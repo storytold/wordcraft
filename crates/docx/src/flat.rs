@@ -442,13 +442,20 @@ fn xml_fragment<'a>(ct: &str, bytes: &'a [u8]) -> Option<&'a str> {
 
 /// Whether `s` is exactly one well-formed element, with only whitespace, comments and processing
 /// instructions around it. Kept bytes are inlined into `pkg:xmlData` only then; anything else could
-/// close the wrapper and add parts of its own, so it goes out as `pkg:binaryData` (#3742).
-fn one_element(s: &str) -> bool {
+/// close the wrapper and add parts of its own, so it goes out as `pkg:binaryData` (#3742). Also the
+/// gate for an equation's kept OMML (#6072).
+pub(crate) fn one_element(s: &str) -> bool {
     let mut r = quick_xml::Reader::from_str(s);
     r.config_mut().check_comments = true;
     let (mut depth, mut roots) = (0usize, 0usize);
     loop {
-        let attrs_ok = |e: &BytesStart| e.attributes().all(|a| a.is_ok());
+        // Each attribute parses and its value unescapes: an undeclared entity (`x="&no;"`) isn't
+        // well-formed, and the reader would keep it raw (#6072).
+        // Names must be XML names too: the reader takes `<a?b>` and `x?="1"` without complaint.
+        let attrs_ok = |e: &BytesStart| {
+            is_qname(e.name().as_ref())
+                && e.attributes().all(|a| a.is_ok_and(|a| is_qname(a.key.as_ref()) && a.normalized_value(quick_xml::XmlVersion::Explicit1_0).is_ok()))
+        };
         match r.read_event() {
             Ok(Event::Start(e)) => {
                 if !attrs_ok(&e) || (depth == 0 && roots > 0) {
@@ -477,6 +484,28 @@ fn one_element(s: &str) -> bool {
             Ok(Event::Eof) => return depth == 0 && roots == 1,
             Ok(_) => {}
         }
+    }
+}
+
+/// Whether `name` is an XML name with at most one colon, neither first nor last: a qualified name
+/// in Namespaces in XML 1.0 (§4), with the name characters of XML 1.0 (Fifth Edition) §2.3.
+fn is_qname(name: &[u8]) -> bool {
+    fn start(c: char) -> bool {
+        matches!(c, 'A'..='Z' | '_' | 'a'..='z' | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}' | '\u{370}'..='\u{37D}'
+            | '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}' | '\u{2070}'..='\u{218F}' | '\u{2C00}'..='\u{2FEF}' | '\u{3001}'..='\u{D7FF}'
+            | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}' | '\u{10000}'..='\u{EFFFF}')
+    }
+    fn more(c: char) -> bool {
+        start(c) || matches!(c, '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
+    }
+    let ncname = |p: &str| {
+        let mut cs = p.chars();
+        cs.next().is_some_and(start) && cs.all(more)
+    };
+    let Ok(name) = std::str::from_utf8(name) else { return false };
+    match name.split_once(':') {
+        Some((prefix, local)) => ncname(prefix) && ncname(local),
+        None => ncname(name),
     }
 }
 
@@ -587,6 +616,12 @@ mod tests {
             "<a></a></pkg:xmlData>",
             "<a><!-- x -- y --></a>",
             "<a/><!-- x--->",
+            "<a x=\"&no;\"/>",
+            "<a><b x=\"&no;\"/></a>",
+            "<a?b/>",
+            "<a x?=\"1\"/>",
+            "<a><b:c:d/></a>",
+            "<a :x=\"1\"/>",
         ] {
             assert!(xml_fragment(ct, bad.as_bytes()).is_none(), "{bad}");
         }

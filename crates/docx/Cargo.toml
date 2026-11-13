@@ -12,6 +12,7 @@ workspace = true
 wordcraft-doc = { workspace = true }
 wordcraft-geom = { workspace = true }
 quick-xml = { workspace = true }
+roxmltree = { workspace = true }
 zip = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }

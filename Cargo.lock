@@ -6963,6 +6963,7 @@ dependencies = [
  "log",
  "proptest",
  "quick-xml 0.41.0",
+ "roxmltree",
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.1",
