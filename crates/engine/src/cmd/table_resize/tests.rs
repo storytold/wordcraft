@@ -128,6 +128,32 @@ fn the_corner_handle_scales_the_table() {
     assert!(((d1.bottom() - a1.y) - h * 2.0).abs() < 0.5, "{h} → {}", d1.bottom() - a1.y);
 }
 
+/// #6438: a right-to-left table's columns run from its right edge, and Word drags their borders
+/// and its corner the mirrored way, which isn't built yet: they aren't grabbed, so a drag leaves
+/// its columns alone (one used to squeeze all but the first to nothing). Its rows' borders resize
+/// as in any table.
+#[test]
+fn a_right_to_left_tables_columns_keep_their_widths() {
+    let mut s = table_session(2, 3);
+    s.run("table.rtl", &json!({"value": true})).unwrap();
+    let start = first_table(&s);
+    let (a, c) = (cell_rect(&mut s, 0, 0), cell_rect(&mut s, 1, 2));
+    let y = a.y + a.h / 2.0;
+    let l = s.layout();
+    for x in [a.x, a.x + 1.0, a.x - 1.0, a.right(), c.x, c.right()] {
+        assert!(resize_target(&l, &s.doc, 0, x, y, REACH).is_none_or(|t| !matches!(t.edge, Edge::Column(_))), "x {x}");
+        let _ = s.run("table.resizeDrag", &json!({"page": 0, "x": x, "y": y, "toX": x - 30.0, "toY": y}));
+        assert_eq!(first_table(&s), start, "x {x}");
+    }
+    let below = c.bottom() + 1.0 + HANDLE / 2.0;
+    for (x, y) in [(a.right() + 1.0 + HANDLE / 2.0, below), (c.x - 1.0 - HANDLE / 2.0, below), (a.x + 10.0, y)] {
+        assert!(table_under(&l, &s.doc, 0, x, y, REACH).is_none(), "no corner handle at {x}, {y}");
+    }
+    let x = a.x + a.w / 2.0;
+    s.run("table.resizeDrag", &json!({"page": 0, "x": x, "y": a.bottom() + 1.0, "toX": x, "toY": a.bottom() + 21.0})).unwrap();
+    assert!((cell_rect(&mut s, 0, 0).h - (a.h + 20.0)).abs() < 0.1, "the row border moves");
+}
+
 /// A merged cell hides the border it covers: no column border to grab in its middle.
 #[test]
 fn merged_cells_have_no_border_inside() {

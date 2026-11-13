@@ -4,7 +4,8 @@
 //! only in their rows. The geometry comes from the layout (what is on the page, in
 //! page points), so the result is what the drag showed even when autofit or a percentage width
 //! made the drawn columns differ from the stored grid. The app sends each finished drag here,
-//! so every drag is one undo step.
+//! so every drag is one undo step. A right-to-left table's rows resize; its columns and corner
+//! don't yet (`ResizeTarget::resizable_columns`).
 
 use serde_json::Value;
 use wordcraft_doc::props::{Align, HeightRule, VMerge};
@@ -72,7 +73,8 @@ pub struct DrawnRow {
     pub row: usize,
     pub top: f32,
     pub bottom: f32,
-    /// Grid lines that are cell borders in this row (a merged cell hides the ones it covers).
+    /// Drawn grid lines (`ResizeTarget::cols`' indices) that are cell borders in this row (a
+    /// merged cell hides the ones it covers).
     pub(crate) edges: Vec<usize>,
 }
 
@@ -82,12 +84,16 @@ pub struct ResizeTarget {
     pub edge: Edge,
     pub story: StoryRef,
     pub table: Path,
-    /// Drawn grid lines, page x, left to right (columns + 1 of them).
+    /// Drawn grid lines, page x, left to right (columns + 1 of them); a right-to-left table's
+    /// grid runs the other way (`grid_line`).
     pub cols: Vec<f32>,
     /// Drawn rows on this page, top to bottom.
     pub rows: Vec<DrawnRow>,
     /// Whether the table's last row is on this page (the handle is shown only then).
     pub ends_here: bool,
+    /// Whether the table runs right to left (`w:bidiVisual`): its first column is drawn at the
+    /// right.
+    pub rtl: bool,
     /// When cells of the table are selected and the column border is one of theirs
     /// (`limit_to_selection`): their rows, each with the grid lines its cells' borders are on.
     /// The border moves only there; empty, it moves in the whole column.
@@ -130,6 +136,18 @@ impl ResizeTarget {
     /// The resize handle's square (page points).
     pub fn handle(&self) -> Rect {
         Rect::new(self.right() + 1.0, self.bottom() + 1.0, HANDLE, HANDLE)
+    }
+    /// The grid line that drawn line `line` (`cols`' index) is, or the other way round: the same
+    /// in a left-to-right table, counted from the other edge in a right-to-left one.
+    pub fn grid_line(&self, line: usize) -> usize {
+        if self.rtl { self.cols.len().saturating_sub(1).saturating_sub(line) } else { line }
+    }
+    /// Whether the table's column borders and resize handle are grabbed. Not a right-to-left
+    /// table's: Word drags those the mirrored way (the start edge on the right, the handle at the
+    /// bottom-left), and these drags, made for a grid running from the left, would put the new
+    /// widths on the wrong columns (#6438).
+    pub fn resizable_columns(&self) -> bool {
+        !self.rtl
     }
 
     /// The new widths and heights a drag that moved the pointer by (`dx`, `dy`) points gives;
@@ -340,18 +358,23 @@ pub(crate) fn cell_boxes(l: &DocLayout, page: usize) -> Vec<CellBox> {
         .collect()
 }
 
-/// The drawn geometry of one table on a page, from its cells' boxes.
+/// The drawn geometry of one table on a page, from its cells' boxes: its grid lines as drawn,
+/// left to right, and its rows.
 fn geometry(t: &Table, boxes: &[&CellBox]) -> Option<(Vec<f32>, Vec<DrawnRow>)> {
     let n = t.cols();
     if n == 0 || n > wordcraft_doc::table::MAX_COLS || boxes.is_empty() {
         return None;
     }
+    // Lines are counted from the left as drawn. A right-to-left table's grid runs from its right
+    // edge (`layout::table`), so a cell's left edge is the grid line it ends at, from the right.
+    let rtl = t.props.bidi_visual;
     let mut lines: Vec<Option<f32>> = vec![None; n + 1];
     let mut rows: Vec<DrawnRow> = Vec::new();
     for b in boxes {
         let g = t.grid_col(b.row, b.cell);
         let span = t.rows.get(b.row).and_then(|r| r.cells.get(b.cell)).map_or(1, wordcraft_doc::Cell::span);
         let end = g.saturating_add(span).min(n);
+        let (g, end) = if rtl { (n.saturating_sub(end), n.saturating_sub(g)) } else { (g, end) };
         if let Some(x) = lines.get_mut(g) {
             x.get_or_insert(b.rect.x);
         }
@@ -371,7 +394,10 @@ fn geometry(t: &Table, boxes: &[&CellBox]) -> Option<(Vec<f32>, Vec<DrawnRow>)> 
     }
     // A line no cell on this page ends at: between its drawn neighbours, as the grid shares it.
     let (first, last) = (lines.first().copied().flatten()?, lines.last().copied().flatten()?);
-    let weight = |i: usize| t.grid.get(i).copied().filter(|w| t.grid.len() == n && w.is_finite() && *w > 0.0).unwrap_or(1.0);
+    let weight = |i: usize| {
+        let i = if rtl { n.saturating_sub(1).saturating_sub(i) } else { i };
+        t.grid.get(i).copied().filter(|w| t.grid.len() == n && w.is_finite() && *w > 0.0).unwrap_or(1.0)
+    };
     let mut cols = Vec::with_capacity(n + 1);
     let mut prev = (0usize, first);
     for i in 0..=n {
@@ -418,14 +444,20 @@ pub(crate) fn tables_on(l: &DocLayout, doc: &Document, page: usize) -> Vec<Resiz
             let mine: Vec<&CellBox> = boxes.iter().filter(|b| b.story == story && b.table == *path).collect();
             let (cols, rows) = geometry(t, &mine)?;
             let ends_here = rows.last().is_some_and(|r| r.row + 1 == t.rows.len());
-            Some(ResizeTarget { edge: Edge::Corner, story, table: path.clone(), cols, rows, ends_here, only: Vec::new() })
+            let rtl = t.props.bidi_visual;
+            Some(ResizeTarget { edge: Edge::Corner, story, table: path.clone(), cols, rows, ends_here, rtl, only: Vec::new() })
         })
         .collect()
 }
 
 fn on_handle(t: &ResizeTarget, x: f32, y: f32, reach: f32) -> bool {
     let h = t.handle();
-    t.ends_here && x >= h.x - reach / 2.0 && x <= h.right() + reach / 2.0 && y >= h.y - reach / 2.0 && y <= h.bottom() + reach / 2.0
+    t.ends_here
+        && t.resizable_columns()
+        && x >= h.x - reach / 2.0
+        && x <= h.right() + reach / 2.0
+        && y >= h.y - reach / 2.0
+        && y <= h.bottom() + reach / 2.0
 }
 
 /// The innermost table under page point (`x`, `y`) whose resize handle is on this page, or whose
@@ -437,7 +469,11 @@ pub fn table_under(l: &DocLayout, doc: &Document, page: usize, x: f32, y: f32, r
     let reach = if reach.is_finite() { reach.clamp(0.5, 24.0) } else { REACH };
     tables_on(l, doc, page)
         .into_iter()
-        .filter(|t| t.ends_here && ((x >= t.left() && x <= t.right() && y >= t.top() && y <= t.bottom()) || on_handle(t, x, y, reach)))
+        .filter(|t| {
+            t.ends_here
+                && t.resizable_columns()
+                && ((x >= t.left() && x <= t.right() && y >= t.top() && y <= t.bottom()) || on_handle(t, x, y, reach))
+        })
         .max_by_key(|t| t.table.0.len())
 }
 
@@ -464,9 +500,12 @@ pub fn resize_target(l: &DocLayout, doc: &Document, page: usize, x: f32, y: f32,
         if x < left - reach || x > right + reach || y < top - reach || y > bottom + reach {
             continue;
         }
-        // Column borders: in the row under the pointer, only lines that are cell borders there.
+        // Column borders: in the row under the pointer, only lines that are cell borders there
+        // (none of a right-to-left table's yet, `resizable_columns`).
         let row_here = target.rows.iter().find(|r| y >= r.top && y <= r.bottom).cloned();
-        if let Some(r) = &row_here {
+        if let Some(r) = &row_here
+            && target.resizable_columns()
+        {
             for line in 0..target.cols.len() {
                 // The table's left edge is grabbed from outside it (a point in, for the border's
                 // width): inside starts the first cell.

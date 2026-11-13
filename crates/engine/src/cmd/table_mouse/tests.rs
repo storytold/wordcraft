@@ -379,6 +379,79 @@ fn dragging_the_handle_moves_the_table() {
     assert!(!movable(&nested));
 }
 
+fn rtl_table_session(rows: usize, cols: usize) -> Session {
+    let mut s = table_session(rows, cols);
+    s.run("table.rtl", &json!({"value": true})).unwrap();
+    s
+}
+
+/// #6438: a right-to-left table's first column is drawn at the right, and its move handle sits
+/// past its top-right corner, as in Word, not by the first cell's left edge in the middle of the
+/// table. The pointer finds the table's edges where they are drawn; the handle selects it.
+#[test]
+fn a_right_to_left_tables_move_handle_is_past_its_top_right_corner() {
+    let mut s = rtl_table_session(3, 4);
+    let (first, last) = (cell_rect(&mut s, 0, 0), cell_rect(&mut s, 0, 3));
+    assert!(first.x > last.right(), "the first column is drawn at the right: {first:?} {last:?}");
+    let g = table_resize::tables_on(&s.layout(), &s.doc, 0)[0].clone();
+    assert_eq!((g.left(), g.right()), (last.x, first.right()), "the table's drawn edges");
+    let h = handle(&g);
+    assert!(h.x > first.right() && h.bottom() < first.y, "past the top-right corner: {h:?}, {first:?}");
+    assert_eq!(spot_at(&mut s, h.x + h.w / 2.0, h.y + h.h / 2.0), Some(Spot::Handle));
+    assert_ne!(spot_at(&mut s, first.x - 6.0, first.y - 6.0), Some(Spot::Handle), "not by the first cell's left edge");
+    // The caret's table shows it there, and the pointer finds it on its way there.
+    let l = s.layout();
+    assert_eq!(caret_handles(&l, &s.doc, StoryRef::Body, &table_path(&s), 0).0, Some(h));
+    assert_eq!(handle_table(&l, &s.doc, StoryRef::Body, 0, h.right(), h.bottom(), REACH).map(|g| g.table), Some(table_path(&s)));
+    s.run("table.selectAt", &json!({"page": 0, "x": h.x + 4.0, "y": h.y + 4.0})).unwrap();
+    assert_eq!(s.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 2), (0, 3))));
+}
+
+/// #6438: dragging a right-to-left table's move handle moves the whole table as far as the
+/// pointer went, as with any table, instead of putting its left edge where its first cell's was
+/// (past the right margin, all but one column off the page). Dragged far right, it stays on the
+/// page.
+#[test]
+fn dragging_a_right_to_left_tables_handle_moves_the_whole_table() {
+    let mut s = rtl_table_session(3, 4);
+    let row = |s: &mut Session| (0..4).map(|c| cell_rect(s, 0, c)).collect::<Vec<_>>();
+    let before = row(&mut s);
+    let h = handle(&table_resize::tables_on(&s.layout(), &s.doc, 0)[0]);
+    let (hx, hy) = (h.x + h.w / 2.0, h.y + h.h / 2.0);
+    s.run("table.moveDrag", &json!({"page": 0, "x": hx, "y": hy, "toX": hx - 40.0, "toY": hy + 30.0})).unwrap();
+    assert!(first_table(&s).props.float.is_some());
+    for (a, b) in before.iter().zip(row(&mut s)) {
+        assert!((b.x - (a.x - 40.0)).abs() < 0.5 && (b.y - (a.y + 30.0)).abs() < 0.5 && (b.w - a.w).abs() < 0.5, "{a:?} → {b:?}");
+    }
+    let h = handle(&table_resize::tables_on(&s.layout(), &s.doc, 0)[0]);
+    let (hx, hy) = (h.x + h.w / 2.0, h.y + h.h / 2.0);
+    s.run("table.moveDrag", &json!({"page": 0, "x": hx, "y": hy, "toX": hx + 1000.0, "toY": hy})).unwrap();
+    let (moved, page_w) = (row(&mut s), s.layout().pages[0].w);
+    assert!(moved[0].right() <= page_w + 0.5 && moved[0].right() > page_w - 1.0, "at the page's right edge: {moved:?}");
+    assert!((moved[0].right() - moved[3].x - (before[0].right() - before[3].x)).abs() < 0.5, "the whole table: {moved:?}");
+}
+
+/// A right-to-left table's columns are found where they are drawn: the area above its right
+/// column selects the first, above its left one the last; the insert button on the border left
+/// of the first cell adds the second column.
+#[test]
+fn a_right_to_left_tables_columns_are_found_where_they_are_drawn() {
+    let mut s = rtl_table_session(2, 3);
+    fill(&mut s);
+    let (c0, c1, c2) = (cell_rect(&mut s, 0, 0), cell_rect(&mut s, 0, 1), cell_rect(&mut s, 0, 2));
+    assert_eq!(spot_at(&mut s, c0.x + c0.w / 2.0, c0.y - 3.0), Some(Spot::Column(0)));
+    assert_eq!(spot_at(&mut s, c2.x + c2.w / 2.0, c2.y - 3.0), Some(Spot::Column(2)));
+    s.run("table.selectAt", &json!({"page": 0, "x": c2.x + c2.w / 2.0, "y": c2.y - 3.0})).unwrap();
+    assert_eq!(s.selected_text(), "r0c2\nr1c2");
+    s.run("table.selectAt", &json!({"page": 0, "x": c0.x + 20.0, "y": c0.y - 3.0, "toX": c1.x + 20.0, "toY": c1.y - 3.0})).unwrap();
+    assert_eq!(s.cell_range().map(|r| r.cols), Some((0, 1)), "a drag from the first column to the second");
+    assert_eq!(spot_at(&mut s, c0.x, c0.y - 8.0), Some(Spot::InsertColumn(1)));
+    s.run("table.insertAt", &json!({"page": 0, "x": c0.x, "y": c0.y - 8.0})).unwrap();
+    assert_eq!(first_table(&s).cols(), 4);
+    assert!(para(&s, 0, 0).plain_text() == "r0c0" && para(&s, 0, 1).is_empty() && para(&s, 0, 2).plain_text() == "r0c1");
+    assert_eq!(s.cell_range().map(|r| r.cols), Some((1, 1)), "it's selected");
+}
+
 /// A double-click on a column border fits the column left of it to its text; as in Word, the
 /// columns right of it keep their widths and move along, so the table narrows. The right
 /// edge's column fits the same way.
