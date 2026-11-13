@@ -186,6 +186,27 @@ impl Exporter<'_> {
         }
     }
 
+    /// One of a placed (floating) picture's draws in tagged PDF: the picture itself is a figure
+    /// with the object's `alt`, while its outline (the strokes layout draws around it) is an
+    /// artifact, so a screen reader meets the picture and not its frame. A turned picture is
+    /// turned as a whole, its parts tagged the same way inside the turn.
+    fn placed_picture(&mut self, s: &mut Surface, d: &Draw, alt: &str) {
+        match d {
+            Draw::Rotated { cx, cy, spin, items } if self.opts.tagged => {
+                if !ok(*cx) || !ok(*cy) {
+                    return;
+                }
+                let [a, b, c, d, e, f] = spin.matrix(*cx, *cy);
+                s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                for it in items {
+                    self.placed_picture(s, it, alt);
+                }
+                s.pop();
+            }
+            Draw::Image { .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
+            _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
+        }
+    }
     /// One draw of a paragraph's line, tagged for what it is: text as the paragraph's content
     /// (structure entry `idx`), pictures and figures on their own, anything else an artifact.
     fn line_item(&mut self, s: &mut Surface, d: &Draw, idx: usize) {
@@ -272,11 +293,19 @@ impl Exporter<'_> {
                         Some(InlineObject::Image { alt, .. }) => alt.clone(),
                         _ => String::new(),
                     };
-                    self.tagged(s, role, Some(&alt), |me, s| {
-                        for d in &draws {
-                            me.draw(s, d);
+                    match role {
+                        // A described picture: the picture is the figure, its outline an artifact.
+                        Role::Figure => {
+                            for d in &draws {
+                                self.placed_picture(s, d, &alt);
+                            }
                         }
-                    });
+                        _ => self.tagged(s, role, Some(&alt), |me, s| {
+                            for d in &draws {
+                                me.draw(s, d);
+                            }
+                        }),
+                    }
                 }
                 // A floating shape with a description: a figure (see `shape_figure_alt`).
                 Placed::Shape { alt, .. } if !alt.is_empty() => self.tagged(s, Role::Figure, Some(alt), |me, s| {

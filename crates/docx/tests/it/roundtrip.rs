@@ -471,6 +471,10 @@ fn images_round_trip() {
         crop: [0.1, 0.0, 0.25, 0.05],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let floating = InlineObject::Image {
         media: key.clone(),
@@ -481,6 +485,10 @@ fn images_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let aligned = InlineObject::Image {
         media: key.clone(),
@@ -501,6 +509,10 @@ fn images_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let mut floats = vec![floating.clone(), aligned];
     for wrap in [Wrap::Tight, Wrap::Through, Wrap::TopAndBottom, Wrap::BehindText, Wrap::InFrontOfText] {
@@ -513,6 +525,10 @@ fn images_round_trip() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         });
     }
     let mut p = Paragraph::with_text("pic: ", CharProps::default());
@@ -529,6 +545,181 @@ fn images_round_trip() {
     assert_eq!(got.objects, expect);
     assert_eq!(r.media.get(&key).map(|b| b.as_slice()), Some(png.as_slice()));
     assert_eq!(r.media.len(), 1);
+}
+
+/// #5544: a picture's outline (Picture Border, `a:ln` in `pic:spPr`) is read and written back.
+/// The issue's certificate frame is a 6 pt green compound (`thickThin`) outline: it comes in with
+/// its colour, total width and compound type, and a dashed outline with its dash. An outline
+/// with no fill, and no `a:ln`, is none.
+#[test]
+fn picture_outline_round_trips() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let pic = |alt: &str| InlineObject::Image {
+        media: key.clone(),
+        w: 60.0,
+        h: 40.0,
+        alt: alt.into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
+    };
+    let mut p = Paragraph::new();
+    for alt in ["framed", "no fill", "dashed", "plain"] {
+        let end = p.len();
+        p.insert_object(end, pic(alt), &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    const END: &str = "</pic:spPr>";
+    assert_eq!(xml.matches(END).count(), 4, "{xml}");
+    assert!(!xml.contains("<a:ln"), "a picture with no outline writes none: {xml}");
+    // Give the first picture Word's frame, the second an outline with no fill and the third a
+    // dashed one. Each patch ends in one `</pic:spPr>`, so the later pictures keep their index.
+    let patch = |xml: &str, n: usize, with: &str| -> String {
+        let (at, _) = xml.match_indices(END).nth(n).unwrap();
+        format!("{}{with}{}", &xml[..at], &xml[at + END.len()..])
+    };
+    let framed = r#"<a:ln w="76200" cmpd="thickThin"><a:solidFill><a:srgbClr val="00B050"/></a:solidFill></a:ln></pic:spPr>"#;
+    let unfilled = r#"<a:ln w="12700"><a:noFill/></a:ln></pic:spPr>"#;
+    let dashed = r#"<a:ln w="38100"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:prstDash val="dash"/></a:ln></pic:spPr>"#;
+    let xml = patch(&patch(&patch(&xml, 0, framed), 1, unfilled), 2, dashed);
+    let read = wordcraft_docx::read(&replace_part(&bytes, "word/document.xml", xml.as_bytes())).unwrap();
+    type Outline = (String, Option<Rgb>, f32, LineDash, CompoundLine);
+    let outlines = |doc: &Document| -> Vec<Outline> {
+        paras(doc)[0]
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Image { alt, stroke, stroke_width, dash, compound, .. } => {
+                    Some((alt.clone(), *stroke, *stroke_width, dash.clone(), *compound))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let want = vec![
+        ("framed".to_string(), Some(Rgb(0x00, 0xB0, 0x50)), 6.0, LineDash::Solid, CompoundLine::ThickThin),
+        ("no fill".to_string(), None, 0.0, LineDash::Solid, CompoundLine::Single),
+        ("dashed".to_string(), Some(Rgb(0xFF, 0x00, 0x00)), 3.0, LineDash::Dash, CompoundLine::Single),
+        ("plain".to_string(), None, 0.0, LineDash::Solid, CompoundLine::Single),
+    ];
+    assert_eq!(outlines(&read), want);
+    // Saved, the frame and the dashed line are written back into their pictures' `pic:spPr`,
+    // compound type and dash included, and read the same again.
+    let saved = wordcraft_docx::write(&read).unwrap();
+    let xml = document_xml(&saved);
+    assert_eq!(xml.matches("<a:ln").count(), 2, "{xml}");
+    assert!(xml.contains(framed), "{xml}");
+    assert!(xml.contains(dashed), "{xml}");
+    assert_eq!(outlines(&wordcraft_docx::read(&saved).unwrap()), want);
+}
+
+/// #5544: an outline can come from the picture's style alone — a `pic:style` `a:lnRef`
+/// with no `a:ln` in `pic:spPr` — and a picture's own `a:ln` beats the style's, in
+/// colour and width alike.
+#[test]
+fn picture_outline_comes_from_pic_style_and_sppr_wins() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let pic = |alt: &str| InlineObject::Image {
+        media: key.clone(),
+        w: 60.0,
+        h: 40.0,
+        alt: alt.into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
+    };
+    let mut p = Paragraph::new();
+    for alt in ["styled", "both"] {
+        let end = p.len();
+        p.insert_object(end, pic(alt), &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    // The style element goes at the end of its `pic:pic`, where the schema puts it.
+    let styled = r#"<pic:style><a:lnRef idx="1"><a:srgbClr val="0000FF"/></a:lnRef><a:fillRef idx="0"/></pic:style>"#;
+    let with_style = |xml: &str, n: usize| -> String {
+        let (at, _) = xml.match_indices("</pic:pic>").nth(n).unwrap();
+        format!("{}{styled}{}", &xml[..at], &xml[at..])
+    };
+    let xml = with_style(&with_style(&xml, 0), 1);
+    // The second picture also states an outline of its own: red, 3 pt, in its `pic:spPr`.
+    let (at, _) = xml.match_indices("</pic:spPr>").nth(1).unwrap();
+    let own = r#"<a:ln w="38100"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>"#;
+    let xml = format!("{}{own}{}", &xml[..at], &xml[at..]);
+    let read = wordcraft_docx::read(&replace_part(&bytes, "word/document.xml", xml.as_bytes())).unwrap();
+    let outlines: Vec<(Option<Rgb>, f32, LineDash, CompoundLine)> = paras(&read)[0]
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Image { stroke, stroke_width, dash, compound, .. } => Some((*stroke, *stroke_width, dash.clone(), *compound)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outlines.len(), 2, "both pictures read");
+    // From the style alone: the reference's colour at the theme's first line width
+    // (0.5 pt), solid and single — a style line brings no dash or compound type.
+    assert_eq!(outlines[0], (Some(Rgb(0x00, 0x00, 0xFF)), 0.5, LineDash::Solid, CompoundLine::Single), "the style's outline");
+    // Its own `a:ln` wins over the style's.
+    assert_eq!(outlines[1], (Some(Rgb(0xFF, 0x00, 0x00)), 3.0, LineDash::Solid, CompoundLine::Single), "its own outline wins");
+}
+
+#[test]
+fn a_picture_outline_with_its_fill_omitted_is_the_theme_dark_colour() {
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let obj = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "bare".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
+    };
+    let mut p = Paragraph::new();
+    p.insert_object(0, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    // A line that names its width and leaves the fill out: a solid line in the theme's
+    // dark colour at that width, as Office draws it — not no outline at all.
+    let xml = xml.replacen("</pic:spPr>", r#"<a:ln w="76200"/></pic:spPr>"#, 1);
+    let read = wordcraft_docx::read(&replace_part(&bytes, "word/document.xml", xml.as_bytes())).unwrap();
+    let got: Vec<(Option<Rgb>, f32)> = paras(&read)[0]
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Image { stroke, stroke_width, .. } => Some((*stroke, *stroke_width)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(got, vec![(Some(Rgb(0x00, 0x00, 0x00)), 6.0)]);
+    // Saved, the border is written as the explicit solid line it now is, and reads back.
+    let saved = wordcraft_docx::write(&read).unwrap();
+    let xml = document_xml(&saved);
+    assert!(xml.contains(r#"<a:ln w="76200"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></pic:spPr>"#), "{xml}");
 }
 
 #[test]
@@ -1317,6 +1508,10 @@ fn groups_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let oval = InlineObject::Shape {
         kind: ShapeKind::Ellipse,
@@ -1413,6 +1608,10 @@ fn drawing_canvas_round_trips() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let star = InlineObject::Shape {
         kind: ShapeKind::Star,
@@ -1880,6 +2079,10 @@ fn kitchen_sink() -> Document {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -1977,6 +2180,10 @@ fn hostile_model_values_still_write() {
             crop: [f32::NAN; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -2248,6 +2455,10 @@ fn rotation_and_flips_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let shape = |kind, float| InlineObject::Shape {
         kind,
@@ -2749,6 +2960,10 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let shape = |alt: AltText| InlineObject::Shape {
         kind: ShapeKind::Ellipse,

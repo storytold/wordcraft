@@ -942,6 +942,10 @@ fn media_of_blocks_collects_graphic_and_group_images() {
                 crop: [0.0; 4],
                 fx: Default::default(),
                 ole: None,
+                stroke: None,
+                stroke_width: 0.0,
+                dash: Default::default(),
+                compound: Default::default(),
             },
         }],
     };
@@ -972,6 +976,10 @@ fn insert_fragment_remaps_conflicting_media_keys() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     });
     let frag = Fragment { blocks: vec![Block::Para(p)], parts: Default::default(), media: frag_media };
 

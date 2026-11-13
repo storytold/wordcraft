@@ -500,6 +500,10 @@ mod tests {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
         let end = Pos::body(0, OBJ.len_utf8());
@@ -562,6 +566,10 @@ mod tests {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         }
     }
 

@@ -606,6 +606,10 @@ fn dimmed_header_image_renders() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     hp.insert_object(0, obj, &Default::default()).unwrap();
     let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
@@ -638,6 +642,10 @@ fn picture_brightness_contrast_transparency() {
         crop: [0.0; 4],
         fx,
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let mut p = wordcraft_doc::Paragraph::new();
     p.insert_object(0, pic(PicFx::default(), 100.0), &Default::default()).unwrap();
@@ -664,6 +672,342 @@ fn picture_brightness_contrast_transparency() {
     let top: Vec<[u8; 4]> = (60..140).flat_map(|y| (60..140).map(move |x| (x, y))).map(|(x, y)| img.pixel(x, y)).collect();
     assert!(top.iter().filter(|p| p[0].abs_diff(244) <= 2 && p[0] == p[2]).count() > 1000);
     assert!(!top.iter().any(|p| p[0] == 100));
+}
+
+/// A document of one red picture, `w` × `h`, placed by `float`, with the outline `stroke` 6 pt wide.
+fn outlined_picture(w: f32, h: f32, float: wordcraft_doc::para::Float, stroke: Option<Rgb>) -> Document {
+    outlined_picture_styled(w, h, float, stroke, Default::default(), Default::default())
+}
+
+/// [`outlined_picture`] with the outline's `dash` and `compound` type.
+fn outlined_picture_styled(
+    w: f32,
+    h: f32,
+    float: wordcraft_doc::para::Float,
+    stroke: Option<Rgb>,
+    dash: wordcraft_doc::line_dash::LineDash,
+    compound: wordcraft_doc::line_dash::CompoundLine,
+) -> Document {
+    let mut d = Document::new();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let media = d.add_media(png, "png");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let stroke_width = if stroke.is_some() { 6.0 } else { 0.0 };
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w,
+        h,
+        alt: String::new(),
+        float,
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke,
+        stroke_width,
+        dash,
+        compound,
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    d
+}
+
+/// The rect of the first picture on `d`'s first page, and the page rendered at 1 px per point.
+fn picture_and_render(d: &Document) -> (wordcraft_geom::Rect, Rendered) {
+    let l = layout(d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    (rect, render_page(d, &l.pages[0], 1.0, &opts))
+}
+
+/// #5544: a double (`dbl`) outline 6 pt wide is two 2 pt lines with a 2 pt gap centred on the
+/// frame's edge: the gap shows the picture just inside the edge and the paper just outside, and
+/// each line carries the outline's colour.
+#[test]
+fn a_double_picture_outline_paints_two_lines() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let d = outlined_picture_styled(70.0, 70.0, Default::default(), Some(green), LineDash::Solid, CompoundLine::Double);
+    let (rect, img) = picture_and_render(&d);
+    let y = (rect.y + rect.h / 2.0) as u32;
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    // Along a row, the lines cover [-3, -1] and [1, 3] points from the left edge and the gap
+    // [-1, 1]. The pixel starting at floor(x + o) lies wholly within 1 pt of x + o, so these
+    // samples are each inside one line or the gap, wherever the frame falls on the pixel grid.
+    let outer = img.pixel((rect.x - 2.0) as u32, y);
+    let inner = img.pixel((rect.x + 2.0) as u32, y);
+    assert!(is_green(outer), "the outer line: {outer:?}");
+    assert!(is_green(inner), "the inner line: {inner:?}");
+    // The gap: the red picture or white paper, with no green over it (red stays high).
+    let gap = img.pixel(rect.x as u32, y);
+    assert!(gap[0] > 150 && !is_green(gap), "the gap between the lines is not painted: {gap:?}");
+}
+
+/// #5544: a dashed outline is drawn in dashes: along the top edge some of the line carries the
+/// outline's colour and some, in the gaps, does not.
+#[test]
+fn a_dashed_picture_outline_has_gaps() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let d = outlined_picture_styled(200.0, 70.0, Default::default(), Some(green), LineDash::Dash, CompoundLine::Single);
+    let (rect, img) = picture_and_render(&d);
+    // Just outside the top edge, inside the 6 pt line's outer half (so the picture never shows).
+    let y = (rect.y - 2.0) as u32;
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    let row: Vec<bool> = ((rect.x + 6.0) as u32..(rect.x + rect.w - 6.0) as u32).map(|x| is_green(img.pixel(x, y))).collect();
+    assert!(row.iter().any(|g| *g), "dashes are drawn");
+    assert!(row.iter().any(|g| !*g), "with gaps between them");
+}
+
+/// #5544: a `thickThin` outline is a thick line outside the frame and a thin one
+/// inside, sharing the 6 pt band with a gap between them.
+#[test]
+fn a_thick_thin_picture_outline_has_its_two_lines() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let d = outlined_picture_styled(200.0, 70.0, Default::default(), Some(green), LineDash::Solid, CompoundLine::ThickThin);
+    let (rect, img) = picture_and_render(&d);
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    let y = (rect.y + rect.h / 2.0) as u32;
+    // The band is 6 pt centred on the frame's edge: the thick line covers [-3, 0], the
+    // thin line [1.5, 3], the gap (0, 1.5) between them. Whole-pixel samples inside each.
+    assert!(is_green(img.pixel((rect.x - 2.0) as u32, y)), "the thick line outside the frame");
+    assert!(is_green(img.pixel((rect.x + 2.0) as u32, y)), "the thin line inside the frame");
+    let gap = img.pixel(rect.x as u32, y);
+    assert!(!is_green(gap) && gap[0] > 150, "the gap between the lines shows the picture: {gap:?}");
+    assert!(!is_green(img.pixel((rect.x - 4.0) as u32, y)), "nothing past the band outside");
+    assert!(!is_green(img.pixel((rect.x + 4.0) as u32, y)), "nothing past the band inside");
+}
+
+/// #5544: a dash on a compound outline is scaled by each line's own width (Dash is 4 on,
+/// 3 off, times the line width): on a 6 pt `thickThin` outline the thick line (3 pt)
+/// dashes 12 pt on and the thin line (1.5 pt) 6 pt on.
+#[test]
+fn a_dashed_thick_thin_outline_scales_its_dashes_per_line() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let d = outlined_picture_styled(200.0, 70.0, Default::default(), Some(green), LineDash::Dash, CompoundLine::ThickThin);
+    let (rect, img) = picture_and_render(&d);
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    // The longest green run along the top edge, inside each line's band: the thick
+    // line's band is the 3 pt above the frame's top edge, the thin line's the 3 pt below.
+    let longest = |row: u32| -> u32 {
+        let mut best = 0;
+        let mut run = 0;
+        for x in (rect.x + 8.0) as u32..(rect.x + rect.w - 8.0) as u32 {
+            if is_green(img.pixel(x, row)) {
+                run += 1;
+                best = best.max(run);
+            } else {
+                run = 0;
+            }
+        }
+        best
+    };
+    let thick = longest((rect.y - 2.0) as u32);
+    let thin = longest((rect.y + 2.0) as u32);
+    assert!(thick >= 8, "the thick line's dashes are long: {thick}");
+    assert!((3..=7).contains(&thin), "the thin line's dashes are about half as long: {thin}");
+    assert!(thick > thin, "each line dashes at its own width: {thick} against {thin}");
+}
+
+/// #5544: a flipped picture's outline stays on its frame: the picture is mirrored and
+/// the outline is drawn around the mirrored picture, on all four edges.
+#[test]
+fn a_flipped_pictures_outline_stays_on_its_frame() {
+    use wordcraft_doc::para::Float;
+    let green = Rgb(0x00, 0xB0, 0x50);
+    // A picture whose left half is bright red and right half dark red, under `float`.
+    let halves = |float: Float| {
+        let mut d = Document::new();
+        let mut pic = image::RgbaImage::new(4, 4);
+        for (x, _y, p) in pic.enumerate_pixels_mut() {
+            *p = if x < 2 { image::Rgba([220, 0, 0, 255]) } else { image::Rgba([90, 0, 0, 255]) };
+        }
+        let mut png = Vec::new();
+        pic.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let media = d.add_media(png, "png");
+        let float = Float {
+            wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+            h_rel: wordcraft_doc::para::Anchor::Page,
+            v_rel: wordcraft_doc::para::Anchor::Page,
+            x: 100.0,
+            y: 100.0,
+            ..float
+        };
+        let mut p = wordcraft_doc::Paragraph::new();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+            stroke: Some(green),
+            stroke_width: 6.0,
+            dash: Default::default(),
+            compound: Default::default(),
+        };
+        p.insert_object(0, obj, &Default::default()).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let rect = l.pages[0]
+            .items
+            .iter()
+            .find_map(|i| match i {
+                wordcraft_layout::Placed::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a picture on the page");
+        (rect, render_page(&d, &l.pages[0], 1.0, &RenderOptions::default()))
+    };
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    for (name, float) in [
+        ("flipH", Float { flip_h: true, ..Default::default() }),
+        ("flipV", Float { flip_v: true, ..Default::default() }),
+        ("flipH and flipV", Float { flip_h: true, flip_v: true, ..Default::default() }),
+        ("no flip", Float::default()),
+    ] {
+        let flip_h = float.flip_h;
+        let (rect, img) = halves(float);
+        let cx = (rect.x + rect.w / 2.0) as u32;
+        let cy = (rect.y + rect.h / 2.0) as u32;
+        // The outline is on the frame: green just outside the middle of each edge.
+        assert!(is_green(img.pixel(cx, (rect.y - 2.0) as u32)), "{name}: the top edge");
+        assert!(is_green(img.pixel(cx, (rect.y + rect.h + 1.0) as u32)), "{name}: the bottom edge");
+        assert!(is_green(img.pixel((rect.x - 2.0) as u32, cy)), "{name}: the left edge");
+        assert!(is_green(img.pixel((rect.x + rect.w + 1.0) as u32, cy)), "{name}: the right edge");
+        // The picture inside is the mirrored one exactly when flipped horizontally.
+        let left = img.pixel((rect.x + 10.0) as u32, cy);
+        let right = img.pixel((rect.x + rect.w - 11.0) as u32, cy);
+        if flip_h {
+            assert!(left[0] < right[0], "{name}: the dark half moved to the left: {left:?} {right:?}");
+        } else {
+            assert!(left[0] > right[0], "{name}: the bright half stays on the left: {left:?} {right:?}");
+        }
+    }
+}
+
+/// #5544: a picture's outline (Picture Border) is stroked on its frame, half outside it and half
+/// over the picture; a picture with no outline has none.
+#[test]
+fn a_picture_outline_is_stroked_on_its_frame() {
+    let green = Rgb(0x00, 0xB0, 0x50);
+    for stroke in [Some(green), None] {
+        let d = outlined_picture(70.0, 70.0, Default::default(), stroke);
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let opts = RenderOptions::default();
+        let rect = page_display(&d, &l.pages[0], &opts.display)
+            .iter()
+            .find_map(|i| match i {
+                Draw::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a picture on the page");
+        let img = render_page(&d, &l.pages[0], 1.0, &opts);
+        let y = (rect.y + rect.h / 2.0) as u32;
+        let middle = img.pixel((rect.x + rect.w / 2.0) as u32, y);
+        assert!(middle[0] > 150 && middle[1] < 60, "the picture is drawn: {middle:?}");
+        // The 6 pt outline covers 3 pt either side of the frame's left edge.
+        let edge = img.pixel((rect.x + 1.0) as u32, y);
+        let outside = img.pixel((rect.x - 2.0) as u32, y);
+        if stroke.is_some() {
+            assert!(edge[0] < 60 && edge[1] > 140, "the outline is drawn over the picture's edge: {edge:?}");
+            assert!(outside[0] < 60 && outside[1] > 140, "and outside it: {outside:?}");
+        } else {
+            assert!(edge[0] > 150 && edge[1] < 60, "no outline: the picture's own edge: {edge:?}");
+            assert!(outside[..3].iter().all(|c| *c > 200), "no outline: paper beside it: {outside:?}");
+        }
+    }
+}
+
+/// #5544: an outline of width 0 is a hairline, as Office draws it: the frame's edge is
+/// painted at the renderer's minimum width, and the paper a few points out is untouched.
+#[test]
+fn a_zero_width_picture_outline_is_a_hairline() {
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let mut d = Document::new();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let media = d.add_media(png, "png");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: 70.0,
+        h: 70.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke: Some(green),
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(&d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let y = (rect.y + rect.h / 2.0) as u32;
+    let middle = img.pixel((rect.x + rect.w / 2.0) as u32, y);
+    assert!(middle[0] > 150 && middle[1] < 60, "the picture is drawn: {middle:?}");
+    // The hairline straddles the frame edge at the renderer's minimum width: the pixel
+    // just outside it is paper tinted with the outline colour, not plain paper.
+    let edge = img.pixel((rect.x - 1.0) as u32, y);
+    assert!(edge[1] > edge[0] && edge[0] < 250, "the hairline tints the paper at the frame edge: {edge:?}");
+    let outside = img.pixel((rect.x - 3.0) as u32, y);
+    assert!(outside[..3].iter().all(|c| *c > 200), "and only there: paper beside it: {outside:?}");
+}
+
+/// #5544: a turned picture's outline turns with it, as the certificate's frame (a picture turned
+/// 90°) does: a 100 × 40 picture turned 90° has its outline 50 pt above and below its centre, and
+/// none 50 pt left or right of it, where the unturned frame's would be.
+#[test]
+fn a_turned_picture_outline_turns_with_it() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    fn turned(items: &[Draw]) -> Option<(f32, f32, &[Draw])> {
+        items.iter().find_map(|i| match i {
+            Draw::Rotated { cx, cy, items, .. } => Some((*cx, *cy, items.as_slice())),
+            Draw::Figure { draws, .. } => turned(draws),
+            Draw::Clip { items, .. } => turned(items),
+            _ => None,
+        })
+    }
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 200.0, y: 200.0, rot: 90.0, ..Default::default() };
+    let d = outlined_picture(100.0, 40.0, float, Some(green));
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let items = page_display(&d, &l.pages[0], &opts.display);
+    let (cx, cy, inner) = turned(&items).expect("a turned picture");
+    assert!(
+        matches!(inner, [Draw::Image { .. }, Draw::Shape { stroke: Some(c), stroke_width, fill: None, .. }] if *c == green && *stroke_width == 6.0),
+        "the outline is drawn in the picture's turn: {inner:?}"
+    );
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    for (dx, dy, want) in [(0.0, -49.0, true), (0.0, 49.0, true), (-49.0, 0.0, false), (49.0, 0.0, false)] {
+        let p = img.pixel((cx + dx) as u32, (cy + dy) as u32);
+        assert_eq!(is_green(p), want, "outline at ({dx}, {dy}) from the centre: {p:?}");
+    }
 }
 
 /// #2892: a rule is stroked with flat ends, as the PDF export and Word draw them. Round caps
@@ -1017,6 +1361,10 @@ fn metafile_picture_is_drawn_as_vectors() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1061,6 +1409,10 @@ fn a_crop_keeping_a_sliver_fills_the_frame_with_it() {
                 crop,
                 fx: Default::default(),
                 ole: None,
+                stroke: None,
+                stroke_width: 0.0,
+                dash: Default::default(),
+                compound: Default::default(),
             };
             p.insert_object(0, obj, &Default::default()).unwrap();
             d.body = vec![wordcraft_doc::para_block(p)];
@@ -1099,6 +1451,10 @@ fn cosmetic_metafile_pen_is_one_device_pixel_wide() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1146,6 +1502,10 @@ fn metafile_text_records_are_painted() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1193,6 +1553,10 @@ fn metafile_text_with_a_huge_font_is_left_out() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1232,6 +1596,10 @@ fn unreadable_metafile_keeps_the_grey_box() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1512,6 +1880,10 @@ fn undecodable_pictures_keep_their_grey_box_pixels() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         p.insert_object(n, obj, &Default::default()).unwrap();
     }

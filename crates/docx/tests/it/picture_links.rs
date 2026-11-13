@@ -87,6 +87,10 @@ fn a_linked_picture_is_saved_with_its_link_on_the_drawing_too() {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
         fx: Default::default(),
     };
     let linked = |l: &str| CharProps { link: Some(l.to_string()), ..Default::default() };

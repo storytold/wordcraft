@@ -31,6 +31,10 @@ fn complete_document() -> Document {
             crop: Default::default(),
             fx: Default::default(),
             ole: Some(source.clone()),
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )

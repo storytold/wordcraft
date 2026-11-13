@@ -5163,6 +5163,10 @@ fn context_menu_crop_item_activates_crop_mode() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
     let end = Pos::body(0, OBJ.len_utf8());
@@ -5206,6 +5210,10 @@ fn crop_is_disabled_when_cursor_is_adjacent_without_selection() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
     // Caret is collapsed right at pos 0 (adjacent to the picture).
@@ -5412,6 +5420,10 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
         crop: [0.0; 4],
         fx: PicFx::new(0, 0, 80_000),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, pic, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -5438,12 +5450,48 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
             off: 0,
             spin: Default::default(),
             fx,
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         }],
         ..Default::default()
     };
     let plain = pages::page_content_key(&at([0.0; 4], PicFx::default()));
     assert_ne!(plain, pages::page_content_key(&at([0.1, 0.0, 0.0, 0.0], PicFx::default())), "crop");
     assert_ne!(plain, pages::page_content_key(&at([0.0; 4], PicFx::new(10_000, 0, 0))), "brightness");
+}
+
+/// #5544: a page's content key covers a picture's outline, so changing only the
+/// outline — its colour, width, dash or compound type, one field at a time —
+/// repaints the page.
+#[test]
+fn a_pictures_outline_changes_its_page_key() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    use wordcraft_doc::props::Rgb;
+    let at = |stroke: Option<Rgb>, stroke_width: f32, dash: LineDash, compound: CompoundLine| Page {
+        items: vec![Placed::Image {
+            rect: Default::default(),
+            media: "m".into(),
+            crop: [0.0; 4],
+            story: StoryRef::Body,
+            path: Default::default(),
+            off: 0,
+            spin: Default::default(),
+            fx: Default::default(),
+            stroke,
+            stroke_width,
+            dash,
+            compound,
+        }],
+        ..Default::default()
+    };
+    let plain = pages::page_content_key(&at(None, 0.0, LineDash::Solid, CompoundLine::Single));
+    let green = Some(Rgb(0x00, 0xB0, 0x50));
+    assert_ne!(plain, pages::page_content_key(&at(green, 0.0, LineDash::Solid, CompoundLine::Single)), "colour");
+    assert_ne!(plain, pages::page_content_key(&at(None, 6.0, LineDash::Solid, CompoundLine::Single)), "width");
+    assert_ne!(plain, pages::page_content_key(&at(None, 0.0, LineDash::Dash, CompoundLine::Single)), "dash");
+    assert_ne!(plain, pages::page_content_key(&at(None, 0.0, LineDash::Solid, CompoundLine::ThickThin)), "compound");
 }
 
 /// #5267: a picture linked from its context menu (Link…) keeps the link, shows it on hover and

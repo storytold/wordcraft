@@ -213,6 +213,10 @@ fn ctrl_shift_drag_copies_an_inline_picture_at_the_text_cursor() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     app.session.doc.insert_object(&Pos::body(1, 0), image, &Default::default()).unwrap();
     app.session.touch();
@@ -520,6 +524,10 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     a.session.doc.insert_object(&Pos::body(1, 0), picture, &Default::default()).unwrap();
     a.session.touch();
@@ -844,6 +852,10 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         let (mut app, _) = app_with(picture);
         app.session.doc.media.insert("rotation-test".into(), Arc::new(bytes));
@@ -987,6 +999,10 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
         crop: [0.0; 4],
         ole: None,
         fx: Default::default(),
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let (mut app, _) = app_with(picture);
     app.session.doc.media.insert("large-preview-test".into(), Arc::new(bytes));

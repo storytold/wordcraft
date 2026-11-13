@@ -25,7 +25,7 @@ impl Writer<'_> {
 
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
-        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
+        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, stroke, stroke_width, dash, compound, .. } = o else { return };
         let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
@@ -64,6 +64,20 @@ impl Writer<'_> {
         w.open("a:prstGeom", &[("prst", "rect")]);
         w.empty("a:avLst", &[]);
         w.close("a:prstGeom");
+        // Its outline (Picture Border), with its compound type and dash; none is no `a:ln`.
+        if let Some(c) = stroke {
+            let width = emu(wordcraft_geom::finite(*stroke_width).clamp(0.0, 100.0));
+            let mut attrs = vec![("w", width.as_str())];
+            if !compound.is_single() {
+                attrs.push(("cmpd", compound.to_ooxml()));
+            }
+            w.open("a:ln", &attrs);
+            w.open("a:solidFill", &[]);
+            w.empty("a:srgbClr", &[("val", &c.hex())]);
+            w.close("a:solidFill");
+            line_dash(w, dash);
+            w.close("a:ln");
+        }
         w.close("pic:spPr");
         w.close("pic:pic");
     }

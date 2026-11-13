@@ -14,6 +14,10 @@ fn picture(name: &str, w: f32, h: f32, x: f32, y: f32, wrap: Wrap, dist: f32) ->
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     }
 }
 

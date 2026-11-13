@@ -283,7 +283,7 @@ pub(crate) fn line_dash(ln: Option<&El>) -> wordcraft_doc::line_dash::LineDash {
     if let Some(custom) = ln.child("a:custDash") {
         let stops: Vec<_> =
             custom.children("a:ds").take(MAX_DASH_STOPS).filter_map(|e| Some((dash_ratio(e.attr("d")?)?, dash_ratio(e.attr("sp")?)?))).collect();
-        return if stops.is_empty() { LineDash::Solid } else { LineDash::Custom(stops) };
+        return if stops.is_empty() { LineDash::Solid } else { LineDash::Custom(stops).bounded() };
     }
     ln.child("a:prstDash").and_then(|e| e.attr("val")).map(LineDash::from_ooxml).unwrap_or_default()
 }

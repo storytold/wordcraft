@@ -24,6 +24,10 @@ fn picture() -> InlineObject {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     }
 }
 fn model_box() -> Document {

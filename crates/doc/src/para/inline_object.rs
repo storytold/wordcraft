@@ -27,6 +27,19 @@ pub enum InlineObject {
         /// [`crate::graphic::Embedded`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ole: Option<std::sync::Arc<crate::graphic::Embedded>>,
+        /// The picture's outline (Picture Format › Picture Border, DrawingML's `a:ln` in
+        /// `pic:spPr`): its colour, `None` for no outline.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stroke: Option<crate::props::Rgb>,
+        /// Outline width, points: the total width of a compound outline's lines and gaps.
+        #[serde(default, skip_serializing_if = "super::float::is_zero")]
+        stroke_width: f32,
+        /// The outline's dash pattern; absent in older saved documents means solid.
+        #[serde(default, deserialize_with = "crate::line_dash::deserialize_bounded", skip_serializing_if = "crate::line_dash::LineDash::is_solid")]
+        dash: crate::line_dash::LineDash,
+        /// The outline's compound type (`a:ln/@cmpd`); absent means one line.
+        #[serde(default, skip_serializing_if = "crate::line_dash::CompoundLine::is_single")]
+        compound: crate::line_dash::CompoundLine,
     },
     /// A chart or SmartArt diagram (see [`crate::graphic`]).
     Graphic {
@@ -434,5 +447,25 @@ impl InlineObject {
             InlineObject::Opaque { text, .. } => text,
             _ => "",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InlineObject;
+    use crate::line_dash::{CompoundLine, LineDash};
+
+    /// An image saved before the outline fields existed (#5544) has none of the
+    /// `stroke`/`stroke_width`/`dash`/`compound` keys: it loads with no outline, solid
+    /// and single, so older documents open unchanged.
+    #[test]
+    fn an_image_saved_without_outline_fields_loads_with_no_outline() {
+        let old = r#"{"type":"image","media":"m.png","w":60.0,"h":40.0}"#;
+        let obj: InlineObject = serde_json::from_str(old).unwrap();
+        let InlineObject::Image { stroke, stroke_width, dash, compound, .. } = obj else { panic!("an image: {obj:?}") };
+        assert_eq!(stroke, None);
+        assert_eq!(stroke_width, 0.0);
+        assert_eq!(dash, LineDash::Solid);
+        assert_eq!(compound, CompoundLine::Single);
     }
 }

@@ -27,6 +27,20 @@ pub enum LineDash {
 }
 
 impl LineDash {
+    /// This dash with a custom pattern cut to the stops a draw can use
+    /// ([`MAX_DASH_STOPS`]): a stored document can carry a far longer list than
+    /// any draw needs, and a floating picture is copied into every page's
+    /// layout, so the list is bounded where it enters, not where it is drawn.
+    pub fn bounded(self) -> Self {
+        match self {
+            Self::Custom(mut stops) => {
+                stops.truncate(MAX_DASH_STOPS);
+                Self::Custom(stops)
+            }
+            other => other,
+        }
+    }
+
     pub fn from_ooxml(value: &str) -> Self {
         match value {
             "dot" => Self::Dot,
@@ -91,9 +105,87 @@ impl LineDash {
     }
 }
 
+/// A DrawingML outline's compound type (`a:ln/@cmpd`, ECMA-376 §20.1.10.15): one line, or
+/// two or three parallel lines sharing the outline's total width.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompoundLine {
+    #[default]
+    Single,
+    Double,
+    /// A thick line outside a thin one.
+    ThickThin,
+    /// A thin line outside a thick one.
+    ThinThick,
+    /// A thick line between two thin ones.
+    Triple,
+}
+
+impl CompoundLine {
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "dbl" => Self::Double,
+            "thickThin" => Self::ThickThin,
+            "thinThick" => Self::ThinThick,
+            "tri" => Self::Triple,
+            _ => Self::Single,
+        }
+    }
+
+    pub fn to_ooxml(self) -> &'static str {
+        match self {
+            Self::Single => "sng",
+            Self::Double => "dbl",
+            Self::ThickThin => "thickThin",
+            Self::ThinThick => "thinThick",
+            Self::Triple => "tri",
+        }
+    }
+
+    pub fn is_single(&self) -> bool {
+        *self == Self::Single
+    }
+
+    /// The parallel lines of an outline `width` points wide, as (offset of the line's centre
+    /// from the outline's centre, positive outward; the line's width), outermost first. The
+    /// lines and the gaps between them share the width: Double is thirds, thick-thin quarters
+    /// (the thick line two of them), Triple sixths (thin, gap, thick of two, gap, thin).
+    pub fn lines(self, width: f32) -> Vec<(f32, f32)> {
+        let w = width;
+        let half = w / 2.0;
+        match self {
+            Self::Single => vec![(0.0, w)],
+            Self::Double => {
+                let u = w / 3.0;
+                vec![(u, u), (-u, u)]
+            }
+            Self::ThickThin => {
+                let u = w / 4.0;
+                vec![(half - u, 2.0 * u), (-half + u / 2.0, u)]
+            }
+            Self::ThinThick => {
+                let u = w / 4.0;
+                vec![(half - u / 2.0, u), (-half + u, 2.0 * u)]
+            }
+            Self::Triple => {
+                let u = w / 6.0;
+                vec![(half - u / 2.0, u), (0.0, 2.0 * u), (-half + u / 2.0, u)]
+            }
+        }
+    }
+}
+
 fn dash_points(ratio: f32, width: f32) -> f32 {
     let width = if width.is_finite() { width.clamp(0.25, 200.0) } else { 0.75 };
     (ratio * width).clamp(MIN_DASH_POINTS, MAX_DASH_POINTS)
+}
+
+/// A [`LineDash`] read from a saved document, bounded by [`LineDash::bounded`].
+pub(crate) fn deserialize_bounded<'de, D>(deserializer: D) -> Result<LineDash, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    LineDash::deserialize(deserializer).map(LineDash::bounded)
 }
 
 #[cfg(test)]
@@ -109,10 +201,35 @@ mod tests {
     }
 
     #[test]
+    fn a_custom_dash_read_from_a_saved_document_is_bounded() {
+        let stops: Vec<[u32; 2]> = vec![[100_000, 50_000]; MAX_DASH_STOPS + 10];
+        let json = serde_json::json!({"type": "image", "media": "m", "w": 10.0, "h": 10.0,
+            "dash": {"custom": stops}});
+        let o: crate::para::InlineObject = serde_json::from_value(json).unwrap();
+        let crate::para::InlineObject::Image { dash, .. } = o else { panic!("not an image") };
+        let LineDash::Custom(stops) = dash else { panic!("not a custom dash") };
+        assert_eq!(stops.len(), MAX_DASH_STOPS, "a stored custom dash is cut to the stops a draw can use");
+    }
+
+    #[test]
     fn old_shapes_default_to_solid() {
         let extra: crate::connector::ShapeExtra = serde_json::from_str("{}").unwrap();
         assert!(extra.dash.is_solid());
         assert!(!serde_json::to_string(&extra).unwrap().contains("dash"));
+    }
+
+    #[test]
+    fn compound_lines_share_the_width() {
+        assert_eq!(CompoundLine::Single.lines(6.0), [(0.0, 6.0)]);
+        assert_eq!(CompoundLine::Double.lines(6.0), [(2.0, 2.0), (-2.0, 2.0)]);
+        // Thick outside thin: the thick line's outer edge and the thin line's inner edge are the band's.
+        assert_eq!(CompoundLine::ThickThin.lines(8.0), [(2.0, 4.0), (-3.0, 2.0)]);
+        assert_eq!(CompoundLine::ThinThick.lines(8.0), [(3.0, 2.0), (-2.0, 4.0)]);
+        assert_eq!(CompoundLine::Triple.lines(6.0), [(2.5, 1.0), (0.0, 2.0), (-2.5, 1.0)]);
+        for c in ["sng", "dbl", "thickThin", "thinThick", "tri"] {
+            assert_eq!(CompoundLine::from_ooxml(c).to_ooxml(), c);
+        }
+        assert!(CompoundLine::from_ooxml("bogus").is_single());
     }
 
     #[test]
