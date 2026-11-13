@@ -269,8 +269,7 @@ fn styles_and_lists_round_trip() {
         locked: true,
         default: false,
         table: None,
-        para_change: None,
-        chr_change: None,
+        ..Default::default()
     });
     Arc::make_mut(&mut d.styles).upsert(Style {
         id: "MyStyleChar".into(),
@@ -2953,4 +2952,37 @@ fn drop_cap_options_round_trip() {
         (b.props.drop_cap, b.props.drop_cap_margin, b.props.drop_cap_distance, b.props.drop_cap_font.as_deref()),
         (Some(4), Some(true), None, None)
     );
+}
+
+/// A style's visibility flags, aliases, Automatically update, e-mail flags and rsid come back as
+/// they were (ECMA-376 Part 1 §17.7.4).
+#[test]
+fn style_ui_flags_round_trip() {
+    let base = Style { kind: StyleKind::Paragraph, based_on: Some("Normal".into()), builtin: false, ..Default::default() };
+    let styles = [
+        Style { id: "SemiOnly".into(), hidden: true, semi_hidden: true, ..base.clone() },
+        Style { id: "UnhideOnly".into(), unhide_when_used: true, ..base.clone() },
+        Style { id: "Everywhere".into(), hidden: true, hidden_everywhere: true, ..base.clone() },
+        Style { id: "Both".into(), hidden: true, hidden_everywhere: true, semi_hidden: true, ..base.clone() },
+        Style { id: "AppHidden".into(), hidden: true, ..base.clone() },
+        Style {
+            id: "Extras".into(),
+            aliases: Some("H1,Head".into()),
+            auto_redefine: true,
+            personal: true,
+            personal_compose: true,
+            personal_reply: true,
+            rsid: Some("00AB12CD".into()),
+            ..base.clone()
+        },
+    ];
+    let mut d = Document::new();
+    for mut s in styles {
+        s.name = s.id.clone();
+        Arc::make_mut(&mut d.styles).upsert(s);
+    }
+    let r = rt(&d);
+    for id in ["SemiOnly", "UnhideOnly", "Everywhere", "Both", "AppHidden", "Extras"] {
+        assert_eq!(r.styles.get(id), d.styles.get(id), "style {id}");
+    }
 }

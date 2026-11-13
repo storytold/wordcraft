@@ -125,6 +125,19 @@ impl Reader<'_> {
                 quick: flag(s, "w:qFormat").unwrap_or(false),
                 hidden: flag(s, "w:semiHidden").unwrap_or(false) || flag(s, "w:hidden").unwrap_or(false),
                 builtin: !s.attr("w:customStyle").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on")),
+                semi_hidden: flag(s, "w:semiHidden").unwrap_or(false),
+                unhide_when_used: flag(s, "w:unhideWhenUsed").unwrap_or(false),
+                hidden_everywhere: flag(s, "w:hidden").unwrap_or(false),
+                aliases: s.child_val("w:aliases").filter(|a| !a.trim().is_empty() && a.len() <= 4096).map(str::to_string),
+                auto_redefine: flag(s, "w:autoRedefine").unwrap_or(false),
+                personal: flag(s, "w:personal").unwrap_or(false),
+                personal_compose: flag(s, "w:personalCompose").unwrap_or(false),
+                personal_reply: flag(s, "w:personalReply").unwrap_or(false),
+                rsid: s
+                    .child_val("w:rsid")
+                    .map(str::trim)
+                    .filter(|v| v.len() == 8 && v.chars().all(|c| c.is_ascii_hexdigit()))
+                    .map(str::to_ascii_uppercase),
                 locked: flag(s, "w:locked").unwrap_or(false),
                 // Only where the writer couldn't tell from the id (it flags the English ids).
                 default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true")
@@ -139,6 +152,11 @@ impl Reader<'_> {
             };
             let mut old_para = None;
             let mut old_chr = None;
+            // Hidden until used is what the writer gives a style hidden in the app: read it back as that.
+            if st.semi_hidden && st.unhide_when_used && !st.hidden_everywhere {
+                st.semi_hidden = false;
+                st.unhide_when_used = false;
+            }
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
                 if let Some(ch) = p.child("w:pPrChange") {
