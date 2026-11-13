@@ -9,7 +9,9 @@
 //! an operator or space; a parenthesised operand loses its parentheses). `^`/`_` with nothing
 //! before them are pre-scripts. A top-level `#` numbers the equation (`E=mc^2#(1)`).
 
-use crate::math::{Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, any_too_deep, is_nary_char, math_class, merge_runs, too_deep};
+use crate::math::{
+    Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
+};
 
 /// Function names set upright and applied to the following operand.
 pub const FUNCTION_NAMES: &[&str] = &[
@@ -172,7 +174,7 @@ impl P {
                         out.push(self.prescript(stops));
                     } else {
                         self.i += 1;
-                        let s = self.script_operand(stops);
+                        let s = self.script_chain(c, stops, 0);
                         if out.last().is_some_and(too_deep) {
                             out.push(text(c));
                             out.extend(s);
@@ -449,11 +451,14 @@ impl P {
             }
             Some(c @ ('^' | '_')) => {
                 self.i += 1;
-                let s = self.script_operand(stops);
+                // `sin^2^3` nests to the right like any other script (#6074).
+                let s = self.script_chain(c, stops, 0);
                 let mut n = attach_script(Some(MNode::Run(MRun::plain(word.clone()))), c == '^', s);
-                if let Some(c2 @ ('^' | '_')) = self.peek() {
+                // Only the other script joins it, and it nests the same way (`log_2^3`, `sin^2_a_b`);
+                // the same one again is what the chain left at its depth cap.
+                if let Some(c2 @ ('^' | '_')) = self.peek().filter(|&c2| c2 != c) {
                     self.i += 1;
-                    let s2 = self.script_operand(stops);
+                    let s2 = self.script_chain(c2, stops, 0);
                     n = attach_script(Some(n), c2 == '^', s2);
                 }
                 vec![n]
@@ -465,7 +470,10 @@ impl P {
             self.i += 1;
         }
         let next = self.peek();
-        let applies = next.is_some_and(|c| !stops.contains(&c) && !is_closer(c) && (!is_boundary(c) || c == '(' || matches!(c, '−' | '-' | '+')));
+        // A `^`/`_` here is what the script chain left at its depth cap: text for `expr`, not an operand.
+        let applies = next.is_some_and(|c| {
+            !stops.contains(&c) && !is_closer(c) && !matches!(c, '^' | '_') && (!is_boundary(c) || c == '(' || matches!(c, '−' | '-' | '+'))
+        });
         if !applies {
             return name;
         }
@@ -584,7 +592,7 @@ impl P {
             }
             match c {
                 '^' | '_' => {
-                    let s = self.script_operand(stops);
+                    let s = self.script_chain(c, stops, 0);
                     let b = base(out);
                     out.push(attach_script(b, c == '^', s));
                 }
@@ -599,6 +607,32 @@ impl P {
                 }
             }
         }
+    }
+
+    /// A script operand, with the same script operator after it nested inside: `a^b^c` is
+    /// `a^(b^c)`, as Word builds it (#6074). The chain stops at `WRAP_DEPTH` like every other
+    /// wrap, so `x^1^1^1…` stays shallow (#1456) and the rest is left to the caller as text. The
+    /// cap holds for the whole tree too: when the operands are deep themselves, a level that would
+    /// make it too deep keeps its operator as text, as `expr` does.
+    fn script_chain(&mut self, op: char, stops: &[char], level: usize) -> Arg {
+        let s = self.script_operand(stops);
+        if self.peek() != Some(op) || s.is_empty() || level + 1 >= WRAP_DEPTH || self.tired() || any_too_deep(&s) {
+            return s;
+        }
+        self.i += 1;
+        self.depth += 1;
+        let inner = self.script_chain(op, stops, level + 1);
+        self.depth -= 1;
+        let (kind, sub, sup) = if op == '^' { (ScriptKind::Sup, Vec::new(), inner) } else { (ScriptKind::Sub, inner, Vec::new()) };
+        let node = MNode::Script { kind, base: s, sub, sup };
+        if !too_deep(&node) {
+            return vec![node];
+        }
+        let MNode::Script { base: mut out, sub, sup, .. } = node else { return Vec::new() };
+        out.push(text(op));
+        out.extend(sub);
+        out.extend(sup);
+        out
     }
 
     /// A script or limit: a parenthesised group, a structure, a number, a signed operand, a run of
