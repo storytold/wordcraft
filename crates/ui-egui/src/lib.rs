@@ -929,6 +929,21 @@ impl WordApp {
             self.status(e.clone());
             return Err(e);
         }
+        // A PDF is a read-only page view with no editable Document behind it. `edit.copy` reaches
+        // here from the ribbon, the right-click menu, keytips, the control channel and MCP; left
+        // alone it would read the blank placeholder and `put_result` would put an empty string on
+        // the clipboard (which `put` ignores). Route it to the PDF text layer so every Copy
+        // control behaves like Ctrl+C. Cut stays refused by the engine's read-only gate.
+        if id == "edit.copy" && self.session.pdf_view().is_some() {
+            let text = crate::canvas::pdf_selected_text(self).unwrap_or_default();
+            if let Some(ctx) = self.ctx.clone() {
+                crate::system_clipboard::put(self, &ctx, &text, "", "");
+            } else {
+                // Headless, no Context yet: the frame tail puts it there, as `ui.pdf.copy` does.
+                self.canvas.pdf_copy_text = Some(text.clone());
+            }
+            return Ok(json!({"text": text}));
+        }
         if let Some(r) = self.ui_command(id, &params) {
             return r;
         }
@@ -1018,6 +1033,13 @@ impl WordApp {
             if matches!(self.dialog, Some(dialogs::Dialog::SaveChanges { .. })) {
                 self.dialog = None;
             }
+            // A PDF selection indexes that view's text layer; it must not survive into the next
+            // file, even if no frame is rendered before a script opens something else.
+            self.canvas.pdf_selection = None;
+            self.canvas.pdf_hover_link = None;
+            self.canvas.pdf_goto = None;
+            self.canvas.pdf_current_page = None;
+            self.canvas.pdf_doc_ptr = None;
             crate::table_pen::stop(self);
         }
         // An explicit save to the document's own file lets AutoSave keep writing there.
@@ -1728,6 +1750,54 @@ impl WordApp {
                 self.status(tl!("Click the empty text box the text should continue in (Esc cancels)"));
                 json!({"pending": "link"})
             }
+            // Read-only PDF navigation and selection. These live in the UI (like `ui.click`)
+            // because a PDF has no `Document` to edit: `edit.goto` moves a caret and `edit.copy`
+            // would read the blank placeholder document.
+            "ui.pdf.goto" => {
+                let Some(pdf) = self.session.pdf_view() else { return Some(Err("no PDF is open".into())) };
+                let n = p.get("page").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
+                let page = (n - 1).min(pdf.page_count().saturating_sub(1));
+                let top = p.get("top").and_then(Value::as_f64).unwrap_or(0.0).max(0.0) as f32;
+                self.canvas.pdf_goto = Some((page, top));
+                json!({"page": page + 1, "top": top})
+            }
+            "ui.pdf.select" => {
+                if self.session.pdf_view().is_none() {
+                    return Some(Err("no PDF is open".into()));
+                };
+                let endpoint = |k: &str| -> Option<(usize, usize)> {
+                    let a = p.get(k)?.as_array()?;
+                    Some((a.first()?.as_u64()? as usize, a.get(1)?.as_u64()? as usize))
+                };
+                let (Some(anchor), Some(focus)) = (endpoint("from"), endpoint("to")) else {
+                    return Some(Err("`from` and `to` must be [page, character] pairs".into()));
+                };
+                self.canvas.pdf_selection = Some(crate::canvas::PdfSelection { anchor, focus, dragging: false });
+                json!({"from": anchor, "to": focus})
+            }
+            "ui.pdf.copy" => {
+                let text = crate::canvas::pdf_selected_text(self).unwrap_or_default();
+                // The clipboard needs a `Context`, which `ui_command` does not have; the frame
+                // tail puts it there, the same pattern as `open_url`.
+                self.canvas.pdf_copy_text = Some(text.clone());
+                json!({"text": text})
+            }
+            "ui.pdf.links" => {
+                let Some(pdf) = self.session.pdf_view() else { return Some(Err("no PDF is open".into())) };
+                let page = p.get("page").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let links: Vec<Value> = pdf
+                    .links(page)
+                    .iter()
+                    .map(|l| {
+                        let target = match &l.target {
+                            wordcraft_engine::LinkTarget::Page { page, top } => json!({"page": page + 1, "top": top}),
+                            wordcraft_engine::LinkTarget::Uri(u) => json!({"uri": u}),
+                        };
+                        json!({"rect": [l.rect.x0, l.rect.y0, l.rect.x1, l.rect.y1], "target": target})
+                    })
+                    .collect();
+                json!({"page": page, "links": links})
+            }
             _ => return None,
         }))
     }
@@ -2243,6 +2313,9 @@ impl WordApp {
         self.refocus_after_chrome_click(&ctx);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
+        if let Some(text) = self.canvas.pdf_copy_text.take() {
+            crate::system_clipboard::put(self, &ctx, &text, "", "");
         }
         let title = if self.has_document() {
             // PDF is a read-only view: say so in the window title. "PDF" is a format name, not
@@ -2837,6 +2910,116 @@ mod tests {
         // Opening a real document leaves the PDF view behind.
         app.run("file.new", json!({})).unwrap();
         assert!(app.session.pdf.is_none());
+    }
+
+    #[test]
+    fn pdf_link_and_selection_commands_are_wired() {
+        let mut app = app();
+        // Without a PDF these are clean errors, never panics or blank-document commands.
+        assert!(app.run("ui.pdf.goto", json!({"page": 3})).is_err());
+        assert!(app.run("ui.pdf.select", json!({"from": [0, 0], "to": [0, 1]})).is_err());
+        assert!(app.run("ui.pdf.links", json!({"page": 0})).is_err());
+        assert!(crate::canvas::pdf_selected_text(&app).is_none());
+
+        let doc = wordcraft_doc::Document::from_text("PDF view");
+        let bytes = wordcraft_pdf::export(&doc, &wordcraft_pdf::PdfOptions::default()).unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
+        app.run("file.open", json!({"path": "notes.pdf", "data": data})).unwrap();
+        let pages = app.session.pdf.as_ref().map_or(1, |p| p.page_count());
+
+        // Navigation clamps an out-of-range page and remembers the requested top offset.
+        let r = app.run("ui.pdf.goto", json!({"page": 999, "top": 12.5})).unwrap();
+        assert_eq!(r["page"], pages);
+        assert_eq!(app.canvas.pdf_goto, Some((pages - 1, 12.5)));
+        let r = app.run("ui.pdf.links", json!({"page": 0})).unwrap();
+        assert!(r["links"].is_array());
+
+        // A selection is UI-only: it never touches Session.sel or the undo history.
+        let before = app.session.sel.clone();
+        app.run("ui.pdf.select", json!({"from": [0, 0], "to": [0, 5]})).unwrap();
+        assert_eq!(app.canvas.pdf_selection.unwrap().ends(), ((0, 0), (0, 5)));
+        assert_eq!(app.session.sel, before);
+        assert!(app.run("ui.pdf.copy", json!({})).unwrap()["text"].is_string());
+        app.run("ui.pdf.select", json!({"from": [0, 9], "to": [0, 2]})).unwrap();
+        assert_eq!(app.canvas.pdf_selection.unwrap().ends(), ((0, 2), (0, 9)));
+
+        // Hostile control-channel parameters must not panic.
+        for junk in [json!({"page": -1}), json!({"page": 1e30}), json!(null), json!({"page": "x"})] {
+            let _ = app.run("ui.pdf.goto", junk);
+        }
+        for junk in [json!({"from": [0, 0]}), json!({"from": [-1, 0], "to": [0, 1]}), json!(null)] {
+            let _ = app.run("ui.pdf.select", junk);
+        }
+        // Switching to a plain document drops the PDF selection and pending jump. A frame in
+        // between records the PDF's identity, exactly as a real window would render it.
+        let ctx = egui::Context::default();
+        let frame = |app: &mut WordApp| {
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            out.drop_without_applying_deltas();
+        };
+        frame(&mut app);
+        app.run("file.new", json!({})).unwrap();
+        frame(&mut app);
+        assert!(app.canvas.pdf_selection.is_none());
+        assert!(app.canvas.pdf_goto.is_none());
+    }
+
+    /// A one-page PDF with a /ToUnicode CMap, so its text layer has real characters. Inlined so
+    /// the test needs no fixture file and copying an empty string can never look like success.
+    const PDF_WITH_TEXT: &str = "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1OTUgODQyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAzNyA+PgpzdHJlYW0KQlQgL0YxIDEyIFRmIDIwIDcwMCBUZCAoSGVsbG8pIFRqIEVUCgplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhIC9Ub1VuaWNvZGUgNiAwIFIgPj4KZW5kb2JqCjYgMCBvYmoKPDwgL0xlbmd0aCAxOTkgPj4Kc3RyZWFtCi9DSURJbml0IC9Qcm9jU2V0IGZpbmRyZXNvdXJjZSBiZWdpbgoxMiBkaWN0IGJlZ2luCmJlZ2luY21hcAoxIGJlZ2luY29kZXNwYWNlcmFuZ2UKPDAwPiA8RkY+CmVuZGNvZGVzcGFjZXJhbmdlCjQgYmVnaW5iZmNoYXIKPDQ4PiA8MDA0OD4KPDY1PiA8MDA2NT4KPDZDPiA8MDA2Qz4KPDZGPiA8MDA2Rj4KZW5kYmZjaGFyCmVuZGNtYXAKZW5kCmVuZAoKZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgNwowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDMyOCAwMDAwMCBuIAowMDAwMDAwNDE1IDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNyAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKNjY1CiUlRU9GCg==";
+
+    /// Right-click › Copy, the ribbon's Copy, keytips, the control channel and MCP all send
+    /// `edit.copy`. With a PDF open it must read the PDF text layer, not the blank placeholder
+    /// Document behind the view (which used to put an empty string on the clipboard).
+    #[test]
+    fn pdf_edit_copy_reads_the_pdf_text_layer() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.run("file.open", json!({"path": "copy.pdf", "data": PDF_WITH_TEXT})).unwrap();
+        app.run("ui.pdf.select", json!({"from": [0, 0], "to": [0, 4]})).unwrap();
+
+        let expected = crate::canvas::pdf_selected_text(&app).unwrap_or_default();
+        assert!(expected.contains("Hello"), "the fixture has a selectable text layer: {expected:?}");
+
+        let from_menu = app.run("edit.copy", json!({})).unwrap();
+        assert_eq!(from_menu["text"], expected, "right-click / ribbon Copy must copy the PDF selection");
+        let from_script = app.execute("edit.copy", json!({})).unwrap();
+        assert_eq!(from_script["text"], expected, "a script's edit.copy must copy the PDF selection");
+        assert_eq!(app.run("ui.pdf.copy", json!({})).unwrap()["text"], expected);
+
+        // The text really reaches the host clipboard, not just the command's reply. The first
+        // frame installs the Context; the next reports what `ctx.copy_text` was given.
+        let frame = |app: &mut WordApp| {
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            let copied = out
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            out.drop_without_applying_deltas();
+            copied
+        };
+        app.canvas.pdf_copy_text = None;
+        frame(&mut app);
+        app.run("edit.copy", json!({})).unwrap();
+        assert_eq!(frame(&mut app), expected, "edit.copy writes the system clipboard");
+
+        // Read-only: Cut is still refused. A real document restores the ordinary Copy path.
+        assert!(app.execute("edit.cut", json!({})).is_err());
+        app.run("file.new", json!({})).unwrap();
+        assert!(app.session.pdf.is_none());
+        assert!(crate::canvas::pdf_selected_text(&app).is_none());
+        assert!(app.execute("edit.copy", json!({})).is_ok());
     }
 
     #[test]

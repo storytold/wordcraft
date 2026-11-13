@@ -35,6 +35,23 @@ const EDGE_MAX_DT: f32 = 0.1;
 /// are rendered again when they come back.
 const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
+/// A selection in a read-only PDF: two `(page, character index)` endpoints in the PDF's text
+/// layer. Deliberately not a `wordcraft_engine::Selection`: a PDF has no editable `Document`,
+/// so nothing here can enter the undo history or be saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PdfSelection {
+    pub anchor: (usize, usize),
+    pub focus: (usize, usize),
+    pub dragging: bool,
+}
+
+impl PdfSelection {
+    /// The endpoints in reading order.
+    pub fn ends(&self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.focus { (self.anchor, self.focus) } else { (self.focus, self.anchor) }
+    }
+}
+
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
     /// Visible full-resolution tiles of pages too tall for one GPU texture.
@@ -79,6 +96,18 @@ pub struct CanvasState {
     pub last_font_color: String,
     pub last_shading: String,
     pub open_url: Option<String>,
+    /// Text selection in a read-only PDF, or `None` for an ordinary document.
+    pub pdf_selection: Option<PdfSelection>,
+    /// A clicked PDF link asks for a jump to (page, distance from the page top in points).
+    pub pdf_goto: Option<(usize, f32)>,
+    /// The link under the pointer (page, link index), for hover feedback.
+    pub pdf_hover_link: Option<(usize, usize)>,
+    /// Identity of the PDF view last frame, so switching files drops the stale selection.
+    pub pdf_doc_ptr: Option<usize>,
+    /// Page at the top of the viewport in a PDF, for the status bar (a PDF has no caret).
+    pub pdf_current_page: Option<usize>,
+    /// A `ui.pdf.copy` result waiting to reach the system clipboard at the end of the frame.
+    pub pdf_copy_text: Option<String>,
     /// Screen rects of pages last frame (for the control channel: page ↔ screen coordinates).
     pub page_rects: Vec<Rect>,
     /// While the vertical scrollbar is dragged: the page at the top of the window (0-based),
@@ -239,6 +268,12 @@ impl Default for CanvasState {
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
             open_url: None,
+            pdf_selection: None,
+            pdf_goto: None,
+            pdf_hover_link: None,
+            pdf_doc_ptr: None,
+            pdf_current_page: None,
+            pdf_copy_text: None,
             page_rects: Vec::new(),
             scrollbar_page: None,
             scale: PX_PER_PT,
@@ -967,6 +1002,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // While a PDF is shown, the pages above are empty sheets in the PDF's own sizes and each
     // raster comes from the PDF view instead of the document renderer.
     let pdf_view = app.session.pdf_view();
+    // Another file (or a plain document) replaced this PDF: its text-layer indices are stale.
+    let pdf_ptr = pdf_view.as_ref().map(|p| std::sync::Arc::as_ptr(p) as usize);
+    if app.canvas.pdf_doc_ptr != pdf_ptr {
+        app.canvas.pdf_doc_ptr = pdf_ptr;
+        app.canvas.pdf_selection = None;
+        app.canvas.pdf_hover_link = None;
+        app.canvas.pdf_goto = None;
+        app.canvas.pdf_current_page = None;
+    }
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
     {
@@ -1012,6 +1056,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     let avail = if app.session.view.read_mode { area.size() } else { area.size() - vec2(SCROLLBAR, 0.0) };
     let geo = geometry(app, &layout, avail);
+    // A PDF has no caret for the status bar to locate, so derive the current page from the
+    // scroll position instead. `geo.rects` and `scroll_offset` share the content coordinate
+    // system; the offset is last frame's, one frame behind a fresh jump at most.
+    if pdf_view.is_some() {
+        let y = app.canvas.scroll_offset.y + 80.0;
+        let first = geo.rects.iter().position(|r| r.bottom() > y).unwrap_or(geo.rects.len().saturating_sub(1));
+        app.canvas.pdf_current_page = Some(first.min(geo.rects.len().saturating_sub(1)));
+    }
     // A pane or toolbar resize changes the reachable last column immediately. Navigation must
     // clamp against this frame's geometry, not the previous frame's scroll maximum.
     if app.session.view.read_mode {
@@ -1091,6 +1143,16 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         scroll_target = Some(r.expand2(vec2(40.0, 60.0)));
     }
     app.canvas.scroll_to_caret = false;
+    // A clicked PDF link scrolls to its target page (and, for /XYZ destinations, its y offset).
+    // `edit.goto` moves a caret and is refused in the read-only view, so PDF navigation stays
+    // in the UI layer like the other page-turn requests.
+    if let Some((page, top)) = app.canvas.pdf_goto.take()
+        && let Some(pr) = geo.rects.get(page)
+    {
+        let x = (pr.left() - GAP).max(0.0);
+        let y = (pr.top() + top * geo.scale - 40.0).max(0.0);
+        app.canvas.scroll_request = Some(vec2(x, y));
+    }
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
     // The canvas scrolls itself on wheel/touchpad input (crate::scroll): touchpads 1:1 with
@@ -1341,6 +1403,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 painter.image(tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
             let page_scale = page_screen_scale(visual_sr, page, geo.scale);
+            // PDF-only overlays: the selected text and the hovered link sit on top of the page
+            // bitmap. Both are drawn in page points and use the same scale as the bitmap.
+            if let Some(pdf) = &pdf_view {
+                pdf_paint_overlay(app, &painter, pdf.as_ref(), i, visual_sr, page_scale, &t);
+            }
             // Header/footer editing chrome.
             if let StoryRef::Part(id) = app.session.sel.focus.story {
                 let sect_body = page.body;
@@ -1662,7 +1729,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     } else
     // Draw Table / Eraser own the mouse while on (no caret moves); else the usual editing.
     if !middle_gesture && !crate::table_pen::pointer(app, ui, &resp, &rects, &layout, geo.scale) {
-        mouse(app, ui, &resp, &rects, &layout, geo.scale);
+        if pdf_view.is_some() {
+            pdf_mouse(app, ui, &resp, &rects, &layout, geo.scale);
+        } else {
+            mouse(app, ui, &resp, &rects, &layout, geo.scale);
+        }
     }
     // A click on a check box ticks it; on a list's button opens the list.
     if !middle_gesture {
@@ -2315,6 +2386,112 @@ fn edge_scroll(p: f32, lo: f32, hi: f32, dt: f32) -> f32 {
 /// scrollable range, so a document shorter than the viewport never moves.
 fn clamped_scroll(before: egui::Vec2, delta: egui::Vec2, max: egui::Vec2) -> egui::Vec2 {
     (before - delta).clamp(egui::Vec2::ZERO, max)
+}
+
+/// Draw a PDF's text selection and hovered link on top of its page bitmap.
+fn pdf_paint_overlay(app: &WordApp, painter: &egui::Painter, pdf: &wordcraft_engine::PdfView, page: usize, page_rect: Rect, scale: f32, t: &Tokens) {
+    let to_screen = |r: &wordcraft_engine::PdfRect| {
+        Rect::from_min_max(
+            pos2(page_rect.min.x + r.x0 * scale, page_rect.min.y + r.y0 * scale),
+            pos2(page_rect.min.x + r.x1 * scale, page_rect.min.y + r.y1 * scale),
+        )
+    };
+    if let Some((hp, idx)) = app.canvas.pdf_hover_link
+        && hp == page
+        && let Some(link) = pdf.links(page).get(idx)
+    {
+        // A warm highlight says "this is clickable", distinct from the cool selection colour.
+        painter.rect_filled(to_screen(&link.rect), 0.0, t.find_highlight);
+    }
+    let Some(sel) = app.canvas.pdf_selection else { return };
+    let (a, b) = sel.ends();
+    if page < a.0 || page > b.0 {
+        return;
+    }
+    let Some(chars) = pdf.text(page) else { return };
+    let lo = if page == a.0 { a.1.min(chars.len()) } else { 0 };
+    let hi = if page == b.0 { b.1.saturating_add(1).min(chars.len()) } else { chars.len() };
+    if lo >= hi {
+        return;
+    }
+    // Merge neighbouring characters of one line into a single strip, so a whole sentence is a
+    // handful of rectangles instead of hundreds.
+    let mut strip: Option<(usize, Rect)> = None;
+    for c in chars.iter().take(hi).skip(lo) {
+        let r = to_screen(&c.rect);
+        match &mut strip {
+            Some((line, acc)) if *line == c.line => *acc = (*acc).union(r),
+            _ => {
+                if let Some((_, acc)) = strip.take() {
+                    painter.rect_filled(acc, 0.0, t.selection);
+                }
+                strip = Some((c.line, r));
+            }
+        }
+    }
+    if let Some((_, acc)) = strip {
+        painter.rect_filled(acc, 0.0, t.selection);
+    }
+}
+
+/// Mouse behaviour in the read-only PDF view: clicking a link jumps to its page, dragging picks
+/// characters out of the PDF text layer. Nothing here touches `Session.sel`, so the view never
+/// becomes editable and no undo entry is created.
+fn pdf_mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
+    let Some(pdf) = app.session.pdf_view() else { return };
+    let Some(p) = resp.interact_pointer_pos().or_else(|| resp.hover_pos()) else { return };
+    let Some((page, x, y)) = page_at(rects, layout, scale, p) else {
+        app.canvas.pdf_hover_link = None;
+        return;
+    };
+    let hover = pdf.links(page).iter().position(|l| l.rect.contains(x, y));
+    app.canvas.pdf_hover_link = hover.map(|i| (page, i));
+    if hover.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    if resp.clicked() {
+        match pdf.link_at(page, x, y) {
+            Some(wordcraft_engine::LinkTarget::Page { page: target, top }) => {
+                app.canvas.pdf_goto = Some((target, top.unwrap_or(0.0)));
+                app.canvas.pdf_selection = None;
+                ui.ctx().request_repaint();
+                return;
+            }
+            Some(wordcraft_engine::LinkTarget::Uri(url)) if is_followable_link(&url) => {
+                app.canvas.open_url = Some(url);
+                return;
+            }
+            _ => app.canvas.pdf_selection = None,
+        }
+    }
+    if resp.drag_started()
+        && hover.is_none()
+        && let Some(i) = pdf.char_index_at(page, x, y)
+    {
+        app.canvas.pdf_selection = Some(PdfSelection { anchor: (page, i), focus: (page, i), dragging: true });
+    }
+    if resp.dragged()
+        && let Some(sel) = &mut app.canvas.pdf_selection
+        && sel.dragging
+        && let Some(i) = pdf.char_index_at(page, x, y)
+    {
+        sel.focus = (page, i);
+    }
+    if resp.drag_stopped()
+        && let Some(sel) = &mut app.canvas.pdf_selection
+    {
+        sel.dragging = false;
+    }
+}
+
+/// The plain text of the PDF selection, or `None` when no PDF selection exists. Ctrl+C and the
+/// `ui.pdf.copy` command both go through here.
+pub fn pdf_selected_text(app: &WordApp) -> Option<String> {
+    let pdf = app.session.pdf_view()?;
+    let sel = app.canvas.pdf_selection?;
+    let (a, b) = sel.ends();
+    Some(pdf.selection_text(a, b))
 }
 
 fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
@@ -3125,6 +3302,12 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             ui.close();
         }
     };
+    // A read-only PDF has nothing to cut, paste or format: the engine refuses every mutating
+    // command. Offer just Copy, which `WordApp::execute` routes to the PDF text layer.
+    if app.session.pdf_view().is_some() {
+        item(ui, app, "Copy", "edit.copy", json!({}));
+        return;
+    }
     if let Some(issue) = app.canvas.context_issue.clone() {
         let sugg: Vec<String> = issue
             .get("suggestions")

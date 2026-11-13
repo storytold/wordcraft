@@ -5449,6 +5449,7 @@ name = "wordcraft-pdfview"
 version = "0.9.0"
 dependencies = [
  "hayro",
+ "kurbo",
  "log",
  "thiserror 2.0.21",
 ]

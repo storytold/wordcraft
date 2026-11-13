@@ -447,7 +447,11 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(14.0, 0.0);
                 let l = app.session.layout();
-                let page = if app.session.selects_whole_story() {
+                let page = if let Some(p) = app.canvas.pdf_current_page.filter(|_| app.session.pdf.is_some()) {
+                    // A PDF has no caret: the page at the top of the viewport is the current one,
+                    // so link jumps and scrolling are reflected in the status bar.
+                    p.saturating_add(1).min(l.pages.len())
+                } else if app.session.selects_whole_story() {
                     app.session.page_hint.min(l.pages.len().saturating_sub(1)) + 1
                 } else {
                     l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)

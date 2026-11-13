@@ -69,6 +69,27 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 | `ui.parity` | — | feature-catalog parity |
 | `ui.resize` / `ui.focus` / `app.quit` | | window control |
 
+### Read-only PDF commands
+
+UI commands, run through `engine.execute` while a PDF is open. Character indices and `page` in
+`ui.pdf.select` and `ui.pdf.links` are 0-based; `ui.pdf.goto` takes a 1-based page number.
+Rectangles and `top` are in page points with a top-left origin.
+
+| Command | Params | Result |
+|---|---|---|
+| `ui.pdf.links` | `page` (0-based) | `{page, links: [{rect: [x0,y0,x1,y1], target: {page, top?} or {uri}}]}` |
+| `ui.pdf.goto` | `page` (1-based), `top?` (points from the page's top) | `{page, top}`, clamped to the document |
+| `ui.pdf.select` | `from`, `to` = `[page, charIndex]` | `{from, to}`; reversed ranges are normalised |
+| `ui.pdf.copy` | — | `{text}`: the selected text, also put on the system clipboard |
+
+A real click on a link goes through the canvas, so `ui.clickText` works when that page is on
+screen; dragging over the text layer selects. Ctrl/⌘+C, the right-click menu's Copy, the ribbon's
+Copy and a scripted `edit.copy` all read that same selection (`edit.copy` returns `{text}` here
+instead of the blank document behind the view). Destinations come from
+`/Dest`, `/A /GoTo` (including named destinations in `/Dests` or the `/Names` name tree) and
+`/A /URI`; external links reach the host only when they are web or mail URLs. See
+`docs/file-format-parity.md` for what is not supported.
+
 Any other method name is treated as a command id: `{"method": "format.bold"}` works.
 
 The `CharProps` and `ParaProps` that `format.set`, `para.set` and `styles.modify` take are listed

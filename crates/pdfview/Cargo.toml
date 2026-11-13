@@ -13,5 +13,6 @@ workspace = true
 # shares the exact hayro-interpret / image / kurbo versions already in Cargo.lock, so it adds
 # no duplicate copies of the PDF interpreter. No C/C++ library and no WASM glue is required.
 hayro = "0.7.1"
+kurbo = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }

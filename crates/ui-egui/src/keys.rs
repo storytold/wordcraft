@@ -382,9 +382,15 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 let _ = app.run(id, json!({"text": t}));
             }
             egui::Event::Copy | egui::Event::Cut => {
-                let id = if matches!(e, egui::Event::Cut) { "edit.cut" } else { "edit.copy" };
-                // `run` puts the copied text on the system clipboard itself.
-                let _ = app.run(id, json!({}));
+                // A PDF has no editable document behind it: `edit.copy` would return an empty
+                // string from the blank placeholder. Copy the PDF text layer selection instead.
+                if let Some(text) = crate::canvas::pdf_selected_text(app) {
+                    crate::system_clipboard::put(app, ctx, &text, "", "");
+                } else {
+                    let id = if matches!(e, egui::Event::Cut) { "edit.cut" } else { "edit.copy" };
+                    // `run` puts the copied text on the system clipboard itself.
+                    let _ = app.run(id, json!({}));
+                }
             }
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 if key == Key::Escape && app.session.painter.is_some() {

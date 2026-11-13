@@ -27,7 +27,7 @@ use serde_json::Value;
 
 pub use io::Password;
 pub use keymap::KeyMap;
-pub use pdf_view::PdfView;
+pub use pdf_view::{LinkTarget, PdfChar, PdfLink, PdfRect, PdfView};
 pub use ribbon::RibbonLayout;
 pub use session::{
     CellRange, ColumnBlock, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, UNDO_LIST_MAX, ViewState, blank_document, set_system_locale,

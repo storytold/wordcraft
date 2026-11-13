@@ -7,11 +7,22 @@
 //! target including the web.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod links;
+mod text;
+
+pub use links::{LinkTarget, PdfLink, link_at};
+pub use text::{PdfChar, char_at};
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, Mutex};
 
 use hayro::hayro_interpret::InterpreterSettings;
+use hayro::hayro_interpret::util::TransformExt;
+use hayro::hayro_syntax::object::Rect as PdfBox;
+use hayro::hayro_syntax::page::Page;
 use hayro::hayro_syntax::{LoadPdfError, Pdf};
 use hayro::{RenderCache, RenderSettings, render};
+use kurbo::{Affine, Point};
 
 /// Largest PDF accepted. A PDF is kept in memory for as long as it is open.
 pub const MAX_PDF_BYTES: usize = 512 * 1024 * 1024;
@@ -61,12 +72,87 @@ pub struct PageSize {
     pub h: f32,
 }
 
+/// A rectangle in page points with a top-left origin — the same coordinate space as the page
+/// bitmap, the link annotations and the text layer. Keeping it here avoids a dependency on
+/// `wordcraft-geom` (L0) from this L3 crate, and on egui from anything below L6.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PdfRect {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+impl PdfRect {
+    pub fn new(x0: f32, y0: f32, x1: f32, y1: f32) -> Self {
+        Self { x0: x0.min(x1), y0: y0.min(y1), x1: x0.max(x1), y1: y0.max(y1) }
+    }
+
+    /// Transform a PDF rectangle (y-up user space) through a page's initial transform into
+    /// y-down page coordinates, then keep only the part inside the page.
+    pub fn from_pdf(r: PdfBox, t: Affine, page: PageSize) -> Self {
+        let mut min = (f64::INFINITY, f64::INFINITY);
+        let mut max = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for (x, y) in [(r.x0, r.y0), (r.x1, r.y0), (r.x0, r.y1), (r.x1, r.y1)] {
+            let p = t * Point::new(x, y);
+            if !p.x.is_finite() || !p.y.is_finite() {
+                continue;
+            }
+            min.0 = min.0.min(p.x);
+            min.1 = min.1.min(p.y);
+            max.0 = max.0.max(p.x);
+            max.1 = max.1.max(p.y);
+        }
+        if !min.0.is_finite() {
+            return Self::default();
+        }
+        Self::new(min.0 as f32, min.1 as f32, max.0 as f32, max.1 as f32).clipped_to(page)
+    }
+
+    pub fn clipped_to(self, page: PageSize) -> Self {
+        let f = |v: f32, hi: f32| if v.is_finite() { v.clamp(0.0, hi) } else { 0.0 };
+        Self::new(f(self.x0, page.w), f(self.y0, page.h), f(self.x1, page.w), f(self.y1, page.h))
+    }
+
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x0 && x <= self.x1 && y >= self.y0 && y <= self.y1
+    }
+
+    pub fn intersects(&self, o: &Self) -> bool {
+        self.x0 < o.x1 && o.x0 < self.x1 && self.y0 < o.y1 && o.y0 < self.y1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.x1 - self.x0 < 0.05 || self.y1 - self.y0 < 0.05
+    }
+
+    pub fn area(&self) -> f32 {
+        (self.x1 - self.x0).max(0.0) * (self.y1 - self.y0).max(0.0)
+    }
+}
+
+/// hayro's own renderer uses this transform (with `invert_y = true`) before scaling; reusing it
+/// makes link rectangles and glyph origins line up exactly with the bitmap.
+pub(crate) fn page_transform(page: &Page<'_>) -> Affine {
+    page.initial_transform(true).to_kurbo()
+}
+
 /// An open, read-only PDF. Cheap to share behind an `Arc`; the expensive per-page raster is
 /// produced on demand by [`PdfView::render`].
 pub struct PdfView {
     pdf: Pdf,
     pages: Vec<PageSize>,
+    /// Link annotations, parsed once at open time (cheap: dictionaries only).
+    links: Vec<Vec<PdfLink>>,
+    /// Text layers are expensive (a full interpretation per page), so extract them on demand
+    /// and keep them for the lifetime of the view. `Mutex` gives interior mutability behind the
+    /// `Arc` the UI holds without making `PdfView` itself mutable.
+    text_cache: Mutex<Vec<Option<Arc<Vec<PdfChar>>>>>,
 }
+
+/// Largest copied selection, in characters. A hostile file must not be able to make Ctrl+C
+/// allocate without bound.
+const MAX_COPY_CHARS: usize = 4_000_000;
 
 impl PdfView {
     /// Parse `bytes` and collect every page's size. Nothing is rasterised yet.
@@ -97,7 +183,17 @@ impl PdfView {
             Ok(r) => r?,
             Err(_) => return Err(PdfError::Parse("PDF page tree is invalid".into())),
         };
-        Ok(Self { pdf, pages: sizes })
+        // Annotation dictionaries are pure Rust parsing, but a corrupt page tree can still make
+        // hayro panic; keep the same never-crash guarantee as the page-size pass.
+        let links = match catch_unwind(AssertUnwindSafe(|| links::parse_links(&pdf, &sizes))) {
+            Ok(l) => l,
+            Err(_) => {
+                log::warn!("PDF link annotations could not be read");
+                vec![Vec::new(); sizes.len()]
+            }
+        };
+        let text_cache = (0..sizes.len()).map(|_| None).collect();
+        Ok(Self { pdf, pages: sizes, links, text_cache: Mutex::new(text_cache) })
     }
 
     pub fn page_count(&self) -> usize {
@@ -106,6 +202,81 @@ impl PdfView {
 
     pub fn page_size(&self, index: usize) -> Option<PageSize> {
         self.pages.get(index).copied()
+    }
+
+    /// The clickable links of a page, in page-point coordinates.
+    pub fn links(&self, index: usize) -> &[PdfLink] {
+        self.links.get(index).map_or(&[], Vec::as_slice)
+    }
+
+    /// The link under a point of a page, if any.
+    pub fn link_at(&self, index: usize, x: f32, y: f32) -> Option<LinkTarget> {
+        link_at(self.links(index), x, y).cloned()
+    }
+
+    /// The page's text layer, in reading order. Extracted once, then cached. A page whose
+    /// content stream fails yields an empty (not missing) layer so callers stay simple.
+    pub fn text(&self, index: usize) -> Option<Arc<Vec<PdfChar>>> {
+        if index >= self.page_count() {
+            return None;
+        }
+        let cache = self.text_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(Some(chars)) = cache.get(index) {
+            return Some(chars.clone());
+        }
+        drop(cache);
+
+        let page = self.pdf.pages().get(index)?;
+        let size = self.page_size(index)?;
+        let chars = match catch_unwind(AssertUnwindSafe(|| text::extract(page, size))) {
+            Ok(c) => Arc::new(c),
+            Err(_) => {
+                log::warn!("PDF page {index} text could not be extracted");
+                Arc::new(Vec::new())
+            }
+        };
+        let mut cache = self.text_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(slot) = cache.get_mut(index) {
+            *slot = Some(chars.clone());
+        }
+        Some(chars)
+    }
+
+    /// Text covered by a selection spanning two character endpoints (page, character index),
+    /// inclusive. Reading order is `(page, char)`; reversed drags are normalised. Line breaks
+    /// and page breaks are inserted so the clipboard holds what the reader sees.
+    pub fn selection_text(&self, a: (usize, usize), b: (usize, usize)) -> String {
+        let (start, end) = if (a.0, a.1) <= (b.0, b.1) { (a, b) } else { (b, a) };
+        if start.0 >= self.page_count() {
+            return String::new();
+        }
+        let last_page = end.0.min(self.page_count().saturating_sub(1));
+        let mut out = String::new();
+        let mut written = 0usize;
+        let mut prev: Option<(usize, usize)> = None;
+        for p in start.0..=last_page {
+            let Some(chars) = self.text(p) else { continue };
+            let lo = if p == start.0 { start.1.min(chars.len()) } else { 0 };
+            let hi = if p == last_page { end.1.saturating_add(1).min(chars.len()) } else { chars.len() };
+            if lo >= hi {
+                continue;
+            }
+            for c in chars.iter().take(hi).skip(lo) {
+                if let Some((pp, pl)) = prev
+                    && (pp != p || pl != c.line)
+                    && !out.ends_with('\n')
+                {
+                    out.push('\n');
+                }
+                out.push_str(&c.text);
+                written += c.text.chars().count().max(1);
+                prev = Some((p, c.line));
+                if written >= MAX_COPY_CHARS {
+                    return out;
+                }
+            }
+        }
+        out
     }
 
     /// Rasterise page `index` at `scale` pixels per point. The scale is clamped and, if the

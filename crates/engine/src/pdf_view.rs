@@ -10,6 +10,10 @@ use wordcraft_geom::Rect;
 use wordcraft_layout::{DocLayout, Page};
 use wordcraft_render::Rendered;
 
+// Re-exported so the UI (L6) never needs a direct dependency on the L3 viewer crate; it reads
+// the PDF's link and text layers through the session's `Arc<PdfView>`.
+pub use wordcraft_pdfview::{LinkTarget, PdfChar, PdfLink, PdfRect};
+
 /// The read-only view the session holds while a PDF is open.
 pub struct PdfView {
     inner: wordcraft_pdfview::PdfView,
@@ -42,6 +46,32 @@ impl PdfView {
     /// working exactly as they do for a laid-out document.
     pub fn layout(&self) -> Arc<DocLayout> {
         self.layout.clone()
+    }
+
+    /// Clickable link annotations of a page, in page points.
+    pub fn links(&self, index: usize) -> &[PdfLink] {
+        self.inner.links(index)
+    }
+
+    /// The link under a point of a page, if any.
+    pub fn link_at(&self, index: usize, x: f32, y: f32) -> Option<LinkTarget> {
+        self.inner.link_at(index, x, y)
+    }
+
+    /// The page's text layer in reading order, extracted once and cached by the viewer.
+    pub fn text(&self, index: usize) -> Option<Arc<Vec<PdfChar>>> {
+        self.inner.text(index)
+    }
+
+    /// Nearest character index to a page point, for anchoring a drag selection.
+    pub fn char_index_at(&self, index: usize, x: f32, y: f32) -> Option<usize> {
+        let chars = self.text(index)?;
+        wordcraft_pdfview::char_at(&chars, x, y)
+    }
+
+    /// Plain text of a selection between two `(page, character)` endpoints, inclusive.
+    pub fn selection_text(&self, a: (usize, usize), b: (usize, usize)) -> String {
+        self.inner.selection_text(a, b)
     }
 
     /// The page as a premultiplied RGBA raster. A page that fails to render becomes an empty
