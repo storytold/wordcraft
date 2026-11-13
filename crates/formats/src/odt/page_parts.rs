@@ -4,7 +4,8 @@ use std::collections::HashSet;
 
 use wordcraft_doc::{Document, PartKind};
 
-use super::{Body, Ev, FBlock, Pages, SectionProps, Styles, events, get, model};
+use super::xml::events_at;
+use super::{Body, Ev, FBlock, Pages, SectionProps, Styles, get, model};
 
 /// Most XML events kept for all headers and footers together; a slot past it is left out.
 const MAX_EVENTS: usize = 1 << 20;
@@ -79,13 +80,13 @@ pub(super) fn read(
     objects: (&[String], &std::collections::HashMap<String, String>),
     spaces_left: &mut usize,
 ) -> Parts {
-    let mut found: Vec<(String, Slot, Vec<Ev>)> = Vec::new();
+    let mut found: Vec<(String, Slot, Vec<(Ev, usize)>)> = Vec::new();
     let mut master: Option<String> = None;
     // The slot being read, its nesting depth and whether it is kept.
     let mut slot: Option<(usize, bool)> = None;
     let mut seen = HashSet::new();
     let mut room = MAX_EVENTS;
-    events(xml, |ev| {
+    events_at(xml, |ev, at| {
         if let Some((depth, keep)) = &mut slot {
             match &ev {
                 Ev::End(_) if *depth == 0 => {
@@ -102,7 +103,7 @@ pub(super) fn read(
             }
             if *keep && let Some((.., evs)) = found.last_mut() {
                 room -= 1;
-                evs.push(ev);
+                evs.push((ev, at.1));
             }
             return;
         }
@@ -130,7 +131,9 @@ pub(super) fn read(
         reader.in_text = true;
         (reader.entries, reader.manifest) = (objects.0, Some(objects.1));
         reader.spaces_left = *spaces_left;
-        for ev in evs {
+        reader.markup = xml;
+        for (ev, end) in evs {
+            reader.tag_end = end;
             reader.feed(ev);
         }
         *spaces_left = reader.spaces_left;
