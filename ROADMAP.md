@@ -1444,3 +1444,9 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
 | 2026-11-03 | trivial | Progress log: a line breaks after a hyphen before a slash (#3408) |
+
+### Thai dictionary wrapping (#1548) — 2026-11-06
+
+Dictionary word opportunities and safe emergency boundaries are isolated from alignment. See [Thai segmentation](docs/thai-segmentation.md).
+
+Validation is recorded in the pull request; no change to readiness estimates.

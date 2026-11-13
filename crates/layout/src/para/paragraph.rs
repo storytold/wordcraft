@@ -12,6 +12,7 @@ use super::{
     Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
     Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
 };
+use icu_segmenter::LineSegmenter;
 
 /// A run's formatting resolved in the paragraph's style and table.
 struct Resolver<'a> {
@@ -59,6 +60,7 @@ impl Slot {
             g0: self.g,
             g1: self.g,
             break_after: false,
+            emergency_break_after: false,
             obj_h,
             obj_d,
             dot: false,
@@ -520,13 +522,21 @@ impl<'a> BreakText<'a> {
     fn to_para(&self, i: usize) -> Option<usize> {
         if self.skipped { self.ends.binary_search_by_key(&i, |end| end.0).ok().and_then(|k| self.ends.get(k)).map(|end| end.1) } else { Some(i) }
     }
+
+    fn to_visible(&self, i: usize) -> Option<usize> {
+        if self.skipped { self.ends.binary_search_by_key(&i, |end| end.1).ok().and_then(|k| self.ends.get(k)).map(|end| end.0) } else { Some(i) }
+    }
 }
 
 /// Mark the clusters a line may break after.
 fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
     let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
+    let has_thai = !crate::kinsoku::thai_text_runs(&bt.text).is_empty();
     for c in clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+        c.emergency_break_after = has_thai
+            && matches!(c.kind, ClKind::Text | ClKind::Space)
+            && bt.to_visible(c.end).is_some_and(|i| crate::kinsoku::is_safe_line_break(&bt.text, i));
     }
 }
 
@@ -679,6 +689,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
+    let has_thai = !crate::kinsoku::thai_text_runs(&bt.text).is_empty();
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
@@ -721,7 +732,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l), has_thai);
     if gone {
         collapse(&mut pl);
     }
@@ -860,6 +871,41 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     // The breaks added above come after UAX #14's: put them back in order.
     found.sort_unstable();
     found.dedup();
+    // Thai has no spaces between most words. Segment the complete visible paragraph so ICU keeps
+    // context across formatting runs; only dictionary opportunities inside Thai text replace the
+    // Unicode line-break opportunities, leaving other scripts and punctuation to the old rules.
+    let thai_runs = crate::kinsoku::thai_text_runs(text);
+    if !thai_runs.is_empty() {
+        let segmenter = LineSegmenter::new_dictionary(Default::default());
+        let dictionary: Vec<usize> = segmenter.segment_str(text).collect();
+        // Walk the sorted ICU boundaries and Thai runs together. Rescanning the paragraph-wide
+        // boundary list for each run makes paragraphs with many short Thai runs quadratic.
+        let mut boundaries = dictionary.into_iter().peekable();
+        let mut thai_breaks = Vec::new();
+        let mut replaced_runs = Vec::new();
+        for run in &thai_runs {
+            while boundaries.peek().is_some_and(|&i| i <= run.start) {
+                boundaries.next();
+            }
+            let breaks_before_run = thai_breaks.len();
+            while boundaries.peek().is_some_and(|&i| i < run.end) {
+                if let Some(i) = boundaries.next().filter(|&i| crate::kinsoku::is_safe_line_break(text, i)) {
+                    thai_breaks.push(i);
+                }
+            }
+            if thai_breaks.len() > breaks_before_run {
+                replaced_runs.push(run.clone());
+            }
+        }
+        let mut run_index = 0;
+        found.retain(|&i| {
+            while replaced_runs.get(run_index).is_some_and(|run| i >= run.end) {
+                run_index += 1;
+            }
+            replaced_runs.get(run_index).is_none_or(|run| i <= run.start || i >= run.end)
+        });
+        found.extend(thai_breaks);
+    }
     // Myanmar has no spaces between words: it wraps between syllables.
     if text.chars().any(|c| matches!(u32::from(c), 0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F)) {
         found.extend(wordcraft_doc::cluster::myanmar_breaks(text));
@@ -871,7 +917,25 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     found.retain(|&i| !(text.get(..i).is_some_and(|t| t.ends_with('.')) && text.get(i..).is_some_and(|t| t.starts_with('('))));
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
+    found.retain(|&i| !crate::kinsoku::is_thai_text_boundary(text, i) || crate::kinsoku::is_safe_line_break(text, i));
     found
+}
+
+#[cfg(test)]
+mod break_tests {
+    #[test]
+    fn thai_dictionary_and_hyphen_slash_boundaries_coexist() {
+        let doc = wordcraft_doc::Document::new();
+        let rp = doc.styles.resolve_para(&wordcraft_doc::props::ParaProps::default());
+        let text = "word-/Alpha ทรัพยากรบุคคล";
+        let hyphen = text.find('-').unwrap() + 1;
+        let thai_start = text.find('ท').unwrap();
+        let thai_word_end = thai_start + "ทรัพยากร".len();
+        let breaks = super::break_positions(text, &rp);
+        assert!(breaks.contains(&hyphen), "hyphen before slash remains a break: {breaks:?}");
+        assert!(breaks.contains(&thai_word_end), "Thai dictionary word boundary remains a break: {breaks:?}");
+        assert!(!breaks.contains(&(thai_start + 'ท'.len_utf8())), "no break inside the Thai word: {breaks:?}");
+    }
 }
 
 #[cfg(test)]
