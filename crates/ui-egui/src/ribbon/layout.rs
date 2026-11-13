@@ -2,6 +2,7 @@ use super::arrange::{align_menu, group_menu, position_menu, rotate_menu, wrap_me
 use super::common::{mi, size_menu, stack};
 use super::language::mi_check;
 use super::{MeasureExt, Ui, WordApp, group, json, menu_button, small, vec2};
+use crate::widgets::big;
 
 // Layout › Margins, Orientation, Size and Columns: the caret section's setting has a check
 // mark, as Text Direction's does (#1206).
