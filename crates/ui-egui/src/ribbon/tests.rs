@@ -444,6 +444,11 @@ fn other_regions_show_by_name_once() {
     assert_eq!(language_name(Some("en-AU")), "English (Australia)");
     assert_eq!(language_name(Some("de_AT")), "German (Austria)");
     assert_eq!(language_name(Some("pt-AO")), "Portuguese (Angola)");
+    // Guinea-Bissau, São Tomé and Príncipe and Timor-Leste have names too: these three showed as
+    // `GW`, `ST` and `TL`, while the other regions that write Portuguese like Portugal had names.
+    for (tag, name) in [("pt-GW", "Guinea-Bissau"), ("pt_ST", "São Tomé and Príncipe"), ("pt-TL", "Timor-Leste")] {
+        assert_eq!(language_name(Some(tag)), format!("Portuguese ({name})"), "{tag}");
+    }
     assert_eq!(language_name(Some("sr-Latn-BA")), "Serbian (Bosnia and Herzegovina)");
     assert_eq!(language_name(Some("en-ZZ")), "English (ZZ)");
     assert_eq!(language_name(Some("xx-YY")), "xx-YY");
