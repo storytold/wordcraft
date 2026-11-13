@@ -872,7 +872,14 @@ fn node(node: &MNode, output: &mut String, depth: usize) {
         MNode::Nary { .. } => nary_node(node, output, depth),
         MNode::Delim { beg, end, sep, elems, .. } => delimiter_node(*beg, *end, *sep, elems, output, depth),
         MNode::Func { name, e } => {
-            arg(name, output, depth);
+            match name.as_slice() {
+                // A scripted name is written unbraced (`\log_{2}`): a braced base would close as an empty group.
+                [MNode::Script { kind: kind @ (ScriptKind::Sub | ScriptKind::Sup | ScriptKind::SubSup), base, sub, sup }] => {
+                    arg(base, output, depth);
+                    scripts(*kind, sub, sup, output, depth);
+                }
+                _ => arg(name, output, depth),
+            }
             braced(e, output, depth);
         }
         MNode::Lim { upper, e, lim } => limit_node(*upper, e, lim, output, depth),
@@ -962,6 +969,10 @@ fn script_node(kind: ScriptKind, base: &[MNode], sub: &[MNode], sup: &[MNode], o
         return;
     }
     braced(base, output, depth);
+    scripts(kind, sub, sup, output, depth);
+}
+
+fn scripts(kind: ScriptKind, sub: &[MNode], sup: &[MNode], output: &mut String, depth: usize) {
     if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup) {
         output.push('_');
         braced(sub, output, depth);
@@ -1133,6 +1144,15 @@ mod tests {
         let n = parse_latex(r"\mathbb{R}\hat{x}\text{ if }\overbrace{a+b}^{k}");
         assert!(matches!(&n[0], MNode::Run(r) if r.scr == MScr::DoubleStruck));
         let _ = (LimLoc::UndOvr, MathJc::Center);
+    }
+
+    #[test]
+    fn latex_scripted_function_name_round_trip() {
+        for src in ["log_2 x", "log^2 x", "log x"] {
+            let a = crate::math::parse_linear(src);
+            let l = to_latex(&a);
+            assert_eq!(crate::math::to_linear(&parse_latex(&l)), crate::math::to_linear(&a), "{src} exported as {l}");
+        }
     }
 
     #[test]
