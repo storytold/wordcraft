@@ -179,6 +179,10 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     wr.embeds.custom_xml_rels("P", &mut root);
     wr.embeds.unmodelled_rels("D", &mut rels);
     wr.embeds.unmodelled_rels("P", &mut root);
+    if let Some(fit) = &doc.fit_state {
+        rels.add(rt::CUSTOM_XML, &crate::package::relative("word/document.xml", crate::fit::PART), false);
+        push_part(&mut entries, &mut overrides, crate::fit::PART, crate::fit::write(fit)?, "application/xml", PartRels::default());
+    }
     // Parts of embedded objects and custom XML stores kept from the file.
     for (name, bytes, ct, prels) in std::mem::take(&mut wr.embeds.parts) {
         push_part(&mut entries, &mut overrides, &name, bytes, &ct, prels);
