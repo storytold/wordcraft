@@ -117,6 +117,7 @@ impl Session {
             md_source: _,
             md_file: _,
             picture_looks: _,
+            hidden_first_footers: _,
             last_command: _,
             recording: _,
             macros: _,

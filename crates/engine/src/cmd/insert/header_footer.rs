@@ -54,6 +54,18 @@ fn three_column_hf(s: &Session, style: &str) -> wordcraft_doc::Blocks {
     vec![std::sync::Arc::new(Block::Table(table)), para_block(Paragraph::new().styled(style))]
 }
 
+/// A centred paragraph in `style` holding a PAGE field: the footer "Page Number" makes.
+pub(super) fn page_number_para(style: &str) -> Result<Paragraph, CmdError> {
+    let mut para = Paragraph::new().styled(style);
+    para.props.align = Some(Align::Center);
+    para.insert_object(
+        0,
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &CharProps::default(),
+    )?;
+    Ok(para)
+}
+
 pub(super) fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let id = hf_part(s, header);
     let style = if header { "Header" } else { "Footer" };
@@ -70,14 +82,7 @@ pub(super) fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResu
                 para.insert_text(0, if s.doc.core.title.is_empty() { "[Document title]" } else { &s.doc.core.title }, &CharProps::default())?;
                 para.props.align = Some(Align::Center);
             }
-            "pageNumber" => {
-                para.props.align = Some(Align::Center);
-                para.insert_object(
-                    0,
-                    InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
-                    &CharProps::default(),
-                )?;
-            }
+            "pageNumber" => para = page_number_para(style)?,
             _ => {
                 para.insert_text(0, "[Type here]", &CharProps::default())?;
             }

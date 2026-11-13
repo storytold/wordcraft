@@ -1,0 +1,816 @@
+//! Hide or show the footer (usually the page number) on one page.
+//!
+//! Only constructs that DOCX and ODT both keep are used, so the result survives a save:
+//! - the first page of a section uses *Different First Page* with its own first-page footer
+//!   (empty to hide it);
+//! - any other page is put alone in a section of its own (next-page section breaks before and
+//!   after it) whose footer is its own part, empty to hide it, while the section after it gets
+//!   an explicit copy of the footer the page used to show, so every other page, and the page
+//!   numbers, stay exactly as they were.
+//!
+//! A section break lives on the paragraph that ends a section, so the breaks go on the last
+//! paragraph before the page and on the last paragraph on it; no empty paragraph is added. A
+//! manual page break at the very end of such a paragraph is taken out, the section break being
+//! a page break already (both together leave a blank page in Word and ODT readers).
+//!
+//! A page that starts or ends in the middle of a paragraph, or next to a table, has no paragraph
+//! boundary to break at: the command is refused with the reason (and nothing changes). The one
+//! exception is a page that starts or ends right after a manual page break typed inside a
+//! paragraph (not a list item or a heading): the paragraph is cut there, which is what Word
+//! makes of a page break followed by text.
+//!
+//! The command checks its own result by laying the document out again: the page count, the
+//! page numbers and the header and footer of every other page must be unchanged, else it fails
+//! and the session puts the document back.
+//!
+//! # Using it
+//!
+//! Commands go through [`Session::run`]; the payloads are JSON:
+//!
+//! ```text
+//! layout.pageFooterVisible {"page": 3, "visible": false}
+//!   -> {"page": 3, "number": 3, "visible": false, "changed": true, "pageFrom": "argument"}
+//! layout.pageFooterVisible {"page": 3, "visible": false}      (again: nothing to do)
+//!   -> {"page": 3, "number": 3, "visible": false, "changed": false, "pageFrom": "argument"}
+//! layout.pageFooterVisible {"toggle": true}                   (the caret's page, flipped)
+//!   -> {"page": 2, "number": 2, "visible": true, "changed": true, "pageFrom": "caret"}
+//! layout.pageFooters {}
+//!   -> {"pages": [{"page": 1, "number": 1, "footer": true, "header": false,
+//!                  "blocked": null, "blockedCode": null}, ...]}
+//! ```
+//!
+//! From Rust, [`page_footers`] and [`page_footer_info`] give the same map as [`PageFooterInfo`]
+//! values, and [`footer_visible`] and [`header_visible`] answer for one laid-out page.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use wordcraft_doc::para::PAGE_BREAK;
+use wordcraft_doc::section::{HeaderSet, SectionProps, SectionStart};
+use wordcraft_doc::{Blocks, Document};
+use wordcraft_layout::{DocLayout, HfSlot, Page, ParaLayout, Placed};
+
+use super::header_footer::page_number_para;
+use super::{Block, CmdError, CmdResult, Paragraph, PartKind, Path, Pos, Session, StoryRef, json, para_block};
+
+/// Deepest table nesting looked into when deciding whether a footer is empty.
+const BLANK_DEPTH: usize = 8;
+
+/// What a page shows in the map of footers (see [`page_footers`] and [`page_footer_info`]).
+///
+/// `page` and `number` are different things: `page` is the position in the laid-out document
+/// (what `layout.pageFooterVisible` takes as `page`), `number` is what the page displays, which
+/// differs after a section restarts its numbering (pages 1 to 5, then a chapter that starts over:
+/// `page` 6 has `number` 1) or uses another number format's start.
+///
+/// `blocked` and `blocked_code` are both `None` when the footer of the page can be hidden or
+/// shown on its own: that is always so for the first page of a section, which uses Different
+/// First Page. Otherwise both are set: `blocked` is a sentence for people (it may be reworded),
+/// `blocked_code` the stable [`BlockedReason`] for programs, and `layout.pageFooterVisible`
+/// refuses the page with the same reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageFooterInfo {
+    /// Position of the page in the layout, from 1.
+    pub page: usize,
+    /// The number the page displays (after section restarts and number formats); can differ
+    /// from `page`.
+    pub number: u32,
+    /// The page shows a footer with something in it.
+    pub footer: bool,
+    /// The page shows a header with something in it.
+    pub header: bool,
+    /// The sentence saying why the footer of this page cannot be hidden or shown on its own
+    /// (`layout.pageFooterVisible` refuses it), or `None` when it can.
+    pub blocked: Option<String>,
+    /// The stable code of the reason in `blocked` (`None` exactly when `blocked` is).
+    pub blocked_code: Option<BlockedReason>,
+}
+
+/// Why the footer of a page cannot be hidden or shown on its own. The text of the reason can be
+/// reworded; the code from [`BlockedReason::code`] is stable and meant for programs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockedReason {
+    /// The page starts in the middle of a paragraph or a table.
+    StartsMidBlock,
+    /// The page ends in the middle of a paragraph or a table.
+    EndsMidBlock,
+    /// The page holds a continuous section break.
+    ContinuousBreak,
+    /// The page follows a table, and a section break needs a paragraph before it.
+    AfterTable,
+    /// The page ends with a table, and a section break needs a paragraph to hold it.
+    EndsWithTable,
+    /// The page has no text of its own.
+    NoText,
+}
+
+impl BlockedReason {
+    /// The stable machine-readable code: `starts_mid_block`, `ends_mid_block`, `continuous_break`,
+    /// `after_table`, `ends_with_table` or `no_text`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::StartsMidBlock => "starts_mid_block",
+            Self::EndsMidBlock => "ends_mid_block",
+            Self::ContinuousBreak => "continuous_break",
+            Self::AfterTable => "after_table",
+            Self::EndsWithTable => "ends_with_table",
+            Self::NoText => "no_text",
+        }
+    }
+}
+
+/// A refusal to change a page's footer alone: the code and the sentence that explains it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Refusal {
+    code: BlockedReason,
+    text: String,
+}
+
+impl Refusal {
+    fn new(code: BlockedReason, text: String) -> Self {
+        Self { code, text }
+    }
+}
+
+impl From<Refusal> for CmdError {
+    /// The command's error: the sentence, then the code in brackets.
+    fn from(r: Refusal) -> Self {
+        CmdError::Disabled(format!("{} [{}]", r.text, r.code.code()))
+    }
+}
+
+/// Whether `blocks` show nothing: paragraphs without text or objects, and tables of such. An
+/// empty list shows nothing too.
+pub fn blocks_blank(blocks: &[Arc<Block>]) -> bool {
+    blank_at(blocks, 0)
+}
+
+/// Whether the blocks hold nothing visible: only whitespace, no objects, and tables whose cells are blank too, down to `BLANK_DEPTH`.
+fn blank_at(blocks: &[Arc<Block>], depth: usize) -> bool {
+    blocks.iter().all(|b| match &**b {
+        Block::Para(p) => p.objects.is_empty() && p.text.chars().all(char::is_whitespace),
+        Block::Table(t) => depth < BLANK_DEPTH && t.rows.iter().all(|r| r.cells.iter().all(|c| blank_at(&c.blocks, depth + 1))),
+    })
+}
+
+/// The blocks of the part with this id, if the id is set and the part exists.
+fn blocks_of(doc: &Document, id: Option<u32>) -> Option<&Blocks> {
+    id.and_then(|id| doc.parts.get(&id)).map(|part| &part.blocks)
+}
+
+/// Whether `page` shows a footer with something in it.
+pub fn footer_visible(doc: &Document, page: &Page) -> bool {
+    blocks_of(doc, page.footer_story).is_some_and(|b| !blocks_blank(b))
+}
+
+/// Whether `page` shows a header with something in it.
+pub fn header_visible(doc: &Document, page: &Page) -> bool {
+    blocks_of(doc, page.header_story).is_some_and(|b| !blocks_blank(b))
+}
+
+/// Every page of the layout with whether it shows a header and a footer, and whether its footer
+/// can be changed alone: the map the footer panel is drawn from. Empty when there are no pages.
+pub fn page_footers(s: &mut Session) -> Vec<PageFooterInfo> {
+    let layout = s.layout();
+    (0..layout.pages.len()).filter_map(|i| info_of(&s.doc, &layout, i)).collect()
+}
+
+/// [`page_footers`] for the page with 0-based index `idx` only (the right-click menu's), or
+/// `None` when the layout has no such page.
+pub fn page_footer_info(s: &mut Session, idx: usize) -> Option<PageFooterInfo> {
+    let layout = s.layout();
+    info_of(&s.doc, &layout, idx)
+}
+
+/// The footer and header state of page `i`, and why its footer cannot be changed alone, if so.
+fn info_of(doc: &Document, layout: &DocLayout, i: usize) -> Option<PageFooterInfo> {
+    let pg = layout.pages.get(i)?;
+    let refusal = match PageUse::of(doc, layout, i) {
+        _ if first_of_section(layout, i) => None,
+        Some(u) => u.refusal(doc, i + 1).err(),
+        None => Some(no_text(i + 1)),
+    };
+    let blocked_code = refusal.as_ref().map(|r| r.code);
+    let blocked = refusal.map(|r| r.text);
+    Some(PageFooterInfo { page: i + 1, number: pg.number, footer: footer_visible(doc, pg), header: header_visible(doc, pg), blocked, blocked_code })
+}
+
+/// What a page holds of the body, by top-level block.
+struct PageUse {
+    first: usize,
+    last: usize,
+    /// The page starts in the middle of block `first` (a paragraph carried over, a table split).
+    starts_mid: bool,
+    /// Block `last` goes on onto the next page.
+    ends_mid: bool,
+    /// Where block `first` can be split so the page starts a paragraph: the page begins right
+    /// after a manual page break inside the paragraph. Byte offset in the paragraph.
+    split_before: Option<usize>,
+    /// Likewise for the end of the page: block `last` goes on after a manual page break.
+    split_after: Option<usize>,
+}
+
+#[derive(Default)]
+struct BlockUse {
+    table: bool,
+    from: usize,
+    to: usize,
+    total: usize,
+    seen: bool,
+    /// The paragraph layout with the page's first line of the block, and that line.
+    first_line: Option<(usize, Arc<ParaLayout>)>,
+    /// The paragraph layout with the page's last line of the block, and the line after it.
+    last_line: Option<(usize, Arc<ParaLayout>)>,
+}
+
+/// The top-level body blocks with something placed on `page`.
+fn blocks_on(page: &Page) -> BTreeMap<usize, BlockUse> {
+    let mut map: BTreeMap<usize, BlockUse> = BTreeMap::new();
+    for it in &page.items {
+        match it {
+            Placed::Lines { story: StoryRef::Body, path, para, l0, l1, .. } => {
+                let Some(&b) = path.0.first() else { continue };
+                let e = map.entry(b as usize).or_default();
+                if path.0.len() > 1 {
+                    e.table = true;
+                } else {
+                    if !e.seen || *l0 < e.from {
+                        e.first_line = Some((*l0, Arc::clone(para)));
+                    }
+                    if !e.seen || *l1 > e.to {
+                        e.last_line = Some((*l1, Arc::clone(para)));
+                    }
+                    e.from = if e.seen { e.from.min(*l0) } else { *l0 };
+                    e.to = e.to.max(*l1);
+                    e.total = para.lines.len();
+                    e.seen = true;
+                }
+            }
+            Placed::Cell { story: StoryRef::Body, table, .. } => {
+                if let Some(&b) = table.0.first() {
+                    map.entry(b as usize).or_default().table = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    map
+}
+
+/// Whether paragraph `block` may be cut in two at byte `off`, just after a manual page break:
+/// the two halves are what Word makes of a page break followed by text. Not a list item or
+/// a heading, whose second half would be a second item or heading.
+fn can_split_after_break(doc: &Document, block: usize, off: usize) -> bool {
+    let Some(p) = doc.para(StoryRef::Body, &Path::top(block)) else { return false };
+    let heading = p.props.style.as_deref().is_some_and(|st| st.starts_with("Heading") || st == "Title");
+    p.text.get(..off).is_some_and(|before| before.ends_with(PAGE_BREAK))
+        && off < p.text.len()
+        && p.props.numbering.is_none()
+        && p.props.outline_level.is_none()
+        && !heading
+}
+
+impl PageUse {
+    /// How page `idx` relates to the paragraphs and tables that touch it, or `None` when the page has no text of its own.
+    fn of(doc: &Document, layout: &DocLayout, idx: usize) -> Option<PageUse> {
+        let here = blocks_on(layout.pages.get(idx)?);
+        let (&first, &last) = (here.keys().next()?, here.keys().next_back()?);
+        let before = idx.checked_sub(1).and_then(|i| layout.pages.get(i)).map(blocks_on).unwrap_or_default();
+        let after = layout.pages.get(idx + 1).map(blocks_on).unwrap_or_default();
+        let (f, l) = (here.get(&first)?, here.get(&last)?);
+        // A paragraph carried over from the page before, or a table that is on both pages.
+        let starts_mid = if f.table { before.contains_key(&first) } else { f.from > 0 || before.contains_key(&first) };
+        let ends_mid = if l.table { after.contains_key(&last) } else { l.to < l.total || after.contains_key(&last) };
+        let split_before = f
+            .first_line
+            .as_ref()
+            .filter(|_| starts_mid && !f.table && f.from > 0)
+            .and_then(|(l0, para)| para.lines.get(*l0).map(|line| line.start))
+            .filter(|off| can_split_after_break(doc, first, *off));
+        let split_after = l
+            .last_line
+            .as_ref()
+            .filter(|_| ends_mid && !l.table && l.to > 0 && l.to < l.total)
+            .and_then(|(l1, para)| l1.checked_sub(1).and_then(|k| para.lines.get(k)).map(|line| line.stop))
+            .filter(|off| can_split_after_break(doc, last, *off));
+        Some(PageUse { first, last, starts_mid, ends_mid, split_before, split_after })
+    }
+
+    /// Why a section break can't go before and after this page, if so.
+    fn refusal(&self, doc: &Document, n: usize) -> Result<(), Refusal> {
+        if self.starts_mid && self.split_before.is_none() {
+            return Err(Refusal::new(
+                BlockedReason::StartsMidBlock,
+                format!(
+                    "page {n} starts in the middle of a paragraph or table, and section breaks go between paragraphs: put the paragraph that starts it on a page of its own (Page Break Before) first"
+                ),
+            ));
+        }
+        if self.ends_mid && self.split_after.is_none() {
+            return Err(Refusal::new(
+                BlockedReason::EndsMidBlock,
+                format!(
+                    "page {n} ends in the middle of a paragraph or table, and section breaks go between paragraphs: put a page break after that paragraph first"
+                ),
+            ));
+        }
+        let sections = doc.sections();
+        let sidx = doc.section_index_of(self.first);
+        if doc.section_index_of(self.last) != sidx {
+            return Err(Refusal::new(
+                BlockedReason::ContinuousBreak,
+                format!("page {n} holds a continuous section break: make it a next-page break first"),
+            ));
+        }
+        let start = if sidx == 0 { 0 } else { sections.get(sidx - 1).map_or(0, |(e, _)| e + 1) };
+        let end = sections.get(sidx).map_or(self.last, |(e, _)| *e);
+        let para = |b: usize| matches!(doc.body.get(b).map(|x| &**x), Some(Block::Para(_)));
+        if self.first > start && self.split_before.is_none() && !para(self.first - 1) {
+            return Err(Refusal::new(
+                BlockedReason::AfterTable,
+                format!("page {n} follows a table, and a section break needs a paragraph before it"),
+            ));
+        }
+        if self.last < end && self.split_after.is_none() && !para(self.last) {
+            return Err(Refusal::new(
+                BlockedReason::EndsWithTable,
+                format!("page {n} ends with a table, and a section break needs a paragraph to hold it"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The refusal for a page with no text of its own, where a section break cannot be placed.
+fn no_text(n: usize) -> Refusal {
+    Refusal::new(BlockedReason::NoText, format!("page {n} has no text of its own, so there is nothing to put a section break around"))
+}
+
+/// Whether page `idx` is the first page of its section.
+fn first_of_section(layout: &DocLayout, idx: usize) -> bool {
+    match idx.checked_sub(1) {
+        None => true,
+        Some(prev) => layout.pages.get(prev).zip(layout.pages.get(idx)).is_none_or(|(a, b)| a.section != b.section),
+    }
+}
+
+/// The part id stored in one slot (first, even or default) of a header or footer set.
+fn slot_get(set: &HeaderSet, slot: HfSlot) -> Option<u32> {
+    match slot {
+        HfSlot::First => set.first,
+        HfSlot::Even => set.even,
+        HfSlot::Default => set.default,
+    }
+}
+
+/// Stores a part id in one slot (first, even or default) of a header or footer set.
+fn slot_set(set: &mut HeaderSet, slot: HfSlot, id: Option<u32>) {
+    match slot {
+        HfSlot::First => set.first = id,
+        HfSlot::Even => set.even = id,
+        HfSlot::Default => set.default = id,
+    }
+}
+
+/// The headers (or footers) section `sidx` shows: its own, else those it inherits.
+fn linked(doc: &Document, sidx: usize, footer: bool) -> HeaderSet {
+    let mut acc = HeaderSet::default();
+    for (_, sec) in doc.sections().into_iter().take(sidx.saturating_add(1)) {
+        let own = if footer { sec.footers } else { sec.headers };
+        acc = HeaderSet { default: own.default.or(acc.default), first: own.first.or(acc.first), even: own.even.or(acc.even) };
+    }
+    acc
+}
+
+/// The footer slot as the layout reads it: an even page without its own even footer shows the default.
+fn linked_slot(doc: &Document, sidx: usize, slot: HfSlot) -> Option<u32> {
+    let set = linked(doc, sidx, true);
+    match slot {
+        HfSlot::Even => set.even.or(set.default),
+        other => slot_get(&set, other),
+    }
+}
+
+/// A section like `sec` for the pages that follow a break made here: same page setup, nothing
+/// of its own to show, no restart of the numbering and no separate first page.
+fn plain_copy(sec: &SectionProps) -> SectionProps {
+    let mut c = sec.clone();
+    c.headers = HeaderSet::default();
+    c.footers = HeaderSet::default();
+    c.title_page = false;
+    c.page_num_start = None;
+    c.start = SectionStart::NextPage;
+    c.fmt_change = None;
+    c
+}
+
+/// A footer with one empty paragraph in the "Footer" style.
+fn blank_footer() -> Blocks {
+    vec![para_block(Paragraph::new().styled("Footer"))]
+}
+
+/// Adds a part of the given kind to the document, mapping the error to a command error.
+fn add_part(s: &mut Session, kind: PartKind, blocks: Blocks) -> Result<u32, CmdError> {
+    Ok(s.doc.try_add_part(kind, blocks)?)
+}
+
+/// Ends a section on paragraph `block`. A page break at the very end of that paragraph is
+/// taken out: the next-page break of the section does the same job, and both together make
+/// Word and ODT readers add a blank page.
+fn set_mark(s: &mut Session, block: usize, props: SectionProps) -> Result<(), CmdError> {
+    let para = s.doc.para_mut(StoryRef::Body, &Path::top(block))?;
+    if para.text.ends_with(PAGE_BREAK) {
+        let end = para.text.len();
+        para.delete(end.saturating_sub(PAGE_BREAK.len_utf8()), end)?;
+    }
+    para.section = Some(Box::new(props));
+    Ok(())
+}
+
+/// Takes part `id` out of the document when no section names it any more.
+fn drop_if_unreferenced(doc: &mut Document, id: Option<u32>) {
+    let Some(id) = id else { return };
+    let used =
+        doc.sections().iter().any(|(_, sec)| [sec.headers, sec.footers].iter().any(|set| [set.default, set.first, set.even].contains(&Some(id))));
+    if !used {
+        doc.parts.remove(&id);
+    }
+}
+
+/// The blocks of a header or footer that show something.
+fn shown_blocks(doc: &Document, id: Option<u32>) -> Option<Blocks> {
+    blocks_of(doc, id).filter(|b| !blocks_blank(b)).cloned()
+}
+
+/// What each page shows: its number, header and footer. Equal before and after a change for
+/// every page but the one changed.
+type View = Vec<(u32, Option<Blocks>, Option<Blocks>)>;
+
+/// A snapshot of every page: its number, shown header blocks and shown footer blocks, used to check that nothing else changed.
+fn view_of(doc: &Document, layout: &DocLayout) -> View {
+    layout.pages.iter().map(|pg| (pg.number, shown_blocks(doc, pg.header_story), shown_blocks(doc, pg.footer_story))).collect()
+}
+
+/// Checks the document laid out again: page `idx` shows a footer or not as wanted, and nothing
+/// else about the pages changed.
+fn verify(s: &mut Session, before: &View, idx: usize, want_visible: bool) -> Result<(), CmdError> {
+    s.touch();
+    let layout = s.layout();
+    let after = view_of(&s.doc, &layout);
+    let shown = layout.pages.get(idx).is_some_and(|pg| footer_visible(&s.doc, pg));
+    let same = before.len() == after.len() && before.iter().zip(&after).enumerate().all(|(i, (a, b))| i == idx || a == b);
+    if shown == want_visible && same && before.get(idx).zip(after.get(idx)).is_some_and(|(a, b)| a.0 == b.0 && a.1 == b.1) {
+        return Ok(());
+    }
+    Err(CmdError::Failed(format!(
+        "page {} cannot be changed alone in this document without moving other pages or their headers and footers",
+        idx + 1
+    )))
+}
+
+/// `layout.pageFooterVisible`: hide or show the footer on one page of the current layout.
+///
+/// # Parameters
+/// - `page` (optional): a whole JSON number from 1 to the page count of the current layout. Left
+///   out, it is the page the caret is on (the last known page when the caret is in a header, a
+///   footer or a note), which depends on the session: the result says so in `pageFrom`. Anything
+///   else (null, a string, a boolean, a fraction, `2.0`, a negative, 0, a number past the last
+///   page) is a [`CmdError::Params`] and never falls back to the caret's page.
+/// - `visible` (a boolean) and `toggle` (a boolean): exactly one is required. `visible` sets the
+///   state and is idempotent; `toggle: true` flips the current state. Neither, both, a `visible`
+///   that is not a boolean, or a `toggle` that is not a boolean is a [`CmdError::Params`]
+///   (`toggle: false` counts as absent, `null` counts as absent for both).
+///
+/// # Returns
+/// `{"page", "number", "visible", "changed", "pageFrom"}`: the page changed (from 1), the number
+/// it displays (which can differ from `page` after a section restart), the state it now has,
+/// whether the document changed (`false` when the page was in that state already), and where
+/// `page` came from (`"argument"` or `"caret"`).
+///
+/// # Errors
+/// - [`CmdError::Params`] for the invalid parameters above.
+/// - [`CmdError::Failed`] for a document with no pages, or when laying the result out again
+///   shows that other pages would move (the session restores the document).
+/// - [`CmdError::Disabled`] when the page cannot be changed alone (it starts or ends inside a
+///   paragraph or table, holds a continuous break, follows or ends with a table, has no text of
+///   its own). The text ends with the reason code in brackets, as listed by [`BlockedReason`],
+///   and names the page when the caret chose it. Nothing changes.
+///
+/// # Example
+/// ```text
+/// {"page": 4, "visible": false}   hide the footer of page 4 only
+/// {"page": 4, "visible": true}    show it again
+/// {"toggle": true}                flip the footer of the page the caret is on
+/// ```
+pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> CmdResult {
+    let explicit = match v.get("visible") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(CmdError::Params("visible must be true or false".into())),
+    };
+    let toggle = match v.get("toggle") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(_) => return Err(CmdError::Params("toggle must be true or false".into())),
+    };
+    if explicit.is_some() == toggle {
+        return Err(CmdError::Params(
+            if toggle { "give either visible or toggle: true, not both" } else { "give visible (true or false), or toggle: true to flip the footer" }
+                .into(),
+        ));
+    }
+    let layout = s.layout();
+    let caret = || {
+        let focus = s.sel.focus.clone();
+        if focus.story == StoryRef::Body { layout.page_of(&focus) } else { Some(s.page_hint) }
+    };
+    let (idx, from_caret) = resolve_page(v.get("page"), layout.pages.len(), caret)?;
+    let Some(pg) = layout.pages.get(idx) else { return Err(CmdError::Failed("the document has no pages".into())) };
+    let now = footer_visible(&s.doc, pg);
+    let want = explicit.unwrap_or(!now);
+    let number = pg.number;
+    let result = |changed: bool| {
+        Ok(json!({"page": idx + 1, "number": number, "visible": want, "changed": changed, "pageFrom": if from_caret { "caret" } else { "argument" }}))
+    };
+    if want == now {
+        return result(false);
+    }
+    // Name the page in a refusal when the caller did not choose it.
+    let named = |e: CmdError| match e {
+        CmdError::Disabled(m) if from_caret => CmdError::Disabled(format!("{m} (page {} is the page the caret is on)", idx + 1)),
+        CmdError::Failed(m) if from_caret => CmdError::Failed(format!("{m} (page {} is the page the caret is on)", idx + 1)),
+        other => other,
+    };
+    let before = view_of(&s.doc, &layout);
+    if want {
+        show(s, &layout, idx, &before).map_err(named)?;
+    } else {
+        let orig = blocks_of(&s.doc, pg.footer_story).cloned().unwrap_or_else(blank_footer);
+        set_page_footer(s, &layout, idx, blank_footer(), orig).map_err(named)?;
+        verify(s, &before, idx, false).map_err(named)?;
+    }
+    result(true)
+}
+
+/// The 0-based index of the page a command is about, and whether it is the caret's page because
+/// no `page` was given. A given `page` must be a whole number from 1 to `count`: anything else
+/// (null, a string, a fraction, a negative, `2.0`) is a Params error and never falls back to the
+/// caret's page, so a wrong call cannot change a page the caller did not name.
+fn resolve_page(page: Option<&serde_json::Value>, count: usize, caret: impl FnOnce() -> Option<usize>) -> Result<(usize, bool), CmdError> {
+    if count == 0 {
+        return Err(CmdError::Failed("the document has no pages".into()));
+    }
+    let Some(page) = page else {
+        return Ok((caret().unwrap_or(0).min(count - 1), true));
+    };
+    let Some(n) = page.as_u64() else {
+        return Err(CmdError::Params("page must be a whole number from 1 (leave page out for the caret's page)".into()));
+    };
+    let n = usize::try_from(n).unwrap_or(usize::MAX);
+    if n == 0 || n > count {
+        return Err(CmdError::Params(format!("no page {n}: pages are numbered from 1 to {count}")));
+    }
+    Ok((n - 1, false))
+}
+
+/// Shows the footer on page `idx`: it gets the neighbour's footer, or a page number, and the result is verified by laying out again.
+fn show(s: &mut Session, layout: &DocLayout, idx: usize, before: &View) -> Result<(), CmdError> {
+    let Some(pg) = layout.pages.get(idx) else { return Ok(()) };
+    let content = match neighbour_footer(&s.doc, layout, idx) {
+        Some(blocks) => blocks,
+        None => vec![para_block(page_number_para("Footer")?)],
+    };
+    let orig = blocks_of(&s.doc, pg.footer_story).cloned().unwrap_or_else(blank_footer);
+    // First the simple way back: undo what hiding did, which leaves the file as it was.
+    let backup = s.doc.clone();
+    let stash = s.hidden_first_footers.clone();
+    let undone =
+        if first_of_section(layout, idx) { restore_first_page(s, layout, idx) || drop_first_page(s, layout, idx) } else { relink(s, layout, idx) };
+    if undone {
+        if verify(s, before, idx, true).is_ok() {
+            return Ok(());
+        }
+        s.doc = backup;
+        s.hidden_first_footers = stash;
+    }
+    set_page_footer(s, layout, idx, content, orig)?;
+    verify(s, before, idx, true)
+}
+
+/// The footer of the closest page that shows one in the same slot (else any), to show on a page
+/// that has none.
+fn neighbour_footer(doc: &Document, layout: &DocLayout, idx: usize) -> Option<Blocks> {
+    let slot = layout.pages.get(idx)?.hf_slot;
+    let order = || (0..idx).rev().chain(idx + 1..layout.pages.len());
+    let pick = |same_slot: bool| order().filter_map(|j| layout.pages.get(j)).find(|pg| footer_visible(doc, pg) && (!same_slot || pg.hf_slot == slot));
+    let pg = pick(true).or_else(|| pick(false))?;
+    blocks_of(doc, pg.footer_story).cloned()
+}
+
+/// Gives page `idx` the footer `content`, leaving every other page as it was. `orig` is what
+/// the page showed, which the pages after it in the same section must go on showing.
+fn set_page_footer(s: &mut Session, layout: &DocLayout, idx: usize, content: Blocks, orig: Blocks) -> Result<(), CmdError> {
+    if first_of_section(layout, idx) { set_first_page(s, layout, idx, content) } else { set_inner_page(s, layout, idx, content, orig) }
+}
+
+/// The first page of a section: Different First Page and an own first-page footer.
+fn set_first_page(s: &mut Session, layout: &DocLayout, idx: usize, content: Blocks) -> Result<(), CmdError> {
+    let Some(pg) = layout.pages.get(idx) else { return Ok(()) };
+    let sections: Vec<(usize, SectionProps)> = s.doc.sections().into_iter().map(|(e, p)| (e, p.clone())).collect();
+    let sidx = pg.section.min(sections.len().saturating_sub(1));
+    let Some((end, sec)) = sections.get(sidx).cloned() else { return Ok(()) };
+    let old_first_footer = linked(&s.doc, sidx, true).first;
+    // With a first-page slot the page would show that slot's header: keep the one it shows now.
+    if !sec.title_page {
+        let first_header = linked(&s.doc, sidx, false).first;
+        let shown = pg.header_story.filter(|id| s.doc.parts.contains_key(id));
+        if first_header != shown {
+            let blocks = blocks_of(&s.doc, shown).cloned().unwrap_or_else(|| vec![para_block(Paragraph::new().styled("Header"))]);
+            let id = add_part(s, PartKind::Header, blocks)?;
+            s.doc.section_mut(end).headers.first = Some(id);
+        }
+    }
+    let id = add_part(s, PartKind::Footer, content)?;
+    let replaced = {
+        let target = s.doc.section_mut(end);
+        let replaced = target.footers.first.replace(id);
+        target.title_page = true;
+        replaced
+    };
+    // Later sections that read the first-page footer from this one keep what they showed.
+    for (n_end, n) in sections.iter().skip(sidx + 1) {
+        if n.footers.first.is_some() {
+            break;
+        }
+        if n.title_page {
+            let blocks = blocks_of(&s.doc, old_first_footer).cloned().unwrap_or_else(blank_footer);
+            let copy = add_part(s, PartKind::Footer, blocks)?;
+            s.doc.section_mut(*n_end).footers.first = Some(copy);
+            break;
+        }
+    }
+    // Hiding a page that had its own first-page footer: keep what it showed, to bring it back
+    // when the page is shown again (the file only has the empty footer in the meantime).
+    if let Some(old) = replaced {
+        let kept = blocks_of(&s.doc, Some(old)).filter(|b| !blocks_blank(b)).cloned();
+        if let Some(blocks) = kept.filter(|_| sec.title_page && blocks_blank(&content_of(&s.doc, id))) {
+            s.hidden_first_footers.insert(id, blocks);
+        }
+        s.hidden_first_footers.remove(&old);
+    }
+    drop_if_unreferenced(&mut s.doc, replaced);
+    Ok(())
+}
+
+/// The blocks of footer part `id`, empty if it is gone.
+fn content_of(doc: &Document, id: u32) -> Blocks {
+    blocks_of(doc, Some(id)).cloned().unwrap_or_default()
+}
+
+/// Any other page: alone in a section of its own, see the module docs.
+fn set_inner_page(s: &mut Session, layout: &DocLayout, idx: usize, content: Blocks, orig: Blocks) -> Result<(), CmdError> {
+    let n = idx + 1;
+    let Some(pg) = layout.pages.get(idx) else { return Ok(()) };
+    let usage = PageUse::of(&s.doc, layout, idx).ok_or_else(|| CmdError::from(no_text(n)))?;
+    usage.refusal(&s.doc, n)?;
+    let slot = pg.hf_slot;
+    if slot == HfSlot::First {
+        return Err(CmdError::Failed(format!("page {n} uses a first-page footer but does not start its section")));
+    }
+    let (mut f, mut l) = (usage.first, usage.last);
+    // A page that starts or ends right after a manual page break inside a paragraph: the
+    // paragraph is cut there, as a page break followed by a new paragraph. The end goes first
+    // so the offset of the start stays valid when both are in one paragraph.
+    if let Some(off) = usage.split_after {
+        cut_after_break(s, l, off)?;
+    }
+    if let Some(off) = usage.split_before {
+        cut_after_break(s, f, off)?;
+        f += 1;
+        l += 1;
+    }
+    let sections: Vec<(usize, SectionProps)> = s.doc.sections().into_iter().map(|(e, p)| (e, p.clone())).collect();
+    let sidx = s.doc.section_index_of(f);
+    let Some((end, sec)) = sections.get(sidx).cloned() else { return Err(CmdError::Failed("page without a section".into())) };
+    let start = if sidx == 0 { 0 } else { sections.get(sidx - 1).map_or(0, |(e, _)| e + 1) };
+
+    let mut mid = if f > start { plain_copy(&sec) } else { sec.clone() };
+    let replaced = slot_get(&mid.footers, slot);
+    let mid_footer = add_part(s, PartKind::Footer, content)?;
+    slot_set(&mut mid.footers, slot, Some(mid_footer));
+    if f > start {
+        set_mark(s, f - 1, sec.clone())?;
+    }
+    if l < end {
+        set_mark(s, l, mid)?;
+        let mut after = plain_copy(&sec);
+        let copy = add_part(s, PartKind::Footer, orig)?;
+        slot_set(&mut after.footers, slot, Some(copy));
+        *s.doc.section_mut(end) = after;
+    } else {
+        *s.doc.section_mut(end) = mid;
+        pin_next_section(s, &sections, sidx, slot, orig)?;
+    }
+    drop_if_unreferenced(&mut s.doc, replaced);
+    Ok(())
+}
+
+/// Cuts paragraph `block` in two at byte `off`; the second half starts a page, so it keeps no
+/// Page Break Before of its own.
+fn cut_after_break(s: &mut Session, block: usize, off: usize) -> Result<(), CmdError> {
+    s.doc.split_paragraph(&Pos::body(block, off))?;
+    s.doc.para_mut(StoryRef::Body, &Path::top(block + 1))?.props.page_break_before = None;
+    Ok(())
+}
+
+/// The section after `sidx` that read `slot` from the one before it gets its own copy of `orig`,
+/// so a footer changed in the section before it no longer reaches it.
+fn pin_next_section(s: &mut Session, sections: &[(usize, SectionProps)], sidx: usize, slot: HfSlot, orig: Blocks) -> Result<(), CmdError> {
+    if let Some((n_end, n)) = sections.get(sidx + 1)
+        && slot_get(&n.footers, slot).is_none()
+    {
+        let copy = add_part(s, PartKind::Footer, orig)?;
+        slot_set(&mut s.doc.section_mut(*n_end).footers, slot, Some(copy));
+    }
+    Ok(())
+}
+
+/// The first page was hidden over an own first-page footer that was kept aside (see
+/// [`set_first_page`]): put that footer back in place of the empty one. Whether anything changed.
+fn restore_first_page(s: &mut Session, layout: &DocLayout, idx: usize) -> bool {
+    let Some(pg) = layout.pages.get(idx) else { return false };
+    let sections = s.doc.sections();
+    let sidx = pg.section.min(sections.len().saturating_sub(1));
+    let Some((end, sec)) = sections.get(sidx).map(|(e, p)| (*e, (*p).clone())) else { return false };
+    let Some(own) = sec.footers.first else { return false };
+    if !sec.title_page || !blocks_blank(&content_of(&s.doc, own)) {
+        return false;
+    }
+    let Some(kept) = s.hidden_first_footers.remove(&own) else { return false };
+    let Ok(id) = add_part(s, PartKind::Footer, kept) else { return false };
+    s.doc.section_mut(end).footers.first = Some(id);
+    drop_if_unreferenced(&mut s.doc, Some(own));
+    true
+}
+
+/// Hiding a first page left Different First Page on with an empty first-page footer: turn both
+/// off again when the page then looks the same apart from its footer. Whether anything changed.
+fn drop_first_page(s: &mut Session, layout: &DocLayout, idx: usize) -> bool {
+    let Some(pg) = layout.pages.get(idx) else { return false };
+    let sections = s.doc.sections();
+    let sidx = pg.section.min(sections.len().saturating_sub(1));
+    let Some((end, sec)) = sections.get(sidx).map(|(e, p)| (*e, (*p).clone())) else { return false };
+    let own = sec.footers.first;
+    if !sec.title_page || !blocks_of(&s.doc, own).is_some_and(|b| blocks_blank(b)) {
+        return false;
+    }
+    let heads = linked(&s.doc, sidx, false);
+    if blocks_of(&s.doc, heads.first) != blocks_of(&s.doc, heads.default) {
+        return false;
+    }
+    let own_head = sec.headers.first;
+    let target = s.doc.section_mut(end);
+    target.title_page = false;
+    target.footers.first = None;
+    if own_head.is_some() {
+        target.headers.first = None;
+    }
+    drop_if_unreferenced(&mut s.doc, own);
+    drop_if_unreferenced(&mut s.doc, own_head);
+    true
+}
+
+/// A page hidden by an own empty footer in a section of its own shows the footer of the section
+/// before again, and the section after it stops carrying its copy. Whether anything changed.
+fn relink(s: &mut Session, layout: &DocLayout, idx: usize) -> bool {
+    let Some(pg) = layout.pages.get(idx) else { return false };
+    let slot = pg.hf_slot;
+    let sections: Vec<(usize, SectionProps)> = s.doc.sections().into_iter().map(|(e, p)| (e, p.clone())).collect();
+    let sidx = pg.section.min(sections.len().saturating_sub(1));
+    // Only when the page is the whole section: the others must not change with it.
+    if sidx == 0 || layout.pages.iter().filter(|p| p.section == sidx).count() != 1 {
+        return false;
+    }
+    let Some((end, sec)) = sections.get(sidx).cloned() else { return false };
+    let own = slot_get(&sec.footers, slot);
+    if !blocks_of(&s.doc, own).is_some_and(|b| blocks_blank(b)) {
+        return false;
+    }
+    let inherited = linked_slot(&s.doc, sidx - 1, slot);
+    let Some(shown) = blocks_of(&s.doc, inherited).filter(|b| !blocks_blank(b)).cloned() else { return false };
+    slot_set(&mut s.doc.section_mut(end).footers, slot, None);
+    let mut dropped = vec![own];
+    if let Some((n_end, n)) = sections.get(sidx + 1) {
+        let n_own = slot_get(&n.footers, slot);
+        if blocks_of(&s.doc, n_own) == Some(&shown) {
+            slot_set(&mut s.doc.section_mut(*n_end).footers, slot, None);
+            dropped.push(n_own);
+        }
+    }
+    for id in dropped {
+        drop_if_unreferenced(&mut s.doc, id);
+    }
+    true
+}
+#[cfg(test)]
+mod tests;
