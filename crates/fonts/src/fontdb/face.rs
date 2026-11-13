@@ -1,7 +1,7 @@
 use super::names::{LocalName, east_asian_font};
 use super::{
-    Arc, AtomicU32, BezPath, DrawSettings, Engine, GlyphId, Hinting, HintingInstance, HintingOptions, Location, LocationRef, MetadataProvider,
-    Ordering, OutlinePen, RwLock, Size, Target,
+    Arc, AtomicU32, BezPath, DrawSettings, Engine, GlyphId, GlyphStyles, Hinting, HintingInstance, HintingOptions, Location, LocationRef,
+    MetadataProvider, Ordering, OutlineGlyphFormat, OutlinePen, RwLock, Size, SmoothMode, Target,
 };
 
 /// The family used when a requested family is unknown (the UI sans).
@@ -77,6 +77,8 @@ pub struct FontFace {
     pub(super) bmp: std::sync::OnceLock<Box<[u64]>>,
     // Some legacy CJK fonts assemble their contours with TrueType instructions.
     pub(super) outline_hinter: std::sync::OnceLock<Option<HintingInstance>>,
+    /// The autohinter's analysis of the font for screen hinting, made once for every size.
+    pub(super) glyph_styles: std::sync::OnceLock<GlyphStyles>,
     /// Hinted draws so far, those that ran too long, and whether that turned hinting off
     /// ([`FontFace::count_hinted`]).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -288,6 +290,42 @@ impl FontFace {
             })
             .as_ref()
     }
+    /// Glyph `gid`'s outline hinted for screen text at `ppem` device pixels per em, in device
+    /// pixels, y-down (flipped), or `None` when the face can't be hinted. The hinting is light,
+    /// as FreeType's `hintslight`: horizontal edges (baseline, x-height, cap height) move onto
+    /// whole pixels, nothing moves sideways, so advances and layout stay as they are.
+    pub(super) fn hinted_glyph_outline(&self, gid: u32, hinter: &HintingInstance) -> Option<BezPath> {
+        let f = self.skrifa()?;
+        let g = f.outline_glyphs().get(GlyphId::new(gid))?;
+        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false, hinted: true };
+        g.draw(DrawSettings::hinted(hinter, false), &mut pen).map_err(|e| log::warn!("Cannot hint glyph {gid} in {:?}: {e}", self.family)).ok()?;
+        Some(pen.path)
+    }
+
+    /// A light hinting instance for `ppem` device pixels per em, with the engine FreeType's light
+    /// hinting picks: the autohinter for TrueType outlines (their own instructions are ignored;
+    /// measured against Firefox on Linux, the autohinter matches its rows of pixels and the
+    /// TrueType instructions don't), the font's own hints for PostScript (CFF) outlines, and for
+    /// fonts whose glyphs need their instructions to be assembled at all their instructions with
+    /// the monochrome target, as skrifa requires for them.
+    pub(super) fn screen_hinter(&self, ppem: f32) -> Option<HintingInstance> {
+        let f = self.skrifa()?;
+        let outlines = f.outline_glyphs();
+        let light = Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true };
+        let (engine, target) = if outlines.require_interpreter() {
+            // FreeType's "tricky" fonts (old CJK fonts that assemble glyphs with their
+            // instructions): skrifa asks for the interpreter with the monochrome target, under
+            // which the instructions may move points sideways, or glyphs come apart.
+            (Engine::Interpreter, Target::Mono)
+        } else if outlines.format() == Some(OutlineGlyphFormat::Glyf) {
+            (Engine::Auto(Some(self.glyph_styles.get_or_init(|| GlyphStyles::new(&outlines)).clone())), light)
+        } else {
+            (Engine::Interpreter, light)
+        };
+        HintingInstance::new(&outlines, Size::new(ppem), self.location(), HintingOptions { engine, target })
+            .map_err(|e| log::warn!("Cannot hint {:?} at {ppem} px: {e}", self.family))
+            .ok()
+    }
     /// Is `family` this face's typographic, legacy, full or PostScript name?
     pub fn named(&self, family: &str) -> bool {
         self.family.eq_ignore_ascii_case(family)
@@ -358,13 +396,18 @@ impl FontFace {
 pub(super) static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
 pub(super) const OUTLINE_CACHE_MAX: usize = 50_000;
+/// Hinting instances kept (one per face and text size on screen).
+pub(super) const HINTER_CACHE_MAX: usize = 256;
+/// Sizes hinted, in device pixels per em: below, text is too small to read anyway; above, the
+/// half-pixel hinting moves is invisible (and each size would cost a cache entry).
+pub(super) const HINT_PPEM: std::ops::RangeInclusive<f32> = 4.0..=96.0;
 
 /// Collects an outline flipped to y-down, keeping at most `room` path elements (`over` once it
 /// had to drop one).
 pub(super) struct FlipPen {
     pub(super) path: BezPath,
-    room: usize,
-    over: bool,
+    pub(super) room: usize,
+    pub(super) over: bool,
     /// Drawn with the face's TrueType interpreter.
     pub(super) hinted: bool,
 }

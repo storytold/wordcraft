@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special)
             .key("Mod+Alt+V")
-            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64}"#),
+            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64, "privateClipboard"?: bool}"#),
     ]
 }
 
@@ -60,11 +60,18 @@ fn looks_like_html(t: &str) -> bool {
     t.starts_with('<') && (t.contains("</") || t.contains("/>"))
 }
 
+/// Whether the system clipboard still holds this window's copy. A front end that can check says
+/// so in `privateClipboard`; callers that cannot (an agent, the CLI) omit it, and the session's
+/// copy is used as before.
+fn owns_clipboard(v: &Value) -> bool {
+    p::bool(v, "privateClipboard").unwrap_or(true)
+}
+
 /// The source for a format, if the clipboard has it.
 fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
-        "formatted" => {
+        "formatted" if owns_clipboard(v) => {
             let f = s.clipboard.as_ref()?;
             // System clipboard text that isn't our own copy means someone else copied since.
             match p::str(v, "text") {
@@ -72,6 +79,7 @@ fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
                 _ => Some(String::new()),
             }
         }
+        "formatted" => None,
         "rtf" => p::str(v, "rtf").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_rtf(t))).and_then(non_empty),
         "html" => p::str(v, "html").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_html(t))).and_then(non_empty),
         "picture" => p::str(v, "picture").map(str::to_string).and_then(non_empty),
@@ -106,6 +114,10 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
             if let Some(t) = p::str(v, k) {
                 req[k] = json!(t);
             }
+        }
+        // Keep the ownership result so the dialog's list is the same as this one.
+        if let Some(own) = p::bool(v, "privateClipboard") {
+            req["privateClipboard"] = json!(own);
         }
         // Only the newest dialog request matters; older ones would pin their payloads.
         s.ui_requests.retain(|r| r["open"] != "pasteSpecial");
@@ -267,9 +279,12 @@ pub enum Pasted {
 }
 
 /// What Paste inserts: WordCraft's own copy while the system clipboard still holds it, else
-/// another program's formatted copy (HTML, RTF), else the system clipboard's text.
+/// another program's formatted copy (HTML, RTF), else the system clipboard's text. A front end
+/// that knows another program owns the clipboard passes `privateClipboard: false`, which keeps
+/// the fragment out even when the text matches.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
+ fix/5785-copy-paste-text-box
     let html = p::str(v, "html");
     let rtf = p::str(v, "rtf");
     let has_rich = html.is_some_and(|h| !h.is_empty()) || rtf.is_some_and(|r| !r.is_empty());
@@ -280,6 +295,12 @@ pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t || (t.is_empty() && has_rich))
         && html_matches
         && rtf_matches
+
+    if owns_clipboard(v)
+        && let Some(f) = &s.clipboard
+        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
+        && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
+ main
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
