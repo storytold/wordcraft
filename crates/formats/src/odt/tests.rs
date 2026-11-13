@@ -442,6 +442,41 @@ fn table_column_widths_survive_a_round_trip() {
 }
 
 #[test]
+fn narrow_table_columns_keep_their_width() {
+    // Columns of a few points stay as the file gives them, so the table stays as wide as its source.
+    let content = format!(
+        r##"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Table1.A" style:family="table-column"><style:table-column-properties style:column-width="3pt"/></style:style><style:style style:name="Table1.B" style:family="table-column"><style:table-column-properties style:column-width="100pt"/></style:style></office:automatic-styles><office:body><office:text><table:table><table:table-column table:style-name="Table1.A"/><table:table-column table:style-name="Table1.B"/><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let grid_of = |doc: &wordcraft_doc::Document| {
+        doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.grid.clone()) } else { None })
+    };
+    assert_eq!(grid_of(&doc), Some(vec![3.0, 100.0]));
+    // Saved and opened again, the narrow column is still the file's width.
+    let back = import(&export(&doc).unwrap()).unwrap();
+    let grid = grid_of(&back).unwrap();
+    assert_eq!(grid.len(), 2, "{grid:?}");
+    assert!((grid[0] - 3.0).abs() < 0.01 && (grid[1] - 100.0).abs() < 0.01, "{grid:?}");
+}
+
+#[test]
+fn table_columns_of_a_point_or_less_give_equal_columns() {
+    // A column of a point or less, nothing or NaN (a damaged or hostile file) is no width to
+    // lay out: the whole grid falls back to equal columns, and nothing reaches layout below a
+    // point, negative or not a number.
+    for bad in ["1pt", "0.5pt", "0pt", "-3pt", "NaNpt"] {
+        let content = format!(
+            r##"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Table1.A" style:family="table-column"><style:table-column-properties style:column-width="{bad}"/></style:style><style:style style:name="Table1.B" style:family="table-column"><style:table-column-properties style:column-width="100pt"/></style:style></office:automatic-styles><office:body><office:text><table:table><table:table-column table:style-name="Table1.A"/><table:table-column table:style-name="Table1.B"/><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+        );
+        let doc = import(&package(&content, None)).unwrap();
+        let grid = doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.grid.clone()) } else { None }).unwrap();
+        assert_eq!(grid.len(), 2, "{bad}: {grid:?}");
+        assert!(grid.iter().all(|w| w.is_finite() && *w > 1.0), "{bad}: {grid:?}");
+        assert_eq!(grid[0], grid[1], "{bad}: equal columns, {grid:?}");
+    }
+}
+
+#[test]
 fn table_without_column_widths_keeps_the_equal_split() {
     let content = format!(
         r##"<office:document-content {NS_T}><office:body><office:text><table:table><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##

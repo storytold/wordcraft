@@ -287,12 +287,16 @@ fn share_out(w: &mut [f32], i: usize, dx: f32, share: Share) -> Option<f32> {
         Share::Proportional if rest > 0.0 && narrowest > 0.0 => Share::Proportional,
         _ => Share::LeftOnly,
     };
-    let least = MIN_COL - left;
+    // A column already narrower than `MIN_COL` (a file can give one; import keeps those over a
+    // point) is not narrowed further, nor widened by a drag that has no room for it: forcing it
+    // to `MIN_COL` would take its neighbour below a point, which the next import would read as
+    // no width and give the whole table equal columns.
+    let least = (MIN_COL - left).min(0.0);
     let d = match share {
-        Share::Neighbour => dx.clamp(least, (w.get(i + 1).copied().unwrap_or(0.0) - MIN_COL).max(least)),
+        Share::Neighbour => dx.clamp(least, (w.get(i + 1).copied().unwrap_or(0.0) - MIN_COL).max(0.0)),
         // As far as the narrowest column on the right, shrunk in proportion, stays `MIN_COL`.
-        Share::Proportional => dx.clamp(least, (rest * (1.0 - (MIN_COL / narrowest).min(1.0))).max(least)),
-        Share::LeftOnly => (left + dx).clamp(MIN_COL, MAX_LEN) - left,
+        Share::Proportional => dx.clamp(least, (rest * (1.0 - (MIN_COL / narrowest).min(1.0))).max(0.0)),
+        Share::LeftOnly => (left + dx).clamp(MIN_COL.min(left), MAX_LEN.max(left)) - left,
     };
     if let Some(x) = w.get_mut(i) {
         *x = left + d;
