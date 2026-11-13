@@ -840,6 +840,62 @@ fn bold_toggles_selection_and_caret_word() {
 }
 
 #[test]
+fn bold_at_a_caret_takes_a_word_with_a_typographic_apostrophe() {
+    // Word bolds `don’t` and `dogs’` whole: `’` is part of the word like `'` (#6517).
+    let bold_word = |text: &str, caret: usize| {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": text}));
+        run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": caret}}));
+        run(&mut s, "format.bold", json!({}));
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap().clone();
+        p.text.char_indices().filter(|&(i, _)| p.props_of_char(i).bold == Some(true)).map(|(_, c)| c).collect::<String>()
+    };
+    assert_eq!(bold_word("don’t stop", 1), "don’t");
+    assert_eq!(bold_word("the dogs’ bone", 5), "dogs’");
+    assert_eq!(bold_word("’tis here", 3), "’tis");
+}
+
+#[test]
+fn select_word_takes_a_typographic_apostrophe() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "don’t stop"}));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 1}}));
+    run(&mut s, "select.word", json!({}));
+    let (a, b) = s.sel.ordered();
+    assert_eq!((a.off, b.off), (0, 8), "`don’t ` with its trailing space, as Word selects it (#6517)");
+}
+
+#[test]
+fn thesaurus_at_a_caret_looks_up_a_quoted_word_without_its_quotes() {
+    // The word unit now takes `’`, so `‘good’` gives `good’`; the lookup drops enclosing quotes.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "a ‘good’ day"}));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 6}}));
+    let r = run(&mut s, "review.thesaurus", json!({}));
+    assert_eq!(r["word"], json!("good"));
+    assert!(r["synonyms"].as_array().is_some_and(|a| !a.is_empty()), "{r}");
+}
+
+#[test]
+fn a_synonym_replaces_the_word_and_keeps_its_quotes() {
+    // The range a chosen synonym replaces (the context menu's): the word without its quotes or the
+    // space after it, while an apostrophe inside a word stays part of it (#6517).
+    let word = |text: &str, caret: usize| {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": text, "raw": true}));
+        run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": caret}}));
+        let (a, b) = crate::cmd::review::thesaurus_word(&s).unwrap();
+        s.sel = crate::Selection { anchor: a, focus: b };
+        run(&mut s, "text.insert", json!({"text": "fine", "raw": true}));
+        s.doc.plain_text(StoryRef::Body)
+    };
+    assert_eq!(word("a ‘good’ day", 6), "a ‘fine’ day");
+    assert_eq!(word("a 'good' day", 4), "a 'fine' day");
+    assert_eq!(word("a good day", 3), "a fine day");
+    assert_eq!(word("don’t go", 1), "fine go");
+}
+
+#[test]
 fn border_toggles_and_saves() {
     use wordcraft_doc::props::Border;
     let border = |s: &Session| s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).border;
