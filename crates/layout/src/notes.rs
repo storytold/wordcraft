@@ -168,6 +168,9 @@ pub(crate) const MAX_NOTE_PAGES: usize = 10_000;
 pub(crate) struct NoteBox {
     pub(crate) id: u32,
     pub(crate) items: Vec<Placed>,
+    /// Its In Front of Text objects, laid out like `items`: the page draws them over all of its
+    /// text, the notes after this one too (#1993).
+    pub(crate) on_top: Vec<Placed>,
     pub(crate) h: f32,
     /// The rest of a note that didn't fit on an earlier page (drawn below the continuation
     /// separator).
@@ -256,9 +259,14 @@ impl NoteBox {
                 other => head.push(other),
             }
         }
+        // In Front of Text objects stay above unless they start below the cut, as other objects do.
+        let (top_head, mut top_tail): (Vec<_>, Vec<_>) = self.on_top.into_iter().partition(|it| v_span(it).0 < cut - 0.01);
         // The rest starts at its first line (the space between paragraphs goes with the break).
         let start = tail.iter().filter(|it| matches!(it, Placed::Lines { .. })).map(|it| v_span(it).0).fold(f32::MAX, f32::min);
         let start = if start == f32::MAX { cut } else { start.max(cut) };
+        for it in &mut top_tail {
+            it.translate(0.0, -start);
+        }
         for it in &mut tail {
             it.translate(0.0, -start);
             // Shading cut at the break starts at the rest's top.
@@ -270,7 +278,10 @@ impl NoteBox {
             }
         }
         let rest = (self.h - start).max(0.0);
-        (NoteBox { id: self.id, items: head, h: cut, cont: self.cont }, NoteBox { id: self.id, items: tail, h: rest, cont: true })
+        (
+            NoteBox { id: self.id, items: head, on_top: top_head, h: cut, cont: self.cont },
+            NoteBox { id: self.id, items: tail, on_top: top_tail, h: rest, cont: true },
+        )
     }
 }
 
@@ -311,7 +322,7 @@ pub(crate) fn place_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, ids: Vec<u32>,
         // A note longer than the room left continues at a line break in the next column or on
         // a new page (Word). Each page takes at least a line, so this ends; the page cap is a
         // backstop (the rest then runs off the last page).
-        let mut note = NoteBox { id, items, h, cont: false };
+        let mut note = NoteBox { id, items, on_top: Vec::new(), h, cont: false };
         loop {
             let room = pb.bottom - pb.y;
             let cut = if note.h <= room + 0.01 || added >= MAX_NOTE_PAGES {
@@ -390,8 +401,9 @@ pub(crate) fn table_notes(ctx: &mut Ctx, pb: &mut PageBuilder, items: &[Placed])
     for id in ids {
         let Some(part) = ctx.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::Footnote) else { continue };
         let blocks = part.blocks.clone();
-        let BoxLayout { items, height: h, .. } = layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, pb.sect.text_width(), 0, None));
-        pb.notes.push(NoteBox { id, items, h, cont: false });
+        let BoxLayout { items, on_top, height: h, .. } = layout_box(ctx, BoxInput::note(StoryRef::Part(id), &blocks, pb.sect.text_width()));
+        let on_top = on_top.into_iter().map(|t| t.item).collect();
+        pb.notes.push(NoteBox { id, items, on_top, h, cont: false });
     }
     pb.bottom -= pb.notes_h() - before;
 }

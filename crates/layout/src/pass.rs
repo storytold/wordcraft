@@ -213,6 +213,7 @@ fn new_page_builder<'p>(
         seps: NoteSeps::default(),
         para_end: None,
         behind: Vec::new(),
+        on_top: Vec::new(),
         max_y: 0.0,
         content_bottom: 0.0,
         balance: None,
@@ -422,6 +423,7 @@ fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionPro
     pb.close_column_lines();
     pb.apply_valign();
     pb.flush_notes();
+    pb.lift_on_top();
     let last_block = doc.body.len().saturating_sub(1);
     for _ in 0..MAX_NOTE_PAGES {
         if pb.carry.is_empty() {
@@ -430,6 +432,7 @@ fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionPro
         let top = pb.top;
         pb.new_page(last_block, top);
         pb.flush_notes();
+        pb.lift_on_top();
     }
     pb.carry.clear();
     let mut pages = pb.pages;
@@ -623,6 +626,9 @@ struct Snap<'a> {
     pages: usize,
     items: usize,
     behind: usize,
+    /// The last page's In Front of Text objects: leaving the page moves them into its items,
+    /// which going back truncates.
+    on_top: Vec<(usize, Placed)>,
     counters: Counters,
     eq_count: u32,
     page_field: u32,
@@ -633,14 +639,15 @@ struct Snap<'a> {
 impl<'a> Snap<'a> {
     fn take(pb: &mut PageBuilder<'a>, ctx: &Ctx) -> Self {
         // The pages stay out of the copy: it would cost the whole document per block.
-        let (pages, behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (pages, behind, on_top) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.on_top));
         let copy = pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.on_top) = (pages, behind, on_top);
         Snap {
             pb: copy,
             pages: pb.pages.len(),
             items: pb.pages.last().map_or(0, |p| p.items.len()),
             behind: pb.behind.last().copied().unwrap_or(0),
+            on_top: pb.on_top.last().cloned().unwrap_or_default(),
             counters: ctx.counters.clone(),
             eq_count: ctx.eq_count,
             page_field: ctx.fields.page,
@@ -652,9 +659,13 @@ impl<'a> Snap<'a> {
     /// Go back to this state: drop the pages added since and what was added to the last one
     /// (appended, or inserted at the front behind the text).
     fn restore(&self, pb: &mut PageBuilder<'a>, ctx: &mut Ctx) {
-        let (mut pages, mut behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (mut pages, mut behind, mut on_top) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.on_top));
         pages.truncate(self.pages);
         behind.truncate(self.pages);
+        on_top.truncate(self.pages);
+        if let Some(t) = on_top.last_mut() {
+            t.clone_from(&self.on_top);
+        }
         if let Some(pg) = pages.last_mut() {
             let k = behind.last().copied().unwrap_or(0).saturating_sub(self.behind).min(pg.items.len());
             pg.items.drain(..k);
@@ -664,7 +675,7 @@ impl<'a> Snap<'a> {
             *b = self.behind;
         }
         *pb = self.pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.on_top) = (pages, behind, on_top);
         ctx.counters = self.counters.clone();
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;

@@ -4,6 +4,7 @@ use super::floats::{
 };
 use super::page::PageFrame;
 use super::placed::Placed;
+use super::table::OnTop;
 use super::table_flow::below;
 use super::{
     Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, StoryRef, TableFloat, TextDirection,
@@ -13,6 +14,9 @@ use super::{
 /// Cell identity is independent of optional table-style formatting.
 pub(crate) enum BoxContext<'a> {
     Other,
+    /// A footnote: as `Other`, but its In Front of Text objects stay apart, for the page to draw
+    /// over the notes after it too (#1993).
+    Note,
     /// Outer cell edges relative to its text origin (not including wrap distances).
     Cell {
         text: Option<&'a para::CellText>,
@@ -36,6 +40,11 @@ pub(crate) struct BoxInput<'a> {
 impl<'a> BoxInput<'a> {
     pub(crate) fn other(story: StoryRef, blocks: &'a Blocks, width: f32, depth: usize, frame: Option<PageFrame<'a>>) -> Self {
         Self { story, blocks, prefix: &[], width, context: BoxContext::Other, depth, frame }
+    }
+
+    /// A footnote's text (see [`BoxContext::Note`]).
+    pub(crate) fn note(story: StoryRef, blocks: &'a Blocks, width: f32) -> Self {
+        Self { context: BoxContext::Note, ..Self::other(story, blocks, width, 0, None) }
     }
 
     pub(crate) fn cell(story: StoryRef, blocks: &'a Blocks, prefix: &'a [u32], width: f32, cell: Option<&'a para::CellText>, depth: usize) -> Self {
@@ -70,6 +79,7 @@ struct TableBlockContext<'ctx, 'state, 'doc> {
     depth: usize,
     y: &'state mut f32,
     items: &'state mut Vec<Placed>,
+    on_top: &'state mut Vec<OnTop>,
     exclusions: &'state mut Vec<WrapArea>,
     float_tables: &'state mut Vec<Rect>,
     table_areas: &'state mut Vec<Rect>,
@@ -138,6 +148,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
         depth,
         y,
         items,
+        on_top,
         exclusions,
         float_tables,
         table_areas,
@@ -178,6 +189,11 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
             item.translate(tx, row_y);
             items.push(item);
         }
+        for top in &row.on_top {
+            let mut top = top.clone();
+            top.translate(tx, row_y);
+            on_top.push(top);
+        }
         row_y += row.height;
     }
     if t.props.float.is_none() {
@@ -198,16 +214,18 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
     let empty_cell = para::CellText::default();
+    let keeps_on_top = !matches!(context, BoxContext::Other);
     let (in_cell, table, cell_edges) = match context {
-        BoxContext::Other => (false, None, None),
+        BoxContext::Other | BoxContext::Note => (false, None, None),
         BoxContext::Cell { text, left, right, clamp } => (true, Some(text.unwrap_or(&empty_cell)), clamp.then_some((left, right))),
     };
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =
         in_cell && ctx.doc.settings.allow_space_of_same_style_in_table && matches!(ctx.doc.settings.compat_mode, 11 | 12 | 14);
     let mut items = Vec::new();
-    // Pictures behind the text go first; `behind` counts them.
+    // Pictures behind the text go first; `behind` counts them. Those in front of it go last.
     let mut behind = 0;
+    let mut on_top = Vec::new();
     // Wrap areas of the box's floating objects.
     let mut excl: Vec<WrapArea> = Vec::new();
     // Areas of the box's floating tables, which other floating tables may have to avoid.
@@ -340,7 +358,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                         pinned: Some(&pinned),
                         late: None,
                     };
-                    let (back, front) = place_objects(
+                    let (back, front, top) = place_objects(
                         ctx,
                         &ObjectPlacement {
                             story,
@@ -365,6 +383,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     behind += back.len();
                     items.splice(at..at, back);
                     items.extend(front);
+                    // Each goes with its paragraph's first line when a row splits.
+                    on_top.extend(top.into_iter().map(|item| OnTop { cell: 0, anchor: y + lead, para: path.clone(), turned: None, item }));
                 }
                 // Automatic space after: none after the last paragraph of a cell or box. Nor
                 // contextual spacing after a cell's last paragraph in the default style (or an
@@ -390,6 +410,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     depth,
                     y: &mut y,
                     items: &mut items,
+                    on_top: &mut on_top,
                     exclusions: &mut excl,
                     float_tables: &mut float_tables,
                     table_areas: &mut table_areas,
@@ -404,7 +425,13 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    // In Front of Text goes over all of the box's text. A cell's goes further, over the rest of
+    // the page (the rows and paragraphs after its table), so the table carries it up (#1993); a
+    // footnote's over the notes after it, so the page lifts it.
+    if !keeps_on_top {
+        items.extend(on_top.drain(..).map(|t| t.item));
+    }
+    BoxLayout { items, on_top, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -459,6 +486,9 @@ fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
 /// height without it).
 pub(crate) struct BoxLayout {
     pub(crate) items: Vec<Placed>,
+    /// A table cell's or footnote's In Front of Text objects, for its table or page to draw over
+    /// the rest of the page (#1993). Empty for other boxes, whose `items` end with them.
+    pub(crate) on_top: Vec<OnTop>,
     pub(crate) table_areas: Vec<Rect>,
     pub(crate) page_table_wraps: Vec<WrapArea>,
     pub(crate) height: f32,
