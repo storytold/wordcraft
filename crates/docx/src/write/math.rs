@@ -440,7 +440,11 @@ fn run(w: &mut W, r: &MRun) {
         MSty::Italic => "i",
         MSty::BoldItalic => "bi",
     });
+    // `CT_RPR` holds `m:nor` or `m:scr`/`m:sty`, not both, and Word drops the `m:sty` of a normal-text
+    // run: its bold and italic go in `w:rPr` below, where the reader takes them back (#6073).
+    let sty = sty.filter(|_| !r.nor);
     let scr = match r.scr {
+        _ if r.nor => None,
         MScr::Roman => None,
         MScr::Script => Some("script"),
         MScr::Fraktur => Some("fraktur"),
@@ -472,6 +476,15 @@ fn run(w: &mut W, r: &MRun) {
     w.open("w:rPr", &[]);
     let font = r.font.as_deref().filter(|_| r.nor).unwrap_or("Cambria Math");
     w.empty("w:rFonts", &[("w:ascii", font), ("w:hAnsi", font)]);
+    // Normal text's bold and italic (see `sty` above).
+    if r.nor {
+        if matches!(r.sty, Some(MSty::Bold | MSty::BoldItalic)) {
+            w.empty("w:b", &[]);
+        }
+        if matches!(r.sty, Some(MSty::Italic | MSty::BoldItalic)) {
+            w.empty("w:i", &[]);
+        }
+    }
     if let Some(c) = r.color {
         w.val("w:color", &c.hex());
     }
