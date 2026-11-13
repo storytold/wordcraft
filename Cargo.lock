@@ -7111,6 +7111,7 @@ dependencies = [
  "kurbo",
  "log",
  "thiserror 2.0.21",
+ "unicode-normalization",
  "wordcraft-doc",
  "wordcraft-fonts",
  "wordcraft-geom",

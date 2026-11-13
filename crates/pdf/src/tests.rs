@@ -2099,6 +2099,105 @@ fn left_to_right_glyphs_keep_their_order() {
     assert!(left_to_right(&glyphs));
 }
 
+/// The text of every glyph through the ToUnicode maps alone, as extractors that ignore
+/// /ActualText read it (pypdf, search indexers): a glyph the maps don't cover reads as the
+/// replacement character, standing for whatever such an extractor makes of its subset code.
+fn cmap_text(bytes: &[u8]) -> String {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    struct Ex(String);
+    impl Device<'_> for Ex {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            // Synthetic bold fills and then strokes each glyph: one character, two draws.
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
+            match g.as_unicode() {
+                Some(hayro_cmap::BfString::Char(c)) => self.0.push(c),
+                Some(hayro_cmap::BfString::String(s)) => self.0.push_str(&s),
+                None => self.0.push('\u{FFFD}'),
+            }
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut ex = Ex(String::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut ex);
+    }
+    ex.0
+}
+
+/// Thai reads back through the ToUnicode maps alone, as extractors that ignore /ActualText read
+/// it (#5883). A cluster's whole text used to sit on its first glyph's map entry with nothing on
+/// the rest, so such an extractor read control characters for the unmapped subset codes, and
+/// `นี่` read as the `น้ำ` an earlier cluster had left on the shared `น` glyph. Every glyph now
+/// carries the character it shows, with SARA AM spelled as its nikhahit and aa parts, the way
+/// per-glyph maps spell it. Needs Noto Sans Thai (craft-fonts carries it).
+#[test]
+fn thai_text_extracts_through_the_tounicode_maps() {
+    let d = Document::from_text("ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่");
+    let text = cmap_text(&export(&d, &PdfOptions::default()).unwrap());
+    // `นํ้า`: the SARA AM of `น้ำ` read back as its parts, nikhahit before the tone mark.
+    let expected = "ห้อง ก๋วยเตี๋ยว น\u{0E4D}\u{0E49}า ที่นี่";
+    assert_eq!(text, expected);
+}
+
+/// A cluster whose glyphs the font's character map knows each takes its own character, in a run
+/// that runs left to right (#5883: the splitting used to run only for the other runs).
+#[test]
+fn split_clusters_give_ltr_marks_their_characters() {
+    let glyphs = [(10, 0.0, 0.0), (11, 3.0, -2.0), (12, 3.0, 0.0)];
+    let ranges = [0..4, 0..4, 4..5];
+    let rev: std::collections::HashMap<u32, char> = [(10, 'a'), (11, '\u{0E49}'), (12, 'b')].into_iter().collect();
+    let (text, clusters, parts) = split_clusters("a\u{0E49}b", &glyphs, &ranges, &rev);
+    assert_eq!(text, "a\u{0E49}b");
+    assert_eq!(clusters, [0..4, 0..4, 4..5]);
+    assert_eq!(parts, [0..1, 1..4, 4..5]);
+}
+
+/// A cluster with more glyphs than characters spells the characters' decomposition out, so a
+/// glyph that shows one part of a character (Thai ำ's nikhahit) carries that part, and a glyph
+/// the map doesn't know (a mark's contextual form) takes the character left over (#5883).
+#[test]
+fn split_clusters_spell_a_decomposed_character_out() {
+    let glyphs = [(10, 0.0, 0.0), (21, 3.0, -4.0), (22, 3.0, -2.0), (23, 3.0, 0.0)];
+    let ranges = [0..9, 0..9, 0..9, 0..9];
+    let rev: std::collections::HashMap<u32, char> = [(10, 'น'), (21, '\u{0E4D}'), (23, 'า')].into_iter().collect();
+    let (text, clusters, parts) = split_clusters("น้ำ", &glyphs, &ranges, &rev);
+    // The parts in character order (`น ้ ํ า`); each glyph reads its own: nikhahit before the
+    // tone mark in the glyphs' order.
+    assert_eq!(text, "น\u{0E49}\u{0E4D}า");
+    assert_eq!(clusters, [0..12, 0..12, 0..12, 0..12]);
+    assert_eq!(parts, [0..3, 6..9, 3..6, 9..12]);
+}
+
+/// A cluster that cannot be spelled per glyph keeps its shared range (#5883).
+#[test]
+fn split_clusters_keep_what_cannot_be_spelled_per_glyph() {
+    // Two glyphs, three characters, and no character decomposes that far.
+    let glyphs = [(10, 0.0, 0.0), (11, 5.0, 0.0)];
+    let ranges = [0..3, 0..3];
+    let rev: std::collections::HashMap<u32, char> = [(10, 'a'), (11, 'c')].into_iter().collect();
+    let (text, clusters, parts) = split_clusters("abc", &glyphs, &ranges, &rev);
+    assert_eq!(text, "abc");
+    assert_eq!(clusters, [0..3, 0..3]);
+    assert_eq!(parts, [0..3, 0..3]);
+}
+
 /// A lam-alef some fonts draw as a lam and a zero-width alef at the same x goes in reverse
 /// text order, so the run's ranges still decrease and viewers read لا, not ال (#2310).
 /// Left-to-right clusters at one x keep their text order.
@@ -2127,10 +2226,10 @@ fn right_to_left_clusters_are_written_whole_left_to_right() {
     let ranges = [0..4, 0..4, 4..8, 4..8, 8..12, 12..14];
     let rev: std::collections::HashMap<u32, char> = [(1, 'ש'), (2, '\u{5B8}'), (6, 'ם')].into_iter().collect();
     assert!(!left_to_right(&glyphs));
-    let parts = split_clusters(text, &glyphs, &ranges, &rev);
+    let (text, clusters, parts) = split_clusters(text, &glyphs, &ranges, &rev);
     assert_eq!(parts, [2..4, 0..2, 4..8, 4..8, 8..12, 12..14]);
     // Glyph by glyph by x this would be [5, 4, 3, 2, 0, 1]: the lam-alef's glyphs swapped.
-    assert_eq!(visual_order(text, &glyphs, &ranges, &parts), [5, 4, 2, 3, 0, 1]);
+    assert_eq!(visual_order(&text, &glyphs, &clusters, &parts), [5, 4, 2, 3, 0, 1]);
 }
 
 /// The image XObjects in a PDF: (width, height, filters, decoded samples per pixel).
