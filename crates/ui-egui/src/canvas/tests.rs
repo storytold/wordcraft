@@ -1484,6 +1484,9 @@ fn double_and_triple_click_select_in_a_note() {
             a.run(command, json!({"text": "Alpha bravo charlie"})).unwrap();
             let note = a.session.sel.focus.story;
             assert!(matches!(part_kind(&a, note), Some(PartKind::Footnote | PartKind::Endnote)), "{command}");
+            // A second paragraph in the note: the triple-click selects the first one only.
+            a.run("text.newParagraph", json!({})).unwrap();
+            a.run("text.insert", json!({"text": "Delta echo"})).unwrap();
             if from_body {
                 a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 2));
             }
@@ -1519,9 +1522,15 @@ fn double_and_triple_click_select_in_a_note() {
             clicks(&mut h, at, 2);
             assert_eq!(h.state().session.sel.focus.story, note, "{case}: the double-click stays in the note");
             assert_eq!(h.state().session.selected_text().trim_end(), "bravo", "{case}: the word is selected");
+            // The double-click left the caret in the note: the triple-click starts from the body
+            // again when the case says so.
+            if from_body {
+                h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 2));
+            }
             clicks(&mut h, at, 3);
             assert_eq!(h.state().session.sel.focus.story, note, "{case}: the triple-click stays in the note");
-            assert!(h.state().session.selected_text().contains("Alpha bravo charlie"), "{case}: the paragraph is selected");
+            let paragraph = h.state().session.selected_text();
+            assert!(paragraph.contains("Alpha bravo charlie") && !paragraph.contains("Delta"), "{case}: the first paragraph is selected: {paragraph:?}");
             // With the caret in a footnote, a double-click on the page's blank space between the
             // body text and the footnote (on no story's text) is the body's: the caret leaves
             // the note, as it did before the note kept its double-clicks.
