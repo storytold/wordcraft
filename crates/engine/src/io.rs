@@ -851,8 +851,22 @@ pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&
     safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Saves a document to `path` with optional password and export options on web targets.
 #[cfg(target_arch = "wasm32")]
 pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<(), String> {
+    Err(format!("{}: files are saved through the browser on the web", path.display()))
+}
+
+/// Write `text` to `path` as it is (a Markdown file's own text), as safely as [`save_path_with`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_text_path(path: &std::path::Path, text: &str) -> Result<(), String> {
+    crate::file_access::check_write(&path.to_string_lossy())?;
+    safe_save::write(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Write `text` to `path` as it is (a Markdown file's own text), as safely as [`save_path_with`].
+#[cfg(target_arch = "wasm32")]
+pub fn save_text_path(path: &std::path::Path, _text: &str) -> Result<(), String> {
     Err(format!("{}: files are saved through the browser on the web", path.display()))
 }
 
