@@ -1356,3 +1356,72 @@ fn delete_previous_sentence_shortcut_dispatches_and_can_be_reassigned() {
     assert!(!app.session.sel.is_collapsed());
     assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. Second sentence.");
 }
+
+/// #6328: Ctrl+' then e types é through the page's key handling, as in Word for Windows; Shift
+/// for a capital keeps the accent waiting; Escape and an unbound shortcut cancel it, so the
+/// letter after is plain. The keys are egui's logical keys: on a French layout the comma has its
+/// own key (where the US M is), and Ctrl+, then c still types ç. Ctrl+Alt+Shift+? types ¿.
+#[test]
+fn accent_keys_then_a_letter_type_the_accented_letter_on_the_page() {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let doc_text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end().to_string();
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let none = Modifiers::NONE;
+    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+    let shift = Modifiers { shift: true, ..Default::default() };
+    let key = |key, physical, pressed, modifiers| egui::Event::Key { key, physical_key: Some(physical), pressed, repeat: false, modifiers };
+    let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| canvas_events(a, ui.ctx())).drop_without_applying_deltas();
+    };
+    // Ctrl+<key> pressed and let go, in one frame.
+    let accent = |a: &mut WordApp, k: Key, physical: Key, m: Modifiers| {
+        frame(a, vec![egui::Event::ModifiersChanged(m), key(k, physical, true, m), key(k, physical, false, m), egui::Event::ModifiersChanged(none)]);
+    };
+    let letter = |a: &mut WordApp, k: Key, text: &str, m: Modifiers| {
+        frame(a, vec![key(k, k, true, m), egui::Event::Text(text.into()), key(k, k, false, m)]);
+    };
+
+    accent(&mut a, Key::Quote, Key::Quote, ctrl);
+    assert!(a.session.accent_waiting().is_some(), "Ctrl+' waits for the letter");
+    letter(&mut a, Key::E, "e", none);
+    letter(&mut a, Key::E, "e", none);
+    assert_eq!(doc_text(&a), "ée", "one letter takes the accent");
+
+    // Shift pressed for the capital doesn't cancel.
+    accent(&mut a, Key::Backtick, Key::Backtick, ctrl);
+    frame(&mut a, vec![egui::Event::ModifiersChanged(shift), key(Key::ShiftLeft, Key::ShiftLeft, true, shift)]);
+    letter(&mut a, Key::A, "A", shift);
+    frame(&mut a, vec![key(Key::ShiftLeft, Key::ShiftLeft, false, none), egui::Event::ModifiersChanged(none)]);
+    assert_eq!(doc_text(&a), "éeÀ");
+
+    // Escape cancels and does nothing else; so does a shortcut bound to nothing (Ctrl+;).
+    accent(&mut a, Key::Quote, Key::Quote, ctrl);
+    frame(&mut a, vec![key(Key::Escape, Key::Escape, true, none), key(Key::Escape, Key::Escape, false, none)]);
+    assert_eq!(a.session.accent_waiting(), None);
+    letter(&mut a, Key::E, "e", none);
+    accent(&mut a, Key::Quote, Key::Quote, ctrl);
+    accent(&mut a, Key::Semicolon, Key::Semicolon, ctrl);
+    letter(&mut a, Key::E, "e", none);
+    assert_eq!(doc_text(&a), "éeÀee");
+
+    // French AZERTY: the comma is on the US M key.
+    accent(&mut a, Key::Comma, Key::M, ctrl);
+    letter(&mut a, Key::C, "c", none);
+    // US Ctrl+Shift+; reports the colon; Ctrl+Shift+6 has no ^ key in egui and arrives as 6.
+    accent(&mut a, Key::Colon, Key::Semicolon, Modifiers { shift: true, ..ctrl });
+    letter(&mut a, Key::U, "u", none);
+    accent(&mut a, Key::Num6, Key::Num6, Modifiers { shift: true, ..ctrl });
+    letter(&mut a, Key::O, "o", none);
+    accent(&mut a, Key::Questionmark, Key::Slash, Modifiers { shift: true, alt: true, ..ctrl });
+    assert_eq!(doc_text(&a), "éeÀeeçüô¿");
+
+    // The keys can be given to other commands in Customize Keyboard, and are listed there.
+    assert_eq!(a.session.keymap.keys_for(&a.session.registry, "text.accentAcute"), ["Mod+'"]);
+    a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+'": "text.accentStroke"}}));
+    accent(&mut a, Key::Quote, Key::Quote, ctrl);
+    letter(&mut a, Key::O, "o", none);
+    assert_eq!(doc_text(&a), "éeÀeeçüô¿ø");
+}

@@ -2037,6 +2037,245 @@ fn alt_numpad_code_types_one_character() {
     assert_eq!(raw(&s), ["Café Θ ąąП"]);
 }
 
+/// The paragraphs' text as typed (`texts` lowercases).
+fn raw_texts(s: &Session) -> Vec<String> {
+    paras(s).into_iter().map(|p| p.0).collect()
+}
+
+/// #6328: Word's international-character keys on Windows and Linux: the accent key, then the
+/// letter. Every letter of Word's table, capitals included.
+#[test]
+fn accent_keys_then_a_letter_type_the_accented_letter() {
+    let table = [
+        ("Mod+`", "text.accentGrave", "aeiouAEIOU", "àèìòùÀÈÌÒÙ"),
+        ("Mod+'", "text.accentAcute", "aeiouyAEIOUYdD", "áéíóúýÁÉÍÓÚÝðÐ"),
+        ("Mod+Shift+6", "text.accentCircumflex", "aeiouAEIOU", "âêîôûÂÊÎÔÛ"),
+        ("Mod+Shift+`", "text.accentTilde", "anoANO", "ãñõÃÑÕ"),
+        ("Mod+Shift+:", "text.accentDiaeresis", "aeiouyAEIOUY", "äëïöüÿÄËÏÖÜŸ"),
+        ("Mod+Shift+2", "text.accentRing", "aA", "åÅ"),
+        ("Mod+Shift+7", "text.accentLigature", "aAoOs", "æÆœŒß"),
+        ("Mod+,", "text.accentCedilla", "cC", "çÇ"),
+        ("Mod+/", "text.accentStroke", "oO", "øØ"),
+    ];
+    for (key, id, letters, accented) in table {
+        // The keys are Word's on Windows and Linux; macOS has its Option dead keys instead.
+        let bound = s().registry.by_shortcut(key).map(|c| c.id);
+        assert_eq!(bound, (!cfg!(target_os = "macos")).then_some(id), "{key}");
+        let mut s = s();
+        for letter in letters.chars() {
+            if cfg!(target_os = "macos") {
+                run(&mut s, id, json!({}));
+            } else {
+                press(&mut s, key).unwrap();
+            }
+            typ(&mut s, &letter.to_string());
+        }
+        assert_eq!(raw_texts(&s), [accented], "{id}");
+    }
+    if !cfg!(target_os = "macos") {
+        // Ctrl+Shift+: arrives as Ctrl+Shift+; where the key reports its own character.
+        assert_eq!(s().registry.by_shortcut("Mod+Shift+;").map(|c| c.id), Some("text.accentDiaeresis"));
+    }
+}
+
+/// #6328: a character the accent doesn't apply to is typed as it is, and the accent key is used
+/// up; Escape (the front end's `cancel_accent`), a caret move, a click elsewhere or another
+/// command forget a waiting accent key; a second accent key replaces the first.
+#[test]
+fn an_accent_key_waits_for_one_character_only() {
+    let mut s = s();
+    run(&mut s, "text.accentAcute", json!({}));
+    typ(&mut s, "Xe");
+    run(&mut s, "text.accentCedilla", json!({}));
+    typ(&mut s, " 1");
+    assert_eq!(raw_texts(&s), ["Xe 1"], "no accent for X or a space; the next e is plain");
+    assert_eq!(s.accent_waiting(), None);
+
+    run(&mut s, "text.accentGrave", json!({}));
+    assert_eq!(s.accent_waiting(), Some(crate::cmd::text::Accent::Grave));
+    s.cancel_accent();
+    typ(&mut s, "a");
+    run(&mut s, "text.accentGrave", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    typ(&mut s, "a");
+    run(&mut s, "text.accentGrave", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    typ(&mut s, "a");
+    // A click moves the caret without a command.
+    run(&mut s, "text.accentGrave", json!({}));
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    typ(&mut s, "a");
+    assert_eq!(raw_texts(&s), ["aXe 1aaa"]);
+
+    // Ctrl+' then Ctrl+` : the grave wins.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.accentAcute", json!({}));
+    run(&mut s, "text.accentGrave", json!({}));
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["aXe 1aaaè"]);
+}
+
+/// #6328 review: a `text.insert` that types nothing, or is refused, leaves the accent waiting for
+/// the next character; switching documents forgets it, there and in the document it was pressed in.
+#[test]
+fn an_accent_waits_through_an_empty_or_refused_insertion_and_not_across_documents() {
+    let mut s = s();
+    run(&mut s, "text.accentAcute", json!({}));
+    run(&mut s, "text.insert", json!({"text": ""}));
+    assert_eq!(s.accent_waiting(), Some(crate::cmd::text::Accent::Acute), "nothing was typed");
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["é"]);
+
+    // A protected document whose editable region is elsewhere: the insertion runs, then is
+    // refused as a change outside the region.
+    let mut s = typed("Free locked");
+    s.run("select.text", &json!({"text": "Free"})).unwrap();
+    s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+    s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.accentAcute", json!({}));
+    let e = s.run("text.insert", &json!({"text": "e"})).unwrap_err().to_string();
+    assert!(e.contains("only the editable regions"), "{e}");
+    assert_eq!(s.accent_waiting(), Some(crate::cmd::text::Accent::Acute), "the insertion was refused");
+    s.doc.settings.protection = None;
+    typ(&mut s, "e");
+    // The editable region's start and end marks stand around "Free".
+    assert!(raw_texts(&s)[0].ends_with(" lockedé"), "{:?}", raw_texts(&s));
+
+    // Another document, its caret at the start as this one's was.
+    let mut s = self::s();
+    let first = s.document_id();
+    run(&mut s, "text.accentAcute", json!({}));
+    s.add_document(wordcraft_doc::Document::new());
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["e"], "the new document");
+    run(&mut s, "text.accentAcute", json!({}));
+    s.activate(first).unwrap();
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["e"], "back in the first document");
+}
+
+/// #6368 review: a front end with a window per document makes each window's document active to
+/// draw it (`switch_document`). The accent key waits through a draw of the other window, and a
+/// letter typed in that other document, its caret where this one's is, is not accented.
+#[test]
+fn an_accent_waits_while_another_window_draws_and_stays_in_its_document() {
+    let mut s = s();
+    let first = s.document_id();
+    let second = s.add_document(wordcraft_doc::Document::new());
+    // Both carets stand at the start of an empty document.
+    run(&mut s, "text.accentAcute", json!({}));
+    s.switch_document(first).unwrap();
+    assert_eq!(s.accent_waiting(), None, "not waiting in the other document");
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["e"], "the first document: the accent was pressed in the second");
+    s.switch_document(second).unwrap();
+    assert_eq!(s.accent_waiting(), None, "typing in the first document forgot the accent");
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["e"]);
+
+    run(&mut s, "text.accentAcute", json!({}));
+    s.switch_document(first).unwrap();
+    s.switch_document(second).unwrap();
+    assert_eq!(s.accent_waiting(), Some(crate::cmd::text::Accent::Acute));
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["eé"], "the second document, after the first one drew");
+}
+
+/// #6368 review: a click elsewhere forgets a waiting accent key at once (Escape then does its
+/// usual job), and a click back to where it was pressed doesn't bring it back; activating the
+/// document that is already active keeps it.
+#[test]
+fn an_accent_is_forgotten_by_a_click_away_and_back_but_not_by_activating_its_document() {
+    let mut s = s();
+    typ(&mut s, "ab");
+    run(&mut s, "text.accentAcute", json!({}));
+    let pressed_at = s.sel.clone();
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    assert_eq!(s.accent_waiting(), None, "after a click elsewhere");
+    // The front end draws between the two clicks.
+    run(&mut s, "format.state", json!({}));
+    s.sel = pressed_at;
+    assert_eq!(s.accent_waiting(), None, "after a click back");
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["abe"]);
+
+    run(&mut s, "text.accentAcute", json!({}));
+    let id = s.document_id();
+    s.activate(id).unwrap();
+    assert_eq!(s.accent_waiting(), Some(crate::cmd::text::Accent::Acute));
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["abeé"]);
+}
+
+/// #6328: the accented letter is typing: it joins the typing undo step around it, takes
+/// AutoCorrect, and Repeat and macros replay the accented letter, not the plain one.
+#[test]
+fn an_accented_letter_is_typed_like_any_other() {
+    let mut s = s();
+    typ(&mut s, "Caf");
+    run(&mut s, "text.accentAcute", json!({}));
+    typ(&mut s, "e au lait");
+    assert_eq!(raw_texts(&s), ["Café au lait"]);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(raw_texts(&s), [""], "one typing undo step");
+    run(&mut s, "edit.redo", json!({}));
+
+    // Several characters in one text.insert (an input method's commit): the first is accented.
+    run(&mut s, "text.accentDiaeresis", json!({}));
+    run(&mut s, "text.insert", json!({"text": "uber"}));
+    assert_eq!(raw_texts(&s), ["Café au laitüber"]);
+    run(&mut s, "edit.repeat", json!({}));
+    assert_eq!(raw_texts(&s), ["Café au laitüberüber"], "Repeat types the accented text");
+
+    let mut m = self::s();
+    run(&mut m, "tools.recordMacro", json!({"name": "ny"}));
+    run(&mut m, "text.accentTilde", json!({}));
+    typ(&mut m, "n");
+    run(&mut m, "tools.recordMacro", json!({}));
+    run(&mut m, "tools.macros", json!({"run": "ny"}));
+    assert_eq!(raw_texts(&m), ["ññ"]);
+
+    // The waiting key changes nothing: no undo step, no unsaved change.
+    let mut c = self::s();
+    let labels = c.undo_labels();
+    run(&mut c, "text.accentStroke", json!({}));
+    assert_eq!(c.undo_labels(), labels);
+    assert!(!c.dirty);
+}
+
+/// #6328: Alt+Ctrl+Shift+? types ¿ and Alt+Ctrl+Shift+! types ¡ (Windows and Linux).
+#[test]
+fn inverted_question_and_exclamation_marks() {
+    let mut s = s();
+    if cfg!(target_os = "macos") {
+        run(&mut s, "text.invertedQuestion", json!({}));
+        typ(&mut s, "Qué?");
+        run(&mut s, "text.invertedExclamation", json!({}));
+    } else {
+        press(&mut s, "Mod+Alt+Shift+?").unwrap();
+        typ(&mut s, "Qué?");
+        press(&mut s, "Mod+Alt+Shift+!").unwrap();
+        // The keys as the US layout's / and 1 report them without their shifted characters.
+        assert_eq!(s.registry.by_shortcut("Mod+Alt+Shift+/").map(|c| c.id), Some("text.invertedQuestion"));
+        assert_eq!(s.registry.by_shortcut("Mod+Alt+Shift+1").map(|c| c.id), Some("text.invertedExclamation"));
+    }
+    typ(&mut s, "Sí!");
+    assert_eq!(raw_texts(&s), ["¿Qué?¡Sí!"]);
+}
+
+/// #6328: the accent keys don't reach into an equation (its own keys type there).
+#[test]
+fn accent_keys_are_off_in_an_equation() {
+    let mut s = s();
+    run(&mut s, "insert.equation", json!({}));
+    assert!(s.math.is_some());
+    assert!(matches!(s.run("text.accentAcute", &json!({})), Err(crate::CmdError::Disabled(_))));
+    assert!(s.math.is_some(), "still editing the equation");
+    assert_eq!(s.accent_waiting(), None);
+}
+
 #[test]
 fn shift_f5_goes_back_through_the_last_edits() {
     let mut s = typed("One\nTwo\nThree");
