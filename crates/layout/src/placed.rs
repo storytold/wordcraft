@@ -105,6 +105,10 @@ pub enum Placed {
         /// Its paragraph's column left and top: where offsets relative to the column and the
         /// paragraph (`Anchor::Column` / `Anchor::Paragraph`) start.
         origin: wordcraft_geom::Point,
+        /// A group's text boxes: each one's upright frame relative to `rect`'s top-left (so it
+        /// moves with the group; [`Placed::turn`] turns it with the group) and the story it shows.
+        /// Empty for anything else.
+        group_boxes: Vec<(Rect, u32)>,
     },
 }
 
@@ -179,9 +183,15 @@ impl Placed {
             | Placed::Cell { rect, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
             }
-            Placed::Object { rect, origin, .. } => {
-                *rect = turn_rect(turn, x, y, *rect);
+            Placed::Object { rect, origin, group_boxes, .. } => {
+                let old = *rect;
+                *rect = turn_rect(turn, x, y, old);
                 (origin.x, origin.y) = turn_point(turn, x, y, origin.x, origin.y);
+                // A group's text boxes turn with it, kept relative to its new frame.
+                for (r, _) in group_boxes.iter_mut() {
+                    let t = turn_rect(turn, x, y, Rect::new(old.x + r.x, old.y + r.y, r.w, r.h));
+                    *r = Rect::new(t.x - rect.x, t.y - rect.y, t.w, t.h);
+                }
             }
             Placed::Clip { rect, items, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
