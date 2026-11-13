@@ -1045,7 +1045,7 @@ fn compare_table_layout_and_margins_keep_live_revised_and_record_base() {
             t.props.cell_margins = Some([5.0, 108.0, 0.0, 108.0]);
         })
     };
-    let (mut s, r) = compare_saved("tbllayout", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("tbllayout", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert!(!t.props.fixed, "live tblPr is autofit (revised)");
@@ -1617,7 +1617,7 @@ fn compare_run_change_keeps_live_revised_and_record_base() {
         d.format_range(&d.start_of(StoryRef::Body), &d.end_of(StoryRef::Body), &|c| c.bold = Some(true)).unwrap();
         d
     };
-    let (mut s, r) = compare_saved("runfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("runfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let p = s.doc.body[0].as_para().unwrap();
     let run = p.runs.iter().find(|run| run.props.fmt_change.is_some()).expect("a run formatting change yields w:rPrChange");
@@ -1647,7 +1647,7 @@ fn compare_mark_change_keeps_live_revised_and_record_base() {
         d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.bold = Some(true);
         d
     };
-    let (mut s, r) = compare_saved("markfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("markfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let p = s.doc.body[0].as_para().unwrap();
     assert_eq!(p.mark.bold, Some(true), "live paragraph mark is bold (revised)");
@@ -1674,7 +1674,7 @@ fn compare_para_change_keeps_live_revised_and_record_base() {
         d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.align = Some(Align::Center);
         d
     };
-    let (mut s, r) = compare_saved("parafmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("parafmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
     assert_eq!(p.props.align, Some(Align::Center), "live paragraph is centred (revised)");
@@ -1702,7 +1702,7 @@ fn compare_row_change_keeps_live_revised_and_record_base() {
             t.rows[0].props.height_rule = HeightRule::AtLeast;
         })
     };
-    let (mut s, r) = compare_saved("rowfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("rowfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.rows[0].props.height, Some(30.0), "live row height is revised");
@@ -1727,7 +1727,7 @@ fn compare_cell_change_keeps_live_revised_and_record_base() {
     use wordcraft_doc::props::Rgb;
     let original = || table_doc(|_| {});
     let revised = || table_doc(|t| t.rows[0].cells[0].props.shading = Some(Rgb(0xFF, 0, 0)));
-    let (mut s, r) = compare_saved("cellfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("cellfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.rows[0].cells[0].props.shading, Some(Rgb(0xFF, 0, 0)), "live cell shading is revised");
@@ -1757,7 +1757,7 @@ fn compare_table_change_keeps_live_revised_and_record_base() {
             t.props.align = Some(Align::Center);
         })
     };
-    let (mut s, r) = compare_saved("tblfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("tblfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.props.style.as_deref(), Some("TableGrid"), "live table style is revised");
