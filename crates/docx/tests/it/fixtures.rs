@@ -2642,6 +2642,44 @@ fn theme_styled_connectors_and_callout_boxes_keep_their_paint() {
     assert!(matches!(&paras(&again)[0].objects[0], InlineObject::Shape { stroke, extra, .. } if *stroke == Some(theme[7]) && extra.arrow_end));
 }
 
+/// A styled outline takes its width from the document's own theme (`a:lnStyleLst`), not from
+/// Word's default themes: measured in Word for Windows, rectangles styled `a:lnRef idx` 1 to 4
+/// in a document whose theme lists line styles of 0.75, 2 and 3 pt are outlined 0.75, 2, 3 and
+/// 3 pt wide. The widths survive saving.
+#[test]
+fn a_styled_outline_takes_its_width_from_the_documents_theme() {
+    let ln = |w: u32| format!(r#"<a:ln w="{w}"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>"#);
+    let theme = format!(
+        r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fmtScheme name="T"><a:lnStyleLst>{}{}{}</a:lnStyleLst></a:fmtScheme></a:themeElements></a:theme>"#,
+        ln(9_525),
+        ln(25_400),
+        ln(38_100)
+    );
+    let style = |idx: u8| {
+        format!(
+            r#"<wps:style><a:lnRef idx="{idx}"><a:srgbClr val="000000"/></a:lnRef><a:fillRef idx="0"><a:srgbClr val="000000"/></a:fillRef><a:effectRef idx="0"><a:srgbClr val="000000"/></a:effectRef><a:fontRef idx="minor"/></wps:style>"#
+        )
+    };
+    let rect = r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#;
+    let body: String = (1..=4).map(|idx| anchored_wsp("Rect", 914400, 457200, rect, &style(idx), "<wps:cNvSpPr/>")).collect();
+    let body = format!("<w:p>{body}</w:p>");
+    let widths = |d: &Document| -> Vec<f32> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .map(|o| match o {
+                InlineObject::Shape { stroke_width, .. } => *stroke_width,
+                o => panic!("{o:?}"),
+            })
+            .collect()
+    };
+    let d = wordcraft_docx::read(&docx(&body, &[("rId2", "theme", "theme/theme1.xml")], &[("word/theme/theme1.xml", &theme)])).unwrap();
+    assert_eq!(widths(&d), [0.75, 2.0, 3.0, 3.0]);
+    assert_eq!(widths(&wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap()), [0.75, 2.0, 3.0, 3.0]);
+    // A document without a theme of its own gets the widths of Word's default themes.
+    assert_eq!(widths(&read_body(&body)), [0.5, 1.0, 1.5, 1.5]);
+}
+
 /// A rounded rectangle's corner is its `adj` (100000ths of the shorter side), read, capped and
 /// written back; without one, and for presets only drawn as rounded rectangles, the default.
 #[test]
