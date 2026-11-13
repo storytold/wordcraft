@@ -217,8 +217,10 @@ fn leaf(sp: &Sp, w: f32, h: f32, float: Float, b: &Build, pics: &mut Pictures) -
     let unfilled = p.filled == Some(false) || (matches!(sp.spt, 85..=88 | 185 | 186) && p.filled != Some(true));
     let fill = if line || unfilled { None } else { Some(Fill::solid(p.fill_color.unwrap_or(Rgb::WHITE))) };
     let stroke = if p.line == Some(false) { None } else { Some(p.line_color.unwrap_or(Rgb::BLACK)) };
-    // Line widths are EMUs; Word's default is 0.75 pt.
-    let stroke_width = p.line_width.map_or(0.75, |e| (e as f32 / 12_700.0).clamp(0.0, 100.0));
+    // Line widths are EMUs; Word's default is 0.75 pt. A line that is off has none: the width
+    // is the room an outline takes from the shape's text, and Word gives a line that is off no
+    // room (measured in Word for Windows with a .doc text box whose 3 pt line is off).
+    let stroke_width = if stroke.is_some() { p.line_width.map_or(0.75, |e| (e as f32 / 12_700.0).clamp(0.0, 100.0)) } else { 0.0 };
     Some(InlineObject::Shape {
         kind,
         w,

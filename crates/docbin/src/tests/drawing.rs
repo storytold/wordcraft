@@ -218,6 +218,41 @@ fn braces_and_brackets_are_unfilled_unless_filled_is_set() {
     );
 }
 
+/// A line that is off has no width: the model's width is the room an outline takes from the
+/// shape's text, and Word gives a line that is off none. Measured in Word for Windows
+/// (16.0.20625) with a .doc it saved itself: text in a box whose 3 pt line is off starts where
+/// it does in a box without a line, in a box whose 3 pt line is on 1.5 pt further in.
+#[test]
+fn a_line_that_is_off_has_no_width() {
+    // Three rectangles with a 3 pt line (lineWidth 38 100 EMU): fLine off, fLine on, fLine unsaid
+    // (on by default), and one whose line is on with no width named (Word's 0.75 pt).
+    let (off, on) = (1u32 << 19, (1u32 << 19) | (1 << 3));
+    let shapes = [
+        sp(&[fsp(1, 1026, 0xA00), fopt(&[(0x01CB, 38_100), (0x01FF, off)], &[])]),
+        sp(&[fsp(1, 1027, 0xA00), fopt(&[(0x01CB, 38_100), (0x01FF, on)], &[])]),
+        sp(&[fsp(1, 1028, 0xA00), fopt(&[(0x01CB, 38_100)], &[])]),
+        sp(&[fsp(1, 1029, 0xA00), fopt(&[(0x01FF, on)], &[])]),
+        sp(&[fsp(1, 1030, 0xA00), fopt(&[(0x01FF, off)], &[])]),
+    ];
+    let art = art_content(&[], &shapes);
+    let flags = spa_flags(0, 0, 3, false);
+    let spas = plc(&[1, 2, 3, 4, 5, 7], &(1026..=1030u32).map(|id| spa(id, [0, 0, 1440, 720], flags)).collect::<Vec<_>>().concat());
+    let text = "A\u{8}\u{8}\u{8}\u{8}\u{8}B\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec { text, extra_pairs: vec![(40, spas), (50, art)], ..structured_spec(text, ccp) };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let outlines: Vec<_> = p0
+        .objects
+        .iter()
+        .map(|o| match o {
+            InlineObject::Shape { stroke, stroke_width, .. } => (stroke.is_some(), *stroke_width),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(outlines, [(false, 0.0), (true, 3.0), (true, 3.0), (true, 0.75), (false, 0.0)]);
+}
+
 #[test]
 fn text_boxes_pointing_at_the_same_story_text_read_it_once() {
     // Two text boxes whose PlcftxbxTxt stories are both [0, 7) (the table steps back to CP 0

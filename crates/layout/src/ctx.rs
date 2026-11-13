@@ -106,10 +106,28 @@ pub(crate) struct Pin {
     pub(crate) seen: HashSet<(Vec<u32>, usize)>,
 }
 
-/// The text rectangle of shape `o` at its saved size ([`wordcraft_doc::connector::text_insets`]).
+/// The text rectangle of shape `o` at its saved size ([`shape_text_insets_in`]).
 pub(crate) fn shape_text_insets(o: &InlineObject) -> [f32; 4] {
     match o {
-        InlineObject::Shape { kind, w, h, extra, .. } => wordcraft_doc::connector::text_insets(*kind, extra.corner, *w, *h),
+        InlineObject::Shape { w, h, .. } => shape_text_insets_in(o, *w, *h),
+        _ => [0.0; 4],
+    }
+}
+
+/// How far inside its frame shape `o`, drawn `w` × `h`, keeps its text, before the text box's own
+/// margins: its preset's text rectangle ([`wordcraft_doc::connector::text_insets`]) and half its
+/// outline's width on every side. The outline counts by its width alone, drawn or not: measured
+/// in Word for Windows, text in a rectangle with an outline of 0.5, 3 and 6 pt starts 0.25, 1.5
+/// and 3 pt further in from the left and the top and ends as much short of the right and the
+/// bottom, the same with the outline's fill taken off, and a shape that resizes to fit its text
+/// is taller by the whole width. (A VML or .doc line that is off takes no room in Word; those are
+/// read as no width.)
+pub(crate) fn shape_text_insets_in(o: &InlineObject, w: f32, h: f32) -> [f32; 4] {
+    match o {
+        InlineObject::Shape { kind, extra, stroke_width, .. } => {
+            let outline = if stroke_width.is_finite() { stroke_width.clamp(0.0, 100.0) / 2.0 } else { 0.0 };
+            wordcraft_doc::connector::text_insets(*kind, extra.corner, w, h).map(|v| v + outline)
+        }
         _ => [0.0; 4],
     }
 }

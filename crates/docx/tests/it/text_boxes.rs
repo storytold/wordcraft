@@ -259,3 +259,51 @@ fn story_shared_by_many_shapes_is_written_once() {
     assert!(xml.len() < 2_000_000, "document.xml is {} bytes", xml.len());
     assert_eq!(xml.matches(text.as_str()).count(), 1);
 }
+
+#[test]
+fn an_outline_that_is_not_drawn_has_the_width_word_gives_it_room_for() {
+    // The model's outline width is the room the outline takes from the shape's text. Measured in
+    // Word for Windows (16.0.20625): a DrawingML outline takes half the width its `a:ln` states
+    // on every side whether it is drawn or not (`a:noFill`), a VML line only while it is on
+    // (`stroked="f"` with any `strokeweight` takes none). So a DrawingML outline that is not
+    // drawn keeps its width, here and in the saved file, and a VML line that is off has none.
+    let content = r#"<w:txbxContent><w:p><w:r><w:t>Text</w:t></w:r></w:p></w:txbxContent>"#;
+    let dml = |ln: &str| {
+        format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="3810000" cy="762000"/><wp:docPr id="1" name="Box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:prstGeom prst="rect"/>{ln}</wps:spPr><wps:txbx>{content}</wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let vml = |attrs: &str| {
+        format!(r#"<w:p><w:r><w:pict><v:rect style="width:300pt;height:60pt" {attrs}><v:textbox>{content}</v:textbox></v:rect></w:pict></w:r></w:p>"#)
+    };
+    let body = [
+        dml(r#"<a:ln w="38100"><a:noFill/></a:ln>"#),
+        dml(r#"<a:ln><a:noFill/></a:ln>"#),
+        dml(r#"<a:ln w="38100"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>"#),
+        vml(r#"stroked="f" strokeweight="3pt""#),
+        vml(r#"stroked="f""#),
+        vml(r#"strokeweight="3pt""#),
+        vml(""),
+    ]
+    .concat();
+    let doc = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:body>{body}</w:body></w:document>"#
+    );
+    let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
+    let outlines = |d: &Document| {
+        let mut out = Vec::new();
+        d.objects_in_reading_order(&mut |o| {
+            if let InlineObject::Shape { stroke, stroke_width, .. } = o {
+                out.push((stroke.is_some(), *stroke_width));
+            }
+        });
+        out
+    };
+    let want = [(false, 3.0), (false, 0.0), (true, 3.0), (false, 0.0), (false, 0.0), (true, 3.0), (true, 0.75)];
+    assert_eq!(outlines(&d), want);
+    // Saved and read again, they stay: the outline that is not drawn is written with its width.
+    let saved = wordcraft_docx::write(&d).unwrap();
+    assert_eq!(document_xml(&saved).matches(r#"<a:ln w="38100"><a:noFill/>"#).count(), 1, "the width of the outline that is not drawn");
+    assert_eq!(outlines(&wordcraft_docx::read(&saved).unwrap()), want);
+}

@@ -27,7 +27,7 @@ fn text_box_with(d: &mut Document, para: usize, text: &str, w: f32, h: f32, body
         h,
         fill: None,
         stroke: None,
-        stroke_width: 1.0,
+        stroke_width: 0.0,
         float,
         story: Some(id),
         effects: Default::default(),
@@ -561,4 +561,93 @@ fn a_fitted_shape_keeps_the_room_its_saved_text_rectangle_left() {
     let (_, plain_top) = fitted(ShapeKind::Rectangle, None, 100.0, stacked);
     assert!((round - plain).abs() < 0.02, "stacked text: a rounded rectangle is fitted {round} pt tall, a rectangle {plain}");
     assert!((top - plain_top).abs() < 0.02, "stacked text starts {top} pt down the rounded rectangle, {plain_top} down the rectangle");
+}
+
+/// Text in a shape keeps clear of half its outline's width on every side, whether the outline is
+/// drawn or not. Measured in Word for Windows (16.0.20625) with 300 pt wide rectangles, rounded
+/// rectangles and ellipses: with an outline of 0.5, 3 and 6 pt the first line starts 0.25, 1.5
+/// and 3 pt further in from the left and further down than with an outline without a width (in
+/// the PDF 0.24, 1.44 and 3.0 pt), right-aligned lines end as much short of the right edge and
+/// bottom-anchored text sits as much above the bottom; a 3 pt outline whose fill is taken off
+/// (`a:noFill` under an `a:ln` that states its width) takes the same 1.5 pt. A shape that resizes
+/// to fit three 11.5 pt lines is taller by the whole width: 34.5 pt without an outline, 35.0,
+/// 37.5 and 40.5 pt with one of 0.5, 3 and 6 pt. WordCraft set the text against the frame's
+/// edge, under the outline's inner half.
+#[test]
+fn text_in_a_shape_keeps_clear_of_half_its_outline() {
+    use wordcraft_doc::para::ShapeKind;
+    use wordcraft_doc::props::Rgb;
+    crate::test_fonts();
+    let zero = TextBody { inset: Some([0; 4]), ..Default::default() };
+    // Where the first of three lines starts in the frame, how long a line may be, and the frame.
+    let first = |kind: ShapeKind, corner: Option<u32>, outline: (Option<Rgb>, f32), body: TextBody| {
+        let mut d = Document::from_text("x");
+        let id = shape_with_text(&mut d, kind, corner, (300.0, 100.0), 3, body);
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        for o in &mut p.objects {
+            if let InlineObject::Shape { stroke, stroke_width, .. } = o {
+                (*stroke, *stroke_width) = outline;
+            }
+        }
+        p.touch();
+        let l = lay(&d);
+        let r = frame_of(&l, id);
+        let (at, len) = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(s), para, x, y, l0, .. } if *s == id => {
+                    let line = para.lines.get(*l0)?;
+                    Some(((x - r.x, y - r.y), line.right - line.left))
+                }
+                _ => None,
+            })
+            .expect("the shape shows its text");
+        (at, len, r)
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.02;
+    let none = (None, 0.0);
+    let drawn = |w: f32| (Some(Rgb::BLACK), w);
+    for (what, kind, corner) in [
+        ("a rectangle", ShapeKind::Rectangle, None),
+        ("a text box", ShapeKind::TextBox, None),
+        ("a rounded rectangle", ShapeKind::RoundedRectangle, Some(50_000)),
+        ("an ellipse", ShapeKind::Ellipse, None),
+    ] {
+        let ((x0, y0), len0, _) = first(kind, corner, none, zero);
+        for (outline, w) in [(drawn(0.5), 0.5f32), (drawn(3.0), 3.0), (drawn(6.0), 6.0), ((None, 3.0), 3.0)] {
+            let ((x, y), len, _) = first(kind, corner, outline, zero);
+            assert!(
+                near(x - x0, w / 2.0) && near(y - y0, w / 2.0),
+                "{what}, outline {outline:?}: the text starts ({x}, {y}) into the frame, without an outline ({x0}, {y0})"
+            );
+            assert!(near(len0 - len, w), "{what}, outline {outline:?}: lines are {len} pt long, without an outline {len0}");
+        }
+    }
+    // The box's own margins come on top, as they do on the shape's text rectangle.
+    let margins = TextBody { inset: Some([91_440, 45_720, 91_440, 45_720]), ..Default::default() };
+    let ((x, y), len, _) = first(ShapeKind::Rectangle, None, drawn(3.0), margins);
+    assert!(near(x, 7.2 + 1.5) && near(y, 3.6 + 1.5) && near(len, 300.0 - 14.4 - 3.0), "with the default margins: ({x}, {y}), lines {len} pt long");
+    // Bottom-anchored text sits half the width above the bottom, centred text stays centred.
+    let low = TextBody { anchor: VAlign::Bottom, ..zero };
+    let (((_, y0), ..), ((_, y), ..)) = (first(ShapeKind::Rectangle, None, none, low), first(ShapeKind::Rectangle, None, drawn(6.0), low));
+    assert!(near(y0 - y, 3.0), "bottom-anchored: {y} pt down with a 6 pt outline, {y0} without");
+    let mid = TextBody { anchor: VAlign::Center, ..zero };
+    let (((_, y0), ..), ((_, y), ..)) = (first(ShapeKind::Rectangle, None, none, mid), first(ShapeKind::Rectangle, None, drawn(6.0), mid));
+    assert!(near(y0, y), "centred: {y} pt down with a 6 pt outline, {y0} without");
+    // Resize to fit: taller by the whole width, the text half of it down.
+    let fit = TextBody { auto_fit: true, ..zero };
+    let (_, _, plain) = first(ShapeKind::Rectangle, None, none, fit);
+    for (outline, w) in [(drawn(0.5), 0.5f32), (drawn(3.0), 3.0), (drawn(6.0), 6.0), ((None, 3.0), 3.0)] {
+        let ((_, y), _, r) = first(ShapeKind::Rectangle, None, outline, fit);
+        assert!(near(r.h - plain.h, w), "fitted, outline {outline:?}: {} pt tall, without an outline {}", r.h, plain.h);
+        assert!(near(y, w / 2.0), "fitted, outline {outline:?}: the text starts {y} pt down");
+    }
+    // A width that is no width takes no room, and one wider than the shape still lays out.
+    for w in [f32::NAN, f32::INFINITY, -4.0] {
+        let ((x, y), len, _) = first(ShapeKind::Rectangle, None, (Some(Rgb::BLACK), w), zero);
+        assert!(near(x, 0.0) && near(y, 0.0) && near(len, 300.0), "an outline {w} pt wide: ({x}, {y}), lines {len} pt long");
+    }
+    let (_, len, r) = first(ShapeKind::Rectangle, None, drawn(1.0e9), zero);
+    assert!(len.is_finite() && r.h.is_finite(), "an outline wider than the shape: lines {len} pt long in {r:?}");
 }

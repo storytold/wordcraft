@@ -166,9 +166,18 @@ impl Writer<'_> {
                 w.close("a:ln");
             }
             None => {
+                // An outline that is not drawn keeps its width: Word keeps the shape's text
+                // clear of half of it all the same, so the width is not lost on the way out.
+                let width = emu(stroke_width.clamp(0.0, 100.0));
                 let cap = extra.cap.ooxml();
-                let ln: &[(&str, &str)] = if extra.cap.is_flat() { &[] } else { &[("cap", cap)] };
-                w.open("a:ln", ln);
+                let mut ln: Vec<(&str, &str)> = Vec::new();
+                if stroke_width.is_finite() && *stroke_width > 0.0 {
+                    ln.push(("w", width.as_str()));
+                }
+                if !extra.cap.is_flat() {
+                    ln.push(("cap", cap));
+                }
+                w.open("a:ln", &ln);
                 w.empty("a:noFill", &[]);
                 line_dash(w, &extra.dash);
                 w.close("a:ln");

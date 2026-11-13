@@ -320,12 +320,9 @@ fn carried(rect: Rect, spin: Spin, centre: Point) -> Rect {
     Rect::new(rect.x + nx - cx, rect.y + ny - cy, rect.w, rect.h)
 }
 
-/// The text rectangle of shape `o` drawn in `r` ([`wordcraft_doc::connector::text_insets`]).
+/// The text rectangle of shape `o` drawn in `r` ([`crate::ctx::shape_text_insets_in`]).
 fn text_inset_in(o: &InlineObject, r: Rect) -> [f32; 4] {
-    match o {
-        InlineObject::Shape { kind, extra, .. } => wordcraft_doc::connector::text_insets(*kind, extra.corner, r.w, r.h),
-        _ => [0.0; 4],
-    }
+    crate::ctx::shape_text_insets_in(o, r.w, r.h)
 }
 
 fn group_members(o: &InlineObject, rect: Rect) -> Vec<(Rect, &InlineObject)> {

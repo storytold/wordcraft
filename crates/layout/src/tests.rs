@@ -8175,7 +8175,7 @@ fn inline_picture_wider_than_a_text_box_is_fitted_to_it() {
         h: 72.0,
         fill: None,
         stroke: None,
-        stroke_width: 0.75,
+        stroke_width: 0.0,
         float: Default::default(),
         story: Some(id),
         freeform: None,
