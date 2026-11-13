@@ -714,6 +714,43 @@ fn circle_checks_face_coverage() {
 }
 
 #[test]
+fn a_non_breaking_hyphen_uses_the_face_word_draws_it_in() {
+    // Word draws a non-breaking hyphen its font lacks in Cambria Math, and Cambria's hyphen and
+    // line are the same, so it stands in ([`crate::word::fallback_families`]). Bundled fonts
+    // renamed stand in for both here.
+    let dir = font_dir("nb-hyphen-fallback");
+    std::fs::write(dir.join("Math-Regular.ttf"), named_face("SourceSerif4-Regular.ttf", "Cambria Math")).unwrap();
+    std::fs::write(dir.join("Text-Regular.ttf"), named_face("SourceSerif4-Regular.ttf", "Cambria")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let primary = db.face("JetBrains Mono", "Regular");
+    assert_eq!(primary.family, "JetBrains Mono");
+    assert!(!primary.covers('\u{2011}'), "the requested face lacks the hyphen");
+    db.set_system_fallback(false);
+    assert_eq!(db.fallback_for('\u{2011}', primary.id()).unwrap().family, FALLBACK_FAMILY, "not loaded: the fallback family");
+    db.set_system_fallback(true);
+    let found = db.fallback_for('\u{2011}', primary.id()).unwrap();
+    assert_eq!(found.family, "Cambria Math");
+    assert!(found.covers('\u{2011}'));
+    assert_ne!(db.fallback_for('\u{2011}', found.id()).unwrap().id(), found.id(), "the excluded face cannot be reused");
+    assert_eq!(db.fallback_styled('\u{2011}', primary.id(), true, true).unwrap().family, "Cambria Math", "it has no bold or italic of its own");
+    assert_eq!(db.fallback_for('-', primary.id()).unwrap().family, FALLBACK_FAMILY, "an ordinary hyphen's fallback is unchanged");
+    // Without Cambria Math: Cambria.
+    std::fs::remove_file(dir.join("Math-Regular.ttf")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let primary = db.face("JetBrains Mono", "Regular");
+    assert_eq!(db.fallback_for('\u{2011}', primary.id()).unwrap().family, "Cambria");
+}
+
+#[test]
+fn word_fallback_families_are_known_for_two_characters() {
+    assert_eq!(crate::word::fallback_families('\u{25CF}'), ["Times New Roman"]);
+    assert_eq!(crate::word::fallback_families('\u{2011}'), ["Cambria Math", "Cambria"]);
+    for c in ['-', '\u{2010}', '\u{2012}', '\u{25CB}', 'a', ' ', '\u{0}'] {
+        assert!(crate::word::fallback_families(c).is_empty(), "{c:?}");
+    }
+}
+
+#[test]
 fn catalog_postscript_names() {
     let dir = font_dir("postscript");
     for path in [dir.join("Sysfont-Regular.ttf"), dir.join("Sub/Sysfont-Bold.TTF")] {

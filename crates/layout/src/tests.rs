@@ -1438,6 +1438,44 @@ fn a_missing_roman_font_with_its_own_substitute_keeps_it() {
     assert_eq!(para.styles[first.style as usize].face, wordcraft_fonts::word::resolve("Times New Roman", false, false).face);
 }
 
+/// A non-breaking hyphen (U+2011) the font has no glyph for is drawn with the font's own hyphen
+/// where the face Word draws it in (Cambria Math) is not installed, so its line stays in one
+/// font and as tall as the lines around it. Measured in Word for Windows: the hyphen Arial
+/// lacks is 0.332 em wide, as wide as Arial's own hyphen-minus to a thousandth of an em, and
+/// its line 0.02 em taller than its neighbours. WordCraft took the hyphen from the fallback
+/// family, whose line is taller: each such line of 8 pt Arial moved the text below it 1.2 pt.
+#[test]
+fn a_non_breaking_hyphen_the_font_lacks_is_drawn_with_its_own_hyphen() {
+    crate::test_fonts();
+    const FONT: &str = "JetBrains Mono";
+    let mono = wordcraft_fonts::word::resolve(FONT, false, false);
+    assert!(
+        !mono.substituted && !mono.face.covers('\u{2011}') && mono.face.covers('\u{2010}'),
+        "the fixture font has a hyphen and no non-breaking one"
+    );
+    // Each cluster's face, advance, bytes and whether a line may end after it, and the line's height.
+    let line = |text: &str| {
+        let mut d = Document::from_text(text);
+        d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.font = Some(FONT.into())).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let faces: Vec<_> = para.clusters.iter().map(|c| para.styles[c.style as usize].face).collect();
+        let advances: Vec<f32> = para.clusters.iter().map(|c| c.adv).collect();
+        let bytes: Vec<(usize, usize)> = para.clusters.iter().map(|c| (c.start, c.end)).collect();
+        let breaks: Vec<bool> = para.clusters.iter().map(|c| c.break_after).collect();
+        (faces, advances, bytes, breaks, para.lines[0].height)
+    };
+    let (faces, advances, bytes, breaks, height) = line("ab\u{2011}cd");
+    let (_, own_advances, _, own_breaks, own_height) = line("ab\u{2010}cd");
+    assert!(faces.iter().all(|f| *f == mono.face), "every character is drawn in the paragraph's font: {faces:?}");
+    assert_eq!(advances, own_advances, "the hyphen is as wide as the font's own");
+    assert_eq!(height, own_height, "the line is no taller");
+    // The text keeps its character: the cluster covers the non-breaking hyphen's bytes, and no
+    // line may end after it, as one may after the hyphen it is drawn with.
+    assert_eq!(bytes, [(0, 1), (1, 2), (2, 5), (5, 6), (6, 7)]);
+    assert_eq!((breaks.get(2), own_breaks.get(2)), (Some(&false), Some(&true)));
+}
+
 #[test]
 fn an_empty_section_mark_stays_on_a_full_page() {
     crate::test_fonts();
