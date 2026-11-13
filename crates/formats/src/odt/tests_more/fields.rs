@@ -366,3 +366,14 @@ fn a_field_that_follows_the_document_says_so() {
     assert!(c.contains(r#"<text:author-name text:fixed="false""#), "{c}");
     assert!(c.contains("<text:sender-firstname>Ann</text:sender-firstname>"), "{c}");
 }
+
+#[test]
+fn an_author_field_read_without_fixed_is_written_not_fixed() {
+    // Kept as read, it would say nothing, and a reader would show it fixed; WordCraft holds it
+    // as a field, so it is written from the model with `text:fixed="false"`.
+    let d =
+        import(&body(r#"<text:p><text:author-name>Ada</text:author-name> and <text:author-initials>AL</text:author-initials></text:p>"#)).unwrap();
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(c.contains(r#"<text:author-name text:fixed="false">Ada</text:author-name>"#), "{c}");
+    assert!(c.contains(r#"<text:author-initials text:fixed="false">AL</text:author-initials>"#), "{c}");
+}

@@ -25,14 +25,16 @@ const SIMPLE: &[(&str, &str)] = &[
     ("initial-creator", "AUTHOR"),
     ("creator", "LASTSAVEDBY"),
     ("author-name", "USERNAME"),
+    ("author-initials", "USERINITIALS"),
     ("description", "COMMENTS"),
     ("keywords", "KEYWORDS"),
-    ("file-name", "FILENAME"),
     ("word-count", "NUMWORDS"),
     ("character-count", "NUMCHARS"),
     ("creation-date", "CREATEDATE"),
     ("modification-date", "SAVEDATE"),
     ("print-date", "PRINTDATE"),
+    ("editing-cycles", "REVNUM"),
+    ("editing-duration", "EDITTIME"),
 ];
 
 /// The sender fields (§7.3.6 `text:sender-firstname` … §7.3.7 `text:sender-state-or-province`).
@@ -173,6 +175,17 @@ pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<
                 _ => format!("REF {name} \\h"),
             })
         }
+        // The document's file or template name (§7.3 `text:file-name`, `text:template-name`), shown as its name with
+        // extension (Word's FILENAME / TEMPLATE) or its full path (their `\p`); any other
+        // display has no Word field.
+        "file-name" | "template-name" => {
+            let code = if local == "file-name" { "FILENAME" } else { "TEMPLATE" };
+            match get(a, "text:display").map(str::trim) {
+                None | Some("name-and-extension") => Some(code.to_string()),
+                Some("full") => Some(format!("{code} \\p")),
+                Some(_) => None,
+            }
+        }
         // The sender's details (§7.3.6–7.3.7), from the application's user data: WordCraft's
         // own `SENDER` field code, shown as its last result.
         _ if local.strip_prefix("sender-").is_some_and(|p| SENDER_PARTS.contains(&p)) => local.strip_prefix("sender-").map(|p| format!("SENDER {p}")),
@@ -218,6 +231,13 @@ pub(super) fn element(instr: &str, result: &str, data_style: Option<&str>) -> Op
             let number = [" \\n", " \\r", " \\w"].iter().any(|s| instr.contains(s));
             let display = if number { "number" } else { "name" };
             Some(format!("<text:chapter text:display=\"{display}\" text:outline-level=\"{level}\">{result}</text:chapter>"))
+        }
+        // The file or template name: with its path under `\p` (ODF's default display is the
+        // full path, so the display is always said).
+        "FILENAME" | "TEMPLATE" => {
+            let el = if code == "FILENAME" { "file-name" } else { "template-name" };
+            let display = if words.any(|w| w.eq_ignore_ascii_case("\\p")) { "full" } else { "name-and-extension" };
+            Some(format!("<text:{el} text:display=\"{display}\">{result}</text:{el}>"))
         }
         "PAGE" => {
             let fmt = match switch_arg(instr, '*').as_deref() {
