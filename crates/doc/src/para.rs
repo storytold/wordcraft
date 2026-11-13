@@ -340,6 +340,69 @@ impl Paragraph {
         self.runs = out;
     }
 
+    /// Make the objects match the U+FFFC markers one to one (files lie): drop surplus objects,
+    /// and remove markers past the last object. Runs must already cover the text.
+    ///
+    /// One scan finds the unmatched markers, one pass removes them and the runs and objects are
+    /// fixed up once, so the cost is linear in the paragraph however many markers are unmatched.
+    /// There is no cap on the markers: stopping early would leave markers without objects.
+    pub fn reconcile_objects(&mut self) {
+        let keep = self.objects.len();
+        // Byte offsets of the unmatched markers (every marker after the first `keep`), ascending.
+        let mut seen = 0usize;
+        let mut drop: Vec<usize> = Vec::new();
+        for (i, _) in self.text.match_indices(OBJ) {
+            if seen >= keep {
+                drop.push(i);
+            }
+            seen += 1;
+        }
+        if self.objects.len() > seen {
+            self.objects.truncate(seen);
+            self.touch();
+        }
+        if drop.is_empty() {
+            return;
+        }
+        let w = OBJ.len_utf8();
+        if self.text.len() == drop.len() * w {
+            // Emptying: the mark keeps the formatting of what was deleted (as `delete` does).
+            let revisions = (self.mark.ins, self.mark.del, self.mark.fmt_change.clone());
+            let mut mark = self.props_of_char(0).clone();
+            (mark.ins, mark.del, mark.fmt_change) = revisions;
+            self.mark = mark;
+        }
+        // Shrink the runs: each removed marker takes `w` bytes off the run that holds it.
+        let mut d = 0usize;
+        let mut start = 0usize;
+        for r in &mut self.runs {
+            let re = start + r.len;
+            let mut cut = 0usize;
+            while let Some(&off) = drop.get(d) {
+                if off >= re {
+                    break;
+                }
+                if off >= start {
+                    cut += w;
+                }
+                d += 1;
+            }
+            start = re;
+            r.len -= cut.min(r.len);
+        }
+        let mut out = String::with_capacity(self.text.len() - drop.len() * w);
+        // The pieces between markers; marker `k` sits before piece `k + 1` and stays if matched.
+        for (k, piece) in self.text.split(OBJ).enumerate() {
+            if k > 0 && k <= keep {
+                out.push(OBJ);
+            }
+            out.push_str(piece);
+        }
+        self.text = out;
+        self.normalize();
+        self.touch();
+    }
+
     /// Delete `a..b` (bytes). Objects inside are removed.
     pub fn delete(&mut self, a: usize, b: usize) -> Result<()> {
         let (a, b) = (a.min(b), a.max(b));
