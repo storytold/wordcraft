@@ -1486,6 +1486,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),
+        last_link: None,
         bookmarks: std::cell::OnceCell::new(),
     };
     let (page, x, y) = ex.bookmark("target").unwrap();
@@ -2999,4 +3000,64 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
     let expected: std::collections::BTreeSet<String> =
         ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
     assert_eq!(shown, expected);
+}
+
+#[test]
+fn link_annotations_are_tagged_with_link_and_objr() {
+    use hayro_syntax::object::{Array, Dict, Name, Object};
+
+    let mut p = Paragraph::with_text("Visit ", CharProps::default());
+    let link_props = CharProps { link: Some("https://example.com".into()), ..Default::default() };
+    p.insert_text(p.len(), "Example", &link_props).unwrap();
+    p.insert_text(p.len(), " now", &CharProps::default()).unwrap();
+    let mut d = Document::new();
+    d.core.title = "Link test".into();
+    d.body = vec![para_block(p)];
+
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    let page = &pdf.pages()[0];
+    let annots = page.raw().get::<Array>(b"Annots").expect("page Annots");
+    let annot = annots.iter::<Dict>().next().expect("link annotation");
+    assert!(annot.get::<i32>(b"StructParent").is_some(), "link annotation missing /StructParent");
+    let annot_id = format!("{:?}", annot.obj_id().expect("indirect annotation"));
+
+    let root = pdf.xref().get::<Dict>(pdf.xref().root_id()).unwrap();
+    let struct_tree = root.get::<Dict>(b"StructTreeRoot").expect("StructTreeRoot");
+
+    fn find_links(dict: &Dict, out: &mut Vec<(bool, Option<String>)>) {
+        if dict.get::<Name>(b"S").is_some_and(|s| s.as_ref() == b"Link") {
+            let mut has_mcid = false;
+            let mut objr = None;
+            if let Some(k) = dict.get::<Array>(b"K") {
+                for item in k.iter::<Object>() {
+                    match item {
+                        Object::Number(_) => has_mcid = true,
+                        Object::Dict(d) if d.get::<Name>(b"Type").is_some_and(|t| t.as_ref() == b"OBJR") => {
+                            objr = d.get::<Dict>(b"Obj").and_then(|o| o.obj_id()).map(|id| format!("{id:?}"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            out.push((has_mcid, objr));
+        }
+        if let Some(k) = dict.get::<Array>(b"K") {
+            for item in k.iter::<Object>() {
+                if let Object::Dict(child) = item {
+                    find_links(&child, out);
+                }
+            }
+        } else if let Some(child) = dict.get::<Dict>(b"K") {
+            find_links(&child, out);
+        }
+    }
+
+    let mut links = Vec::new();
+    find_links(&struct_tree, &mut links);
+    assert!(!links.is_empty(), "StructTreeRoot has no /Link structure element (annot {annot_id})");
+    assert!(
+        links.iter().any(|(mcid, objr)| *mcid && objr.as_deref() == Some(&annot_id)),
+        "Link element missing MCID or OBJR for {annot_id}: {links:?}"
+    );
 }

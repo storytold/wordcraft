@@ -104,6 +104,7 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),
+        last_link: None,
         bookmarks: std::cell::OnceCell::new(),
     };
     if let Some(o) = ex.outline(pages) {
@@ -133,8 +134,15 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
             }
         }
         surface.finish();
-        for annotation in annotations {
-            kp.add_annotation(annotation);
+        for (annotation, tag_slot) in annotations {
+            if opts.tagged
+                && let Some((para_idx, child_idx)) = tag_slot
+            {
+                let annot_id = kp.add_tagged_annotation(annotation);
+                ex.attach_link_annotation(para_idx, child_idx, annot_id);
+            } else {
+                kp.add_annotation(annotation);
+            }
         }
         kp.finish();
     }
