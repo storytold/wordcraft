@@ -112,6 +112,7 @@ impl Session {
             status: String::new(),
             new_header_parts,
             hf_return,
+            review_style: None,
             history,
             undo_evicted,
             redo,
