@@ -150,6 +150,23 @@ impl Reader {
         }
     }
 
+    /// A high surrogate from `\uN` pairs only with a low one in the very next `\u`. Anything else
+    /// after it (text, another high surrogate, a paragraph end, the end of the document) first
+    /// emits it as U+FFFD, in the formatting the surrogate was read in.
+    pub(super) fn flush_high_surrogate(&mut self) {
+        let Some((_, fmt)) = self.pending_high.take() else { return };
+        // Multibyte text read before the surrogate comes first.
+        self.finish_multibyte();
+        self.with_fmt(fmt, |r| r.emit_text("\u{FFFD}"));
+    }
+
+    /// Runs `f` with `fmt` as the character formatting, then puts the current formatting back.
+    pub(super) fn with_fmt(&mut self, fmt: Fmt, f: impl FnOnce(&mut Self)) {
+        let current = std::mem::replace(&mut self.st.fmt, fmt);
+        f(self);
+        self.st.fmt = current;
+    }
+
     pub(super) fn finish_pict(&mut self) {
         if self.pict_half.take().is_some() {
             // Odd hex digit count: drop the dangling nibble.
@@ -190,6 +207,12 @@ impl Reader {
     }
 
     pub(super) fn text(&mut self, s: &str) {
+        self.flush_high_surrogate();
+        self.emit_text(s);
+    }
+
+    /// `text` without first emitting a held high surrogate.
+    fn emit_text(&mut self, s: &str) {
         match self.st.dest {
             Dest::Body => {
                 if self.st.hidden {
@@ -317,6 +340,7 @@ impl Reader {
             self.skip_chars -= 1;
             return;
         }
+        self.flush_high_surrogate();
         self.finish_multibyte();
         // Only a literal `;` ends a font name: an escaped one (`\'3b`, `\u59?`) belongs to it.
         if c == ';' && self.st.dest == Dest::FontTbl {

@@ -82,13 +82,22 @@ impl Reader {
             "u" => {
                 let u = (pv as i64).rem_euclid(65_536) as u16;
                 if (0xD800..0xDC00).contains(&u) {
-                    self.pending_high = Some(u);
+                    // An earlier high surrogate not followed by a low one stands alone.
+                    self.flush_high_surrogate();
+                    self.pending_high = Some((u, self.st.fmt.clone()));
                 } else {
-                    let c = match self.pending_high.take() {
-                        Some(h) if (0xDC00..0xE000).contains(&u) => char::decode_utf16([h, u]).next().and_then(Result::ok).unwrap_or('\u{FFFD}'),
-                        _ => char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}'),
-                    };
-                    self.ch(c);
+                    match self.pending_high.take() {
+                        // A pair takes the formatting of its high half.
+                        Some((h, fmt)) if (0xDC00..0xE000).contains(&u) => {
+                            let c = char::decode_utf16([h, u]).next().and_then(Result::ok).unwrap_or('\u{FFFD}');
+                            self.finish_multibyte();
+                            self.with_fmt(fmt, |r| r.ch(c));
+                        }
+                        held => {
+                            self.pending_high = held;
+                            self.ch(char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}'));
+                        }
+                    }
                 }
                 self.skip_chars = self.st.uc;
             }
