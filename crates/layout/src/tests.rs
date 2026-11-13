@@ -15444,3 +15444,43 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
     }
 }
+
+/// Page-anchored body text frames use page coordinates; other anchors remain in body flow.
+#[test]
+fn a_body_text_frame_respects_its_anchors() {
+    crate::test_fonts();
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::new();
+    for i in 0..5 {
+        d.insert_block(
+            StoryRef::Body,
+            &Path::top(i),
+            (*wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Body line", Default::default()))).clone(),
+        )
+        .unwrap();
+    }
+    let mut framed = wordcraft_doc::Paragraph::with_text("Framed line", Default::default());
+    framed.props.frame = Some(TextFrame {
+        w: Some(150.0),
+        x: 340.0,
+        y: 180.0,
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "notBeside".into(),
+        ..Default::default()
+    });
+    d.insert_block(StoryRef::Body, &Path::top(5), (*wordcraft_doc::para_block(framed)).clone()).unwrap();
+    let l = lay(&d);
+    let at = l.caret(&Pos { story: StoryRef::Body, path: Path::top(5), off: 0 }).unwrap();
+    assert!((at.x - 340.0).abs() < 0.5, "page-anchored frame x: {}", at.x);
+    assert!((at.top - 180.0).abs() < 0.5, "page-anchored frame y: {}", at.top);
+
+    let mut flowing = wordcraft_doc::Paragraph::with_text("Margin-anchored line", Default::default());
+    flowing.props.frame =
+        Some(TextFrame { w: Some(150.0), h_anchor: "margin".into(), v_anchor: "page".into(), wrap: "notBeside".into(), ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(6), (*wordcraft_doc::para_block(flowing)).clone()).unwrap();
+    let l = lay(&d);
+    let at = l.caret(&Pos { story: StoryRef::Body, path: Path::top(6), off: 0 }).unwrap();
+    assert!((at.x - 72.0).abs() < 0.5, "margin-anchored frame x: {}", at.x);
+    assert!(at.top > 180.0, "margin-anchored frame should remain in body flow: {}", at.top);
+}
