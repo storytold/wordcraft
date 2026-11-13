@@ -107,17 +107,8 @@ impl Unit {
 /// (lines are 12 pt). A bare number is in `default`. Returns points. Either decimal separator
 /// works (`2,5 cm` and `2.5 cm`), whatever the region.
 pub fn parse_measure(s: &str, default: Unit) -> Option<f32> {
-    let t = s.trim().to_ascii_lowercase().replace('\u{2212}', "-");
-    if t.is_empty() {
-        return None;
-    }
-    let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == ',')).unwrap_or(t.len());
-    let (num, unit) = t.split_at(split);
-    let v: f32 = num.replace(',', ".").parse().ok()?;
-    if !v.is_finite() {
-        return None;
-    }
-    let k = match unit.trim() {
+    let (v, unit) = split_number(s)?;
+    let k = match unit.as_str() {
         "" => default.pt_per_unit(),
         "\"" | "in" | "inch" | "inches" => PT_PER_IN,
         "cm" => PT_PER_CM,
@@ -133,6 +124,35 @@ pub fn parse_measure(s: &str, default: Unit) -> Option<f32> {
         return None;
     }
     Some(res)
+}
+
+/// Parse a number of characters typed by a user: `2 ch`, `1,5ch` (Word's unit), and `2 ic` or
+/// `2 chars`. One character is the font size, the width of an East Asian ideograph, as in
+/// `w:firstLineChars`. With `bare`, a number without a unit counts too, for a box that shows
+/// characters. A length (`1 cm`) is `None`: see [`parse_measure`].
+pub fn parse_chars(s: &str, bare: bool) -> Option<f32> {
+    let (v, unit) = split_number(s)?;
+    match unit.as_str() {
+        "ch" | "char" | "chars" | "character" | "characters" | "ic" => Some(v),
+        "" if bare => Some(v),
+        _ => None,
+    }
+}
+
+/// A typed number and the unit after it, lower case and trimmed (`(2.5, "cm")`), with either
+/// decimal separator. `None` without a finite number first.
+fn split_number(s: &str) -> Option<(f32, String)> {
+    let t = s.trim().to_ascii_lowercase().replace('\u{2212}', "-");
+    if t.is_empty() {
+        return None;
+    }
+    let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == ',')).unwrap_or(t.len());
+    let (num, unit) = t.split_at(split);
+    let v: f32 = num.replace(',', ".").parse().ok()?;
+    if !v.is_finite() {
+        return None;
+    }
+    Some((v, unit.trim().to_string()))
 }
 
 /// A point in page space (points, y down).
@@ -382,6 +402,24 @@ mod tests {
         assert_eq!(parse_measure("1e39 pt", Unit::Points), None);
         assert_eq!(parse_measure("inf", Unit::Points), None);
         assert_eq!(parse_measure("nan", Unit::Points), None);
+    }
+
+    #[test]
+    fn parses_characters() {
+        // #6065: indents in characters, as Word's Paragraph dialog takes them (`2 ch`, `2ch`,
+        // `2 CH`, `2,5 ch`), and the CSS name the issue asks for (`2 ic`).
+        for (typed, chars) in [("2 ch", 2.0), ("2ch", 2.0), ("2 CH", 2.0), ("1.5 ch", 1.5), ("2,5 ch", 2.5), ("-2 ch", -2.0), ("2 ic", 2.0)] {
+            assert_eq!(parse_chars(typed, false), Some(chars), "{typed}");
+        }
+        assert_eq!(parse_chars("\u{2212}1 chars", false), Some(-1.0));
+        // A bare number is characters only in a box that shows them.
+        assert_eq!(parse_chars("2", false), None);
+        assert_eq!(parse_chars("2", true), Some(2.0));
+        // Lengths, other units and junk are not characters; characters are not a length.
+        for typed in ["1 cm", "0.5\"", "12 pt", "2 li", "2 em", "ch", "", "1,2,3 ch", "inf ch", "nan ch"] {
+            assert_eq!(parse_chars(typed, true), None, "{typed}");
+        }
+        assert_eq!(parse_measure("2 ch", Unit::Points), None);
     }
 
     #[test]

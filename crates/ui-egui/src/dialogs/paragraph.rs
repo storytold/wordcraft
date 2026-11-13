@@ -8,12 +8,17 @@ pub(super) fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u
     };
     let (vl, vr) = rp.visual_indents();
     let unit = crate::options::unit().pt_per_unit();
+    // Indents in characters show as characters (`2 ch`), the rest in the measurement unit.
+    let [start, end, first] = rp.indent_chars;
+    let (cl, cr) = if rp.bidi { (end, start) } else { (start, end) };
+    let shown = |chars: f32, pt: f32| if chars != 0.0 { chars } else { pt / unit };
     Dialog::Paragraph {
         rtl: rp.bidi,
         align: format!("{:?}", rp.align.visual(rp.bidi)).to_lowercase(),
-        left: vl / unit,
-        right: vr / unit,
-        first: rp.indent_first / unit,
+        left: shown(cl, vl),
+        right: shown(cr, vr),
+        first: shown(first, rp.indent_first),
+        chars: [cl, cr, first].map(|c| c != 0.0),
         before: rp.space_before,
         after: rp.space_after,
         line,
@@ -29,10 +34,18 @@ pub(super) fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u
     }
 }
 
+/// The indent fields as `para.set` names them, left, right and first line: the length (points)
+/// and the characters.
+const INDENTS: [(&str, &str); 3] = [("left", "leftChars"), ("right", "rightChars"), ("indentFirst", "indentFirstChars")];
+
 /// The Paragraph dialog's fields as `para.set` takes them: `align`, `left` and `right` as seen
-/// on the page (its `onPage`), the rest as paragraph properties, line spacing as a multiple.
+/// on the page (its `onPage`), the rest as paragraph properties, line spacing as a multiple. An
+/// indent in characters is just those (`leftChars`); one in a length also clears the characters
+/// (`leftChars: 0`), as they would win over it.
 pub(super) fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
-    let Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow, asian, opts, .. } = d
+    let Dialog::Paragraph {
+        rtl, align, left, right, first, chars, before, after, line, keep_next, keep_lines, page_break, widow, asian, opts, ..
+    } = d
     else {
         return serde_json::Map::new();
     };
@@ -40,23 +53,30 @@ pub(super) fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
     let [kinsoku, word_wrap, overflow, top_line, de, dn] = asian;
     let [mirror, contextual, no_numbers, no_hyphens] = opts;
     let fields = json!({
-        "bidi": rtl, "align": align, "left": left * unit, "right": right * unit, "indentFirst": first * unit,
+        "bidi": rtl, "align": align,
         "spaceBefore": before, "spaceAfter": after, "lineSpacing": {"rule": "multiple", "value": line},
         "keepNext": keep_next, "keepLines": keep_lines, "pageBreakBefore": page_break, "widowControl": widow,
         "mirrorIndents": mirror, "contextualSpacing": contextual, "suppressLineNumbers": no_numbers, "suppressHyphens": no_hyphens,
         "kinsoku": kinsoku, "wordWrap": word_wrap, "overflowPunct": overflow, "topLinePunct": top_line, "autoSpaceDE": de, "autoSpaceDN": dn,
     });
-    match fields {
+    let mut fields = match fields {
         Value::Object(m) => m,
         _ => serde_json::Map::new(),
+    };
+    for (((length, in_chars), value), is_chars) in INDENTS.iter().zip([left, right, first]).zip(chars) {
+        if *is_chars {
+            fields.insert(in_chars.to_string(), json!(*value));
+        } else {
+            fields.insert(length.to_string(), json!(*value * unit));
+            fields.insert(in_chars.to_string(), json!(0.0));
+        }
     }
+    fields
 }
 
-/// The Paragraph dialog's number boxes: a length in the measurement unit (indents), points
-/// (spacing) or lines (line spacing).
+/// The Paragraph dialog's number boxes: points (spacing) or lines (line spacing).
 #[derive(Clone, Copy)]
 pub(super) enum ParaNumber {
-    Length,
     Points,
     Lines,
 }
@@ -67,17 +87,13 @@ const RLM: char = '\u{200F}';
 /// A Paragraph dialog number box for the field `key`. While the selected paragraphs differ in
 /// it, it shows nothing, not even the unit, until a value is typed or dragged in.
 pub(super) fn para_number(ui: &mut Ui, value: &mut f32, kind: ParaNumber, key: &str, mixed: &mut BTreeSet<String>, label: &egui::Response) {
-    let unit = crate::options::unit();
     let blank = mixed.contains(key);
     // A value from the document outside the range (line spacing 6) stays until edited.
     let field = match kind {
-        ParaNumber::Length => egui::DragValue::new(value).speed(3.6 / unit.pt_per_unit()).max_decimals(2),
         ParaNumber::Points => egui::DragValue::new(value).speed(1.0).range(0.0..=1584.0).clamp_existing_to_range(false),
         ParaNumber::Lines => egui::DragValue::new(value).speed(0.05).range(0.5..=5.0).clamp_existing_to_range(false),
     };
     let field = match kind {
-        ParaNumber::Length if blank => field.measure_blank(unit),
-        ParaNumber::Length => field.measure(unit),
         _ if blank => field.custom_formatter(|_, _| String::new()),
         // Right to left, the unit's space goes after the word and a right-to-left mark closes it: a
         // plain leading space between the digits and an Arabic unit is drawn with no width.
@@ -87,6 +103,43 @@ pub(super) fn para_number(ui: &mut Ui, value: &mut f32, kind: ParaNumber, key: &
     };
     if ui.add(field).labelled_by(label.id).changed() {
         mixed.remove(key);
+    }
+}
+
+/// A Paragraph dialog indent box, indent `i` of [`INDENTS`]: a length in the measurement unit,
+/// or characters when `in_chars` (`2 ch`, Word's unit for East Asian indents, one character
+/// being the font size). A value typed in the other unit (`2 ch`, `1 cm`) switches the box; a
+/// number alone stays in its unit. While the selected paragraphs differ in it, it shows nothing,
+/// not even the unit, until a value is typed or dragged in.
+pub(super) fn para_indent(ui: &mut Ui, value: &mut f32, in_chars: &mut bool, i: usize, mixed: &mut BTreeSet<String>, label: &egui::Response) {
+    let Some(&(length, chars)) = INDENTS.get(i) else { return };
+    let unit = crate::options::unit();
+    let blank = mixed.contains(length) || mixed.contains(chars);
+    let was_chars = *in_chars;
+    // The unit of the text the box read this frame, if it read any.
+    let typed = std::cell::Cell::new(None);
+    let parse = |text: &str| {
+        if let Some(n) = crate::options::parse_chars(text, was_chars) {
+            typed.set(Some(true));
+            return Some(n);
+        }
+        let n = crate::options::parse_length(text, unit)?;
+        typed.set(Some(false));
+        Some(n)
+    };
+    let field = egui::DragValue::new(value).max_decimals(2);
+    let field = match was_chars {
+        _ if blank => field.measure_blank(unit),
+        true => field.speed(0.1).measure_chars(),
+        false => field.speed(3.6 / unit.pt_per_unit()).measure(unit),
+    };
+    let changed = ui.add(field.custom_parser(parse)).labelled_by(label.id).changed();
+    if let Some(now) = typed.get() {
+        *in_chars = now;
+    }
+    if changed || typed.get().is_some() {
+        mixed.remove(length);
+        mixed.remove(chars);
     }
 }
 
@@ -111,7 +164,7 @@ pub(super) fn apply_paragraph(app: &mut WordApp, d: &Dialog) {
     let turned = !mixed.contains("bidi") && fields.get("bidi") != start.get("bidi");
     let (mut props, mut page) = (serde_json::Map::new(), serde_json::Map::new());
     for (k, v) in fields {
-        let on_page = matches!(k.as_str(), "align" | "left" | "right");
+        let on_page = matches!(k.as_str(), "align" | "left" | "right" | "leftChars" | "rightChars");
         if mixed.contains(&k) || (start.get(&k) == Some(&v) && !(turned && on_page)) {
             continue;
         }

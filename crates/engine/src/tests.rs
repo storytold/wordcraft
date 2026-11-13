@@ -6704,6 +6704,50 @@ fn para_set_frame_geometry_keeps_anchor_lock_unless_replaced() {
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap().anchor_lock, Some(false));
 }
 
+/// #6065: indents in characters, as Word sets them for East Asian text (`2 ch`). `para.set`
+/// keeps the characters and gives the points the same width: two characters of 10.5 pt are
+/// 21 pt, and Word writes `w:firstLineChars="200" w:firstLine="420"`. It is one undo step, and a
+/// DOCX save keeps both. On the page, the left indent of a right-to-left paragraph is its end.
+/// `para.indents` (the ruler) takes characters too, up to Word's 327.67, and a length there
+/// replaces them.
+#[test]
+fn para_set_takes_indents_in_characters() {
+    use wordcraft_doc::Path;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "中文段落首行缩进两个字符"}));
+    s.doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.size = Some(10.5);
+    let own = |s: &Session| s.doc.para_at(&Pos::body(0, 0)).unwrap().props.clone();
+    let depth = s.undo_depth();
+
+    run(&mut s, "para.set", json!({"props": {"indentFirstChars": 2.0}, "onPage": {"leftChars": 1.5}}));
+    let p = own(&s);
+    assert_eq!((p.indent_first_chars, p.indent_first), (Some(2.0), Some(21.0)), "two characters, 21 pt");
+    assert_eq!((p.indent_left_chars, p.indent_left, p.indent_right_chars), (Some(1.5), Some(15.75), None));
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step");
+
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"w:leftChars="150" w:left="315" w:firstLineChars="200" w:firstLine="420""#), "{xml}");
+    let back = wordcraft_docx::read(&bytes).unwrap().para_at(&Pos::body(0, 0)).unwrap().props.clone();
+    assert_eq!((back.indent_first_chars, back.indent_first, back.indent_left_chars), (Some(2.0), Some(21.0), Some(1.5)), "kept on reopening");
+
+    run(&mut s, "edit.undo", json!({}));
+    let p = own(&s);
+    assert_eq!((p.indent_first_chars, p.indent_first, p.indent_left_chars, p.indent_left), (None, None, None, None), "undo takes them back");
+
+    run(&mut s, "para.indents", json!({"firstLineChars": 1e9}));
+    assert_eq!((own(&s).indent_first_chars, own(&s).indent_first), (Some(327.67), Some(1584.0)), "within Word's range");
+    run(&mut s, "para.indents", json!({"firstLine": 18.0}));
+    assert_eq!((own(&s).indent_first_chars, own(&s).indent_first), (Some(0.0), Some(18.0)), "a length replaces them");
+
+    run(&mut s, "para.rtl", json!({}));
+    run(&mut s, "para.set", json!({"props": {}, "onPage": {"leftChars": 1.0, "right": 9.0}}));
+    let p = own(&s);
+    assert_eq!((p.indent_right_chars, p.indent_right, p.indent_left), (Some(1.0), Some(10.5), Some(9.0)), "left on the page is the end");
+}
+
 /// #555: Update Heading 2 to Match Selection (the styles pane's context menu) makes Heading 2
 /// look like the selected text — its paragraph style and direct formatting — so every Heading 2
 /// paragraph changes; the selected paragraph takes Heading 2, and it is one undo step.
