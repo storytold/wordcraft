@@ -4,7 +4,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::props::{
-    Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
+    Align, Border, BorderStyle, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline,
+    VertAlign,
 };
 use crate::styles::{StyleKind, StyleSheet};
 
@@ -91,7 +92,7 @@ impl ResolvedChar {
             color: c.color.unwrap_or_default(),
             highlight: c.highlight.and_then(Highlight::rgb),
             shading: c.shading,
-            border: c.border.filter(Border::is_visible),
+            border: c.border.filter(drawn),
             vert_align: c.vert_align.unwrap_or_default(),
             caps: c.caps.unwrap_or(false),
             small_caps: c.small_caps.unwrap_or(false),
@@ -230,6 +231,12 @@ pub struct ResolvedPara {
 
 const MAX_INDENT: f32 = 1584.0; // 22"
 
+/// A border that is drawn: any line but `nil`/`none`, width 0 included, which Word draws at its
+/// thinnest line without giving it room (#5065).
+fn drawn(b: &Border) -> bool {
+    b.style != BorderStyle::None && b.width.is_finite() && b.width >= 0.0
+}
+
 impl ResolvedPara {
     /// Visual (left, right) indents. Indents, like alignment, are logical: `indent_left` is the
     /// start (leading) edge, which is the right edge of a right-to-left paragraph (ISO 29500
@@ -283,10 +290,10 @@ impl ResolvedPara {
             numbering: p.numbering.filter(|n| n.num != 0),
             tabs,
             shading: p.shading,
-            borders: p.borders.filter(Borders::any_visible),
+            borders: p.borders.filter(|b| [b.top, b.left, b.bottom, b.right, b.between, b.inside_v].iter().flatten().any(drawn)),
             padding: p.borders.map_or([0.0; 4], |b| {
                 [b.top, b.left, b.bottom, b.right]
-                    .map(|s| s.filter(|l| !l.is_visible() && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
+                    .map(|s| s.filter(|l| !drawn(l) && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
             }),
             bidi: p.bidi.unwrap_or(false),
             drop_cap: p.drop_cap.unwrap_or(0).min(10),

@@ -2638,19 +2638,79 @@ fn table_style_borders_survive_empty_tbl_borders() {
     assert!(rules_on_page0(&l).len() >= 8, "rules {:?}", rules_on_page0(&l));
 }
 
-/// #5065: the thinnest border is an eighth of a point, as Word draws `w:sz` 0 and 1.
+/// The border lines drawn on page one: (y0, width).
+fn drawn_rules(d: &Document, l: &DocLayout) -> Vec<(f32, f32)> {
+    display::page_display(d, &l.pages[0], &display::DisplayOptions::default())
+        .into_iter()
+        .filter_map(|i| if let display::Draw::Line { y0, width, .. } = i { Some((y0, width)) } else { None })
+        .collect()
+}
+
+/// #5065: a paragraph border of width 0 (`w:sz="0"` or no `w:sz`) is drawn at the thinnest line,
+/// an eighth of a point, inside the paragraph, and takes no room: the next paragraph sits where
+/// it would without a border. One of `w:sz="1"` is drawn the same just below and takes its room.
 #[test]
-fn the_thinnest_border_is_an_eighth_of_a_point() {
-    for (width, drawn) in [(0.05, 0.125), (0.125, 0.125), (0.5, 0.5)] {
-        let mut d = Document::from_text("Ruled");
-        if let Some(wordcraft_doc::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
-            p.props.borders = Some(Borders { bottom: Some(Border::single(width)), ..Borders::default() });
+fn a_width_0_paragraph_border_is_drawn_and_takes_no_room() {
+    crate::test_fonts();
+    let ruled = |width: Option<f32>| {
+        let mut d = Document::from_text(
+            "Ruled
+Next",
+        );
+        if let Some(Block::Para(p)) = d.body.first_mut().map(Arc::make_mut) {
+            p.props.borders = width.map(|w| Borders { bottom: Some(Border::single(w)), ..Borders::default() });
         }
         let l = lay(&d);
-        let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
-        let widths: Vec<f32> = items.iter().filter_map(|i| if let display::Draw::Line { width, .. } = i { Some(*width) } else { None }).collect();
-        assert_eq!(widths, [drawn], "a {width} pt border");
+        let bottom = l.pages[0].items.iter().find_map(|i| match i {
+            Placed::Lines { y, para, story: StoryRef::Body, .. } => {
+                para.lines.last().zip(para.lines.first()).map(|(z, a)| y + z.top + z.height - a.top)
+            }
+            _ => None,
+        });
+        (line_tops(&l), bottom.unwrap(), drawn_rules(&d, &l))
+    };
+    let (plain, _, none) = ruled(None);
+    assert!(none.is_empty() && plain.len() == 2, "{plain:?} {none:?}");
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    let (tops, bottom, rules) = ruled(Some(0.0));
+    assert_eq!(tops, plain, "a width-0 border takes no room");
+    assert!(matches!(rules[..], [(y, w)] if near(w, 0.125) && near(y + w / 2.0, bottom)), "drawn inside the paragraph: {rules:?} {bottom}");
+    let (tops, bottom, rules) = ruled(Some(0.125));
+    assert!(near(tops[1], plain[1] + 0.125), "w:sz=1 takes an eighth of a point: {tops:?} {plain:?}");
+    assert!(matches!(rules[..], [(y, w)] if near(w, 0.125) && near(y - w / 2.0, bottom)), "drawn below the paragraph: {rules:?} {bottom}");
+}
+
+/// #5065: a page border of width 0 is drawn at the thinnest line, an eighth of a point, as is
+/// one thinner than that; the text stays put.
+#[test]
+fn a_width_0_page_border_is_drawn_at_the_thinnest_line() {
+    crate::test_fonts();
+    let plain = line_tops(&lay(&Document::from_text("Page")));
+    for (width, drawn) in [(0.0, 0.125), (0.05, 0.125), (0.5, 0.5)] {
+        let mut d = Document::from_text("Page");
+        d.last_section.page_borders = Some(Borders::box_(Border::single(width)));
+        let l = lay(&d);
+        let widths: Vec<f32> = drawn_rules(&d, &l).into_iter().map(|(_, w)| w).collect();
+        assert_eq!(widths, [drawn; 4], "a {width} pt page border");
+        assert_eq!(line_tops(&l), plain);
     }
+}
+
+/// #5065: a character border of width 0 is drawn at the thinnest line, an eighth of a point,
+/// and the text stays put (Word gives it no room above or below the line).
+#[test]
+fn a_width_0_character_border_is_drawn_at_the_thinnest_line() {
+    crate::test_fonts();
+    let mut d = Document::from_text(
+        "Hello world
+Next",
+    );
+    let plain = line_tops(&lay(&d));
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.border = Some(Border::single(0.0))).unwrap();
+    let l = lay(&d);
+    let widths: Vec<f32> = drawn_rules(&d, &l).into_iter().map(|(_, w)| w).collect();
+    assert_eq!(widths, [0.125; 4]);
+    assert_eq!(line_tops(&l), plain);
 }
 
 /// Thick borders meet in closed corners: a horizontal edge starts at the outer side of the

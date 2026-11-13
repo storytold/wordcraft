@@ -1241,38 +1241,40 @@ fn char_border_reads_and_nil_resolves_off() {
     assert_eq!(d.styles.resolve_char(None, nil).border, None);
 }
 
-/// #5065: a border without `w:sz`, or with `w:sz` 0, is an eighth of a point, as Word draws
-/// paragraph, character, table, cell and page borders (0.12 pt in its PDF export, like
-/// `w:sz="1"`). Saving writes `w:sz="1"`.
+/// #5065: a paragraph, character or page border without `w:sz` is width 0, as `w:sz="0"` (Word
+/// draws both at its thinnest line and gives them no room), and saving writes `w:sz="0"`. Table
+/// and cell borders are read on their own (`PropCtx::table_borders`).
 #[test]
-fn a_border_without_a_size_is_an_eighth_of_a_point() {
+fn a_border_without_a_size_is_width_0() {
     let body = |sz: &str| {
         let b = |side: &str| format!(r#"<w:{side} w:val="single"{sz}/>"#);
         format!(
-            r#"<w:p><w:pPr><w:pBdr>{}</w:pBdr></w:pPr><w:r><w:rPr><w:bdr w:val="single"{sz}/></w:rPr><w:t>a</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblBorders>{}</w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders>{}</w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/><w:sectPr><w:pgBorders>{}</w:pgBorders></w:sectPr>"#,
-            b("bottom"),
-            b("top"),
+            r#"<w:p><w:pPr><w:pBdr>{}</w:pBdr></w:pPr><w:r><w:rPr><w:bdr w:val="single"{sz}/></w:rPr><w:t>a</w:t></w:r></w:p><w:sectPr><w:pgBorders>{}</w:pgBorders></w:sectPr>"#,
             b("bottom"),
             b("left")
         )
     };
-    // Paragraph, character, table, cell and page border widths.
+    // Paragraph, character and page border widths.
     let widths = |d: &Document| {
-        let (p, t) = (d.body[0].as_para().unwrap(), d.body[1].as_table().unwrap());
+        let p = d.body[0].as_para().unwrap();
         [
             p.props.borders.and_then(|b| b.bottom).map(|b| b.width),
             p.props_of_char(0).border.map(|b| b.width),
-            t.props.borders.and_then(|b| b.top).map(|b| b.width),
-            t.rows[0].cells[0].props.borders.and_then(|b| b.bottom).map(|b| b.width),
             d.last_section.page_borders.and_then(|b| b.left).map(|b| b.width),
         ]
     };
-    for (sz, width) in [("", 0.125), (r#" w:sz="0""#, 0.125), (r#" w:sz="1""#, 0.125), (r#" w:sz="2""#, 0.25), (r#" w:sz="4""#, 0.5)] {
-        assert_eq!(widths(&read_body(&body(sz))), [Some(width); 5], "{sz:?}");
+    for (sz, width) in [("", 0.0), (r#" w:sz="0""#, 0.0), (r#" w:sz="1""#, 0.125), (r#" w:sz="2""#, 0.25), (r#" w:sz="4""#, 0.5)] {
+        assert_eq!(widths(&read_body(&body(sz))), [Some(width); 3], "{sz:?}");
     }
-    let saved = wordcraft_docx::write(&read_body(&body(""))).unwrap();
-    assert!(text(&unzip(&saved), "word/document.xml").contains(r#"w:val="single" w:sz="1""#));
-    assert_eq!(widths(&wordcraft_docx::read(&saved).unwrap()), [Some(0.125); 5]);
+    // A width-0 border is still a border: it resolves, to be drawn.
+    let d = read_body(&body(""));
+    let p = d.body[0].as_para().unwrap();
+    assert!(d.styles.resolve_para(&p.props).borders.and_then(|b| b.bottom).is_some());
+    assert!(d.styles.resolve_char(None, p.props_of_char(0)).border.is_some());
+    let saved = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&saved), "word/document.xml");
+    assert!(xml.contains(r#"w:val="single" w:sz="0""#) && !xml.contains(r#"w:sz="1""#), "{xml}");
+    assert_eq!(widths(&wordcraft_docx::read(&saved).unwrap()), [Some(0.0); 3]);
 }
 
 #[test]
