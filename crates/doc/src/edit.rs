@@ -1465,11 +1465,36 @@ impl Document {
 
     /// The blocks of `frag`, a fragment of another document, with every text box given a new
     /// story of its own here copied from the fragment's parts (as a paste does), to place them
-    /// in this document; a box the fragment has no story for keeps none.
+    /// in this document; a box the fragment has no story for keeps none. The media its objects
+    /// show comes along too, under a new key when this document has different bytes at the same
+    /// one.
     pub fn adopt_fragment(&mut self, frag: &Fragment) -> Vec<Block> {
         let mut blocks = frag.blocks.clone();
+        let mut parts = frag.parts.clone();
+        let mut media_remap = BTreeMap::new();
+        for (k, v) in &frag.media {
+            if let Some(existing) = self.media.get(k) {
+                if existing.as_slice() != v.as_slice() {
+                    let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
+                    let new_key = self.add_media((**v).clone(), ext);
+                    media_remap.insert(k.clone(), new_key);
+                }
+            } else {
+                self.media.insert(k.clone(), v.clone());
+            }
+        }
+        if !media_remap.is_empty() {
+            for b in &mut blocks {
+                remap_media_block(b, &media_remap);
+            }
+            for part in parts.values_mut() {
+                for b in &mut part.blocks {
+                    remap_media_block(Arc::make_mut(b), &media_remap);
+                }
+            }
+        }
         let mut budget = BoxBudget { local: false, ..BoxBudget::new() };
-        self.adopt_text_boxes(&mut blocks, &frag.parts, 0, &mut budget);
+        self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         if budget.skipped > 0 {
             log::warn!(
                 "{} text boxes are left empty; their stories are past what one copy brings ({MAX_PASTED_BOXES} stories, {MAX_PASTED_BOX_BYTES} bytes)",
