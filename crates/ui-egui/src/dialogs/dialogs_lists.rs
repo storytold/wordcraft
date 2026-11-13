@@ -607,7 +607,14 @@ pub fn define_number(app: &mut WordApp, ui: &mut Ui, f: &mut NumberForm) -> bool
             None => f.font_dialog = Some(d),
             Some(true) => {
                 if let Some(changed) = crate::dialogs::number_font_result(app, &d) {
-                    f.props.extend(changed);
+                    // Null: cleared in the dialog, so the number no longer has it.
+                    for (k, v) in changed {
+                        if v.is_null() {
+                            f.props.remove(&k);
+                        } else {
+                            f.props.insert(k, v);
+                        }
+                    }
                 }
             }
             Some(false) => {}
@@ -1061,6 +1068,73 @@ mod tests {
         h.run();
         assert_eq!(h.state().2, Some(true));
         assert_eq!(h.state().0.session.doc, doc);
+    }
+
+    /// #2787: the number's Font… opens on the number's kerning, not the selected text's; a size
+    /// the number had and the user cleared there goes, so the number takes the paragraph's.
+    #[test]
+    fn the_number_font_dialog_shows_the_kerning_and_clears_a_size() {
+        let mut a = app();
+        a.run("text.insert", json!({"text": "Clause"})).unwrap();
+        let mut props = serde_json::Map::new();
+        props.insert("kern".into(), json!(18.0));
+        let d = crate::dialogs::number_font_dialog(&mut a, &props).unwrap();
+        assert!(matches!(d, Dialog::Font { kern: Some(true), kern_at, .. } if kern_at == 18.0), "{d:?}");
+        let d = crate::dialogs::number_font_dialog(&mut a, &serde_json::Map::new()).unwrap();
+        assert!(matches!(d, Dialog::Font { kern: Some(false), .. }), "{d:?}");
+        // Size 14, cleared, then OK: the number's size goes.
+        let mut form = super::NumberForm::default();
+        form.props.insert("size".into(), json!(14.0));
+        let mut d = crate::dialogs::number_font_dialog(&mut a, &form.props).unwrap();
+        if let Dialog::Font { size, .. } = &mut d {
+            size.clear();
+        }
+        form.font_dialog = Some(Box::new(d));
+        let mut h = number_harness(a, form);
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!(h.state().1.font_dialog.is_none(), "Font closed");
+        assert_eq!(h.state().1.props.get("size"), None, "{:?}", h.state().1.props);
+    }
+
+    /// #2787: the number's Font… window sits above Define New Number Format, which is modal, and
+    /// takes clicks.
+    #[test]
+    fn the_number_font_dialog_takes_clicks_over_its_modal_dialog() {
+        use egui_kittest::kittest::Queryable;
+        let mut a = app();
+        a.run("text.insert", json!({"text": "Clause"})).unwrap();
+        a.run("para.defineNumber", json!({})).unwrap();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 900.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                if fonts {
+                    crate::dialogs::show(app, &ctx);
+                } else {
+                    crate::theme::install_fonts_for(&ctx, false);
+                    fonts = true;
+                }
+            },
+            a,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h.get_by_label("Font…").click();
+        for _ in 0..4 {
+            h.step();
+        }
+        h.get_by_label("Bold").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        let bold = match &h.state().dialog {
+            Some(Dialog::DefineNumber { form }) => matches!(form.font_dialog.as_deref(), Some(Dialog::Font { bold: true, .. })),
+            _ => false,
+        };
+        assert!(bold, "Bold clicked in the number's Font dialog");
     }
 
     /// #328: the ribbon opens Define New Multilevel List; OK defines the list and numbers the

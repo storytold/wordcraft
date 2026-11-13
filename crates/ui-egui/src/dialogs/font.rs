@@ -217,6 +217,8 @@ pub(crate) fn number_font_dialog(app: &mut WordApp, props: &serde_json::Map<Stri
         hidden,
         color,
         spacing,
+        kern,
+        kern_at,
         for_number,
         ..
     } = &mut d
@@ -229,6 +231,9 @@ pub(crate) fn number_font_dialog(app: &mut WordApp, props: &serde_json::Map<Stri
         let vert = props.get("vertAlign").and_then(Value::as_str);
         (*sup, *sub) = (vert == Some("superscript"), vert == Some("subscript"));
         *spacing = props.get("spacing").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+        // The number's kerning, not the selected text's: off unless the number kerns from a size.
+        let k = props.get("kern").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0);
+        (*kern, *kern_at) = (Some(k.is_some()), k.unwrap_or(12.0) as f32);
         *color = match props.get("color").and_then(|c| c.get("Rgb")).and_then(Value::as_array) {
             Some(c) => c.iter().filter_map(Value::as_u64).map(|x| format!("{:02X}", x.min(255))).collect(),
             None => "auto".into(),
@@ -249,6 +254,8 @@ pub(crate) fn show_number_font(app: &mut WordApp, ctx: &egui::Context, d: &mut D
     let (mut open, mut close) = (true, false);
     egui::Window::new(tl!("Font"))
         .id(egui::Id::unique(("dialog", "Font", "number")))
+        // Above the dialog that opened it, which is modal: on its layer it would take no clicks.
+        .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -40.0))
@@ -263,7 +270,14 @@ pub(crate) fn show_number_font(app: &mut WordApp, ctx: &egui::Context, d: &mut D
     Some(matches!(d, Dialog::Font { for_number: Some(true), .. }))
 }
 
-/// After a number's Font dialog closed: the properties changed on OK, `None` on Cancel.
+/// After a number's Font dialog closed: the properties changed on OK, `None` on Cancel. A field
+/// the number had and the user cleared (its size, say) is null: the number loses it.
 pub(crate) fn number_font_result(app: &mut WordApp, d: &Dialog) -> Option<serde_json::Map<String, Value>> {
-    matches!(d, Dialog::Font { for_number: Some(true), .. }).then(|| changed_font_props(app, d))
+    let Dialog::Font { for_number: Some(true), start, .. } = d else { return None };
+    let mut changed = changed_font_props(app, d);
+    let now = font_props(d);
+    for k in start.keys().filter(|k| !now.contains_key(*k)) {
+        changed.insert(k.clone(), Value::Null);
+    }
+    Some(changed)
 }
