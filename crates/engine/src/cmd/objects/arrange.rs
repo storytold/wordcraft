@@ -147,8 +147,8 @@ pub(super) fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, 
 }
 
 /// [`move_object`]'s one placement: move the object's character to the anchor under (x, y) on
-/// `page` and offset it from there. Objects in headers/footers, on pages without anchoring text,
-/// or configured not to move with text retain page-relative anchoring.
+/// `page` and offset it from there. Objects in headers/footers, or on pages without anchoring
+/// text, retain page-relative anchoring; a body object is placed by its paragraph (#5705).
 fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w, h): (f32, f32)) -> Result<Pos, CmdError> {
     use wordcraft_doc::para::Anchor;
     if pos.path.depth() > 0 || !movable_story(s, pos.story) {
@@ -165,8 +165,6 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         Some(path) => (Pos { story, path, off: 0 }, false),
         None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
     };
-    let was_with_text =
-        s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).and_then(|o| o.frame()).map_or(story == StoryRef::Body, |(_, _, f)| moves_with_text(f));
     // Move its character to the anchor, unless it's already in that paragraph and drawn on this
     // page (one anchored on a later page of it is drawn there, #4250).
     let at = if anchor.story == pos.story && anchor.path == pos.path && !on_page && layout.object(pos, page).is_some_and(|o| o.page == page) {
@@ -199,7 +197,7 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         f.x = x.clamp(-MAX_OFFSET, MAX_OFFSET);
         f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
-    if on_page || story != StoryRef::Body || !was_with_text {
+    if on_page || story != StoryRef::Body {
         return Ok(at);
     }
     // Then offsets from its paragraph, as laid out with the object there.
