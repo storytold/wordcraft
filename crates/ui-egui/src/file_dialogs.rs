@@ -475,13 +475,25 @@ impl WordApp {
         let _ = self.ask_file(FileDialogRequest::OpenMany { purpose: "font".into() }, AfterPick::Font);
     }
 
-    /// Request loading local system installed fonts (web: queryLocalFonts).
+    /// Request loading local system installed fonts (web: queryLocalFonts). The desktop scans
+    /// the font folders again, for fonts installed since WordCraft started (#2499).
     pub(crate) fn load_system_fonts(&mut self) {
         if let Some(f) = &self.services.load_system_fonts {
             f();
-        } else {
-            self.status(tl!("All system fonts are already available."));
+            return;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // The faces found that are new: a style of an installed family counts, a family's
+            // legacy names in the font list don't.
+            let found = wordcraft_fonts::FontDb::global().load_new_system_fonts();
+            if found > 0 {
+                let msg = crate::i18n::fmt(tl!("Loaded {count} system fonts."), &[("count", &found.to_string())]);
+                self.status(msg);
+                return;
+            }
+        }
+        self.status(tl!("All system fonts are already available."));
     }
 }
 

@@ -244,6 +244,13 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
         // user fonts are mounted here instead (no filesystem permission needed). Flatpak after
         // 1.19.2 also mounts ~/.fonts, at user-fonts-legacy when the XDG user font folder exists too.
         dirs.extend(["/run/host/fonts", "/run/host/local-fonts", "/run/host/user-fonts", "/run/host/user-fonts-legacy"].map(Into::into));
+        // And every folder the fontconfig configuration adds, as `fc-list` lists them (#2499).
+        #[cfg(not(target_arch = "wasm32"))]
+        for d in super::fontconfig::dirs(&super::fontconfig::Env::from_process()) {
+            if !dirs.contains(&d) {
+                dirs.push(d);
+            }
+        }
     }
     dirs
 }

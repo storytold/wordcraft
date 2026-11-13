@@ -631,6 +631,8 @@ fn load_system_fonts_runs_hook_when_present() {
     assert!(called.get());
 }
 
+/// The desktop has no hook: it scans the font folders again, and with nothing installed since,
+/// says so (#2499).
 #[test]
 fn load_system_fonts_without_hook_reports_status() {
     let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
