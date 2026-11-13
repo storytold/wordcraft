@@ -806,4 +806,65 @@ mod tests {
             }
         }
     }
+
+    /// Pasting renames media; a Drawing Canvas's picture background and a picture-filled shape
+    /// inside it are renamed with the rest rather than left pointing at the source document's
+    /// picture.
+    #[test]
+    fn adopt_renames_picture_fill_media() {
+        use crate::fill::{Fill, PictureFill};
+        let pic = |media: &str| {
+            Some(Fill::Picture(std::sync::Arc::new(PictureFill {
+                media: media.into(),
+                crop: [0.0; 4],
+                stretch: [0.0; 4],
+                transparency: 0.0,
+                rot_with_shape: true,
+                tile: None,
+            })))
+        };
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 5.0,
+            h: 5.0,
+            fill: pic("shape.png"),
+            stroke: None,
+            stroke_width: 0.0,
+            float: Default::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let canvas = InlineObject::Group {
+            w: 10.0,
+            h: 10.0,
+            float: Default::default(),
+            ch_w: 10.0,
+            ch_h: 10.0,
+            children: vec![GroupChild { x: 0.0, y: 0.0, obj: shape }],
+            canvas: Some(CanvasStyle { fill: pic("canvas.png"), stroke: None, stroke_width: 0.0 }),
+        };
+        let mut src = crate::Document::from_text("x");
+        src.media.insert("canvas.png".into(), std::sync::Arc::new(vec![1u8, 2]));
+        src.media.insert("shape.png".into(), std::sync::Arc::new(vec![3u8, 4]));
+        src.insert_object(&crate::Pos::body(0, 0), canvas, &Default::default()).unwrap();
+        let mut dest = crate::Document::from_text("y");
+        let frag = dest.adopt(src);
+        let mut seen = Vec::new();
+        for b in &frag.blocks {
+            crate::edit::each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    let InlineObject::Group { canvas: Some(c), children, .. } = o else { continue };
+                    let InlineObject::Shape { fill, .. } = &children[0].obj else { panic!("{:?}", children[0].obj) };
+                    for f in [&c.fill, fill] {
+                        let Some(Fill::Picture(p)) = f else { panic!("{f:?}") };
+                        seen.push(p.media.clone());
+                    }
+                }
+            });
+        }
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert!(seen.iter().all(|k| k != "canvas.png" && k != "shape.png" && dest.media.contains_key(k)), "{seen:?}");
+    }
 }

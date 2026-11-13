@@ -29,7 +29,11 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     // Emit only explicit properties so absent values keep inheriting from the style chain.
     let mut fonts: Vec<(&str, &str)> = Vec::new();
     if let Some(f) = &c.font {
-        fonts.extend([("w:ascii", f.as_str()), ("w:hAnsi", f.as_str())]);
+        fonts.push(("w:ascii", f.as_str()));
+    }
+    // The high-ANSI font: its own, else the ASCII font set with it (see `CharProps::font_hansi`).
+    if let Some(f) = c.font_hansi.as_ref().or(c.font.as_ref()) {
+        fonts.push(("w:hAnsi", f.as_str()));
     }
     if let Some(ea) = &c.font_ea {
         fonts.push(("w:eastAsia", ea));

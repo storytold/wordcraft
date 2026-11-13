@@ -298,6 +298,7 @@ impl<'a> Shaped<'a> {
         big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
+            big.font_hansi = None;
             big.font_cs = f.clone();
             big.font_ea = Some(f.clone());
         }
@@ -659,6 +660,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         clusters: Vec::new(),
         levels,
         shown: Vec::new(),
+        glyph_styles: Vec::new(),
         substituted: Vec::new(),
     };
     let mut cx =
@@ -690,6 +692,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         glyphs: b.glyphs,
         clusters: b.clusters,
         shown: b.shown,
+        glyph_styles: b.glyph_styles,
         lines: Vec::new(),
         label,
         height: 0.0,

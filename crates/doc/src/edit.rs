@@ -510,6 +510,14 @@ impl Relink<'_> {
         p.touch();
     }
 
+    fn picture_fill(&self, fill: Option<&mut crate::fill::Fill>) {
+        if let Some(crate::fill::Fill::Picture(p)) = fill
+            && let Some(k) = self.media.get(p.media.as_str())
+        {
+            Arc::make_mut(p).media = k.clone();
+        }
+    }
+
     fn object(&self, o: &mut InlineObject, depth: usize) {
         // An id that names nothing here becomes one that names nothing at all.
         let map = |m: &BTreeMap<u32, u32>, id: &mut u32| *id = m.get(id).copied().unwrap_or(u32::MAX);
@@ -531,7 +539,12 @@ impl Relink<'_> {
                     }
                 }
             }
-            InlineObject::Group { children, .. } if depth < MAX_BOX_DEPTH => children.iter_mut().for_each(|c| self.object(&mut c.obj, depth + 1)),
+            InlineObject::Shape { fill, .. } => self.picture_fill(fill.as_mut()),
+            InlineObject::Group { children, canvas, .. } if depth < MAX_BOX_DEPTH => {
+                // A Drawing Canvas's picture background names media too.
+                self.picture_fill(canvas.as_mut().and_then(|c| c.fill.as_mut()));
+                children.iter_mut().for_each(|c| self.object(&mut c.obj, depth + 1));
+            }
             InlineObject::NoteRef { id, .. } => map(self.notes, id),
             InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } => map(self.comments, id),
             InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } => *id = id.saturating_add(self.perms),

@@ -128,6 +128,7 @@ fn a_diagram_is_saved_as_a_group_of_its_drawing() {
                 size: 12.0,
                 color: Rgb::WHITE,
                 bold: false,
+                vertical: false,
                 align: TextAlign::Center,
                 font: None,
             },

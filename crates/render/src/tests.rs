@@ -290,6 +290,73 @@ fn text_darkening_adds_ink_on_screen_only() {
     assert!(!RenderOptions::default().text_darkening);
 }
 
+/// A picture-filled ellipse shows its picture inside the ellipse only: its frame's corners
+/// stay paper, and a picture stretched past the frame (`a:fillRect`) is cut off at the outline.
+#[test]
+fn a_picture_fill_is_clipped_to_its_shape() {
+    use wordcraft_doc::fill::{Fill, PictureFill};
+    use wordcraft_doc::para::{Anchor, Float, InlineObject, Wrap};
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 200, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut d = Document::from_text("");
+    d.media.insert("fill.png".into(), Arc::new(png));
+    let pic = PictureFill { media: "fill.png".into(), crop: [0.0; 4], stretch: [-20.0; 4], transparency: 0.0, rot_with_shape: true, tile: None };
+    let ellipse = InlineObject::Shape {
+        kind: ShapeKind::Ellipse,
+        w: 200.0,
+        h: 100.0,
+        fill: Some(Fill::Picture(Arc::new(pic))),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), ellipse, &Default::default()).unwrap();
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let at = |x: u32, y: u32| img.pixel(x, y)[..3].to_vec();
+    assert_eq!(at(200, 150), [10, 200, 30], "the picture inside");
+    assert_eq!(at(198, 103), [10, 200, 30], "up to the top of the outline");
+    for (x, y) in [(103, 103), (297, 197), (90, 150), (200, 92)] {
+        assert_eq!(at(x, y), [255, 255, 255], "paper outside the ellipse at {x}, {y}");
+    }
+}
+
+/// A clip far larger than can be rasterised stays a clip: inside the visible area it covers
+/// what the whole path covers, with its points bounded, near the area, however big the curve.
+#[test]
+fn an_oversized_clip_keeps_its_area_inside_the_view_with_bounded_work() {
+    use kurbo::{Point, Rect};
+    let visible = Rect::new(0.0, 0.0, 600.0, 800.0);
+    let mut path = BezPath::new();
+    path.move_to((-3e9, -3e9));
+    path.curve_to((3e9, -4e9), (5e9, 300.0), (300.0, 400.0));
+    path.quad_to((-2e9, 3e9), (-3e9, 3e9));
+    path.close_path();
+    assert!(!path_extent_ok(Affine::IDENTITY, &path));
+    let cut = clip_to_visible(&path, Affine::IDENTITY, &visible);
+    assert!(cut.elements().len() <= MAX_CLIP_POINTS + 8, "{}", cut.elements().len());
+    let near = visible.inflate(1.001, 1.001);
+    assert!(path_extent_ok(Affine::IDENTITY, &cut) && near.contains_rect(cut.bounding_box()), "{:?}", cut.bounding_box());
+    for x in (5..600).step_by(45) {
+        for y in (5..800).step_by(45) {
+            let p = Point::new(f64::from(x), f64::from(y));
+            assert_eq!(cut.winding(p) != 0, path.winding(p) != 0, "{p:?}");
+        }
+    }
+    // A clip that passes around the view, showing nothing of it, stays empty.
+    let mut away = BezPath::new();
+    away.move_to((-3e9, 2000.0));
+    away.curve_to((0.0, 1e9), (0.0, 1e9), (3e9, 2000.0));
+    away.close_path();
+    assert_eq!(clip_to_visible(&away, Affine::IDENTITY, &visible).elements().len(), 0);
+}
+
 /// Inked pixels that are only partly covered (grey): an edge between two pixel rows.
 fn grey(img: &Rendered) -> usize {
     img.pixels.as_chunks::<4>().0.iter().filter(|p| (40..215).contains(&p[0])).count()

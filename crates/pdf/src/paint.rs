@@ -126,6 +126,24 @@ pub(crate) fn shape_effects(
     s.set_stroke(None);
 }
 
+/// The path a [`Draw::ClipTo`] clips to; `None` when it has no finite area to clip to.
+pub(crate) fn outline_path(outline: &wordcraft_layout::display::Outline) -> Option<Path> {
+    use wordcraft_layout::display::Outline;
+    match outline {
+        Outline::Shape { rect, kind, corner } => shape_path(*kind, rect, *corner).filter(|_| rect.w > 0.0 && rect.h > 0.0),
+        Outline::Path(segs) => {
+            let path = wordcraft_layout::display::seg_path(segs);
+            let b = kurbo::Shape::bounding_box(&path);
+            if !(b.is_finite() && b.width() > 0.0 && b.height() > 0.0 && b.x0.abs().max(b.x1.abs()).max(b.y0.abs()).max(b.y1.abs()) < 1e6) {
+                return None;
+            }
+            let mut pb = PathBuilder::new();
+            append_path(&mut pb, &path);
+            pb.finish()
+        }
+    }
+}
+
 /// Outline of a basic shape in a rectangle (same geometry as the raster renderer); `corner` is a
 /// rounded rectangle's ([`wordcraft_doc::connector::ShapeExtra::corner`]).
 pub(crate) fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Option<Path> {

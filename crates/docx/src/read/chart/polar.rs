@@ -109,7 +109,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             let y = at(*t, 0).1 as f32;
             let s = format_value(*t, &c.val_fmt, vs.step);
             let w = text_w(&s, fs) + 4.0;
-            text(out, Rect { x: cx as f32 - GAP / 2.0 - w, y: y - lh / 2.0, w, h: lh }, &s, fs, TextAlign::Right, false);
+            text(out, Rect { x: cx as f32 - GAP / 2.0 - w, y: y - lh / 2.0, w, h: lh }, &s, fs, TextAlign::Right, c.val_bold(), c.val_colour());
         }
     }
     if labelled {
@@ -128,7 +128,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
                 let cw = (text_w(&txt, fs) + 4.0).max(1.0);
                 (Rect { x: x - cw / 2.0, y: if sy > 0.0 { y - lh } else { y }, w: cw, h: lh }, TextAlign::Center)
             };
-            text(out, rect, &txt, fs, align, false);
+            text(out, rect, &txt, fs, align, c.cat_bold(), c.cat_colour());
         }
     }
 }
@@ -139,12 +139,15 @@ pub(super) fn label_of(s: &Series, i: usize) -> Option<String> {
     if s.labels != Some(true) {
         return None;
     }
-    let v = s.raw.get(i).copied().flatten()?;
-    let fmt = s.fmt.as_deref().filter(|f| !f.eq_ignore_ascii_case("General"));
-    Some(match fmt {
+    Some(value_text(s, s.raw.get(i).copied().flatten()?))
+}
+
+/// A value of `s` in the series' number format.
+pub(super) fn value_text(s: &Series, v: f64) -> String {
+    match s.fmt.as_deref().filter(|f| !f.eq_ignore_ascii_case("General")) {
         Some(f) => format_value(v, f, 1.0),
         None => general_value(v),
-    })
+    }
 }
 
 /// A value in the `General` format: whole numbers without decimals, others with up to six.
@@ -171,7 +174,7 @@ pub(super) fn draw_data_labels(out: &mut Vec<GraphicItem>, labels: &[DataLabel],
             (Rect { x: l.x - w / 2.0, y: l.y - lh, w, h: lh }, TextAlign::Center)
         };
         let color = if l.inside { Rgb::WHITE } else { TEXT };
-        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None });
+        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None, vertical: false });
     }
 }
 

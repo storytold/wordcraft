@@ -101,11 +101,16 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
         None => 0,
         Some(Fill::Solid { .. }) => 1,
         Some(Fill::Gradient(_)) => 2,
+        Some(Fill::Picture(_)) => 3,
     };
     let mut pick = kind;
     ui.radio_value(&mut pick, 0, tl!("No fill"));
     ui.radio_value(&mut pick, 1, tl!("Solid fill"));
     ui.radio_value(&mut pick, 2, tl!("Gradient fill"));
+    // A picture fill read from a file: shown, and replaced by picking another fill.
+    if kind == 3 {
+        ui.radio_value(&mut pick, 3, tl!("Picture fill"));
+    }
     if pick != kind {
         let accent1 = theme.get(4).copied().unwrap_or(Rgb(68, 114, 196));
         let main = fill.as_ref().map_or(accent1, Fill::main_color);
@@ -121,7 +126,7 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     match fill {
         Some(Fill::Solid { color, transparency }) => solid(app, ui, &theme, color, transparency),
         Some(Fill::Gradient(g)) => gradient(app, ui, &theme, &g),
-        None => {}
+        Some(Fill::Picture(_)) | None => {}
     }
 }
 

@@ -1421,6 +1421,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-23 | trivial | Progress log: justified lines ending in a manual line break reach the margin (#3924) |
 | 2026-10-23 | trivial | Progress log: "NaN" in the Font dialog's Size box no longer closes the app (#3663) |
 | 2026-10-23 | trivial | Progress log: a table cell span from a `.json` file no longer overflows (#3637) |
+| 2026-10-27 | trivial | Progress log: a shape filled with a picture (a report cover's banner) shows the picture, clipped to the shape |
 | 2026-10-28 | trivial | Progress log: chart and SmartArt text the font lacks is drawn in a fallback face (#4720) |
 | 2026-11-02 | trivial | Progress log: ODT controls, custom shapes, in-line placement (gap 19) |
 | 2026-11-02 | trivial | Progress log: ODT charts kept, frame outlines, header height (gap 19) |

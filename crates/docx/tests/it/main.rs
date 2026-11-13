@@ -17,6 +17,7 @@ mod east_asian_layout;
 mod emphasis_marks;
 mod fixtures;
 mod glossary;
+mod hansi_font;
 mod heading_levels;
 mod legacy_forms;
 mod ligatures;

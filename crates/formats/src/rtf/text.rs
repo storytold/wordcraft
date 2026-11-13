@@ -195,25 +195,38 @@ impl Reader {
                 if self.st.hidden {
                     return;
                 }
-                let mut f = self.st.fmt.clone();
+                if let Some(field) = &self.page_field {
+                    // Text outside `\fldrslt` (a space between the code and result groups, a
+                    // group after the result) is not part of the result.
+                    let depth = self.depth();
+                    if field.result_done || field.result_depth.is_none_or(|d| depth < d) {
+                        return;
+                    }
+                    let fmt = (!field.from_result).then(|| self.text_fmt());
+                    let Some(field) = &mut self.page_field else { return };
+                    if let Some(fmt) = fmt {
+                        field.fmt = fmt;
+                        field.from_result = true;
+                    }
+                    // The reader's place markers are not text a file may supply.
+                    let s = s.replace([MARK_OPEN, MARK_CLOSE], "\u{FFFD}");
+                    // A run arrives whole, however long: cut it to the room left under the cap, at
+                    // a character boundary, and end the result there.
+                    let mut end = 4096usize.saturating_sub(field.result.len()).min(s.len());
+                    while !s.is_char_boundary(end) {
+                        end = end.saturating_sub(1);
+                    }
+                    field.result.push_str(s.get(..end).unwrap_or_default());
+                    field.result_done |= end < s.len();
+                    return;
+                }
                 if s.contains([MARK_OPEN, MARK_CLOSE]) {
+                    let f = self.st.fmt.clone();
                     self.para.push_text(&s.replace([MARK_OPEN, MARK_CLOSE], "\u{FFFD}"), &f);
                     self.para_has = true;
                     return;
                 }
-                let r = self.st.rev;
-                if r.ins {
-                    f.ins = Some(self.rev_mark(r.auth, r.dttm));
-                }
-                if r.del {
-                    f.del = Some(self.rev_mark(r.authdel, r.dttmdel));
-                }
-                let c = &self.st.chg_c;
-                if let Some(words) = c.old.clone() {
-                    let mark = self.rev_mark(c.auth, c.date);
-                    let old = self.old_fmt(&words);
-                    f.fmt_change = Some(Box::new(model::FmtChange { mark, old }));
-                }
+                let f = self.text_fmt();
                 self.para.push_text(s, &f);
                 self.para_has = true;
             }
@@ -298,6 +311,19 @@ impl Reader {
             }
             Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) => {}
         }
+    }
+
+    /// The formatting of text read now: the run's, with its tracked insertion, deletion and
+    /// formatting change.
+    pub(super) fn text_fmt(&mut self) -> Fmt {
+        let mut f = self.with_rev(self.st.fmt.clone(), self.st.rev);
+        let c = &self.st.chg_c;
+        if let Some(words) = c.old.clone() {
+            let mark = self.rev_mark(c.auth, c.date);
+            let old = self.old_fmt(&words);
+            f.fmt_change = Some(Box::new(model::FmtChange { mark, old }));
+        }
+        f
     }
 
     /// The formatting before a tracked character change: the current run's, with the
