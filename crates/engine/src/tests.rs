@@ -1845,6 +1845,42 @@ fn pasted_code_from_vscode_has_syntax_colors_and_no_character_shading() {
     assert!(p.runs.iter().any(|r| r.props.color == Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0x56, 0x9c, 0xd6)))));
 }
 
+/// A multi-block paste keeps the first pasted paragraph's shading when the destination has its own properties (#6157).
+#[test]
+fn multi_block_paste_keeps_first_paragraph_shading() {
+    let mut s = s();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    let html = r#"<div style="background-color:#1e1e1e"><p>one</p><p>two</p></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "one\ntwo", "html": html}));
+    assert_eq!(text(&s), "one\ntwo");
+    let p = s.doc.body.get(0).and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "first pasted paragraph keeps its shading");
+}
+
+/// A destination paragraph whose style shades keeps that shading when a shaded paragraph is pasted (#6157).
+#[test]
+fn paste_keeps_destination_style_shading() {
+    let mut s = s();
+    Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
+        id: "Shaded".into(),
+        name: "Shaded".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: wordcraft_doc::props::ParaProps { shading: Some(wordcraft_doc::Rgb(0x22, 0x22, 0x22)), ..Default::default() },
+        ..Default::default()
+    });
+    run(&mut s, "para.style", json!({"style": "Shaded"}));
+    let html = r#"<div style="background-color:#1e1e1e"><span>text</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "text", "html": html}));
+    let p = s.doc.body.get(0).and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None, "source shading must not override the destination style");
+    assert_eq!(
+        s.doc.styles.resolve_para(&p.props).shading,
+        Some(wordcraft_doc::Rgb(0x22, 0x22, 0x22)),
+        "destination style shading remains effective"
+    );
+}
+
 /// A CF_HTML ("HTML Format") clipboard payload around `html`, with the byte offsets Windows writes.
 fn cf_html(html: &str) -> String {
     let n = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n".len();

@@ -1505,6 +1505,7 @@ impl Document {
         if self.para_at(pos).is_none() {
             return Err(DocError::BadPath(pos.path.to_string()));
         }
+        let destination_shading = self.para_at(pos).and_then(|p| self.styles.resolve_para(&p.props).shading);
         let mut parts = frag.parts.clone();
         if !media_remap.is_empty() {
             for b in &mut blocks {
@@ -1543,8 +1544,9 @@ impl Document {
             target.append(tail);
             target.props = keep;
             // Paragraph shading is the pasted text's background (HTML container backgrounds
-            // become paragraph shading), so an unshaded destination takes the source's.
-            if target.props.shading.is_none() {
+            // become paragraph shading), so an unshaded destination takes the source's. The
+            // destination's style shading counts as shaded, so it is not overridden.
+            if destination_shading.is_none() {
                 target.props.shading = src_shading;
             }
             target.section = sect;
@@ -1562,9 +1564,13 @@ impl Document {
                 let keep = l.props.clone();
                 let mut p2 = p;
                 let pprops = p2.props.clone();
+                let src_shading = pprops.shading;
                 p2.section = None;
                 l.append(p2);
                 l.props = if keep.is_empty() { pprops } else { keep };
+                if l.props.shading.is_none() && destination_shading.is_none() {
+                    l.props.shading = src_shading;
+                }
             }
             t @ Block::Table(_) => {
                 self.insert_block(pos.story, &left.with_last(idx), t)?;
