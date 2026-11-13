@@ -783,16 +783,6 @@ pub(crate) fn object_groups(ctx: &mut Ctx, req: &ObjectPlacement) -> Vec<ObjGrou
             };
             // A box linked from another shows (and edits) that box's story.
             let shown = text_box.map(|id| textbox::shown_story(ctx, id));
-            front.push(Placed::Object {
-                rect,
-                spin: float.spin(),
-                story,
-                path: Path(path.to_vec()),
-                off: c.start,
-                text_box: shown,
-                wrap: float.wrap,
-                origin: Point::new(at.col.0, late_here.map_or(at.para_y, |l| l.top)),
-            });
             // Its text (a group: its text boxes', each where the group's turn carries it; the
             // text itself stays upright), unless the box budget says no (a box inside itself,
             // too deep, too many).
@@ -808,6 +798,25 @@ pub(crate) fn object_groups(ctx: &mut Ctx, req: &ObjectPlacement) -> Vec<ObjGrou
                     .collect(),
                 _ => text_box.map(|id| (id, rect)).into_iter().collect(),
             };
+            // A group's text boxes are where a click edits their text (#6027): kept on the
+            // group's area, relative to it so they move with it.
+            let group_boxes = match obj {
+                InlineObject::Group { .. } => {
+                    boxes.iter().map(|&(id, r)| (Rect::new(r.x - rect.x, r.y - rect.y, r.w, r.h), textbox::shown_story(ctx, id))).collect()
+                }
+                _ => Vec::new(),
+            };
+            front.push(Placed::Object {
+                rect,
+                spin: float.spin(),
+                story,
+                path: Path(path.to_vec()),
+                off: c.start,
+                text_box: shown,
+                wrap: float.wrap,
+                origin: Point::new(at.col.0, late_here.map_or(at.para_y, |l| l.top)),
+                group_boxes,
+            });
             for (id, rect) in boxes {
                 let items = textbox::box_items(ctx, id, rect, depth);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
