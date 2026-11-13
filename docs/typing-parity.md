@@ -591,6 +591,8 @@ Increase/Decrease Font Size and the one-point shortcuts transform each selected
 run from its own resolved size, including paragraph and character style inheritance
 (#4903). The existing button steps are unchanged: 20 pt and 10 pt become 22 pt and
 10.5 pt with Increase Font Size; Grow Font 1 Point makes them 21 pt and 11 pt.
+Decrease Font Size steps one point at a time below 8 pt (8, 7 … 1) and, mirroring
+Increase Font Size, by 10 pt above 72 pt (100, 90, 80, 72), as in Word.
 Both commands continue to set normal and complex-script sizes explicitly. Whole-body
 selections visit the selected paragraph paths once, without repeated prefix scans.
 
@@ -620,6 +622,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 | 2026-11-06 | trivial | Track Changes: resolving away an empty paragraph with a section break removes it whole; the next paragraph keeps its style (#5667) |
 | 2026-11-03 | trivial | Alt+numpad codes type their character in text boxes too (Find what, dialog fields), not the digits or nothing (#4403) |
 | 2026-11-03 | trivial | Find smart-quoted text with a keyboard apostrophe (#5388); exact search modes and replacement spelling preserved. |
+| 2026-11-11 | trivial | P0236: Decrease Font Size steps one point below 8 pt and 10 pt above 72 pt, as in Word. |
 | 2026-11-01 | minor | English spelling by dialect from SCOWL 2026: typed British, Canadian and Australian text, modern words and ordinals pinned (#40, #520, #1281, #1045; CP2) |
 | 2026-10-31 | minor | #3693: Delete Previous Sentence command and keyboard dispatch, with sentence/paragraph/cell, selection, undo and tracking regressions. Additional WordCraft behavior; Word-parity estimates unchanged. |
 | 2026-10-29 | trivial | Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged |
