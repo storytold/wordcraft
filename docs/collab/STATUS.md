@@ -1,6 +1,6 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-13 (PR facts measured at 2026-11-12T23:37Z: the head of the
+- Date: 2026-11-13 (PR facts measured at 2026-11-13T12:52Z: the head of the
   branch, the tree, and the state of PR #5834)
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
@@ -18,8 +18,20 @@
   `git ls-remote fork refs/heads/feature/realtime-collaboration` for the branch
   itself. The only stable source is the PR number. A hash below is a dated
   observation, never a claim that the tip stopped moving.
-- Measured at 2026-11-12T23:37Z: `git ls-remote fork`, the `headRefOid` of
+- Measured at 2026-11-13T12:52Z: `git ls-remote fork`, the `headRefOid` of
   PR #5834 and the local `HEAD` all answered
+  `29afb4757ff5a03f808626f8e62aee653610b68b`, the tree was clean and
+  `git rev-list --left-right --count fork/feature/realtime-collaboration...HEAD`
+  was `0 0`; the PR was updated at 2026-11-13T10:15:00Z. The head is a merge of
+  upstream `main` `b5fa2f9e` into the branch (first parent `6e15bcbc`, the
+  documentation head of §5.45): 227 files, +18464/−852, no collab file among
+  them, and `Cargo.lock` moves `craft-libs` from `c5a1cbfb` to `6e03f65b`
+  (`craft-update` gains `rustix 1.1.5`). §5.46 records what that merge does to
+  the build. Against `origin/main` `b5fa2f9e` the branch is 0 behind and 114
+  commits ahead (251 commits from the PR's base `4b0d3995`), and the branch's
+  own diff, first parent to first parent, is still 70 files, +32890/−22.
+- Earlier measurement, 2026-11-12T23:37Z: `git ls-remote fork`, the
+  `headRefOid` of PR #5834 and the local `HEAD` all answered
   `ce0bb001d6317b43c799f59b6b477482372cc74e`, the tree was clean and
   `git rev-list --left-right --count fork/feature/realtime-collaboration...HEAD`
   was `0 0`; the PR was updated at 2026-11-12T23:24:17Z. Two commits sit above
@@ -46,23 +58,29 @@
   (`50c68e3a`), at 07:26Z (`af6c311b` and `2e414114` together), at 11:27Z
   (`fab0530c`, `65037c7b` and `a32524b5` together), at 13:29Z (`b4b5f50b`), at
   21:11Z (`d55d7c94`), at 05:42Z on 2026-11-12 (`b85e193a`), at 19:38Z
-  (`3532bfda`, with `089bec7c` and `aa839078` together) and at 23:24Z
-  (`d9d667ec` and `ce0bb001` together); at each point the local `HEAD`, the
-  fork branch and the `headRefOid` of PR #5834 were the same commit (§5.21,
-  §5.24, §5.26, §5.27, §5.35, §5.36, §5.38, §5.39, §5.40, §5.43, §5.44).
+  (`3532bfda`, with `089bec7c` and `aa839078` together), at 23:24Z
+  (`d9d667ec` and `ce0bb001` together) and at 10:15Z on 2026-11-13
+  (`29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46); at each point the
+  local `HEAD`, the fork branch and the `headRefOid` of PR #5834 were the same
+  commit (§5.21, §5.24, §5.26, §5.27, §5.35, §5.36, §5.38, §5.39, §5.40,
+  §5.43, §5.44, §5.46).
 - The PR is `MERGEABLE` and `BLOCKED`, and its `reviewDecision` is empty: the
   branch merges cleanly, and `BLOCKED` is the required review plus the
-  unapproved workflows. Its rollup on `ce0bb001` holds one check, CodeRabbit's
-  `skipped` (started and finished at 2026-11-12T23:26:29Z); no run on that head
-  has executed. The fork git source is gone from the manifest and the lock
+  unapproved workflows. Its rollup on `29afb475` holds one check, CodeRabbit's
+  `skipped`; no run on that head has executed. The fork git source is gone from
+  the manifest and the lock
   (§5.24), and the three `printing.yml` steps are green on the pushed tree at
   the build host (§5.25).
 - CI has still not executed on any pushed head. The five runs created at
-  2026-11-12T23:24:13Z on `ce0bb001` were created and not executed — each is
-  `completed` with `conclusion: action_required` and no job started: `Printing`
+  2026-11-13T10:15:10Z on `29afb475` were created and not executed — each is
+  `completed` with `conclusion: action_required` and no job started:
+  `Printing` (`43407760756`), `CI` (`43407760935`), `Packaging lint`
+  (`43407761099`), `SonarCloud` (`43407761150`) and `Nix` (`43407761233`); the
+  rollup on this head holds only CodeRabbit's `skipped`. The same held for the
+  five on `ce0bb001` (2026-11-12T23:24:13Z) — `Printing`
   (`43328554991`), `SonarCloud` (`43328555659`), `CI` (`43328555822`),
-  `Packaging lint` (`43328555472`) and `Nix` (`43328555640`). The same held for
-  the five on `3532bfda` (2026-11-12T19:38:49Z: `Nix` `43292286749`, `Printing`
+  `Packaging lint` (`43328555472`) and `Nix` (`43328555640`) — for the five on
+  `3532bfda` (2026-11-12T19:38:49Z: `Nix` `43292286749`, `Printing`
   `43292285907`, `SonarCloud` `43292286432`, `Packaging lint` `43292286313`,
   `CI` `43292286650`), for the five on `b85e193a` (2026-11-12T05:42:17Z:
   `Printing` `43163143760`, `CI`
@@ -89,8 +107,9 @@
 - CodeRabbit's last completed review is `5855379673` on `2e414114`
   (2026-11-11T07:39:16Z, three inline comments and six outside the diff); all
   nine are triaged in §5.37, and the confirmed ones are fixed in `65037c7b` and
-  `a32524b5`, both delivered. On `ce0bb001` the check is `skipped`
-  (2026-11-12T23:26:29Z) and no review exists for it, as for `3532bfda`
+  `a32524b5`, both delivered. On `29afb475` the check is `skipped` too (the
+  rollup's only entry, §5.46), and no review exists for it; the same held for
+  `ce0bb001` (2026-11-12T23:26:29Z), for `3532bfda`
   (19:41:04Z), `b85e193a` (`05:44:26Z`) and `d55d7c94`. The
   review before it, `5853542478` on `50c68e3a` (2026-11-11T03:42:23Z, eight
   actionable comments), is answered in `af6c311b` and triaged in §5.35. The one
@@ -395,7 +414,7 @@ missing, and where the next session should start.
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered | PR #5834; its head is read from the PR, not crowned here, and the 2026-11-12T23:37Z measurement answered `ce0bb001` (the test fix of §5.45), above `d9d667ec` (the documentation sync carrying §5.44), `3532bfda` and `089bec7c` (§5.43), with the fork branch, `headRefOid` and the local `HEAD` matching and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: the five runs on `ce0bb001` were created at 2026-11-12T23:24:13Z as `action_required` (`Printing` 43328554991, `SonarCloud` 43328555659, `CI` 43328555822, `Packaging lint` 43328555472, `Nix` 43328555640) and the rollup holds only CodeRabbit's `skipped` at 23:26:29Z (§5.2, §5.45); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); nothing is left above the measured head — `d9d667ec` and `ce0bb001` went up in the 23:24Z push; the branch's only CI change is the declared `git-sources` job (§5.24) |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered | PR #5834; its head is read from the PR, not crowned here, and the 2026-11-13T12:52Z measurement answered `29afb475` (the merge of `origin/main` `b5fa2f9e`, §5.46), above the earlier `ce0bb001` (the test fix of §5.45) and `d9d667ec` (the documentation sync carrying §5.44), `3532bfda` and `089bec7c` (§5.43), with the fork branch, `headRefOid` and the local `HEAD` matching and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: the five runs on `29afb475` were created at 2026-11-13T10:15:10Z as `action_required` (`Printing` 43407760756, `SonarCloud` 43407761150, `CI` 43407760935, `Packaging lint` 43407761099, `Nix` 43407761233) with only CodeRabbit's `skipped` in the rollup, as on `ce0bb001` (§5.2, §5.45, §5.46); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); nothing is left above the measured head — `29afb475` went up in the 10:15Z push; the branch's only CI change is the declared `git-sources` job (§5.24) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -418,6 +437,15 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 
 Results at this writing:
 
+- §5.46, the merge head `29afb475` (upstream `main` `b5fa2f9e` merged in): on
+  the build host `agents`, `cargo check --workspace -j 12` EXIT=0 (27.15 s),
+  `cargo test` over the eight collab crates — 402 passed, 0 failed, 1 ignored
+  (the LibreOffice gate) in 18 binaries — and `cargo clippy` over
+  `ui-egui`, `wordcraft`, `wordcraft-cli`, `wordcraft-web` and
+  `collab-server` (`--all-targets -D warnings`) EXIT=0. The full workspace
+  `cargo test` on the same tree (chair's merge gate, 2026-11-13T10:03Z): 6414
+  passed, 8 failed — all eight fonts/locales, reproduced on clean
+  `origin/main`.
 - §5.43, the server slice (`089bec7c`, delivered in `3532bfda`): on the build
   host, `cargo fmt --all -- --check` EXIT=0, `cargo clippy -p
   wordcraft-collab-server --all-targets -- -D warnings` EXIT=0, and `cargo test
@@ -4408,6 +4436,61 @@ assets, layers, wasm — 146 test binaries, **6055 passed, 0 failed**, 2 ignored
 not run the gate: the evidence is the PR sweep report at
 `.craft/reports/20261112-2324-pr-sweep.md` in the cabinet workspace, which ran
 it on the build host.
+
+### 5.46 The merge of `origin/main` `b5fa2f9e` builds, and the collab tests are green (run 2026-11-13)
+
+**What the head is.** `29afb4757ff5a03f808626f8e62aee653610b68b` is a merge
+commit: first parent `6e15bcbc` (the documentation head of §5.45), second parent
+`origin/main` `b5fa2f9e`. Against `6e15bcbc` it brings 227 files, +18464/−852:
+the 205 upstream files of the merge plus the lock and manifest movement, and
+**not one collab file**
+(`git diff --name-only 6e15bcbc 29afb475 | grep -ci collab` is `0`;
+`crates/ui-egui/src/collab.rs` and `app/commands.rs` are untouched). The one
+dependency change that reaches this branch is `Cargo.lock`'s `craft-libs`
+`c5a1cbfb` → `6e03f65b`, where `craft-update` picks up `rustix 1.1.5`. The
+conflict was one file, `crates/ui-egui/src/app.rs`: upstream `main` now calls
+`clear_raw_scroll_replay()` first in `ui()`.
+
+**Why a gate was needed.** No GitHub check on this head has executed. The five
+runs created at 2026-11-13T10:15:10Z are `completed`/`action_required` with
+zero jobs, and the rollup holds only CodeRabbit's `skipped` (the header quotes
+the run ids). So the 205 upstream files and the `craft-libs` bump were, as far
+as CI goes, unbuilt.
+
+**The gate** (build host `agents`, rustc 1.99.1, 20 cores, 2026-11-13T12:51Z;
+logs in the cabinet workspace under `.craft/logs/`):
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `cargo check --workspace -j 12` | `Finished … in 27.15s`, exit 0; 25 workspace crates re-checked, the rest fresh in the host target. `gate-wordcraft-29afb475-check-20261113T1550.log` |
+| 2 | `cargo test -p wordcraft-collab -p wordcraft-collab-app -p wordcraft-collab-client -p wordcraft-collab-doc -p wordcraft-collab-engine -p wordcraft-collab-web -p wordcraft-collab-ws -p wordcraft-collab-server -j 12` | 18 test binaries, **402 passed, 0 failed, 1 ignored**, exit 0. `gate-wordcraft-29afb475-collab-test-20261113T1552.log` |
+| 3 | `cargo clippy -p wordcraft-ui-egui -p wordcraft -p wordcraft-cli -p wordcraft-web -p wordcraft-collab-server --all-targets -j 12 -- -D warnings` | `Finished … in 39.51s`, exit 0, no warning. `gate-wordcraft-29afb475-clippy-20261113T1600.log` |
+
+Per package, the collab run is: `wordcraft-collab` 61, `-app` 47, `-client` 26,
+`-doc` 116, `-engine` 58, `-server` 78 (+1 ignored: the LibreOffice commit
+gate), `-web` 14, `-ws` 2 (`tests/reconnect.rs`). The server suite is the one
+§5.45 repaired, and it is green on the merged tree: the shared-store race does
+not come back with upstream's layout changes in the graph.
+
+**The rest of the workspace was gated earlier, on the same tree.** The merge
+gate of 2026-11-13T10:03Z (`gate-wordcraft-5834-merge-test-20261113T1003`, run
+by the chair's PR sweep before the 10:15Z push) ran the full `cargo test` plus
+fmt, clippy, layers, assets, language, pdf-deps and wasm: everything green
+except eight tests — `wordcraft-engine` `fit_one_page` (2) and
+`swiss_german`, `wordcraft-layout` hyphenation (2) and
+`fragmented_hidden_text`, `wordcraft-ui-egui` `rtl_template_titles` and
+`interface_symbols_have_glyphs`. All eight are fonts/locales, and all eight
+failed identically on a clean `origin/main` `b5fa2f9e` without the branch's code
+(`gate-wordcraft-main-control-20261113T1006`). They are the host's font set,
+not the merge.
+
+**Verdict.** The merge neither breaks the workspace nor touches collab code:
+`cargo check --workspace` is green, every collab crate's tests pass, and clippy
+on the merge-touched crates (`ui-egui`, `apps/*`) is warning-free. What is left
+is external and unchanged: a maintainer approves the five runs on `29afb475`,
+reviews, and merges. This pass changed no code and pushed nothing — the docs
+commit recording this section stays local, because a push would move the head
+away from `29afb475` and reset the five runs that wait for approval.
 
 ## 6. Where things live
 
