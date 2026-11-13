@@ -9,6 +9,15 @@ use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, Tab
 /// Narrow cells and float spans must retain their usable width.
 const MIN_LINE_WIDTH: f32 = 1.0;
 
+/// How far a word may run past its line's end and still be taken onto the line: room for the
+/// rounding of the positions added up along the line, and no more. Measured in Word for Windows
+/// (16.0.20625; Arial and Times New Roman at 9 to 12 pt; lines set narrower than their text
+/// needs by a known part of a twip): a word too wide for what is left of its line by 0.0002 pt
+/// wraps, and when the line's spaces shrink to take it Word keeps it up to about 0.001 pt too
+/// wide. A hundredth of a point kept one word in five of those that miss their line by less
+/// than a twip, the step every indent, margin and cell width is written in (#6508).
+const FIT_SLACK: f32 = 0.001;
+
 /// What a paragraph's lines are broken with: the paragraph's measures and the state the lines
 /// are broken in, from one to the next.
 struct Breaker<'e> {
@@ -894,7 +903,7 @@ impl Scan {
             0.0
         };
         let fits = absorbs
-            || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
+            || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + FIT_SLACK
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;
         if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
@@ -987,7 +996,7 @@ impl Scan {
             self.word_from = if c.kind == ClKind::Space { self.x - c.adv } else { self.x };
         } else if self.hyph_ok
             && !pl.clusters.get(j + 1).is_some_and(|n| n.kind == ClKind::Text && n.g1 <= n.g0)
-            && self.x + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + 0.01
+            && self.x + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + FIT_SLACK
         {
             self.last_break = Some(j);
         }
