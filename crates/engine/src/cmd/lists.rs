@@ -276,6 +276,11 @@ fn define(s: &mut Session, v: &Value) -> CmdResult {
         Some(n) => {
             // Change the list in place: every list sharing its definition follows.
             let aid = s.doc.numbering.num(n).map(|x| x.abstract_id).ok_or_else(|| CmdError::Params("no such list".into()))?;
+            // A list using a list style keeps only a copy of the style's levels (rewritten from the
+            // style on reopening and whenever the style changes): the change goes to the style's
+            // definition, and every list using the style follows.
+            let followed = s.doc.numbering.abstracts.iter().find(|a| a.id == aid && a.style_link.is_none()).and_then(|a| a.num_style_link.clone());
+            let aid = followed.as_deref().and_then(|st| style_definition(s, st)).unwrap_or(aid);
             let mut style = None;
             if let Some(a) = Arc::make_mut(&mut s.doc.numbering).abstracts.iter_mut().find(|a| a.id == aid) {
                 a.levels = levels.clone();
@@ -936,6 +941,27 @@ mod tests {
         assert_eq!(s.doc.numbering.level(num, 0).unwrap().chr.bold, Some(true));
         s.run("edit.undo", &json!({})).unwrap();
         assert_eq!(labels(&mut s), ["1)", "2)"]);
+    }
+
+    /// #3805: Define New Multilevel List on a list that uses a list style changes the style, so the
+    /// change reaches every list using it and survives a save to .docx and back (the lists take the
+    /// style's levels on reopening) and a later change to another level of the style.
+    #[test]
+    fn defining_a_list_that_uses_a_list_style_changes_the_style() {
+        let mut s = three();
+        select_para(&mut s, 0);
+        let r = s.run("list.defineStyle", &json!({"name": "Steps"})).unwrap();
+        let id = r["style"].as_str().unwrap().to_string();
+        let num = r["num"].as_u64().unwrap() as u32;
+        select_para(&mut s, 2);
+        s.run("list.applyStyle", &json!({"style": "Steps"})).unwrap();
+        s.run("list.define", &json!({"num": num, "levels": [{"text": "Step %1:"}], "apply": false})).unwrap();
+        assert_eq!(labels(&mut s), ["Step 1:", "Step 2:"]);
+        assert_eq!(s.doc.numbering.style_definition(&id).unwrap().levels[0].text, "Step %1:", "the style changed");
+        let mut b = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        assert_eq!(labels(&mut b), ["Step 1:", "Step 2:"], "after reopening");
+        s.run("list.defineStyle", &json!({"style": "Steps", "levels": [{}, {"text": "(%2)"}]})).unwrap();
+        assert_eq!(labels(&mut s), ["Step 1:", "Step 2:"], "after changing the style");
     }
 
     /// #3805: a list style and the lists using it stay linked through a save to .docx and back

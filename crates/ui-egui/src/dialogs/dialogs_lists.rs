@@ -155,7 +155,8 @@ impl ListForm {
     pub fn sample(&self, k: usize) -> String {
         let Some(l) = self.levels.get(k) else { return String::new() };
         match l.format.as_str() {
-            "none" => return String::new(),
+            // What the list draws: the text, without numbers.
+            "none" => return wordcraft_doc::numbering::none_label(&l.text),
             "bullet" => return l.text.clone(),
             _ => {}
         }
@@ -380,16 +381,22 @@ pub(crate) fn preview_width(ui: &mut Ui, f: &ListForm, width: f32) {
         let on = i == f.level;
         let ink = if on { egui::Color32::BLACK } else { egui::Color32::from_gray(150) };
         let label = f.sample(i);
+        // The interface fonts have no ➢: it is drawn, as on its Bullet Library tile.
+        let arrow = l.format == "bullet" && label == crate::ribbon::ARROW_BULLET;
         let font = egui::FontId::proportional(10.5);
-        let galley = p.layout_no_wrap(label, font, ink);
-        let w = galley.size().x;
+        let galley = p.layout_no_wrap(if arrow { String::new() } else { label }, font, ink);
+        let w = if arrow { 8.0 } else { galley.size().x };
         let x = x_of(l.aligned_at);
         let nx = match l.align.as_str() {
             "center" => x - w / 2.0,
             "right" => x - w,
             _ => x,
         };
-        p.galley(egui::pos2(nx, y - galley.size().y / 2.0), galley, ink);
+        if arrow {
+            crate::ribbon::paint_arrow_bullet(&p, egui::pos2(nx + w / 2.0, y), 0.8, ink);
+        } else {
+            p.galley(egui::pos2(nx, y - galley.size().y / 2.0), galley, ink);
+        }
         let tx = match l.follow.as_str() {
             "space" => nx + w + 3.0,
             "nothing" => nx + w,
@@ -1168,6 +1175,18 @@ mod tests {
             _ => false,
         };
         assert!(bold, "Bold clicked in the number's Font dialog");
+    }
+
+    /// #3805: a "none" level shows its text in the preview, as the list draws it.
+    #[test]
+    fn a_none_level_previews_its_text() {
+        let a = app();
+        let mut form = super::ListForm::read(&a);
+        form.levels[1].format = "none".into();
+        form.levels[1].text = "Note:".into();
+        assert_eq!(form.sample(1), "Note:");
+        form.levels[1].text = String::new();
+        assert_eq!(form.sample(1), "");
     }
 
     /// #328: the ribbon opens Define New Multilevel List; OK defines the list and numbers the

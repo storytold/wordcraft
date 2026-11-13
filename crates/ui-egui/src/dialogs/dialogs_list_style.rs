@@ -77,11 +77,20 @@ impl ListStyleForm {
     /// Take what the Font dialog changed (font, size, bold, italic, underline, colour) into the level.
     fn take_number_props(&mut self, changed: &serde_json::Map<String, Value>) {
         let Some(l) = self.level() else { return };
-        if let Some(f) = changed.get("font").and_then(Value::as_str) {
-            l.font = f.to_string();
+        // Null: cleared in the dialog, the paragraph's again.
+        match changed.get("font") {
+            Some(Value::String(f)) => l.font = f.to_string(),
+            Some(Value::Null) => l.font.clear(),
+            _ => {}
         }
-        if let Some(s) = changed.get("size").and_then(Value::as_f64).filter(|s| s.is_finite()) {
-            l.size = (s as f32).clamp(1.0, 1638.0);
+        match changed.get("size") {
+            Some(Value::Null) => l.size = 0.0,
+            Some(s) => {
+                if let Some(s) = s.as_f64().filter(|s| s.is_finite()) {
+                    l.size = (s as f32).clamp(1.0, 1638.0);
+                }
+            }
+            None => {}
         }
         if let Some(b) = changed.get("bold").and_then(Value::as_bool) {
             l.bold = b;
@@ -102,6 +111,7 @@ impl ListStyleForm {
             }
             // The Font dialog sends Automatic as "Auto".
             Some(Value::String(a)) if a.eq_ignore_ascii_case("auto") => l.color.clear(),
+            Some(Value::Null) => l.color.clear(),
             _ => {}
         }
     }
@@ -127,12 +137,31 @@ impl ListStyleForm {
     }
 }
 
+/// The font Home › Bullets gives bullet `c`.
+fn bullet_font(c: &str) -> String {
+    let kind = wordcraft_doc::ListKind::parse(c).unwrap_or(wordcraft_doc::ListKind::Bullet);
+    wordcraft_doc::numbering::levels_for(kind).first().and_then(|x| x.chr.font.clone()).unwrap_or_default()
+}
+
 /// Make `l` a bullet level showing `c`, in the font Home › Bullets gives that bullet.
 fn set_bullet(l: &mut crate::dialogs_lists::LevelForm, c: &str) {
     l.format = "bullet".into();
     l.text = c.to_string();
-    let kind = wordcraft_doc::ListKind::parse(c).unwrap_or(wordcraft_doc::ListKind::Bullet);
-    l.font = wordcraft_doc::numbering::levels_for(kind).first().and_then(|x| x.chr.font.clone()).unwrap_or_default();
+    l.font = bullet_font(c);
+}
+
+/// Make level `i` (`l`) number in `format`: a bullet's text becomes the number `%n)`, and the
+/// font [`set_bullet`] gave the bullet goes, so the number is in the paragraph's font.
+fn set_number(l: &mut crate::dialogs_lists::LevelForm, i: usize, format: &str) {
+    if l.format == "bullet" {
+        if l.font == bullet_font(&l.text) {
+            l.font.clear();
+        }
+        l.text = format!("%{})", i + 1);
+    } else if !l.text.contains('%') {
+        l.text = format!("%{})", i + 1);
+    }
+    l.format = format.to_string();
 }
 
 /// Define New List Style. Returns true to close.
@@ -240,8 +269,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: &mut ListStyleForm) -> bool {
         let Some(l) = f.level() else { return };
         let bullet = l.format == "bullet";
         if crate::widgets::small_toggle(ui, "numbering", tl!("Numbering"), !bullet, true).clicked() && bullet {
-            l.format = "decimal".into();
-            l.text = format!("%{})", i + 1);
+            set_number(l, i, "decimal");
         }
         if crate::widgets::small_toggle(ui, "bullets", tl!("Bullets"), bullet, true).clicked() && !bullet {
             set_bullet(l, "•");
@@ -258,10 +286,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: &mut ListStyleForm) -> bool {
         let combo = craft_ui::ComboBox::from_id_salt("dls_style").width(170.0).height(480.0).selected_text(current).show_ui(ui, |ui| {
             for (k, s) in STYLES.into_iter().filter(|(k, _)| *k != "bullet") {
                 if ui.selectable_label(l.format == k, style_label(s)).clicked() {
-                    if l.format == "bullet" || !l.text.contains('%') {
-                        l.text = format!("%{})", i + 1);
-                    }
-                    l.format = k.to_string();
+                    set_number(l, i, k);
                 }
             }
             ui.separator();
@@ -371,6 +396,8 @@ fn show_numbering(ctx: &egui::Context, f: &mut ListForm) -> Option<bool> {
     let (mut open, mut done) = (true, None);
     egui::Window::new(tl!("Define New Multilevel List"))
         .id(egui::Id::unique(("dialog", "Define New List Style", "numbering")))
+        // Above the list style dialog, which is modal: on its layer it would take no clicks.
+        .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -20.0))
@@ -388,7 +415,7 @@ fn show_numbering(ctx: &egui::Context, f: &mut ListForm) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
     use wordcraft_engine::Session;
 
     use crate::dialogs::Dialog;
@@ -524,6 +551,70 @@ mod tests {
         assert_eq!((params["levels"][0]["format"].as_str(), params["levels"][0]["text"].as_str()), (Some("bullet"), Some("–")));
     }
 
+    /// #3805: a number style after a bullet takes away the font the bullet brought (a symbol font
+    /// would draw the number as symbols), from the Numbering button and the number styles alike;
+    /// a font the user picked stays.
+    #[test]
+    fn a_number_after_a_bullet_is_in_the_paragraph_font() {
+        use egui_kittest::kittest::Queryable;
+        let a = app();
+        let mut form = super::ListStyleForm::new(&a);
+        let symbol = crate::ribbon::BULLET_LIBRARY.into_iter().find(|c| !super::bullet_font(c).is_empty()).expect("a bullet with a font");
+        super::set_bullet(&mut form.list.levels[0], symbol);
+        let mut h = harness(a, form);
+        h.run();
+        h.get_by_label("Numbering").click();
+        h.run();
+        let l = &h.state().1.list.levels[0];
+        assert_eq!((l.format.as_str(), l.font.as_str()), ("decimal", ""));
+        assert_eq!(h.state().1.list.sample(0), "1)");
+        let l = &mut h.state_mut().1.list.levels[0];
+        super::set_bullet(l, symbol);
+        super::set_number(l, 0, "lowerRoman");
+        assert_eq!((l.format.as_str(), l.font.as_str()), ("lowerRoman", ""));
+        super::set_bullet(l, symbol);
+        l.font = "Georgia".into();
+        super::set_number(l, 0, "decimal");
+        assert_eq!(l.font, "Georgia", "the user's font stays");
+    }
+
+    /// #3805: Define New List Style's Format › Numbering… window sits above the dialog, which is
+    /// modal, and takes clicks.
+    #[test]
+    fn format_numbering_takes_clicks_over_the_list_style_dialog() {
+        use egui_kittest::kittest::Queryable;
+        let mut a = app();
+        a.run("list.defineStyle", json!({})).unwrap();
+        if let Some(Dialog::DefineListStyle { form }) = &mut a.dialog {
+            form.numbering = Some(Box::new(form.list.clone()));
+        }
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 900.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                if fonts {
+                    crate::dialogs::show(app, &ctx);
+                } else {
+                    crate::theme::install_fonts_for(&ctx, false);
+                    fonts = true;
+                }
+            },
+            a,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h.get_by_label("3").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        let level = match &h.state().dialog {
+            Some(Dialog::DefineListStyle { form }) => form.numbering.as_ref().map(|n| n.level),
+            _ => None,
+        };
+        assert_eq!(level, Some(2), "level 3 picked in Format › Numbering…");
+    }
+
     /// #3805: the level's number formatting from Format › Font… goes into the level and back.
     #[test]
     fn format_font_sets_the_level_number_formatting() {
@@ -543,5 +634,10 @@ mod tests {
         changed.insert("color".into(), json!("Auto"));
         form.take_number_props(&changed);
         assert!(form.list.levels[0].color.is_empty());
+        // A size cleared in Font… (null) is the paragraph's again.
+        changed.clear();
+        changed.insert("size".into(), Value::Null);
+        form.take_number_props(&changed);
+        assert_eq!(form.list.levels[0].size, 0.0);
     }
 }

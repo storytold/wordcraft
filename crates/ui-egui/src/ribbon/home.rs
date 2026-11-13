@@ -241,25 +241,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                             mi_text(ui, app, &text, "list.multilevelPreset", json!({"preset": k}));
                         }
                         ui.separator();
-                        // The document's list styles (#3805), by name; a click numbers the selection
-                        // with one. The default "No List" style isn't one to pick.
-                        let mut list_styles: Vec<(String, String)> = app
-                            .session
-                            .doc
-                            .styles
-                            .styles
-                            .iter()
-                            .filter(|st| st.kind == wordcraft_doc::StyleKind::Numbering && !st.default && !st.hidden && st.id != "NoList")
-                            .map(|st| (st.id.clone(), if st.name.is_empty() { st.id.clone() } else { st.name.clone() }))
-                            .collect();
-                        list_styles.sort_by(|a, b| a.1.cmp(&b.1));
-                        if !list_styles.is_empty() {
-                            ui.label(egui::RichText::new(tl!("List Styles")).small().weak());
-                            for (id, name) in list_styles {
-                                mi_text(ui, app, &name, "list.applyStyle", json!({"style": id}));
-                            }
-                            ui.separator();
-                        }
+                        list_styles_menu(ui, app);
                         mi(ui, app, "Define New Multilevel List…", "list.define", json!({}));
                         mi(ui, app, "Define New List Style…", "list.defineStyle", json!({}));
                         ui.separator();
@@ -394,4 +376,30 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Editor", None, app, |ui, app| {
         big(ui, app, "editor", "Editor", "review.spelling", json!({}), false);
     });
+}
+
+/// The Multilevel List menu's List Styles (#3805): the document's list styles by name; a click
+/// numbers the selection with one. The default "No List" style isn't one to pick. Many scroll, so
+/// Define New List Style… and the commands after them stay on screen.
+pub(super) fn list_styles_menu(ui: &mut Ui, app: &mut WordApp) {
+    let mut list_styles: Vec<(String, String)> = app
+        .session
+        .doc
+        .styles
+        .styles
+        .iter()
+        .filter(|st| st.kind == wordcraft_doc::StyleKind::Numbering && !st.default && !st.hidden && st.id != "NoList")
+        .map(|st| (st.id.clone(), if st.name.is_empty() { st.id.clone() } else { st.name.clone() }))
+        .collect();
+    list_styles.sort_by(|a, b| a.1.cmp(&b.1));
+    if list_styles.is_empty() {
+        return;
+    }
+    ui.label(egui::RichText::new(tl!("List Styles")).small().weak());
+    egui::ScrollArea::vertical().id_salt("list_styles").max_height(240.0).show(ui, |ui| {
+        for (id, name) in list_styles {
+            mi_text(ui, app, &name, "list.applyStyle", json!({"style": id}));
+        }
+    });
+    ui.separator();
 }
