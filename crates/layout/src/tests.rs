@@ -8082,6 +8082,107 @@ fn chart_text_the_font_lacks_is_drawn_in_a_fallback_face() {
     assert!(xs.windows(2).all(|w| w[0] <= w[1]), "{xs:?}");
 }
 
+/// The glyph x of every run of `draws` whose text is `want`, in the order the glyphs were shaped.
+fn label_xs(draws: &[display::Draw], want: &str) -> Vec<f32> {
+    draws
+        .iter()
+        .filter_map(|x| if let display::Draw::Glyphs { text, glyphs, .. } = x { (text == want).then_some(glyphs) } else { None })
+        .flatten()
+        .map(|g| g.1)
+        .collect()
+}
+
+/// A chart of `labels` (text and the y of its own rectangle), drawn on the first page.
+fn chart_labels(labels: &[(f32, &str)]) -> Vec<display::Draw> {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    crate::test_fonts();
+    let items = labels
+        .iter()
+        .map(|(y, text)| GraphicItem::Text {
+            rect: [0.0, *y, 216.0, 20.0],
+            text: (*text).into(),
+            size: 10.0,
+            color: Rgb::BLACK,
+            bold: false,
+            align: TextAlign::Center,
+            font: None,
+        })
+        .collect();
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()))
+}
+
+#[test]
+fn an_arabic_chart_label_is_drawn_right_to_left() {
+    // #4199: `wordcraft_fonts::shape` hands back glyphs in logical order, and the chart path
+    // walked the pen through them in that order, so an Arabic title, category label or legend
+    // entry came out back to front.
+    let (title, latin) = ("إيرادات المناطق", "Revenue");
+    let draws = chart_labels(&[(10.0, title), (100.0, latin)]);
+    // The glyphs stay in logical order, each at the x its cluster took: the first character of
+    // the title is drawn furthest right.
+    let rtl = label_xs(&draws, title);
+    assert!(rtl.len() > 2, "the title is drawn: {rtl:?}");
+    assert!(rtl.windows(2).all(|w| w[0] > w[1]), "the Arabic title reads right to left: {rtl:?}");
+    // A label with no right-to-left character is laid out as it always was.
+    let ltr = label_xs(&draws, latin);
+    assert!(ltr.len() > 2, "the Latin label is drawn: {ltr:?}");
+    assert!(ltr.windows(2).all(|w| w[0] < w[1]), "the Latin label reads left to right: {ltr:?}");
+    // The run's text and its per-glyph ranges stay logical, so the PDF's text layer and the
+    // strict missing-glyph check still read the title the way it is written.
+    let run = draws.iter().find_map(|x| match x {
+        display::Draw::Glyphs { text, ranges, .. } if text == title => Some(ranges.clone()),
+        _ => None,
+    });
+    let ranges = run.expect("the title is one run");
+    assert_eq!(ranges.len(), rtl.len());
+    assert!(ranges.windows(2).all(|w| w[0].start <= w[1].start), "ranges in logical order: {ranges:?}");
+    assert!(ranges.iter().all(|r| title.get(r.clone()).is_some()), "ranges on character boundaries: {ranges:?}");
+}
+
+#[test]
+fn a_mixed_chart_label_orders_its_runs_visually() {
+    // #4199: "الشرق Q1" reads right to left, so the Latin sits at the left end of the label and
+    // the Arabic to the right of it. The runs used to be drawn in logical order instead.
+    let label = "الشرق Q1";
+    let draws = chart_labels(&[(10.0, label)]);
+    // The primary face has no Arabic, so the label is drawn as two runs: the Arabic with the
+    // space that follows it, then the Latin.
+    let arabic = label_xs(&draws, "الشرق ");
+    let latin = label_xs(&draws, "Q1");
+    assert!(arabic.len() > 2 && latin.len() == 2, "{arabic:?} {latin:?}");
+    assert!(arabic.windows(2).all(|w| w[0] > w[1]), "the Arabic reads right to left: {arabic:?}");
+    assert!(latin.windows(2).all(|w| w[0] < w[1]), "the Latin reads left to right: {latin:?}");
+    let rightmost_latin = latin.iter().copied().fold(f32::MIN, f32::max);
+    let leftmost_arabic = arabic.iter().copied().fold(f32::MAX, f32::min);
+    assert!(rightmost_latin < leftmost_arabic, "the Latin run sits left of the Arabic: {latin:?} {arabic:?}");
+}
+
+#[test]
+fn a_bracket_in_an_arabic_chart_label_is_mirrored() {
+    // UAX #9 rule L4. The primary face has the brackets but not the Arabic, so `(الشرق)` is
+    // drawn as three runs; each is still shaped in the direction the bidi algorithm resolved,
+    // or a bracket moved to the other end of the label would face the wrong way.
+    let draws = chart_labels(&[(10.0, "(الشرق)")]);
+    let bracket = |want: &str| {
+        draws.iter().find_map(|x| match x {
+            display::Draw::Glyphs { face, text, glyphs, .. } if text == want => glyphs.first().map(|g| (g.0, g.1, *face)),
+            _ => None,
+        })
+    };
+    let (open_gid, open_x, face) = bracket("(").expect("the opening bracket is drawn");
+    let (close_gid, close_x, _) = bracket(")").expect("the closing bracket is drawn");
+    // The label reads right to left, so the character written first sits at the right end and
+    // each bracket is drawn with the other one's glyph: on screen the word is still in brackets.
+    assert!(open_x > close_x, "( is drawn at the right end: {open_x} {close_x}");
+    assert_eq!(open_gid, face.glyph_for(')'), "( takes the mirrored glyph");
+    assert_eq!(close_gid, face.glyph_for('('), ") takes the mirrored glyph");
+}
+
 /// The draws with figures opened up.
 fn flat(draws: Vec<display::Draw>) -> Vec<display::Draw> {
     draws.into_iter().flat_map(|x| if let display::Draw::Figure { draws, .. } = x { draws } else { vec![x] }).collect()
