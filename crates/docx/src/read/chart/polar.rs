@@ -2,7 +2,7 @@ use super::canvas::{Rect, clip_text, fill, stroke, text, text_w, widest};
 use super::format::format_value;
 use super::model::{DataLabel, Kind, Series};
 use super::plot::{Axes, has_values};
-use super::{Chart, FRAC_PI_2, GAP, GRID, GraphicItem, LINE, PathSeg, Rgb, ShapeKind, TAU, TEXT, TextAlign};
+use super::{Chart, FRAC_PI_2, GAP, GRID, GraphicItem, LINE, LINE_W, PathSeg, Rgb, ShapeKind, TAU, TEXT, TextAlign};
 
 pub(super) fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     let Some(s) = c.series.first() else { return };
@@ -92,7 +92,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         if c.radar_fill {
             fill(out, segs.clone(), col);
         }
-        stroke(out, segs, col, s.line_w);
+        stroke(out, segs, col, s.line_w.unwrap_or(LINE_W));
         for (i, p) in ring.iter().enumerate() {
             if c.radar_marks && s.values.get(i).copied().flatten().is_some() {
                 let rect = [p.0 as f32 - MARKER / 2.0, p.1 as f32 - MARKER / 2.0, MARKER, MARKER];
@@ -171,7 +171,7 @@ pub(super) fn draw_data_labels(out: &mut Vec<GraphicItem>, labels: &[DataLabel],
             (Rect { x: l.x - w / 2.0, y: l.y - lh, w, h: lh }, TextAlign::Center)
         };
         let color = if l.inside { Rgb::WHITE } else { TEXT };
-        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None });
+        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None, angle: 0.0 });
     }
 }
 

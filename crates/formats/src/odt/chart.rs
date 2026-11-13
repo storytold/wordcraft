@@ -229,7 +229,7 @@ impl Reader {
                 };
                 let name = s.label.as_deref().and_then(|a| cells_of(a).first().copied()).map(|at| label(self.cell(at))).unwrap_or_default();
                 let name = if name.is_empty() { format!("Series {}", i + 1) } else { name };
-                ChartSeries { name, values }
+                ChartSeries { name, values, ..Default::default() }
             })
             .collect();
         // A scatter chart's x values: its first series' domain.
@@ -248,7 +248,10 @@ impl Reader {
             _ => LegendPos::Right,
         });
         let title = self.title.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
-        Some(ChartSpec { kind, categories, series, title, legend, data_labels }.sanitized())
+        // ODF axis formatting is not read; the value axis keeps the look every chart had before
+        // axes were formattable (gridlines, no axis line), a round chart has none.
+        let val_axis = if kind.is_round() { Default::default() } else { wordcraft_doc::chart::value_axis() };
+        Some(ChartSpec { kind, categories, series, title, legend, data_labels, val_axis, ..Default::default() }.sanitized())
     }
 }
 

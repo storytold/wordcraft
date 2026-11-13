@@ -57,8 +57,8 @@ fn spec(chart: &str) -> Option<ChartSpec> {
 
 fn north_south() -> Vec<ChartSeries> {
     vec![
-        ChartSeries { name: "North".into(), values: vec![Some(10.0), Some(14.0), Some(8.0), Some(16.0)] },
-        ChartSeries { name: "South".into(), values: vec![Some(12.0), None, Some(11.0), Some(13.0)] },
+        ChartSeries { name: "North".into(), values: vec![Some(10.0), Some(14.0), Some(8.0), Some(16.0)], ..Default::default() },
+        ChartSeries { name: "South".into(), values: vec![Some(12.0), None, Some(11.0), Some(13.0)], ..Default::default() },
     ]
 }
 
@@ -78,6 +78,8 @@ fn a_column_chart_reads_its_data_title_and_legend() {
             title: Some("Sales by quarter".into()),
             legend: Some(LegendPos::Right),
             data_labels: false,
+            val_axis: wordcraft_doc::chart::value_axis(),
+            ..Default::default()
         }
     );
     // The frame's size, in points.
@@ -135,7 +137,7 @@ fn line_area_pie_doughnut_and_scatter_classes() {
     let s = spec(&chart_xml("chart:scatter", "", "", "", scatter)).unwrap();
     assert_eq!(s.kind, ChartType::Scatter);
     assert_eq!(s.categories, vec!["10", "14", "8", "16"]);
-    assert_eq!(s.series, vec![ChartSeries { name: "South".into(), values: vec![Some(12.0), None, Some(11.0), Some(13.0)] }]);
+    assert_eq!(s.series, vec![ChartSeries { name: "South".into(), values: vec![Some(12.0), None, Some(11.0), Some(13.0)], ..Default::default() }]);
 }
 
 #[test]
@@ -249,7 +251,15 @@ fn every_chart_type_is_saved_as_a_chart_object_and_reads_back() {
         let bytes = crate::odt::export(&doc_with(spec.clone(), false)).unwrap();
         let back = reread(&bytes);
         assert_eq!(back.len(), 1, "{kind:?}");
-        assert_eq!(*back[0].spec, spec.clone().sanitized(), "{kind:?}");
+        // ODF keeps no series or axis formatting here: only the data, the title and the legend
+        // come back; the value axis has the gridlines every chart had before axes were formattable.
+        let mut expected = spec.clone().sanitized();
+        for s in &mut expected.series {
+            *s = ChartSeries { name: std::mem::take(&mut s.name), values: std::mem::take(&mut s.values), ..Default::default() };
+        }
+        expected.cat_axis = Default::default();
+        expected.val_axis = if kind.is_round() { Default::default() } else { wordcraft_doc::chart::value_axis() };
+        assert_eq!(*back[0].spec, expected, "{kind:?}");
         assert_eq!((back[0].w, back[0].h, back[0].alt.as_str()), (300.0, 180.0, "Sales chart"), "{kind:?}");
         // The package lists the chart object.
         let z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();

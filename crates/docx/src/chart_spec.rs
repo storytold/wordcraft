@@ -6,7 +6,7 @@
 //! [`spec_of`] turns a chart part back into the model only when writing that model again gives
 //! the same markup, so a chart with anything the model leaves out stays as it was read.
 
-use wordcraft_doc::chart::{ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES};
+use wordcraft_doc::chart::{ChartAxis, ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES};
 use wordcraft_doc::graphic::GraphicItem;
 use wordcraft_doc::props::Rgb;
 
@@ -102,11 +102,24 @@ fn bounded(spec: &ChartSpec) -> ChartSpec {
             .series
             .iter()
             .take(MAX_SERIES)
-            .map(|s| ChartSeries { name: s.name.clone(), values: s.values.iter().take(MAX_POINTS).copied().collect() })
+            .map(|s| ChartSeries {
+                name: s.name.clone(),
+                values: s.values.iter().take(MAX_POINTS).copied().collect(),
+                fill: s.fill,
+                no_fill: s.no_fill,
+                line_w: s.line_w,
+                no_line: s.no_line,
+                markers: s.markers,
+                smooth: s.smooth,
+                labels: s.labels,
+                fmt: s.fmt.clone(),
+            })
             .collect(),
         title: spec.title.clone(),
         legend: spec.legend,
         data_labels: spec.data_labels,
+        cat_axis: spec.cat_axis.clone(),
+        val_axis: spec.val_axis.clone(),
     }
     .sanitized()
 }
@@ -185,17 +198,19 @@ fn plot(w: &mut W, spec: &ChartSpec) {
     match k {
         ChartType::Pie | ChartType::Doughnut => {}
         ChartType::Scatter => {
-            value_axis(w, CAT_AX, VAL_AX, "b", false, "midCat");
-            value_axis(w, VAL_AX, CAT_AX, "l", true, "midCat");
+            value_axis(w, CAT_AX, VAL_AX, "b", "midCat", &spec.cat_axis);
+            value_axis(w, VAL_AX, CAT_AX, "l", "midCat", &spec.val_axis);
         }
         _ => {
-            category_axis(w, if horizontal { "l" } else { "b" });
-            value_axis(w, VAL_AX, CAT_AX, if horizontal { "b" } else { "l" }, true, "between");
+            category_axis(w, if horizontal { "l" } else { "b" }, &spec.cat_axis);
+            value_axis(w, VAL_AX, CAT_AX, if horizontal { "b" } else { "l" }, "between", &spec.val_axis);
         }
     }
 }
 
-/// One `c:ser` (ECMA-376 element order: idx, order, tx, spPr, marker, cat/xVal, val/yVal, smooth).
+/// One `c:ser` (ECMA-376 element order: idx, order, tx, spPr, marker, invertIfNegative, dLbls,
+/// cat/xVal, val/yVal, smooth): the series' formatting (fill, line, markers, its own labels) sits
+/// in `c:spPr`, `c:marker` and `c:dLbls`; the values carry their number format.
 fn series(w: &mut W, spec: &ChartSpec, i: usize, s: &ChartSeries) {
     let k = spec.kind;
     let i = i.to_string();
@@ -207,25 +222,26 @@ fn series(w: &mut W, spec: &ChartSpec, i: usize, s: &ChartSeries) {
         w.leaf("c:v", &[], &s.name);
         w.close("c:tx");
     }
-    match k {
-        // Markers only: the series has no line.
-        ChartType::Scatter => {
-            w.open("c:spPr", &[]);
-            w.open("a:ln", &[("w", "19050")]);
-            w.empty("a:noFill", &[]);
-            w.close("a:ln");
-            w.close("c:spPr");
-        }
-        ChartType::Column | ChartType::ColumnStacked | ChartType::Bar | ChartType::BarStacked => {
-            w.empty("c:invertIfNegative", &[("val", "0")]);
-        }
-        ChartType::Line => {
-            w.open("c:marker", &[]);
-            w.empty("c:symbol", &[("val", "none")]);
-            w.close("c:marker");
-        }
-        _ => {}
+    series_props(w, s);
+    series_marker(w, k, s);
+    if matches!(k, ChartType::Column | ChartType::ColumnStacked | ChartType::Bar | ChartType::BarStacked) {
+        w.empty("c:invertIfNegative", &[("val", "0")]);
     }
+    if let Some(on) = s.labels {
+        w.open("c:dLbls", &[]);
+        for (name, show) in [
+            ("c:showLegendKey", false),
+            ("c:showVal", on),
+            ("c:showCatName", false),
+            ("c:showSerName", false),
+            ("c:showPercent", false),
+            ("c:showBubbleSize", false),
+        ] {
+            w.empty(name, &[("val", if show { "1" } else { "0" })]);
+        }
+        w.close("c:dLbls");
+    }
+    let code = s.fmt.as_deref().unwrap_or("General");
     if k == ChartType::Scatter {
         let xs: Option<Vec<Option<f64>>> = spec
             .categories
@@ -234,25 +250,82 @@ fn series(w: &mut W, spec: &ChartSpec, i: usize, s: &ChartSeries) {
             .collect();
         w.open("c:xVal", &[]);
         match xs {
-            Some(xs) => num_lit(w, &xs),
+            Some(xs) => num_lit(w, &xs, "General"),
             None => str_lit(w, &spec.categories),
         }
         w.close("c:xVal");
         w.open("c:yVal", &[]);
-        num_lit(w, &s.values);
+        num_lit(w, &s.values, code);
         w.close("c:yVal");
     } else {
         w.open("c:cat", &[]);
         str_lit(w, &spec.categories);
         w.close("c:cat");
         w.open("c:val", &[]);
-        num_lit(w, &s.values);
+        num_lit(w, &s.values, code);
         w.close("c:val");
     }
     if matches!(k, ChartType::Line | ChartType::Scatter) {
-        w.empty("c:smooth", &[("val", "0")]);
+        w.empty("c:smooth", &[("val", if s.smooth { "1" } else { "0" })]);
     }
     w.close("c:ser");
+}
+
+/// `c:spPr`: the series' fill (`a:solidFill` / `a:noFill`) and line (`a:ln`), written when the
+/// model sets them. `a:ln` without `w` is the default width, `w` a fixed one, and `a:noFill`
+/// inside it "no line" (a scatter series keeps its markers with no line).
+fn series_props(w: &mut W, s: &ChartSeries) {
+    let fill_set = s.no_fill || s.fill.is_some();
+    let ln_set = s.no_line || s.line_w.is_some();
+    if !(fill_set || ln_set) {
+        return;
+    }
+    w.open("c:spPr", &[]);
+    if fill_set {
+        match &s.fill {
+            Some(c) => {
+                w.open("a:solidFill", &[]);
+                w.empty("a:srgbClr", &[("val", &c.hex())]);
+                w.close("a:solidFill");
+            }
+            None => w.empty("a:noFill", &[]),
+        }
+    }
+    if ln_set {
+        let w_attr = s.line_w.map(emu).unwrap_or_default();
+        let attrs = [("w", w_attr.as_str())];
+        w.open("a:ln", if w_attr.is_empty() { &[] } else { &attrs });
+        if s.no_line {
+            w.empty("a:noFill", &[]);
+        }
+        w.close("a:ln");
+    }
+    w.close("c:spPr");
+}
+
+/// `c:marker`: line and scatter series say which symbol each point gets; other types have none.
+fn series_marker(w: &mut W, k: ChartType, s: &ChartSeries) {
+    match k {
+        ChartType::Line => {
+            w.open("c:marker", &[]);
+            w.empty("c:symbol", &[("val", if s.markers == Some(true) { "circle" } else { "none" })]);
+            w.close("c:marker");
+        }
+        // Unset: no `c:marker`, so Word picks its automatic symbol for each series.
+        ChartType::Scatter => {
+            if let Some(on) = s.markers {
+                w.open("c:marker", &[]);
+                w.empty("c:symbol", &[("val", if on { "circle" } else { "none" })]);
+                w.close("c:marker");
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A line width in points as the `w` attribute DrawingML wants (EMU).
+fn emu(pt: f32) -> String {
+    ((pt * 12700.0).round().max(0.0) as i64).to_string()
 }
 
 fn str_lit(w: &mut W, items: &[String]) {
@@ -266,9 +339,9 @@ fn str_lit(w: &mut W, items: &[String]) {
     w.close("c:strLit");
 }
 
-fn num_lit(w: &mut W, values: &[Option<f64>]) {
+fn num_lit(w: &mut W, values: &[Option<f64>], code: &str) {
     w.open("c:numLit", &[]);
-    w.leaf("c:formatCode", &[], "General");
+    w.leaf("c:formatCode", &[], code);
     w.empty("c:ptCount", &[("val", &values.len().to_string())]);
     for (i, v) in values.iter().enumerate() {
         if let Some(v) = v.filter(|v| v.is_finite()) {
@@ -285,17 +358,21 @@ fn num(v: f64) -> String {
     if v == 0.0 { "0".to_string() } else { format!("{v}") }
 }
 
-fn category_axis(w: &mut W, pos: &str) {
+fn category_axis(w: &mut W, pos: &str, ax: &ChartAxis) {
     w.open("c:catAx", &[]);
     w.empty("c:axId", &[("val", CAT_AX)]);
-    w.open("c:scaling", &[]);
-    w.empty("c:orientation", &[("val", "minMax")]);
-    w.close("c:scaling");
+    scaling(w, ax);
     w.empty("c:delete", &[("val", "0")]);
     w.empty("c:axPos", &[("val", pos)]);
+    if ax.gridlines {
+        w.empty("c:majorGridlines", &[]);
+    }
+    axis_title(w, ax);
+    num_fmt(w, ax);
     w.empty("c:majorTickMark", &[("val", "none")]);
     w.empty("c:minorTickMark", &[("val", "none")]);
-    w.empty("c:tickLblPos", &[("val", "nextTo")]);
+    w.empty("c:tickLblPos", &[("val", if ax.labels { "nextTo" } else { "none" })]);
+    axis_line(w, ax);
     w.empty("c:crossAx", &[("val", VAL_AX)]);
     w.empty("c:crosses", &[("val", "autoZero")]);
     w.empty("c:auto", &[("val", "1")]);
@@ -305,32 +382,79 @@ fn category_axis(w: &mut W, pos: &str) {
     w.close("c:catAx");
 }
 
-/// A value axis: with gridlines and no axis line (`grid`), else with its line and no gridlines.
-fn value_axis(w: &mut W, id: &str, cross: &str, pos: &str, grid: bool, between: &str) {
+/// A value axis (scatter x axes included): its scale, gridlines, title, labels and line, as the
+/// model sets them.
+fn value_axis(w: &mut W, id: &str, cross: &str, pos: &str, between: &str, ax: &ChartAxis) {
     w.open("c:valAx", &[]);
     w.empty("c:axId", &[("val", id)]);
-    w.open("c:scaling", &[]);
-    w.empty("c:orientation", &[("val", "minMax")]);
-    w.close("c:scaling");
+    scaling(w, ax);
     w.empty("c:delete", &[("val", "0")]);
     w.empty("c:axPos", &[("val", pos)]);
-    if grid {
+    if ax.gridlines {
         w.empty("c:majorGridlines", &[]);
     }
+    axis_title(w, ax);
+    num_fmt(w, ax);
     w.empty("c:majorTickMark", &[("val", "none")]);
     w.empty("c:minorTickMark", &[("val", "none")]);
-    w.empty("c:tickLblPos", &[("val", "nextTo")]);
-    if grid {
-        w.open("c:spPr", &[]);
-        w.open("a:ln", &[]);
-        w.empty("a:noFill", &[]);
-        w.close("a:ln");
-        w.close("c:spPr");
-    }
+    w.empty("c:tickLblPos", &[("val", if ax.labels { "nextTo" } else { "none" })]);
+    axis_line(w, ax);
     w.empty("c:crossAx", &[("val", cross)]);
     w.empty("c:crosses", &[("val", "autoZero")]);
     w.empty("c:crossBetween", &[("val", between)]);
     w.close("c:valAx");
+}
+
+/// `c:scaling`: the orientation, then the fixed bounds when the model sets them.
+fn scaling(w: &mut W, ax: &ChartAxis) {
+    w.open("c:scaling", &[]);
+    w.empty("c:orientation", &[("val", "minMax")]);
+    for (name, v) in [("c:max", ax.max), ("c:min", ax.min)] {
+        if let Some(v) = v.filter(|v| v.is_finite()) {
+            w.empty(name, &[("val", &num(v))]);
+        }
+    }
+    w.close("c:scaling");
+}
+
+/// The axis title, in the same rich-text shape the chart title uses.
+fn axis_title(w: &mut W, ax: &ChartAxis) {
+    let Some(t) = &ax.title else { return };
+    w.open("c:title", &[]);
+    w.open("c:tx", &[]);
+    w.open("c:rich", &[]);
+    w.empty("a:bodyPr", &[]);
+    w.empty("a:lstStyle", &[]);
+    w.open("a:p", &[]);
+    w.open("a:r", &[]);
+    w.leaf("a:t", &[], t);
+    w.close("a:r");
+    w.close("a:p");
+    w.close("c:rich");
+    w.close("c:tx");
+    w.empty("c:overlay", &[("val", "0")]);
+    w.close("c:title");
+}
+
+/// Tick-label number format: the model's code, unlinked from the source, else the default.
+fn num_fmt(w: &mut W, ax: &ChartAxis) {
+    match &ax.fmt {
+        Some(code) => w.empty("c:numFmt", &[("formatCode", code), ("sourceLinked", "0")]),
+        None => w.empty("c:numFmt", &[("formatCode", "General"), ("sourceLinked", "1")]),
+    }
+}
+
+/// `c:spPr`: an axis line only when the model keeps it (the default writes nothing, which reads
+/// as a line); `a:noFill` when the axis line is off.
+fn axis_line(w: &mut W, ax: &ChartAxis) {
+    if ax.line {
+        return;
+    }
+    w.open("c:spPr", &[]);
+    w.open("a:ln", &[]);
+    w.empty("a:noFill", &[]);
+    w.close("a:ln");
+    w.close("c:spPr");
 }
 
 /// The chart a chart part holds, when the part is exactly what [`chart_xml`] writes for it (so
@@ -365,15 +489,40 @@ pub(crate) fn spec_of(space: &El) -> Option<ChartSpec> {
     let categories = sers.first().and_then(|s| s.child(if scatter { "c:xVal" } else { "c:cat" })).map(literal).unwrap_or_default();
     let series = sers
         .iter()
-        .map(|s| ChartSeries {
-            name: s.child("c:tx").and_then(|t| t.child("c:v")).map(|v| v.text()).unwrap_or_default(),
-            values: s
-                .child(if scatter { "c:yVal" } else { "c:val" })
-                .map(literal)
-                .unwrap_or_default()
-                .iter()
-                .map(|v| v.parse::<f64>().ok().filter(|v| v.is_finite()))
-                .collect(),
+        .map(|s| {
+            let ln = s.child("c:spPr").and_then(|p| p.child("a:ln"));
+            let symbol = s.child("c:marker").and_then(|m| m.child("c:symbol")).and_then(|m| m.attr("val"));
+            ChartSeries {
+                name: s.child("c:tx").and_then(|t| t.child("c:v")).map(|v| v.text()).unwrap_or_default(),
+                values: s
+                    .child(if scatter { "c:yVal" } else { "c:val" })
+                    .map(literal)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|v| v.parse::<f64>().ok().filter(|v| v.is_finite()))
+                    .collect(),
+                fill: s
+                    .child("c:spPr")
+                    .and_then(|p| p.child("a:solidFill"))
+                    .and_then(|f| f.child("a:srgbClr"))
+                    .and_then(|c| c.attr("val"))
+                    .and_then(Rgb::parse),
+                no_fill: s.child("c:spPr").and_then(|p| p.child("a:noFill")).is_some(),
+                line_w: ln.and_then(|l| l.attr("w")).and_then(|w| w.parse::<f64>().ok()).filter(|w| w.is_finite()).map(|w| (w / 12700.0) as f32),
+                no_line: ln.and_then(|l| l.child("a:noFill")).is_some(),
+                // Line series show no markers by default: only a setting that differs from that
+                // belongs in the model. A scatter series keeps what the file says, so a missing
+                // `c:marker` (Word's automatic symbols) stays unset and is not written back.
+                markers: symbol.map(|v| v != "none").filter(|m| scatter || *m),
+                smooth: s.child("c:smooth").and_then(|v| v.attr("val")).is_some_and(|v| v == "1"),
+                labels: s.child("c:dLbls").and_then(|d| d.child("c:showVal")).and_then(|v| v.attr("val")).map(|v| v == "1"),
+                fmt: s
+                    .child(if scatter { "c:yVal" } else { "c:val" })
+                    .and_then(|v| v.els().find(|e| e.name == "c:numLit"))
+                    .and_then(|l| l.child("c:formatCode"))
+                    .map(|f| f.text())
+                    .filter(|f| *f != "General"),
+            }
         })
         .collect();
     let title = chart.child("c:title").and_then(|t| t.find("a:t")).map(|t| t.text());
@@ -384,10 +533,46 @@ pub(crate) fn spec_of(space: &El) -> Option<ChartSpec> {
         _ => LegendPos::Right,
     });
     let data_labels = ty.child("c:dLbls").and_then(|d| d.child("c:showVal")).and_then(|v| v.attr("val")) == Some("1");
-    let spec = ChartSpec { kind, categories, series, title, legend, data_labels }.sanitized();
-    // Editable only when nothing would be lost: writing the model again gives the same part.
-    let again = xml::parse(chart_xml(&spec).as_bytes()).ok()?;
+    let (cat_a, val_a) = crate::read::chart::chart_axes(plot, scatter);
+    let axis = |a: crate::read::chart::Axis| ChartAxis {
+        title: a.title,
+        min: a.min,
+        max: a.max,
+        fmt: a.fmt,
+        gridlines: a.grid,
+        labels: a.labels,
+        line: a.line,
+    };
+    let spec = ChartSpec { kind, categories, series, title, legend, data_labels, cat_axis: axis(cat_a), val_axis: axis(val_a) }.sanitized();
+    // Editable only when nothing would be lost: writing the model again gives the same part, as
+    // this writer or the earlier one wrote it.
+    let mut again = xml::parse(chart_xml(&spec).as_bytes()).ok()?;
+    if same(space, &again, 0) {
+        return Some(spec);
+    }
+    as_previous_writer(&mut again);
     same(space, &again, 0).then_some(spec)
+}
+
+/// `part` (what [`chart_xml`] writes) as the earlier WordCraft writer wrote the same model: it
+/// had no axis `c:numFmt`. Only that element goes, and only with the value its absence reads as
+/// (General, linked to the source), so a part that matches still holds nothing the model leaves out.
+fn as_previous_writer(part: &mut El) {
+    fn els_mut(e: &mut El) -> impl Iterator<Item = &mut El> {
+        e.kids.iter_mut().filter_map(|n| match n {
+            Node::El(e) => Some(e),
+            Node::Text(_) => None,
+        })
+    }
+    fn drop_els(e: &mut El, drop: impl Fn(&El) -> bool) {
+        e.kids.retain(|n| !matches!(n, Node::El(c) if drop(c)));
+    }
+    let Some(plot) = els_mut(part).find(|e| e.name == "c:chart").and_then(|c| els_mut(c).find(|e| e.name == "c:plotArea")) else { return };
+    for e in els_mut(plot) {
+        if matches!(e.name.as_str(), "c:catAx" | "c:valAx") {
+            drop_els(e, |c| c.name == "c:numFmt" && c.attr("sourceLinked") == Some("1"));
+        }
+    }
 }
 
 /// The points of a `c:strLit` / `c:numLit` (or a cache) as texts by index, `ptCount` long.
@@ -461,10 +646,11 @@ mod tests {
         let spec = ChartSpec {
             kind: ChartType::Column,
             categories: (0..4500).map(|i| i.to_string()).collect(),
-            series: (0..300).map(|i| ChartSeries { name: format!("S{i}"), values: vec![Some(1.0); 4500] }).collect(),
+            series: (0..300).map(|i| ChartSeries { name: format!("S{i}"), values: vec![Some(1.0); 4500], ..Default::default() }).collect(),
             title: None,
             legend: None,
             data_labels: false,
+            ..Default::default()
         };
         let x = chart_xml(&spec);
         let series = x.matches("<c:ser>").count();
@@ -500,6 +686,61 @@ mod tests {
         assert_eq!(spec_of(&xml::parse(x.as_bytes()).unwrap()), None);
     }
 
+    /// Chart parts as the previous WordCraft chart writer saved them (its output for
+    /// `ChartSpec::sample`): no axis `c:numFmt`, and scatter series with no `c:marker`.
+    const PREVIOUS_COLUMN: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:roundedCorners val="0"/><c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Series 1</c:v></c:tx><c:invertIfNegative val="0"/><c:cat><c:strLit><c:ptCount val="4"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt><c:pt idx="3"><c:v>Q4</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>3.2</c:v></c:pt><c:pt idx="1"><c:v>4.1</c:v></c:pt><c:pt idx="2"><c:v>3.6</c:v></c:pt><c:pt idx="3"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Series 2</c:v></c:tx><c:invertIfNegative val="0"/><c:cat><c:strLit><c:ptCount val="4"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt><c:pt idx="3"><c:v>Q4</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>2</c:v></c:pt><c:pt idx="1"><c:v>2.7</c:v></c:pt><c:pt idx="2"><c:v>3.9</c:v></c:pt><c:pt idx="3"><c:v>3.3</c:v></c:pt></c:numLit></c:val></c:ser><c:ser><c:idx val="2"/><c:order val="2"/><c:tx><c:v>Series 3</c:v></c:tx><c:invertIfNegative val="0"/><c:cat><c:strLit><c:ptCount val="4"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt><c:pt idx="3"><c:v>Q4</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>1.5</c:v></c:pt><c:pt idx="1"><c:v>2.2</c:v></c:pt><c:pt idx="2"><c:v>2.4</c:v></c:pt><c:pt idx="3"><c:v>3.8</c:v></c:pt></c:numLit></c:val></c:ser><c:gapWidth val="150"/><c:axId val="500000001"/><c:axId val="500000002"/></c:barChart><c:catAx><c:axId val="500000001"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="500000002"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx><c:valAx><c:axId val="500000002"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr><c:crossAx val="500000001"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx></c:plotArea><c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>"#;
+    const PREVIOUS_SCATTER: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:roundedCorners val="0"/><c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:layout/><c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Series 1</c:v></c:tx><c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr><c:xVal><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt><c:pt idx="3"><c:v>4</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>2.1</c:v></c:pt><c:pt idx="1"><c:v>3.4</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt><c:pt idx="3"><c:v>4.6</c:v></c:pt></c:numLit></c:yVal><c:smooth val="0"/></c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Series 2</c:v></c:tx><c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr><c:xVal><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt><c:pt idx="3"><c:v>4</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>1.2</c:v></c:pt><c:pt idx="1"><c:v>1.9</c:v></c:pt><c:pt idx="2"><c:v>2.8</c:v></c:pt><c:pt idx="3"><c:v>3.1</c:v></c:pt></c:numLit></c:yVal><c:smooth val="0"/></c:ser><c:axId val="500000001"/><c:axId val="500000002"/></c:scatterChart><c:valAx><c:axId val="500000001"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="500000002"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx><c:valAx><c:axId val="500000002"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr><c:crossAx val="500000001"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx></c:plotArea><c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>"#;
+
+    #[test]
+    fn charts_saved_by_the_previous_writer_stay_editable() {
+        for (x, kind) in [(PREVIOUS_COLUMN, ChartType::Column), (PREVIOUS_SCATTER, ChartType::Scatter)] {
+            let spec = spec_of(&xml::parse(x.as_bytes()).unwrap()).unwrap_or_else(|| panic!("{kind:?}: the earlier part is read-only"));
+            assert_eq!((spec.kind, spec.series.len()), (kind, if kind == ChartType::Scatter { 2 } else { 3 }));
+            assert_eq!((spec.cat_axis.fmt.as_deref(), spec.val_axis.fmt.as_deref()), (None, None), "{kind:?}");
+            assert!(spec.series.iter().all(|s| s.markers.is_none()), "{kind:?}: markers unset");
+            // Saved again, it is in the current shape and still reads back as the same model.
+            assert_eq!(spec_of(&parse(&spec)).as_ref(), Some(&spec), "{kind:?}");
+        }
+        // What neither writer writes still keeps such a part read-only: an axis format linked to
+        // the source that isn't General, a scatter marker other than the default, a marker size.
+        let edited = |x: &str, from: &str, to: &str| {
+            assert!(x.contains(from), "{from}");
+            spec_of(&xml::parse(x.replacen(from, to, 1).as_bytes()).unwrap())
+        };
+        let ax = r#"<c:axPos val="l"/><c:majorGridlines/>"#;
+        assert_eq!(edited(PREVIOUS_COLUMN, ax, &format!(r#"{ax}<c:numFmt formatCode="0.0" sourceLinked="1"/>"#)), None);
+        let ln = r#"<a:ln w="19050"><a:noFill/></a:ln></c:spPr>"#;
+        assert_eq!(edited(PREVIOUS_SCATTER, ln, &format!(r#"{ln}<c:marker><c:symbol val="square"/></c:marker>"#)), None);
+        assert_eq!(edited(PREVIOUS_SCATTER, ln, &format!(r#"{ln}<c:marker><c:symbol val="circle"/><c:size val="9"/></c:marker>"#)), None);
+        assert_eq!(edited(PREVIOUS_COLUMN, "<c:roundedCorners val=\"0\"/>", "<c:roundedCorners val=\"0\"/><c:style val=\"2\"/>"), None);
+    }
+
+    /// A scatter series with no `c:marker` (Word's automatic symbols) stays without one after an
+    /// unrelated edit and a save; an explicit circle or "none" stays explicit.
+    #[test]
+    fn scatter_series_without_a_marker_stay_without_after_a_save() {
+        let marker_of = |x: &El| -> Vec<Option<String>> {
+            let sc = x.child("c:chart").unwrap().child("c:plotArea").unwrap().child("c:scatterChart").unwrap();
+            sc.children("c:ser").map(|s| s.child("c:marker").map(|m| m.child("c:symbol").unwrap().attr("val").unwrap().to_string())).collect()
+        };
+        let mut spec = spec_of(&xml::parse(PREVIOUS_SCATTER.as_bytes()).unwrap()).unwrap();
+        assert_eq!(marker_of(&xml::parse(PREVIOUS_SCATTER.as_bytes()).unwrap()), [None, None]);
+        spec.title = Some("Edited".into());
+        spec.series[0].name = "Renamed".into();
+        let saved = parse(&spec);
+        assert_eq!(marker_of(&saved), [None, None]);
+        let again = spec_of(&saved).unwrap();
+        assert_eq!(again, spec);
+        assert!(again.series.iter().all(|s| s.markers.is_none()));
+        // Explicit choices are kept as written.
+        spec.series[0].markers = Some(true);
+        spec.series[1].markers = Some(false);
+        let saved = parse(&spec);
+        assert_eq!(marker_of(&saved), [Some("circle".to_string()), Some("none".to_string())]);
+        let again = spec_of(&saved).unwrap();
+        assert_eq!((again.series[0].markers, again.series[1].markers), (Some(true), Some(false)));
+    }
+
     #[test]
     fn elements_come_in_schema_order() {
         let mut spec = ChartSpec::sample(ChartType::ColumnStacked);
@@ -517,6 +758,11 @@ mod tests {
             ["c:barDir", "c:grouping", "c:varyColors", "c:ser", "c:ser", "c:ser", "c:dLbls", "c:gapWidth", "c:overlap", "c:axId", "c:axId"]
         );
         assert_eq!(names(bar.child("c:ser").unwrap()), ["c:idx", "c:order", "c:tx", "c:invertIfNegative", "c:cat", "c:val"]);
+        // A series with its own labels keeps `c:invertIfNegative` ahead of `c:dLbls` (CT_BarSer).
+        spec.series[0].labels = Some(true);
+        let labelled = parse(&spec);
+        let ser = labelled.child("c:chart").unwrap().child("c:plotArea").unwrap().child("c:barChart").unwrap().child("c:ser").unwrap();
+        assert_eq!(names(ser), ["c:idx", "c:order", "c:tx", "c:invertIfNegative", "c:dLbls", "c:cat", "c:val"]);
         let val_ax = plot.child("c:valAx").unwrap();
         assert_eq!(
             names(val_ax),
@@ -526,6 +772,7 @@ mod tests {
                 "c:delete",
                 "c:axPos",
                 "c:majorGridlines",
+                "c:numFmt",
                 "c:majorTickMark",
                 "c:minorTickMark",
                 "c:tickLblPos",
@@ -535,13 +782,35 @@ mod tests {
                 "c:crossBetween"
             ]
         );
+        let cat_ax = plot.child("c:catAx").unwrap();
+        assert_eq!(
+            names(cat_ax),
+            [
+                "c:axId",
+                "c:scaling",
+                "c:delete",
+                "c:axPos",
+                "c:numFmt",
+                "c:majorTickMark",
+                "c:minorTickMark",
+                "c:tickLblPos",
+                "c:crossAx",
+                "c:crosses",
+                "c:auto",
+                "c:lblAlgn",
+                "c:lblOffset",
+                "c:noMultiLvlLbl"
+            ]
+        );
         let line = parse(&ChartSpec { data_labels: true, ..ChartSpec::sample(ChartType::Line) });
         let lc = line.child("c:chart").unwrap().child("c:plotArea").unwrap().child("c:lineChart").unwrap();
         assert_eq!(names(lc), ["c:grouping", "c:varyColors", "c:ser", "c:ser", "c:ser", "c:dLbls", "c:marker", "c:axId", "c:axId"]);
         assert_eq!(names(lc.child("c:ser").unwrap()), ["c:idx", "c:order", "c:tx", "c:marker", "c:cat", "c:val", "c:smooth"]);
-        let sc = parse(&ChartSpec::sample(ChartType::Scatter));
+        let mut scatter = ChartSpec::sample(ChartType::Scatter);
+        scatter.series.iter_mut().for_each(|s| s.markers = Some(true));
+        let sc = parse(&scatter);
         let sc = sc.child("c:chart").unwrap().child("c:plotArea").unwrap().child("c:scatterChart").unwrap();
-        assert_eq!(names(sc.child("c:ser").unwrap()), ["c:idx", "c:order", "c:tx", "c:spPr", "c:xVal", "c:yVal", "c:smooth"]);
+        assert_eq!(names(sc.child("c:ser").unwrap()), ["c:idx", "c:order", "c:tx", "c:spPr", "c:marker", "c:xVal", "c:yVal", "c:smooth"]);
         let dn = parse(&ChartSpec::sample(ChartType::Doughnut));
         let dn = dn.child("c:chart").unwrap().child("c:plotArea").unwrap();
         assert_eq!(names(dn), ["c:layout", "c:doughnutChart"]);
