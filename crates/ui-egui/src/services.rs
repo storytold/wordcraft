@@ -1,5 +1,5 @@
 use super::state::DefaultApp;
-use super::{FileDialogAnswer, FileDialogRequest, async_saves, paste_picture, printing};
+use super::{FileDialogAnswer, FileDialogRequest, WordApp, async_saves, paste_picture, printing, system_clipboard};
 
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
@@ -8,6 +8,9 @@ pub struct Services {
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
+    /// Desktop: stop the print job still waiting to be sent (on a sleeping printer's driver,
+    /// say). `true`: it will never be sent; `false`: it was already being sent.
+    pub cancel_print: Option<Box<dyn Fn() -> bool>>,
     /// Pick a file to open; the argument says what for (`document`, `picture`).
     pub pick_open: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// Pick a path to save to, given a suggested name.
@@ -18,6 +21,10 @@ pub struct Services {
     /// sender counts as cancelled. An `Err` says no system dialog could be shown, and the app shows
     /// its built-in file browser instead (#576). The app shows one dialog at a time ([`file_dialogs`]).
     pub file_dialog: Option<Box<dyn Fn(FileDialogRequest) -> std::sync::mpsc::Receiver<FileDialogAnswer>>>,
+    /// Desktop: stop waiting for the system file dialog the host is showing, if it can (a portal
+    /// that never answers). The app calls it when it gives the dialog up (File › Open › Browse in
+    /// WordCraft…), so the host closes the request and answers as cancelled.
+    pub cancel_file_dialog: Option<Box<dyn Fn()>>,
     /// Web: open a file picker; the file arrives later through `inbox`.
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
@@ -63,12 +70,17 @@ pub struct Services {
     /// Desktop: the HTML on the system clipboard — another program's formatted copy (a Word
     /// document, a web page) — if any. Paste keeps its formatting (#687); see [`system_clipboard`].
     pub clipboard_html: Option<Box<dyn Fn() -> Option<String>>>,
-    /// Desktop: put HTML on the system clipboard with its plain-text alternative (html, text, and
-    /// for a copy of one equation alone its MathML, else empty), so other programs keep the
-    /// formatting (#1523) and equations (#816). The MathML goes in the platform's MathML formats
-    /// as well, which Word reads a pasted equation from (#1297). `true` when the HTML and text are
-    /// there; otherwise the copy's text goes through egui as usual.
-    pub set_clipboard_html: Option<Box<dyn Fn(&str, &str, &str) -> bool>>,
+    /// Desktop: put a copy on the system clipboard as (text, html, rtf, mathml): its text, with
+    /// its HTML (equations as MathML, #816) and RTF beside it where the platform takes them, so
+    /// other programs keep the formatting (#1523); an empty one isn't offered. `mathml` is a copy
+    /// of one equation alone (else empty), for the platform's MathML formats, which Word reads a
+    /// pasted equation from (#1297). `true` when the text and HTML are there; otherwise the copy's
+    /// text goes through egui as usual.
+    pub set_clipboard_rich: Option<Box<dyn Fn(&str, &str, &str, &str) -> bool>>,
+    /// Desktop: publish one picture's pixels, HTML and text together without clearing formats.
+    pub set_clipboard_image: Option<Box<dyn Fn(&system_clipboard::CopyImage, &str, &str) -> bool>>,
+    /// Whether the clipboard still contains this process's last copy.
+    pub clipboard_is_own: Option<Box<dyn Fn() -> bool>>,
     /// Desktop: the RTF on the system clipboard, where the platform offers it (#687).
     pub clipboard_rtf: Option<Box<dyn Fn() -> Option<String>>>,
     /// Desktop: the names of the formats on the system clipboard (MIME types, Windows format
@@ -88,6 +100,13 @@ pub struct Services {
     /// `xdg-mime`. `None` (web, macOS) hides the button; macOS shows how to do it in Finder
     /// instead. An error means nothing changed.
     pub make_default_app: Option<Box<dyn Fn() -> Result<DefaultApp, String>>>,
+    /// Desktop: write the app's current preferences out now, not only at exit (#2716): a
+    /// document taken off the recent list should survive the app being killed before a normal
+    /// close. `Ok(true)`: written; `Ok(false)`: nothing written because the host keeps no
+    /// preferences (switched off, no settings folder); an error is the reason the write failed.
+    /// The recent commands report these as `saved` true / null / false. `None` (web, tests) keeps
+    /// the change to this run and reports `saved: null`.
+    pub save_prefs: Option<Box<dyn Fn(&WordApp) -> Result<bool, String>>>,
     /// Desktop: the app's own user templates folder (`Templates` in the settings folder, #2852),
     /// used while File › Options names none. File › New lists personal templates from it and Save
     /// as Word Template starts in it. `None` (web) hides personal templates.

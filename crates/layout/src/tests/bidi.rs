@@ -59,6 +59,7 @@ fn at(s: &str, n: usize) -> usize {
 
 #[test]
 fn visual_order_follows_uax9_rule_l2() {
+    crate::test_fonts();
     // The example from UAX #9 / unicode-bidi: levels 0 0 0 1 1 1 2 2.
     assert_eq!(visual_order(&[0, 0, 0, 1, 1, 1, 2, 2]), vec![0, 1, 2, 6, 7, 5, 4, 3]);
     assert_eq!(visual_order(&[1, 1, 1]), vec![2, 1, 0]);
@@ -70,6 +71,7 @@ fn visual_order_follows_uax9_rule_l2() {
 
 #[test]
 fn levels_for_persian_with_latin_and_numbers() {
+    crate::test_fonts();
     assert!(bidi_levels("plain English", false).is_empty(), "pure LTR paragraphs skip the algorithm");
     let s = "سلام Word ۱۴۰۳";
     let lv = bidi_levels(s, true);
@@ -85,6 +87,7 @@ fn levels_for_persian_with_latin_and_numbers() {
 
 #[test]
 fn rtl_paragraph_is_right_aligned_and_reads_right_to_left() {
+    crate::test_fonts();
     let s = "سلام دنیا";
     let d = doc_of(&[(s, true)]);
     let l = lay(&d);
@@ -101,6 +104,7 @@ fn rtl_paragraph_is_right_aligned_and_reads_right_to_left() {
 
 #[test]
 fn ltr_paragraph_with_embedded_persian_word() {
+    crate::test_fonts();
     let s = "Hello سلام world";
     let d = doc_of(&[(s, false)]);
     let l = lay(&d);
@@ -111,6 +115,7 @@ fn ltr_paragraph_with_embedded_persian_word() {
 
 #[test]
 fn numbers_and_latin_inside_persian_keep_their_order() {
+    crate::test_fonts();
     // "Price 250 toman" in Persian, with a Latin product name and Persian punctuation.
     let s = "قیمت 250 تومان برای Word، امسال ۱۴۰۳.";
     let d = doc_of(&[(s, true)]);
@@ -132,6 +137,7 @@ fn numbers_and_latin_inside_persian_keep_their_order() {
 
 #[test]
 fn caret_and_hit_agree_in_bidi_text() {
+    crate::test_fonts();
     for (s, rtl) in [("سلام world ۱۲۳", true), ("Hello سلام دنیا end", false), ("کتاب «WordCraft» (نسخه ۲)", true)] {
         let d = doc_of(&[(s, rtl)]);
         let l = lay(&d);
@@ -152,6 +158,7 @@ fn caret_and_hit_agree_in_bidi_text() {
 
 #[test]
 fn visual_steps_cover_the_line_in_order() {
+    crate::test_fonts();
     let s = "سلام world";
     let d = doc_of(&[(s, true)]);
     let l = lay(&d);
@@ -182,6 +189,7 @@ fn visual_steps_cover_the_line_in_order() {
 
 #[test]
 fn selection_of_mixed_text_can_be_two_pieces() {
+    crate::test_fonts();
     // Logical range "lo wo" of "Hello سلام world"? Select across the Persian word's start:
     // "lo سل" is two visual pieces (the end of Hello, and the right part of سلام).
     let s = "Hello سلام world";
@@ -196,6 +204,7 @@ fn selection_of_mixed_text_can_be_two_pieces() {
 
 #[test]
 fn rtl_indents_and_alignment_are_measured_from_the_right() {
+    crate::test_fonts();
     let s = "متن فارسی";
     let mut d = doc_of(&[(s, true), (s, true), (s, true)]);
     let p0 = Pos::body(0, 0);
@@ -214,8 +223,9 @@ fn rtl_indents_and_alignment_are_measured_from_the_right() {
 
 #[test]
 fn rtl_list_label_sits_on_the_right() {
+    crate::test_fonts();
     let mut d = doc_of(&[("مورد اول", true), ("مورد دوم", true)]);
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, 0), &|p: &mut ParaProps| {
         p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })
     })
@@ -235,6 +245,7 @@ fn rtl_list_label_sits_on_the_right() {
 
 #[test]
 fn rtl_empty_and_trailing_lines_mirror() {
+    crate::test_fonts();
     let d = doc_of(&[("", true)]);
     let l = lay(&d);
     assert!((caret_x(&l, 0, 0) - 540.0).abs() < 0.5, "empty right-to-left paragraph: caret at the right margin");
@@ -248,6 +259,7 @@ fn rtl_empty_and_trailing_lines_mirror() {
 
 #[test]
 fn bidi_display_draws_every_glyph_inside_the_line() {
+    crate::test_fonts();
     let s = "این یک متن آزمایشی با English و عدد ۱۲۳ است. ".repeat(12);
     let d = doc_of(&[(&s, true)]);
     let l = lay(&d);
@@ -274,6 +286,7 @@ fn bidi_display_draws_every_glyph_inside_the_line() {
 
 #[test]
 fn hostile_bidi_text_never_panics() {
+    crate::test_fonts();
     // Explicit embeddings, isolates, unmatched pops, marks with no base, lone surrogates' stand-ins.
     let junk = [
         "\u{202B}\u{202B}\u{202C}\u{202C}\u{202C}abc\u{2067}سلام\u{2069}\u{2069}",
@@ -301,6 +314,7 @@ fn hostile_bidi_text_never_panics() {
 
 /// A face that has Arabic letters (installed system fonts), or `None` to skip.
 fn arabic_face() -> Option<wordcraft_fonts::FaceRef> {
+    crate::test_fonts();
     wordcraft_fonts::FontDb::global().fallback_for('ب', 0).map(|f| wordcraft_fonts::FaceRef::of(&f)).filter(|f| f.covers('پ'))
 }
 
@@ -319,6 +333,7 @@ fn cluster_glyphs(glyphs: &[wordcraft_fonts::ShapedGlyph]) -> Vec<Vec<u32>> {
 
 #[test]
 fn persian_letters_join_and_brackets_mirror() {
+    crate::test_fonts();
     let Some(face) = arabic_face() else {
         eprintln!("skipped: no font with Persian letters installed");
         return;
@@ -355,6 +370,7 @@ fn persian_letters_join_and_brackets_mirror() {
 
 #[test]
 fn persian_text_in_a_latin_font_stays_in_one_fallback_face() {
+    crate::test_fonts();
     if arabic_face().is_none() {
         eprintln!("skipped: no font with Persian letters installed");
         return;
@@ -373,6 +389,7 @@ fn persian_text_in_a_latin_font_stays_in_one_fallback_face() {
 
 #[test]
 fn glyph_runs_carry_their_text_for_pdf_export() {
+    crate::test_fonts();
     let s = "سلام WordCraft می‌خواهم";
     let d = doc_of(&[(s, true)]);
     let l = lay(&d);
@@ -402,6 +419,7 @@ fn glyph_runs_carry_their_text_for_pdf_export() {
 
 #[test]
 fn character_border_boxes_a_whole_rtl_word() {
+    crate::test_fonts();
     let s = "کتاب خوب";
     let mut d = doc_of(&[(s, true)]);
     let b = wordcraft_doc::props::Border { space: 0.0, ..wordcraft_doc::props::Border::single(0.5) };
@@ -426,6 +444,7 @@ fn character_border_boxes_a_whole_rtl_word() {
 
 #[test]
 fn inline_picture_in_rtl_text_sits_in_its_place() {
+    crate::test_fonts();
     // "متن [picture] بیشتر": in a right-to-left paragraph the picture is drawn where its cluster
     // is on the line (left of the first word), not at its logical x.
     let s = "متن  بیشتر";
@@ -438,6 +457,7 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(off, pic, &Default::default()).unwrap();
@@ -463,6 +483,7 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
 /// margin and border are drawn on its right. Clicks find cells by where they are drawn.
 #[test]
 fn rtl_table_lays_its_columns_out_right_to_left() {
+    crate::test_fonts();
     use wordcraft_doc::props::{Border, Borders};
     use wordcraft_doc::{Path, Table};
     let mut d = Document::from_text("before\nafter");
@@ -510,6 +531,7 @@ fn rtl_table_lays_its_columns_out_right_to_left() {
 /// first column at the right, and the line between them stays midway.
 #[test]
 fn rtl_section_puts_its_first_column_on_the_right() {
+    crate::test_fonts();
     use wordcraft_doc::section::Columns;
     let text = "Columns flow from the right edge in a right-to-left section. ".repeat(150);
     let mut d = Document::from_text(&text);
@@ -530,11 +552,12 @@ fn rtl_section_puts_its_first_column_on_the_right() {
 
 #[test]
 fn list_label_moves_with_its_text_when_the_paragraph_is_aligned() {
+    crate::test_fonts();
     // Issue #1159: centring or end-aligning a list item moved the text and left the bullet at the
     // margin. In Word the label stays attached to the start of the text, in both directions.
     for (rtl, text) in [(false, "alpha beta"), (true, "مورد اول")] {
         let mut d = doc_of(&[(text, rtl), (text, rtl), (text, rtl), (text, rtl)]);
-        let id = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+        let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(3, 1), &|p: &mut ParaProps| {
             p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })
         })
@@ -576,7 +599,7 @@ fn list_label_moves_with_its_text_when_the_paragraph_is_aligned() {
 fn rtl_list_label_mirrors_its_brackets() {
     let mut d = doc_of(&[("סעיף", true)]);
     let lvl = wordcraft_doc::numbering::Level { text: "(%1)".into(), ..Default::default() };
-    let num = d.numbering.try_add_levels(None, vec![lvl]).unwrap();
+    let num = Arc::make_mut(&mut d.numbering).try_add_levels(None, vec![lvl]).unwrap();
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p: &mut ParaProps| p.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 }))
         .unwrap();
     let l = lay(&d);
@@ -603,8 +626,8 @@ fn list_label_after_leading_page_break_uses_its_text_lines_alignment() {
                     let make = |page_break: bool| {
                         let contents = if page_break { format!("\u{000C}{text}") } else { text.clone() };
                         let mut d = doc_of(&[("Before", false), (&contents, rtl)]);
-                        let id = d.numbering.add_list(kind);
-                        for a in &mut d.numbering.abstracts {
+                        let id = Arc::make_mut(&mut d.numbering).add_list(kind);
+                        for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
                             let level = a.levels.first_mut().unwrap();
                             level.start = 2;
                             level.indent = 14.2;
@@ -636,5 +659,151 @@ fn list_label_after_leading_page_break_uses_its_text_lines_alignment() {
                 }
             }
         }
+    }
+}
+
+/// The glyph ids of each letter of paragraph 0 as laid out (marks of runs left out have none).
+fn letters(l: &DocLayout) -> Vec<Vec<u32>> {
+    let (pl, _) = first_line(l, 0);
+    pl.clusters.iter().filter(|c| c.g1 > c.g0).map(|c| pl.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.gid).collect()).collect()
+}
+
+/// `text` as one right-to-left paragraph with `format` applied to each `(start, end)` byte range.
+fn formatted(text: &str, splits: &[(usize, usize)], format: &dyn Fn(&mut wordcraft_doc::props::CharProps)) -> Document {
+    let mut d = doc_of(&[(text, true)]);
+    for &(start, end) in splits {
+        d.format_range(&Pos::body(0, start), &Pos::body(0, end), format).unwrap();
+    }
+    d
+}
+
+const BEH: usize = 'ب'.len_utf8();
+
+fn red(c: &mut wordcraft_doc::props::CharProps) {
+    c.color = Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::props::Rgb(0xC0, 0, 0)));
+}
+
+/// The reporter's symptom: after a change of formatting inside a word, the letters on either side
+/// took the forms of the end and the start of a word, which reads as a space in it (#4093).
+#[test]
+fn letters_join_across_a_change_of_formatting() {
+    if arabic_face().is_none() {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    }
+    let word = "بببب";
+    let whole = letters(&lay(&doc_of(&[(word, true)])));
+    assert_eq!(whole.len(), 4, "one cluster per letter: {whole:?}");
+    assert!(whole.first() != whole.get(1) && whole.get(1) != whole.last(), "initial, medial and final forms: {whole:?}");
+    // A letter of its own at each place, then the two middle letters, then every other letter.
+    let pieces: [&[(usize, usize)]; 6] =
+        [&[(0, BEH)], &[(BEH, 2 * BEH)], &[(2 * BEH, 3 * BEH)], &[(3 * BEH, 4 * BEH)], &[(BEH, 3 * BEH)], &[(0, BEH), (2 * BEH, 3 * BEH)]];
+    for runs in pieces {
+        let d = formatted(word, runs, &red);
+        assert!(d.para_at(&Pos::body(0, 0)).unwrap().runs.len() > 1, "{runs:?} split the run");
+        assert_eq!(letters(&lay(&d)), whole, "split at {runs:?}");
+    }
+}
+
+/// A letter joins what is on the page: with a tracked deletion shown, the deleted letter; with it
+/// left out, the letter past it. The same goes for hidden text.
+#[test]
+fn letters_join_past_text_left_out_of_the_layout() {
+    if arabic_face().is_none() {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    }
+    let (three, two) = (letters(&lay(&doc_of(&[("ببب", true)]))), letters(&lay(&doc_of(&[("بب", true)]))));
+    assert_eq!((three.len(), two.len()), (3, 2));
+    let middle = [(BEH, 2 * BEH)];
+
+    let deleted = formatted("ببب", &middle, &|c| c.del = Some(0));
+    assert_eq!(letters(&lay(&deleted)), three, "deletion shown: it joins both neighbours");
+    let mut c = LayoutCache::new();
+    let final_text = layout(&deleted, &mut c, &LayoutOptions { hide_deleted: true, ..LayoutOptions::default() });
+    assert_eq!(letters(&final_text), two, "deletion left out: its neighbours join each other");
+
+    let hidden = formatted("ببب", &middle, &|c| c.hidden = Some(true));
+    assert_eq!(letters(&lay(&hidden)), two, "hidden text left out: its neighbours join each other");
+    let mut c = LayoutCache::new();
+    let shown = layout(&hidden, &mut c, &LayoutOptions { show_hidden: true, ..LayoutOptions::default() });
+    assert_eq!(letters(&shown), three, "hidden text shown: it joins both neighbours");
+}
+
+/// A mark in a run of its own (a coloured vowel sign) doesn't stop the letters around it joining.
+#[test]
+fn letters_join_past_a_mark_in_a_run_of_its_own() {
+    if arabic_face().is_none() {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    }
+    let word = "بَب";
+    let whole = letters(&lay(&doc_of(&[(word, true)])));
+    let split = letters(&lay(&formatted(word, &[(BEH, BEH + 'َ'.len_utf8())], &red)));
+    assert_eq!(split.last(), whole.last(), "the letter after the mark stays joined");
+    // Together with the mark, the letter before it has more glyphs, in the shaper's order.
+    let (before, with_mark) = (split.first().unwrap(), whole.first().unwrap());
+    assert!(before.iter().all(|g| with_mark.contains(g)), "and the letter before it: {before:?} {with_mark:?}");
+}
+
+/// What can't join still doesn't: a tab between the letters, in one run or at the edge of a run, a
+/// Latin neighbour, and a letter beside a drop cap, which is drawn apart from the word.
+#[test]
+fn letters_stay_apart_where_nothing_joins_them() {
+    if arabic_face().is_none() {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    }
+    let alone = letters(&lay(&doc_of(&[("ب", true)])));
+    assert_eq!(alone.len(), 1);
+    let beh = alone.first();
+    let tabbed = "ب\tب";
+    for d in [doc_of(&[(tabbed, true)]), formatted(tabbed, &[(0, BEH)], &red), formatted(tabbed, &[(BEH + 1, tabbed.len())], &red)] {
+        let got = letters(&lay(&d));
+        assert_eq!((got.first(), got.last()), (beh, beh), "across a tab: {got:?}");
+    }
+    let got = letters(&lay(&formatted("xب", &[(0, 1)], &red)));
+    assert_eq!(got.last(), beh, "after a Latin letter: {got:?}");
+
+    // The drop cap in the word's run, and formatted on its own (a run of its own).
+    let two = letters(&lay(&doc_of(&[("بب", true)])));
+    for mut d in [doc_of(&[("ببب", true)]), formatted("ببب", &[(0, BEH)], &red)] {
+        let at = Pos::body(0, 0);
+        d.format_paragraphs(&at, &at, &|p: &mut ParaProps| p.drop_cap = Some(2)).unwrap();
+        let runs = d.para_at(&at).unwrap().runs.len();
+        let got = letters(&lay(&d));
+        assert_eq!(got.get(got.len().saturating_sub(2)..), two.get(..), "{runs} run(s): the letters after a drop cap start a word: {got:?} {two:?}");
+    }
+}
+
+#[test]
+fn the_shaper_takes_a_letters_form_from_the_text_around_it() {
+    use wordcraft_fonts::{ShapeContext, shape_run_in};
+    let Some(face) = arabic_face() else {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    };
+    let form = |around| cluster_glyphs(&shape_run_in(&face, "ب", &[], |c| c, true, around));
+    let isolated = form(ShapeContext::default());
+    let joined = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "ببب", &[], |c| c, true));
+    assert_eq!(form(ShapeContext { before: "", after: "ب" }).first(), joined.first(), "initial");
+    assert_eq!(form(ShapeContext { before: "ب", after: "ب" }).first(), joined.get(1), "medial");
+    assert_eq!(form(ShapeContext { before: "ب", after: "" }).first(), joined.get(2), "final");
+    // A vowel sign is transparent, and ZWNJ and a Latin letter stop the join.
+    assert_eq!(form(ShapeContext { before: "بَ", after: "" }).first(), joined.get(2), "past a mark");
+    assert_eq!(form(ShapeContext { before: "ب\u{200C}", after: "" }), isolated, "after ZWNJ");
+    assert_eq!(form(ShapeContext { before: "a", after: "b" }), isolated, "between Latin letters");
+    // Only the letter's form depends on the context: nothing of it is drawn.
+    assert_eq!(form(ShapeContext { before: "ببب", after: "ببب" }).len(), 1);
+}
+
+#[test]
+fn scripts_that_join_their_letters_are_told_apart() {
+    use wordcraft_fonts::joins_cursively;
+    for c in ['ب', 'پ', 'ܐ', 'ᠠ', 'ߊ', '𞤀'] {
+        assert!(joins_cursively(c), "{c}");
+    }
+    for c in ['a', 'é', '’', 'я', 'א', '中', ' ', '\t', '\u{FFFC}', '\u{200C}', 'َ'] {
+        assert!(!joins_cursively(c), "{c:?}");
     }
 }

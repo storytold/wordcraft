@@ -39,12 +39,34 @@ fn default_paragraph_style_font_becomes_document_font() {
 }
 
 #[test]
+fn the_default_text_colour_round_trips() {
+    // Google Docs' résumé template greys all its text in the default style; it came back black.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Hi</text:p></office:text></office:body></office:document-content>"#
+    );
+    let styles = format!(
+        r##"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:color="#666666"/></style:default-style></office:styles></office:document-styles>"##
+    );
+    let grey = Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::props::Rgb(0x66, 0x66, 0x66)));
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(doc.styles.default_chr.color, grey);
+    let back = import(&export(&doc).unwrap()).unwrap();
+    assert_eq!(back.styles.default_chr.color, grey);
+    // None stated: none written (automatic).
+    let plain = import(&package(&content, None)).unwrap();
+    let styles = entry(&export(&plain).unwrap(), "styles.xml");
+    let default =
+        styles.split("<style:default-style style:family=\"paragraph\">").nth(1).and_then(|s| s.split("</style:default-style>").next()).unwrap();
+    assert!(!default.contains("fo:color"), "{default}");
+}
+
+#[test]
 fn rejects_garbage() {
     assert!(parse(b"not a zip").is_err());
 }
 
 /// A package holding `entries`, deflated.
-fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+pub(super) fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     for (name, data) in entries {
@@ -183,10 +205,85 @@ fn object_without_mathml_falls_back_to_its_replacement_image() {
     assert!(imgs[0].data.as_slice() == png.as_slice());
 }
 
-const NS_T: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
+/// A picture of `w` by `h` pixels, as a PNG.
+fn png_of(w: u32, h: u32) -> Vec<u8> {
+    let mut png = Cursor::new(Vec::new());
+    image::RgbImage::new(w, h).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    png.into_inner()
+}
+
+#[test]
+fn a_picture_stated_on_one_side_keeps_its_own_proportions() {
+    // A hundred times as tall as wide: only the cap on a page's size may shrink it, in proportion.
+    let frame = r#"<draw:frame text:anchor-type="as-char" svg:width="500pt"><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = zip_of(&[("content.xml", content.as_bytes()), ("Pictures/a.png", &png_of(10, 1000))]);
+    let flow = parse(&pkg).unwrap();
+    let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+    assert!((img.w - 15.84).abs() < 0.01 && (img.h - 1584.0).abs() < 0.01, "{} {}", img.w, img.h);
+}
+
+#[test]
+fn an_objects_picture_with_no_stated_size_is_fitted_to_the_text() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let frame =
+        r#"<draw:frame text:anchor-type="as-char"><draw:object xlink:href="./Object 1"/><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = zip_of(&[
+        ("content.xml", content.as_bytes()),
+        ("styles.xml", styles.as_bytes()),
+        ("Object 1/content.xml", b"<office:spreadsheet/>"),
+        ("Pictures/a.png", &png_of(1000, 500)),
+    ]);
+    let flow = parse(&pkg).unwrap();
+    let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+    assert!(img.object.is_some(), "still the object");
+    assert!((img.w - 306.14).abs() < 0.5 && (img.h - 153.07).abs() < 0.5, "{} {}", img.w, img.h);
+}
+
+#[test]
+fn a_frame_stating_a_size_of_nothing_is_fitted_to_the_text() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let frame = r#"<draw:frame text:anchor-type="as-char" svg:width="0pt"><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/a.png", &png_of(1000, 500))]);
+    let flow = parse(&pkg).unwrap();
+    let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+    assert!((img.w - 306.14).abs() < 0.5 && (img.h - 153.07).abs() < 0.5, "{} {}", img.w, img.h);
+}
+
+#[test]
+fn a_picture_in_line_raised_or_turned_with_no_size_is_fitted_to_the_text() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let auto = r#"<office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:vertical-pos="middle" style:vertical-rel="char"/></style:style></office:automatic-styles>"#;
+    for attrs in [r#" draw:style-name="fr1""#, r#" draw:transform="rotate (0.5) translate (0cm 0cm)""#] {
+        let frame = format!(r#"<draw:frame text:anchor-type="as-char"{attrs}><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#);
+        let content = format!(
+            r#"<office:document-content {NS_T}>{auto}<office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+        );
+        let pkg = zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/a.png", &png_of(1000, 500))]);
+        let flow = parse(&pkg).unwrap();
+        let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+        assert!(img.w <= 306.5, "{attrs}: {} {}", img.w, img.h);
+    }
+}
+
+pub(super) const NS_T: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
 
 /// A package with `content.xml` and, when given, `styles.xml`.
-fn package(content: &str, styles: Option<&str>) -> Vec<u8> {
+pub(super) fn package(content: &str, styles: Option<&str>) -> Vec<u8> {
     let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for (name, data) in
@@ -198,7 +295,7 @@ fn package(content: &str, styles: Option<&str>) -> Vec<u8> {
     z.finish().unwrap().into_inner()
 }
 
-fn paras(f: &Flow) -> Vec<&Para> {
+pub(super) fn paras(f: &Flow) -> Vec<&Para> {
     f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect()
 }
 
@@ -213,21 +310,22 @@ fn common_paragraph_styles_give_text_formatting() {
     let content = format!(
         r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Bridge" style:family="paragraph" style:parent-style-name="Emphasis"/></office:automatic-styles><office:body><office:text><text:p>Plain</text:p><text:p text:style-name="Emphasis">Common</text:p><text:p text:style-name="Derived">Derived</text:p><text:p text:style-name="Bridge">Bridge</text:p></office:text></office:body></office:document-content>"#
     );
-    let f = parse(&package(&content, Some(&styles))).unwrap();
-    let ps = paras(&f);
-    assert_eq!(ps.len(), 4);
-    let fmt = |p: &Para| p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap();
-    assert_eq!(fmt(ps[0]), Fmt::default());
-    for p in &ps[1..] {
-        let f = fmt(p);
-        assert!(f.bold && f.color == Some(Rgb(255, 0, 0)) && f.size == Some(24.0), "{}: {f:?}", p.text());
+    // The text shows them (they stay in the custom styles the paragraphs are in).
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let shown: Vec<_> =
+        d.body.iter().filter_map(|b| b.as_para()).map(|p| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props)).collect();
+    assert_eq!(shown.len(), 4);
+    assert!(!shown[0].bold && shown[0].size != 24.0);
+    for c in &shown[1..] {
+        assert!(c.bold && c.color == wordcraft_doc::props::TextColor::Rgb(Rgb(255, 0, 0)) && c.size == 24.0, "{c:?}");
     }
 }
 
 #[test]
 fn text_after_a_drawing_shape_stays_in_its_paragraph() {
     // #1654: a shape's own text:p closed the paragraph it is anchored in, and the text after
-    // the shape was dropped. Shapes are skipped like text boxes; the paragraph keeps its text.
+    // the shape was dropped. A shape's text is its own (`odt/tests_more/shapes.rs`); the
+    // paragraph keeps its text.
     let draw =
         r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
     let content = format!(
@@ -239,7 +337,10 @@ fn text_after_a_drawing_shape_stays_in_its_paragraph() {
     let f = parse(&package(&content, Some(&styles))).unwrap();
     let ps = paras(&f);
     assert_eq!(ps.iter().map(|p| p.text()).collect::<Vec<_>>(), ["Before middle after", "Next"]);
-    assert!(ps[0].inlines.iter().all(|i| !matches!(i, Inline::Text(_, f) if !f.bold)), "{:?}", ps[0].inlines);
+    // The whole paragraph keeps its style's bold.
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let p = d.body[0].as_para().unwrap();
+    assert!(p.runs.iter().all(|r| d.styles.resolve_char(p.props.style.as_deref(), &r.props).bold), "{:?}", p.runs);
 }
 
 #[test]
@@ -272,7 +373,8 @@ fn page_layout_follows_the_first_master_page() {
     let mut sec = wordcraft_doc::SectionProps::default();
     apply_page_layout(xml, &mut sec);
     assert!(sec.landscape);
-    assert_eq!((sec.page_w, sec.page_h, sec.margin_left, sec.margin_top), (720.0, 360.0, 72.0, 72.0));
+    // A margin left unsaid is XSL's initial value, 0.
+    assert_eq!((sec.page_w, sec.page_h, sec.margin_left, sec.margin_top), (720.0, 360.0, 72.0, 0.0));
 }
 
 #[test]
@@ -292,8 +394,9 @@ fn hostile_page_layout_values_are_clamped() {
     apply_page_layout(styles("1e30pt", "1e30in", "1e30pt").as_bytes(), &mut sec);
     assert_eq!((sec.page_w, sec.page_h), (1584.0, 1584.0));
     assert_eq!((sec.margin_top, sec.margin_left), (1584.0, 1584.0));
-    // Negative, zero, tiny and non-numeric values leave the defaults alone.
-    let def = wordcraft_doc::SectionProps::default();
+    // Negative, zero, tiny and non-numeric values leave the defaults alone: the default page, and
+    // XSL's margins (0).
+    let def = wordcraft_doc::SectionProps { margin_top: 0.0, margin_right: 0.0, ..Default::default() };
     for (w, h, m) in [("-10in", "-5in", "-1in"), ("0pt", "0pt", "NaNpt"), ("1pt", "2pt", "infpt"), ("NaN", "inf", "x")] {
         let mut sec = wordcraft_doc::SectionProps::default();
         apply_page_layout(styles(w, h, m).as_bytes(), &mut sec);
@@ -455,7 +558,7 @@ fn headers_and_footers_follow_their_master_page() {
     assert_eq!(d.parts.len(), 6);
     let id = up.headers.default.unwrap();
     let Some(wordcraft_doc::Block::Para(p)) = d.parts[&id].blocks.first().map(|b| &**b) else { panic!("no header paragraph") };
-    assert!(p.runs.iter().all(|r| r.props.bold == Some(true)), "{:?}", p.runs);
+    assert!(p.runs.iter().all(|r| d.styles.resolve_char(p.props.style.as_deref(), &r.props).bold), "{:?}", p.runs);
 }
 
 #[test]
@@ -486,6 +589,24 @@ fn deeply_nested_header_content_does_not_panic() {
     let d = import(&package(&content, Some(&styles))).unwrap();
     assert!(d.last_section.headers.default.is_some());
     assert_eq!(part_text(&d, d.last_section.footers.default), "After");
+}
+
+#[test]
+fn headers_and_footers_share_the_text_s_budget_with_the_body() {
+    // Each header and footer was read with a budget of its own (#3700).
+    let run = r#"<text:s text:c="1000"/>"#.repeat(3_000);
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>h{run}</text:p></style:header><style:footer><text:p>f{run}</text:p></style:footer></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>b{run}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let texts =
+        [part_text(&d, d.last_section.headers.default), part_text(&d, d.last_section.footers.default), d.plain_text(wordcraft_doc::StoryRef::Body)];
+    // One space per element in all three, and one budget of extra spaces between them.
+    assert_eq!(texts.iter().map(|t| t.matches(' ').count()).sum::<usize>(), 3 * 3_000 + MAX_EXTRA_SPACES);
+    assert!(texts[0].starts_with("h ") && texts[1].starts_with("f ") && texts[2].starts_with("b "));
 }
 
 #[test]
@@ -633,7 +754,7 @@ fn a_list_cut_at_a_section_boundary_goes_on_numbering() {
         r#"<office:document-content {NS_T}><office:automatic-styles>{styles}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
     );
     let doc = import(&package(&content, Some(&cols_styles()))).unwrap();
-    let bytes = export(&doc).unwrap();
+    let bytes = crate::odt::tests::export_model(&doc).unwrap();
     let xml = String::from_utf8(read_entry(&mut archive(&bytes), "content.xml").unwrap()).unwrap();
     assert_eq!(xml.matches("text:continue-list=\"").count(), 1, "{xml}");
     // The continuation points at the first list's xml:id.
@@ -654,14 +775,14 @@ fn export_keeps_a_page_number_restart_on_the_first_section() {
 #[test]
 fn export_of_a_one_section_document_stays_simple() {
     let doc = import(&sections_package()).unwrap();
-    let one = import(&export(&doc).unwrap()).unwrap();
+    let one = import(&crate::odt::tests::export_model(&doc).unwrap()).unwrap();
     let mut single = one.clone();
     for b in single.body.iter_mut() {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
             p.section = None;
         }
     }
-    let bytes = export(&single).unwrap();
+    let bytes = crate::odt::tests::export_model(&single).unwrap();
     let mut z = archive(&bytes);
     let styles = String::from_utf8(read_entry(&mut z, "styles.xml").unwrap()).unwrap();
     let content = String::from_utf8(read_entry(&mut z, "content.xml").unwrap()).unwrap();
@@ -844,8 +965,8 @@ fn tracked_changes_round_trip_through_export() {
 
 #[test]
 fn an_inserted_ruby_keeps_its_tracked_insertion() {
-    // ODF has no ruby: its base text is written as text, and the insertion on the ruby must
-    // still be a change range around that text, not plain untracked text.
+    // A ruby inside a tracked insertion is written as its base text, so that it stays inside
+    // the change range rather than becoming plain untracked text.
     use wordcraft_doc::RevisionKind::Insert;
     let props = wordcraft_doc::props::CharProps::default();
     let mut p = wordcraft_doc::Paragraph::with_text("before ", props.clone());
@@ -1050,6 +1171,38 @@ fn explicit_spaces_at_paragraph_ends_are_kept() {
 }
 
 #[test]
+fn text_s_spaces_have_a_budget_for_the_whole_document() {
+    // 5,000 elements asking for 1,000 spaces each would add 5 million (#3700).
+    let tags = 5_000;
+    let run = r#"<text:s text:c="1000"/>"#.repeat(tags);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>a{run}b</text:p><text:p>c<text:s text:c="3"/>d</text:p></office:text></office:body></office:document-content>"#
+    );
+    crate::model::begin_import();
+    let f = parse(&package(&content, None)).unwrap();
+    let texts: Vec<String> = paras(&f).iter().map(|p| p.text()).collect();
+    // Once the budget is spent, each element still stands for one space, and the cut is logged.
+    assert_eq!(texts[0].len(), 2 + tags + MAX_EXTRA_SPACES);
+    assert!(texts[0].starts_with("a ") && texts[0].ends_with(" b"));
+    assert_eq!(texts[1], "c d");
+    assert!(crate::model::Dropped::Spaces.reported());
+}
+
+#[test]
+fn text_s_outside_a_paragraph_spends_no_budget() {
+    // Spaces outside a paragraph are dropped, so they mustn't use up the budget (#3700).
+    let stray = r#"<text:s text:c="1000"/>"#.repeat(5_000);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text>{stray}<text:p>a<text:s text:c="1000"/>b</text:p></office:text></office:body></office:document-content>"#
+    );
+    crate::model::begin_import();
+    let f = parse(&package(&content, None)).unwrap();
+    let texts: Vec<String> = paras(&f).iter().map(|p| p.text()).collect();
+    assert_eq!(texts, vec![format!("a{}b", " ".repeat(1000))]);
+    assert!(!crate::model::Dropped::Spaces.reported(), "nothing was cut");
+}
+
+#[test]
 fn test_asian_complex_and_extended_text_properties() {
     let content = format!(
         r#"<office:document-content {NS_T}><office:automatic-styles>
@@ -1134,4 +1287,188 @@ fn meta_creation_date_timezones_and_fallbacks() {
     let m2 = read_meta(xml_dc_date_fallback);
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
+}
+
+#[test]
+fn a_later_default_style_without_a_font_keeps_the_default_font() {
+    // #4501 follow-up: styles read twice (styles.xml, then content.xml) must not wipe the font.
+    let mut styles = styles::Styles::default();
+    let with_font = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let without = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    styles.read(with_font.as_bytes(), false);
+    styles.read(without.as_bytes(), false);
+    assert_eq!(styles.doc_font().as_deref(), Some("DejaVu Serif"));
+}
+
+#[test]
+fn a_later_monospaced_default_style_keeps_the_proportional_default_font() {
+    // #4501 follow-up: a monospaced default font is rejected and must not wipe the earlier one.
+    let mut styles = styles::Styles::default();
+    let with_font = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let mono = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Courier New"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    styles.read(with_font.as_bytes(), false);
+    styles.read(mono.as_bytes(), false);
+    assert_eq!(styles.doc_font().as_deref(), Some("DejaVu Serif"));
+}
+
+/// The `content.xml` of a package.
+pub(super) fn content_of(bytes: &[u8]) -> String {
+    let mut z = archive(bytes);
+    String::from_utf8(read_entry(&mut z, "content.xml").unwrap()).unwrap()
+}
+
+/// Entry `name` of a package, as text.
+/// `d` saved from its model alone, as after an edit: nothing written as it was read (for tests
+/// of how WordCraft writes what it models).
+pub(crate) fn export_model(d: &wordcraft_doc::Document) -> Result<Vec<u8>, String> {
+    let mut d = d.clone();
+    d.kept.clear();
+    super::export(&d)
+}
+
+pub(super) fn entry(bytes: &[u8], name: &str) -> String {
+    let mut z = archive(bytes);
+    String::from_utf8(read_entry(&mut z, name).unwrap()).unwrap()
+}
+
+/// The `styles.xml` of a package.
+pub(super) fn styles_of(bytes: &[u8]) -> String {
+    let mut z = archive(bytes);
+    String::from_utf8(read_entry(&mut z, "styles.xml").unwrap()).unwrap()
+}
+
+#[test]
+fn the_default_styles_font_size_is_the_documents() {
+    // LibreOffice's letter templates: 10 pt in `style:default-style`; the Standard style's own
+    // size (the document's defaults) wins over it.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Hi</text:p></office:text></office:body></office:document-content>"#
+    );
+    let default_only = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let doc = import(&package(&content, Some(&default_only))).unwrap();
+    assert_eq!(doc.styles.default_chr.size, Some(10.0));
+    let p = doc.body[0].as_para().unwrap();
+    assert_eq!(doc.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 10.0);
+    let standard = default_only.replace(
+        "</office:styles>",
+        r#"<style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:style></office:styles>"#,
+    );
+    let d = import(&package(&content, Some(&standard))).unwrap();
+    assert_eq!(d.styles.default_chr.size, Some(11.0));
+    let p = d.body[0].as_para().unwrap();
+    assert_eq!(d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 11.0);
+    // Written back as the default style's.
+    let s = entry(&crate::odt::tests::export_model(&doc).unwrap(), "styles.xml");
+    assert!(s.contains(r#"fo:font-size="10pt""#), "{s}");
+    // Standard's 11 pt too: LibreOffice's letters grew a page at 12 pt.
+    let s = entry(&crate::odt::tests::export_model(&d).unwrap(), "styles.xml");
+    assert!(
+        s.contains(r#"<style:text-properties fo:font-family="'Liberation Serif'" fo:font-size="11pt""#)
+            || s.contains(r#"fo:font-size="11pt" style:font-size-asian="11pt""#),
+        "{s}"
+    );
+    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    let p = back.body[0].as_para().unwrap();
+    assert_eq!(back.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 11.0);
+}
+
+#[test]
+fn a_style_with_no_parent_takes_the_default_styles_size() {
+    // The default style says 12 pt, Standard 11 pt (the document's defaults); a style with no
+    // parent inherits the default style's 12 pt, as LibreOffice shows it.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Loose">Hi</text:p><text:p>Plain</text:p></office:text></office:body></office:document-content>"#
+    );
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:style><style:style style:name="Loose" style:family="paragraph"/></office:styles></office:document-styles>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let sizes: Vec<f32> =
+        d.body.iter().filter_map(|b| b.as_para()).map(|p| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size).collect();
+    assert_eq!(sizes, [12.0, 11.0]);
+}
+
+#[test]
+fn an_empty_paragraph_keeps_its_marks_size() {
+    // LibreOffice's fax template: an empty 6 pt line above "Important!". Its size is the mark's,
+    // the paragraph's height, and is written back on the paragraph's style.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:text-properties fo:font-size="6pt"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1"/><text:p text:style-name="P1">Text</text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let marks = |d: &Document| d.body.iter().filter_map(|b| b.as_para()).map(|p| p.mark.size).collect::<Vec<_>>();
+    // Only the empty paragraph's: the other's text has the size itself.
+    assert_eq!(marks(&doc), [Some(6.0), None]);
+    let s = entry(&export(&doc).unwrap(), "content.xml");
+    assert!(s.contains(r#"fo:font-size="6pt""#), "{s}");
+    let back = import(&export(&doc).unwrap()).unwrap();
+    assert_eq!(marks(&back), [Some(6.0), None]);
+    let p = back.body[1].as_para().unwrap();
+    assert_eq!(p.runs[0].props.size, Some(6.0));
+}
+
+#[test]
+fn unequal_columns_keep_their_widths_and_columns_without_a_gap_have_none() {
+    // LibreOffice's one-page résumé: a narrow first column and a wide second one (shares of the
+    // width, `style:rel-width`), written back as shares (and without a gap, which would make
+    // LibreOffice ignore them on a page).
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="p"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" fo:margin-left="1in" fo:margin-right="1in" fo:margin-top="1in" fo:margin-bottom="1in"><style:columns fo:column-count="2"><style:column style:rel-width="1*" fo:start-indent="0in" fo:end-indent="0.1in"/><style:column style:rel-width="2*" fo:start-indent="0.1in" fo:end-indent="0in"/></style:columns></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="p"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    let widths =
+        |d: &Document| d.last_section.columns.widths.iter().map(|(w, a)| ((w * 10.0).round() / 10.0, (a * 10.0).round() / 10.0)).collect::<Vec<_>>();
+    // 6.5 in of text: 2.1667 in less 0.1 in, then 4.3333 in less 0.1 in; 0.2 in between.
+    assert_eq!(widths(&doc), [(148.8, 14.4), (304.8, 0.0)]);
+    let out = entry(&export(&doc).unwrap(), "styles.xml");
+    assert!(out.contains(r#"<style:columns fo:column-count="2"><style:column style:rel-width"#), "{out}");
+    assert_eq!(widths(&import(&export(&doc).unwrap()).unwrap()), [(148.8, 14.4), (304.8, 0.0)]);
+    // Equal shares: equal columns with their gap. No gap stated and no shares: WordCraft's half
+    // inch (the standard gives none).
+    let equal = styles.replace(r#"rel-width="2*""#, r#"rel-width="1*""#);
+    let c = import(&package(&content, Some(&equal))).unwrap().last_section.columns;
+    assert!(c.widths.is_empty() && (c.space - 14.4).abs() < 0.01, "{c:?}");
+    let bare = styles.replace(r#"<style:column style:rel-width="1*" fo:start-indent="0in" fo:end-indent="0.1in"/><style:column style:rel-width="2*" fo:start-indent="0.1in" fo:end-indent="0in"/>"#, "");
+    let c = import(&package(&content, Some(&bare))).unwrap().last_section.columns;
+    assert_eq!((c.count, c.space, c.widths.len()), (2, 36.0, 0));
+}
+
+#[test]
+fn a_paragraph_starting_a_column_starts_with_a_column_break() {
+    // LibreOffice's résumé: "Education" starts the second column (`fo:break-before="column"`),
+    // Word's column break before it, written back on the paragraph.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="C" style:family="paragraph"><style:paragraph-properties fo:break-before="column"/></style:style></office:automatic-styles><office:body><office:text><text:p>Side</text:p><text:p text:style-name="C">Education</text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let text = |d: &Document| d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<Vec<_>>();
+    assert_eq!(text(&doc), ["Side", "\u{e}Education"]);
+    let out = content_of(&export(&doc).unwrap());
+    assert!(out.contains(r#"fo:break-before="column""#) && !out.contains('\u{e}'), "{out}");
+    assert_eq!(text(&import(&export(&doc).unwrap()).unwrap()), ["Side", "\u{e}Education"]);
+}
+
+#[test]
+fn meta_modified_date_keeps_a_negative_offset() {
+    let meta = |date: &str| format!("<office:document-meta><office:meta><dc:date>{date}</dc:date></office:meta></office:document-meta>");
+    // A `-hh:mm` offset is a zone: no `Z` after it (an invalid xsd:dateTime written back on save).
+    assert_eq!(super::import::read_changes(meta("2024-03-05T13:45:00-05:00").as_bytes()).1, "2024-03-05T13:45:00-05:00");
+    assert_eq!(super::import::read_changes(meta("2024-03-05T13:45:00+01:00").as_bytes()).1, "2024-03-05T13:45:00+01:00");
+    assert_eq!(super::import::read_changes(meta("2024-03-05T13:45:00Z").as_bytes()).1, "2024-03-05T13:45:00Z");
+    // Zoneless (the date's own `-`s are not an offset): UTC, fraction dropped.
+    assert_eq!(super::import::read_changes(meta("2024-03-05T13:45:00.25").as_bytes()).1, "2024-03-05T13:45:00Z");
+    assert_eq!(super::import::read_changes(meta("").as_bytes()).1, "");
 }

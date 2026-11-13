@@ -1,7 +1,9 @@
 use super::{
-    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, Reader, Style, StyleKind, StyleSheet, TablePart, TableStyleParts,
-    VAlign, flag, int, props, tw, u32_of,
+    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, PropChange, Reader, RevisionKind, Style, StyleKind, StyleSheet,
+    TablePart, TableStyleParts, VAlign, flag, int, props, tw, u32_of,
 };
+use crate::units::tw_i16;
+use std::sync::Arc;
 
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
@@ -135,25 +137,49 @@ impl Reader<'_> {
                     ),
                 ..Default::default()
             };
+            let mut old_para = None;
+            let mut old_chr = None;
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
+                if let Some(ch) = p.child("w:pPrChange") {
+                    let old = ch.child("w:pPr").map(|o| self.pc.ppr(o).0.formatting()).unwrap_or_default();
+                    old_para = Some((self.revision(RevisionKind::Format, ch), old));
+                }
             }
             // Word gives its built-in heading styles their outline level whether or not the file
             // writes `w:outlineLvl` (some producers leave it out): "heading 2" is level 2 in the
             // Navigation pane and the table of contents, whatever its id (#4696).
             if kind == StyleKind::Paragraph
                 && st.builtin
-                && st.para.outline_level.is_none()
                 && let Some(level) = s.child_val("w:name").and_then(builtin_heading_level)
             {
-                st.para.outline_level = Some(level);
+                if st.para.outline_level.is_none() {
+                    st.para.outline_level = Some(level);
+                }
+                if let Some((_, old)) = &mut old_para
+                    && old.outline_level.is_none()
+                {
+                    old.outline_level = Some(level);
+                }
             }
             if let Some(rp) = s.child("w:rPr") {
                 st.chr = self.pc.rpr(rp);
+                if let Some(ch) = rp.child("w:rPrChange") {
+                    let old = ch.child("w:rPr").map(|o| self.pc.rpr(o).formatting()).unwrap_or_default();
+                    old_chr = Some((self.revision(RevisionKind::Format, ch), old));
+                }
             }
             if kind == StyleKind::Table {
                 let parts = self.table_style_parts(s, &mut st);
                 st.table = (parts != TableStyleParts::default()).then_some(parts);
+            }
+            // CT_Style has no `stylePrChange`. Keep its two valid revision carriers separate: a
+            // foreign document may attribute paragraph and run changes to different authors.
+            if let Some((rev, old)) = old_para {
+                st.para_change = PropChange::boxed(rev, old);
+            }
+            if let Some((rev, old)) = old_chr {
+                st.chr_change = PropChange::boxed(rev, old);
             }
             // A style defined twice (some generators write their own Heading 1 after a
             // placeholder one) is the last definition, whole: Word drops the earlier one rather
@@ -179,6 +205,24 @@ impl Reader<'_> {
         for (s, n) in sheet.styles.iter_mut().zip(fixed) {
             s.para.numbering = n;
         }
+        let old_fixed: Vec<Option<Option<wordcraft_doc::props::NumRef>>> = sheet
+            .styles
+            .iter()
+            .map(|s| {
+                s.para_change.as_ref().map(|ch| match ch.old.numbering {
+                    Some(n) if n.num == props::LEVEL_ONLY => {
+                        let base = s.based_on.as_deref().and_then(|b| props::chain_list(&sheet, b));
+                        base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level })
+                    }
+                    other => other,
+                })
+            })
+            .collect();
+        for (s, n) in sheet.styles.iter_mut().zip(old_fixed) {
+            if let (Some(ch), Some(n)) = (&mut s.para_change, n) {
+                ch.old.numbering = n;
+            }
+        }
         if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
             sheet.default_para.numbering = None;
         }
@@ -186,7 +230,7 @@ impl Reader<'_> {
         if !sheet.styles.iter().any(|s| s.quick) {
             sheet.add_default_gallery();
         }
-        self.doc.styles = sheet;
+        self.doc.styles = Arc::new(sheet);
         Ok(())
     }
 
@@ -196,7 +240,7 @@ impl Reader<'_> {
         let mut t = TableStyleParts::default();
         if let Some(tp) = s.child("w:tblPr") {
             if let Some(b) = tp.child("w:tblBorders") {
-                t.borders = Some(props::borders(b));
+                t.borders = Some(self.pc.borders(b));
             }
             t.fill = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
@@ -210,7 +254,7 @@ impl Reader<'_> {
             let f = PartFormat {
                 chr: c.child("w:rPr").map(|r| self.pc.rpr(r)).unwrap_or_default(),
                 fill: tc.and_then(|p| p.child("w:shd")).and_then(|e| self.pc.shd_fill(e)),
-                borders: tc.and_then(|p| p.child("w:tcBorders")).map(props::borders),
+                borders: tc.and_then(|p| p.child("w:tcBorders")).map(|b| self.pc.borders(b)),
                 align: ppr.as_ref().and_then(|p| p.align),
                 v_align: tc.and_then(|p| p.child_val("w:vAlign")).map(|v| match v {
                     "center" => VAlign::Center,
@@ -229,7 +273,7 @@ impl Reader<'_> {
                     t.fill = f.fill;
                 }
                 if let Some(b) = c.child("w:tblPr").and_then(|p| p.child("w:tblBorders")) {
-                    t.borders = Some(props::borders(b));
+                    t.borders = Some(self.pc.borders(b));
                 }
                 if f.v_align.is_some() {
                     t.regions.insert(part, PartFormat { v_align: f.v_align, ..PartFormat::default() });
@@ -298,8 +342,8 @@ impl Reader<'_> {
                 a.levels = levels;
             }
         }
-        self.doc.numbering.abstracts = abstracts;
-        self.doc.numbering.nums = nums;
+        Arc::make_mut(&mut self.doc.numbering).abstracts = abstracts;
+        Arc::make_mut(&mut self.doc.numbering).nums = nums;
         Ok(())
     }
 
@@ -316,12 +360,12 @@ impl Reader<'_> {
             lv.align = props::align(j);
         }
         if let Some(ind) = l.child("w:pPr").and_then(|p| p.child("w:ind")) {
-            if let Some(v) = tw(ind, "w:left").or_else(|| tw(ind, "w:start")) {
+            if let Some(v) = tw_i16(ind, "w:left").or_else(|| tw_i16(ind, "w:start")) {
                 lv.indent = v;
             }
-            if let Some(h) = tw(ind, "w:hanging") {
+            if let Some(h) = tw_i16(ind, "w:hanging") {
                 lv.hanging = h;
-            } else if let Some(f) = tw(ind, "w:firstLine") {
+            } else if let Some(f) = tw_i16(ind, "w:firstLine") {
                 lv.hanging = -f;
             }
         }

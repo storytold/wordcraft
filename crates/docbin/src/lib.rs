@@ -25,7 +25,9 @@ mod stsh;
 mod table;
 
 use std::io::{Read, Seek};
+use std::sync::Arc;
 
+use wordcraft_doc::link::hyperlink_target;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::Paragraph;
@@ -49,6 +51,14 @@ const MAX_PARTS: usize = 50_000;
 /// headers, notes, text boxes), whatever the file's size. The working budget is tied to the
 /// WordDocument stream (see [`read`]); this caps even a maximal stream.
 const MAX_TOTAL_CHARS: u64 = 64 << 20;
+/// Most paragraph and cell marks across every story walk of one document. The character
+/// budget does not see them: a mark is one byte of the file but about 1 KB of document, so a
+/// file of nothing but marks would grow memory about a thousand times faster than its size.
+/// The cap bounds a flood to about 2 GB while reading (about 4 GB at the very cap, when the
+/// blocks are assembled). Past it the read fails with [`DocbinError::Limit`]. Real documents stay far below it:
+/// 50 paragraphs on each of 10,000 pages is 500,000, and a 10,000-page one-column table (46
+/// rows, each a cell mark plus a row mark) is about 920,000.
+const MAX_PARAGRAPHS: usize = 2_000_000;
 /// Bytes of repeated work per document beyond the text itself: piece Prm grpprls (Prcs, up
 /// to 64 KB each) interpreted (#3692), hyperlink targets (#3708), picture alt text (#3709)
 /// and floating objects (#3710) copied into every run or anchor. Past it Prms are skipped,
@@ -193,6 +203,12 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
 /// verifier ([`DocbinError::WrongPassword`] when it does not match) and then decrypted. The
 /// password is ignored for an unprotected file.
 pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Document, DocbinError> {
+    read_limited(bytes, password, MAX_PARAGRAPHS)
+}
+
+/// [`read_with_password`] with the paragraph cap as a parameter, so tests need not build a
+/// file of [`MAX_PARAGRAPHS`] marks.
+fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> Result<Document, DocbinError> {
     let mut comp = open_container(bytes)?;
     let mut word = stream(&mut comp, "WordDocument").ok_or_else(|| DocbinError::NotWord("no WordDocument stream".into()))?;
     if word.len() as u64 > MAX_STREAM {
@@ -233,6 +249,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         Some((f, l)) => stsh::parse(&table, f, l)?,
         None => Vec::new(),
     };
+    let standard_fonts = fib.pair(fib::pair::STSHF).map(|(f, l)| stsh::standard_fonts(&table, f, l)).unwrap_or_default();
     let chpx_bins = match fib.pair(fib::pair::PLCF_BTE_CHPX) {
         Some((f, l)) => Bins::parse(&table, f, l)?,
         None => Bins::parse(&[], 0, 0)?,
@@ -243,13 +260,16 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     };
 
     let mut doc = Document::new();
+    // Word opens Word 97-2003 files in compatibility mode 11 (Word 2003); the model's default
+    // 15 would apply Word 2013+ justification and line-breaking rules to them.
+    doc.settings.compat_mode = 11;
     if let Some(core) = metadata::read(&mut comp) {
         doc.core = core;
     }
     doc.body.clear();
-    doc.styles = fmt::stylesheet(&raw_styles, &fonts);
-    doc.numbering = list::parse(&table, &fib, &fonts);
-    let sheet: StyleSheet = doc.styles.clone();
+    doc.styles = Arc::new(fmt::stylesheet(&raw_styles, &fonts, standard_fonts));
+    doc.numbering = Arc::new(list::parse(&table, &fib, &fonts));
+    let sheet: StyleSheet = StyleSheet::clone(&doc.styles);
     let sects = sections::parse(&word, &table, &fib);
     let stories = sections::header_stories(&table, &fib);
     // Subdocument layout in the CP space: main document, footnotes, headers, comments,
@@ -267,6 +287,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     // tight against aliasing — and never past the absolute ceiling.
     let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
     let work = Work::new(MAX_WORK);
+    let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
 
     let ctx = WalkCtx {
         word: &word,
@@ -282,6 +303,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         drawn: &[],
         sect_ends: &[],
         budget: &budget,
+        paragraphs: &paragraphs,
         work: &work,
     };
 
@@ -301,7 +323,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
             if doc.parts.len() >= MAX_PARTS || tb_stories.contains_key(&spid) {
                 continue;
             }
-            let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
+            let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
             tb_stories.insert(spid, doc.add_part(PartKind::TextBox, blocks));
         }
     }
@@ -326,7 +348,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
                 0 | 1 | 4 => PartKind::Header,
                 _ => PartKind::Footer,
             };
-            let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
+            let blocks = header_story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
             if !blocks.is_empty() {
                 let id = doc.add_part(kind, blocks);
                 hf_ids.push((si, k, id));
@@ -339,7 +361,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
     for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT) {
         let Some((a, b)) = story(ftn_base, fib.ccp.ftn, ab) else { continue };
-        let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
+        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(PartKind::Footnote, blocks);
             note_links.push((cp, NoteKind::Footnote, id));
@@ -347,7 +369,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     }
     for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT) {
         let Some((a, b)) = story(edn_base, fib.ccp.edn, ab) else { continue };
-        let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
+        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(PartKind::Endnote, blocks);
             note_links.push((cp, NoteKind::Endnote, id));
@@ -363,6 +385,11 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     // Sections: each section's properties attach to the paragraph that ends it (its story of
     // header/footer parts included); the section reaching the end of the text is the final one.
     let mut paras = walk(&ctx, 0, fib.ccp.text, &mut pics);
+    // The first paragraph ending at each CP, found once rather than by a scan per section.
+    let mut ending: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for (i, p) in paras.iter().enumerate() {
+        ending.entry(p.end_cp).or_insert(i);
+    }
     let last = sects.last().map(|s| s.props.clone());
     for (si, sec) in sects.iter().enumerate() {
         let mut props = sec.props.clone();
@@ -373,11 +400,8 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         if is_final {
             continue; // handled below through `last`
         }
-        for p in paras.iter_mut() {
-            if p.end_cp == sec.end_cp {
-                p.para.section = Some(Box::new(props));
-                break;
-            }
+        if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
+            p.para.section = Some(Box::new(props));
         }
     }
     if let Some(mut l) = last {
@@ -388,11 +412,58 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         doc.last_section = l;
     }
 
+    if paragraphs.exceeded.get() {
+        return Err(paragraph_limit(max_paragraphs));
+    }
     doc.media.extend(pics.media);
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     work.log();
     Ok(doc)
+}
+
+fn paragraph_limit(max_paragraphs: usize) -> DocbinError {
+    DocbinError::Limit(format!("the document has more than {max_paragraphs} paragraphs and table cells"))
+}
+
+/// Walks one story into blocks. A walk that spent the shared paragraph budget is refused before
+/// its partial list is assembled, so a flood does not build blocks it will throw away.
+fn story_blocks(ctx: &WalkCtx<'_>, a: u32, b: u32, pics: &mut media::Pictures, max_paragraphs: usize) -> Result<wordcraft_doc::Blocks, DocbinError> {
+    let paras = walk(ctx, a, b, pics);
+    if ctx.paragraphs.exceeded.get() {
+        return Err(paragraph_limit(max_paragraphs));
+    }
+    Ok(table::assemble(paras))
+}
+
+/// A header or footer story's blocks without its guard paragraph mark. [MS-DOC] 2.3.3: a
+/// non-empty header story ends with a paragraph mark that only separates it from the next story
+/// and is not part of its contents, so a one-line header is stored as `text\r\r`. Laid out, the
+/// guard would add an empty paragraph to every header and footer and push the body down when
+/// the header reaches past the top margin (#5922).
+///
+/// Only an empty last paragraph after an ordinary one is dropped: a story that is nothing but a
+/// mark stays a part (an empty header, not one linked to the previous section), and a mark right
+/// after a table row stays the paragraph that closes the table.
+fn header_story_blocks(
+    ctx: &WalkCtx<'_>,
+    a: u32,
+    b: u32,
+    pics: &mut media::Pictures,
+    max_paragraphs: usize,
+) -> Result<wordcraft_doc::Blocks, DocbinError> {
+    let mut paras = walk(ctx, a, b, pics);
+    if ctx.paragraphs.exceeded.get() {
+        return Err(paragraph_limit(max_paragraphs));
+    }
+    let outside_table = |p: &table::ParaOut| p.row.as_ref().is_none_or(|r| !r.in_table && !r.ttp && !r.cell_mark);
+    if let [.., prev, last] = paras.as_slice() {
+        let guard = outside_table(last) && last.para.text.is_empty() && last.para.objects.is_empty() && last.para.section.is_none();
+        if guard && outside_table(prev) {
+            paras.pop();
+        }
+    }
+    Ok(table::assemble(paras))
 }
 
 /// A story's CP range `[a, b)`, relative to a subdocument starting at `base` with `len`
@@ -428,8 +499,33 @@ struct WalkCtx<'a> {
     /// footnotes, text boxes) are hostile and can each span a whole subdocument, so thousands of
     /// them could otherwise materialise the same text thousands of times; this bounds the total.
     budget: &'a std::cell::Cell<u64>,
+    /// Paragraph and cell marks still allowed across every story walk ([`MAX_PARAGRAPHS`]).
+    paragraphs: &'a ParaBudget,
     /// Repeated-work bytes left ([`MAX_WORK`]), and what they left out.
     work: &'a Work,
+}
+
+/// The paragraph and cell marks still allowed in this document, and whether a walk ran into
+/// the end of them (the read then fails).
+struct ParaBudget {
+    left: std::cell::Cell<usize>,
+    exceeded: std::cell::Cell<bool>,
+}
+
+impl ParaBudget {
+    /// Spends one mark; false (and the overrun noted) when none are left.
+    fn spend(&self) -> bool {
+        match self.left.get().checked_sub(1) {
+            Some(left) => {
+                self.left.set(left);
+                true
+            }
+            None => {
+                self.exceeded.set(true);
+                false
+            }
+        }
+    }
 }
 
 /// State while assembling one paragraph from per-CP formatting.
@@ -439,26 +535,34 @@ struct ParaBuild {
     runs: Vec<Run>,
     props: wordcraft_doc::props::ParaProps,
     mark: CharProps,
-    /// The current run's properties, so runs only break when formatting changes.
-    cur: Option<CharProps>,
+    /// Which resolved formatting ([`FmtState::generation`]) the last character came from, while
+    /// the last run is still the one it extended: the same generation means equal properties.
+    run_gen: Option<u64>,
     /// Inline objects, each anchored at a U+FFFC pushed into `text`.
     objects: Vec<InlineObject>,
 }
 
 impl ParaBuild {
     fn push(&mut self, c: char, props: CharProps) {
+        self.run_gen = None;
         let len = c.len_utf8();
-        match &self.cur {
-            Some(p) if *p == props => {
-                if let Some(r) = self.runs.last_mut() {
-                    r.len += len;
-                }
-            }
-            _ => {
-                self.runs.push(Run { len, props: props.clone() });
-                self.cur = Some(props);
-            }
+        match self.runs.last_mut() {
+            Some(r) if r.props == props => r.len += len,
+            _ => self.runs.push(Run { len, props }),
         }
+        self.text.push(c);
+    }
+
+    /// [`ParaBuild::push`] for properties that are resolved once and shared by many characters:
+    /// they are cloned only when a run starts, and not even compared while `generation` stays
+    /// the same.
+    fn push_shared(&mut self, c: char, props: &CharProps, generation: u64) {
+        let len = c.len_utf8();
+        match self.runs.last_mut() {
+            Some(r) if self.run_gen == Some(generation) || r.props == *props => r.len += len,
+            _ => self.runs.push(Run { len, props: props.clone() }),
+        }
+        self.run_gen = Some(generation);
         self.text.push(c);
     }
 
@@ -489,7 +593,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     // Field assembly state: instruction characters are swallowed, the result is kept until
     // the end character, then emitted as one object (hyperlinks keep their result text).
     let mut field: Option<FieldBuild> = None;
-    let mut memo: Option<FmtMemo<'a>> = None;
+    let mut fmt = FmtState::default();
     while cp < cp_end {
         // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
         // an empty table and `cp` never matches the main-document CPs).
@@ -522,6 +626,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&cp.saturating_add(1)).is_ok();
         match c {
             '\r' | '\u{7}' | '\u{C}' if c != '\u{C}' || section_mark => {
+                if !ctx.paragraphs.spend() {
+                    break;
+                }
                 // Paragraph mark: its PAPX covers the FC range of the paragraph it ends, so
                 // querying at the mark's own FC finds that paragraph's properties.
                 let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
@@ -531,6 +638,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 }
                 let mut row = table::decode(papx);
                 row.cell_mark = c == '\u{7}';
+                // Only table marks keep their table context; a plain paragraph would carry
+                // a `RowInfo` (about 300 bytes) it never uses.
+                let row = row.is_table().then(|| Box::new(row));
                 let mut ilvl = 0u8;
                 let mut ilfo = 0i32;
                 for prl in sprm::iter(papx) {
@@ -584,7 +694,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     && f.depth == 1
                     && f.sep.is_none()
                 {
-                    f.sep = Some(Vec::new());
+                    f.sep = Some(FieldResult::default());
                 }
                 cp = cp.saturating_add(1);
                 continue;
@@ -618,6 +728,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                             alt,
                             float: Default::default(),
                             crop: p.crop,
+                            fx: Default::default(),
                             ole: None,
                         });
                     }
@@ -645,16 +756,16 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     pb.objects.push(InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() });
                 }
             }
-            '\t' => push_formatted(&mut pb, cp, '\t', ctx, field.as_mut(), &mut memo),
-            '\u{B}' => push_formatted(&mut pb, cp, '\n', ctx, field.as_mut(), &mut memo),
-            '\u{C}' => push_formatted(&mut pb, cp, '\u{C}', ctx, field.as_mut(), &mut memo),
-            '\u{E}' => push_formatted(&mut pb, cp, '\u{E}', ctx, field.as_mut(), &mut memo),
-            '\u{1E}' => push_formatted(&mut pb, cp, '\u{2011}', ctx, field.as_mut(), &mut memo),
-            '\u{1F}' => push_formatted(&mut pb, cp, '\u{AD}', ctx, field.as_mut(), &mut memo),
+            '\t' => push_formatted(&mut pb, cp, '\t', ctx, field.as_mut(), &mut fmt),
+            '\u{B}' => push_formatted(&mut pb, cp, '\n', ctx, field.as_mut(), &mut fmt),
+            '\u{C}' => push_formatted(&mut pb, cp, '\u{C}', ctx, field.as_mut(), &mut fmt),
+            '\u{E}' => push_formatted(&mut pb, cp, '\u{E}', ctx, field.as_mut(), &mut fmt),
+            '\u{1E}' => push_formatted(&mut pb, cp, '\u{2011}', ctx, field.as_mut(), &mut fmt),
+            '\u{1F}' => push_formatted(&mut pb, cp, '\u{AD}', ctx, field.as_mut(), &mut fmt),
             // Object anchors, comment references and other special characters are dropped
             // (or handled by later passes).
             c if (c as u32) < 0x20 => {}
-            c => push_formatted(&mut pb, cp, c, ctx, field.as_mut(), &mut memo),
+            c => push_formatted(&mut pb, cp, c, ctx, field.as_mut(), &mut fmt),
         }
         cp = cp.saturating_add(units);
     }
@@ -663,7 +774,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         out.push(ParaOut {
             para: Paragraph { text: done.text, runs: done.runs, props: done.props, mark: done.mark, objects: done.objects, ..Default::default() },
             end_cp: cp_end,
-            row: table::RowInfo::default(),
+            row: None,
         });
     }
     out
@@ -674,7 +785,28 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
 struct FieldBuild {
     depth: u32,
     instr: String,
-    sep: Option<Vec<(char, CharProps)>>,
+    sep: Option<FieldResult>,
+}
+
+/// A field's cached result: its text and, as runs, the formatting of that text. A run is added
+/// only when the formatting changes, so a result of millions of equally formatted characters
+/// costs one `CharProps`, not one per character (365 bytes each).
+#[derive(Default)]
+struct FieldResult {
+    text: String,
+    /// (byte length in `text`, formatting) in order; adjacent runs differ.
+    runs: Vec<(usize, CharProps)>,
+}
+
+impl FieldResult {
+    fn push(&mut self, c: char, props: CharProps) {
+        let len = c.len_utf8();
+        match self.runs.last_mut() {
+            Some((n, last)) if *last == props => *n += len,
+            _ => self.runs.push((len, props)),
+        }
+        self.text.push(c);
+    }
 }
 
 /// Bytes a clone of `obj` copies: the object itself plus a picture's alt text, a group with all
@@ -699,103 +831,26 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
     let result = f.sep.unwrap_or_default();
     if let Some(target) = hyperlink_target(&instr) {
         let cost = target.len() as u64;
-        let mut run: Option<CharProps> = None;
-        for (c, props) in result {
-            if run.as_ref() == Some(&props) {
-                pb.extend(c);
-                continue;
-            }
-            let mut linked = props.clone();
+        let mut chars = result.text.chars();
+        for (len, props) in result.runs {
+            let mut linked = props;
             if work.charge(cost, Cost::LinkTarget) {
                 linked.link = Some(target.clone());
             }
-            pb.push(c, linked);
-            run = Some(props);
+            let mut left = len;
+            let Some(first) = chars.next() else { break };
+            pb.push(first, linked);
+            left = left.saturating_sub(first.len_utf8());
+            while left > 0 {
+                let Some(c) = chars.next() else { break };
+                pb.extend(c);
+                left = left.saturating_sub(c.len_utf8());
+            }
         }
         return;
     }
-    let result_text: String = result.iter().map(|(c, _)| *c).collect();
     pb.push('\u{FFFC}', CharProps::default());
-    pb.objects.push(InlineObject::Field { instr, result: result_text, locked: false, dirty: false, code: false, form: String::new() });
-}
-
-/// `HYPERLINK "url"` / `HYPERLINK url \l "bookmark"` → the model link target
-/// (`#bookmark` for internal links); `None` when not a hyperlink.
-fn hyperlink_target(instr: &str) -> Option<String> {
-    let t = instr.trim();
-    let rest = if t.get(..9).is_some_and(|h| h.eq_ignore_ascii_case("hyperlink")) {
-        t.get(9..).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace))?.trim()
-    } else {
-        return None;
-    };
-    if rest.is_empty() {
-        return None;
-    }
-
-    let mut url: Option<String> = None;
-    let mut local: Option<String> = None;
-    let mut switch: Option<&str> = None;
-
-    let mut i = 0;
-    let bytes = rest.as_bytes();
-    while i < bytes.len() {
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= bytes.len() {
-            break;
-        }
-        if bytes[i] == b'\\' {
-            let start = i;
-            i += 1;
-            while i < bytes.len() && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'*') {
-                i += 1;
-            }
-            switch = Some(rest.get(start..i).unwrap_or(""));
-            continue;
-        }
-        let arg = if bytes[i] == b'"' {
-            i += 1;
-            let start = i;
-            while i < bytes.len() && bytes[i] != b'"' {
-                i += 1;
-            }
-            let val = rest.get(start..i).unwrap_or("");
-            if i < bytes.len() && bytes[i] == b'"' {
-                i += 1;
-            }
-            val.to_string()
-        } else {
-            let start = i;
-            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            rest.get(start..i).unwrap_or("").to_string()
-        };
-        let clean_arg = arg.replace("%22", "\"");
-        match switch.take() {
-            Some("\\l") => local = Some(clean_arg),
-            Some(_) => {}
-            None => {
-                if url.is_none() {
-                    url = Some(clean_arg);
-                }
-            }
-        }
-    }
-
-    match (url, local) {
-        (Some(u), Some(l)) if !u.is_empty() && !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            if u.contains('#') { Some(u) } else { Some(format!("{u}#{frag}")) }
-        }
-        (Some(u), _) if !u.is_empty() => Some(u),
-        (None, Some(l)) if !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            Some(format!("#{frag}"))
-        }
-        _ => None,
-    }
+    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: String::new() });
 }
 
 /// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.
@@ -840,34 +895,53 @@ fn num_of(ilfo: i32) -> Option<u32> {
 /// plus the piece's Prm, over the paragraph style's base character props. Inside a field,
 /// the character is recorded into the instruction or the cached result instead of (or as
 /// well as) the visible text.
-fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, field: Option<&mut FieldBuild>, memo: &mut Option<FmtMemo<'a>>) {
-    let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
-    let grpprl = ctx.chpx_bins.chpx(ctx.word, fc);
-    let prm = ctx.pieces.prm_of(cp);
-    let style = pb.props.style.as_deref();
-    let mut props = match memo.as_ref().filter(|m| std::ptr::eq(m.chpx, grpprl) && m.prm == prm && m.style.as_deref() == style) {
-        Some(m) => m.props.clone(),
+fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, field: Option<&mut FieldBuild>, st: &mut FmtState<'a>) {
+    // The piece and the CHPX run of the previous character usually cover this one too.
+    let span = match st.span.filter(|s| s.contains(cp)) {
+        Some(s) => Some(s),
         None => {
-            let default;
-            let base = match style.and_then(|id| ctx.sheet.get(id)) {
-                Some(st) => &st.chr,
-                None => {
-                    default = CharProps::default();
-                    &default
-                }
-            };
-            let mut props = char_props(grpprl, ctx.fonts, base);
-            apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
-            *memo = Some(FmtMemo { chpx: grpprl, prm, style: style.map(str::to_owned), props: props.clone() });
-            props
+            st.span = ctx.pieces.span(cp);
+            st.span
         }
     };
+    let fc = span.and_then(|s| s.fc_at(cp)).unwrap_or(0);
+    let run = match st.chpx.filter(|r| r.contains(fc)) {
+        Some(r) => r,
+        None => {
+            let r = ctx.chpx_bins.chpx_run(ctx.word, fc);
+            st.chpx = Some(r);
+            r
+        }
+    };
+    let grpprl = run.grpprl;
+    let prm = span.map_or(0, |s| s.prm());
+    let style = pb.props.style.as_deref();
+    let hit = st.memo.as_ref().is_some_and(|m| std::ptr::eq(m.chpx, grpprl) && m.prm == prm && m.style.as_deref() == style);
+    if !hit {
+        let default;
+        let base = match style.and_then(|id| ctx.sheet.get(id)) {
+            Some(sty) => &sty.chr,
+            None => {
+                default = CharProps::default();
+                &default
+            }
+        };
+        let mut props = char_props(grpprl, ctx.fonts, base);
+        apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
+        st.memo = Some(FmtMemo { chpx: grpprl, prm, style: style.map(str::to_owned), props });
+        st.generation += 1;
+    }
+    let Some(m) = st.memo.as_ref() else { return };
     // A symbol character (Insert › Symbol) is stored as the placeholder U+0028 with
     // sprmCSymbol carrying the font and the character code ([MS-DOC] §2.6.1).
+    let symbol = if c == '(' { symbol_operand(grpprl) } else { None };
+    if field.is_none() && symbol.is_none() {
+        pb.push_shared(c, &m.props, st.generation);
+        return;
+    }
+    let mut props = m.props.clone();
     let mut c = c;
-    if c == '('
-        && let Some((ftc, xchar)) = symbol_operand(grpprl)
-    {
+    if let Some((ftc, xchar)) = symbol {
         if let Some(font) = ctx.fonts.get(usize::from(ftc)) {
             props.font = Some(font.clone());
         }
@@ -879,11 +953,23 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
         Some(f) => match f.sep.as_mut() {
             // Inside a field, characters are recorded for the field object instead of shown;
             // `finish_field` emits the visible text (hyperlink runs or one object anchor).
-            Some(result) => result.push((c, props)),
+            Some(result) => result.push(c, props),
             None => f.instr.push(c),
         },
         None => pb.push(c, props),
     }
+}
+
+/// What the walk carries from one character to the next while it resolves formatting: the piece
+/// and the CHPX run the last character was in (so most characters need no search), and the last
+/// formatting resolved.
+#[derive(Default)]
+struct FmtState<'a> {
+    span: Option<piece::PieceSpan<'a>>,
+    chpx: Option<fkp::ChpxRun<'a>>,
+    memo: Option<FmtMemo<'a>>,
+    /// Counts the memo's replacements, so equal values mean the same properties.
+    generation: u64,
 }
 
 /// The last character formatting resolved, reused while the CHPX, the piece's Prm and the

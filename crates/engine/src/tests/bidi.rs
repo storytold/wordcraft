@@ -2,6 +2,7 @@
 //! commands on Persian text, arrow keys in bidirectional text, DOCX save and open.
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_doc::props::Align;
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -118,9 +119,9 @@ fn font_commands_override_inherited_complex_script_properties_explicitly() {
     use wordcraft_doc::props::CharProps;
 
     let mut s = session("שלום ABC", true);
-    s.doc.styles.default_chr.size_cs = Some(30.0);
-    s.doc.styles.default_chr.bold_cs = Some(true);
-    s.doc.styles.default_chr.italic_cs = Some(true);
+    Arc::make_mut(&mut s.doc.styles).default_chr.size_cs = Some(30.0);
+    Arc::make_mut(&mut s.doc.styles).default_chr.bold_cs = Some(true);
+    Arc::make_mut(&mut s.doc.styles).default_chr.italic_cs = Some(true);
     run(&mut s, "select.all", json!({}));
     run(&mut s, "format.bold", json!({"value": false}));
     run(&mut s, "format.italic", json!({"value": false}));

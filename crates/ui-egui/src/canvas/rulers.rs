@@ -24,6 +24,11 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
     hp.rect_filled(bar, 0.0, t.ruler_margin);
     let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
     hp.rect_filled(text, 0.0, t.ruler);
+    // The spaces between the caret section's text columns, shaded like the margins (#5197).
+    let columns = super::column_ruler::column_gaps(app, layout, pi);
+    if let Some(cg) = &columns {
+        super::column_ruler::draw(&hp, cg, bar, x0, scale, &t);
+    }
     let rp = app.session.doc.para_at(&app.session.sel.focus).map(|para| app.session.doc.styles.resolve_para(&para.props));
     // Graduations in the File › Options unit.
     let (unit, div, step) = ruler_scale(app.session.units());
@@ -101,6 +106,11 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
         // spans the text area, so a border marker keeps its drag) and before the indent markers,
         // which keep the pointer where they overlap.
         crate::table_ruler::columns(app, ui, layout, pi, bar, x0, scale);
+        // Outside a table, the spaces between the text columns, in the same order (#5197).
+        if let Some(cg) = &columns {
+            let tabs = crate::ruler_tabs::marker_rects(app, bar, &px, &rp.tabs);
+            super::column_ruler::handles(app, ui, cg, bar, x0, scale, &tabs);
+        }
         // Dragging the left-indent marker.
         let id = ui.scope_id().with("ruler_left");
         let mr = Rect::from_center_size(pos2(left, bar.max.y - 3.0), vec2(12.0, 12.0));

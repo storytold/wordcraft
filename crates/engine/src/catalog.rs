@@ -70,6 +70,7 @@ Home|Font|Character Shading|format.shading
 Home|Font|Font Dialog|format.fontDialog
 Home|Font|Double Strikethrough|format.doubleStrikethrough
 Home|Font|Small Caps|format.smallCaps
+Home|Font|Emphasis Mark|format.emphasisMark
 Home|Font|All Caps|format.allCaps
 Home|Font|Hidden|format.hidden
 Home|Font|Emboss|format.emboss
@@ -223,6 +224,7 @@ Layout|Page Setup|Columns|layout.columns
 Layout|Page Setup|Breaks|layout.break
 Layout|Page Setup|Line Numbers|layout.lineNumbers
 Layout|Page Setup|Hyphenation|layout.hyphenation
+Layout|Page Setup|Fit One Page|layout.fitOnePage
 Layout|Page Setup|Page Setup Dialog|layout.pageSetup
 Layout|Page Setup|Vertical Alignment|layout.verticalAlign
 Layout|Page Setup|Document Grid|layout.documentGrid

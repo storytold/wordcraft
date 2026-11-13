@@ -2,6 +2,7 @@
 //! reopen. An unset default is resolved as `DEFAULT_FONT_SIZE`; the writer must say so, because
 //! the reader reads an omitted size as 10 pt.
 use std::io::{Read, Write};
+use std::sync::Arc;
 use wordcraft_doc::Document;
 use wordcraft_doc::props::{CharProps, DEFAULT_FONT_SIZE};
 fn resolved(d: &Document) -> f32 {
@@ -19,7 +20,7 @@ fn defaults(xml: &str) -> &str {
 #[test]
 fn an_unset_default_size_keeps_its_effective_size_across_save_and_reopen() {
     let mut d = Document::new();
-    d.styles.default_chr.size = None;
+    Arc::make_mut(&mut d.styles).default_chr.size = None;
     assert_eq!(resolved(&d), DEFAULT_FONT_SIZE);
     let bytes = wordcraft_docx::write(&d).unwrap();
     assert!(defaults(&styles_xml(&bytes)).contains(r#"<w:sz w:val="22"/>"#));
@@ -33,7 +34,7 @@ fn an_unset_default_size_keeps_its_effective_size_across_save_and_reopen() {
 fn an_explicit_default_size_is_written_as_it_is() {
     for size in [8.0, 10.0, 11.0, 12.5, 18.0] {
         let mut d = Document::new();
-        d.styles.default_chr.size = Some(size);
+        Arc::make_mut(&mut d.styles).default_chr.size = Some(size);
         let bytes = wordcraft_docx::write(&d).unwrap();
         assert_eq!(resolved(&wordcraft_docx::read(&bytes).unwrap()), size);
     }
@@ -59,8 +60,8 @@ fn an_unset_default_size_does_not_take_a_styles_size() {
     // The written default is the resolver's own fallback, not what the Normal style resolves to,
     // so a style that sets a size keeps it and one that does not still falls back to the default.
     let mut d = Document::new();
-    d.styles.default_chr.size = None;
-    if let Some(normal) = d.styles.get_mut("Normal") {
+    Arc::make_mut(&mut d.styles).default_chr.size = None;
+    if let Some(normal) = Arc::make_mut(&mut d.styles).get_mut("Normal") {
         normal.chr.size = Some(14.0);
     }
     let reopened = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();

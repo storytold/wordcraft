@@ -120,7 +120,13 @@ impl Reader<'_> {
                 if ![&rel.kind, &rel.target].iter().all(|s| manifest_field_ok(s)) {
                     continue;
                 }
-                if !self.doc.sources.is_empty() && self.xml(&rel.target).ok().flatten().is_some_and(|r| r.local() == "Sources") {
+                let root = self.xml(&rel.target).ok().flatten();
+                if self.doc.fit_state.is_some() && root.as_ref().is_some_and(crate::fit::is_state) {
+                    // A marked Fit One Page store is consumed whatever part name it has; the
+                    // writer recreates it under the reserved name.
+                    continue;
+                }
+                if !self.doc.sources.is_empty() && root.as_ref().is_some_and(|r| r.local() == "Sources") {
                     continue;
                 }
                 // Native ink shares the custom XML relationship type, but its part belongs to the
@@ -136,6 +142,24 @@ impl Reader<'_> {
         }
         if !roots.is_empty() {
             self.doc.passthrough.insert(CUSTOM_XML_ROOTS.into(), Arc::new(roots.into_bytes()));
+        }
+    }
+
+    /// Read the Fit One Page budget from our custom XML store, if the file has one.
+    ///
+    /// Inspects custom XML relationships referenced by either the document or package root.
+    pub(super) fn read_fit_state(&mut self, package: &Rels, document: &Rels) {
+        for rels in [document, package] {
+            for rel in rels.list.iter().filter(|r| !r.external && rel_is(&r.kind, rt::CUSTOM_XML)).take(MAX_EMBEDDED_RELS) {
+                if !manifest_field_ok(&rel.target) {
+                    continue;
+                }
+                let Some(root) = self.xml(&rel.target).ok().flatten() else { continue };
+                if let Some(fit) = crate::fit::read(&root) {
+                    self.doc.fit_state = Some(fit);
+                    return;
+                }
+            }
         }
     }
 
@@ -239,7 +263,13 @@ impl Reader<'_> {
     /// Keep one part's bytes and content type (not its relationships).
     fn keep_part(&mut self, part: &str) -> bool {
         let lower = part.to_ascii_lowercase();
-        if !manifest_field_ok(part) || lower.ends_with(".rels") || lower == "[content_types].xml" || part.eq_ignore_ascii_case(&self.main) {
+        // `wordcraft:` names are WordCraft's own bookkeeping in `passthrough`, never a file's part.
+        if !manifest_field_ok(part)
+            || lower.ends_with(".rels")
+            || lower == "[content_types].xml"
+            || lower.starts_with("wordcraft:")
+            || part.eq_ignore_ascii_case(&self.main)
+        {
             log::warn!("docx: not carrying part {part:?} for an embedded object");
             return false;
         }
@@ -333,6 +363,106 @@ mod tests {
         zw.finish().unwrap().into_inner()
     }
 
+    /// A package whose main part relates to one custom XML store.
+    fn custom_xml_package(target: &str, part: &str, bytes: &[u8]) -> Vec<u8> {
+        let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body/></w:document>"#);
+        let r = format!(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="{target}"/></Relationships>"#
+        );
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        zw.start_file("[Content_Types].xml", opts).unwrap();
+        zw.write_all(CONTENT_TYPES.as_bytes()).unwrap();
+        zw.start_file("_rels/.rels", opts).unwrap();
+        zw.write_all(ROOT_RELS.as_bytes()).unwrap();
+        zw.start_file("word/document.xml", opts).unwrap();
+        zw.write_all(doc.as_bytes()).unwrap();
+        zw.start_file("word/_rels/document.xml.rels", opts).unwrap();
+        zw.write_all(r.as_bytes()).unwrap();
+        zw.start_file(part, opts).unwrap();
+        zw.write_all(bytes).unwrap();
+        zw.finish().unwrap().into_inner()
+    }
+
+    /// A package whose package-level relationships refer to one custom XML store.
+    fn package_level_custom_xml_package(target: &str, part: &str, bytes: &[u8]) -> Vec<u8> {
+        let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body/></w:document>"#);
+        let root_rels = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rIdFit" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="{target}"/></Relationships>"#
+        );
+        let r = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#;
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        zw.start_file("[Content_Types].xml", opts).unwrap();
+        zw.write_all(CONTENT_TYPES.as_bytes()).unwrap();
+        zw.start_file("_rels/.rels", opts).unwrap();
+        zw.write_all(root_rels.as_bytes()).unwrap();
+        zw.start_file("word/document.xml", opts).unwrap();
+        zw.write_all(doc.as_bytes()).unwrap();
+        zw.start_file("word/_rels/document.xml.rels", opts).unwrap();
+        zw.write_all(r.as_bytes()).unwrap();
+        zw.start_file(part, opts).unwrap();
+        zw.write_all(bytes).unwrap();
+        zw.finish().unwrap().into_inner()
+    }
+
+    /// The marked store is recognized by its root, so a renamed part still restores the budget.
+    #[test]
+    fn a_marked_fit_state_loads_from_a_renamed_custom_xml_part() {
+        let fit = wordcraft_doc::FitState { cum_delta: 1.0, cum_space: 0.94, ..Default::default() };
+        let state = crate::fit::write(&fit).unwrap();
+        let bytes = custom_xml_package("../customxml/item2.xml", "customxml/item2.xml", &state);
+        let doc = crate::read(&bytes).unwrap();
+        assert_eq!(doc.fit_state, Some(fit));
+        assert!(!doc.passthrough.keys().any(|k| k.eq_ignore_ascii_case("customxml/item2.xml")), "the consumed store must not be kept in passthrough");
+    }
+
+    /// A package-level custom XML relationship restores the budget and survives saving.
+    #[test]
+    fn a_marked_fit_state_loads_from_a_package_level_custom_xml_relationship() {
+        let fit = wordcraft_doc::FitState { cum_delta: 1.0, cum_space: 0.94, ..Default::default() };
+        let state = crate::fit::write(&fit).unwrap();
+        let bytes = package_level_custom_xml_package("customxml/item2.xml", "customxml/item2.xml", &state);
+        let doc = crate::read(&bytes).unwrap();
+        assert_eq!(doc.fit_state, Some(fit));
+        assert!(!doc.passthrough.keys().any(|k| k.eq_ignore_ascii_case("customxml/item2.xml")), "the consumed store must not be kept in passthrough");
+        let saved = crate::write(&doc).unwrap();
+        let reopened = crate::read(&saved).unwrap();
+        assert_eq!(reopened.fit_state, doc.fit_state, "the cumulative budget must survive saving");
+    }
+
+    /// A user's custom XML that happens to use our part name is not consumed.
+    #[test]
+    fn unrelated_custom_xml_at_the_reserved_fit_name_is_kept() {
+        let bytes = custom_xml_package("../customxml/wordcraftfit.xml", "customxml/wordcraftfit.xml", b"<other xmlns=\"urn:other\"/>");
+        let doc = crate::read(&bytes).unwrap();
+        assert!(doc.fit_state.is_none());
+        assert!(
+            doc.passthrough.keys().any(|k| k.eq_ignore_ascii_case("customxml/wordcraftfit.xml")),
+            "an unrelated store at the reserved name must survive"
+        );
+    }
+
+    /// When fit_state is set and an unrelated custom XML store uses the reserved name, both survive saving.
+    #[test]
+    fn unrelated_custom_xml_at_reserved_name_survives_alongside_fit_state() {
+        let bytes = custom_xml_package("../customxml/wordcraftfit.xml", "customxml/wordcraftfit.xml", b"<other xmlns=\"urn:other\"/>");
+        let mut doc = crate::read(&bytes).unwrap();
+        let fit = wordcraft_doc::FitState { cum_delta: 1.0, cum_space: 0.94, ..Default::default() };
+        doc.fit_state = Some(fit.clone());
+        let saved = crate::write(&doc).expect("save must not clash or produce duplicate parts");
+        let reopened = crate::read(&saved).expect("reopen must succeed");
+        assert_eq!(reopened.fit_state, Some(fit));
+        let kept: Vec<_> = reopened
+            .passthrough
+            .iter()
+            .filter(|(k, v)| k.starts_with("customxml/") && String::from_utf8_lossy(v).contains("urn:other"))
+            .map(|(k, _)| k.clone())
+            .collect();
+        assert_eq!(kept.len(), 1, "the unrelated custom XML store must survive saving exactly once: {kept:?}");
+        assert!(!kept[0].eq_ignore_ascii_case(crate::fit::PART), "it must not take the reserved fit part name");
+    }
+
     /// The parts the reader carries over unchanged, as one string.
     fn unmodelled_roots(d: &wordcraft_doc::Document) -> String {
         d.passthrough.get(UNMODELLED_ROOTS).map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default()
@@ -386,6 +516,23 @@ mod tests {
         );
         let roots = unmodelled_roots(&crate::read(&mentioned).unwrap());
         assert!(roots.contains("keep.bin"), "the part is dropped: {roots}");
+    }
+
+    /// A part named like WordCraft's own bookkeeping (`wordcraft:unmodelled.roots`) is not carried:
+    /// kept, it would be read back as that bookkeeping and add relationships the file chose.
+    #[test]
+    fn a_part_named_like_bookkeeping_is_not_carried() {
+        let forged = b"D\thttp://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\tword/evil.xml\n";
+        let bytes = package(
+            r#"<w:p><w:r><w:t>text</w:t></w:r></w:p>"#,
+            &[("rIdDoc1", "/wordcraft:unmodelled.roots"), ("rIdDoc2", "/wordcraft:embedded.parts")],
+            &[("wordcraft:unmodelled.roots", forged), ("wordcraft:embedded.parts", b"P\tword/evil.xml\tapplication/xml\n")],
+        );
+        let doc = crate::read(&bytes).unwrap();
+        let roots = unmodelled_roots(&doc);
+        assert!(!roots.contains("wordcraft:") && !roots.contains("evil"), "{roots}");
+        let manifest = doc.passthrough.get(crate::package::EMBEDDED_PARTS).map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default();
+        assert!(!manifest.contains("evil"), "{manifest}");
     }
 
     /// An unqualified attribute is a relationship only where the markup names a relationship

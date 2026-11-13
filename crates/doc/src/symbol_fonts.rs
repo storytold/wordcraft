@@ -19,8 +19,8 @@
 //!
 //! Tables are indexed by code − 0x20; 0 = no Unicode equivalent.
 
-/// The symbol fonts this module knows, by lowercase family name.
-fn table(family: &str) -> Option<&'static [u32; 224]> {
+/// The symbol table for a single family name, by lowercase family name.
+fn single_table(family: &str) -> Option<&'static [u32; 224]> {
     let f = family.trim();
     if f.eq_ignore_ascii_case("symbol") || f.eq_ignore_ascii_case("symbol (pcl6)") {
         Some(&SYMBOL)
@@ -35,6 +35,11 @@ fn table(family: &str) -> Option<&'static [u32; 224]> {
     } else {
         None
     }
+}
+
+/// The symbol fonts this module knows, by lowercase family name.
+fn table(family: &str) -> Option<&'static [u32; 224]> {
+    if family.contains(';') { family.split(';').map(str::trim).filter(|s| !s.is_empty()).find_map(single_table) } else { single_table(family) }
 }
 
 /// Whether `family` is one of Word's symbol fonts (Symbol, Wingdings, Wingdings 2, Wingdings 3,

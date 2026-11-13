@@ -71,6 +71,9 @@ pub struct Session {
     /// HTML for the system clipboard beside [`Self::clipboard_text`]: the copy's formatting for
     /// programs that read HTML, equations as MathML (#816); empty when nothing was copied.
     pub clipboard_html: String,
+    /// RTF for the system clipboard beside [`Self::clipboard_html`], for programs that read RTF
+    /// rather than HTML; empty when nothing was copied.
+    pub clipboard_rtf: String,
     /// Items collected by Copy and Cut this session, for the Clipboard pane.
     pub clip_history: crate::cmd::edit::ClipHistory,
     pub find: FindState,
@@ -93,6 +96,10 @@ pub struct Session {
     pub new_header_parts: Vec<u32>,
     /// The body selection a command left for a header or footer: `insert.closeHeader` puts it back.
     pub hf_return: Option<Selection>,
+    /// The style-definition change Next / Previous Change selected, for the Accept or Reject that
+    /// follows (`cmd::review`). It names its document and selection, so it is shared by the open
+    /// documents and stops counting once either changes.
+    pub(crate) review_style: Option<crate::cmd::review::StyleTarget>,
     /// Undo and redo steps. Shared so `run` can snapshot both stacks cheaply (a pointer per
     /// step) and put them back exactly when a command fails.
     history: Vec<Arc<Undo>>,
@@ -161,6 +168,10 @@ pub struct Session {
     typing: Option<TypedWord>,
     /// Picture edits: edited media key → original media key (Reset Picture).
     pub originals: std::collections::HashMap<String, String>,
+    /// View › Markdown Source: its text, while it is open.
+    pub md_source: Option<crate::cmd::md_source::MdSource>,
+    /// A Markdown file's own text, so Save can write it unchanged.
+    pub md_file: crate::cmd::md_source::FileText,
     /// Picture effects, styles and borders: drawn media key → what was drawn on which bitmap,
     /// so the next one replaces them instead of drawing over them (#2052).
     pub picture_looks: std::collections::HashMap<String, crate::cmd::objects::PictureLook>,
@@ -180,6 +191,8 @@ pub struct Session {
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
     pub ui_requests: Vec<Value>,
+    /// View › Window: the other WordCraft windows and Side by Side (#322).
+    pub windows: crate::cmd::view::Windows,
     /// Read Aloud player (Review › Speech).
     pub read_aloud: crate::speech::ReadAloud,
     /// Preferences the front end saves between runs.
@@ -216,6 +229,10 @@ pub struct Session {
     /// More pictures and shapes selected along with the one the selection holds (Shift+click),
     /// for Group. Cleared by any edit or selection change other than adding to it.
     pub also_selected: Vec<Pos>,
+    /// The member of the selected Drawing Canvas picked on its own (#2637), which Shape Format,
+    /// Delete, Copy and the frame act on; see [`crate::cmd::canvas::selected_member`]. Cleared by
+    /// any selection change, caret movement or undo.
+    pub member: Option<crate::cmd::canvas::CanvasMember>,
     /// Column (block) selection, if one was made (see [`Session::column_segments`]).
     pub column: Option<ColumnBlock>,
     /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.
