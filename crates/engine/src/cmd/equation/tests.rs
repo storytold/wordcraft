@@ -639,3 +639,17 @@ fn a_math_name_is_corrected_by_any_character_that_cannot_continue_it() {
     s.run("equation.type", &json!({"text": r"\alpha+"})).unwrap();
     assert_eq!(linear(&s), r"\alpha+");
 }
+
+#[test]
+fn a_typed_number_is_a_whole_script_base() {
+    // #6229, Word for Windows (build 16.0.20527): `10^3` + Space builds 10³, not 1·0³; a decimal too.
+    use wordcraft_doc::math::ScriptKind;
+    for (typed, base) in [("10^3 ", "10"), ("2.5^2 ", "2.5"), ("1,000_i ", "1,000")] {
+        let mut s = session();
+        s.run("insert.equation", &json!({})).unwrap();
+        s.run("equation.type", &json!({"text": typed})).unwrap();
+        let nodes = nodes_of(&s, &s.math.as_ref().unwrap().at).unwrap();
+        let [MNode::Script { kind: ScriptKind::Sup | ScriptKind::Sub, base: b, .. }] = &nodes[..] else { panic!("{typed}: {nodes:#?}") };
+        assert!(matches!(b.as_slice(), [MNode::Run(r)] if r.text == base), "{typed}: {nodes:#?}");
+    }
+}
