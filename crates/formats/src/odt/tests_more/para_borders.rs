@@ -54,6 +54,29 @@ fn padding_without_a_border_keeps_its_room() {
     assert_eq!(back.styles.resolve_para(&props(&back)).padding, [36.0; 4]);
 }
 
+/// #5065: a DOCX paragraph or character border without `w:sz` is width 0 — Word draws it at its
+/// thinnest line, an eighth of a point, and gives it no room. ODF has no border that is drawn and
+/// still takes no room, so it keeps the thinnest line rather than losing the border.
+#[test]
+fn a_width_0_border_is_written_as_the_thinnest_line() {
+    let line = Border { style: BorderStyle::Single, width: 0.0, color: Some(Rgb(0xc0, 0, 0)), space: 0.0 };
+    let mut p = Paragraph::new();
+    p.text = "Edged".into();
+    p.runs = vec![wordcraft_doc::para::Run { len: 5, props: wordcraft_doc::props::CharProps { border: Some(line), ..Default::default() } }];
+    p.props.borders = Some(Borders { bottom: Some(line), ..Default::default() });
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let out = crate::odt::tests::content_of(&export(&d).unwrap());
+    let thinnest = crate::odt::writer::pt(Border::THINNEST);
+    assert!(out.contains(&format!(r#"fo:border-bottom="{thinnest} solid #c00000""#)), "{out}");
+    assert!(out.contains(&format!(r#"loext:border="{thinnest} solid #c00000""#)), "{out}");
+    // Read back, both are borders again.
+    let back = import(&export(&d).unwrap()).unwrap();
+    let p = back.body[0].as_para().expect("a paragraph");
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some_and(|b| b.is_visible()), "{:?}", p.props.borders);
+    assert!(p.props_of_char(0).border.is_some_and(|b| b.is_visible()), "{:?}", p.props_of_char(0));
+}
+
 #[test]
 fn an_empty_paragraph_with_only_a_bottom_border_is_still_a_rule() {
     let d = open(r#"fo:border-bottom="0.75pt solid #a0a0a0""#, "");

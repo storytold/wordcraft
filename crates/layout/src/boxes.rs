@@ -627,16 +627,10 @@ pub(crate) fn joined(doc: &Document, blocks: &Blocks, i: usize, j: Option<usize>
     }
 }
 
-/// A paragraph or page border that is drawn: any line but `nil`/`none`, width 0 included, which
-/// Word draws at its thinnest line ([`THINNEST_BORDER`]) and gives no room (#5065).
-pub(crate) fn drawn(b: &Border) -> bool {
-    b.style != wordcraft_doc::props::BorderStyle::None && b.width.is_finite() && b.width >= 0.0
-}
-
 /// The room a paragraph's top or bottom border takes in the text flow: its distance from the
 /// text plus its width (Word), so just the distance for one of width 0.
 fn border_room(b: Option<Border>) -> f32 {
-    b.filter(drawn).map_or(0.0, |b| {
+    b.filter(Border::is_drawn).map_or(0.0, |b| {
         let extent = b.space + b.width;
         if extent.is_finite() { extent.max(0.0) } else { 0.0 }
     })
@@ -698,19 +692,19 @@ pub(crate) fn push_para(
         // All four lines lie beyond their distance from the text; top and bottom reach the corners.
         // A line of width 0 is drawn inside that distance, at the thinnest line (Word).
         let half = |t: &Border| t.width.max(THINNEST_BORDER) / 2.0;
-        if let Some(t) = b.top.filter(|t| e.ends.0 && drawn(t) && t.space.is_finite()) {
+        if let Some(t) = b.top.filter(|t| e.ends.0 && t.is_drawn() && t.space.is_finite()) {
             let ty = y - t.space - t.width + half(&t);
             items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
         }
-        if let Some(t) = b.bottom.filter(|t| e.ends.1 && drawn(t) && t.space.is_finite()) {
+        if let Some(t) = b.bottom.filter(|t| e.ends.1 && t.is_drawn() && t.space.is_finite()) {
             let by = y + h + t.space + t.width - half(&t);
             items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
         }
-        if let Some(t) = b.left.filter(drawn) {
+        if let Some(t) = b.left.filter(Border::is_drawn) {
             let bx = lx + half(&t);
             items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
         }
-        if let Some(t) = b.right.filter(drawn) {
+        if let Some(t) = b.right.filter(Border::is_drawn) {
             let bx = rx - half(&t);
             items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
         }

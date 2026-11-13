@@ -1304,7 +1304,9 @@ fn page_look(doc: &Document, sec: &SectionProps) -> String {
 /// they go round: each border at its distance from the edge (WordCraft's), which becomes the
 /// margin, with the rest of the way to the text as its padding.
 fn page_borders(b: Option<wordcraft_doc::props::Borders>, margins: [f32; 4]) -> (String, [f32; 4]) {
-    let Some(b) = b.filter(|b| b.any_visible()) else { return (String::new(), margins) };
+    // A page border of width 0 (a DOCX one without `w:sz`) is drawn at the thinnest line: ODF has
+    // no border that is drawn and still takes no room (#5065).
+    let Some(b) = b.map(|b| b.as_drawn()).filter(|b| b.any_visible()) else { return (String::new(), margins) };
     let mut out = margins;
     let mut attrs = String::new();
     for (i, (side, edge)) in [("top", b.top), ("bottom", b.bottom), ("left", b.left), ("right", b.right)].into_iter().enumerate() {

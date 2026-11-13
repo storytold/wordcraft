@@ -232,4 +232,11 @@ fn a_page_borders_padding_keeps_the_text_where_it_was() {
         assert!((m - 72.0).abs() < 0.05, "{s:?}");
     }
     assert_eq!(s.page_borders.and_then(|b| b.left).map(|b| (b.width, b.space)), Some((3.0, 24.0)));
+    // #5065: a page border of width 0 (a DOCX one without `w:sz`) is still drawn, at the thinnest
+    // line, rather than lost: ODF has no border that is drawn and still takes no room.
+    let thin = wordcraft_doc::props::Border { width: 0.0, ..edge };
+    d.last_section.page_borders = Some(wordcraft_doc::props::Borders { left: Some(thin), ..Default::default() });
+    let styles = crate::odt::tests::styles_of(&export(&d).unwrap());
+    let thinnest = crate::odt::writer::pt(wordcraft_doc::props::Border::THINNEST);
+    assert!(styles.contains(&format!(r#"fo:border-left="{thinnest} solid"#)), "{styles}");
 }

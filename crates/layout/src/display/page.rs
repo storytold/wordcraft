@@ -424,7 +424,7 @@ fn border_stroke(s: BorderStyle) -> Stroke {
 
 /// The thinnest border line, an eighth of a point: Word draws `w:sz` 0 and 1, and a border
 /// without `w:sz`, at it (#5065).
-pub(crate) const THINNEST_BORDER: f32 = 0.125;
+pub(crate) const THINNEST_BORDER: f32 = Border::THINNEST;
 
 /// A border line from `(x0, y0)` to `(x1, y1)` (paragraph rules and character borders), no
 /// thinner than [`THINNEST_BORDER`].

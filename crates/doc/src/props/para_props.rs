@@ -276,11 +276,26 @@ pub struct Border {
 }
 
 impl Border {
+    /// The thinnest line a border is drawn at, an eighth of a point: Word draws `w:sz="0"`, and
+    /// a DOCX border without `w:sz`, at it (#5065).
+    pub const THINNEST: f32 = 0.125;
     pub fn single(width: f32) -> Border {
         Border { style: BorderStyle::Single, width, color: None, space: 0.0 }
     }
+    /// The border takes room: it has a line and a width to give it.
     pub fn is_visible(&self) -> bool {
         self.style != BorderStyle::None && self.width > 0.0
+    }
+    /// The border is drawn: any line but `nil`/`none`, one of width 0 included, which Word draws
+    /// at [`Border::THINNEST`] without giving it any room (#5065).
+    pub fn is_drawn(&self) -> bool {
+        self.style != BorderStyle::None && self.width.is_finite() && self.width >= 0.0
+    }
+    /// The border at the width it is drawn at: itself, unless it is a drawn line of width 0,
+    /// which becomes one of [`Border::THINNEST`]. That is how a format with no width-0 border
+    /// (ODF, RTF, HTML) keeps one, since it has no way to say "drawn, but taking no room".
+    pub fn as_drawn(&self) -> Border {
+        if self.is_drawn() && self.width <= 0.0 { Border { width: Border::THINNEST, ..*self } } else { *self }
     }
 }
 
@@ -307,6 +322,18 @@ impl Borders {
     }
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
+    }
+    /// Every side at the width it is drawn at ([`Border::as_drawn`]).
+    pub fn as_drawn(&self) -> Borders {
+        let side = |s: Option<Border>| s.map(|b| b.as_drawn());
+        Borders {
+            top: side(self.top),
+            left: side(self.left),
+            bottom: side(self.bottom),
+            right: side(self.right),
+            between: side(self.between),
+            inside_v: side(self.inside_v),
+        }
     }
     /// A side is drawn, or a paragraph side without a line holds padding (ODF's, which keeps
     /// its room in LibreOffice's layout).
