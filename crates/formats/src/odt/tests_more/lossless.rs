@@ -171,6 +171,31 @@ fn a_save_without_edits_loses_nothing() {
     }
 }
 
+/// The same gate after an edit: a save must lose nothing the edit didn't touch. Our loss checks
+/// once only saved without edits, and missed that one style change rewrote every definition.
+#[test]
+fn a_style_or_list_change_loses_nothing_else() {
+    let edits: [(&str, fn(&mut wordcraft_doc::Document)); 2] = [
+        ("an unused style", |d| {
+            if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).get_mut("Quote") {
+                st.chr.size = Some(13.0);
+            }
+        }),
+        ("a new list", |d| {
+            std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+        }),
+    ];
+    for s in SAMPLES {
+        for (what, edit) in &edits {
+            let orig = package(&s);
+            let mut d = import(&orig).unwrap();
+            edit(&mut d);
+            let lost = losses(&orig, &export(&d).unwrap());
+            assert!(lost.is_empty(), "{}: lost after changing {what}:\n  {}", s.name, lost.join("\n  "));
+        }
+    }
+}
+
 #[test]
 fn the_gate_sees_a_loss() {
     let with = Sample {
