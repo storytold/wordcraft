@@ -67,7 +67,13 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, opener: &Response, ask: Optio
             }
             open = true;
         }
+        // What the menu offers was worked out for the selection it opened on: when that changes
+        // under the open menu (an arrow key still reaches the canvas), the menu closes.
+        None if app.canvas.context_sel.as_ref() != Some(&app.session.sel) => open = false,
         None => {}
+    }
+    if ask.is_some() {
+        app.canvas.context_sel = Some(app.session.sel.clone());
     }
     if !open {
         app.canvas.context_menu_open = false;
