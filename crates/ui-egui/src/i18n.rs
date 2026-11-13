@@ -34,6 +34,10 @@
 //! - [`fmt`]: fill `{name}` placeholders after a lookup; translators may reorder them.
 //! - [`fmt_plain`]: [`fmt`] without bidi isolate marks, for text that goes into the document.
 
+mod messages;
+
+pub(crate) use messages::{accessibility_issue, proof_message};
+
 use std::cell::Cell;
 use std::sync::{LazyLock, OnceLock};
 

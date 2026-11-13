@@ -56,7 +56,7 @@ pub(crate) fn issue_heading(issue: &serde_json::Value) -> String {
     if issue.get("kind").and_then(|k| k.as_str()) == Some("spelling") {
         return tl!("Possible spelling mistake").to_string();
     }
-    tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).to_string()
+    crate::i18n::proof_message(issue.get("message").and_then(|m| m.as_str()).unwrap_or(""))
 }
 
 pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
