@@ -3091,3 +3091,117 @@ fn formatting_runs_break_where_the_chpx_changes() {
     // (the run from the field to CP 20), "d(ee" italic.
     assert_eq!(shape, [(4, Some(true), None), (7, None, None), (3, Some(true), None), (4, None, Some(true))], "{shape:?}");
 }
+
+#[test]
+fn doc_cell_borders_survive_import_and_range_overrides() {
+    let mut row = t_def_table(&[0, 100, 200, 300, 400, 500]);
+    // Opcode, cb, cell count, six boundaries, then the first TC80's flags and width.
+    row[21..25].copy_from_slice(&[16, 1, 1, 0]); // top: single 2 pt
+    row.extend(sprm_cb(0xD620, &[0, 2, 4, 8, 1, 1, 0])); // bottom: single 1 pt
+    row.extend(sprm_cb(0xD62F, &[1, 2, 4, 0, 0, 0, 0, 0, 0, 0, 0])); // second cell: clear bottom
+    let doc = word_table_doc(row, vec![], vec![]);
+    let cells = &doc.body[0].as_table().expect("table").rows[0].cells;
+    let first = cells[0].props.borders.expect("first cell borders");
+    assert_eq!(first.top.expect("TC80 top").width, 2.0);
+    assert_eq!(first.bottom.expect("range bottom").width, 1.0);
+    assert!(!cells[1].props.borders.expect("second cell borders").bottom.expect("cleared border").is_visible());
+}
+
+#[test]
+fn doc_rows_share_grid_at_their_actual_cell_edges() {
+    let doc =
+        word_table_doc(t_def_edges(&[-100, 100, 400, 900, 1000, 1400]), t_def_edges(&[-100, 100, 500, 900, 1000, 1400]), t_def_edges(&[-100, 1400]));
+    let table = doc.body[0].as_table().expect("table");
+    assert!(table.props.fixed);
+    assert_eq!(table.grid, vec![10.0, 15.0, 5.0, 20.0, 5.0, 20.0]);
+    assert_eq!(table.rows[0].cells[2].span(), 2);
+    assert_eq!(table.rows[1].cells[1].span(), 2);
+    assert_eq!(table.rows[2].cells[0].span(), 6);
+}
+
+/// A malformed later row must not partially replace the first row's grid or cell spans.
+#[test]
+fn doc_rows_keep_original_grid_when_boundary_count_mismatches() {
+    let doc = word_table_doc(
+        t_def_edges(&[0, 100, 300, 600, 1000, 1500]),
+        t_def_edges(&[0, 250, 500, 1000, 1500]), // Four columns, but five content cells.
+        t_def_edges(&[0, 1500]),
+    );
+    let table = doc.body[0].as_table().expect("table");
+    assert_eq!(table.grid, [5.0, 10.0, 15.0, 20.0, 25.0]);
+    assert_eq!(table.rows.iter().map(|row| row.cells.len()).collect::<Vec<_>>(), [5, 5, 1]);
+    for row in &table.rows {
+        assert_eq!((row.props.grid_before, row.props.grid_after), (0, 0));
+        assert!(row.cells.iter().all(|cell| cell.span() == 1));
+    }
+}
+
+/// Equal and descending edges both reject reconciliation even when the cell count matches.
+#[test]
+fn doc_rows_keep_original_grid_when_boundaries_do_not_increase() {
+    for edges in [[0, 100, 300, 300, 1000, 1500], [0, 100, 600, 300, 1000, 1500]] {
+        let doc = word_table_doc(t_def_edges(&[0, 100, 300, 600, 1000, 1500]), t_def_edges(&edges), t_def_edges(&[0, 1500]));
+        let table = doc.body[0].as_table().expect("table");
+        assert_eq!(table.grid, [5.0, 10.0, 15.0, 20.0, 25.0]);
+        assert_eq!(table.rows.iter().map(|row| row.cells.len()).collect::<Vec<_>>(), [5, 5, 1]);
+        for row in &table.rows {
+            assert_eq!((row.props.grid_before, row.props.grid_after), (0, 0));
+            assert!(row.cells.iter().all(|cell| cell.span() == 1));
+        }
+    }
+}
+
+/// Individually valid rows may exceed the shared grid's 63-column limit only when combined.
+#[test]
+fn doc_rows_keep_original_grid_when_combined_edges_exceed_limit() {
+    use crate::table::{ParaOut, RowInfo};
+    use wordcraft_doc::para::Paragraph;
+
+    for last_odd_edge in [63, 65] {
+        let row_edges = [
+            (0..=62).step_by(2).map(|edge| edge as f32).collect::<Vec<_>>(),
+            (1..=last_odd_edge).step_by(2).map(|edge| edge as f32).collect::<Vec<_>>(),
+        ];
+        let mut paras = Vec::new();
+        for edges in &row_edges {
+            for _ in 1..edges.len() {
+                let mut info = RowInfo::default();
+                info.in_table = true;
+                info.cell_mark = true;
+                paras.push(ParaOut { para: Paragraph::new(), end_cp: 0, row: Some(Box::new(info)) });
+            }
+            let mut info = RowInfo::default();
+            info.in_table = true;
+            info.cell_mark = true;
+            info.ttp = true;
+            info.edges = edges.clone();
+            paras.push(ParaOut { para: Paragraph::new(), end_cp: 0, row: Some(Box::new(info)) });
+        }
+        let blocks = crate::table::assemble(paras);
+        let table = blocks[0].as_table().expect("table");
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[0].cells.len(), 31);
+        assert_eq!(table.rows[1].cells.len(), (last_odd_edge / 2) as usize);
+        if last_odd_edge == 63 {
+            // Exactly 64 distinct edges (63 columns) is allowed, proving the rows are valid.
+            assert_eq!(table.grid, vec![1.0; 63]);
+            assert_eq!((table.rows[0].props.grid_before, table.rows[0].props.grid_after), (0, 1));
+            assert_eq!((table.rows[1].props.grid_before, table.rows[1].props.grid_after), (1, 0));
+            assert!(table.rows.iter().flat_map(|row| &row.cells).all(|cell| cell.span() == 2));
+        } else {
+            // One additional edge would need 64 columns: preserve the whole original shape.
+            assert_eq!(table.grid, vec![2.0; 31]);
+            for row in &table.rows {
+                assert_eq!((row.props.grid_before, row.props.grid_after), (0, 0));
+                assert!(row.cells.iter().all(|cell| cell.span() == 1));
+            }
+        }
+    }
+}
+
+#[test]
+fn doc_table_autofit_is_preserved() {
+    let row = [t_def_edges(&[0, 100, 200, 300, 400, 500]), grpprl(&[(0x3615, &[1])])].concat();
+    let doc = word_table_doc(row, vec![], vec![]);
+    assert!(!doc.body[0].as_table().expect("table").props.fixed);
+}
