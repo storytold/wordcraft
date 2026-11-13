@@ -4619,8 +4619,10 @@ assets, the 27-crate layering and the 22-crate wasm check. The two
 `fit_one_page` tests are red for the same reason on clean upstream `main`; they
 are not a property of this head and they touch no collab code. The head itself
 carries five workflow runs, all created at 2026-11-13T13:19:59Z and all
-`completed`/`action_required` with no job started (`gh run list --repo
-storytold/wordcraft --commit 9c6e343ae17ea09c69ac12d72f8bea748c51982b`), so CI
+`completed`/`action_required` with no job started — `CI` `43432753402`, `Nix`
+`43432753705`, `SonarCloud` `43432753423`, `Printing` `43432753363`,
+`Packaging lint` `43432753414` (`gh run list --repo storytold/wordcraft
+--commit 9c6e343ae17ea09c69ac12d72f8bea748c51982b`), so CI
 has not executed on it and this gate is the evidence instead. Nothing was
 pushed and the head did not move: the documentation commit that records this
 section stays local, and the PR still waits for a maintainer's approval and
