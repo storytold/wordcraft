@@ -14590,6 +14590,61 @@ fn a_row_leaves_room_for_the_border_below_it() {
     }
 }
 
+/// Where a table breaks across pages, Word closes the part on the page with the table's bottom
+/// border (or the cells' own) and needs room for that one; the inside border under the row is
+/// not drawn there and needs none. Measured in Word for Windows on tables of one-line rows after
+/// a filler of every height a twip apart: with 0.5 pt inside borders and a 3 pt border round
+/// the table the last row on a page ends 3 pt above the bottom margin, with 3 pt inside borders
+/// and a 0.5 pt one round the table 0.5 pt above it, and with inside borders alone, 0.5 or 3 pt,
+/// it ends at the margin. WordCraft kept room for the inside border.
+#[test]
+fn the_last_row_on_a_page_leaves_room_for_the_tables_bottom_border() {
+    use wordcraft_doc::props::LineSpacing;
+    crate::test_fonts();
+    let single = |w: f32| (w > 0.0).then(|| Border::single(w));
+    let exact = |text: &str, height: f32| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        p.props.line_spacing = Some(LineSpacing::Exactly(height));
+        wordcraft_doc::para_block(p)
+    };
+    // Three 20 pt rows under a filler `filler` pt tall: the page the second row is on and where
+    // it ends.
+    let second_row = |inside: f32, outer: f32, filler: f32| {
+        let mut t = Table::new(3, 1, 300.0);
+        t.props.style = None;
+        t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+        let (i, o) = (single(inside), single(outer));
+        t.props.borders = Some(Borders { top: o, left: o, bottom: o, right: o, between: i, inside_v: i });
+        for row in &mut t.rows {
+            row.cells[0].blocks = vec![exact("row", 20.0)];
+        }
+        let mut d = Document::from_text("");
+        d.body = vec![exact("filler", filler), Arc::new(Block::Table(t))];
+        let l = lay(&d);
+        let found = l.pages.iter().enumerate().find_map(|(page, p)| {
+            p.items.iter().find_map(|it| if let Placed::Cell { rect, row: 1, .. } = it { Some((page, rect.bottom())) } else { None })
+        });
+        (found.expect("the second row is laid out"), d.last_section.page_h - d.last_section.margin_bottom)
+    };
+    for (inside, outer) in [(0.5f32, 3.0f32), (3.0, 0.5), (0.5, 0.0), (3.0, 0.0), (0.0, 3.0)] {
+        // Where the second row ends under a 100 pt filler, then fillers that leave it a little
+        // more and a little less room than the closing border needs.
+        let ((page, end), bottom) = second_row(inside, outer, 100.0);
+        assert_eq!(page, 0, "inside {inside}, outer {outer}: the table starts on the first page");
+        for (room, stays) in [(outer + 0.2, true), (outer - 0.2, false)] {
+            let ((page, _), _) = second_row(inside, outer, 100.0 + bottom - end - room);
+            assert_eq!(
+                page == 0,
+                stays,
+                "inside {inside} pt, outer {outer} pt: with {room} pt under the second row it {} on the page",
+                if stays { "stays" } else { "does not stay" }
+            );
+        }
+    }
+}
+
 /// A horizontal rule (VML `o:hr`) takes its whole line and is drawn across its share of it,
 /// placed by its alignment (Word, measured: 50 % centred, left, right). In a table cell it
 /// follows its column instead of widening the table.
