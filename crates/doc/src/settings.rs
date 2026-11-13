@@ -166,6 +166,13 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// Hide spelling errors in this document only (`w:hideSpellingErrors`): no squiggles under
+    /// misspelled words. Spelling & Grammar (F7) still finds them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_spelling_errors: bool,
+    /// Hide grammar errors in this document only (`w:hideGrammaticalErrors`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_grammar_errors: bool,
     /// The document was opened from ODF: the standard's rules that differ from Word's apply as
     /// it is laid out.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -328,6 +335,8 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            hide_spelling_errors: false,
+            hide_grammar_errors: false,
             odf: None,
         }
     }

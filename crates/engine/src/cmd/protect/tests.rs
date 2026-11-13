@@ -258,7 +258,11 @@ fn a_version_restore_keeps_the_live_protection() {
 #[test]
 fn a_document_wide_change_that_is_not_tracked_is_refused_under_protection() {
     for mode in ["readOnly", "forms", "comments", "trackedChanges"] {
-        for (id, params) in [("file.properties", json!({"title": "Forged title"})), ("file.privacyOptions", json!({"removePersonalInfo": true}))] {
+        for (id, params) in [
+            ("file.properties", json!({"title": "Forged title"})),
+            ("file.privacyOptions", json!({"removePersonalInfo": true})),
+            ("file.proofingExceptions", json!({"hideSpellingErrors": true})),
+        ] {
             let mut s = Session::new(Document::from_text("Some text."));
             s.run("review.restrict", &json!({"mode": mode})).unwrap();
             let before = s.doc.clone();
@@ -273,6 +277,8 @@ fn a_document_wide_change_that_is_not_tracked_is_refused_under_protection() {
     assert_eq!(s.doc.core.title, "A title");
     s.run("file.privacyOptions", &json!({"removePersonalInfo": true})).unwrap();
     assert!(s.doc.settings.remove_personal_info);
+    s.run("file.proofingExceptions", &json!({"hideSpellingErrors": true})).unwrap();
+    assert!(s.doc.settings.hide_spelling_errors);
 }
 
 /// A file command that changes the document is checked like any other: the privacy options,

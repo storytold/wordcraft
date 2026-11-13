@@ -82,6 +82,8 @@ Save Changes exposes the document-specific question as an alert-dialog name and 
 
 The Language dialog reads effective character formatting, including document defaults, paragraph styles and character styles. Accepting it unchanged keeps inherited language and no-proof choices (#2717); explicit direct formatting still takes precedence. Other proofing and Windows-specific reports remain separate.
 
+File › Options › Proofing › Exceptions for this document has Word's "Hide spelling errors in this document only" and "Hide grammar errors in this document only" (`file.proofingExceptions`, read with `file.proofing`). Each checkbox hides the marks of its kind on the page; Spelling & Grammar (F7) and `review.issues` still find the errors. The choices are saved in the document (`w:hideSpellingErrors`, `w:hideGrammaticalErrors`) and read from files that have them. Word's Exceptions for list also offers All New Documents; WordCraft applies the choices to the open document only.
+
 The `table.sort` command requires an explicit `column` to be a non-negative JSON integer naming a column in the table, indexed from 0 (#5531). Omitting it still sorts by column 0. Invalid selectors return an error before changing rows or history; the Sort dialog and collation rules are unchanged.
 
 ## Screen paper colors (#3398)
@@ -158,6 +160,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-31 | trivial | View › Macros opens a Macros dialog (also Alt+F8 and command search): the macros of this session listed with Run, Delete and Record, which reads Stop Recording while a recording runs; the button did nothing before, as `tools.macros` without a macro to run, define or delete only returned the list (#4327) |
 | 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |
 | 2026-10-30 | trivial | Synchronize the existing Proofing pane and navigation/selection/undo regressions with main `3b7f7ed`; new-SHA validation pending, readiness unchanged |
+| 2026-10-30 | trivial | File › Options › Proofing: Hide spelling errors and Hide grammar errors in this document only, saved with the document (`file.proofingExceptions`) |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-29 | trivial | Insert › Shapes lists the basic shapes as a grid of code-drawn icon tiles with accessible names and tooltips, as Word's gallery does, instead of a text list (#4349) |
