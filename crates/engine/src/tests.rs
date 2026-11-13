@@ -5541,8 +5541,9 @@ fn arrange_bounds_resizes_and_moves_objects() {
     assert_eq!(box_area(&mut s).rect, n);
 }
 
-/// A frame anchored to a page and moved in WordCraft is placed by its paragraph from then on: the
-/// file's page number goes, or the save would put it back. Only resized, it stays on that page.
+/// A frame anchored to a page stays fixed on a page when moved in WordCraft, now the page it was
+/// dropped on, so the save doesn't put the file's page number back. Set to move with text, it is
+/// placed by its paragraph from then on and the page number goes. Only resized, it stays on its page.
 #[test]
 fn an_odt_frame_moved_from_its_page_loses_the_page_number() {
     let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
@@ -5566,8 +5567,16 @@ fn an_odt_frame_moved_from_its_page_loses_the_page_number() {
     select_box(&mut s);
     run(&mut s, "arrange.bounds", json!({"width": 150, "height": 80}));
     assert!(frame_tag(&s).contains(r#"text:anchor-page-number="3""#), "resized: {}", frame_tag(&s));
+    // Fixed on the page, moved to another: it is fixed on that page, with its number.
     let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
     select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"page": 0, "x": 200, "y": 300}));
+    let tag = frame_tag(&s);
+    assert!(tag.contains(r#"text:anchor-type="page""#) && tag.contains(r#"text:anchor-page-number="1""#), "moved: {tag}");
+    // Set to move with text, then moved: placed by its paragraph, and the file's page number is gone.
+    let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
+    select_box(&mut s);
+    run(&mut s, "arrange.moveWithText", json!({"value": true}));
     run(&mut s, "arrange.bounds", json!({"page": 0, "x": 200, "y": 300}));
     let tag = frame_tag(&s);
     assert!(!tag.contains("anchor-page-number") && !tag.contains(r#"text:anchor-type="page""#), "moved: {tag}");
