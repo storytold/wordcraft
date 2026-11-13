@@ -291,7 +291,12 @@ fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
 /// as Keep Text Only does.
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
     match super::paste::paste_content(s, v)? {
-        super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
+        super::paste::Pasted::Fragment(frag) => {
+            // Formatted content can't go into a form field's result: a fill in progress is
+            // finished first and the content lands after the field, which stays (#5525).
+            super::commit_form_fill(s);
+            super::paste::insert(s, frag)?
+        }
         super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
     }
     sel_result(s)
@@ -448,7 +453,7 @@ fn paste_text(s: &mut Session, v: &Value) -> CmdResult {
     if text.is_empty() {
         return Err(CmdError::Failed("the clipboard is empty".into()));
     }
-    super::paste_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))?;
+    super::paste_plain_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))?;
     sel_result(s)
 }
 

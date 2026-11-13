@@ -104,6 +104,7 @@ impl Session {
             clip_history: Default::default(),
             find,
             goal_x,
+            form_fill: None,
             page_hint,
             registry,
             author: "WordCraft User".into(),

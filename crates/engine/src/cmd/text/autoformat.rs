@@ -67,7 +67,12 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
         return insert_paragraphs(s, text);
     }
     typing_options(s, text);
-    let smart_quote = if raw { None } else { autoformat(s, text) };
+    // A selected text form field's result is not the paragraph's text: smart quotes
+    // would read the field object (or the text before it) instead of the result (#5525).
+    // With Track Changes on the fill declines and the tracked replacement runs instead,
+    // where smart quotes behave as they always did.
+    let in_form_field = !s.doc.settings.track_changes && crate::cmd::selected_text_form_field(s).is_some();
+    let smart_quote = if raw || in_form_field { None } else { autoformat(s, text) };
     let was_collapsed = s.sel.is_collapsed();
     let effect = type_text_effect(s, smart_quote.as_deref().unwrap_or(text))?;
     let mut outcome = crate::ImeEditOutcome {
@@ -78,7 +83,8 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
         selection_changed: false,
     };
     let trigger = text.chars().count() == 1 && text.chars().all(|c| c == ' ' || ",.;:!?".contains(c));
-    if raw || !trigger {
+    // Text typed into a form field's result is not the paragraph's: no AutoCorrect over it (#5525).
+    if raw || !trigger || s.form_fill.is_some() {
         s.set_ime_edit_outcome(outcome);
         return sel_result(s);
     }

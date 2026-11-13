@@ -79,6 +79,8 @@ pub struct Session {
     pub find: FindState,
     /// Page x the caret tries to keep on Up/Down.
     pub goal_x: Option<f32>,
+    /// A legacy text form field being typed into (#5525): only typing and deleting keep it.
+    pub(crate) form_fill: Option<crate::cmd::FormFill>,
     /// Page the caret was last on (headers/footers repeat on many pages).
     pub page_hint: usize,
     pub registry: Arc<Registry>,
