@@ -738,6 +738,9 @@ fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
         .hash(&mut h);
     app.session.doc.media.len().hash(&mut h);
+    // A new document or a PDF view replaces every page texture: neither the layout fingerprint
+    // nor the view state alone would change enough to invalidate them.
+    (app.session.document_id(), app.session.pdf.is_some()).hash(&mut h);
     // A page drawn without a dragged object must not pass for the page with it: the drag starts
     // and ends change the key once each, so the page is rendered again then and only then.
     hidden.hash(&mut h);
@@ -961,6 +964,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     crate::ink::replay_tick(app, ui.ctx());
     let layout = app.session.layout();
+    // While a PDF is shown, the pages above are empty sheets in the PDF's own sizes and each
+    // raster comes from the PDF view instead of the document renderer.
+    let pdf_view = app.session.pdf_view();
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
     {
@@ -1202,6 +1208,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // would be on the page where it was and under the pointer at once).
         let hidden = app.canvas.dragged_off_page();
         let view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
+        let pdf_mode = pdf_view.is_some();
         for (i, pr) in geo.rects.iter().enumerate() {
             let sr = pr.translate(content_origin.to_vec2());
             let Some(page) = layout.pages.get(i) else { continue };
@@ -1209,7 +1216,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             // A Web/Draft page can be arbitrarily tall. Shrinking the whole page into one GPU
             // texture makes the text blurry; split those pages into native-resolution tiles.
             let width_scale = (geo.scale * ppp).min(max_tex / page.w.max(1.0)).max(0.05);
-            let tiled = page.h.clamp(1.0, 1e6) * width_scale > max_tex;
+            // PDF pages are one bitmap each, already capped by the viewer; never split them
+            // into tiles (the tile path would ask the document renderer for their pixels).
+            let tiled = !pdf_mode && page.h.clamp(1.0, 1e6) * width_scale > max_tex;
             let scale_px = if tiled { width_scale } else { width_scale.min(max_tex / page.h.clamp(1.0, 1e6)).max(0.05) };
             let tile_height_px = TILE_HEIGHT_PX.min(max_tex as usize).max(1);
             // Hide White Space shows only a band of the page; everything below paints into it.
@@ -1226,10 +1235,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             // Render before placing the page: a page re-rendered in this frame (a zoom step, an
             // edit) then sits on the pixel grid in this frame too, rather than a frame later.
             if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
-                let mut opts = page_render_options(app, dim_body);
-                // Only on the page it is on: the `Pos` can't match an object of another page.
-                opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
-                let img = wordcraft_render::render_page(&app.session.doc, page, scale_px, &opts);
+                let img = if let Some(pdf) = &pdf_view {
+                    pdf.render(i, scale_px)
+                } else {
+                    let mut opts = page_render_options(app, dim_body);
+                    // Only on the page it is on: the `Pos` can't match an object of another page.
+                    opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
+                    wordcraft_render::render_page(&app.session.doc, page, scale_px, &opts)
+                };
                 let ci = page_image(&img);
                 match app.canvas.textures.get_mut(&i) {
                     Some((k, tex)) => {
@@ -1247,7 +1260,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.ctx().request_repaint();
             }
             let current_scale = geo.scale * ppp;
-            let visual_sr = if fresh && (scale_px - current_scale).abs() <= 0.0001_f32.max(current_scale.abs() * 0.0001) {
+            // A PDF bitmap may have been scaled down to fit the raster budget, so its pixel
+            // dimensions are not the page's screen size: stretch it to the page rectangle.
+            let visual_sr = if pdf_mode {
+                sr
+            } else if fresh && (scale_px - current_scale).abs() <= 0.0001_f32.max(current_scale.abs() * 0.0001) {
                 app.canvas.textures.get(&i).map_or(sr, |(_, tex)| texel_aligned_rect(sr, tex.size_vec2(), ppp))
             } else {
                 sr
@@ -1467,8 +1484,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
         }
-        // Caret.
-        let focused = resp.has_focus() || app.canvas.focused;
+        // Caret. A PDF is read-only: no caret and no IME candidate window over its pages.
+        let focused = pdf_view.is_none() && (resp.has_focus() || app.canvas.focused);
         // After an automatic change, the web's text agent starts afresh (`keys::note_automatic_change`).
         // Only there: on X11 an interrupt recreates the input context and fcitx drops later keys (#1169).
         let ime_reset = std::mem::take(&mut app.canvas.ime_reset) && cfg!(target_arch = "wasm32") && app.canvas.ime_preedit.is_empty();

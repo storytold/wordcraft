@@ -211,19 +211,30 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         return sel_result(s);
     };
     let password = p::str(v, "password");
-    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
-        let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
+    let data = p::str(v, "data").map(|d| super::insert::base64_decode(d).ok_or_else(|| CmdError::Params("bad base64".into()))).transpose()?;
+    // A PDF opens as a read-only view, not as a Document. Decide by extension or by the %PDF-
+    // signature in the bytes, then handle it before any document importer sees it.
+    let is_pdf = match &data {
+        Some(bytes) => !bytes.is_empty() && crate::io::is_pdf(path, Some(bytes)),
+        None => crate::io::is_pdf(path, None),
+    };
+    if is_pdf {
+        let bytes = match data {
+            Some(bytes) => bytes,
+            None => crate::io::read_pdf_path(std::path::Path::new(path)).map_err(CmdError::Failed)?,
+        };
+        let view = crate::io::open_pdf_bytes(bytes).map_err(CmdError::Failed)?;
+        let pages = view.page_count();
+        s.set_pdf_view(view, path);
+        return Ok(json!({"path": path, "format": "pdf", "readOnly": true, "pages": pages, "encrypted": false}));
+    }
+    let (mut doc, encrypted) = match data {
         // An empty file (File Explorer's New › Microsoft Word Document makes one) opens as a new
         // blank document that saves back to it (#1384).
-        if bytes.is_empty() {
-            (normal_document(s), false)
-        } else {
-            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
-        }
-    } else if crate::io::is_empty_file(std::path::Path::new(path)) {
-        (normal_document(s), false)
-    } else {
-        crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
+        Some(bytes) if bytes.is_empty() => (normal_document(s), false),
+        Some(bytes) => crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?,
+        None if crate::io::is_empty_file(std::path::Path::new(path)) => (normal_document(s), false),
+        None => crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?,
     };
     // Plain text and Markdown carry no language: they are in the editing language.
     let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();

@@ -382,8 +382,10 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 // No document open (#1129): the app's name alone.
                 "WordCraft".to_string()
             } else {
+                // "PDF" is a format name, so it needs no translation.
+                let kind = if app.session.pdf.is_some() { " (PDF)" } else { "" };
                 format!(
-                    "{} — {}",
+                    "{}{kind} — {}",
                     app.title_stem(),
                     if app.session.dirty {
                         tl!("Edited")

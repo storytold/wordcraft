@@ -25,6 +25,16 @@ use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, ViewM
 
 use crate::{CmdError, Registry};
 
+/// A PDF is a view, never a document. Editing it, or writing the blank document behind it out
+/// under the PDF's name, is refused; navigating, changing the view, Close and Open still work.
+fn pdf_blocks(id: &str, mutates: bool) -> bool {
+    id.starts_with("file.save")
+        || id.starts_with("file.export")
+        || id.starts_with("file.print")
+        || id.starts_with("file.encrypt")
+        || (mutates && !matches!(id, "file.close" | "file.new" | "file.open"))
+}
+
 /// A selection: anchor (where it started) and focus (where the caret is).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Selection {
@@ -357,6 +367,9 @@ pub struct Session {
     /// Formatting picked with a collapsed caret, applied to the next typed text.
     pub pending: Option<CharProps>,
     pub path: Option<std::path::PathBuf>,
+    /// A PDF opened for reading: shown instead of the document, never part of it. Shared with the
+    /// UI so a page raster can be produced without borrowing the whole session.
+    pub pdf: Option<Arc<crate::PdfView>>,
     /// Name given to a document not saved yet (File › Info › Rename): what Save suggests. A file
     /// name, not document metadata, so it is not part of the document or its undo history.
     pub file_name: Option<String>,
@@ -634,6 +647,7 @@ impl Session {
             view: ViewState::default(),
             pending: None,
             path: None,
+            pdf: None,
             file_name: None,
             user_dict_path: None,
             dirty: false,
@@ -803,8 +817,12 @@ impl Session {
         if set.is_empty() { self.author.split_whitespace().filter_map(|w| w.chars().next()).collect() } else { set.to_string() }
     }
 
-    /// The current layout (recomputed when the document or view changed).
+    /// The current layout (recomputed when the document or view changed). A PDF view supplies
+    /// one empty page per sheet, so the canvas places PDF bitmaps with its ordinary geometry.
     pub fn layout(&mut self) -> Arc<DocLayout> {
+        if let Some(pdf) = &self.pdf {
+            return pdf.layout();
+        }
         let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
         let width = match mode {
             ViewMode::Read => self.view.read_width,
@@ -1101,8 +1119,9 @@ impl Session {
         blank_document(&self.region())
     }
 
-    /// Replace the document (open/new).
+    /// Replace the document (open/new). Any other open or New closes a PDF view.
     pub fn set_document(&mut self, doc: Document) {
+        self.pdf = None;
         self.autocap = None;
         self.document_id = self.document_id.wrapping_add(1);
         self.bib_style = doc_bib_style(&doc);
@@ -1125,6 +1144,24 @@ impl Session {
         self.touch();
         self.dirty = false;
         self.relayout();
+    }
+
+    /// Show a PDF instead of the document. A blank document still backs the session (commands
+    /// read `doc` unconditionally), but the canvas draws the PDF and nothing may edit or save it.
+    pub fn set_pdf_view(&mut self, pdf: crate::PdfView, path: &str) {
+        let blank = self.blank_document();
+        self.set_document(blank);
+        self.pdf = Some(Arc::new(pdf));
+        self.path = Some(std::path::PathBuf::from(path));
+        self.view.mode = ViewMode::Print;
+        self.view.read_mode = false;
+        self.dirty = false;
+        self.relayout();
+    }
+
+    /// The PDF currently shown, if any. Cheap to hold while painting a frame.
+    pub fn pdf_view(&self) -> Option<Arc<crate::PdfView>> {
+        self.pdf.clone()
     }
 
     /// A snapshot to put back with [`Session::restore`], for a caller that runs a command and
@@ -1150,6 +1187,8 @@ impl Session {
             view: _,
             pending: _,
             path: _,
+            // A read-only PDF view is not part of the document or its history.
+            pdf: _,
             file_name: _,
             // The custom dictionary file, like the file path: host wiring, not an edit.
             user_dict_path: _,
@@ -1285,6 +1324,9 @@ impl Session {
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
         if let Some(why) = (spec.enabled)(self) {
             return Err(CmdError::Disabled(format!("{id}: {why}")));
+        }
+        if self.pdf.is_some() && pdf_blocks(id, spec.mutates) {
+            return Err(CmdError::Disabled(format!("{id}: a PDF is open as a read-only view")));
         }
         // Restrict Editing: refused outright, or allowed as long as it only edits the exceptions.
         let guard = if spec.mutates { crate::cmd::protect::check_before(self, id, params)? } else { false };

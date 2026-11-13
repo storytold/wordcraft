@@ -26,6 +26,8 @@ pub const OPEN_EXTS: &[&str] = &[
     "xml",
     "wcraft.json",
     "json",
+    // Read-only PDF view (page bitmaps, never an editable Document).
+    "pdf",
 ];
 /// Formats WordCraft saves (Save As).
 pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "tex", "png", "json", "xml"];
@@ -45,6 +47,42 @@ fn ext_of(name: &str) -> String {
 /// Is `ext` one of Word's package formats (.docx/.docm/.dotx/.dotm), which save without loss?
 pub fn is_word_package(ext: &str) -> bool {
     wordcraft_docx::Flavor::from_ext(ext).is_some()
+}
+
+/// True when the name or the bytes say this is a PDF. PDFs open as a read-only view, not as a
+/// `Document`, so `file.open` handles them before the document importers. Passing `None` for
+/// `bytes` (a path the caller has not read yet) decides by extension alone.
+pub fn is_pdf(name: &str, bytes: Option<&[u8]>) -> bool {
+    if ext_of(name) == "pdf" {
+        return true;
+    }
+    bytes.is_some_and(|b| {
+        let head = b.get(..b.len().min(1024)).unwrap_or_default();
+        head.windows(5).any(|w| w == b"%PDF-")
+    })
+}
+
+/// Parse PDF bytes into the session's read-only view. Errors are strings, like every other
+/// importer's, so a bad PDF is an ordinary "could not open" and never a panic.
+pub fn open_pdf_bytes(bytes: Vec<u8>) -> Result<crate::PdfView, String> {
+    let inner = wordcraft_pdfview::PdfView::open(bytes).map_err(|e| e.to_string())?;
+    Ok(crate::PdfView::new(inner))
+}
+
+/// Read a PDF from disk with the same guards as [`open_path_in`] (automation read root, size cap).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_pdf_path(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    crate::file_access::check_read(&path.to_string_lossy())?;
+    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if meta.len() > 2 << 30 {
+        return Err(format!("{}: file is larger than 2 GB", path.display()));
+    }
+    std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn read_pdf_path(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    Err(format!("{}: files are opened through the browser on the web", path.display()))
 }
 
 /// How a copy in another format is written.
@@ -342,6 +380,8 @@ fn open_by_content(
     } else if matches!(ext, "doc" | "dot" | "docx" | "docm" | "dotx" | "dotm" | "rtf") && looks_like_web_page(bytes) {
         let opened = crate::io_ext::open("html", bytes, page).unwrap_or_else(|| Err(format!("{name}: can't open web pages")));
         (opened?, false)
+    } else if bytes.starts_with(b"%PDF-") {
+        return Err(format!("{name}: a PDF opens as a read-only view, not an editable document"));
     } else if wordcraft_formats::txt::is_text(bytes) {
         (wordcraft_formats::txt::import_on(bytes, page), false)
     } else if ext.is_empty() {

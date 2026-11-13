@@ -13,6 +13,7 @@ pub mod io;
 mod io_ext;
 pub mod keymap;
 pub mod math_gallery;
+pub mod pdf_view;
 pub mod print;
 pub mod recovery;
 pub mod ribbon;
@@ -26,6 +27,7 @@ use serde_json::Value;
 
 pub use io::Password;
 pub use keymap::KeyMap;
+pub use pdf_view::PdfView;
 pub use ribbon::RibbonLayout;
 pub use session::{
     CellRange, ColumnBlock, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, UNDO_LIST_MAX, ViewState, blank_document, set_system_locale,

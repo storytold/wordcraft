@@ -2245,7 +2245,10 @@ impl WordApp {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         let title = if self.has_document() {
-            format!("{}{} - WordCraft", self.title_stem(), if self.session.dirty { " •" } else { "" })
+            // PDF is a read-only view: say so in the window title. "PDF" is a format name, not
+            // interface wording, so it needs no translation.
+            let kind = if self.session.pdf.is_some() { " (PDF)" } else { "" };
+            format!("{}{kind}{} - WordCraft", self.title_stem(), if self.session.dirty { " •" } else { "" })
         } else {
             "WordCraft".to_string()
         };
@@ -2807,6 +2810,33 @@ mod tests {
 
     fn app() -> WordApp {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    /// Opening a PDF shows its pages through the ordinary canvas texture path and refuses edits.
+    #[test]
+    fn pdf_view_paints_and_is_read_only() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let doc = wordcraft_doc::Document::from_text("PDF view");
+        let bytes = wordcraft_pdf::export(&doc, &wordcraft_pdf::PdfOptions::default()).unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
+        let result = app.run("file.open", json!({"path": "notes.pdf", "data": data})).unwrap();
+        assert_eq!(result["format"], "pdf");
+        assert_eq!(result["readOnly"], true);
+        assert!(app.session.pdf.is_some());
+        assert_eq!(app.title_stem(), "notes");
+        let pages = app.session.layout().pages.len();
+        assert!(pages >= 1, "the PDF view supplies a page per sheet");
+        // One full frame rasterises the page and uploads it as a texture, as for any document.
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        out.drop_without_applying_deltas();
+        assert!(app.run("text.insert", json!({"text": "x"})).is_err(), "a PDF view is read-only");
+        // Opening a real document leaves the PDF view behind.
+        app.run("file.new", json!({})).unwrap();
+        assert!(app.session.pdf.is_none());
     }
 
     #[test]

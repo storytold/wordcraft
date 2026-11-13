@@ -1,0 +1,17 @@
+[package]
+name = "wordcraft-pdfview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Read-only PDF page viewing: hayro parsing and rasterising, no native libraries"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Pure Rust (Apache-2.0 OR MIT), forbid(unsafe_code) upstream, vello_cpu rasteriser. 0.7.1
+# shares the exact hayro-interpret / image / kurbo versions already in Cargo.lock, so it adds
+# no duplicate copies of the PDF interpreter. No C/C++ library and no WASM glue is required.
+hayro = "0.7.1"
+thiserror = { workspace = true }
+log = { workspace = true }

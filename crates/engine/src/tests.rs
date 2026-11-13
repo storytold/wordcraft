@@ -8491,3 +8491,67 @@ fn rtf_list_round_trip_keeps_text() {
         assert_eq!(d.plain_text(StoryRef::Body), "first\nsecond", "{cmd}");
     }
 }
+
+/// A real PDF written by our own exporter: opening what we save is the shortest round trip.
+fn pdf_bytes() -> Vec<u8> {
+    let doc = wordcraft_doc::Document::from_text("Hello PDF");
+    wordcraft_pdf::export(&doc, &wordcraft_pdf::PdfOptions::default()).unwrap()
+}
+
+#[test]
+fn pdf_opens_as_a_read_only_page_view() {
+    let bytes = pdf_bytes();
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(crate::io::OPEN_EXTS.contains(&"pdf"));
+    let data = crate::cmd::insert::base64_encode(&bytes);
+    let mut s = s();
+    let r = run(&mut s, "file.open", json!({"path": "notes.pdf", "data": data}));
+    assert_eq!(r["format"], "pdf");
+    assert_eq!(r["readOnly"], true);
+    let pages = r["pages"].as_u64().unwrap() as usize;
+    assert!(pages >= 1);
+    assert!(s.pdf.is_some());
+    // The blank document behind the view stays empty: no PDF content ever enters Document.
+    assert!(s.doc.plain_text(StoryRef::Body).trim().is_empty());
+    let layout = s.layout();
+    assert_eq!(layout.pages.len(), pages);
+    assert!(layout.pages[0].w > 100.0 && layout.pages[0].h > 100.0);
+    let view = s.pdf_view().unwrap();
+    let raster = view.render(0, 1.0);
+    assert!(raster.width > 0 && raster.height > 0);
+    assert_eq!(raster.pixels.len(), (raster.width as usize) * (raster.height as usize) * 4);
+}
+
+#[test]
+fn pdf_view_is_read_only_and_leaves_on_open() {
+    let data = crate::cmd::insert::base64_encode(&pdf_bytes());
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": "notes.pdf", "data": data}));
+    for id in ["text.insert", "format.bold", "file.save", "file.saveAs", "file.exportPdf"] {
+        let r = s.run(id, &json!({"text": "x", "path": "out.docx"}));
+        assert!(matches!(r, Err(crate::CmdError::Disabled(_))), "{id} should be refused while a PDF is shown");
+    }
+    // Opening (or creating) a real document takes the view away and editing works again.
+    run(&mut s, "file.new", json!({}));
+    assert!(s.pdf.is_none());
+    run(&mut s, "text.insert", json!({"text": "editable"}));
+    assert_eq!(text(&s), "editable");
+}
+
+#[test]
+fn hostile_pdf_inputs_never_panic() {
+    let encode = crate::cmd::insert::base64_encode;
+    for junk in [b"%PDF-".to_vec(), b"not a pdf".to_vec(), vec![0u8; 64], pdf_bytes()[..20].to_vec()] {
+        let data = encode(&junk);
+        for path in ["junk.pdf", "junk.bin"] {
+            let mut s = s();
+            let _ = s.run("file.open", &json!({"path": path, "data": data}));
+            let _ = s.layout();
+            s.clamp_selection();
+        }
+    }
+    assert!(crate::io::is_pdf("report.bin", Some(b"junk %PDF-1.7 junk")));
+    assert!(!crate::io::is_pdf("report.bin", Some(b"just text")));
+    // The document importers refuse a PDF with a clear error instead of showing garbage.
+    assert!(crate::io::open_bytes("x.pdf", &pdf_bytes()).is_err());
+}

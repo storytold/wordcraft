@@ -42,6 +42,8 @@ js-sys = "0.3"
 cfb = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 zip = { workspace = true }
+# A real PDF from our own exporter, so the PDF view test opens what WordCraft writes.
+wordcraft-pdf = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

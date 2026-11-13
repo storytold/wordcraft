@@ -83,4 +83,9 @@ and upstream bundled material; see that revision's licenses/pdf-writer/ and ATTR
 The backend patch prevents finalization during an unwind and rejects a writer after failed
 cleanup. WordCraft enables only writing; PDF import and its image decoders are not enabled.
 
+Read-only PDF viewing uses the hayro crate family (Apache-2.0 OR MIT, pure Rust, fetched from
+crates.io): hayro-syntax parses the file and hayro rasterises pages through vello_cpu. No native
+PDFium, Poppler or MuPDF library is bundled or linked. Encrypted PDFs, transparency groups and
+knockout groups are not supported by that renderer.
+
 No Microsoft, Adobe, Avid or Autodesk icons, images, templates or artwork are included.

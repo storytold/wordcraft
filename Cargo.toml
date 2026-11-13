@@ -21,6 +21,7 @@ wordcraft-docbin = { path = "crates/docbin" }
 wordcraft-formats = { path = "crates/formats" }
 wordcraft-render = { path = "crates/render" }
 wordcraft-pdf = { path = "crates/pdf" }
+wordcraft-pdfview = { path = "crates/pdfview" }
 wordcraft-proof = { path = "crates/proof" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
