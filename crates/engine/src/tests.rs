@@ -883,6 +883,28 @@ fn toggles_on_mixed_selection_follow_first_character() {
     }
 }
 
+/// A selection that starts in an empty paragraph: Word decides from the first text character, not
+/// from the empty paragraph's mark (observed in Word for Windows, #6516 review).
+#[test]
+fn toggle_on_a_selection_from_an_empty_paragraph_follows_the_first_text() {
+    let toggled = |mark_bold: bool, text_bold: bool| -> Option<bool> {
+        let mut s = s();
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "text.insert", json!({"text": "abc"}));
+        let first = Pos::body(0, 0);
+        s.doc.para_mut(first.story, &first.path).unwrap().mark.bold = Some(mark_bold);
+        run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 3}}));
+        run(&mut s, "format.bold", json!({"value": text_bold}));
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 1, "off": 3}}));
+        run(&mut s, "format.bold", json!({}));
+        s.doc.para_at(&Pos::body(1, 0)).unwrap().props_of_char(0).bold
+    };
+    // A bold empty paragraph before plain text: Bold goes on.
+    assert_eq!(toggled(true, false), Some(true));
+    // A plain empty paragraph before bold text: Bold comes off.
+    assert_eq!(toggled(false, true), Some(false));
+}
+
 #[test]
 fn border_toggles_and_saves() {
     use wordcraft_doc::props::Border;
