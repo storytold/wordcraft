@@ -1283,3 +1283,734 @@ fn compare_pairs_many_notes_when_budget_exhausted() {
         assert!(has_del, "Note tracks deletion of 'observations': {}", para.plain_text());
     }
 }
+
+/// #5842: Inserted footnotes with dependent text boxes and media items adopt their text box
+/// stories under independent IDs in `s.doc` and retain image bytes in `s.doc.media`.
+#[test]
+fn compare_inserted_note_adopts_dependent_parts_and_media() {
+    let orig = Session::new(Document::from_text("Original body paragraph."));
+
+    let mut rev = Session::new(Document::from_text("Original body paragraph with note."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Original body paragraph with note.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Inserted footnote text."})).unwrap();
+
+    let fn_id = rev.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+
+    let tb_story_id = rev.doc.add_part(
+        wordcraft_doc::PartKind::TextBox,
+        vec![Arc::new(Block::Para(Paragraph::with_text("Text box inside footnote.", CharProps::default())))],
+    );
+    let shape_obj = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 100.0,
+        h: 50.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: Some(tb_story_id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let media_key = "note_image.png";
+    let media_bytes = Arc::new(vec![0x89, b'P', b'N', b'G', 1, 2, 3]);
+    rev.doc.media.insert(media_key.into(), media_bytes.clone());
+    let img_obj = InlineObject::Image {
+        media: media_key.into(),
+        w: 20.0,
+        h: 20.0,
+        alt: "Image in note".into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+
+    if let Some(fn_part) = rev.doc.parts.get_mut(&fn_id)
+        && let Some(Block::Para(p)) = fn_part.blocks.get_mut(0).map(Arc::make_mut)
+    {
+        let at = p.len();
+        let _ = p.insert_object(at, shape_obj, &CharProps::default());
+        let at = p.len();
+        let _ = p.insert_object(at, img_obj, &CharProps::default());
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-note-dep-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    // Verify media was preserved in s.doc.media.
+    assert!(
+        s.doc.media.values().any(|b| b.as_slice() == media_bytes.as_slice()),
+        "media bytes preserved in s.doc.media: {:?}",
+        s.doc.media.keys().collect::<Vec<_>>()
+    );
+
+    // Verify text box part was adopted into s.doc under an independent ID.
+    let adopted_tb = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::TextBox);
+    assert!(adopted_tb.is_some(), "Text box from inserted note was adopted into s.doc");
+    let adopted_text = adopted_tb.unwrap().blocks[0].as_para().unwrap().plain_text();
+    assert_eq!(adopted_text, "Text box inside footnote.");
+}
+
+/// #5842: When a paired footnote's text is edited, the note's run formatting is preserved:
+/// the footnote reference mark retains `FootnoteReference`, unchanged text retains its own
+/// font/style properties rather than inheriting the first run's props, and inserted words
+/// take the revised run props.
+#[test]
+fn compare_preserves_note_run_formatting() {
+    let mut orig = Session::new(Document::from_text("Body sentence."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Body sentence.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Original note content."})).unwrap();
+
+    // Style a specific word in the original footnote as bold.
+    let fn_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+    if let Some(fn_part) = orig.doc.parts.get_mut(&fn_id)
+        && let Some(Block::Para(p)) = fn_part.blocks.get_mut(0).map(Arc::make_mut)
+        && let Some(idx) = p.text.find("Original")
+    {
+        let _ = p.format(idx, idx + "Original".len(), &|c| c.bold = Some(true));
+    }
+
+    let mut rev = Session::new(Document::from_text("Body sentence."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Body sentence.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Original note updated."})).unwrap();
+    let rev_fn_id = rev.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+    if let Some(fn_part) = rev.doc.parts.get_mut(&rev_fn_id)
+        && let Some(Block::Para(p)) = fn_part.blocks.get_mut(0).map(Arc::make_mut)
+    {
+        if let Some(idx) = p.text.find("Original") {
+            let _ = p.format(idx, idx + "Original".len(), &|c| c.bold = Some(true));
+        }
+        if let Some(idx) = p.text.find("updated") {
+            let _ = p.format(idx, idx + "updated".len(), &|c| c.italic = Some(true));
+        }
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fnprops-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    let fn_part = s.doc.parts.get(&fn_id).unwrap();
+    let p = fn_part.blocks[0].as_para().unwrap();
+
+    // Verify the footnote reference run style is still FootnoteReference.
+    let ref_run = p.runs.first().unwrap();
+    assert_eq!(ref_run.props.style.as_deref(), Some("FootnoteReference"));
+
+    // Verify "Original" retained bold: true and is NOT FootnoteReference.
+    let orig_idx = p.text.find("Original").unwrap();
+    let orig_props = p.props_of_char(orig_idx);
+    assert_eq!(orig_props.bold, Some(true), "Original retained bold");
+    assert_ne!(orig_props.style.as_deref(), Some("FootnoteReference"), "Text does not inherit FootnoteReference");
+
+    // Verify "updated" is marked ins and has italic: true from revised run.
+    let upd_idx = p.text.find("updated").unwrap();
+    let upd_props = p.props_of_char(upd_idx);
+    assert!(upd_props.ins.is_some(), "'updated' is tracked as ins");
+    assert_eq!(upd_props.italic, Some(true), "'updated' has italic: true from revised run");
+}
+
+/// #5842: When a paired paragraph changes both text and paragraph formatting, the formatting
+/// change is recorded as `fmt_change` so that `review.rejectAll` restores original properties.
+#[test]
+fn compare_records_para_formatting_when_text_also_changes() {
+    let orig = Session::new(Document::from_text("First paragraph text."));
+    let mut rev = Session::new(Document::from_text("First paragraph revised text."));
+    // Set Center alignment on revised paragraph
+    if let Some(Block::Para(p)) = rev.doc.body.get_mut(0).map(Arc::make_mut) {
+        p.props.align = Some(wordcraft_doc::Align::Center);
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-parafmt-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p.props.align, Some(wordcraft_doc::Align::Center));
+    assert!(p.props.fmt_change.is_some(), "Paragraph records fmt_change for alignment change");
+
+    // Rejecting all changes must restore original text AND original alignment (Left / None)!
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p_rej.plain_text(), "First paragraph text.");
+    assert_ne!(p_rej.props.align, Some(wordcraft_doc::Align::Center), "Alignment reverted from Center");
+}
+
+/// #5842: When an unchanged word within an edited paragraph changes character formatting
+/// (e.g. regular to bold), the character formatting change is tracked on that run so that
+/// `review.rejectAll` restores the original character formatting.
+#[test]
+fn compare_records_run_formatting_when_text_also_changes() {
+    let orig = Session::new(Document::from_text("First word and second word."));
+    let mut rev = Session::new(Document::from_text("First word revised and second word."));
+
+    // Set bold: true on "second" in rev.
+    if let Some(Block::Para(p)) = rev.doc.body.get_mut(0).map(Arc::make_mut)
+        && let Some(idx) = p.text.find("second")
+    {
+        let _ = p.format(idx, idx + "second".len(), &|c| c.bold = Some(true));
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-runfmt-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let sec_idx = p.text.find("second").unwrap();
+    let sec_props = p.props_of_char(sec_idx);
+    assert_eq!(sec_props.bold, Some(true), "'second' received bold formatting in result");
+    assert!(sec_props.fmt_change.is_some(), "'second' has fmt_change recorded for bold addition");
+
+    // Rejecting all changes restores 'second' to regular (not bold)!
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s.doc.body[0].as_para().unwrap();
+    let sec_rej_props = p_rej.props_of_char(p_rej.text.find("second").unwrap());
+    assert_ne!(sec_rej_props.bold, Some(true), "'second' reverted to regular after rejectAll");
+}
+
+/// #5842: When a matched token in the revised document spans multiple formatting boundaries
+/// in the original token (e.g. "prefix old" -> "prefix new", where only "fix" was bold originally
+/// and "prefix" is regular in revised), `apply_tok_formatting` splits revised pieces at original
+/// formatting boundaries so formatting differences within the token are recorded and restored
+/// on `review.rejectAll`.
+#[test]
+fn compare_splits_matched_token_pieces_at_original_formatting_boundaries() {
+    let mut orig = Session::new(Document::from_text("prefix old"));
+    if let Some(Block::Para(p)) = orig.doc.body.get_mut(0).map(Arc::make_mut)
+        && let Some(idx) = p.text.find("fix")
+    {
+        let _ = p.format(idx, idx + "fix".len(), &|c| c.bold = Some(true));
+    }
+
+    let rev = Session::new(Document::from_text("prefix new"));
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-splitfmt-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    // Rejecting all changes must restore original text AND the bold property on "fix"!
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p_rej.plain_text(), "prefix old");
+    let fix_idx = p_rej.text.find("fix").unwrap();
+    let fix_props = p_rej.props_of_char(fix_idx);
+    assert_eq!(fix_props.bold, Some(true), "'fix' reverted to bold after rejectAll");
+    let pre_idx = p_rej.text.find("pre").unwrap();
+    let pre_props = p_rej.props_of_char(pre_idx);
+    assert_ne!(pre_props.bold, Some(true), "'pre' stayed regular");
+}
+
+/// #5842: When a note contains a table whose cell text is unchanged but paragraph alignment
+/// in the cell changes, Compare records the paragraph formatting revision so `review.rejectAll`
+/// restores the original alignment.
+#[test]
+fn compare_records_para_formatting_inside_matched_tables() {
+    let mut orig = session_with_note("Body text.", "Note text", false);
+    if let Some(part) = orig.doc.parts.values_mut().find(|p| p.kind == wordcraft_doc::PartKind::Footnote) {
+        part.blocks.push(Arc::new(Block::Table(wordcraft_doc::Table::new(1, 1, 200.0))));
+    }
+
+    let mut rev = session_with_note("Body text.", "Note text", false);
+    let mut table = wordcraft_doc::Table::new(1, 1, 200.0);
+    // Change paragraph alignment in table cell
+    if let Some(Block::Para(p)) = table.rows[0].cells[0].blocks.get_mut(0).map(Arc::make_mut) {
+        p.props.align = Some(wordcraft_doc::Align::Center);
+    }
+    if let Some(part) = rev.doc.parts.values_mut().find(|p| p.kind == wordcraft_doc::PartKind::Footnote) {
+        part.blocks.push(Arc::new(Block::Table(table)));
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-tblfmt-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    // Verify cell paragraph has Center alignment and fmt_change recorded
+    let fn_part = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).unwrap();
+    let Block::Table(t) = &*fn_part.blocks[1] else { panic!("expected table") };
+    let cell_p = t.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(cell_p.props.align, Some(wordcraft_doc::Align::Center));
+    assert!(cell_p.props.fmt_change.is_some(), "Cell paragraph has fmt_change recorded");
+
+    // Rejecting all changes restores original alignment
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let fn_part_rej = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).unwrap();
+    let Block::Table(t_rej) = &*fn_part_rej.blocks[1] else { panic!("expected table") };
+    let cell_p_rej = t_rej.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_ne!(cell_p_rej.props.align, Some(wordcraft_doc::Align::Center), "Alignment reverted from Center");
+}
+
+/// #5842: When `footnotes` is false, note references in the revised body are still aligned and
+/// remapped to their matching original notes, and unmatched revised references receive orphan IDs
+/// so they never resolve to an unrelated original note.
+#[test]
+fn compare_remaps_revised_note_refs_when_footnotes_false() {
+    let mut orig = Session::new(Document::from_text("Para one.\nPara two."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "First footnote content."})).unwrap();
+    orig.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Second footnote content."})).unwrap();
+
+    let fn_ids: Vec<u32> = orig.doc.parts.iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).collect();
+    assert_eq!(fn_ids.len(), 2);
+    let orig_fn2_id = fn_ids[1];
+
+    let mut rev = Session::new(Document::from_text("Para two."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Para two.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Second footnote content."})).unwrap();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fnremapdis-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "footnotes": false})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    // The surviving paragraph's footnote reference must resolve to orig_fn2_id, not note 1!
+    let mut found_fn2_ref = false;
+    for block in &s.doc.body {
+        if let Block::Para(p) = &**block {
+            for o in &p.objects {
+                if let InlineObject::NoteRef { id, .. } = o
+                    && *id == orig_fn2_id
+                {
+                    found_fn2_ref = true;
+                }
+            }
+        }
+    }
+    assert!(found_fn2_ref, "Surviving note reference was remapped to original note 2");
+}
+
+/// #5842: When `formatting` is false, matched tables still recurse through cells, so removing
+/// a footnote reference from a table cell is recorded.
+#[test]
+fn compare_compares_matched_tables_when_formatting_false() {
+    let mut orig = session_with_note("Body text.", "Note in cell", false);
+    let fn_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+    let mut table = wordcraft_doc::Table::new(1, 1, 200.0);
+    if let Some(Block::Para(p)) = table.rows[0].cells[0].blocks.get_mut(0).map(Arc::make_mut) {
+        let _ = p.insert_object(
+            p.len(),
+            InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id: fn_id, custom: String::new() },
+            &CharProps::default(),
+        );
+    }
+    if let Some(Block::Para(p)) = orig.doc.body.get_mut(0).map(Arc::make_mut) {
+        p.text.clear();
+        p.runs.clear();
+        p.objects.clear();
+    }
+    orig.doc.body.push(Arc::new(Block::Table(table)));
+
+    let mut rev = session_with_note("Body text.", "Note in cell", false);
+    let rev_table = wordcraft_doc::Table::new(1, 1, 200.0);
+    if let Some(Block::Para(p)) = rev.doc.body.get_mut(0).map(Arc::make_mut) {
+        p.text.clear();
+        p.runs.clear();
+        p.objects.clear();
+    }
+    rev.doc.body.push(Arc::new(Block::Table(rev_table)));
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-tblnofmt-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "formatting": false})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "Change recorded for footnote ref removal in table even when formatting is false");
+}
+
+/// #5842: When revised document has an inserted footnote referencing media keys that
+/// collide with existing media in original document but have different bytes, the
+/// revised media is remapped to new keys so neither original nor revised image bytes
+/// are shadowed.
+#[test]
+fn compare_remaps_conflicting_media_keys_in_inserted_notes_and_body() {
+    let mut orig = Session::new(Document::from_text("Original body paragraph."));
+    let orig_media = Arc::new(vec![0x89, b'P', b'N', b'G', 1, 1, 1]);
+    orig.doc.media.insert("image1.png".into(), orig_media.clone());
+    if let Some(Block::Para(p)) = orig.doc.body.get_mut(0).map(Arc::make_mut) {
+        let _ = p.insert_object(
+            p.len(),
+            InlineObject::Image {
+                media: "image1.png".into(),
+                w: 10.0,
+                h: 10.0,
+                alt: "Original pic".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        );
+    }
+
+    let mut rev = session_with_note("Original body paragraph.", "Revised footnote with picture.", false);
+    let rev_media = Arc::new(vec![0x89, b'P', b'N', b'G', 2, 2, 2]);
+    rev.doc.media.insert("image1.png".into(), rev_media.clone());
+    let fn_id = rev.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+    if let Some(fn_part) = rev.doc.parts.get_mut(&fn_id)
+        && let Some(Block::Para(p)) = fn_part.blocks.get_mut(0).map(Arc::make_mut)
+    {
+        let at = p.len();
+        let _ = p.insert_object(
+            at,
+            InlineObject::Image {
+                media: "image1.png".into(),
+                w: 10.0,
+                h: 10.0,
+                alt: "Revised note pic".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        );
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-mediacollide-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let _ = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    // Original image1.png must still hold original bytes:
+    assert_eq!(s.doc.media["image1.png"].as_slice(), orig_media.as_slice(), "Original image bytes preserved");
+
+    // The revised image was stored under a new remapped key:
+    let remapped_key = s.doc.media.iter().find(|(k, v)| k.as_str() != "image1.png" && v.as_slice() == rev_media.as_slice()).map(|(k, _)| k.clone());
+    assert!(remapped_key.is_some(), "Conflicting revised image stored under new key in s.doc.media");
+    let new_key = remapped_key.unwrap();
+
+    // The adopted footnote part must reference the remapped key:
+    let adopted_fn = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).expect("Footnote adopted");
+    let mut found_remapped_img = false;
+    for b in &adopted_fn.blocks {
+        if let Block::Para(p) = &**b {
+            for o in &p.objects {
+                if let InlineObject::Image { media, .. } = o
+                    && media == &new_key
+                {
+                    found_remapped_img = true;
+                }
+            }
+        }
+    }
+    assert!(found_remapped_img, "Adopted footnote references remapped image key {new_key}");
+}
+
+/// #5842: Tables with different shapes (e.g. 2x1 vs 1x2) having identical flattened
+/// text are handled as replacements (deleted old table + inserted new table) rather
+/// than adopting the revised table untracked.
+#[test]
+fn compare_tracks_replacement_when_matched_tables_differ_in_shape() {
+    let mut orig = Session::new(Document::new());
+    let mut table_orig = wordcraft_doc::Table::new(2, 1, 200.0);
+    table_orig.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("cell one", CharProps::default()))];
+    table_orig.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("cell two", CharProps::default()))];
+    orig.doc.body = vec![Arc::new(Block::Table(table_orig))];
+
+    let mut rev = Session::new(Document::new());
+    let mut table_rev = wordcraft_doc::Table::new(1, 2, 200.0);
+    table_rev.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("cell one", CharProps::default()))];
+    table_rev.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("cell two", CharProps::default()))];
+    rev.doc.body = vec![Arc::new(Block::Table(table_rev))];
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-tblshape-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "Change recorded for shape-mismatched table replacement");
+
+    // Both the deleted original table and the inserted revised table must be present in s.doc.body:
+    let tables: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Table(t) = &**b { Some(t) } else { None }).collect();
+    assert_eq!(tables.len(), 2, "Expected deleted original table and inserted revised table");
+    assert_eq!(tables[0].rows.len(), 2, "Original table has 2 rows");
+    assert_eq!(tables[1].rows.len(), 1, "Revised table has 1 row");
+
+    // Table 0 cells have del revision:
+    assert!(tables[0].rows[0].cells[0].blocks[0].as_para().unwrap().mark.del.is_some(), "Original table cell 0 marked deleted");
+    // Table 1 cells have ins revision:
+    assert!(tables[1].rows[0].cells[0].blocks[0].as_para().unwrap().mark.ins.is_some(), "Revised table cell 0 marked inserted");
+}
+
+/// #5842: Paired notes adopt revised text box stories before comparing blocks, so text box stories
+/// exist in `s.doc.parts` under independent IDs and comparison/output use the adopted slot IDs.
+#[test]
+fn compare_paired_note_adopts_text_boxes_before_comparing() {
+    let orig = session_with_note("Body paragraph.", "Footnote content.", false);
+    let orig_fn_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+
+    let mut rev = session_with_note("Body paragraph.", "Footnote content with text box.", false);
+    let rev_fn_id = rev.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+
+    let tb_story_id =
+        rev.doc.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(Paragraph::with_text("Box inside paired note.", CharProps::default()))]);
+    let shape_obj = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 50.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: Some(tb_story_id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    if let Some(fn_part) = rev.doc.parts.get_mut(&rev_fn_id)
+        && let Some(Block::Para(p)) = fn_part.blocks.get_mut(0).map(Arc::make_mut)
+    {
+        let at = p.len();
+        let _ = p.insert_object(at, shape_obj, &CharProps::default());
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-paired-tb-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    // Verify text box part from the paired note was adopted into s.doc:
+    let adopted_tb = s.doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::TextBox);
+    assert!(adopted_tb.is_some(), "Text box from paired note was adopted into s.doc");
+    let adopted_text = adopted_tb.unwrap().blocks[0].as_para().unwrap().plain_text();
+    assert_eq!(adopted_text, "Box inside paired note.");
+
+    // Verify footnote blocks reference the adopted ID:
+    let adopted_id = s.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).map(|(&id, _)| id).unwrap();
+    let fn_part = s.doc.parts.get(&orig_fn_id).expect("original footnote part");
+    let mut found_slot = false;
+    for b in &fn_part.blocks {
+        if let Block::Para(p) = &**b {
+            for o in &p.objects {
+                if let InlineObject::Shape { story: Some(id), .. } = o
+                    && *id == adopted_id
+                {
+                    found_slot = true;
+                }
+            }
+        }
+    }
+    assert!(found_slot, "Paired footnote references adopted text box ID {adopted_id}");
+}
+
+/// #5842: When a matched table's text and shape stay unchanged but table or cell
+/// formatting properties change, formatting revisions are attached.
+#[test]
+fn compare_records_table_property_formatting_changes() {
+    let mut orig = Session::new(Document::new());
+    let mut table_orig = wordcraft_doc::Table::new(1, 1, 200.0);
+    table_orig.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("cell text", CharProps::default()))];
+    orig.doc.body = vec![Arc::new(Block::Table(table_orig))];
+
+    let mut rev = Session::new(Document::new());
+    let mut table_rev = wordcraft_doc::Table::new(1, 1, 200.0);
+    table_rev.props.align = Some(wordcraft_doc::props::Align::Center);
+    table_rev.rows[0].cells[0].props.shading = Some(wordcraft_doc::props::Rgb(255, 0, 0));
+    table_rev.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("cell text", CharProps::default()))];
+    rev.doc.body = vec![Arc::new(Block::Table(table_rev))];
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-tblprops-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "Change recorded for table formatting differences");
+
+    let Block::Table(result_table) = &*s.doc.body[0] else { panic!("expected table") };
+    assert!(result_table.props.fmt_change.is_some(), "Table props carry fmt_change");
+    assert!(result_table.rows[0].cells[0].props.fmt_change.is_some(), "Cell props carry fmt_change");
+}
+
+/// Verifies that when paragraph text differs only by case and `caseChanges` is false,
+/// paragraph-level formatting changes are still detected and recorded.
+#[test]
+fn compare_tracks_para_formatting_when_only_case_differs() {
+    let mut orig = Session::new(Document::new());
+    let mut p_orig = Paragraph::with_text("Sample Paragraph Text", CharProps::default());
+    p_orig.props.align = Some(wordcraft_doc::Align::Left);
+    orig.doc.body = vec![para_block(p_orig)];
+
+    let mut rev = Session::new(Document::new());
+    let mut p_rev = Paragraph::with_text("sample paragraph text", CharProps::default());
+    p_rev.props.align = Some(wordcraft_doc::Align::Center);
+    rev.doc.body = vec![para_block(p_rev)];
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-casefmt-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "caseChanges": false, "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "Change recorded for paragraph formatting");
+    let Block::Para(result_para) = &*s.doc.body[0] else { panic!("expected paragraph") };
+    assert!(result_para.props.fmt_change.is_some(), "Paragraph props carry fmt_change");
+}
+
+/// Verifies that tables with differing column grids are treated as replacements
+/// rather than matched identical containers.
+#[test]
+fn compare_tables_with_different_grids_treated_as_replacements() {
+    let mut orig = Session::new(Document::new());
+    let mut table_orig = wordcraft_doc::Table::new(1, 1, 200.0);
+    table_orig.grid = vec![200.0];
+    table_orig.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("table cell", CharProps::default()))];
+    orig.doc.body = vec![Arc::new(Block::Table(table_orig))];
+
+    let mut rev = Session::new(Document::new());
+    let mut table_rev = wordcraft_doc::Table::new(1, 1, 300.0);
+    table_rev.grid = vec![300.0];
+    table_rev.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("table cell", CharProps::default()))];
+    rev.doc.body = vec![Arc::new(Block::Table(table_rev))];
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-gridrepl-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "Change recorded for differing table grids");
+    let tables: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Table(t) = &**b { Some(t) } else { None }).collect();
+    assert_eq!(tables.len(), 2, "Replaced tables emit deleted original table and inserted revised table");
+    assert_eq!(tables[0].grid, vec![200.0]);
+    assert_eq!(tables[1].grid, vec![300.0]);
+}
+
+/// Verifies that when a hyperlink's target URL changes on identical text,
+/// the difference is tracked as content changes (deletion of old link + insertion of new link).
+#[test]
+fn compare_tracks_hyperlink_target_changes_as_content() {
+    let mut orig = Session::new(Document::new());
+    let mut p_orig = Paragraph::new();
+    let props_orig = CharProps { link: Some("https://example.com/old".to_string()), ..Default::default() };
+    p_orig.insert_text(0, "clickable link", &props_orig).unwrap();
+    orig.doc.body = vec![para_block(p_orig)];
+
+    let mut rev = Session::new(Document::new());
+    let mut p_rev = Paragraph::new();
+    let props_rev = CharProps { link: Some("https://example.com/new".to_string()), ..Default::default() };
+    p_rev.insert_text(0, "clickable link", &props_rev).unwrap();
+    rev.doc.body = vec![para_block(p_rev)];
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-linktgt-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "Change recorded for hyperlink target difference");
+    let Block::Para(p) = &*s.doc.body[0] else { panic!("expected paragraph") };
+    let runs: Vec<_> = p.run_ranges().collect();
+    assert!(runs.iter().any(|(_, c)| c.del.is_some() && c.link.as_deref() == Some("https://example.com/old")), "Old link marked deleted");
+    assert!(runs.iter().any(|(_, c)| c.ins.is_some() && c.link.as_deref() == Some("https://example.com/new")), "New link marked inserted");
+}
+
+/// Verifies that tables with differing cell merges (e.g. vmerge) are treated as structural replacements.
+#[test]
+fn compare_tables_differing_in_vmerge_treated_as_replacements() {
+    let mut orig = Session::new(Document::new());
+    let mut table_orig = wordcraft_doc::Table::new(2, 1, 200.0);
+    table_orig.rows[0].cells[0].props.vmerge = wordcraft_doc::props::VMerge::None;
+    table_orig.rows[1].cells[0].props.vmerge = wordcraft_doc::props::VMerge::None;
+    table_orig.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("cell 1", CharProps::default()))];
+    table_orig.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("cell 2", CharProps::default()))];
+    orig.doc.body = vec![Arc::new(Block::Table(table_orig))];
+
+    let mut rev = Session::new(Document::new());
+    let mut table_rev = wordcraft_doc::Table::new(2, 1, 200.0);
+    table_rev.rows[0].cells[0].props.vmerge = wordcraft_doc::props::VMerge::Restart;
+    table_rev.rows[1].cells[0].props.vmerge = wordcraft_doc::props::VMerge::Continue;
+    table_rev.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("cell 1", CharProps::default()))];
+    table_rev.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("cell 2", CharProps::default()))];
+    rev.doc.body = vec![Arc::new(Block::Table(table_rev))];
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-tblvmerge-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "Change recorded for table cell vmerge difference");
+    let tables: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Table(t) = &**b { Some(t) } else { None }).collect();
+    assert_eq!(tables.len(), 2, "Tables with different cell merges are treated as replacements");
+}
+
+/// Verifies that when formatting comparison is disabled (`formatting: false`),
+/// tables differing only in column widths match as identical rather than being replaced.
+#[test]
+fn compare_ignores_table_width_when_formatting_false() {
+    let mut orig = Session::new(Document::new());
+    let mut table_orig = wordcraft_doc::Table::new(1, 1, 200.0);
+    table_orig.grid = vec![200.0];
+    table_orig.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("unchanged cell text", CharProps::default()))];
+    orig.doc.body = vec![Arc::new(Block::Table(table_orig))];
+    orig.doc.ensure_nonempty();
+
+    let mut rev = Session::new(Document::new());
+    let mut table_rev = wordcraft_doc::Table::new(1, 1, 350.0);
+    table_rev.grid = vec![350.0];
+    table_rev.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("unchanged cell text", CharProps::default()))];
+    rev.doc.body = vec![Arc::new(Block::Table(table_rev))];
+    rev.doc.ensure_nonempty();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-nofmtwidth-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "formatting": false})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert_eq!(r["changes"].as_u64().unwrap(), 0, "No changes recorded when formatting comparison disabled");
+    let tables: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Table(t) = &**b { Some(t) } else { None }).collect();
+    assert_eq!(tables.len(), 1, "Table matched as identical container");
+    assert_eq!(tables[0].grid, vec![200.0], "Original grid preserved");
+}

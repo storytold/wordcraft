@@ -297,6 +297,83 @@ pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions
     r.para(old, new);
 }
 
+/// Compare paragraph properties and paragraph mark between `old_props`/`old_mark` and `new`,
+/// recording any tracked formatting changes by `author`.
+pub(crate) fn compare_para_formatting(
+    old_props: &ParaProps,
+    old_mark: &CharProps,
+    new: &mut Paragraph,
+    revisions: &mut Vec<Revision>,
+    author: &str,
+    date: &str,
+) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    let mut changed = false;
+    if let Some(Replacement(want)) = r.change(old_props, &new.props, ParaProps::formatting, |p| &p.fmt_change) {
+        new.props.fmt_change = want;
+        changed = true;
+    }
+    if let Some(Replacement(want)) = r.change(old_mark, &new.mark, CharProps::formatting, |c| &c.fmt_change) {
+        new.mark.fmt_change = want;
+        changed = true;
+    }
+    changed
+}
+
+/// Compare character properties between `old` and `new`, recording any tracked formatting
+/// change on `new` if `old` and `new` format differently.
+pub(crate) fn compare_char_props(old: &CharProps, new: &mut CharProps, revisions: &mut Vec<Revision>, author: &str, date: &str) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    if let Some(Replacement(want)) = r.change(old, new, CharProps::formatting, |c| &c.fmt_change) {
+        new.fmt_change = want;
+        true
+    } else {
+        false
+    }
+}
+
+/// Compare table formatting properties between `old` and `new`, attaching a formatting
+/// revision if they differ.
+pub(crate) fn compare_table_props(
+    old_table: &TableProps,
+    new_table: &mut TableProps,
+    revisions: &mut Vec<Revision>,
+    author: &str,
+    date: &str,
+) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    if let Some(Replacement(w)) = r.change(old_table, new_table, strip_table, |t| &t.fmt_change) {
+        new_table.fmt_change = w;
+        true
+    } else {
+        false
+    }
+}
+
+/// Compare row formatting properties between `old` and `new`, attaching a formatting
+/// revision if they differ.
+pub(crate) fn compare_row_props(old_row: &RowProps, new_row: &mut RowProps, revisions: &mut Vec<Revision>, author: &str, date: &str) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    if let Some(Replacement(w)) = r.change(old_row, new_row, strip_row, |r| &r.fmt_change) {
+        new_row.fmt_change = w;
+        true
+    } else {
+        false
+    }
+}
+
+/// Compare cell formatting properties between `old` and `new`, attaching a formatting
+/// revision if they differ.
+pub(crate) fn compare_cell_props(old_cell: &CellProps, new_cell: &mut CellProps, revisions: &mut Vec<Revision>, author: &str, date: &str) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    if let Some(Replacement(w)) = r.change(old_cell, new_cell, strip_cell, |c| &c.fmt_change) {
+        new_cell.fmt_change = w;
+        true
+    } else {
+        false
+    }
+}
+
 /// The properties a change sets, as the Style Inspector lists them: `[{"prop", "value"}]` in
 /// field order; a switch turned off is `false`, a value removed is `null`.
 pub fn diff<T: Serialize>(old: &T, new: &T) -> Vec<Value> {

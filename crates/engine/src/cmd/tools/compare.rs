@@ -5,11 +5,7 @@ use super::{
 use wordcraft_doc::para::OBJ;
 
 /// Compare and Combine take the same settings.
- fix/5842-compare-footnotes-endnotes
-pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character", "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared), "footnotes"?: bool (default true: compare footnotes and endnotes)}"#;
-
-pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
- main
+pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared), "footnotes"?: bool (default true: compare footnotes and endnotes)}"#;
 
 /// What Compare / Combine compares (the More >> settings of Word's dialog).
 struct CompareOptions {
@@ -38,6 +34,9 @@ struct DiffCtx<'a> {
     opts: &'a CompareOptions,
     budget: &'a mut u64,
     char_fallbacks: &'a mut usize,
+    revisions: &'a mut Vec<wordcraft_doc::Revision>,
+    author: &'a str,
+    date: &'a str,
 }
 
 /// Changed paragraphs longer than this (in characters) are compared word by word even at
@@ -47,16 +46,12 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// Compare the current document (original, or `original` from a file) with a revised one: the
 /// result shows the differences as tracked insertions, deletions and formatting changes, labelled
 /// with `author`. Options Word offers that the comparison can't honour yet (moves, comments,
- fix/5842-compare-footnotes-endnotes
 /// headers and footers, text boxes, fields) are accepted and listed in the result. Footnotes and
 /// endnotes are compared by default (`footnotes`: true), tracking edits, insertions, deletions,
 /// and paragraph formatting changes within note stories.
-
-/// headers and footers, footnotes, text boxes, fields) are accepted and listed in the result.
 /// When character-level comparison is requested (`"level": "character"`) but any paragraph exceeds
 /// [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that paragraph, surfaces the
 /// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`.
- main
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let mut revised = if let Some(t) = p::str(v, "text") {
         Document::from_text(t)
@@ -83,49 +78,63 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         formatting: p::bool(v, "formatting").unwrap_or(true),
         characters: matches!(level, "character" | "char"),
     };
- fix/5842-compare-footnotes-endnotes
     let compare_notes = p::bool(v, "footnotes").unwrap_or(true);
-    let not_honoured: Vec<&str> =
-        ["moves", "comments", "headersFooters", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
-
     let mut not_honoured: Vec<&str> =
-        ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
- main
+        ["moves", "comments", "headersFooters", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
     let mut budget = MAX_COMPARE_CELLS;
     let mut note_budget = MAX_NOTE_ALIGN_BUDGET;
+
+    reconcile_media(&mut s.doc, &mut revised);
+
     let mut note_map = std::collections::HashMap::new();
     let mut paired_notes = Vec::new();
     let mut inserted_notes = Vec::new();
     let mut deleted_notes = Vec::new();
 
-    if compare_notes {
-        for kind in [wordcraft_doc::PartKind::Footnote, wordcraft_doc::PartKind::Endnote] {
-            let orig_ids = document_note_ids(&s.doc, kind);
-            let rev_ids = document_note_ids(&revised, kind);
-            let (paired, inserted, deleted) = align_notes(&s.doc, &orig_ids, &revised, &rev_ids, kind, &opts, &mut note_budget);
-            for (o, r) in paired {
-                note_map.insert(r, o);
+    let mut next_orphan_id = s.doc.parts.keys().next_back().copied().unwrap_or(0).saturating_add(10_000);
+    for kind in [wordcraft_doc::PartKind::Footnote, wordcraft_doc::PartKind::Endnote] {
+        let orig_ids = document_note_ids(&s.doc, kind);
+        let rev_ids = document_note_ids(&revised, kind);
+        let (paired, inserted, deleted) = align_notes(&s.doc, &orig_ids, &revised, &rev_ids, kind, &opts, &mut note_budget);
+        for (o, r) in paired {
+            note_map.insert(r, o);
+            if compare_notes {
                 paired_notes.push((o, r));
             }
+        }
+        if compare_notes {
             for r in inserted {
                 let blocks = revised.parts.get(&r).map(|p| p.blocks.clone()).unwrap_or_default();
-                let new_id = s.doc.add_part(kind, blocks);
+                let frag_blocks: Vec<Block> = blocks.iter().map(|b| (**b).clone()).collect();
+                let frag = wordcraft_doc::edit::Fragment {
+                    parts: revised.parts.iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).map(|(k, p)| (*k, p.clone())).collect(),
+                    media: revised.media_of_blocks(&frag_blocks),
+                    blocks: frag_blocks,
+                };
+                let adopted = s.doc.adopt_fragment(&frag);
+                let new_id = s.doc.add_part(kind, adopted.into_iter().map(Arc::new).collect());
                 note_map.insert(r, new_id);
                 inserted_notes.push((new_id, r));
             }
             deleted_notes.extend(deleted);
-        }
-        if !note_map.is_empty() {
-            revised.body = revised.body.iter().map(|b| Arc::new(remap_note_refs(b, &note_map, 0))).collect();
-            for part in revised.parts.values_mut() {
-                part.blocks = part.blocks.iter().map(|b| Arc::new(remap_note_refs(b, &note_map, 0))).collect();
+        } else {
+            for r in inserted {
+                let orphan_id = next_orphan_id;
+                next_orphan_id = next_orphan_id.saturating_add(1);
+                note_map.insert(r, orphan_id);
             }
-            for &(new_id, _) in &inserted_notes {
-                if let Some(p) = s.doc.parts.get_mut(&new_id) {
-                    p.blocks = p.blocks.iter().map(|b| Arc::new(remap_note_refs(b, &note_map, 0))).collect();
-                }
+        }
+    }
+    if !note_map.is_empty() {
+        revised.body = revised.body.iter().map(|b| Arc::new(remap_note_refs(b, &note_map, 0))).collect();
+        for part in revised.parts.values_mut() {
+            part.blocks = part.blocks.iter().map(|b| Arc::new(remap_note_refs(b, &note_map, 0))).collect();
+        }
+        for &(new_id, _) in &inserted_notes {
+            if let Some(p) = s.doc.parts.get_mut(&new_id) {
+                p.blocks = p.blocks.iter().map(|b| Arc::new(remap_note_refs(b, &note_map, 0))).collect();
             }
         }
     }
@@ -143,16 +152,29 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
     let del = (s.doc.revisions.len() - 1) as u32;
 
+    let mut char_fallbacks = 0usize;
     let run = CompareRun { ins, del, opts: &opts, author: &author, date: &date };
-    let (out, body_changes) = compare_blocks(&s.doc.parts, &mut s.doc.revisions, &run, &old, &new, &mut budget);
+    let (out, body_changes) = compare_blocks(&s.doc.parts, &mut s.doc.revisions, &run, &old, &new, &mut budget, &mut char_fallbacks);
     s.doc.body = out;
     let mut changes = body_changes;
 
     if compare_notes {
         for (orig_id, rev_id) in paired_notes {
             let orig_blocks = s.doc.parts.get(&orig_id).map(|p| p.blocks.clone()).unwrap_or_default();
-            let rev_blocks = revised.parts.get(&rev_id).map(|p| p.blocks.clone()).unwrap_or_default();
-            let (note_out, note_changes) = compare_blocks(&s.doc.parts, &mut s.doc.revisions, &run, &orig_blocks, &rev_blocks, &mut budget);
+            let rev_blocks_raw = revised.parts.get(&rev_id).map(|p| p.blocks.clone()).unwrap_or_default();
+            let frag_blocks: Vec<Block> = rev_blocks_raw.iter().map(|b| (**b).clone()).collect();
+            let frag = wordcraft_doc::edit::Fragment {
+                parts: revised.parts.iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).map(|(k, p)| (*k, p.clone())).collect(),
+                media: revised.media_of_blocks(&frag_blocks),
+                blocks: frag_blocks,
+            };
+            let rev_blocks: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
+                s.doc.adopt_fragment(&frag).into_iter().map(Arc::new).collect()
+            } else {
+                rev_blocks_raw
+            };
+            let (note_out, note_changes) =
+                compare_blocks(&s.doc.parts, &mut s.doc.revisions, &run, &orig_blocks, &rev_blocks, &mut budget, &mut char_fallbacks);
             if let Some(part) = s.doc.parts.get_mut(&orig_id) {
                 part.blocks = note_out;
             }
@@ -180,8 +202,21 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         // Compare creates an untitled result from the current document.
         s.clear_versions();
     }
+    if char_fallbacks > 0 {
+        log::warn!(
+            "compare: {char_fallbacks} paragraph(s) exceeded character diff limit of {MAX_CHAR_DIFF}; fell back from character to word level diff"
+        );
+        if !not_honoured.contains(&"level") {
+            not_honoured.push("level");
+        }
+    }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
-    Ok(json!({"changes": changes, "author": author, "notHonoured": not_honoured}))
+    Ok(json!({
+        "changes": changes,
+        "author": author,
+        "notHonoured": not_honoured,
+        "characterFallback": char_fallbacks,
+    }))
 }
 
 /// Context describing the author, date, options, and change IDs for compare emissions.
@@ -207,20 +242,15 @@ fn compare_blocks(
     old: &[Arc<Block>],
     new: &[Arc<Block>],
     budget: &mut u64,
+    char_fallbacks: &mut usize,
 ) -> (Vec<Arc<Block>>, usize) {
     let key = |b: &Arc<Block>| match &**b {
         Block::Para(p) => run.opts.key(&p.plain_text()),
         // Tables match as a whole, by their text.
         Block::Table(_) => format!("\u{0}table\u{0}{}", run.opts.key(&block_text(b, 0))),
     };
- fix/5842-compare-footnotes-endnotes
     let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), budget);
-
-    let mut budget = MAX_COMPARE_CELLS;
-    let mut char_fallbacks = 0usize;
-    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut budget);
-    let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks };
- main
+    let mut ctx = DiffCtx { ins: run.ins, del: run.del, opts: run.opts, budget, char_fallbacks, revisions, author: run.author, date: run.date };
     let mut out: Vec<Arc<Block>> = Vec::new();
     let (mut i, mut j) = (0usize, 0usize);
     let mut changes = 0usize;
@@ -231,14 +261,10 @@ fn compare_blocks(
                 let (a, b) = (old.get(i), new.get(j));
                 // The revised block, with its formatting changes tracked.
                 if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
-                    if !same_objects(parts, pa, pb) {
-                        // Same text, but objects (text boxes, pictures…) differ: diffed, so the
-                        // original's objects aren't lost.
- fix/5842-compare-footnotes-endnotes
-                        out.push(para_block(word_diff(parts, pa, pb, run.ins, run.del, run.opts, budget)));
-
-                        out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx)));
- main
+                    if !same_objects(parts, pa, pb) || !same_para_links(pa, pb) {
+                        // Same text, but objects (text boxes, pictures…) or hyperlink targets differ:
+                        // diffed, so the original's objects and links aren't lost.
+                        out.push(para_block(word_diff(parts, pa, pb, &mut ctx)));
                         changes += 1;
                         i += 1;
                         j += 1;
@@ -246,14 +272,84 @@ fn compare_blocks(
                         continue;
                     }
                     let mut p = pb.clone();
-                    if run.opts.formatting && pa.text == pb.text {
-                        let before = revisions.len();
-                        crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, revisions, run.author, run.date);
-                        if revisions.len() > before || p != *pb {
+                    if run.opts.formatting && pa.text != pb.text {
+                        // Case or spacing differs only: track paragraph-level formatting.
+                        if crate::cmd::fmt_revisions::compare_para_formatting(&pa.props, &pa.mark, &mut p, ctx.revisions, run.author, run.date) {
+                            changes += 1;
+                        }
+                    } else if run.opts.formatting {
+                        let before = ctx.revisions.len();
+                        crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, ctx.revisions, run.author, run.date);
+                        if ctx.revisions.len() > before || p != *pb {
                             changes += 1;
                         }
                     }
                     out.push(para_block(p));
+                } else if let (Some(Block::Table(ta)), Some(Block::Table(tb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
+                    let mut table_matched = false;
+                    let mut table_changes = 0usize;
+                    let mut new_rows = Vec::with_capacity(tb.rows.len());
+                    if ta.rows.len() == tb.rows.len() && (!run.opts.formatting || ta.grid == tb.grid) {
+                        let mut rows_match = true;
+                        for (ra, rb) in ta.rows.iter().zip(&tb.rows) {
+                            if ra.cells.len() != rb.cells.len() {
+                                rows_match = false;
+                                break;
+                            }
+                            let mut new_cells = Vec::with_capacity(rb.cells.len());
+                            for (ca, cb) in ra.cells.iter().zip(&rb.cells) {
+                                if ca.props.span != cb.props.span || ca.props.vmerge != cb.props.vmerge {
+                                    rows_match = false;
+                                    break;
+                                }
+                                let (cell_blocks, cell_changes) =
+                                    compare_blocks(parts, ctx.revisions, run, &ca.blocks, &cb.blocks, ctx.budget, ctx.char_fallbacks);
+                                table_changes = table_changes.saturating_add(cell_changes);
+                                let mut cell_props = cb.props.clone();
+                                if run.opts.formatting
+                                    && crate::cmd::fmt_revisions::compare_cell_props(&ca.props, &mut cell_props, ctx.revisions, run.author, run.date)
+                                {
+                                    table_changes = table_changes.saturating_add(1);
+                                }
+                                new_cells.push(wordcraft_doc::Cell { props: cell_props, blocks: cell_blocks, controls: cb.controls.clone() });
+                            }
+                            if !rows_match {
+                                break;
+                            }
+                            let mut row_props = rb.props.clone();
+                            if run.opts.formatting
+                                && crate::cmd::fmt_revisions::compare_row_props(&ra.props, &mut row_props, ctx.revisions, run.author, run.date)
+                            {
+                                table_changes = table_changes.saturating_add(1);
+                            }
+                            new_rows.push(wordcraft_doc::Row { props: row_props, cells: new_cells, controls: rb.controls.clone() });
+                        }
+                        table_matched = rows_match;
+                    }
+                    if table_matched {
+                        let mut table_props = tb.props.clone();
+                        if run.opts.formatting
+                            && crate::cmd::fmt_revisions::compare_table_props(&ta.props, &mut table_props, ctx.revisions, run.author, run.date)
+                        {
+                            table_changes = table_changes.saturating_add(1);
+                        }
+                        changes = changes.saturating_add(table_changes);
+                        let final_grid = if run.opts.formatting { tb.grid.clone() } else { ta.grid.clone() };
+                        out.push(Arc::new(Block::Table(wordcraft_doc::Table {
+                            props: table_props,
+                            grid: final_grid,
+                            rows: new_rows,
+                            controls: tb.controls.clone(),
+                        })));
+                    } else {
+                        if let Some(x) = a {
+                            out.push(Arc::new(mark_block(x, &|c| c.del = Some(run.del), 0)));
+                        }
+                        if let Some(x) = b {
+                            out.push(Arc::new(mark_block(x, &|c| c.ins = Some(run.ins), 0)));
+                        }
+                        changes += 1;
+                    }
                 } else if let Some(x) = b.or(a) {
                     out.push(x.clone());
                 }
@@ -270,13 +366,7 @@ fn compare_blocks(
                 for x in 0..dels.max(inss) {
                     let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
                     match (a.map(|x| &**x), b.map(|x| &**x)) {
- fix/5842-compare-footnotes-endnotes
-                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => {
-                            out.push(para_block(word_diff(parts, pa, pb, run.ins, run.del, run.opts, budget)))
-                        }
-
-                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx))),
- main
+                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(parts, pa, pb, &mut ctx))),
                         _ => {
                             if let Some(x) = a {
                                 out.push(Arc::new(mark_block(x, &|c| c.del = Some(run.del), 0)));
@@ -680,29 +770,103 @@ fn remap_note_refs(b: &Block, map: &std::collections::HashMap<u32, u32>, depth: 
             Block::Table(t)
         }
     }
- fix/5842-compare-footnotes-endnotes
+}
+
+/// Remap media references in an inline object.
+fn remap_media_object(o: &mut InlineObject, map: &std::collections::BTreeMap<String, String>, depth: usize) {
+    match o {
+        InlineObject::Image { media, .. } => {
+            if let Some(k) = map.get(media.as_str()) {
+                *media = k.clone();
+            }
+        }
+        InlineObject::Graphic { graphic, .. } => {
+            let mapped = |m: &str| map.get(m).filter(|k| k.as_str() != m);
+            if graphic.items.iter().any(|i| matches!(i, wordcraft_doc::graphic::GraphicItem::Image { media, .. } if mapped(media).is_some())) {
+                for i in &mut Arc::make_mut(graphic).items {
+                    if let wordcraft_doc::graphic::GraphicItem::Image { media, .. } = i
+                        && let Some(k) = map.get(media.as_str())
+                    {
+                        *media = k.clone();
+                    }
+                }
+            }
+        }
+        InlineObject::Group { children, .. } if depth < 8 => {
+            for child in children {
+                remap_media_object(&mut child.obj, map, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remap media references in a block and any nested tables up to depth 16.
+fn remap_media_block(b: &mut Block, map: &std::collections::BTreeMap<String, String>, depth: usize) {
+    match b {
+        Block::Para(p) => {
+            for o in &mut p.objects {
+                remap_media_object(o, map, 0);
+            }
+        }
+        Block::Table(t) => {
+            if depth < 16 {
+                for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    if let Some(ref mut pic) = c.props.picture
+                        && let Some(k) = map.get(&pic.media)
+                    {
+                        pic.media = k.clone();
+                    }
+                    for cb in &mut c.blocks {
+                        remap_media_block(Arc::make_mut(cb), map, depth + 1);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Reconciles media from `revised` into `target`, remapping colliding media keys
+/// that have different content to newly allocated keys in `target`.
+fn reconcile_media(target: &mut wordcraft_doc::Document, revised: &mut wordcraft_doc::Document) {
+    let mut media_remap = std::collections::BTreeMap::new();
+    for (k, v) in &revised.media {
+        if let Some(existing) = target.media.get(k) {
+            if existing.as_slice() != v.as_slice() {
+                let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
+                let mut i = target.media.len().saturating_add(revised.media.len()).saturating_add(1);
+                let mut new_key = format!("image{i}.{ext}");
+                while target.media.contains_key(&new_key) || revised.media.contains_key(&new_key) {
+                    i = i.saturating_add(1);
+                    new_key = format!("image{i}.{ext}");
+                }
+                target.media.insert(new_key.clone(), v.clone());
+                media_remap.insert(k.clone(), new_key);
+            }
+        } else {
+            target.media.insert(k.clone(), v.clone());
+        }
+    }
+    if !media_remap.is_empty() {
+        for b in &mut revised.body {
+            remap_media_block(Arc::make_mut(b), &media_remap, 0);
+        }
+        for part in revised.parts.values_mut() {
+            for b in &mut part.blocks {
+                remap_media_block(Arc::make_mut(b), &media_remap, 0);
+            }
+        }
+        for (old_key, new_key) in media_remap {
+            if let Some(data) = revised.media.remove(&old_key) {
+                revised.media.insert(new_key, data);
+            }
+        }
+    }
 }
 
 /// Returns the plain text of a part's blocks.
 fn part_text(p: &wordcraft_doc::Part) -> String {
     p.blocks.iter().map(|b| block_text(b, 0)).collect::<Vec<_>>().join("\n")
-
-    if char_fallbacks > 0 {
-        log::warn!(
-            "compare: {char_fallbacks} paragraph(s) exceeded character diff limit of {MAX_CHAR_DIFF}; fell back from character to word level diff"
-        );
-        if !not_honoured.contains(&"level") {
-            not_honoured.push("level");
-        }
-    }
-    s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
-    Ok(json!({
-        "changes": changes,
-        "author": author,
-        "notHonoured": not_honoured,
-        "characterFallback": char_fallbacks,
-    }))
- main
 }
 
 /// A block's text (a table's cells in order), for matching blocks.
@@ -905,11 +1069,20 @@ fn flatten_region(out: &mut Vec<Op>, region: &[(Op, usize, Kind)]) {
     out.extend(std::iter::repeat_n(Op::Ins, inss));
 }
 
+/// A piece of text or an inline object with its character properties.
+#[derive(Clone)]
+enum TokPiece<'a> {
+    /// Text slice and its character properties.
+    Text(String, CharProps),
+    /// Inline object and its character properties.
+    Obj(&'a InlineObject, CharProps),
+}
+
 /// A token of a changed paragraph: a word (or character), or an inline object without text
 /// of its own (a text box anchor, a picture, a bookmark…), which is compared and kept whole.
-enum Tok<'a> {
-    Text(String),
-    Obj(&'a InlineObject),
+#[derive(Clone)]
+struct Tok<'a> {
+    pieces: Vec<TokPiece<'a>>,
 }
 
 /// What a comparison sees of a token: the text as the options say, an object with the text of
@@ -936,76 +1109,119 @@ fn same_objects(parts: &std::collections::BTreeMap<u32, wordcraft_doc::Part>, a:
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
-/// between them. Objects with text (fields, equations…) count as their text.
+/// between them, tracking each portion's original character properties.
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
-    fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, c: char, characters: bool) {
-        cur.push(c);
-        if characters || c == ' ' {
-            v.push(Tok::Text(std::mem::take(cur)));
+    fn flush_text(cur_pieces: &mut Vec<TokPiece<'_>>, cur_text: &mut String, cur_props: &mut Option<CharProps>) {
+        if !cur_text.is_empty() {
+            let props = cur_props.take().unwrap_or_default();
+            cur_pieces.push(TokPiece::Text(std::mem::take(cur_text), props));
         }
     }
-    let mut v = Vec::new();
-    let mut cur = String::new();
+
+    fn flush_tok<'a>(out: &mut Vec<Tok<'a>>, cur_pieces: &mut Vec<TokPiece<'a>>, cur_text: &mut String, cur_props: &mut Option<CharProps>) {
+        flush_text(cur_pieces, cur_text, cur_props);
+        if !cur_pieces.is_empty() {
+            out.push(Tok { pieces: std::mem::take(cur_pieces) });
+        }
+    }
+
+    let mut out: Vec<Tok<'_>> = Vec::new();
+    let mut cur_pieces: Vec<TokPiece<'_>> = Vec::new();
+    let mut cur_text = String::new();
+    let mut cur_props: Option<CharProps> = None;
     let mut objects = p.objects.iter();
+
+    let mut runs = p.run_ranges().peekable();
+    let mut byte_off = 0;
     for c in p.text.chars() {
-        if c != OBJ {
-            push(&mut v, &mut cur, c, characters);
+        let char_len = c.len_utf8();
+        while runs.peek().is_some_and(|(r, _)| r.end <= byte_off) {
+            runs.next();
+        }
+        let mut props = runs.peek().map_or_else(|| p.mark.clone(), |(_, pr)| (*pr).clone());
+        props.ins = None;
+        props.del = None;
+        props.fmt_change = None;
+        byte_off += char_len;
+
+        if c == OBJ {
+            flush_tok(&mut out, &mut cur_pieces, &mut cur_text, &mut cur_props);
+            match objects.next() {
+                Some(o) if o.plain_text().is_empty() => {
+                    out.push(Tok { pieces: vec![TokPiece::Obj(o, props)] });
+                }
+                Some(o) => {
+                    for ch in o.plain_text().chars() {
+                        if cur_props.as_ref() != Some(&props) {
+                            flush_text(&mut cur_pieces, &mut cur_text, &mut cur_props);
+                            cur_props = Some(props.clone());
+                        }
+                        cur_text.push(ch);
+                        if characters || ch == ' ' {
+                            flush_tok(&mut out, &mut cur_pieces, &mut cur_text, &mut cur_props);
+                        }
+                    }
+                }
+                None => {
+                    log::warn!("compare: an object marker without its object");
+                    if cur_props.as_ref() != Some(&props) {
+                        flush_text(&mut cur_pieces, &mut cur_text, &mut cur_props);
+                        cur_props = Some(props.clone());
+                    }
+                    cur_text.push(char::REPLACEMENT_CHARACTER);
+                    if characters {
+                        flush_tok(&mut out, &mut cur_pieces, &mut cur_text, &mut cur_props);
+                    }
+                }
+            }
             continue;
         }
-        match objects.next() {
-            Some(o) if o.plain_text().is_empty() => {
-                if !cur.is_empty() {
-                    v.push(Tok::Text(std::mem::take(&mut cur)));
+
+        if cur_props.as_ref() != Some(&props) {
+            flush_text(&mut cur_pieces, &mut cur_text, &mut cur_props);
+            cur_props = Some(props);
+        }
+        cur_text.push(c);
+        if characters || c == ' ' {
+            flush_tok(&mut out, &mut cur_pieces, &mut cur_text, &mut cur_props);
+        }
+    }
+
+    flush_tok(&mut out, &mut cur_pieces, &mut cur_text, &mut cur_props);
+    out
+}
+
+/// Add a token at the end of `p` with revisions applied if specified.
+fn put_tok(p: &mut Paragraph, t: Option<&Tok<'_>>, rev: Option<u32>, is_ins: bool) {
+    let Some(t) = t else { return };
+    for piece in &t.pieces {
+        let at = p.len();
+        match piece {
+            TokPiece::Text(text, props) => {
+                let mut props = props.clone();
+                if let Some(r) = rev {
+                    if is_ins {
+                        props.ins = Some(r);
+                    } else {
+                        props.del = Some(r);
+                    }
                 }
-                v.push(Tok::Obj(o));
+                let _ = p.insert_text(at, text, &props);
             }
-            Some(o) => o.plain_text().chars().for_each(|c| push(&mut v, &mut cur, c, characters)),
-            None => {
-                // A marker without its object (a broken paragraph): kept as a visible
-                // placeholder, so the loss shows in the result instead of vanishing.
-                log::warn!("compare: an object marker without its object");
-                push(&mut v, &mut cur, char::REPLACEMENT_CHARACTER, characters);
+            TokPiece::Obj(o, props) => {
+                let mut props = props.clone();
+                if let Some(r) = rev {
+                    if is_ins {
+                        props.ins = Some(r);
+                    } else {
+                        props.del = Some(r);
+                    }
+                }
+                let _ = p.insert_object(at, (*o).clone(), &props);
             }
         }
-    }
-    if !cur.is_empty() {
-        v.push(Tok::Text(cur));
-    }
-    v
-}
-
-/// Add a token at the end of `p` with `props`.
-fn put(p: &mut Paragraph, t: Option<&Tok<'_>>, props: &CharProps) {
-    let at = p.len();
-    match t {
-        Some(Tok::Text(t)) => {
-            let _ = p.insert_text(at, t, props);
-        }
-        Some(Tok::Obj(o)) => {
-            let _ = p.insert_object(at, (*o).clone(), props);
-        }
-        None => {}
     }
 }
-
- fix/5842-compare-footnotes-endnotes
-/// Diffs two paragraphs word-by-word (or character-by-character) and returns a new paragraph
-/// containing tracked deletions and insertions.
-fn word_diff(
-    parts: &std::collections::BTreeMap<u32, wordcraft_doc::Part>,
-    a: &Paragraph,
-    b: &Paragraph,
-    ins: u32,
-    del: u32,
-    opts: &CompareOptions,
-    budget: &mut u64,
-) -> Paragraph {
-    let (at, bt) = (a.plain_text(), b.plain_text());
-    let chars = opts.characters && at.chars().count().max(bt.chars().count()) <= MAX_CHAR_DIFF;
-    let (ta, tb) = (tokens(a, chars), tokens(b, chars));
-    let key = |t: &Tok<'_>| match t {
-        Tok::Text(t) => Key::Text(opts.key(t)),
-        Tok::Obj(o) => obj_key(parts, o),
 
 /// Returns `true` if paragraph `p` contains more characters than `limit`.
 ///
@@ -1019,11 +1235,142 @@ fn para_exceeds_char_limit(p: &Paragraph, limit: usize) -> bool {
     }
 }
 
+/// Looks up character properties in token `tok` at character offset `off`.
+fn props_at_offset(tok: &Tok<'_>, off: usize) -> CharProps {
+    let mut cur = 0usize;
+    for piece in &tok.pieces {
+        let piece_len = match piece {
+            TokPiece::Text(t, _) => t.chars().count(),
+            TokPiece::Obj(o, _) => o.plain_text().chars().count().max(1),
+        };
+        if off < cur.saturating_add(piece_len) {
+            return match piece {
+                TokPiece::Text(_, p) => p.clone(),
+                TokPiece::Obj(_, p) => p.clone(),
+            };
+        }
+        cur = cur.saturating_add(piece_len);
+    }
+    tok.pieces
+        .last()
+        .map(|p| match p {
+            TokPiece::Text(_, pr) => pr.clone(),
+            TokPiece::Obj(_, pr) => pr.clone(),
+        })
+        .unwrap_or_default()
+}
+
+/// Splits revised text pieces in `b` at formatting boundaries of original token `a`.
+fn split_tok_at_boundaries<'a>(a: &Tok<'_>, b: &mut Tok<'a>) {
+    let mut a_cuts = Vec::new();
+    let mut a_off = 0usize;
+    for p in &a.pieces {
+        let len = match p {
+            TokPiece::Text(t, _) => t.chars().count(),
+            TokPiece::Obj(o, _) => o.plain_text().chars().count().max(1),
+        };
+        a_off = a_off.saturating_add(len);
+        a_cuts.push(a_off);
+    }
+
+    let mut new_pieces = Vec::new();
+    let mut cur_off = 0usize;
+
+    for piece in std::mem::take(&mut b.pieces) {
+        match piece {
+            TokPiece::Text(text, props) => {
+                let char_count = text.chars().count();
+                let piece_end = cur_off.saturating_add(char_count);
+                let cuts: Vec<usize> = a_cuts.iter().copied().filter(|&c| c > cur_off && c < piece_end).collect();
+
+                if cuts.is_empty() {
+                    new_pieces.push(TokPiece::Text(text, props));
+                } else {
+                    let chars: Vec<char> = text.chars().collect();
+                    let mut seg_start = 0usize;
+                    for cut in cuts {
+                        let seg_end = cut.saturating_sub(cur_off);
+                        if seg_end > seg_start && seg_end <= chars.len() {
+                            let seg: String = chars[seg_start..seg_end].iter().collect();
+                            new_pieces.push(TokPiece::Text(seg, props.clone()));
+                            seg_start = seg_end;
+                        }
+                    }
+                    if seg_start < chars.len() {
+                        let seg: String = chars[seg_start..].iter().collect();
+                        new_pieces.push(TokPiece::Text(seg, props));
+                    }
+                }
+                cur_off = piece_end;
+            }
+            TokPiece::Obj(o, props) => {
+                let len = o.plain_text().chars().count().max(1);
+                cur_off = cur_off.saturating_add(len);
+                new_pieces.push(TokPiece::Obj(o, props));
+            }
+        }
+    }
+    b.pieces = new_pieces;
+}
+
+/// Compares character formatting between original token `a` and revised token `b`, recording
+/// tracked formatting revisions on `b`'s pieces when character properties differ.
+fn apply_tok_formatting(a: &Tok<'_>, b: &mut Tok<'_>, ctx: &mut DiffCtx<'_>) {
+    split_tok_at_boundaries(a, b);
+    let mut off = 0;
+    for piece in &mut b.pieces {
+        let old_props = props_at_offset(a, off);
+        let piece_len = match piece {
+            TokPiece::Text(t, props) => {
+                crate::cmd::fmt_revisions::compare_char_props(&old_props, props, ctx.revisions, ctx.author, ctx.date);
+                t.chars().count()
+            }
+            TokPiece::Obj(o, props) => {
+                crate::cmd::fmt_revisions::compare_char_props(&old_props, props, ctx.revisions, ctx.author, ctx.date);
+                o.plain_text().chars().count().max(1)
+            }
+        };
+        off = off.saturating_add(piece_len);
+    }
+}
+
+/// Returns the hyperlink target for a token piece if one is defined.
+fn piece_link<'a>(p: &'a TokPiece<'_>) -> Option<&'a str> {
+    match p {
+        TokPiece::Text(_, pr) | TokPiece::Obj(_, pr) => pr.link.as_deref(),
+    }
+}
+
+/// Returns whether two tokens have identical hyperlink targets across their pieces.
+fn same_tok_links(a: &Tok<'_>, b: &Tok<'_>) -> bool {
+    if a.pieces.len() != b.pieces.len() {
+        let a_has = a.pieces.iter().any(|p| piece_link(p).is_some());
+        let b_has = b.pieces.iter().any(|p| piece_link(p).is_some());
+        return !a_has && !b_has;
+    }
+    a.pieces.iter().zip(&b.pieces).all(|(pa, pb)| piece_link(pa) == piece_link(pb))
+}
+
+/// Returns whether two paragraphs have identical hyperlink targets across their runs.
+fn same_para_links(a: &Paragraph, b: &Paragraph) -> bool {
+    let a_has = a.runs.iter().any(|r| r.props.link.is_some());
+    let b_has = b.runs.iter().any(|r| r.props.link.is_some());
+    if !a_has && !b_has {
+        return true;
+    }
+    if a_has != b_has {
+        return false;
+    }
+    let a_links: Vec<(&str, Option<&str>)> = a.run_ranges().map(|(r, p)| (&a.text[r], p.link.as_deref())).collect();
+    let b_links: Vec<(&str, Option<&str>)> = b.run_ranges().map(|(r, p)| (&b.text[r], p.link.as_deref())).collect();
+    a_links == b_links
+}
+
 /// Diffs two matched paragraphs either at word granularity or at character granularity according
 /// to `ctx.opts.characters`. When character-level diff is requested but either paragraph exceeds
 /// [`MAX_CHAR_DIFF`] characters, falls back to word-level diff and increments `ctx.char_fallbacks`
 /// so callers can discover the fallback.
-fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>) -> Paragraph {
+fn word_diff(parts: &std::collections::BTreeMap<u32, wordcraft_doc::Part>, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>) -> Paragraph {
     let chars = if ctx.opts.characters {
         if para_exceeds_char_limit(a, MAX_CHAR_DIFF) || para_exceeds_char_limit(b, MAX_CHAR_DIFF) {
             *ctx.char_fallbacks = ctx.char_fallbacks.saturating_add(1);
@@ -1035,10 +1382,20 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
         false
     };
     let (ta, tb) = (tokens(a, chars), tokens(b, chars));
-    let key = |t: &Tok<'_>| match t {
-        Tok::Text(t) => Key::Text(ctx.opts.key(t)),
-        Tok::Obj(o) => obj_key(doc, o),
- main
+    let key = |t: &Tok<'_>| {
+        if let Some(TokPiece::Obj(o, _)) = t.pieces.first().filter(|_| t.pieces.len() == 1)
+            && o.plain_text().is_empty()
+        {
+            return obj_key(parts, o);
+        }
+        let mut s = String::new();
+        for piece in &t.pieces {
+            match piece {
+                TokPiece::Text(text, _) => s.push_str(text),
+                TokPiece::Obj(o, _) => s.push_str(o.plain_text()),
+            }
+        }
+        Key::Text(ctx.opts.key(&s))
     };
     let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), ctx.budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
@@ -1047,25 +1404,47 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     let ops = if chars { collapse_noise_matches(&ops) } else { ops };
     let mut p = Paragraph::new();
     p.props = b.props.clone();
-    let base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
+    p.props.fmt_change = None;
+    p.mark = b.mark.clone();
+    p.mark.ins = None;
+    p.mark.del = None;
+    p.mark.fmt_change = None;
     let (mut i, mut j) = (0, 0);
     for op in ops {
         match op {
             Op::Same => {
                 // Equal as compared (perhaps up to case or spacing): the revised text.
-                put(&mut p, tb.get(j), &base);
+                let ta_tok = ta.get(i);
+                let tb_tok = tb.get(j);
+                if let (Some(a_tok), Some(b_tok)) = (ta_tok, tb_tok)
+                    && !same_tok_links(a_tok, b_tok)
+                {
+                    put_tok(&mut p, Some(a_tok), Some(ctx.del), false);
+                    put_tok(&mut p, Some(b_tok), Some(ctx.ins), true);
+                } else {
+                    let mut tb_mut = tb_tok.cloned();
+                    if ctx.opts.formatting
+                        && let (Some(ta_tok), Some(tb_mut)) = (ta.get(i), tb_mut.as_mut())
+                    {
+                        apply_tok_formatting(ta_tok, tb_mut, ctx);
+                    }
+                    put_tok(&mut p, tb_mut.as_ref(), None, false);
+                }
                 i += 1;
                 j += 1;
             }
             Op::Del => {
-                put(&mut p, ta.get(i), &CharProps { del: Some(ctx.del), ..base.clone() });
+                put_tok(&mut p, ta.get(i), Some(ctx.del), false);
                 i += 1;
             }
             Op::Ins => {
-                put(&mut p, tb.get(j), &CharProps { ins: Some(ctx.ins), ..base.clone() });
+                put_tok(&mut p, tb.get(j), Some(ctx.ins), true);
                 j += 1;
             }
         }
+    }
+    if ctx.opts.formatting {
+        crate::cmd::fmt_revisions::compare_para_formatting(&a.props, &a.mark, &mut p, ctx.revisions, ctx.author, ctx.date);
     }
     p
 }
