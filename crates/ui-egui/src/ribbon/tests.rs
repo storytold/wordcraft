@@ -1092,3 +1092,83 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// An app whose document has comments by `authors`, one each.
+fn commented_by(authors: &[&str]) -> WordApp {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Some text to comment on")), crate::Services::default());
+    for a in authors {
+        app.session.author = (*a).to_string();
+        app.run("select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 4}})).unwrap();
+        app.run("review.newComment", json!({"text": "note"})).unwrap();
+    }
+    app
+}
+
+/// The labels of the checked items `h` shows.
+fn checked_labels(h: &egui_kittest::Harness<'_, WordApp>) -> Vec<String> {
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    h.query_all(By::new().predicate(|n| n.toggled() == Some(egui::accesskit::Toggled::True))).filter_map(|n| n.accesskit_node().label()).collect()
+}
+
+/// #3363: Review › Show Markup checks the kinds of markup shown (Track Changes Options' own
+/// settings) and a click turns one off.
+#[test]
+fn show_markup_menu_checks_the_markup_shown() {
+    use egui_kittest::kittest::Queryable;
+    let app = commented_by(&["Ana"]);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(400.0, 400.0))
+        .build_ui_state(|ui, app: &mut WordApp| super::review::show_markup_menu(ui, app), app);
+    h.run_steps(2);
+    assert_eq!(checked_labels(&h), ["Comments", "Insertions and Deletions", "Formatting"]);
+    for submenu in ["Balloons", "Specific People"] {
+        assert!(h.query_by_label(submenu).is_some(), "{submenu}");
+    }
+    h.get_by_label("Comments").click();
+    h.run_steps(2);
+    assert!(!h.state().session.prefs.markup.comments);
+    assert_eq!(checked_labels(&h), ["Insertions and Deletions", "Formatting"]);
+}
+
+/// #3363: Show Markup › Specific People lists the document's reviewers, checked while their
+/// markup shows, under All Reviewers; a click on a name shows or hides that reviewer's markup.
+#[test]
+fn specific_people_lists_the_reviewers_and_toggles_them() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = commented_by(&["Bo", "Ana"]);
+    app.run("review.showReviewer", json!({"author": "Bo", "value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(400.0, 400.0))
+        .build_ui_state(|ui, app: &mut WordApp| super::review::specific_people_items(ui, app), app);
+    h.run_steps(2);
+    assert_eq!(checked_labels(&h), ["Ana"], "Bo is hidden, so not everyone is shown");
+    assert!(h.query_by_label("Bo").is_some() && h.query_by_label("All Reviewers").is_some());
+    h.get_by_label("Bo").click();
+    h.run_steps(2);
+    assert!(h.state().session.view.hidden_reviewers.is_empty());
+    assert_eq!(checked_labels(&h), ["All Reviewers", "Ana", "Bo"]);
+    h.get_by_label("All Reviewers").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.view.hidden_reviewers, ["Ana", "Bo"]);
+    assert!(checked_labels(&h).is_empty());
+}
+
+/// #3363: a document can name any number of reviewers, at any length: the menu lists the first
+/// ones by name, each on one shortened line.
+#[test]
+fn specific_people_caps_the_reviewers_listed() {
+    use super::review::{MENU_REVIEWERS, reviewer_label};
+    use egui_kittest::kittest::Queryable;
+    assert_eq!(reviewer_label("Ana\nBo"), "Ana Bo");
+    assert_eq!(reviewer_label(" "), "Author");
+    assert_eq!(reviewer_label(&"x".repeat(500)).chars().count(), 61);
+    let names: Vec<String> = (0..MENU_REVIEWERS + 10).map(|i| format!("R{i:03}")).collect();
+    let app = commented_by(&names.iter().map(String::as_str).collect::<Vec<_>>());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(400.0, 4000.0))
+        .build_ui_state(|ui, app: &mut WordApp| super::review::specific_people_items(ui, app), app);
+    h.run_steps(2);
+    assert_eq!(checked_labels(&h).len(), MENU_REVIEWERS + 1, "All Reviewers and the first {MENU_REVIEWERS} reviewers");
+    assert!(h.query_by_label("R049").is_some() && h.query_by_label("R050").is_none());
+    assert!(h.query_by_label("More reviewers not listed").is_some());
+}

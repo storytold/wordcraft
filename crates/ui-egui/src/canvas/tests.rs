@@ -5558,3 +5558,20 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
+
+/// #3363: the markup area beside the page shows only for the reviewers whose markup is shown:
+/// with the only commenter hidden it closes, as in Word.
+#[test]
+fn hiding_the_only_commenter_closes_the_markup_area() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("keep this")), Default::default());
+    a.session.author = "Ana".into();
+    a.run("select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 4}})).unwrap();
+    a.run("review.newComment", json!({"text": "note"})).unwrap();
+    // A new comment opens the Comments pane; with it closed, comments go beside the page.
+    a.session.view.comments_pane = false;
+    assert!(markup_width(&a) > 0.0, "Ana's comment needs the markup area");
+    a.run("review.showReviewer", json!({"author": "Ana", "value": false})).unwrap();
+    assert_eq!(markup_width(&a), 0.0, "nothing left to show beside the page");
+    a.run("review.showReviewer", json!({"all": true})).unwrap();
+    assert!(markup_width(&a) > 0.0);
+}

@@ -306,6 +306,7 @@ Review|Comments|Reply|review.reply
 Review|Tracking|Track Changes|review.trackChanges
 Review|Tracking|Display for Review|review.markup
 Review|Tracking|Show Markup|review.showMarkup
+Review|Tracking|Specific People|review.showReviewer
 Review|Tracking|Reviewing Pane|review.changes
 Review|Tracking|Track Changes Options|review.trackingOptions
 Review|Changes|Accept|review.accept

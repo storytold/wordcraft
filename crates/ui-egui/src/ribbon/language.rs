@@ -557,6 +557,11 @@ fn same_proofing(a: &str, b: &str) -> bool {
 
 /// A menu item with a check mark when `checked` (the current choice of several).
 pub(super) fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str, params: Value) {
+    mi_check_text(ui, app, tl!(label), checked, id, params);
+}
+
+/// [`mi_check`] whose text is already in the interface language (or is a name, never translated).
+pub(super) fn mi_check_text(ui: &mut Ui, app: &mut WordApp, text: &str, checked: bool, id: &str, params: Value) {
     // A vector mark needs no font glyph; the empty atom keeps labels aligned.
     let mark = egui::Atom::paint(vec2(14.0, 14.0), move |ui, args| {
         if checked {
@@ -566,7 +571,7 @@ pub(super) fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: boo
         }
     });
     let enabled = crate::widgets::enabled(app, id);
-    let resp = ui.add_enabled(enabled, egui::Button::new((mark, tl!(label))).selected(checked).min_size(vec2(200.0, 0.0)));
+    let resp = ui.add_enabled(enabled, egui::Button::new((mark, text)).selected(checked).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
         crate::widgets::run_from_ribbon(app, id, params);
         ui.close();

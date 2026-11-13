@@ -120,8 +120,9 @@ pub struct CanvasState {
     /// Page content fingerprints of the current layout, for the texture cache (#811).
     pub(crate) page_keys: PageKeys,
     /// Whether the document has tracked formatting changes, moves and deletions, by document
-    /// revision: finding out walks every paragraph, too slow for every frame (#811).
-    markup_facts: std::cell::Cell<Option<((u64, u64), [bool; 3])>>,
+    /// revision and the reviewers hidden: finding out walks every paragraph, too slow for every
+    /// frame (#811).
+    markup_facts: std::cell::Cell<Option<((u64, u64, u64), [bool; 3])>>,
     pub scroll_to_caret: bool,
     /// Set while a command runs for a mouse drag on a table: the pointer is already
     /// on the target, so the view stays put instead of following the caret (#1738).
