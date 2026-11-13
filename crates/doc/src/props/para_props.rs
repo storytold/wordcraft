@@ -468,6 +468,9 @@ pub struct ParaProps {
     /// The drop cap letter's font family (the cap run's `w:rFonts`). Unset = the text's font.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_cap_font: Option<String>,
+    /// The margin cap frame's first-line indent, points; negative = hanging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_cap_indent_first: Option<f32>,
     /// A text frame (`w:framePr` other than a drop cap): the paragraph is placed apart from the
     /// text, which may wrap around it — a footer's page number in a frame, for instance.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -522,7 +525,7 @@ impl ParaProps {
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, suppress_hyphens, suppress_line_numbers,
-            drop_cap, drop_cap_margin, drop_cap_distance, drop_cap_font, frame, snap_to_grid);
+            drop_cap, drop_cap_margin, drop_cap_distance, drop_cap_font, drop_cap_indent_first, frame, snap_to_grid);
     }
 
     fn overlay_script_layout(&mut self, patch: &ParaProps) {

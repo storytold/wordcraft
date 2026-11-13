@@ -1,5 +1,6 @@
 mod comment_ids;
 mod date_fields;
+mod drop_cap_indents;
 mod macro_packages;
 mod odt_charts;
 mod odt_fields;

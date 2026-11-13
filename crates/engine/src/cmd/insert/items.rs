@@ -467,7 +467,24 @@ pub(super) fn drop_cap(s: &mut Session, v: &Value) -> CmdResult {
     // lines, distance and font unless given here.
     let keep = !none && v.get("keep").and_then(Value::as_bool) == Some(true);
     let (distance_given, font_given) = (p::f32(v, "distance").is_some(), v.get("font").is_some());
+    let styles = s.doc.styles.clone();
     crate::cmd::para::fmt(s, &|p| {
+        let was_margin = p.drop_cap.is_some() && p.drop_cap_margin == Some(true);
+        if !none && margin && !was_margin {
+            // Character-unit indents must become points before leaving the text paragraph.
+            p.drop_cap_indent_first = if p.indent_first_chars.is_some_and(|c| c.is_finite() && c != 0.0) {
+                Some(styles.resolve_para(p).indent_first)
+            } else {
+                p.indent_first
+            };
+            p.indent_first = None;
+            p.indent_first_chars = None;
+        } else if (none || !margin)
+            && let Some(indent) = p.drop_cap_indent_first.take()
+        {
+            p.indent_first = Some(indent);
+            p.indent_first_chars = None;
+        }
         let own = keep && p.drop_cap.is_some();
         p.drop_cap = (!none).then(|| if own && !lines_given { p.drop_cap.unwrap_or(lines) } else { lines });
         p.drop_cap_margin = (!none && margin).then_some(true);
