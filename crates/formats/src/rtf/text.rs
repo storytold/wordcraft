@@ -150,6 +150,7 @@ impl Reader {
         }
     }
 
+    /// Finalize the open `\pict` group into an `Inline::Image`, applying any `\shp` float layout.
     pub(super) fn finish_pict(&mut self) {
         if self.pict_half.take().is_some() {
             // Odd hex digit count: drop the dangling nibble.
@@ -183,12 +184,18 @@ impl Reader {
         } else {
             make_img(data, w, h, "")
         };
-        if let Some(img) = img {
+        if let Some(mut img) = img {
+            if let Some(s) = self.shp_pic.as_deref()
+                && s.rslt_depth.is_some()
+            {
+                img.float = s.float();
+            }
             self.para.inlines.push(Inline::Image(img));
             self.para_has = true;
         }
     }
 
+    /// Append decoded text into the currently active RTF destination.
     pub(super) fn text(&mut self, s: &str) {
         match self.st.dest {
             Dest::Body => {
@@ -296,7 +303,19 @@ impl Reader {
                     }
                 }
             }
-            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) => {}
+            Dest::ShpSn | Dest::ShpSv => {
+                let name = self.st.dest == Dest::ShpSn;
+                if let Some(shp) = self.shp_pic.as_deref_mut() {
+                    let into = if name { &mut shp.sn } else { &mut shp.sv };
+                    for c in s.chars() {
+                        if into.len() >= 64 {
+                            break;
+                        }
+                        into.push(c);
+                    }
+                }
+            }
+            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) | Dest::ShpInst => {}
         }
     }
 

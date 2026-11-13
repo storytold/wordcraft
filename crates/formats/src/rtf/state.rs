@@ -42,6 +42,192 @@ pub(super) enum Dest {
     /// Formatting before a tracked change (`\oldpprops` when true, else `\oldcprops`): read
     /// into the group's own state, which the group's end keeps as the change's old formatting.
     OldProps(bool),
+    /// A shape's description (`\shpinst`), and the name (`\sn`) and value (`\sv`) of one of
+    /// its properties.
+    ShpInst,
+    ShpSn,
+    ShpSv,
+}
+
+/// A `\shp` group's placement and wrapping, read from `\shp` and `\shpinst` for the picture in
+/// its `\shprslt` (#6221).
+#[derive(Clone, Debug, Default)]
+pub(super) struct ShpPicSt {
+    pub(super) shp_depth: usize,
+    pub(super) rslt_depth: Option<usize>,
+    /// `\shpleft`, `\shptop`, `\shpright`, `\shpbottom` (twips), and whether any was given.
+    pub(super) rect: [i64; 4],
+    pub(super) has_rect: bool,
+    pub(super) bx: Option<wordcraft_doc::para::Anchor>,
+    pub(super) by: Option<wordcraft_doc::para::Anchor>,
+    pub(super) bx_ignore: bool,
+    pub(super) by_ignore: bool,
+    pub(super) wr: Option<i32>,
+    pub(super) wrk: i32,
+    pub(super) behind: bool,
+    pub(super) sn: String,
+    pub(super) sv: String,
+    pub(super) shape_type: Option<i64>,
+    pub(super) posrelh: Option<i64>,
+    pub(super) posrelv: Option<i64>,
+    pub(super) posh: Option<i64>,
+    pub(super) posv: Option<i64>,
+    pub(super) pseudo_inline: bool,
+    pub(super) hidden: bool,
+    pub(super) flip_h: bool,
+    pub(super) flip_v: bool,
+    pub(super) rotation: Option<i64>,
+    pub(super) behind_prop: Option<bool>,
+    /// `dxWrapDistLeft`, `dxWrapDistRight`, `dyWrapDistTop`, `dyWrapDistBottom` (EMUs).
+    pub(super) dist: [Option<i64>; 4],
+}
+
+impl ShpPicSt {
+    /// Record a `\shp` placement or wrapping control word (`\shpleft`…`\shpbottom`,
+    /// `\shpbx…`/`\shpby…`, `\shpwr`, `\shpwrk`, `\shpfblwtxt`), written either directly in
+    /// `\shp` or inside `\shpinst`. Returns whether `w` was one.
+    pub(super) fn control_word(&mut self, w: &str, p: Option<i32>) -> bool {
+        use wordcraft_doc::para::Anchor;
+        let pv = p.unwrap_or(0);
+        match w {
+            "shpleft" => {
+                self.rect[0] = i64::from(pv);
+                self.has_rect = true;
+            }
+            "shptop" => {
+                self.rect[1] = i64::from(pv);
+                self.has_rect = true;
+            }
+            "shpright" => {
+                self.rect[2] = i64::from(pv);
+                self.has_rect = true;
+            }
+            "shpbottom" => {
+                self.rect[3] = i64::from(pv);
+                self.has_rect = true;
+            }
+            "shpbxpage" => self.bx = Some(Anchor::Page),
+            "shpbxmargin" => self.bx = Some(Anchor::Margin),
+            "shpbxcolumn" => self.bx = Some(Anchor::Column),
+            "shpbxignore" => self.bx_ignore = true,
+            "shpbypage" => self.by = Some(Anchor::Page),
+            "shpbymargin" => self.by = Some(Anchor::Margin),
+            "shpbypara" => self.by = Some(Anchor::Paragraph),
+            "shpbyignore" => self.by_ignore = true,
+            "shpwr" => self.wr = Some(pv),
+            "shpwrk" => self.wrk = pv,
+            "shpfblwtxt" => self.behind = p != Some(0),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Commit the `\sn`/`\sv` property pair just read in `\shpinst`.
+    pub(super) fn commit_prop(&mut self) {
+        let v = self.sv.trim().parse::<i64>().ok();
+        let on = v.map(|v| v != 0);
+        match self.sn.trim() {
+            "shapeType" => self.shape_type = v,
+            "posrelh" => self.posrelh = v,
+            "posrelv" => self.posrelv = v,
+            "posh" => self.posh = v,
+            "posv" => self.posv = v,
+            "fPseudoInline" => self.pseudo_inline = on == Some(true),
+            "fHidden" => self.hidden = on == Some(true),
+            "fFlipH" => self.flip_h = on == Some(true),
+            "fFlipV" => self.flip_v = on == Some(true),
+            "rotation" => self.rotation = v,
+            "fBehindDocument" => self.behind_prop = on,
+            "dxWrapDistLeft" => self.dist[0] = v,
+            "dxWrapDistRight" => self.dist[1] = v,
+            "dyWrapDistTop" => self.dist[2] = v,
+            "dyWrapDistBottom" => self.dist[3] = v,
+            _ => {}
+        }
+        self.sn.clear();
+        self.sv.clear();
+    }
+
+    /// Floating placement for the picture in `\shprslt`, when the shape places it outside the
+    /// line (`shapeType` 75 or omitted, with wrapping or flip/rotation).
+    pub(super) fn float(&self) -> Option<Box<wordcraft_doc::para::Float>> {
+        use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap, WrapText};
+        if self.shape_type.is_some_and(|t| t != 75) {
+            return None;
+        }
+        let align = |v: Option<i64>| match v? {
+            1 => Some(FloatAlign::Start),
+            2 => Some(FloatAlign::Center),
+            3 => Some(FloatAlign::End),
+            4 => Some(FloatAlign::Inside),
+            5 => Some(FloatAlign::Outside),
+            _ => None,
+        };
+        let points = |v: i64, per: f32| (v.clamp(-31_680 * 12_700, 31_680 * 12_700) as f32 / per).clamp(-1584.0, 1584.0);
+        let rot = self.rotation.map_or(0.0, |r| (r.clamp(-360 * 65_536, 360 * 65_536) as f32 / 65_536.0).rem_euclid(360.0));
+        let mut f = Float { flip_h: self.flip_h, flip_v: self.flip_v, rot, hidden: self.hidden, ..Float::default() };
+        if !self.pseudo_inline
+            && (self.wr.is_some()
+                || self.behind
+                || self.behind_prop == Some(true)
+                || self.has_rect
+                || self.bx.is_some()
+                || self.by.is_some()
+                || self.posrelh.is_some()
+                || self.posrelv.is_some()
+                || self.posh.is_some()
+                || self.posv.is_some())
+        {
+            let behind = self.behind_prop.unwrap_or(self.behind);
+            f.wrap = match self.wr {
+                Some(1) => Wrap::TopAndBottom,
+                Some(2) => Wrap::Square,
+                Some(4) => Wrap::Tight,
+                Some(5) => Wrap::Through,
+                _ if behind => Wrap::BehindText,
+                _ => Wrap::InFrontOfText,
+            };
+            f.wrap_text = match self.wrk {
+                1 => WrapText::Left,
+                2 => WrapText::Right,
+                3 => WrapText::Largest,
+                _ => WrapText::BothSides,
+            };
+            let rel_h = self.posrelh.and_then(|v| match v {
+                0 => Some(Anchor::Margin),
+                1 => Some(Anchor::Page),
+                2 => Some(Anchor::Column),
+                3 => Some(Anchor::Character),
+                4 => Some(Anchor::LeftMargin),
+                5 => Some(Anchor::RightMargin),
+                6 => Some(Anchor::InsideMargin),
+                7 => Some(Anchor::OutsideMargin),
+                _ => None,
+            });
+            let rel_v = self.posrelv.and_then(|v| match v {
+                0 => Some(Anchor::Margin),
+                1 => Some(Anchor::Page),
+                2 => Some(Anchor::Paragraph),
+                3 => Some(Anchor::Line),
+                4 => Some(Anchor::TopMargin),
+                5 => Some(Anchor::BottomMargin),
+                6 => Some(Anchor::InsideMargin),
+                7 => Some(Anchor::OutsideMargin),
+                _ => None,
+            });
+            f.h_rel = if self.bx_ignore { rel_h.or(self.bx) } else { self.bx.or(rel_h) }.unwrap_or(Anchor::Column);
+            f.v_rel = if self.by_ignore { rel_v.or(self.by) } else { self.by.or(rel_v) }.unwrap_or(Anchor::Paragraph);
+            f.x = points(self.rect[0], 20.0);
+            f.y = points(self.rect[1], 20.0);
+            f.h_align = align(self.posh);
+            f.v_align = align(self.posv);
+            let dist = |v: Option<i64>, d: f32| v.map_or(d, |v| points(v, 12_700.0).max(0.0));
+            f.dist = dist(self.dist[0].or(self.dist[1]), 9.0);
+            f.dist_top = dist(self.dist[2], 0.0);
+            f.dist_bottom = dist(self.dist[3], 0.0);
+        }
+        (f != Float::default()).then(|| Box::new(f))
+    }
 }
 
 /// A footnote, endnote or comment group being read into an output of its own.
