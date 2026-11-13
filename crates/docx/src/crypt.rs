@@ -17,13 +17,14 @@
 //! spin count is bounded by the specification's maximum. Passwords and keys are wiped from memory
 //! when dropped ([`Zeroizing`]) and never logged.
 
+use std::fmt::Write as _;
 use std::io::{Cursor, Read, Write};
 
 use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use base64::Engine as _;
 use hmac::Mac;
 use sha2::Digest;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::DocxError;
 use crate::xml;
@@ -499,10 +500,7 @@ const LEGACY_MATRIX: [[u16; 7]; 15] = [
 /// high byte when the low byte is 0); the high-order word comes from the initial code array and
 /// the encryption matrix, the low-order word from rotating and XOR-ing the bytes backwards.
 fn legacy_key(password: &str) -> u32 {
-    let mut units = password.encode_utf16().peekable();
-    units.next_if_eq(&0xFEFF);
-    let bytes: Zeroizing<Vec<u8>> =
-        Zeroizing::new(units.take(LEGACY_INITIAL_CODE.len()).map(|u| if u & 0xFF != 0 { (u & 0xFF) as u8 } else { (u >> 8) as u8 }).collect());
+    let bytes = legacy_bytes(password);
     let Some(&initial) = bytes.len().checked_sub(1).and_then(|i| LEGACY_INITIAL_CODE.get(i)) else { return 0 };
     let mut high = initial;
     let first_row = LEGACY_MATRIX.len() - bytes.len();
@@ -523,21 +521,40 @@ fn legacy_key(password: &str) -> u32 {
     (u32::from(high) << 16) | u32::from(low)
 }
 
+/// The legacy key's input: the password's UTF-16 units without a leading BOM, at most 15, each
+/// reduced to one byte. The buffer is allocated at its final size, so it is never moved, which
+/// would leave a copy in freed memory.
+fn legacy_bytes(password: &str) -> Zeroizing<Vec<u8>> {
+    let mut units = password.encode_utf16().peekable();
+    units.next_if_eq(&0xFEFF);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(LEGACY_INITIAL_CODE.len()));
+    bytes.extend(units.take(LEGACY_INITIAL_CODE.len()).map(|u| if u & 0xFF != 0 { (u & 0xFF) as u8 } else { (u >> 8) as u8 }));
+    bytes
+}
+
 /// What the legacy form hashes: the key's bytes in reversed order (Part 4 §14.8.1: 0x64CEED7E
 /// becomes 7EEDCE64), as an upper-case hex string — hashed as UTF-16LE like a password, as Word
 /// does ([MS-OE376] 2.1.410 a).
 fn legacy_key_hex(password: &str) -> Zeroizing<String> {
     let key = legacy_key(password);
-    Zeroizing::new(key.to_le_bytes().iter().map(|b| format!("{b:02X}")).collect())
+    // Written into one buffer of the final size: no temporary strings, and no move.
+    let mut hex = Zeroizing::new(String::with_capacity(8));
+    for b in key.to_le_bytes() {
+        let _ = write!(hex, "{b:02X}");
+    }
+    hex
 }
 
 /// The ISO write-protection hash ([MS-OFFCRYPTO] §2.4.2.4): H0 = H(salt + password as UTF-16LE),
 /// Hn = H(Hn-1 + iterator) — the iterator after the hash, unlike encryption's [`iterate`].
 fn iterate_appended(hash: Hash, salt: &[u8], password: &str, spin_count: u32) -> Zeroizing<Vec<u8>> {
-    let pw: Zeroizing<Vec<u8>> = Zeroizing::new(password.encode_utf16().flat_map(u16::to_le_bytes).collect());
+    let pw = utf16le(password);
     let mut h = Zeroizing::new(hash.hash(&[salt, &pw]));
     for i in 0..spin_count.min(MAX_SPIN_COUNT) {
-        *h = hash.hash(&[&h, &i.to_le_bytes()]);
+        let next = hash.hash(&[&h, &i.to_le_bytes()]);
+        // Assigning through `Zeroizing` would free the previous hash without clearing it.
+        h.zeroize();
+        *h = next;
     }
     h
 }
@@ -627,13 +644,24 @@ impl Hash {
     }
 }
 
+/// `password` as UTF-16LE. A UTF-8 byte becomes at most two UTF-16 bytes, so the buffer is
+/// allocated at its final size and never moved, which would leave a copy in freed memory.
+fn utf16le(password: &str) -> Zeroizing<Vec<u8>> {
+    let mut pw = Zeroizing::new(Vec::with_capacity(password.len().saturating_mul(2)));
+    pw.extend(password.encode_utf16().flat_map(u16::to_le_bytes));
+    pw
+}
+
 /// The password hash after `spin_count` iterations (§2.3.4.11): H0 = H(salt + password as
 /// UTF-16LE), Hn = H(iterator + Hn-1).
 fn iterate(hash: Hash, salt: &[u8], password: &str, spin_count: u32) -> Zeroizing<Vec<u8>> {
-    let pw: Zeroizing<Vec<u8>> = Zeroizing::new(password.encode_utf16().flat_map(u16::to_le_bytes).collect());
+    let pw = utf16le(password);
     let mut h = Zeroizing::new(hash.hash(&[salt, &pw]));
     for i in 0..spin_count.min(MAX_SPIN_COUNT) {
-        *h = hash.hash(&[&i.to_le_bytes(), &h]);
+        let next = hash.hash(&[&i.to_le_bytes(), &h]);
+        // Assigning through `Zeroizing` would free the previous hash without clearing it.
+        h.zeroize();
+        *h = next;
     }
     h
 }
@@ -641,7 +669,10 @@ fn iterate(hash: Hash, salt: &[u8], password: &str, spin_count: u32) -> Zeroizin
 /// A key from the iterated password hash and a block key (§2.3.4.11): H(Hn + blockKey),
 /// truncated to `len`, or padded with 0x36.
 fn derive_key(hash: Hash, hn: &[u8], block_key: &[u8], len: usize) -> Zeroizing<Vec<u8>> {
-    let mut k = Zeroizing::new(hash.hash(&[hn, block_key]));
+    let h = Zeroizing::new(hash.hash(&[hn, block_key]));
+    // Padding the hash in place could move it and leave a copy in freed memory.
+    let mut k = Zeroizing::new(Vec::with_capacity(len));
+    k.extend(h.iter().take(len));
     k.resize(len, 0x36);
     k
 }
@@ -659,8 +690,8 @@ fn standard_key(salt: &[u8], password: &str, len: usize) -> Zeroizing<Vec<u8>> {
         }
         Zeroizing::new(Hash::Sha1.hash(&[&buf[..]]))
     };
-    let mut key = Zeroizing::new(x(0x36).to_vec());
-    key.extend_from_slice(&x(0x5C));
+    // `concat` allocates the final size once; extending X1 would move it, leaving a copy.
+    let mut key = Zeroizing::new([x(0x36).as_slice(), x(0x5C).as_slice()].concat());
     key.truncate(len);
     key
 }
