@@ -1,7 +1,7 @@
 # Real-time collaboration: implementation status
 
 - Date: 2026-11-13 (PR facts measured at 2026-11-13T14:16Z: the head of the
-  branch, the tree, the state of PR #5834 and the runs on it)
+  branch, the tree, the state of PR #5834, and the runs on it at 14:41Z)
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft), title "Real-time collaboration:
@@ -26,8 +26,14 @@
   `git rev-list --left-right --count 9c6e343a...HEAD` answered `0 1` — one
   documentation commit above the head, the page's §5.46 sync — with a clean
   tree. The PR was updated at 2026-11-13T13:20:03Z and is `MERGEABLE`/`BLOCKED`
-  with an empty `reviewDecision`; `gh run list --commit 9c6e343a` answers `[]`,
-  so this head has no workflow run at all: none created, none executed. (This
+  with an empty `reviewDecision`. Five workflow runs exist on this head: all
+  created at 2026-11-13T13:19:59Z, all `completed` with
+  `conclusion: action_required` and no job started — `CI` `43432753402`, `Nix`
+  `43432753705`, `SonarCloud` `43432753423`, `Printing` `43432753363`,
+  `Packaging lint` `43432753414` (measured 2026-11-13T14:41Z; the 14:16Z note
+  that this head had "no workflow run at all" was a measurement error — the
+  command was given the short SHA `9c6e343a`, which `gh run list --commit` does
+  not match, see §5.47). (This
   page's own commit sits above `f2bfaabb`, so the local branch is `0 2` from the
   head as it is read.) The head
   is one commit above `29afb475` and changes one file, `Cargo.lock` (+8/−8): the
@@ -89,16 +95,21 @@
   branch merges cleanly, and `BLOCKED` is the required review plus the
   unapproved workflows. Its rollup on `9c6e343a` holds one check, CodeRabbit's
   `skipped` (`gh pr view 5834 --json statusCheckRollup`,
-  2026-11-13T14:17Z); no run on that head has been created, let alone executed
-  (§5.47). The fork git source is gone from
+  2026-11-13T14:17Z) — an `action_required` run adds nothing to the rollup, and
+  the five runs on that head (`9c6e343ae17ea09c69ac12d72f8bea748c51982b`) were
+  created at 13:19:59Z and none executed: each is `completed` with
+  `action_required` and no job started (§5.47). The fork git source is gone from
   the manifest and the lock
   (§5.24), and the three `printing.yml` steps are green on the pushed tree at
   the build host (§5.25).
 - CI has still not executed on any pushed head. On the head of §5.47,
-  `9c6e343a` (pushed at 13:18Z), not even the runs were created:
-  `gh run list --commit 9c6e343a` answers `[]`. The five runs created at
-  2026-11-13T10:15:10Z on `29afb475` were created and not executed — each is
+  `9c6e343ae17ea09c69ac12d72f8bea748c51982b` (pushed at 13:18Z), five runs
+  exist, all created at 2026-11-13T13:19:59Z, and none executed — each is
   `completed` with `conclusion: action_required` and no job started:
+  `CI` (`43432753402`), `Nix` (`43432753705`), `SonarCloud` (`43432753423`),
+  `Printing` (`43432753363`) and `Packaging lint` (`43432753414`). The five runs
+  created at 2026-11-13T10:15:10Z on `29afb475` were created and not executed —
+  each is `completed` with `conclusion: action_required` and no job started:
   `Printing` (`43407760756`), `CI` (`43407760935`), `Packaging lint`
   (`43407761099`), `SonarCloud` (`43407761150`) and `Nix` (`43407761233`); the
   rollup on this head holds only CodeRabbit's `skipped`. The same held for the
@@ -439,7 +450,7 @@ missing, and where the next session should start.
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered, and this pass did not move it | PR #5834; its head is read from the PR, not crowned here: the 2026-11-13T14:16Z measurement answered `9c6e343a` (the lock fix of §5.47, one commit above `29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46), with the fork branch and the PR's `headRefOid` agreeing, the local `HEAD` one documentation commit above it and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: no run exists on `9c6e343a` at all (`gh run list --commit 9c6e343a` → `[]`), and the five runs on the previous head `29afb475` were created at 2026-11-13T10:15:10Z as `action_required` (`Printing` 43407760756, `SonarCloud` 43407761150, `CI` 43407760935, `Packaging lint` 43407761099, `Nix` 43407761233) with only CodeRabbit's `skipped` in the rollup, as on `ce0bb001` (§5.2, §5.45, §5.46); the gate on the current head ran on the build host (§5.47); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); nothing is left above the measured head — `9c6e343a` went up in the 13:18Z push made by the cabinet's PR sweep; the branch's only CI change is the declared `git-sources` job (§5.24) |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered, and this pass did not move it | PR #5834; its head is read from the PR, not crowned here: the 2026-11-13T14:16Z measurement answered `9c6e343a` (the lock fix of §5.47, one commit above `29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46), with the fork branch and the PR's `headRefOid` agreeing, the local `HEAD` one documentation commit above it and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: the five runs on `9c6e343ae17ea09c69ac12d72f8bea748c51982b` were created at 2026-11-13T13:19:59Z and all are `completed`/`action_required` with no job started (`CI` 43432753402, `Nix` 43432753705, `SonarCloud` 43432753423, `Printing` 43432753363, `Packaging lint` 43432753414), so the rollup holds only CodeRabbit's `skipped`, as on the previous head `29afb475`, whose five runs were created at 2026-11-13T10:15:10Z as `action_required` (`Printing` 43407760756, `SonarCloud` 43407761150, `CI` 43407760935, `Packaging lint` 43407761099, `Nix` 43407761233), and as on `ce0bb001` (§5.2, §5.45, §5.46); the gate on the current head ran on the build host (§5.47); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); nothing is left above the measured head — `9c6e343a` went up in the 13:18Z push made by the cabinet's PR sweep; the branch's only CI change is the declared `git-sources` job (§5.24) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -468,8 +479,10 @@ Results at this writing:
   and clippy and red at `test` only on the two upstream `fit_one_page` tests,
   which fail identically on clean `origin/main` `b5fa2f9e`; the rest of the
   `test` step — 6375 passed, 0 failed, 11 ignored in 45 targets — and
-  i18n-report, language, doctests, assets, layers and wasm all rc 0. The
-  details, command by command, are in §5.47.
+  i18n-report, language, doctests, assets, layers and wasm all rc 0. Five
+  workflow runs exist on the head `9c6e343ae17ea09c69ac12d72f8bea748c51982b`,
+  all created 2026-11-13T13:19:59Z and all `action_required` with no job started
+  (§5.47 names them by id). The details, command by command, are in §5.47.
 - §5.46, the merge head `29afb475` (upstream `main` `b5fa2f9e` merged in): on
   the build host `agents`, `cargo check --workspace -j 12` EXIT=0 (27.15 s),
   `cargo test` over the eight collab crates — 402 passed, 0 failed, 1 ignored
@@ -4545,6 +4558,25 @@ tree is untouched — `sha256sum Cargo.lock` answered
 and after, and `git status --porcelain` was `0` lines both times. The lock is
 accepted, not rewritten.
 
+**CI on the head.** Five workflow runs exist on
+`9c6e343ae17ea09c69ac12d72f8bea748c51982b`, and none has executed: each was
+created at 2026-11-13T13:19:59Z by `pull_request`, is `completed` with
+`conclusion: action_required`, and started no job — `CI` `43432753402`, `Nix`
+`43432753705`, `SonarCloud` `43432753423`, `Printing` `43432753363`,
+`Packaging lint` `43432753414`. Measured at 2026-11-13T14:41Z with
+`gh run list --repo storytold/wordcraft --commit <full sha> --json
+databaseId,name,status,conclusion,createdAt,headSha`.
+
+The commit argument has to be the full 40-character SHA: `gh run list
+--commit` matches no abbreviation of this head — 8 (`9c6e343a`), 12, 16, 24, 32
+and 39 characters all answer `[]`, and only
+`9c6e343ae17ea09c69ac12d72f8bea748c51982b` answers the five. The 14:16Z
+measurement on this page was given the short SHA and concluded, wrongly, that
+the head carried no run at all; this section and the header now state the runs.
+Nothing about the runs is hidden from the rollup either: an `action_required`
+run contributes no check, so `gh pr view 5834 --json statusCheckRollup` still
+shows only CodeRabbit's `skipped`.
+
 **The gate** (build host `agents`, 20 cores,
 `CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts`; logs in the
 cabinet workspace under `.craft/logs/`):
@@ -4586,8 +4618,10 @@ ignored, the interface audit, the language pack test, the doctests, the 48
 assets, the 27-crate layering and the 22-crate wasm check. The two
 `fit_one_page` tests are red for the same reason on clean upstream `main`; they
 are not a property of this head and they touch no collab code. The head itself
-carries no workflow run at all (`gh run list --commit 9c6e343a` answers `[]`),
-so CI has not executed on it and this gate is the evidence instead. Nothing was
+carries five workflow runs, all created at 2026-11-13T13:19:59Z and all
+`completed`/`action_required` with no job started (`gh run list --repo
+storytold/wordcraft --commit 9c6e343ae17ea09c69ac12d72f8bea748c51982b`), so CI
+has not executed on it and this gate is the evidence instead. Nothing was
 pushed and the head did not move: the documentation commit that records this
 section stays local, and the PR still waits for a maintainer's approval and
 review.
