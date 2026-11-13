@@ -314,15 +314,32 @@ impl Reader<'_> {
 
     // ---- tables ----
 
+    /// Word gives a table no cell margins when the file has no default table style and neither the
+    /// table nor its style sets them; saving may write a default Normal Table, so the zeros are
+    /// kept as the table's own. shortcut: they stay direct formatting (a table style applied later
+    /// keeps them), until the model knows the file's default table style. A `w:tblCellMar` that sets
+    /// only some sides keeps them: only the sides it omits become 0.
+    fn no_default_margins(&self, props: &mut wordcraft_doc::props::TableProps) {
+        if self.no_default_table_style
+            && props.cell_margins.is_none()
+            && props.style.as_deref().and_then(|id| self.doc.styles.table_style(id)).is_none_or(|s| s.parts.cell_margins.is_none())
+        {
+            props.cell_margins = Some([0.0; 4]);
+        }
+    }
+
     fn read_table(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize) -> Option<Table> {
         let mut table = Table::default();
         if let Some(p) = t.child("w:tblPr") {
             table.props = self.pc.tblpr(p);
             if let Some(ch) = p.child("w:tblPrChange") {
-                let old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                let mut old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                // Rejecting the change brings back these properties: with the same margins.
+                self.no_default_margins(&mut old);
                 table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
         }
+        self.no_default_margins(&mut table.props);
         if let Some(g) = t.child("w:tblGrid") {
             table.grid = g
                 .children("w:gridCol")
