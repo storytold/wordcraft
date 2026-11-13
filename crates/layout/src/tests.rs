@@ -12019,12 +12019,16 @@ fn consistent_percentage_cell_widths_override_the_grid() {
             let got = columns(fixed, EQUAL, shares, &|_| {});
             assert!(near(got, (200.0, 300.0)), "{what}, fixed layout {fixed}: the columns start {got:?} after the first");
         }
-        // A grid that agrees stays what it is, to the last twentieth of a point: Word wrote it
-        // from the shares, and a column 0.02 pt off moves a word of a full line to the next.
+        // A grid that agrees stays what it is, to the hundredth of a point: Word wrote it from
+        // the shares, and a column 0.02 pt off moves a word of a full line to the next. It
+        // agrees while no column is further from its share than a percentage can say (a
+        // fiftieth of a percent of the table, 0.08 pt here) and a twentieth of a point.
         let got = columns(fixed, [200.0, 100.0, 100.0], [50.0, 25.0, 25.0], &|_| {});
         assert!(near(got, (200.0, 300.0)), "a grid that agrees, fixed layout {fixed}: {got:?}");
-        let got = columns(fixed, [194.35, 102.85, 102.8], [48.58, 25.71, 25.71], &|_| {});
-        assert!(near(got, (194.35, 297.2)), "a grid a rounding away from the shares, fixed layout {fixed}: {got:?}");
+        let got = columns(fixed, [194.4, 102.85, 102.75], [48.58, 25.71, 25.71], &|_| {});
+        assert!(near(got, (194.4, 297.25)), "a grid a rounding away from the shares, fixed layout {fixed}: {got:?}");
+        let got = columns(fixed, [194.5, 102.85, 102.65], [48.58, 25.71, 25.71], &|_| {});
+        assert!(near(got, (194.3, 297.15)), "a grid 0.2 pt away from the shares, fixed layout {fixed}: {got:?}");
     }
     // Left to the grid: rows that disagree, a row without widths, a spanning cell, a width in
     // points among the percentages, and shares that add up to more than the table.

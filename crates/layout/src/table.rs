@@ -1523,8 +1523,9 @@ fn is_automatic(t: &Table) -> bool {
 /// shares are of their sum. Shares that add up to more than the table are left to the grid: Word
 /// then gives the first columns their percentages and the last one what is left.
 ///
-/// A grid within a twentieth of a point of the shares is the one Word wrote from them, and stays
-/// as it is: a column 0.02 pt narrower moves a word of a full line to the next.
+/// A grid that is as near the shares as a percentage can say (a fiftieth of a percent of the
+/// table, and a twentieth of a point for rounding) is the one Word wrote from them, and stays as
+/// it is: a column 0.02 pt narrower moves a word of a full line to the next.
 fn apply_cell_shares(t: &Table, grid: &mut [f32]) -> bool {
     let Some(first) = t.rows.first() else { return false };
     let share = |c: &wordcraft_doc::Cell| c.props.width_pct.filter(|p| p.is_finite() && *p > 0.0 && c.props.width.is_none() && c.span() == 1);
@@ -1540,7 +1541,8 @@ fn apply_cell_shares(t: &Table, grid: &mut [f32]) -> bool {
     }
     let twip = |w: f32| (w * 20.0).round() / 20.0;
     let widths: Vec<f32> = shares.iter().map(|p| twip(total * p / sum)).collect();
-    if grid.iter().zip(&widths).any(|(g, w)| (g - w).abs() > 0.051) {
+    let near = total / 5000.0 + 0.051;
+    if grid.iter().zip(&widths).any(|(g, w)| (g - w).abs() > near) {
         grid.copy_from_slice(&widths);
     }
     true
