@@ -5,11 +5,7 @@ use super::{
 use wordcraft_doc::para::OBJ;
 
 /// Compare and Combine take the same settings.
- fix/5837-compare-header-footer
-pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character", "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared), "headersFooters"?: bool (default true: compare headers and footers)}"#;
-
-pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
- main
+pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared), "headersFooters"?: bool (default true: compare headers and footers)}"#;
 
 /// What Compare / Combine compares (the More >> settings of Word's dialog).
 struct CompareOptions {
@@ -47,16 +43,12 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// Compare the current document (original, or `original` from a file) with a revised one: the
 /// result shows the differences as tracked insertions, deletions and formatting changes, labelled
 /// with `author`. Options Word offers that the comparison can't honour yet (moves, comments,
- fix/5837-compare-header-footer
 /// footnotes, text boxes, fields) are accepted and listed in the result. Headers and footers are
 /// compared by default (`headersFooters`: true), tracking edits, insertions, deletions, and paragraph
-/// formatting changes within header and footer stories.
-
-/// headers and footers, footnotes, text boxes, fields) are accepted and listed in the result.
-/// When character-level comparison is requested (`"level": "character"`) but any paragraph exceeds
-/// [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that paragraph, surfaces the
-/// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`.
- main
+/// formatting changes within header and footer stories. When character-level comparison is requested
+/// (`"level": "character"`) but any paragraph exceeds [`MAX_CHAR_DIFF`] characters, it falls back to
+/// word-level diff for that paragraph, surfaces the fallback count in `"characterFallback"`, and
+/// includes `"level"` in `"notHonoured"`.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let revised = if let Some(t) = p::str(v, "text") {
         Document::from_text(t)
@@ -83,13 +75,8 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         formatting: p::bool(v, "formatting").unwrap_or(true),
         characters: matches!(level, "character" | "char"),
     };
- fix/5837-compare-header-footer
     let compare_headers_footers = p::bool(v, "headersFooters").unwrap_or(true);
-    let not_honoured: Vec<&str> = ["moves", "comments", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
-
-    let mut not_honoured: Vec<&str> =
-        ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
- main
+    let mut not_honoured: Vec<&str> = ["moves", "comments", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
 
@@ -154,7 +141,9 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         orig_eff_footers: &orig_eff_footers,
     };
     let mut budget = MAX_COMPARE_CELLS;
-    let (out, body_changes, sources) = compare_blocks(&s.doc.parts, &mut s.doc.revisions, &run, &old, &new, true, &mut budget);
+    let mut char_fallbacks = 0usize;
+    let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks };
+    let (out, body_changes, sources) = compare_blocks(&mut s.doc, &run, &mut ctx, &old, &new, true);
     s.doc.body = out;
     let mut changes = body_changes;
 
@@ -167,7 +156,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
             orig_eff_headers: &orig_eff_headers,
             orig_eff_footers: &orig_eff_footers,
         };
-        changes += compare_headers_and_footers(s, &revised, &snaps, &sources, rev_has_text_boxes, &run, &mut budget);
+        changes += compare_headers_and_footers(s, &revised, &snaps, &sources, rev_has_text_boxes, &run, &mut ctx);
     }
 
     s.doc.ensure_nonempty();
@@ -181,8 +170,21 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         // Compare creates an untitled result from the current document.
         s.clear_versions();
     }
+    if char_fallbacks > 0 {
+        log::warn!(
+            "compare: {char_fallbacks} paragraph(s) exceeded character diff limit of {MAX_CHAR_DIFF}; fell back from character to word level diff"
+        );
+        if !not_honoured.contains(&"level") {
+            not_honoured.push("level");
+        }
+    }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
-    Ok(json!({"changes": changes, "author": author, "notHonoured": not_honoured}))
+    Ok(json!({
+        "changes": changes,
+        "author": author,
+        "notHonoured": not_honoured,
+        "characterFallback": char_fallbacks,
+    }))
 }
 
 /// Context describing the author, date, options, and change IDs for compare emissions.
@@ -378,7 +380,9 @@ fn adopt_hf_blocks(doc: &mut Document, revised: &Document, blocks: &[Arc<Block>]
             parts.insert(id, part.clone());
         }
     }
-    let frag = wordcraft_doc::edit::Fragment { blocks: blocks.iter().map(|b| (**b).clone()).collect(), parts };
+    let blocks: Vec<Block> = blocks.iter().map(|b| (**b).clone()).collect();
+    let media = revised.media_of_blocks(&blocks);
+    let frag = wordcraft_doc::edit::Fragment { blocks, parts, media };
     doc.adopt_fragment(&frag).into_iter().map(Arc::new).collect()
 }
 
@@ -443,7 +447,7 @@ fn compare_headers_and_footers(
     sources: &[(Option<usize>, Option<usize>)],
     rev_has_text_boxes: bool,
     run: &CompareRun<'_>,
-    budget: &mut u64,
+    ctx: &mut DiffCtx<'_>,
 ) -> usize {
     let mut changes = 0usize;
     let mut seen_inserted = std::collections::HashSet::new();
@@ -541,8 +545,7 @@ fn compare_headers_and_footers(
 
                             if !are_identical {
                                 let rev_blocks = adopt_hf_blocks(&mut s.doc, revised, rev_blocks_raw, rev_has_text_boxes);
-                                let (hf_out, hf_changes, _) =
-                                    compare_blocks(&s.doc.parts, &mut s.doc.revisions, run, snap_blocks, &rev_blocks, false, budget);
+                                let (hf_out, hf_changes, _) = compare_blocks(&mut s.doc, run, ctx, snap_blocks, &rev_blocks, false);
                                 if let Some(part) = s.doc.parts.get_mut(&target) {
                                     part.blocks = hf_out;
                                 }
@@ -665,27 +668,19 @@ fn sanitize_section_hf(
 /// revisions along with the count of changes and block source indices. When `track_sources` is false,
 /// block correspondence tracking is skipped to avoid allocations and vector operations.
 fn compare_blocks(
-    parts: &std::collections::BTreeMap<u32, wordcraft_doc::Part>,
-    revisions: &mut Vec<wordcraft_doc::Revision>,
+    doc: &mut Document,
     run: &CompareRun<'_>,
+    ctx: &mut DiffCtx<'_>,
     old: &[Arc<Block>],
     new: &[Arc<Block>],
     track_sources: bool,
-    budget: &mut u64,
 ) -> (Vec<Arc<Block>>, usize, Vec<(Option<usize>, Option<usize>)>) {
     let key = |b: &Arc<Block>| match &**b {
         Block::Para(p) => run.opts.key(&p.plain_text()),
         // Tables match as a whole, by their text.
         Block::Table(_) => format!("\u{0}table\u{0}{}", run.opts.key(&block_text(b, 0))),
     };
- fix/5837-compare-header-footer
-    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), budget);
-
-    let mut budget = MAX_COMPARE_CELLS;
-    let mut char_fallbacks = 0usize;
-    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut budget);
-    let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks };
- main
+    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), ctx.budget);
     let mut out: Vec<Arc<Block>> = Vec::new();
     let mut sources: Vec<(Option<usize>, Option<usize>)> = if track_sources { Vec::with_capacity(old.len() + new.len()) } else { Vec::new() };
     let (mut i, mut j) = (0usize, 0usize);
@@ -697,17 +692,13 @@ fn compare_blocks(
                 let (a, b) = (old.get(i), new.get(j));
                 // The revised block, with its formatting changes tracked.
                 if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
-                    if !same_objects(parts, pa, pb) {
+                    if !same_objects(doc, pa, pb) {
                         // Same text, but objects (text boxes, pictures…) differ: diffed, so the
                         // original's objects aren't lost.
- fix/5837-compare-header-footer
-                        out.push(para_block(word_diff(parts, pa, pb, run, i, budget)));
+                        out.push(para_block(word_diff(doc, pa, pb, run, ctx, i)));
                         if track_sources {
                             sources.push((Some(i), Some(j)));
                         }
-
-                        out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx)));
- main
                         changes += 1;
                         i += 1;
                         j += 1;
@@ -719,10 +710,10 @@ fn compare_blocks(
                         sanitize_section_hf(pa.section.as_deref(), sb, run, i);
                     }
                     if run.opts.formatting && pa.text == pb.text {
-                        let before = revisions.len();
+                        let before = doc.revisions.len();
                         let unformatted = p.clone();
-                        crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, revisions, run.author, run.date);
-                        if revisions.len() > before || p != unformatted {
+                        crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut doc.revisions, run.author, run.date);
+                        if doc.revisions.len() > before || p != unformatted {
                             changes += 1;
                         }
                     }
@@ -749,16 +740,12 @@ fn compare_blocks(
                 for x in 0..dels.max(inss) {
                     let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
                     match (a.map(|x| &**x), b.map(|x| &**x)) {
- fix/5837-compare-header-footer
                         (Some(Block::Para(pa)), Some(Block::Para(pb))) => {
-                            out.push(para_block(word_diff(parts, pa, pb, run, i + x, budget)));
+                            out.push(para_block(word_diff(doc, pa, pb, run, ctx, i + x)));
                             if track_sources {
                                 sources.push((Some(i + x), Some(j + x)));
                             }
                         }
-
-                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx))),
- main
                         _ => {
                             if let Some(bx) = a {
                                 out.push(Arc::new(mark_block(bx, &|c| c.del = Some(run.del), 0)));
@@ -790,37 +777,7 @@ fn compare_blocks(
             None => break,
         }
     }
- fix/5837-compare-header-footer
     (out, changes, sources)
-
-    s.doc.body = out;
-    s.doc.ensure_nonempty();
-    s.note_body_replaced();
-    s.math = None;
-    if show_in != "original" || p::str(v, "original").is_some() {
-        // The result is a new, untitled document: saving it never overwrites either file.
-        s.path = None;
-        s.file_name = None;
-        // Version snapshots belong to the document they were taken from, including when
-        // Compare creates an untitled result from the current document.
-        s.clear_versions();
-    }
-    if char_fallbacks > 0 {
-        log::warn!(
-            "compare: {char_fallbacks} paragraph(s) exceeded character diff limit of {MAX_CHAR_DIFF}; fell back from character to word level diff"
-        );
-        if !not_honoured.contains(&"level") {
-            not_honoured.push("level");
-        }
-    }
-    s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
-    Ok(json!({
-        "changes": changes,
-        "author": author,
-        "notHonoured": not_honoured,
-        "characterFallback": char_fallbacks,
-    }))
- main
 }
 
 /// A block's text (a table's cells in order), for matching blocks.
@@ -1030,11 +987,6 @@ enum Tok<'a> {
     Obj(&'a InlineObject),
 }
 
-/// Extracts the plain text of a document part by joining the text of its blocks.
-fn part_text(p: &wordcraft_doc::Part) -> String {
-    p.blocks.iter().map(|b| block_text(b, 0)).collect::<Vec<_>>().join("\n")
-}
-
 /// What a comparison sees of a token: the text as the options say, an object with the text of
 /// the text boxes it shows instead of their story ids (each document numbers its own stories).
 #[derive(PartialEq)]
@@ -1043,9 +995,8 @@ enum Key {
     Obj(Box<InlineObject>, Vec<String>),
 }
 
-/// Generates a comparison key for an inline object, extracting text from referenced text box parts.
-fn obj_key(parts: &std::collections::BTreeMap<u32, wordcraft_doc::Part>, o: &InlineObject) -> Key {
-    let texts = o.text_boxes().into_iter().map(|id| parts.get(&id).map(part_text).unwrap_or_default()).collect();
+fn obj_key(doc: &Document, o: &InlineObject) -> Key {
+    let texts = o.text_boxes().into_iter().map(|id| doc.plain_text(StoryRef::Part(id))).collect();
     let mut o = o.clone();
     for story in o.text_box_slots() {
         *story = None;
@@ -1054,8 +1005,8 @@ fn obj_key(parts: &std::collections::BTreeMap<u32, wordcraft_doc::Part>, o: &Inl
 }
 
 /// Whether two paragraphs hold the same objects, as compared.
-fn same_objects(parts: &std::collections::BTreeMap<u32, wordcraft_doc::Part>, a: &Paragraph, b: &Paragraph) -> bool {
-    a.objects.len() == b.objects.len() && a.objects.iter().zip(&b.objects).all(|(x, y)| x == y || obj_key(parts, x) == obj_key(parts, y))
+fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
+    a.objects.len() == b.objects.len() && a.objects.iter().zip(&b.objects).all(|(x, y)| x == y || obj_key(doc, x) == obj_key(doc, y))
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
@@ -1111,23 +1062,6 @@ fn put(p: &mut Paragraph, t: Option<&Tok<'_>>, props: &CharProps) {
     }
 }
 
- fix/5837-compare-header-footer
-/// Diffs two paragraphs token-by-token (by word or character), producing tracked insertions and deletions.
-fn word_diff(
-    parts: &std::collections::BTreeMap<u32, wordcraft_doc::Part>,
-    a: &Paragraph,
-    b: &Paragraph,
-    run: &CompareRun<'_>,
-    orig_idx: usize,
-    budget: &mut u64,
-) -> Paragraph {
-    let (at, bt) = (a.plain_text(), b.plain_text());
-    let chars = run.opts.characters && at.chars().count().max(bt.chars().count()) <= MAX_CHAR_DIFF;
-    let (ta, tb) = (tokens(a, chars), tokens(b, chars));
-    let key = |t: &Tok<'_>| match t {
-        Tok::Text(t) => Key::Text(run.opts.key(t)),
-        Tok::Obj(o) => obj_key(parts, o),
-
 /// Returns `true` if paragraph `p` contains more characters than `limit`.
 ///
 /// Bounded to scan at most `limit + 1` characters without allocating unless inline objects
@@ -1144,7 +1078,7 @@ fn para_exceeds_char_limit(p: &Paragraph, limit: usize) -> bool {
 /// to `ctx.opts.characters`. When character-level diff is requested but either paragraph exceeds
 /// [`MAX_CHAR_DIFF`] characters, falls back to word-level diff and increments `ctx.char_fallbacks`
 /// so callers can discover the fallback.
-fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>) -> Paragraph {
+fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, run: &CompareRun<'_>, ctx: &mut DiffCtx<'_>, orig_idx: usize) -> Paragraph {
     let chars = if ctx.opts.characters {
         if para_exceeds_char_limit(a, MAX_CHAR_DIFF) || para_exceeds_char_limit(b, MAX_CHAR_DIFF) {
             *ctx.char_fallbacks = ctx.char_fallbacks.saturating_add(1);
@@ -1159,7 +1093,6 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     let key = |t: &Tok<'_>| match t {
         Tok::Text(t) => Key::Text(ctx.opts.key(t)),
         Tok::Obj(o) => obj_key(doc, o),
- main
     };
     let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), ctx.budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
@@ -1183,19 +1116,11 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
                 j += 1;
             }
             Op::Del => {
- fix/5837-compare-header-footer
-                put(&mut p, ta.get(i), &CharProps { del: Some(run.del), ..base.clone() });
-                i += 1;
-            }
-            Op::Ins => {
-                put(&mut p, tb.get(j), &CharProps { ins: Some(run.ins), ..base.clone() });
-
                 put(&mut p, ta.get(i), &CharProps { del: Some(ctx.del), ..base.clone() });
                 i += 1;
             }
             Op::Ins => {
                 put(&mut p, tb.get(j), &CharProps { ins: Some(ctx.ins), ..base.clone() });
- main
                 j += 1;
             }
         }
