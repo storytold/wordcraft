@@ -96,6 +96,8 @@ impl Session {
             // Headers just created to edit: closing checks they still exist and are empty.
             new_header_parts: _,
             hf_return: _,
+            // Which navigated style change Accept/Reject acts on: it checks the selection itself.
+            review_style: _,
             history,
             undo_evicted,
             redo,
