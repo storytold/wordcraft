@@ -27,6 +27,7 @@ pub(crate) mod snapshot;
 pub mod speech;
 pub mod strict;
 pub(crate) mod view;
+pub mod writing_stats;
 
 use std::collections::HashMap;
 
