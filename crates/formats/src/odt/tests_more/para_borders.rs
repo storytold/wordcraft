@@ -77,9 +77,9 @@ fn a_width_0_border_is_written_as_the_thinnest_line() {
     assert!(p.props_of_char(0).border.is_some_and(|b| b.is_visible()), "{:?}", p.props_of_char(0));
 }
 
-/// #5065: a width-0 border a named paragraph style carries keeps the thinnest line as well. The
-/// common style is written from the document's styles rather than from the flow model, so it needs
-/// the same conversion the paragraph's own formatting gets.
+/// #5065: a width-0 border a named style carries keeps the thinnest line as well, around its
+/// paragraph and around its text. The common style is written from the document's styles rather
+/// than from the flow model, so it needs the same conversion the direct formatting gets.
 #[test]
 fn a_named_styles_width_0_border_is_written_as_the_thinnest_line() {
     let line = Border { style: BorderStyle::Single, width: 0.0, color: Some(Rgb(0, 0x80, 0)), space: 0.0 };
@@ -89,6 +89,7 @@ fn a_named_styles_width_0_border_is_written_as_the_thinnest_line() {
         name: "Edged".into(),
         kind: wordcraft_doc::styles::StyleKind::Paragraph,
         para: ParaProps { borders: Some(Borders { bottom: Some(line), ..Default::default() }), ..Default::default() },
+        chr: wordcraft_doc::props::CharProps { border: Some(line), ..Default::default() },
         ..Default::default()
     });
     let mut p = Paragraph::new();
@@ -99,6 +100,7 @@ fn a_named_styles_width_0_border_is_written_as_the_thinnest_line() {
     let out = crate::odt::tests::styles_of(&export(&d).unwrap());
     let thinnest = crate::odt::writer::pt(Border::THINNEST);
     assert!(out.contains(&format!(r#"fo:border-bottom="{thinnest} solid #008000""#)), "{out}");
+    assert!(out.contains(&format!(r#"loext:border="{thinnest} solid #008000""#)), "{out}");
 }
 
 #[test]
