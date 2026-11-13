@@ -25,6 +25,8 @@ mod logging;
 mod portal_save;
 mod print;
 mod region;
+#[cfg(any(windows, test))]
+mod taskbar_pins;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 
@@ -491,6 +493,12 @@ fn main() -> eframe::Result {
     if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
+    // Windows: the installer runs this right after an install, to mend a taskbar pin of the old
+    // advertised shortcut (`taskbar_pins`).
+    #[cfg(windows)]
+    if std::env::args_os().nth(1).is_some_and(|a| a == "--repair-taskbar-pins") {
+        std::process::exit(i32::from(taskbar_pins::repair().is_err()));
+    }
     // Linux: before anything reads another program's AppImage variables, or a thread starts (#5653).
     #[cfg(target_os = "linux")]
     let start_over_failed = appimage_env::drop_inherited();
@@ -557,6 +565,19 @@ fn main() -> eframe::Result {
             },
             None => logger.no_file(),
         }
+    }
+    // Also at every start, in case the installer's run was skipped: one folder listing when there
+    // is nothing to mend.
+    // Only from the installed exe: a build run from elsewhere would take the pin over.
+    #[cfg(windows)]
+    match std::env::current_exe()
+        .is_ok_and(|e| taskbar_pins::is_installed_exe(&e, &taskbar_pins::install_folders()))
+        .then(taskbar_pins::repair)
+        .unwrap_or(Ok(0))
+    {
+        Ok(0) => {}
+        Ok(n) => log::info!("mended {n} taskbar or Start pin(s) of the old WordCraft shortcut"),
+        Err(e) => log::warn!("couldn't mend the taskbar pins of the old WordCraft shortcut: {e}"),
     }
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
