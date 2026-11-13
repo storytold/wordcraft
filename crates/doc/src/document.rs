@@ -349,15 +349,20 @@ impl Document {
         self.story_text(s, TextMode::Shown)
     }
 
-    /// [`Self::plain_text`] without tracked-deleted runs. A deleted paragraph mark still yields `\n`.
+    /// [`Self::plain_text`] without tracked-deleted or hidden runs. A deleted paragraph mark
+    /// still yields `\n`. Hidden runs are dropped only here, through the resolved style: the
+    /// paragraph-level [`wordcraft_doc::Paragraph::final_text`] drops tracked deletions only,
+    /// because whether a run is hidden takes the resolved style, which the paragraph alone
+    /// doesn't know.
     pub fn final_text(&self, s: StoryRef) -> String {
         self.story_text(s, TextMode::Final)
     }
 
+    /// The story's text in `mode`: [`Self::plain_text`], [`Self::shown_text`] or [`Self::final_text`].
     fn story_text(&self, s: StoryRef, mode: TextMode) -> String {
         let mut out = String::new();
         if let Some(bl) = self.story(s) {
-            text_of(bl, &mut out, 0, mode);
+            text_of(bl, &mut out, 0, mode, &self.styles);
         }
         if out.ends_with('\n') {
             out.pop();

@@ -3586,6 +3586,201 @@ fn document_text_drops_tracked_deletions() {
     assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Signed by Bob Jones, Director.");
 }
 
+#[test]
+fn document_text_drops_hidden_text() {
+    // Hidden runs (w:vanish) are not body text: an agent reading get_text must not see what a
+    // reader does not see. Inspect Document still reports them.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Approved budget: 100."}));
+    run(&mut s, "select.text", json!({"text": "100"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " Paid: yes."}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Approved budget: . Paid: yes.");
+    assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["hiddenText"], json!(true));
+    // plain_text and shown_text are unchanged: they still return the hidden run.
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Approved budget: 100. Paid: yes.");
+    assert_eq!(s.doc.shown_text(StoryRef::Body), "Approved budget: 100. Paid: yes.");
+}
+
+#[test]
+fn document_text_drops_hidden_text_in_tables() {
+    // Hidden runs inside table cells follow the same rule as body paragraphs.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Before. "}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "Cell note 42"}));
+    run(&mut s, "select.text", json!({"text": "42"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": "After."}));
+    let out = run(&mut s, "document.text", json!({}))["text"].as_str().unwrap().to_string();
+    // Cells read back separated the way plain_text does (`\t` between them, one per row).
+    assert_eq!(out, "Before. \nCell note \nAfter.", "{out}");
+}
+
+#[test]
+fn select_text_skips_hidden_occurrences() {
+    // get_text omits hidden runs; select.text must count the same visible text, or an edit
+    // aimed at what the agent read lands in a hidden run instead.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "foo foo"}));
+    run(&mut s, "select.text", json!({"text": "foo", "occurrence": 1}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    // The first "foo" is hidden now: the default search selects the visible one.
+    run(&mut s, "select.text", json!({"text": "foo"}));
+    run(&mut s, "text.insert", json!({"text": "bar"}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], " bar");
+    // includeHidden finds the hidden occurrence explicitly.
+    run(&mut s, "select.text", json!({"text": "foo", "occurrence": 1, "includeHidden": true}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(text(&s), "X bar");
+}
+
+#[test]
+fn select_text_matches_a_match_straddling_hidden_characters() {
+    // "ayya" with "yy" hidden reads "aa"; the projection match spans the hidden characters.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "ayya"}));
+    run(&mut s, "select.text", json!({"text": "yy"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "aa"}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(text(&s), "X");
+}
+
+#[test]
+fn select_text_finds_the_projections_first_occurrence() {
+    // "aaaa" with the first `a` hidden reads "aaa"; the projection's match sits at raw offset
+    // 1, where a raw-text search finds nothing (its match at 0 overlaps the hidden run).
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "aaaa"}));
+    run(&mut s, "select.text", json!({"text": "a", "occurrence": 1}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "aa", "occurrence": 1}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Xa");
+}
+
+#[test]
+fn select_text_counts_occurrences_of_the_visible_projection() {
+    // "aaaaa" with the first `a` hidden reads "aaaa"; both of its non-overlapping `aa`
+    // occurrences sit one raw offset further than a raw-text search would count (its match
+    // at raw offset 0 overlaps the hidden run, shifting every later occurrence).
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "aaaaa"}));
+    run(&mut s, "select.text", json!({"text": "a", "occurrence": 1}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "aa", "occurrence": 2}));
+    run(&mut s, "text.insert", json!({"text": "Y"}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "aaY");
+}
+
+#[test]
+fn select_text_ends_the_match_before_hidden_text() {
+    // "fooSECRET bar" with "SECRET" hidden reads "foo bar"; selecting "foo" ends the match
+    // at the end of the visible "o" (raw offset 3), so an edit rewrites only "foo" and the
+    // hidden run stays in the paragraph.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "fooSECRET bar"}));
+    run(&mut s, "select.text", json!({"text": "SECRET"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "foo"}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "X bar");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let runs: Vec<String> = p.run_ranges().map(|(r, _)| p.text[r].to_string()).collect();
+    assert!(runs.iter().any(|t| t == "SECRET"), "{runs:?}");
+}
+
+#[test]
+fn select_text_skips_tracked_deletions_in_the_default_projection() {
+    // A tracked-deleted `foo` sits before a visible `foo`: the default search selects the one
+    // document.text returns, and `includeHidden` still reaches the deleted occurrence.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "foo bar foo"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "foo bar"}));
+    run(&mut s, "text.insert", json!({"text": "baz"}));
+    // The inserted `baz` sits over the deleted `foo bar`, which stays in the paragraph.
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "baz foo");
+    // The default search skips the deleted occurrence: it selects the visible `foo` (raw 11..14).
+    let r = run(&mut s, "select.text", json!({"text": "foo"}));
+    assert_eq!(r["anchor"]["off"], json!(11), "{r}");
+    assert_eq!(r["focus"]["off"], json!(14), "{r}");
+    // `includeHidden` searches the raw text: it reaches the deleted occurrence (raw 3..6).
+    let r = run(&mut s, "select.text", json!({"text": "foo", "includeHidden": true}));
+    assert_eq!(r["anchor"]["off"], json!(3), "{r}");
+    assert_eq!(r["focus"]["off"], json!(6), "{r}");
+}
+
+#[test]
+fn document_text_drops_hidden_text_from_a_style() {
+    // A run hidden only through its style (StyleSheet::resolve_char, no direct formatting) is
+    // not body text either: document.text omits it, Inspect Document still reports it, and
+    // select.text skips the hidden paragraph.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Approved budget: 100.\nSecret note.\nPaid: yes.", "paragraphs": true}));
+    // `styles.create` applies the new style to the selected paragraph (a paragraph style):
+    // `styles.modify` then hides it through the style, no direct formatting involved.
+    run(&mut s, "select.text", json!({"text": "Secret note"}));
+    run(&mut s, "styles.create", json!({"name": "Covert", "fromSelection": false}));
+    run(&mut s, "styles.modify", json!({"style": "Covert", "chr": {"hidden": true}}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Approved budget: 100.\n\nPaid: yes.");
+    assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["hiddenText"], json!(true));
+    assert!(s.run("select.text", &json!({"text": "Secret"})).is_err());
+    // includeHidden searches the raw paragraph text.
+    let r = run(&mut s, "select.text", json!({"text": "Secret", "includeHidden": true}));
+    assert_eq!(r["anchor"]["off"], json!(0), "{r}");
+}
+
+#[test]
+fn select_text_maps_multibyte_matches_to_raw_offsets() {
+    // Accented and CJK characters around a hidden run: anchor/focus are raw byte offsets, so
+    // selecting what reads back after a hidden multi-byte run still lands on the real text.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "héllo 世界 wörld"}));
+    run(&mut s, "select.text", json!({"text": "世界"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    // "héllo  wörld" reads back: the visible match offset (8) is not the raw one (14).
+    let r = run(&mut s, "select.text", json!({"text": "wörld"}));
+    assert_eq!(r["anchor"]["off"], json!(14), "{r}");
+    assert_eq!(r["focus"]["off"], json!(20), "{r}");
+}
+
+#[test]
+fn select_text_with_no_visible_match_keeps_the_selection() {
+    // A needle that exists only in hidden runs is not found by default: the command fails and
+    // the selection stays where it was. includeHidden finds it as the positive control.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "foo bar"}));
+    run(&mut s, "select.text", json!({"text": "bar"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    let sel = run(&mut s, "document.selection", json!({}));
+    let (anchor, focus) = (sel["anchor"].clone(), sel["focus"].clone());
+    let e = s.run("select.text", &json!({"text": "bar"})).unwrap_err().to_string();
+    assert!(e.contains("not found"), "{e}");
+    let sel = run(&mut s, "document.selection", json!({}));
+    assert_eq!(sel["anchor"], anchor, "{sel}");
+    assert_eq!(sel["focus"], focus, "{sel}");
+    let r = run(&mut s, "select.text", json!({"text": "bar", "includeHidden": true}));
+    assert_eq!(r["anchor"]["off"], json!(4), "{r}");
+    assert_eq!(r["focus"]["off"], json!(7), "{r}");
+}
+
+#[test]
+fn document_text_drops_hidden_text_in_footnotes() {
+    // Footnotes and other non-body stories go through the same Final path: hidden runs are
+    // omitted there too.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Body."}));
+    let id = run(&mut s, "references.footnote", json!({"text": "note 42"}))["id"].as_u64().unwrap();
+    let story = json!({"part": id});
+    run(&mut s, "select.text", json!({"text": "42", "story": story}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    assert_eq!(run(&mut s, "document.text", json!({"story": story}))["text"], " note ");
+}
+
 /// The author of the revision `rid` points to.
 fn author_of(s: &Session, rid: Option<u32>) -> Option<String> {
     rid.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone())
@@ -3599,9 +3794,11 @@ fn tracked_delete_keeps_another_authors_deletion() {
     s.author = "Ana".into();
     run(&mut s, "select.text", json!({"text": "beta"}));
     run(&mut s, "text.delete", json!({}));
-    // A second author deletes the whole line, including the text Ana already deleted.
+    // A second author deletes the whole line, including the text Ana already deleted. That
+    // text sits outside the default projection (it reads as accepted), so Ben selects the
+    // raw paragraph text.
     s.author = "Ben".into();
-    run(&mut s, "select.text", json!({"text": "alpha beta gamma"}));
+    run(&mut s, "select.text", json!({"text": "alpha beta gamma", "includeHidden": true}));
     run(&mut s, "text.delete", json!({}));
     let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
     let by: Vec<(String, Option<String>)> = p.run_ranges().map(|(r, c)| (p.text[r].to_string(), author_of(&s, c.del))).collect();
