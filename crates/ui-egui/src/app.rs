@@ -20,6 +20,7 @@ mod frame;
 mod input;
 mod pictures;
 mod prefs;
+mod provider_files;
 
 pub(crate) use commands::works_without_document;
 pub(crate) use frame::STATUS_MS;
@@ -238,6 +239,7 @@ impl WordApp {
         // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
         // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
         ctx.add_plugin(super::a11y::FocusGuard);
+        self.provider_tick();
         updates_ui::tick(self, ctx);
         crate::language_packs::tick(self);
         let lang = i18n::Lang::from_pref(&self.ui.language);
@@ -467,6 +469,9 @@ impl WordApp {
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);
+            if let Some(host) = &self.services.file_providers {
+                host.clear_recent_open_error();
+            }
             backstage::forget_save_as_error(&ctx);
         }
         self.paint_window(ui, &ctx, t);
