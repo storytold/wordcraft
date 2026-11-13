@@ -77,6 +77,7 @@ fn issues(app: &mut WordApp, ui: &Ui) -> Vec<Value> {
 fn go_to(app: &mut WordApp, issue: &Value) {
     if let Some(sel) = issue.get("select").filter(|s| s.is_object()) {
         let _ = app.run("select.range", sel.clone());
+        crate::mini_toolbar::put_away(app);
     } else if let Some(pos) = issue.get("pos").filter(|p| p.is_object()) {
         let _ = app.run("caret.set", json!({"pos": pos}));
     }
@@ -147,4 +148,20 @@ fn draft_box(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, current: 
         ui.data_mut(|d| d.remove::<String>(key));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::Pos;
+
+    /// An issue's text is selected to show it, so no mini toolbar covers it (#5017).
+    #[test]
+    fn going_to_an_issue_keeps_the_mini_toolbar_away() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Some text"})).unwrap();
+        go_to(&mut a, &json!({"select": {"anchor": Pos::body(0, 0), "focus": Pos::body(0, 4)}}));
+        assert_eq!(a.session.selected_text(), "Some");
+        assert!(!crate::mini_toolbar::visible(&a));
+    }
 }
