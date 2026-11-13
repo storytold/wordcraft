@@ -47,7 +47,7 @@ pub(super) fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut b
                     ui.data_mut(|d| d.insert_temp(shown, id.clone()));
                     *selected = id.clone();
                 }
-                if r.double_clicked() {
+                if r.double_clicked() && !app.session.view.viewing {
                     *selected = id;
                     if let Some(Dialog::ModifyStyle { id, name, font, size, bold, italic, color, before, after, .. }) =
                         Dialog::modify_style(app, selected)
@@ -86,12 +86,12 @@ pub(super) fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut b
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         // Table styles are edited from Table Design.
-        if ui.add_enabled(ty != "table", egui::Button::new(tl!("Modify…"))).clicked()
+        if ui.add_enabled(ty != "table" && !app.session.view.viewing, egui::Button::new(tl!("Modify…"))).clicked()
             && let Some(Dialog::ModifyStyle { id, name, font, size, bold, italic, color, before, after, .. }) = Dialog::modify_style(app, selected)
         {
             app.dialog = Some(Dialog::ModifyStyle { back: true, resume: None, id, name, font, size, bold, italic, color, before, after });
         }
-        if ui.button(tl!("New Style…")).clicked() {
+        if ui.add_enabled(!app.session.view.viewing, egui::Button::new(tl!("New Style…"))).clicked() {
             app.dialog = Some(Dialog::NewStyle { name: "Style1".into(), based_on: str_of(&cur, "name"), back: true });
         }
         let del = ui.add_enabled(!builtin, egui::Button::new(tl!("Delete")));

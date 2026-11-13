@@ -199,6 +199,10 @@ sync_github_name = true
 [people.entropybeater]
 display_name = "entropybeater"
 
+[people.multipointmaster-glitch]
+display_name = "Bogdan Claudiu Petanec"
+sync_github_name = false
+
 [people.helenkwok]
 real_name = "Helen Kwok"
 

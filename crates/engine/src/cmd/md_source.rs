@@ -282,6 +282,10 @@ fn leave(s: &mut Session) {
 /// The text into the document, if it has edits the document lacks. Its first change in a visit
 /// takes the visit's undo step. Save, AutoSave and crash recovery see the text this way.
 pub fn apply(s: &mut Session) {
+    // The UI also calls this on a timer: pending source must never write through Viewing.
+    if s.view.viewing {
+        return;
+    }
     let (text, entry_text, entry_doc, has_step, entry_lines) = {
         let Some(src) = s.md_source.as_ref().filter(|src| src.is_pending()) else { return };
         if src.text.len() > MAX_SOURCE_BYTES {
@@ -377,7 +381,7 @@ pub(crate) fn refusal(s: &Session, id: &str, mutates: bool) -> Option<&'static s
 
 /// What a command does while the text is open, before it runs (see the module's header).
 pub(crate) fn before_command(s: &mut Session, id: &str, mutates: bool) -> Result<(), CmdError> {
-    if s.md_source.is_none() || id == TOGGLE || id == TEXT {
+    if s.view.viewing || s.md_source.is_none() || id == TOGGLE || id == TEXT {
         return Ok(());
     }
     if LEAVES.contains(&id) {

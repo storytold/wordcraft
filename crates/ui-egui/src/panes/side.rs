@@ -56,7 +56,7 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Current style: {style}"), &[("style", &current_name)])).small());
     // Wrapped: the host gives the pane a fixed width, and the row is wider than its default.
     ui.horizontal_wrapped(|ui| {
-        if ui.button(tl!("New Style…")).clicked() {
+        if ui.add_enabled(!app.session.view.viewing, egui::Button::new(tl!("New Style…"))).clicked() {
             app.dialog = crate::dialogs::Dialog::open("newStyle", app);
         }
         if ui.button(tl!("Update to Match")).clicked() {
@@ -98,7 +98,7 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
                     app.canvas.want_focus = true;
                 }
                 crate::rtl::context_menu(&r, |ui| {
-                    if ui.button(tl!("Modify…")).clicked() {
+                    if ui.add_enabled(!app.session.view.viewing, egui::Button::new(tl!("Modify…"))).clicked() {
                         app.dialog = crate::dialogs::Dialog::modify_style(app, &id);
                         ui.close();
                     }

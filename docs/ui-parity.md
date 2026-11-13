@@ -4,6 +4,8 @@
 
 > **Page Setup update:** 2026-11-07 · Page Setup number boxes keep long input inside the field, including accepted margin values after focus leaves (#5650); accepted ranges and readiness estimates are unchanged.
 
+> **Viewing update:** 2026-11-08 · Manual Viewing keeps its orange indicator and read-only interaction; restoring a window also clears drawing tools and lasso selection. Readiness estimates are unchanged.
+
 Recovery discovery no longer interrupts an explicitly created or opened document. Older copies remain in File › Recover, whose buttons use the interface palette. See [local recovery](recovery.md).
 
 How WordCraft looks and feels next to Word: ribbon, dialogs, panes, keyboard, mouse and touch.
@@ -84,6 +86,16 @@ The Language dialog reads effective character formatting, including document def
 
 The `table.sort` command requires an explicit `column` to be a non-negative JSON integer naming a column in the table, indexed from 0 (#5531). Omitting it still sorts by column 0. Invalid selectors return an error before changing rows or history; the Sort dialog and collation rules are unchanged.
 
+## Interaction modes
+
+The Editing/Reviewing menu also offers [manual Viewing](viewing-mode.md). Its
+button is orange while active. Viewing blocks editing in the current page layout
+and keeps navigation, zoom, selection, copying, search and output available. It
+is transient for the open document, independent of Track Changes and real
+document protection, and does not change the default when another document is
+created or opened. Read Mode remains a separate column-reading layout. This
+addition does not change the measured parity percentages above.
+
 ## Screen paper colors (#3398)
 
 File › Options › General › Screen paper color selects Document background (the default),
@@ -153,6 +165,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-31 | minor | #3398: persistent screen-only green, cream and gray paper presets, with document backgrounds and export colors retained. Read Mode None follows the screen preset; Sepia/Inverse retain priority. |
 | 2026-11-03 | minor | File › Options › Language: Your languages (English variants in use, installed Language packs, the document's languages) with each one's proofing status, Install, Remove and Set as default; Add a language… opens a searchable picker (dutch, nederlands, nl) sorted by name; the Dictionaries folder and the Dictionary files list moved here from Proofing, which has no Dictionaries section any more (CP4.3) |
 | 2026-10-28 | trivial | Fonts that aren't installed are flagged: the font box (ribbon, mini toolbar, both Font dialog boxes) shows a warning mark whose hover note names the font drawn instead; the status bar says "N fonts not installed" and lists them with the faces drawn instead (the first 20, then how many more), with Add Font…. The list comes from layout (`ParaLayout::substituted`), so it covers exactly the text shown, in every story, list labels and East Asian and complex-script text included, and a missing roman font drawn in Cambria counts. Metric-compatible substitutes (Carlito for Calibri, Caladea for Cambria, Liberation for Arial, Times New Roman and Courier New, the Palatino look-alikes) aren't flagged, since line breaks don't move, nor symbol fonts drawn as their Unicode equivalents (Word's bullets); headers and footers count only in views that show them, chart and SmartArt labels not yet; the font box reads the same list, so for text already shown the two agree, and it also warns for a missing font no text shows yet when the box shows a font to come: at a collapsed caret, the font the next letter will be typed in, and in the Font dialog, the fonts OK applies (the Asian text font too, over Latin text); Missing Fonts (`font.missing`, from command search or agents; it says what it found in the status line) and `format.state.fontShownAs` for agents |
+| 2026-11-01 | minor | Manual Viewing in the Editing/Reviewing menu, with an orange active indicator and a temporary command-level edit lock; page layout and reading/copy/export stay available. No readiness or measured parity change. |
 | 2026-10-31 | trivial | Keytips: Alt, F badges the Backstage pages with Word's letters and the letter opens the page; Alt, F, P and Alt, F, V open Print; the badges end with the Backstage (#4960) |
 | 2026-10-30 | trivial | Read Mode keeps the selected Page color between entries, documents and runs. The color does not change document formatting. |
 | 2026-10-31 | trivial | View › Macros opens a Macros dialog (also Alt+F8 and command search): the macros of this session listed with Run, Delete and Record, which reads Stop Recording while a recording runs; the button did nothing before, as `tools.macros` without a macro to run, define or delete only returned the list (#4327) |

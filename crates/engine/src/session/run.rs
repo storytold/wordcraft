@@ -65,6 +65,12 @@ impl Session {
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        // Every dispatch starts from an unclassified outcome. Early returns (unknown, disabled,
+        // protected) leave it at the default.
+        self.ime_edit_outcome = ImeEditOutcome::default();
+        if self.viewing_blocks_command(id, params) {
+            return Err(CmdError::Disabled(format!("{id}: {}", super::viewing::REASON)));
+        }
         if self.md_source.is_some()
             && let Some(mutates) = self.registry.get(id).map(|spec| spec.mutates)
         {
@@ -79,8 +85,7 @@ impl Session {
         // The document the command starts in, and the first id a document it opens can have.
         let home = self.document_id;
         let mark = document_id_mark();
-        // Every dispatch starts from an unclassified outcome. Early returns (unknown, disabled,
-        // protected) leave it at the default.
+        // Markdown preprocessing may run a nested command; classify this dispatch independently.
         self.ime_edit_outcome = ImeEditOutcome::default();
         // A rolled-back transaction must not leave a successful application-change signal from a
         // nested command that ran before the failure.
