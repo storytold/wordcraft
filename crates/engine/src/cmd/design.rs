@@ -79,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
         CommandSpec::new("design.pageBorders", "Page Borders", "Design › Page Background", page_borders).params(
-            r#"{"kind"?: "box|none", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: {"top"|"left"|"bottom"|"right": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null} (exactly these sides, instead of `kind`), "applyTo"?: "section|document"}"#,
+            r#"{"kind"?: "box|none", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: {"top"|"left"|"bottom"|"right": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null} (exactly these sides, instead of `kind`), "applyTo"?: "section|document|firstPage|notFirstPage"} (firstPage / notFirstPage: this section, on its first page only or on every page but its first)"#,
         ),
         CommandSpec::new("design.setDefault", "Set as Default", "Design › Document Formatting", |s, _| {
             s.status = "These settings will be used for new documents.".into();
@@ -278,13 +278,19 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
             (kind != "none").then(|| Borders::box_(Border { style, width, color, space: 24.0 }))
         }
     };
-    let blocks: Vec<usize> = match p::str(v, "applyTo") {
-        Some("document") => s.doc.sections().iter().map(|(end, _)| *end).collect(),
-        Some("section") | None => vec![s.sel.focus.path.0.first().copied().unwrap_or(0) as usize],
+    let here = || vec![s.sel.focus.path.0.first().copied().unwrap_or(0) as usize];
+    // Which sections, and on which of their pages (`w:display`, ECMA-376 §17.6.10; `None` is every
+    // page), as Word's Apply to: Whole document, This section, its first page only, all but it.
+    let (blocks, display): (Vec<usize>, Option<&str>) = match p::str(v, "applyTo") {
+        Some("document") => (s.doc.sections().iter().map(|(end, _)| *end).collect(), None),
+        Some("section") | None => (here(), None),
+        Some(d @ ("firstPage" | "notFirstPage")) => (here(), Some(d)),
         Some(x) => return Err(CmdError::Params(format!("unknown `applyTo` `{x}`"))),
     };
     for block in blocks {
-        s.doc.section_mut(block).page_borders = borders;
+        let sect = s.doc.section_mut(block);
+        sect.page_borders = borders;
+        sect.page_borders_display = display.filter(|_| borders.is_some()).map(str::to_string);
     }
     sel_result(s)
 }

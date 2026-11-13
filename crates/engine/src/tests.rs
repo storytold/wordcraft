@@ -7800,6 +7800,32 @@ fn border_sides_apply_exactly() {
     assert!(s.doc.last_section.page_borders.is_none());
 }
 
+/// #3076: Page Border's Apply to "This section – First page only" / "All except first page" sets
+/// the section's `w:display`, which a .docx keeps; Whole document and This section put the
+/// border back on every page, and removing the border drops the setting with it.
+#[test]
+fn page_borders_apply_to_the_first_page_or_all_but_it() {
+    let mut s = s();
+    let display = |s: &Session| s.doc.last_section.page_borders_display.clone();
+    for apply in ["firstPage", "notFirstPage"] {
+        run(&mut s, "design.pageBorders", json!({"kind": "box", "applyTo": apply}));
+        assert!(s.doc.last_section.page_borders.is_some(), "{apply}");
+        assert_eq!(display(&s).as_deref(), Some(apply));
+        let bytes = crate::io::save_bytes("cover.docx", &s.doc).unwrap();
+        let back = crate::io::open_bytes("cover.docx", &bytes).unwrap();
+        assert_eq!(back.last_section.page_borders_display.as_deref(), Some(apply), "{apply}: kept in the .docx");
+    }
+    for apply in ["section", "document"] {
+        run(&mut s, "design.pageBorders", json!({"kind": "box", "applyTo": "firstPage"}));
+        run(&mut s, "design.pageBorders", json!({"kind": "box", "applyTo": apply}));
+        assert_eq!(display(&s), None, "{apply}: every page again");
+    }
+    run(&mut s, "design.pageBorders", json!({"kind": "box", "applyTo": "notFirstPage"}));
+    run(&mut s, "design.pageBorders", json!({"kind": "none", "applyTo": "notFirstPage"}));
+    assert!(s.doc.last_section.page_borders.is_none() && display(&s).is_none(), "no border, no display");
+    assert!(s.run("design.pageBorders", &json!({"kind": "box", "applyTo": "oddPages"})).is_err());
+}
+
 /// Encrypt with Password (#55): a document saved with a password opens only with it, keeps it
 /// for the next save, and saves unencrypted once the password is removed.
 #[cfg(not(target_arch = "wasm32"))]

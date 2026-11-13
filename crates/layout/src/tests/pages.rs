@@ -771,3 +771,65 @@ fn table_cell_page_field_uses_the_section_number_format() {
         .collect();
     assert_eq!(shown, "one");
 }
+
+/// Page border lines drawn on each page (the body here has no other rules).
+fn border_rules(l: &DocLayout) -> Vec<usize> {
+    l.pages.iter().map(|p| p.items.iter().filter(|it| matches!(it, Placed::Rule { .. })).count()).collect()
+}
+
+/// #3076: `w:pgBorders/@w:display` (ECMA-376 §17.6.10) puts a section's page borders on its first
+/// page only (`firstPage`) or on every page but that one (`notFirstPage`); they used to be drawn
+/// on every page whatever it said. The first page of each section counts, not only the document's.
+#[test]
+fn page_borders_go_on_the_pages_their_display_names() {
+    use wordcraft_doc::props::{Border, Borders};
+    let boxed = |display: Option<&str>| SectionProps {
+        page_borders: Some(Borders::box_(Border::single(1.0))),
+        page_borders_display: display.map(str::to_string),
+        ..SectionProps::default()
+    };
+    for (display, want) in [(None, [4, 4, 4]), (Some("allPages"), [4, 4, 4]), (Some("firstPage"), [4, 0, 0]), (Some("notFirstPage"), [0, 4, 4])] {
+        let mut d = Document::from_text(&"Body line\n".repeat(90));
+        d.last_section = boxed(display);
+        let got = border_rules(&lay(&d));
+        assert!(got.len() >= 3, "{display:?}: {got:?}");
+        assert_eq!(got[..3], want, "{display:?}");
+    }
+    // Two sections, each with a first-page-only border: each section's first page has it.
+    let mut d = Document::from_text("Cover\nChapter");
+    d.last_section = boxed(Some("firstPage"));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(boxed(Some("firstPage"))));
+    let mut more = "Chapter line\n".repeat(90);
+    more.pop();
+    let end = d.para_at(&Pos::body(1, 0)).map_or(0, |p| p.len());
+    d.insert_text(&Pos::body(1, end), &format!("\n{more}"), &Default::default()).unwrap();
+    let l = lay(&d);
+    let got = border_rules(&l);
+    let first_of_section: Vec<bool> = l.pages.iter().enumerate().map(|(i, p)| i == 0 || l.pages[i - 1].section != p.section).collect();
+    assert!(l.pages.len() >= 3 && first_of_section.iter().filter(|f| **f).count() == 2, "{got:?} {first_of_section:?}");
+    for (i, (n, first)) in got.iter().zip(&first_of_section).enumerate() {
+        assert_eq!(*n, if *first { 4 } else { 0 }, "page {i}: {got:?}");
+    }
+}
+
+/// #3076: with mirrored margins, an even page moves its text but not its page borders, which lead
+/// its items. A page whose `w:display` leaves the borders out has none to skip, so its text moves
+/// like any other page's.
+#[test]
+fn mirrored_pages_without_their_borders_still_move_their_text() {
+    use wordcraft_doc::props::{Border, Borders};
+    let mut d = Document::from_text(&"Body line\n".repeat(90));
+    d.last_section.margin_left = 108.0;
+    d.last_section.margin_right = 36.0;
+    d.last_section.gutter = 10.0;
+    d.settings.mirror_margins = true;
+    d.last_section.page_borders = Some(Borders::box_(Border::single(1.0)));
+    for display in ["firstPage", "notFirstPage"] {
+        d.last_section.page_borders_display = Some(display.into());
+        let l = lay(&d);
+        for (i, (x, p)) in body_left(&l).iter().zip(&l.pages).enumerate() {
+            let want = if p.number % 2 == 1 { 118.0 } else { 36.0 };
+            assert!((x - want).abs() < 0.01, "{display}, page {i} (number {}): text at {x}, want {want}", p.number);
+        }
+    }
+}
