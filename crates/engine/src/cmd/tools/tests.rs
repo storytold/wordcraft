@@ -955,3 +955,75 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(!text.contains("Hidden"), "the hidden text is still there: {text}");
     assert!(text.contains("Visible text."), "{text}");
 }
+
+#[test]
+fn compare_keeps_a_page_reference_whose_page_changed_live() {
+    // "Details" is bookmarked in one paragraph, and the next one says "See page 3." through a
+    // PAGEREF field; the revised file shows page 4. The field stays live in the result and in
+    // the saved file, and Accept All and Reject All give back each side (#6269).
+    fn report(page: &str) -> Document {
+        let c = CharProps::default();
+        let mut target = Paragraph::new();
+        target.insert_text(0, "Details", &c).unwrap();
+        target.insert_object(7, InlineObject::BookmarkEnd { name: "Details".into() }, &c).unwrap();
+        target.insert_object(0, InlineObject::BookmarkStart { name: "Details".into() }, &c).unwrap();
+        let mut p = Paragraph::new();
+        p.insert_text(0, "See page .", &c).unwrap();
+        let field = InlineObject::Field {
+            instr: "PAGEREF Details \\h".into(),
+            result: page.into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        p.insert_object("See page ".len(), field, &c).unwrap();
+        let mut d = Document::from_text("x");
+        d.body = vec![para_block(target), para_block(p)];
+        d
+    }
+    /// The body's fields: code, result, deleted, inserted.
+    fn fields(d: &Document) -> Vec<(String, String, bool, bool)> {
+        let mut v = Vec::new();
+        for path in d.para_paths(StoryRef::Body) {
+            let p = d.para(StoryRef::Body, &path).unwrap();
+            for (off, o) in p.objects_with_offsets() {
+                if let InlineObject::Field { instr, result, .. } = o {
+                    let c = p.props_of_char(off);
+                    v.push((instr.clone(), result.clone(), c.del.is_some(), c.ins.is_some()));
+                }
+            }
+        }
+        v
+    }
+    let f = |r: &str, del, ins| ("PAGEREF Details \\h".to_string(), r.to_string(), del, ins);
+    let dir = std::env::temp_dir();
+    let revised = dir.join(format!("wc-compare-pageref-rev-{}.docx", std::process::id()));
+    let result = dir.join(format!("wc-compare-pageref-out-{}.docx", std::process::id()));
+    crate::io::save_path(&revised, &report("4")).unwrap();
+    let mut s = Session::new(report("3"));
+    s.run("review.compare", &json!({"path": revised.to_string_lossy()})).unwrap();
+    let expected = vec![f("3", true, false), f("4", false, true)];
+    assert_eq!(fields(&s.doc), expected);
+    // The saved result keeps the live fields (fldChar and instrText).
+    crate::io::save_path(&result, &s.doc).unwrap();
+    let reopened = crate::io::open_path(&result);
+    let _ = std::fs::remove_file(&revised);
+    let _ = std::fs::remove_file(&result);
+    let reopened = reopened.unwrap();
+    assert_eq!(fields(&reopened), expected);
+    for (then, left, text) in [("review.acceptAll", "4", "Details\nSee page 4."), ("review.rejectAll", "3", "Details\nSee page 3.")] {
+        let mut s = Session::new(reopened.clone());
+        s.run(then, &json!({})).unwrap();
+        assert_eq!(fields(&s.doc), vec![f(left, false, false)], "{then}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), text, "{then}");
+    }
+    // Comparing with an identical report changes nothing.
+    let mut s = Session::new(report("3"));
+    let same = dir.join(format!("wc-compare-pageref-same-{}.docx", std::process::id()));
+    crate::io::save_path(&same, &report("3")).unwrap();
+    let r = s.run("review.compare", &json!({"path": same.to_string_lossy()}));
+    let _ = std::fs::remove_file(&same);
+    assert_eq!(r.unwrap()["changes"], 0);
+    assert_eq!(fields(&s.doc), vec![f("3", false, false)]);
+}
