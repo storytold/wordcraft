@@ -6216,6 +6216,93 @@ fn double_and_triple_borders_take_their_lines_and_gaps_in_a_row() {
     }
 }
 
+/// Every cell of a row keeps clear of the widest border over the row, as it shares the row's
+/// largest margins: a cell without a top border starts its text where its neighbour under a
+/// border does. Measured in Word for Windows on tables of three rows and two columns: with a 0.5
+/// or 3 pt border over the left cell of the second row only, both cells' text starts that much
+/// lower; and beside a cell that continues a vertical merge, whose top border is the table's
+/// inside one though none is drawn there, a cell without borders starts lower by that border.
+/// WordCraft lowered only the cell that has the border, so a row of centred cells was half the
+/// border out and a row as tall as its text lost the border's room.
+#[test]
+fn every_cell_of_a_row_keeps_clear_of_the_rows_widest_border() {
+    crate::test_fonts();
+    use wordcraft_doc::props::{Border, BorderStyle, Borders, VMerge};
+    let none = Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 });
+    // Three rows of two cells: the tops of the six cells' lines and of the paragraph after.
+    let tops = |set: &dyn Fn(&mut Table)| {
+        let mut d = Document::from_text("");
+        let mut t = Table::new(3, 2, 300.0);
+        t.props.style = None;
+        t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+        for row in &mut t.rows {
+            for cell in &mut row.cells {
+                cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("text", Default::default()))];
+            }
+        }
+        set(&mut t);
+        let after = wordcraft_doc::Paragraph::with_text("after", Default::default());
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), wordcraft_doc::para_block(after)];
+        line_tops(&lay(&d))
+    };
+    let plain = tops(&|_| {});
+    assert_eq!(plain.len(), 7, "six cells and the paragraph after");
+    for width in [0.5f32, 3.0] {
+        let border = Some(Border::single(width));
+        // A border over the left cell of the second row, none over the right one.
+        let got = tops(&|t| {
+            t.rows[1].cells[0].props.borders = Some(Borders { top: border, ..Default::default() });
+            t.rows[1].cells[1].props.borders = Some(Borders { top: none, ..Default::default() });
+        });
+        let moved: Vec<f32> = got.iter().zip(&plain).map(|(a, b)| a - b).collect();
+        let want = [0.0, 0.0, width, width, width, width, width];
+        assert!(
+            moved.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01),
+            "a {width} pt border over one cell: the lines moved {moved:?}, expected {want:?}"
+        );
+        // The same under the left cell of the last row: the text after the table moves, the row's doesn't.
+        let got = tops(&|t| t.rows[2].cells[0].props.borders = Some(Borders { bottom: border, ..Default::default() }));
+        let moved: Vec<f32> = got.iter().zip(&plain).map(|(a, b)| a - b).collect();
+        let want = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, width];
+        assert!(
+            moved.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01),
+            "a {width} pt border under one cell: the lines moved {moved:?}, expected {want:?}"
+        );
+        // The table's inside borders, the left column merged down, the right cells without
+        // borders: the right cells of the second and third rows keep the inside border's room.
+        let merged = |t: &mut Table| {
+            t.props.borders = Some(Borders { between: border, inside_v: border, ..Default::default() });
+            for (ri, row) in t.rows.iter_mut().enumerate() {
+                row.cells[0].props.vmerge = if ri == 0 { VMerge::Restart } else { VMerge::Continue };
+                if ri > 0 {
+                    row.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+                }
+                row.cells[1].props.borders = Some(Borders { top: none, bottom: none, ..Default::default() });
+            }
+        };
+        let got = tops(&merged);
+        // The lines of the right column, top to bottom (the merged cell's own line is the first).
+        let mut right: Vec<f32> = got.iter().copied().take(got.len() - 1).collect();
+        right.sort_by(f32::total_cmp);
+        right.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+        assert!(right.len() >= 3, "the right column's three lines: {got:?}");
+        let (first, second, third) = (right[0], right[1], right[2]);
+        let line = plain[2] - plain[0];
+        assert!(
+            ((second - first) - line - width).abs() < 0.01,
+            "merged, {width} pt: the second row starts {} below the first, expected {}",
+            second - first,
+            line + width
+        );
+        assert!(
+            ((third - second) - line - width).abs() < 0.01,
+            "merged, {width} pt: the third row starts {} below the second, expected {}",
+            third - second,
+            line + width
+        );
+    }
+}
+
 /// Word gives every cell in a row the row's largest top and bottom margins: a cell without its
 /// own lines up with a neighbour that has them, and the row is as tall as if all had them.
 #[test]
