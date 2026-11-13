@@ -1411,21 +1411,24 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
 // Share a span's extra minimum in preferred-column proportions. Each column keeps
 // its own text minimum; automatic tables share the extra equally.
 //
-// A cell that fits its columns' preferred widths leaves them alone, as in Word: no column then
-// needs more than its share of the cell's minimum, or than it needs for itself. `borders` is the
-// room the cell's side borders take from it ([`side_borders`]). Measured in Word for Windows with
-// a 300 pt table of 150, 100, 25 and 25 pt columns under a cell spanning them all: with a picture
-// up to 300 pt wide in that cell the columns keep their widths, with one 300.5 pt wide the first
-// three come out 144.2, 98.2 and 29.1 pt.
+// A cell that fits its columns' preferred widths leaves them alone, as in Word: its minimum is
+// shared so that no column needs more than its preferred width for it ([`share_fitting_span`]).
+// `borders` is the room the cell's side borders take from it ([`side_borders`]). Measured in Word
+// for Windows with a 300 pt table of 150, 100, 25 and 25 pt columns under a cell spanning them
+// all: with a picture up to 300 pt wide in that cell the columns keep their widths, with one
+// 300.5 pt wide the first three come out 144.2, 98.2 and 29.1 pt.
 fn share_span_min(cols: &mut [(f32, f32)], grid: Option<&[f32]>, need: f32, borders: f32) {
     let extra = (need - cols.iter().map(|c| c.0).sum::<f32>()).max(0.0);
     let weight = |w: &f32| if w.is_finite() { w.clamp(0.0, UNBOUNDED) } else { 0.0 };
     let total = grid.map_or(0.0, |grid| grid.iter().take(cols.len()).map(weight).sum::<f32>());
     if total > 0.0 {
         if let Some(grid) = grid {
-            let fits = need + borders <= total + 0.01;
+            if need + borders <= total + 0.01 {
+                share_fitting_span(cols, grid, need);
+                return;
+            }
             for (c, w) in cols.iter_mut().zip(grid) {
-                c.0 = if fits { c.0.max(need * weight(w) / total) } else { c.0 + extra * weight(w) / total };
+                c.0 += extra * weight(w) / total;
             }
         }
         return;
@@ -1433,6 +1436,42 @@ fn share_span_min(cols: &mut [(f32, f32)], grid: Option<&[f32]>, need: f32, bord
     let share = extra / cols.len().max(1) as f32;
     for c in cols {
         c.0 += share;
+    }
+}
+
+// The minimum `need` of a cell that fits its columns' preferred widths `grid`, shared among them:
+// a column that needs more for itself than its share by preferred width keeps that, and what
+// is left of the cell's minimum goes to the other columns by their preferred widths. The
+// columns then need the cell's minimum between them and no more (or what they need for
+// themselves, when that is more), and none of them more than its preferred width unless its own
+// content does. So a column with wide content of its own can still take room from the others:
+// with a 300 pt picture over columns of 150, 100, 25 and 25 pt and a 50 pt picture in the third,
+// the table stays 300 pt wide and the third column is 50 pt, as in Word (which takes the 25 pt
+// from the second column alone; here every other column gives its share).
+fn share_fitting_span(cols: &mut [(f32, f32)], grid: &[f32], need: f32) {
+    let weight = |w: &f32| if w.is_finite() { w.clamp(0.0, UNBOUNDED) } else { 0.0 };
+    let (mut rest, mut weights) = (need, grid.iter().take(cols.len()).map(weight).sum::<f32>());
+    // Columns keeping their own minimum: each one leaves the others less to share, so more of
+    // them may come to need more than their share.
+    let mut own = vec![false; cols.len()];
+    loop {
+        let mut more = false;
+        for ((c, w), own) in cols.iter().zip(grid).zip(own.iter_mut()) {
+            if !*own && (weights <= 0.0 || c.0 > rest * weight(w) / weights) {
+                *own = true;
+                rest -= c.0;
+                weights -= weight(w);
+                more = true;
+            }
+        }
+        if !more {
+            break;
+        }
+    }
+    for ((c, w), own) in cols.iter_mut().zip(grid).zip(&own) {
+        if !own && weights > 0.0 {
+            c.0 = c.0.max(rest * weight(w) / weights);
+        }
     }
 }
 

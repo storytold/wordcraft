@@ -14033,8 +14033,8 @@ fn nested_spans_use_grid_weights() {
 
 /// The widths of four cells (150, 100, 25 and 25 pt preferred, no margins) under a cell spanning
 /// them with a picture `banner` pt wide, in a 300 pt table with `border` pt borders all round
-/// (none at 0).
-fn columns_under_a_banner(banner: f32, border: f32) -> Vec<f32> {
+/// (none at 0). The cells hold `A`, or `wide` (cell, width) holds a picture that wide.
+fn columns_under_a_banner(banner: f32, border: f32, wide: Option<(usize, f32)>) -> Vec<f32> {
     let widths = [150.0, 100.0, 25.0, 25.0];
     let mut t = Table::new(2, widths.len(), 300.0);
     t.grid = widths.to_vec();
@@ -14045,12 +14045,18 @@ fn columns_under_a_banner(banner: f32, border: f32) -> Vec<f32> {
     t.rows[0].cells.truncate(1);
     t.rows[0].cells[0].props.span = 4;
     t.rows[0].cells[0].props.width = Some(300.0);
-    let mut p = wordcraft_doc::Paragraph::new();
-    p.insert_object(0, picture(banner, 30.0, Default::default()), &Default::default()).unwrap();
-    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
-    for (cell, w) in t.rows[1].cells.iter_mut().zip(widths) {
+    let with_picture = |w: f32| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.insert_object(0, picture(w, 30.0, Default::default()), &Default::default()).unwrap();
+        vec![wordcraft_doc::para_block(p)]
+    };
+    t.rows[0].cells[0].blocks = with_picture(banner);
+    for (i, (cell, w)) in t.rows[1].cells.iter_mut().zip(widths).enumerate() {
         cell.props.width = Some(w);
-        cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("A", Default::default()))];
+        cell.blocks = match wide {
+            Some((at, w)) if at == i => with_picture(w),
+            _ => vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("A", Default::default()))],
+        };
     }
     let mut d = Document::new();
     d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
@@ -14071,15 +14077,39 @@ fn columns_under_a_banner(banner: f32, border: f32) -> Vec<f32> {
 fn a_spanning_cell_that_fits_its_columns_leaves_them_alone() {
     let kept = |w: &[f32]| w.iter().zip([150.0, 100.0, 25.0, 25.0]).all(|(got, want)| (got - want).abs() < 0.01);
     for (border, fits, too_wide) in [(0.0, 300.0, 300.5), (0.5, 299.7, 299.8), (1.5, 298.7, 298.9), (3.0, 297.2, 297.3), (6.0, 294.1, 294.5)] {
-        let w = columns_under_a_banner(fits, border);
+        let w = columns_under_a_banner(fits, border, None);
         assert_eq!(w.len(), 4, "{border} pt borders");
         assert!(kept(&w), "{border} pt borders, a {fits} pt picture fits: the columns keep their widths, not {w:?}");
-        let w = columns_under_a_banner(too_wide, border);
+        let w = columns_under_a_banner(too_wide, border, None);
         let narrow = w.get(2).copied().unwrap_or_default();
         assert!(narrow > 28.0, "{border} pt borders, a {too_wide} pt picture doesn't fit: the narrow columns grow, {w:?}");
     }
-    assert!(kept(&columns_under_a_banner(290.0, 0.0)), "a 290 pt picture, no borders");
-    assert!(kept(&columns_under_a_banner(290.0, 0.5)), "a 290 pt picture, 0.5 pt borders");
+    assert!(kept(&columns_under_a_banner(290.0, 0.0, None)), "a 290 pt picture, no borders");
+    assert!(kept(&columns_under_a_banner(290.0, 0.5, None)), "a 290 pt picture, 0.5 pt borders");
+}
+
+/// Under a spanning cell that fits, a column whose own content is wider than its preferred
+/// width takes that room from the other columns: the table keeps its width and the column is
+/// as wide as its content. Measured in Word for Windows with the table of
+/// [`columns_under_a_banner`], no borders: under a 300 pt picture, a 50 pt picture in the third
+/// cell gives columns of 150.1, 75.0, 50.1 and 25 pt, one of 30 pt 150.1, 95.0, 30.1 and 25 pt,
+/// and a 160 pt picture in the first cell 160.1, 91.8, 24.8 and 23.3 pt; under a 250 pt picture
+/// the 50 pt one gives 140.1, 85.0, 50.1 and 25 pt. Which columns give the room differs from
+/// Word's choice (the donors here give equal shares, #2464); the wide column and the table are
+/// as wide as Word's. WordCraft made the third column 69.2 pt for its 50 pt picture, and the
+/// first one 220 pt for its 160 pt picture.
+#[test]
+fn under_a_fitting_span_a_column_with_wide_content_takes_room_from_the_others() {
+    for (banner, cell, content) in [(300.0, 2, 50.0), (300.0, 2, 30.0), (300.0, 0, 160.0), (250.0, 2, 50.0), (290.0, 2, 50.0)] {
+        let w = columns_under_a_banner(banner, 0.0, Some((cell, content)));
+        let case = format!("a {banner} pt picture above, a {content} pt picture in cell {cell}: {w:?}");
+        assert_eq!(w.len(), 4, "{case}");
+        assert!((w.iter().sum::<f32>() - 300.0).abs() < 0.01, "the table keeps its 300 pt: {case}");
+        assert!((w.get(cell).copied().unwrap_or_default() - content).abs() < 0.01, "the column is as wide as its picture: {case}");
+        for (i, (got, preferred)) in w.iter().zip([150.0, 100.0, 25.0, 25.0]).enumerate() {
+            assert!(i == cell || *got <= preferred + 0.01, "no other column grows: {case}");
+        }
+    }
 }
 
 /// A narrow grid column that a row leaves empty at its end (`w:gridAfter` with `w:wAfter`) and
