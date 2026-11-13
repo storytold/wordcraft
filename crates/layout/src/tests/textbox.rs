@@ -520,3 +520,45 @@ fn text_in_a_shape_is_set_in_the_shapes_text_rectangle() {
         assert!((top - want).abs() < 0.02, "saved {saved} pt tall, adj {corner}: the text starts {top} pt down, expected {want}");
     }
 }
+
+/// A shape that resizes to fit its text is as tall as the text plus the room its text rectangle
+/// left above and below it in the box as saved, and the text then starts where the fitted box's
+/// own text rectangle does: the two are not the same rectangle. Measured in Word for Windows
+/// (16.0.20625) with 300 pt wide shapes without margins around three 11.5 pt lines: a diamond
+/// saved 20 pt tall comes out 44.5 pt tall (the text and twice 20 / 4) with its text 11.1 pt down
+/// (44.5 / 4), saved 100 pt tall 84.5 pt and 21.1 pt; an ellipse saved 20 pt tall 40.4 pt and 5.9
+/// pt. Stacked text is set in the whole frame, so its box is fitted without the rectangle too.
+#[test]
+fn a_fitted_shape_keeps_the_room_its_saved_text_rectangle_left() {
+    use wordcraft_doc::para::ShapeKind;
+    crate::test_fonts();
+    let fit = TextBody { inset: Some([0; 4]), auto_fit: true, ..Default::default() };
+    // The fitted frame and how far down it the first line starts.
+    let fitted = |kind: ShapeKind, corner: Option<u32>, saved: f32, body: TextBody| {
+        let mut d = Document::from_text("x");
+        let id = shape_with_text(&mut d, kind, corner, (300.0, saved), 3, body);
+        let l = lay(&d);
+        let r = frame_of(&l, id);
+        let top = self::lines(&l, id).first().map(|(_, y, ..)| y - r.y).expect("the shape shows its text");
+        (r.h, top)
+    };
+    let inset = 0.292_893_2f32;
+    let (text, _) = fitted(ShapeKind::Rectangle, None, 100.0, fit);
+    for (what, kind, saved, room, share) in [
+        ("a diamond saved 20 pt tall", ShapeKind::Diamond, 20.0f32, 2.0 * 20.0 / 4.0, 0.25),
+        ("a diamond saved 100 pt tall", ShapeKind::Diamond, 100.0, 2.0 * 100.0 / 4.0, 0.25),
+        ("an ellipse saved 20 pt tall", ShapeKind::Ellipse, 20.0, 20.0 * inset, inset / 2.0),
+        ("an ellipse saved 100 pt tall", ShapeKind::Ellipse, 100.0, 100.0 * inset, inset / 2.0),
+    ] {
+        let (h, top) = fitted(kind, None, saved, fit);
+        assert!((h - text - room).abs() < 0.02, "{what}: {h} pt tall, the text needs {text}, expected {room} more");
+        assert!((top - h * share).abs() < 0.02, "{what}: the text starts {top} pt down the fitted box, expected {}", h * share);
+    }
+    // Stacked text: no shape's rectangle where it is placed, so none in the fitted height.
+    let stacked = TextBody { vert: TextVert::Stacked, ..fit };
+    let (plain, _) = fitted(ShapeKind::Rectangle, None, 100.0, stacked);
+    let (round, top) = fitted(ShapeKind::RoundedRectangle, Some(50_000), 100.0, stacked);
+    let (_, plain_top) = fitted(ShapeKind::Rectangle, None, 100.0, stacked);
+    assert!((round - plain).abs() < 0.02, "stacked text: a rounded rectangle is fitted {round} pt tall, a rectangle {plain}");
+    assert!((top - plain_top).abs() < 0.02, "stacked text starts {top} pt down the rounded rectangle, {plain_top} down the rectangle");
+}

@@ -100,11 +100,17 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
 /// are that much shorter and start that far in, and the text is aligned (top, middle, bottom) in
 /// that part. Only for text that runs across: turned and stacked text keep the whole frame.
 fn text_rect(body: &TextBody, rect: Rect, inset: [f32; 4]) -> Rect {
-    if body.vert.turn() != TextDirection::Horizontal || body.vert == TextVert::Stacked {
-        return rect;
-    }
-    let [l, t, r, b] = inset.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    let [l, t, r, b] = shape_insets(body, inset);
     Rect::new(rect.x + l, rect.y + t, (rect.w - l - r).max(0.0), (rect.h - t - b).max(0.0))
+}
+
+/// The shape's text rectangle insets that `body`'s text keeps: turned and stacked text is set in
+/// the whole frame, so it keeps none, when it is placed and when its box is fitted to it alike.
+fn shape_insets(body: &TextBody, inset: [f32; 4]) -> [f32; 4] {
+    if body.vert.turn() != TextDirection::Horizontal || body.vert == TextVert::Stacked {
+        return [0.0; 4];
+    }
+    inset.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 })
 }
 
 /// The items showing text box `id` in its frame `rect` (page coordinates): its text, or its
@@ -154,7 +160,7 @@ pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32, inset: [f32; 4]) -> 
     // the room that rectangle left above and below it in the box as it was saved (measured in
     // Word for Windows: a rounded rectangle saved 100 pt tall around three lines comes out 44.3
     // pt tall, one saved 20 pt tall 36.5 pt).
-    let [gl, gt, gr, gb] = inset.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    let [gl, gt, gr, gb] = shape_insets(&body, inset);
     let (len, _) = frame(&body, w - gl - gr, 0.0);
     // Measuring doesn't count the box's list numbers and equations: `box_items` lays it out again.
     let snap = (ctx.counters.clone(), ctx.eq_count);
