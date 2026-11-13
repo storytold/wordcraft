@@ -326,7 +326,7 @@ fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): 
                 if a < j && j < a + span {
                     cell.props.span = (j - a) as u32;
                     let mut nc = Cell::empty();
-                    nc.props = cell.props.clone();
+                    nc.props = cell.props.clone().without_revisions();
                     nc.props.span = (a + span - j) as u32;
                     row.cells.insert(c + 1, nc);
                     changed = true;
@@ -353,7 +353,7 @@ fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): 
                     let span = cell.span();
                     cell.props.span = (k + 1 - a) as u32;
                     let mut nc = Cell::empty();
-                    nc.props = cell.props.clone();
+                    nc.props = cell.props.clone().without_revisions();
                     nc.props.span = (a + span - k) as u32;
                     row.cells.insert(ci + 1, nc);
                 } else {
@@ -404,7 +404,8 @@ fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f3
     }
     let t = s.doc.table_mut(story, &tp)?;
     let Some(row) = t.rows.get_mut(r) else { return Err(CmdError::Failed("the row isn't there any more".into())) };
-    let mut new_row = wordcraft_doc::Row { props: row.props.clone(), cells: Vec::with_capacity(row.cells.len()), controls: Default::default() };
+    let mut new_row =
+        wordcraft_doc::Row { props: row.props.clone().without_revisions(), cells: Vec::with_capacity(row.cells.len()), controls: Default::default() };
     new_row.props.header = false;
     if top.is_finite() && bottom.is_finite() && bottom > top {
         let rule = if row.props.height_rule == HeightRule::Exact { HeightRule::Exact } else { HeightRule::AtLeast };
@@ -416,7 +417,7 @@ fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f3
     }
     for (ci, cell) in row.cells.iter_mut().enumerate() {
         let mut nc = Cell::empty();
-        nc.props = cell.props.clone();
+        nc.props = cell.props.clone().without_revisions();
         if crossed_set.contains(&ci) {
             nc.props.vmerge = VMerge::None;
         } else {

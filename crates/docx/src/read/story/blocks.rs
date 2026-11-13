@@ -334,10 +334,25 @@ impl Reader<'_> {
         collect(t, "w:tr", &mut rows, &mut Vec::new(), 0);
         for (tr, row_controls) in rows.into_iter().take(MAX_ROWS) {
             let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new(), controls: row_controls };
-            row.props.exceptions = tr.child("w:tblPrEx").map(|e| Box::new(self.pc.tblpr(e)));
-            if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
-                let old = ch.child("w:trPr").map(trpr).unwrap_or_default();
-                row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+            row.props.exceptions = tr.child("w:tblPrEx").map(|e| {
+                let mut tp = self.pc.tblpr(e);
+                if let Some(ch) = e.child("w:tblPrExChange") {
+                    let old = ch.child("w:tblPrEx").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                    tp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+                }
+                Box::new(tp)
+            });
+            if let Some(p) = tr.child("w:trPr") {
+                if let Some(ins) = p.child("w:ins") {
+                    row.props.ins = Some(self.revision(RevisionKind::Insert, ins));
+                }
+                if let Some(del) = p.child("w:del") {
+                    row.props.del = Some(self.revision(RevisionKind::Delete, del));
+                }
+                if let Some(ch) = p.child("w:trPrChange") {
+                    let old = ch.child("w:trPr").map(trpr).unwrap_or_default();
+                    row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+                }
             }
             let mut tcs = Vec::new();
             collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);
@@ -346,9 +361,17 @@ impl Reader<'_> {
                     .child("w:tcPr")
                     .map(|p| tcpr(&self.pc, p))
                     .unwrap_or_else(|| (wordcraft_doc::props::CellProps { span: 1, ..Default::default() }, false));
-                if let Some(ch) = tc.child("w:tcPr").and_then(|p| p.child("w:tcPrChange")) {
-                    let old = ch.child("w:tcPr").map(|o| tcpr(&self.pc, o).0).unwrap_or_default();
-                    props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+                if let Some(p) = tc.child("w:tcPr") {
+                    if let Some(ins) = p.child("w:cellIns") {
+                        props.ins = Some(self.revision(RevisionKind::Insert, ins));
+                    }
+                    if let Some(del) = p.child("w:cellDel") {
+                        props.del = Some(self.revision(RevisionKind::Delete, del));
+                    }
+                    if let Some(ch) = p.child("w:tcPrChange") {
+                        let old = ch.child("w:tcPr").map(|o| tcpr(&self.pc, o).0).unwrap_or_default();
+                        props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+                    }
                 }
                 if hcont && let Some(prev) = row.cells.last_mut() {
                     prev.props.span = (prev.props.span + props.span.max(1)).min(63);

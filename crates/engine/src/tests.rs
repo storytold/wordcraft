@@ -13493,3 +13493,141 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
 }
+
+#[test]
+fn review_changes_and_accept_reject_cover_row_cell_ins_del_and_tbl_pr_ex_change() {
+    use wordcraft_doc::props::{PropChange, TableProps};
+    use wordcraft_doc::{Revision, RevisionKind, Table};
+
+    let mut d = wordcraft_doc::Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Format, author: "Alice".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Carol".into(), date: String::new(), move_name: None });
+
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].props.exceptions = Some(Box::new(TableProps {
+        width: Some(180.0),
+        fmt_change: Some(Box::new(PropChange { rev: 0, old: TableProps { width: Some(120.0), ..Default::default() } })),
+        ..Default::default()
+    }));
+    t.rows[0].cells[1].props.del = Some(1);
+    t.rows[1].props.ins = Some(2);
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+
+    assert!(crate::cmd::review::has_format_changes(&d));
+    assert!(crate::cmd::review::has_deletions(&d));
+
+    let mut s = Session::new(d);
+    let listed = s.run("review.changes", &json!({})).unwrap();
+    let arr = listed.as_array().unwrap();
+    assert_eq!(arr.len(), 3, "{arr:?}");
+    assert_eq!(arr[0]["kind"], "format");
+    assert_eq!(arr[1]["kind"], "delete");
+    assert_eq!(arr[2]["kind"], "insert");
+
+    // Reject row 0's tblPrExChange at (0, 0).
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off: 0 });
+    run(&mut s, "review.reject", json!({}));
+    assert!(!crate::cmd::review::has_format_changes(&s.doc));
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows[0].props.exceptions.as_ref().and_then(|e| e.width), Some(120.0));
+
+    // Accept cell (0, 1)'s deletion -> removes cell 1 from row 0.
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 0 });
+    run(&mut s, "review.accept", json!({}));
+    assert!(!crate::cmd::review::has_deletions(&s.doc));
+    assert_eq!(s.doc.body[0].as_table().unwrap().rows[0].cells.len(), 1);
+
+    // Reject row 1's insertion -> removes row 1 from the table.
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 0, 0]), off: 0 });
+    run(&mut s, "review.reject", json!({}));
+    assert_eq!(s.doc.body[0].as_table().unwrap().rows.len(), 1);
+}
+
+#[test]
+fn ranged_reject_resolves_table_cells_before_earlier_paragraph_removal_shifts_blocks() {
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, CharProps, Paragraph, Revision, RevisionKind, Table};
+
+    let mut d = wordcraft_doc::Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Carol".into(), date: String::new(), move_name: None });
+
+    let p0 = Paragraph::with_text("Inserted para", CharProps { ins: Some(0), ..Default::default() });
+    let p1 = Paragraph::with_text("Kept para", CharProps::default());
+
+    let mut t = Table::new(1, 1, 200.0);
+    t.rows[0].props.ins = Some(0);
+    d.body = vec![Arc::new(Block::Para(p0)), Arc::new(Block::Para(p1)), Arc::new(Block::Table(t))];
+
+    let mut s = Session::new(d);
+    s.sel = crate::Selection {
+        anchor: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0]), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![2, 0, 0, 0]), off: 0 },
+    };
+    run(&mut s, "review.reject", json!({}));
+    assert_eq!(s.doc.body.len(), 1);
+    assert_eq!(s.doc.body[0].as_para().unwrap().text, "Kept para");
+
+    // Partial selection starting inside a nested table cell and ending in a trailing paragraph of the outer cell.
+    let mut inner = Table::new(1, 2, 100.0);
+    inner.rows[0].cells[0].props.ins = Some(0);
+    let mut outer = Table::new(1, 2, 200.0);
+    outer.rows[0].cells[0].blocks = vec![
+        Arc::new(Block::Para(Paragraph::with_text("Outer lead", CharProps::default()))),
+        Arc::new(Block::Table(inner)),
+        Arc::new(Block::Para(Paragraph::with_text("Outer tail", CharProps::default()))),
+    ];
+    outer.rows[0].cells[0].props.ins = Some(0);
+    outer.rows[0].cells[1].blocks = vec![Arc::new(Block::Para(Paragraph::with_text("Outer sibling", CharProps::default())))];
+    s.doc.body = vec![Arc::new(Block::Table(outer))];
+    s.sel = crate::Selection {
+        anchor: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 1, 0, 0, 0]), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 2]), off: 5 },
+    };
+    run(&mut s, "review.reject", json!({}));
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows[0].cells.len(), 1);
+    assert_eq!(tbl.rows[0].cells[0].blocks[0].as_para().unwrap().text, "Outer sibling");
+}
+
+#[test]
+fn inserting_or_splitting_rows_and_cells_clears_inherited_revisions_and_dropping_rows_promotes_vmerge() {
+    use std::sync::Arc;
+    use wordcraft_doc::props::{PropChange, RowProps, VMerge};
+    use wordcraft_doc::{Block, Revision, RevisionKind, Table};
+
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].props.ins = Some(0);
+    t.rows[0].props.del = Some(1);
+    t.rows[0].props.fmt_change = Some(Box::new(PropChange { rev: 0, old: RowProps::default() }));
+    t.rows[0].cells[0].props.ins = Some(0);
+    t.rows[0].cells[0].props.del = Some(1);
+    t.insert_row(1, 0);
+    assert_eq!((t.rows[1].props.ins, t.rows[1].props.del, t.rows[1].props.fmt_change.is_some()), (None, None, false));
+    assert_eq!((t.rows[1].cells[0].props.ins, t.rows[1].cells[0].props.del), (None, None));
+
+    assert!(t.split_cell_grid(0, 0, 1, 2));
+    assert_eq!((t.rows[1].props.ins, t.rows[1].props.del), (None, None));
+    assert_eq!((t.rows[1].cells[0].props.ins, t.rows[1].cells[0].props.del), (None, None));
+
+    // Dropping a row that starts a vertical merge (via review.acceptAll or review.accept) promotes the row below to VMerge::Restart.
+    for use_all in [false, true] {
+        let mut d = wordcraft_doc::Document::new();
+        d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: String::new(), move_name: None });
+        let mut mt = Table::new(3, 2, 200.0);
+        mt.merge(0, 2, 0, 0);
+        mt.rows[0].props.del = Some(0);
+        d.body = vec![Arc::new(Block::Table(mt))];
+        let mut s = Session::new(d);
+        if use_all {
+            run(&mut s, "review.acceptAll", json!({}));
+        } else {
+            s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off: 0 });
+            run(&mut s, "review.accept", json!({}));
+        }
+        let tbl = s.doc.body[0].as_table().unwrap();
+        assert_eq!(tbl.rows.len(), 2);
+        assert_eq!(tbl.rows[0].cells[0].props.vmerge, VMerge::Restart, "use_all={use_all}");
+        assert_eq!(tbl.rows[1].cells[0].props.vmerge, VMerge::Continue, "use_all={use_all}");
+    }
+}
