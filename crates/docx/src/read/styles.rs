@@ -1,6 +1,6 @@
 use super::{
-    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, PropChange, Reader, RevisionKind, Style, StyleKind, StyleSheet,
-    TablePart, TableStyleParts, VAlign, flag, int, props, tw, u32_of,
+    AbstractNum, DocxError, El, LatentStyle, Level, LevelSuffix, Num, NumFormat, PartFormat, PropChange, Reader, RevisionKind, Style, StyleKind,
+    StyleSheet, TablePart, TableStyleParts, VAlign, flag, int, props, tw, u32_of,
 };
 use crate::units::tw_i16;
 use std::sync::Arc;
@@ -51,9 +51,9 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
     digit.parse::<u8>().ok().filter(|d| digit.len() == 1 && (1..=9).contains(d)).map(|d| d - 1)
 }
 
-/// The built-in styles `l` (the file's `w:latentStyles`) leaves latent but shows in Word's gallery
-/// (`w:qFormat`, not `w:semiHidden`), added to `sheet`: Word writes a style out only once it is used
-/// (#3909).
+/// What `l` (the file's `w:latentStyles`) says about each built-in style it leaves latent, passed
+/// to [`StyleSheet::add_latent_gallery`], which adds the ones Word's gallery shows (`w:qFormat`,
+/// not `w:semiHidden`) to `sheet`: Word writes a style out only once it is used (#3909).
 fn latent_gallery(sheet: &mut StyleSheet, l: &El) {
     let on = |e: &El, k: &str, default: bool| e.attr(k).map_or(default, |v| !matches!(v.trim(), "0" | "false" | "off"));
     let (quick, hidden) = (on(l, "w:defQFormat", false), on(l, "w:defSemiHidden", false));
@@ -70,20 +70,25 @@ fn latent_gallery(sheet: &mut StyleSheet, l: &El) {
         }
     }
     // Each built-in style: the latent defaults, overridden by its own exception if any. Its
-    // lock comes too, so Restrict Editing still keeps a locked latent style off.
+    // lock comes too, so Restrict Editing still keeps a locked latent style off. The ones the
+    // file keeps out of the gallery come along as well, because a style it shows brings its bases.
     let builtin = StyleSheet::builtin();
-    let gallery: Vec<(String, Option<u32>, bool)> = builtin
+    let latent: Vec<LatentStyle> = builtin
         .styles
         .iter()
         .filter(|b| b.kind != StyleKind::Table)
-        .filter_map(|b| {
+        .map(|b| {
             let e = exceptions.iter().find(|e| e.attr("w:name").is_some_and(|n| n.eq_ignore_ascii_case(&b.name)));
-            let shown = e.map_or(quick, |e| on(e, "w:qFormat", quick)) && !e.map_or(hidden, |e| on(e, "w:semiHidden", hidden));
-            let lock = e.map_or(locked, |e| on(e, "w:locked", locked));
-            shown.then(|| (b.name.clone(), Some(e.map_or(priority, |e| prio_of(e))), lock))
+            LatentStyle {
+                name: b.name.clone(),
+                priority: Some(e.map_or(priority, |e| prio_of(e))),
+                locked: e.map_or(locked, |e| on(e, "w:locked", locked)),
+                quick: e.map_or(quick, |e| on(e, "w:qFormat", quick)),
+                hidden: e.map_or(hidden, |e| on(e, "w:semiHidden", hidden)),
+            }
         })
         .collect();
-    sheet.add_latent_gallery(&gallery);
+    sheet.add_latent_gallery(&latent);
 }
 
 impl Reader<'_> {

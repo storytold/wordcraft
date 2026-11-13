@@ -960,6 +960,43 @@ fn latent_styles_take_the_files_default_priority_and_lock() {
     assert!(d.styles.find("Title").is_some_and(|s| !s.locked), "Title isn't");
 }
 
+/// #3909 review: a latent style brings the built-in styles it is based on. TOC Heading has no
+/// font, size or colour of its own — all of it is Heading 1's — so materialising it alone would
+/// show it in the gallery with Normal's look. Word writes the base out with it (observed with
+/// this file: using TOC Heading saves `Heading1` too, `w:semiHidden` and without `w:qFormat`),
+/// and the base stays out of the gallery unless the file's own latent settings put it there.
+#[test]
+fn a_latent_style_brings_the_builtin_styles_it_is_based_on() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:latentStyles w:defLockedState="0" w:defUIPriority="99" w:defSemiHidden="0" w:defUnhideWhenUsed="0" w:defQFormat="0" w:count="376">
+  <w:lsdException w:name="Normal" w:uiPriority="0" w:qFormat="1"/>
+  <w:lsdException w:name="heading 1" w:semiHidden="1" w:unhideWhenUsed="1" w:uiPriority="9"/>
+  <w:lsdException w:name="TOC Heading" w:uiPriority="39" w:qFormat="1"/>
+ </w:latentStyles>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
+</w:styles>"#
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    // The gallery is the file's: TOC Heading, not the Heading 1 it brought in.
+    let names: Vec<&str> = d.styles.gallery().iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Normal", "TOC Heading"]);
+    // Heading 1 is there as the file's latent styles describe it: hidden, not quick, priority 9.
+    let h1 = d.styles.find("Heading 1").unwrap_or_else(|| panic!("Heading 1 in {:?}", d.styles.styles.iter().map(|s| &s.id).collect::<Vec<_>>()));
+    assert_eq!((h1.id.as_str(), h1.quick, h1.hidden, h1.priority), ("Heading1", false, true, Some(9)));
+    // So TOC Heading inherits Heading 1's font, size and colour, as Word shows it.
+    let chain: Vec<&str> = d.styles.chain("TOCHeading").iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(chain, ["Normal", "Heading1", "TOCHeading"], "Normal → Heading 1 → TOC Heading");
+    let toc = d.styles.resolve_char(Some("TOCHeading"), &wordcraft_doc::props::CharProps::default());
+    let heading = d.styles.resolve_char(Some("Heading1"), &wordcraft_doc::props::CharProps::default());
+    assert_eq!((toc.font.as_str(), toc.size, toc.color), (heading.font.as_str(), heading.size, heading.color));
+    assert_ne!(toc.size, d.styles.resolve_char(Some("Normal"), &wordcraft_doc::props::CharProps::default()).size, "not Normal's size");
+    // The document's own Normal is kept, and nothing is added twice.
+    assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Normal").count(), 1);
+    assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Heading 1").count(), 1);
+}
+
 /// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
 /// It reads as a reference to the note itself, so the note text shows its number.
 #[test]
