@@ -7,7 +7,10 @@ pub(super) fn render_png(session: &wordcraft_engine::Session, page: u64, scale: 
     let page = usize::try_from(page.max(1)).unwrap_or(usize::MAX).saturating_sub(1);
     let l = session.export_layout();
     let pg = l.pages.get(page).ok_or_else(|| format!("no page {}", page.saturating_add(1)))?;
-    let img = wordcraft_render::render_page(&session.doc, pg, scale.clamp(0.1, 8.0), &Default::default());
+    // Tracked changes in the Track Changes Options colours, as on screen (#6266).
+    let mut opts = wordcraft_render::RenderOptions::default();
+    opts.display.revisions = session.prefs.markup.clone();
+    let img = wordcraft_render::render_page(&session.doc, pg, scale.clamp(0.1, 8.0), &opts);
     let png = img.to_png();
     Ok(json!({"png": wordcraft_engine::cmd::insert::base64_encode(&png), "width": img.width, "height": img.height, "pages": l.pages.len()}))
 }
