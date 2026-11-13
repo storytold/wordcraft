@@ -912,11 +912,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
- fix/5840-custom-dic
-| 2026-11-08 | trivial | Progress log: freestanding custom.dic dictionary file support in File › Options › Proofing (#5840) |
-
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
- main
+| 2026-11-08 | trivial | Progress log: freestanding custom.dic dictionary file support in File › Options › Proofing (#5840) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |

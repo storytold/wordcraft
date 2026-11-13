@@ -225,8 +225,10 @@ fn user_dict_path() -> Option<std::path::PathBuf> {
 /// Load the user's custom dictionary into proofing, reconciling restored words with the file.
 ///
 /// If a custom dictionary file is configured and successfully read, in-memory words are reconciled
-/// to match the file. Falls back to the default dictionary file if present. A missing default file
-/// or failed read preserves words restored from preferences.
+/// to match the file and writes persist to it. If the custom file is unavailable, proofing falls
+/// back to reading the default dictionary file for spellchecking without redirecting subsequent
+/// writes to it, keeping `prefs.custom_dictionary` and persistence targets consistent. When no
+/// custom dictionary is configured, the default dictionary file is both read and written.
 fn load_user_dictionary(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
@@ -251,19 +253,12 @@ fn load_user_dictionary(app: &mut WordApp) {
         }
     }
     if !loaded && let Some(ref def) = default_path {
-        if def.is_file() {
-            match wordcraft_engine::custom_dict::load_custom_dictionary_replacing(def) {
-                Ok(_) => {
-                    app.session.user_dict_path = Some(def.clone());
-                }
-                Err(e) => {
-                    log::warn!("default dictionary: failed to load '{}': {e}", def.display());
-                    app.session.user_dict_path = Some(def.clone());
-                }
-            }
-        } else {
-            // Missing default file is not treated as a successful replacement;
-            // preserve any backup words restored from preferences.
+        if def.is_file()
+            && let Err(e) = wordcraft_engine::custom_dict::load_custom_dictionary_replacing(def)
+        {
+            log::warn!("default dictionary: failed to load '{}': {e}", def.display());
+        }
+        if custom_path.is_none() {
             app.session.user_dict_path = Some(def.clone());
         }
     }
@@ -844,6 +839,32 @@ mod tests {
             assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("kept"), "{p:?}");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #5840: loading fallback dictionary when a custom dictionary is configured must not silently
+    /// redirect `user_dict_path` writes to the default dictionary file while preferences still
+    /// select the custom dictionary.
+    #[test]
+    fn custom_dictionary_fallback_does_not_redirect_persistence_target() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let missing = std::env::temp_dir().join(format!("missing-custom-dict-{}.dic", std::process::id()));
+        app.session.prefs.custom_dictionary = Some(missing.to_string_lossy().into_owned());
+
+        load_user_dictionary(&mut app);
+
+        assert_eq!(app.session.user_dict_path, None, "missing custom file leaves write target unset, avoiding silent writes to default dictionary");
+        assert_eq!(app.session.prefs.custom_dictionary.as_deref(), Some(missing.to_string_lossy().as_ref()), "preference setting is retained");
+    }
+
+    /// When no custom dictionary is configured (`None`), the default dictionary path is used as the write target.
+    #[test]
+    fn default_dictionary_is_persistence_target_when_no_custom_dictionary_set() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.session.prefs.custom_dictionary = None;
+
+        load_user_dictionary(&mut app);
+
+        assert_eq!(app.session.user_dict_path, app.session.default_user_dict_path);
     }
 }
 
