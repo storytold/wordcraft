@@ -35,24 +35,47 @@ fn story_has_page_field(doc: &wordcraft_doc::Document, story: StoryRef, except: 
     false
 }
 
-fn page_number_paragraph(style: &str, align: Align, x_of_y: bool) -> Result<Paragraph, CmdError> {
+fn page_number_paragraph(style: &str, align: Align, x_of_y: bool, prefix: &str) -> Result<Paragraph, CmdError> {
     let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
     let mut para = Paragraph::new().styled(style);
     para.props.align = Some(align);
     para.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Clear, leader: Default::default() }]);
     if x_of_y {
-        para.insert_text(0, "Page  of ", &CharProps::default())?;
-        para.insert_object(5, field, &CharProps { bold: Some(true), ..Default::default() })?;
+        // Offsets are byte offsets, so a prefix's `len()` is where the PAGE field goes.
+        let page_pos = if prefix.is_empty() {
+            para.insert_text(0, "Page  of ", &CharProps::default())?;
+            5
+        } else {
+            para.insert_text(0, prefix, &CharProps::default())?;
+            prefix.len()
+        };
+        para.insert_object(page_pos, field, &CharProps { bold: Some(true), ..Default::default() })?;
+        if !prefix.is_empty() {
+            para.insert_text(para.len(), " of ", &CharProps::default())?;
+        }
         let end = para.len();
         para.insert_object(
             end,
             InlineObject::Field { instr: "NUMPAGES".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
             &CharProps { bold: Some(true), ..Default::default() },
         )?;
-    } else {
+    } else if prefix.is_empty() {
         para.insert_object(0, field, &CharProps::default())?;
+    } else {
+        para.insert_text(0, prefix, &CharProps::default())?;
+        para.insert_object(prefix.len(), field, &CharProps::default())?;
     }
     Ok(para)
+}
+
+/// Record an asked-for prefix on the selected section(s); an empty one clears it.
+fn set_page_num_prefix(s: &mut Session, prefix: Option<&str>) -> Result<(), CmdError> {
+    if let Some(pfx) = prefix {
+        crate::cmd::page::with_sect(s, |sect| {
+            sect.page_num_prefix = if pfx.is_empty() { None } else { Some(pfx.to_string()) };
+        })?;
+    }
+    Ok(())
 }
 
 // Only cached display text is transferable; instructions, flags and formatting remain part of ownership.
@@ -76,6 +99,11 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
         _ => Align::Center,
     };
     let x_of_y = p::str(v, "format").is_some_and(|f| f.contains("of"));
+    let prefix_param = p::str(v, "prefix");
+    let prefix = prefix_param.unwrap_or("");
+    if prefix.chars().count() > 16 {
+        return Err(CmdError::Params("`prefix` is at most 16 characters".into()));
+    }
     let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
     if position == "current" {
         let props = s.typing_props();
@@ -88,7 +116,10 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     let id = hf_part(s, header);
     let story = StoryRef::Part(id);
     let style = if header { "Header" } else { "Footer" };
-    let mut para = page_number_paragraph(style, align, x_of_y)?;
+    let mut para = page_number_paragraph(style, align, x_of_y, prefix)?;
+    // A generated number may already carry the section's prefix (or the one asked for now).
+    let current_prefix = crate::cmd::page::sect(s).page_num_prefix.unwrap_or_default();
+    let prefixes: BTreeSet<&str> = ["", current_prefix.as_str(), prefix].into_iter().collect();
     // Replace only a top-level paragraph matching our generated structure. User text,
     // field switches/metadata and paragraph/run formatting must not be mistaken for a gallery number.
     // Cached field results and paragraph-mark formatting survive gallery changes and identical requests.
@@ -99,8 +130,9 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
                 let Some(align @ (Align::Left | Align::Center | Align::Right)) = existing.props.align else { return None };
                 [false, true]
                     .into_iter()
-                    .any(|x_of_y| {
-                        page_number_paragraph(style, align, x_of_y).is_ok_and(|mut p| {
+                    .flat_map(|x_of_y| prefixes.iter().map(move |pfx| (x_of_y, *pfx)))
+                    .any(|(x_of_y, pfx)| {
+                        page_number_paragraph(style, align, x_of_y, pfx).is_ok_and(|mut p| {
                             if p.objects.len() != existing.objects.len() {
                                 return false;
                             }
@@ -125,6 +157,7 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
                 *block = replacement;
             }
         }
+        set_page_num_prefix(s, prefix_param)?;
         return Ok(json!({"story": id}));
     }
     let blocks = s.doc.story_mut(story)?;
@@ -141,6 +174,7 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     blocks.push(para_block(para));
+    set_page_num_prefix(s, prefix_param)?;
     Ok(json!({"story": id}))
 }
 

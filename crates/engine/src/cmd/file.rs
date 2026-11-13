@@ -111,8 +111,9 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
             let opts = export_options(s, v);
+            let findings = s.run_export_checks(&opts, "pdf");
             crate::io::save_path_with(std::path::Path::new(&path), &s.doc, None, &opts).map_err(CmdError::Failed)?;
-            Ok(json!({"path": path, "markup": opts.markup}))
+            Ok(json!({"path": path, "markup": opts.markup, "findings": findings}))
         })
         .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
         .pure(),
@@ -432,6 +433,10 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let before_stamp =
         (s.doc.settings.zoom, s.doc.core.last_modified_by.clone(), s.doc.core.created.clone(), s.doc.core.modified.clone(), s.doc.core.revision);
     s.stamp_save();
+    // Every save and export runs the applied profile's checks before writing (PDF verification
+    // only when the output is a PDF). The export still proceeds; findings are reported, not
+    // blocking.
+    let findings = s.run_export_checks(&opts, &ext);
     let password = s.password.as_ref().map(crate::io::Password::as_str);
     // A header/footer just made and left empty isn't saved (#960).
     let copy = super::insert::saved_copy(s);
@@ -460,7 +465,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         // What the file holds now.
         s.md_file = super::md_source::FileText::saved(exact.filter(|_| super::md_source::is_markdown_file(&path)));
     }
-    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten}))
+    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten, "findings": findings}))
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?
@@ -536,7 +541,9 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let page = crate::p::page_index(p::u64(v, "page").unwrap_or(1));
     let strict = p::bool(v, "strict").unwrap_or(false);
     let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
-    let l = s.export_layout_with(export_options(s, v).markup);
+    let opts = export_options(s, v);
+    let findings = s.run_export_checks(&opts, "png");
+    let l = s.export_layout_with(opts.markup);
     let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
     // A page image is the printed page: headers and footers at full strength. Dimming them is
     // the on-screen cue while editing the body, not part of the page.
@@ -553,7 +560,7 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let img = wordcraft_render::render_page(&s.doc, pg, scale, &opts);
     let png = img.to_png();
     crate::io::write_file(path, &png).map_err(CmdError::Failed)?;
-    Ok(json!({"path": path, "width": img.width, "height": img.height, "bytes": png.len()}))
+    Ok(json!({"path": path, "width": img.width, "height": img.height, "bytes": png.len(), "findings": findings}))
 }
 
 /// Text and its bookmark association cross the dialog/command boundary together on rename.
