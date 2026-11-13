@@ -1339,6 +1339,62 @@ fn numbering_change_snapshot_persistence_and_imported_ppr_change() {
     assert_eq!(p_engine.numbering, Some(NumRef { num: 10, level: 0 }), "active numbering preserved against stripped baseline");
 }
 
+/// Two separately created, identically formatted lists do not resolve ambiguous previous-numbering
+/// caches to the first list across save and reload, preserving numbering continuity and counter state.
+#[test]
+fn numbering_change_reject_with_two_identically_formatted_lists() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut doc = Document::from_text("First list item 1\nFirst list item 2\nSecond list item 1 (numbering removed)");
+    let list1 = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    let list2 = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    assert_ne!(list1, list2, "distinct list instances");
+    assert_ne!(doc.numbering.num(list1).unwrap().abstract_id, doc.numbering.num(list2).unwrap().abstract_id, "distinct abstract definitions");
+
+    // List 1 has earlier items.
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num: list1, level: 0 });
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.numbering = Some(NumRef { num: list1, level: 0 });
+
+    // List 2 has an item that had its numbering changed (e.g. removed).
+    let p2 = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    p2.props.numbering = None;
+    p2.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: list2, level: 0 }))));
+
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    // Save and reload.
+    let bytes = wordcraft_docx::write(&doc).expect("docx writes successfully");
+    let reloaded = wordcraft_docx::read(&bytes).expect("docx reads back successfully");
+
+    let p2_reloaded = reloaded.para(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    assert!(p2_reloaded.props.numbering.is_none());
+    let nc = p2_reloaded.props.num_change.as_ref().expect("num_change preserved after reload");
+    assert_eq!(nc.original, "%1:1:0:.");
+    assert_eq!(nc.snapshot, None, "colliding lists treat snapshot as unresolved rather than selecting the first list");
+
+    // Reject the change.
+    let mut session = Session::new(reloaded);
+    session.run("review.rejectAll", &json!({})).unwrap();
+
+    let p2_after = session.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    // Because the snapshot was unresolved, reject does not attach it to list 1 (which would make it item 3 of list 1).
+    assert_ne!(p2_after.props.numbering, Some(NumRef { num: list1, level: 0 }), "must not attach to unrelated first list");
+    assert_eq!(p2_after.props.numbering, None, "unresolved change preserves active numbering");
+    assert!(p2_after.props.num_change.is_none(), "num_change cleared after reject");
+
+    // Verify counter state of list 1 remains unaffected:
+    let mut counters = wordcraft_doc::numbering::Counters::default();
+    let label0 = counters.next_label(&session.doc.numbering, list1, 0).unwrap().0;
+    let label1 = counters.next_label(&session.doc.numbering, list1, 0).unwrap().0;
+    assert_eq!(label0, "1.");
+    assert_eq!(label1, "2.");
+}
+
 /// Verification for tracking removal of style-inherited numbering and restoring fmt_change during Compare.
 #[test]
 fn style_inherited_numbering_and_compare_fmt_change_preservation() {
