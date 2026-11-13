@@ -416,3 +416,30 @@ fn local_civil_date_follows_the_utc_offset() {
         assert!(crate::cmd::local_offset_secs(unix).abs() <= 26 * 3600);
     }
 }
+
+/// Close Header and Footer restores the original body selection rather than a synthetic caret
+/// at the section boundary when header/footer was opened without a page argument or from the same section.
+#[test]
+fn close_header_preserves_original_body_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("First paragraph.\nSecond paragraph with more text."));
+    // Place caret at offset 7 in the second paragraph.
+    s.sel = Selection::caret(Pos::new(StoryRef::Body, Path::top(1), 7));
+    let original = s.sel.clone();
+
+    // Edit footer from ribbon without a page argument.
+    s.run("insert.editFooter", &json!({})).unwrap();
+    assert!(s.in_header_footer());
+
+    // Close header and footer.
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    assert_eq!(s.sel, original, "original body selection was preserved without page argument");
+
+    // Edit footer explicitly specifying the page of the current section.
+    s.sel = original.clone();
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    assert!(s.in_header_footer());
+
+    // Close header and footer.
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    assert_eq!(s.sel, original, "original body selection was preserved with same-section page argument");
+}
