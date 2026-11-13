@@ -3,6 +3,19 @@ use wordcraft_doc::Pos;
 use wordcraft_doc::props::Align;
 use wordcraft_engine::Session;
 
+/// Paste Special lists and pastes the same formats the engine chose: the clipboard ownership
+/// result must survive into the dialog's payload, or another program's copy could be replaced
+/// by WordCraft's own fragment.
+#[test]
+fn paste_special_dialog_keeps_the_clipboard_ownership_result() {
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+    let d = Dialog::paste_special(&a, &json!({"text": "Bold", "privateClipboard": false}));
+    let Dialog::PasteSpecial { formats, payload, .. } = d else { panic!("not Paste Special") };
+    assert_eq!(formats, ["text"], "another program's copy isn't our fragment");
+    assert_eq!(payload.get("privateClipboard"), Some(&json!(false)));
+    assert_eq!(payload.get("text").and_then(Value::as_str), Some("Bold"));
+}
+
 /// #3931: hovering Insert › Table's grid asks the page for a preview of that table (rows by
 /// columns) and changes nothing; leaving the grid drops it; a click inserts the table with no
 /// preview left over for the page to show on top of it.
