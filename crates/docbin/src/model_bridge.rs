@@ -167,7 +167,27 @@ mod tests {
     fn bridges_nested_stories_and_moves_media_without_copying() {
         let mut source = craft_wordmodel::Document::new();
         let long_text = "x".repeat(4 << 20);
-        let body_para = craft_wordmodel::para::Paragraph::with_text(&long_text, Default::default());
+        let mut body_para = craft_wordmodel::para::Paragraph::with_text(&long_text, Default::default());
+        body_para.objects.push(craft_wordmodel::para::InlineObject::Group {
+            w: 32.0,
+            h: 24.0,
+            float: Default::default(),
+            ch_w: 64.0,
+            ch_h: 48.0,
+            children: vec![craft_wordmodel::para::GroupChild {
+                x: 4.0,
+                y: 6.0,
+                obj: craft_wordmodel::para::InlineObject::Field {
+                    instr: "PAGE".into(),
+                    result: "7".into(),
+                    locked: true,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                },
+            }],
+            canvas: None,
+        });
         let cell = craft_wordmodel::table::Cell::with_text("nested cell");
         let table = craft_wordmodel::table::Table {
             rows: vec![craft_wordmodel::table::Row { cells: vec![cell], ..Default::default() }],
@@ -189,6 +209,17 @@ mod tests {
         let document = from_shared_model(source).expect("model conversion");
         assert_eq!(document.body.len(), 2);
         assert_eq!(document.body[0].as_para().map(|p| p.text.as_str()), Some(long_text.as_str()));
+        let group = match &document.body[0].as_para().expect("paragraph").objects[0] {
+            wordcraft_doc::para::InlineObject::Group { children, ch_w, .. } => {
+                assert_eq!(*ch_w, 64.0);
+                children
+            }
+            other => panic!("expected grouped object, got {other:?}"),
+        };
+        assert_eq!((group[0].x, group[0].y), (4.0, 6.0));
+        assert!(
+            matches!(&group[0].obj, wordcraft_doc::para::InlineObject::Field { instr, result, locked: true, .. } if instr == "PAGE" && result == "7")
+        );
         let table = document.body[1].as_table().expect("table block");
         assert_eq!(table.rows[0].cells[0].blocks[0].as_para().map(|p| p.text.as_str()), Some("nested cell"));
         assert_eq!(document.parts[&12].blocks[0].as_para().map(|p| p.text.as_str()), Some("part story"));
