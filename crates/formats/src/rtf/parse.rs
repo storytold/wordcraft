@@ -231,6 +231,7 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
 fn finalize(mut r: Reader) -> Parsed {
     // A multibyte run ends here, and so does a note, comment, header or footer left open by a
     // truncated file.
+    r.flush_high_surrogate();
     r.finish_multibyte();
     r.end_sub();
     r.end_header_footer();

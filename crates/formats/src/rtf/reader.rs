@@ -74,7 +74,8 @@ pub(super) struct Reader {
     rev_authors: Vec<String>,
     pub(super) rev_name: String,
     pub(super) skip_chars: usize,
-    pub(super) pending_high: Option<u16>,
+    /// A high surrogate from `\uN` waiting for its low half, with the formatting it was read in.
+    pub(super) pending_high: Option<(u16, Fmt)>,
     /// A streaming decoder for the current multibyte code page, and the code page it was made for.
     /// A lead byte and its trail byte decode together even when a text word, a group boundary or the
     /// end of a chunk falls between them, so a run of any length never splits a character.
@@ -158,6 +159,11 @@ impl Reader {
 
     /// The header or footer group closed: keep what it held and go back to the body.
     pub(super) fn end_header_footer(&mut self) {
+        if self.hf.is_none() {
+            return;
+        }
+        // A high surrogate left at the end stays in the header or footer: it never pairs across.
+        self.flush_high_surrogate();
         let Some((_, which, body)) = self.hf.take() else { return };
         if self.para_has || !self.para.inlines.is_empty() {
             self.end_para(false);
@@ -190,6 +196,11 @@ impl Reader {
 
     /// The footnote or comment group closed: keep its text and leave a marker in the body.
     pub(super) fn end_sub(&mut self) {
+        if self.sub.is_none() {
+            return;
+        }
+        // A high surrogate left at the end stays in the note or comment: it never pairs across.
+        self.flush_high_surrogate();
         let Some(sub) = self.sub.take() else { return };
         if self.para_has || !self.para.inlines.is_empty() {
             self.end_para(false);
@@ -428,6 +439,7 @@ impl Reader {
 
     /// End the current paragraph (`\par`, `\cell`).
     pub(super) fn end_para(&mut self, in_cell: bool) {
+        self.flush_high_surrogate();
         let read = std::mem::take(&mut self.para);
         let props = self.para_props(&self.st);
         let mut p = Para { inlines: read.inlines, mark_ins: read.mark_ins, mark_del: read.mark_del, ..props };
@@ -469,6 +481,13 @@ impl Reader {
     }
 
     pub(super) fn end_row(&mut self) {
+        if self.para_has || !self.para.inlines.is_empty() {
+            self.flush_high_surrogate();
+        } else {
+            // Nothing since the last `\cell`: the surrogate sits on the row's end mark, which shows
+            // nothing, rather than in a cell of its own.
+            self.pending_high = None;
+        }
         if self.para_has {
             self.end_cell();
         }
