@@ -109,9 +109,10 @@ pub(crate) fn page_by_screen(app: &mut WordApp, id: &str, params: &Value) -> Opt
     if r.is_ok() {
         let to = (step.from.y + dir * step.window.height()).min(app.canvas.scroll_max.y).max(0.0);
         app.canvas.scroll_request = Some(vec2(step.from.x, to));
-        // Past the end of the document the view stops short: still show the caret.
-        let shift = to - app.canvas.scroll_offset.y;
-        app.canvas.scroll_to_caret = caret_middle(app).is_none_or(|p| !(step.window.top()..=step.window.bottom()).contains(&(p.y - shift)));
+        // Past the end of the document the view stops short, and the caret's new place may be
+        // beside the window: still show the caret.
+        let shift = vec2(step.from.x, to) - app.canvas.scroll_offset;
+        app.canvas.scroll_to_caret = caret_middle(app).is_none_or(|p| !step.window.contains(p - shift));
     }
     Some(r)
 }
@@ -125,7 +126,7 @@ struct ScreenStep {
     window: Rect,
     /// The scroll offset the step starts from.
     from: egui::Vec2,
-    /// Whether the caret was in the window.
+    /// Whether the caret was in the window, across and down.
     shown: bool,
 }
 
@@ -143,11 +144,12 @@ fn screen_step(app: &mut WordApp, dir: f32) -> Option<ScreenStep> {
     let layout = app.session.layout();
     let target = pos2(at.x, at.y + dir * window.height());
     let (page, x, y) = page_at(&app.canvas.page_rects, &layout, app.canvas.scale, target)?;
-    let (page, x, y) = past_the_text(&layout, page, x, y, dir);
+    let (page, x, y) = past_the_text(&layout, page, x, y, dir, app.canvas.cols);
     if !x.is_finite() || !y.is_finite() || layout.hit(page, x, y, StoryRef::Body).is_none() {
         return None;
     }
-    let shown = (window.top()..=window.bottom()).contains(&(at.y - (from.y - now.y)));
+    // A caret beside the window (scrolled sideways past it) is out of view too.
+    let shown = window.contains(at - (from - now));
     Some(ScreenStep { page, x, y, window, from, shown })
 }
 
@@ -160,17 +162,19 @@ fn caret_middle(app: &mut WordApp) -> Option<Pos2> {
 
 /// A screen step that lands past the last line of a page's text (Page Down) or before its first
 /// (Page Up), in a margin, the gap between pages or below a short page's text, goes on to the
-/// first line of the next page (the last line of the one before) rather than back to a line the
-/// caret may already be on. Otherwise (`page`, `x`, `y`) as it is.
-fn past_the_text(layout: &DocLayout, page: usize, x: f32, y: f32, dir: f32) -> (usize, f32, f32) {
+/// first line of the page below (the last line of the one above) rather than back to a line the
+/// caret may already be on. With `cols` pages to a row (Multiple Pages) that page is `cols` on, so
+/// the caret keeps its column, as in Word. Otherwise (`page`, `x`, `y`) as it is.
+fn past_the_text(layout: &DocLayout, page: usize, x: f32, y: f32, dir: f32, cols: usize) -> (usize, f32, f32) {
     let line = |p: usize, y: f32| layout.hit(p, x, y, StoryRef::Body).and_then(|at| layout.caret_on(&at, p));
     let height = |p: usize| layout.pages.get(p).map(|p| p.h);
+    let cols = cols.max(1);
     let (beyond, edge) = if dir > 0.0 {
         let past = height(page).and_then(|h| line(page, h)).is_some_and(|last| y > last.top + last.height);
-        (past.then_some(page.saturating_add(1)), Some(0.0))
+        (past.then_some(page.saturating_add(cols)), Some(0.0))
     } else {
         let before = line(page, 0.0).is_some_and(|first| y < first.top);
-        let prev = if before { page.checked_sub(1) } else { None };
+        let prev = if before { page.checked_sub(cols) } else { None };
         (prev, prev.and_then(height))
     };
     match (beyond, edge) {

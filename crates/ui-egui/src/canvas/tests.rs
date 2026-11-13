@@ -1174,6 +1174,68 @@ fn page_down_in_multiple_pages_goes_to_the_next_row() {
     assert_eq!(caret_in_window(&mut h).0, cols, "the caret is on the page below, in the next row");
 }
 
+/// #5680: in Multiple Pages, a Page Down that lands below a short page's text goes on down its
+/// column to the page under it, as Word keeps the caret's column (2×1: page 1, 3, 5). It used to
+/// go to the page beside the short one.
+#[test]
+fn page_down_in_multiple_pages_past_a_short_page_keeps_the_column() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    // Pages 2 to 5 have one line each; the others have 20 paragraphs.
+    for page in 0..10 {
+        let lines = if (2..6).contains(&page) { 1 } else { 20 };
+        for line in 0..lines {
+            if line > 0 {
+                a.run("text.newParagraph", json!({})).unwrap();
+            }
+            a.run("text.insert", json!({"text": format!("Page {page} line {line}")})).unwrap();
+        }
+        if page < 9 {
+            a.run("layout.break", json!({"kind": "page"})).unwrap();
+        }
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("view.multiplePages", json!({})).unwrap();
+    // The caret low on the first page, so a screen down is below the text of the page under it.
+    a.run("select.text", json!({"text": "Page 0 line 19"})).unwrap();
+    a.run("caret.left", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 8);
+    let cols = h.state().canvas.cols;
+    assert!(cols >= 2, "the pages are side by side: {cols} columns");
+    assert_eq!(caret_in_window(&mut h).0, 0);
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    assert_eq!(caret_in_window(&mut h).0, 2 * cols, "past the short page under it, the caret goes on down its column");
+}
+
+/// #5680: at a zoom where the page is wider than the window, with the view scrolled sideways
+/// past the caret, Page Down shows the caret, as any caret move does. It used to keep the view's
+/// sideways scroll, so the caret stayed out of sight.
+#[test]
+fn page_down_shows_a_caret_scrolled_out_sideways() {
+    let mut h = paging_window("view.zoom100");
+    h.state_mut().run("view.zoom", json!({"value": 300})).unwrap();
+    steps(&mut h, 4);
+    h.state_mut().canvas.scroll_request = Some(egui::vec2(900.0, 0.0));
+    steps(&mut h, 4);
+    let caret_x = |h: &mut H| crate::canvas::caret_screen(h.state_mut()).expect("the caret on screen").0.x;
+    let window = h.state().canvas.viewport.expect("viewport");
+    let before = caret_x(&mut h);
+    assert!(before < window.left(), "the caret starts left of the window: {before} < {}", window.left());
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    // The view glides to the caret over a few frames.
+    steps(&mut h, 30);
+    let window = h.state().canvas.viewport.expect("viewport");
+    let after = caret_x(&mut h);
+    assert!((window.left()..=window.right()).contains(&after), "the caret is in the window after Page Down: {after} in {window:?}");
+}
+
 /// #5680: Shift+Page Down at 100% selects one screen down, not a whole page: the anchor stays at
 /// the start, and the view scrolls one screen with the selection's end, which keeps its place in
 /// the window.
