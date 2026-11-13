@@ -1,3 +1,4 @@
+mod attached_template;
 #[cfg(unix)]
 mod closed_stdout;
 mod convert_fields;
