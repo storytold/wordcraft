@@ -151,9 +151,63 @@ impl WordApp {
         }
     }
 
+    /// A context menu can be the first UI surface showing document-script text. Install
+    /// its message, suggestions and synonyms before painting them; egui applies new fonts
+    /// on the next pass, so the opening pass must defer the menu contents.
+    pub(crate) fn prepare_context_menu_fonts(&mut self, ctx: &egui::Context) -> bool {
+        let mut text = String::new();
+        if let Some(issue) = &self.canvas.context_issue {
+            if let Some(message) = issue.get("message").and_then(serde_json::Value::as_str) {
+                text.push_str(tl!(message));
+            }
+            if let Some(suggestions) = issue.get("suggestions").and_then(serde_json::Value::as_array) {
+                for suggestion in suggestions.iter().filter_map(serde_json::Value::as_str) {
+                    text.push_str(suggestion);
+                }
+            }
+        }
+        if let Some(synonyms) = self.canvas.context_synonyms.as_ref().and_then(serde_json::Value::as_array) {
+            for synonym in synonyms.iter().filter_map(serde_json::Value::as_str) {
+                text.push_str(synonym);
+            }
+        }
+        let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
+            wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+        });
+        let needs_cjk = !self.fonts_system_cjk && text.chars().any(wordcraft_fonts::is_cjk);
+        if new.is_empty() && !needs_cjk {
+            return true;
+        }
+        self.canvas.ime_faces.extend(new);
+        self.want_system_cjk |= needs_cjk;
+        self.styled = false;
+        self.install_ui_fonts(ctx, i18n::Lang::from_pref(&self.ui.language));
+        ctx.request_repaint();
+        false
+    }
+
     /// Install the interface fonts when the language, the CJK fallback, or a caption fallback
     /// face has changed since the last install.
     pub(super) fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
+        // Proofing context and suggestions can use a script the interface fonts lack.
+        // Borrow faces only while that text is shown; ordinary Latin windows stay lazy.
+        let db = wordcraft_fonts::FontDb::global();
+        if let Some(form) = self.spelling_review.as_mut()
+            && form.fonts_stale(db.generation())
+        {
+            let text = form.content_text().concat();
+            if text.chars().any(wordcraft_fonts::is_cjk) {
+                self.want_system_cjk = true;
+            }
+            let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
+                wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+            });
+            if !new.is_empty() {
+                self.canvas.ime_faces.extend(new);
+                self.styled = false;
+            }
+            form.fonts_ready(db.generation());
+        }
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
         // An Arabic interface, or a screen that shows Arabic names (language picker / packs) in
         // another interface language, asks for an installed Arabic font when none is embedded.

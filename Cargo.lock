@@ -1079,6 +1079,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-khmer"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=bef543b3731e624f963572e8c11b9545faf136f8#bef543b3731e624f963572e8c11b9545faf136f8"
+dependencies = [
+ "brotli",
+ "brotli-decompressor",
+ "crc32fast",
+ "regex",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "craft-pdf"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=6e03f65bf45181db77ba6229716e6624db9eb25b#6e03f65bf45181db77ba6229716e6624db9eb25b"
@@ -1104,8 +1117,9 @@ dependencies = [
 [[package]]
 name = "craft-proof"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=01315d9c92b5b0e69082d35ca56099461a1efd45#01315d9c92b5b0e69082d35ca56099461a1efd45"
+source = "git+https://github.com/storytold/craft-libs?rev=bef543b3731e624f963572e8c11b9545faf136f8#bef543b3731e624f963572e8c11b9545faf136f8"
 dependencies = [
+ "craft-khmer",
  "log",
  "miniz_oxide 0.9.1",
  "toml",
@@ -4788,6 +4802,8 @@ version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
+ "foldhash 0.2.0",
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -6870,6 +6886,7 @@ name = "wordcraft-doc"
 version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
+ "craft-khmer",
  "log",
  "proptest",
  "serde",

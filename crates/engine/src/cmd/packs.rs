@@ -195,6 +195,20 @@ mod tests {
         }
 
         #[test]
+        fn khmer_status_matches_the_optional_compiled_model() {
+            with_backend(FixedBackend::sample(), |s, _| {
+                for tag in ["km-KH", "km", "khm"] {
+                    mark(s, 0, tag);
+                    let rows = packs::your_languages_with(s, None, &none);
+                    let km = row(&rows, tag);
+                    let expected = if wordcraft_proof::khmer::data_available() { Proofing::BuiltIn } else { Proofing::NotAvailable };
+                    assert_eq!(km.proofing, expected, "{tag}");
+                    assert!(!km.installed && km.pack.is_none(), "the compiled model is not a downloadable Hunspell pack");
+                }
+            });
+        }
+
+        #[test]
         fn an_installed_pack_is_a_row_with_remove() {
             with_backend(FixedBackend::sample(), |s, b| {
                 b.network.store(true, Ordering::Relaxed);

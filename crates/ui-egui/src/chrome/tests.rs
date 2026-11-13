@@ -517,3 +517,80 @@ fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
     assert_eq!(autosave_knob_x(true, true, track), 108.0, "right to left, on: left");
     assert_eq!(autosave_knob_x(true, false, track), 122.0, "right to left, off: right");
 }
+
+/// A selection larger than the paragraph memo limit must not be segmented on
+/// every repaint. Edits, selection movement, the status bar's unit and
+/// document/window changes recount.
+#[test]
+fn selected_word_count_reuses_large_text_and_invalidates_on_changes() {
+    use wordcraft_doc::{Document, Pos};
+    let words = crate::StatusCount::Words;
+    // Document-only combining marks must not be scanned as interface symbols.
+    let text = "ខ\u{17d2}ញុំស\u{17d2}រឡាញ\u{17cb}ភាសាខ\u{17d2}មែរ ".repeat(1200);
+    assert!(text.len() > 64 * 1024);
+    let mut a = WordApp::new(wordcraft_engine::Session::new(Document::from_text(&text)), crate::Services::default());
+    a.run("select.all", json!({})).unwrap();
+    let ctx = ctx();
+    for frame in 0..3 {
+        let input = egui::RawInput {
+            time: Some(frame as f64 / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| status_bar(&mut a, ui)).drop_without_applying_deltas();
+    }
+    let n = a.selected_word_count.get(&a.session, words);
+    assert!(n > 0);
+    for _ in 0..3 {
+        assert_eq!(a.selected_word_count.get(&a.session, words), n);
+    }
+    assert_eq!(a.selected_word_count.computations, 1, "unchanged frames do not extract or segment the selection");
+    a.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, "ខ\u{17d2}ញុំ".len())})).unwrap();
+    assert_eq!(a.selected_word_count.get(&a.session, words), 1);
+    assert_eq!(a.selected_word_count.computations, 2, "selection movement recounts without an edit");
+    a.run("text.insert", json!({"text": "Hello world"})).unwrap();
+    a.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, "Hello world".len())})).unwrap();
+    assert_eq!(a.selected_word_count.get(&a.session, words), 2);
+    a.run("edit.undo", json!({})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    assert_eq!(a.selected_word_count.get(&a.session, words), n);
+    a.run("document.setText", json!({"text": "one two three"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    assert_eq!(a.selected_word_count.get(&a.session, words), 3, "body replacement cannot reuse a stale count");
+    let rev = a.session.rev();
+    a.session.column = Some(wordcraft_engine::ColumnBlock {
+        sel: a.session.sel.clone(),
+        anchor_x: 0.0,
+        focus_x: 50.0,
+        segments: vec![(Pos::body(0, 0), Pos::body(0, 3))],
+        cells: None,
+    });
+    assert_eq!(a.selected_word_count.get(&a.session, words), 1, "column pieces change the selected text with the same corners");
+    a.session.column.as_mut().unwrap().segments = vec![(Pos::body(0, 0), Pos::body(0, 7))];
+    assert_eq!(a.selected_word_count.get(&a.session, words), 2);
+    assert_eq!(a.session.rev(), rev, "column selection is not a document edit");
+    a.session.column = None;
+    assert_eq!(a.selected_word_count.get(&a.session, words), 3);
+    let first = a.session.document_id();
+    a.run("file.new", json!({})).unwrap();
+    assert_ne!(a.session.document_id(), first);
+    a.run("text.insert", json!({"text": "new document"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    assert_eq!(a.selected_word_count.get(&a.session, words), 2);
+    // Each window owns its cache, as it owns its word-count and selection state.
+    let mut parked = crate::window_ui::WindowUi::new(first);
+    a.swap_window(&mut parked);
+    assert!(a.selected_word_count.cached.is_none());
+    a.swap_window(&mut parked);
+    assert_eq!(a.selected_word_count.get(&a.session, words), 2);
+    let chars = a.selected_word_count.get(&a.session, crate::StatusCount::Characters);
+    assert_eq!(chars, "new document".chars().count(), "the status bar's unit is part of the key");
+    let computations = a.selected_word_count.computations;
+    assert_eq!(a.selected_word_count.get(&a.session, crate::StatusCount::Characters), chars);
+    assert_eq!(a.selected_word_count.computations, computations, "character counts are cached too");
+    assert_eq!(a.selected_word_count.get(&a.session, crate::StatusCount::CharactersNoSpaces), 11);
+    assert_eq!(a.selected_word_count.computations, computations + 1, "changing the unit recounts the same selection");
+    assert_eq!(a.selected_word_count.get(&a.session, crate::StatusCount::CharactersNoSpaces), 11);
+    assert_eq!(a.selected_word_count.computations, computations + 1, "no-spaces counts are cached too");
+    assert_eq!(a.selected_word_count.get(&a.session, words), 2, "returning to words cannot reuse the character count");
+}

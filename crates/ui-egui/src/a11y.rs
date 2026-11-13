@@ -51,11 +51,12 @@ struct Key {
     pages: (usize, usize),
     rects: Vec<Rect>,
     sel: (Pos, Pos),
+    line_end: Option<Pos>,
 }
 
 impl Key {
     /// Compares two AccessKit cache keys: layout identity, document id, table-preview flag, page range,
-    /// page rectangles and selection.
+    /// page rectangles, selection and visual wrap side.
     fn same(&self, o: &Key) -> bool {
         Arc::ptr_eq(&self.layout, &o.layout)
             && self.doc == o.doc
@@ -63,6 +64,7 @@ impl Key {
             && self.pages == o.pages
             && self.rects == o.rects
             && self.sel == o.sel
+            && self.line_end == o.line_end
     }
 }
 
@@ -136,11 +138,12 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
         pages,
         rects: rects.get(pages.0..pages.1).unwrap_or_default().to_vec(),
         sel,
+        line_end: preview.is_none().then(|| app.session.line_end.clone()).flatten(),
     };
     if !app.canvas.a11y.key.as_ref().is_some_and(|k| k.same(&key)) {
         // Build before writing the cache: the preview document borrows `app`, and the tree is
         // owned, so the borrow ends with this statement.
-        let tree = build(crate::canvas::page_doc(app), layout, doc_id, rects, pages, (&key.sel.0, &key.sel.1));
+        let tree = build_with_affinity(crate::canvas::page_doc(app), layout, doc_id, rects, pages, (&key.sel.0, &key.sel.1), key.line_end.as_ref());
         app.canvas.a11y.tree = tree;
         app.canvas.a11y.key = Some(key);
     }
@@ -168,8 +171,30 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
 }
 
 /// Build the description of pages `pages.0..pages.1`.
+#[cfg(test)]
 pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pages: (usize, usize), sel: (&Pos, &Pos)) -> Tree {
-    let mut b = Builder { doc, doc_id, tree: Tree::default(), index: HashMap::new(), lists: HashMap::new(), offsets: HashMap::new() };
+    build_with_affinity(doc, layout, doc_id, rects, pages, sel, None)
+}
+
+/// Describe the same visual side of a dictionary wrap as the active canvas caret.
+fn build_with_affinity(
+    doc: &Document,
+    layout: &DocLayout,
+    doc_id: Id,
+    rects: &[Rect],
+    pages: (usize, usize),
+    sel: (&Pos, &Pos),
+    line_end: Option<&Pos>,
+) -> Tree {
+    let mut b = Builder {
+        doc,
+        doc_id,
+        tree: Tree::default(),
+        index: HashMap::new(),
+        lists: HashMap::new(),
+        offsets: HashMap::new(),
+        upstream: HashMap::new(),
+    };
     for pi in pages.0..pages.1 {
         let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { continue };
         let scale = crate::canvas::page_screen_scale(*pr, page, 1.0);
@@ -193,7 +218,12 @@ pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pag
             b.paragraph(path, para, *l0..*l1, &place, &pictures);
         }
     }
-    let at = |p: &Pos| if p.story == StoryRef::Body { b.position(&p.path, p.off) } else { None };
+    let at = |p: &Pos| {
+        if p.story != StoryRef::Body {
+            return None;
+        }
+        line_end.filter(|end| *end == p).and_then(|_| b.upstream.get(&(p.path.0.clone(), p.off)).copied()).or_else(|| b.position(&p.path, p.off))
+    };
     b.tree.selection = match (at(sel.0), at(sel.1)) {
         (Some(anchor), Some(focus)) => Some(TextSelection { anchor, focus }),
         (None, Some(focus)) => Some(TextSelection { anchor: focus, focus }),
@@ -228,6 +258,8 @@ struct Builder<'a> {
     lists: HashMap<Id, (Id, usize)>,
     /// Per paragraph: (byte offset, text run, character index) of each cluster, in text order.
     offsets: HashMap<Vec<u32>, Vec<(usize, Id, usize)>>,
+    /// The preceding line's end at each described Khmer dictionary wrap.
+    upstream: HashMap<(Vec<u32>, usize), TextPosition>,
 }
 
 /// One text run being gathered.
@@ -452,6 +484,12 @@ impl Builder<'_> {
             }
             // Offsets that fell into an empty last segment point at the end of the last run.
             let end = lb.prev;
+            if para.wraps_into(li, line.stop)
+                && let Some((seg, idx)) = end
+            {
+                self.upstream
+                    .insert((path.0.clone(), line.stop), TextPosition { node: pid.with(("run", li, seg)).accesskit_id(), character_index: idx });
+            }
             let entries = self.offsets.entry(path.0.clone()).or_default();
             for (off, seg, idx) in lb.map {
                 let (seg, idx) = if seg >= lb.seg { end.unwrap_or((seg, idx)) } else { (seg, idx) };
@@ -584,6 +622,34 @@ fn bounds(r: Rect) -> accesskit::Rect {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn accesskit_selection_tracks_the_visible_dictionary_wrap_side() {
+        if !wordcraft_engine::proof::khmer::data_available() {
+            return;
+        }
+        let doc =
+            Document::from_text(&"សិស\u{17d2}សានុសិស\u{17d2}សត\u{17d2}រូវបានលើកទឹកចិត\u{17d2}តឱ\u{17d2}យអានសៀវភៅជារៀងរាល\u{17cb}ថ\u{17d2}ងៃ".repeat(12));
+        let mut session = wordcraft_engine::Session::new(doc);
+        let layout = session.layout();
+        let text = &session.doc.para_at(&Pos::body(0, 0)).unwrap().text;
+        let pos = text
+            .char_indices()
+            .find_map(|(off, _)| {
+                let p = Pos::body(0, off);
+                layout.caret_at_line_end(&p, 0).map(|_| p)
+            })
+            .unwrap();
+        let rects: Vec<_> = layout.pages.iter().map(|p| Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(p.w, p.h))).collect();
+        let id = Id::unique("wrap-side");
+        let start = build(&session.doc, &layout, id, &rects, (0, rects.len()), (&pos, &pos));
+        let end = build_with_affinity(&session.doc, &layout, id, &rects, (0, rects.len()), (&pos, &pos), Some(&pos));
+        let (a, b) = (start.selection.unwrap().focus, end.selection.unwrap().focus);
+        assert_ne!(a.node, b.node, "same text offset is described on different lines");
+        let top = |tree: &Tree, node| tree.nodes.iter().find(|(id, _)| id.accesskit_id() == node).unwrap().1.bounds().unwrap().y0;
+        assert!(top(&end, b.node) < top(&start, a.node));
+        assert_eq!(end.selection.unwrap().anchor, b);
+    }
 
     /// What AccessKit is told about `app` after a few frames in `ctx`, with AccessKit on.
     fn described(app: &mut crate::WordApp, ctx: &egui::Context) -> accesskit::TreeUpdate {

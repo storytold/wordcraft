@@ -1,0 +1,92 @@
+{
+  "method": "15 rotating-order fresh processes each; 24 fixed pure-Khmer cases (12 from each author), 100 rounds; 5 maxRSS samples; same compiler/profile/wrapper. Calls use exact segmentation modules only, not full app or all PR3110 features.",
+  "summary": {
+    "aksara": {
+      "cold_us": {
+        "median": 16146,
+        "min": 13830,
+        "max": 24960
+      },
+      "warm_us": {
+        "median": 14132,
+        "min": 12105,
+        "max": 19667
+      },
+      "rss_bytes_median": 10846208,
+      "warm_calls": 2400
+    },
+    "custom": {
+      "cold_us": {
+        "median": 7549,
+        "min": 6546,
+        "max": 9168
+      },
+      "warm_us": {
+        "median": 2781,
+        "min": 2529,
+        "max": 9352
+      },
+      "rss_bytes_median": 7389184,
+      "warm_calls": 2400
+    },
+    "icu": {
+      "cold_us": {
+        "median": 19,
+        "min": 17,
+        "max": 2279
+      },
+      "warm_us": {
+        "median": 1542,
+        "min": 1517,
+        "max": 3773
+      },
+      "rss_bytes_median": 2473984,
+      "warm_calls": 2400
+    },
+    "fourth": {
+      "cold_us": {
+        "median": 15286,
+        "min": 13992,
+        "max": 20362
+      },
+      "warm_us": {
+        "median": 10742,
+        "min": 10038,
+        "max": 14200
+      },
+      "rss_bytes_median": 10846208,
+      "warm_calls": 2400
+    }
+  },
+  "standalone_sizes": {
+    "baseline": {
+      "executable": 440544,
+      "zip": 198839
+    },
+    "aksara": {
+      "executable": 1054288,
+      "zip": 700745,
+      "executable_delta_from_empty": 613744,
+      "zip_delta_from_empty": 501906
+    },
+    "custom": {
+      "executable": 754912,
+      "zip": 512470,
+      "executable_delta_from_empty": 314368,
+      "zip_delta_from_empty": 313631
+    },
+    "icu": {
+      "executable": 2290960,
+      "zip": 1102633,
+      "executable_delta_from_empty": 1850416,
+      "zip_delta_from_empty": 903794
+    },
+    "fourth": {
+      "executable": 1054256,
+      "zip": 700916,
+      "executable_delta_from_empty": 613712,
+      "zip_delta_from_empty": 502077
+    }
+  },
+  "custom_dictionary_bytes": 289054
+}

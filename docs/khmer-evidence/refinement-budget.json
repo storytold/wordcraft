@@ -1,0 +1,12 @@
+{
+  "scope": "Bounded refinement compared with the previous candidate (6be86aa); preservation checks, not linguistic accuracy or app typing latency.",
+  "dictionary_comparisons_per_segmentation": 160000,
+  "exhaustion_policy": "Keep the original model span; reuse completed cached answers.",
+  "public_records": 34104,
+  "public_changed_records": 0,
+  "private_paragraphs": 3331,
+  "private_changed_with_authored_boundaries": 0,
+  "private_changed_without_zwsp": 2,
+  "prior_extra_refinement_breaks_suppressed_without_zwsp": 2,
+  "private_text_included": false
+}

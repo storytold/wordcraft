@@ -99,6 +99,7 @@ pub(super) fn hyphenation_points(
                     if let Some(w) = text.get(a..i)
                         && w.chars().count() >= lim.min_word
                         && !w.chars().any(wordcraft_fonts::is_rtl)
+                        && !w.chars().any(|c| ('\u{1780}'..='\u{17ff}').contains(&c))
                         && !wordcraft_proof::vi::is_vietnamese_word(w)
                         && (caps || !all_caps(w))
                     {
