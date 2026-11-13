@@ -15444,3 +15444,18 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
     }
 }
+
+/// The caret after a page break that ends a paragraph is drawn at the top of the next page,
+/// where text typed there appears (#4247).
+#[test]
+fn caret_after_trailing_page_break_is_on_next_page() {
+    let mut d = Document::from_text("one");
+    d.insert_text(&Pos::body(0, 3), "\u{000C}", &Default::default()).unwrap();
+    let l = lay(&d);
+    let c = l.caret(&Pos::body(0, 4)).unwrap();
+    let mut d2 = d.clone();
+    d2.insert_text(&Pos::body(0, 4), "x", &Default::default()).unwrap();
+    let typed = lay(&d2).caret(&Pos::body(0, 4)).unwrap();
+    assert_eq!((c.page, typed.page), (1, 1), "{c:?} {typed:?}");
+    assert!((c.x - typed.x).abs() < 0.5 && (c.top - typed.top).abs() < 0.5, "{c:?} {typed:?}");
+}
