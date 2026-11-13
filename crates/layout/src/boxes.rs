@@ -23,6 +23,16 @@ pub(crate) enum BoxContext<'a> {
     },
 }
 
+/// The styles of the paragraphs just before and just after a box's own in document order.
+/// Word's contextual spacing looks across cell edges: a cell's first paragraph is beside the
+/// last one of the cell before it, and its last paragraph beside the first one of the cell after
+/// it (`beside_cell` in `table.rs`).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Around<'a> {
+    pub(crate) before: Option<&'a str>,
+    pub(crate) after: Option<&'a str>,
+}
+
 pub(crate) struct BoxInput<'a> {
     pub(crate) story: StoryRef,
     pub(crate) blocks: &'a Blocks,
@@ -31,15 +41,25 @@ pub(crate) struct BoxInput<'a> {
     pub(crate) context: BoxContext<'a>,
     pub(crate) depth: usize,
     pub(crate) frame: Option<PageFrame<'a>>,
+    pub(crate) around: Around<'a>,
 }
 
 impl<'a> BoxInput<'a> {
     pub(crate) fn other(story: StoryRef, blocks: &'a Blocks, width: f32, depth: usize, frame: Option<PageFrame<'a>>) -> Self {
-        Self { story, blocks, prefix: &[], width, context: BoxContext::Other, depth, frame }
+        Self { story, blocks, prefix: &[], width, context: BoxContext::Other, depth, frame, around: Around::default() }
     }
 
     pub(crate) fn cell(story: StoryRef, blocks: &'a Blocks, prefix: &'a [u32], width: f32, cell: Option<&'a para::CellText>, depth: usize) -> Self {
-        Self { story, blocks, prefix, width, context: BoxContext::Cell { text: cell, left: 0.0, right: width, clamp: false }, depth, frame: None }
+        Self {
+            story,
+            blocks,
+            prefix,
+            width,
+            context: BoxContext::Cell { text: cell, left: 0.0, right: width, clamp: false },
+            depth,
+            frame: None,
+            around: Around::default(),
+        }
     }
 }
 
@@ -156,7 +176,15 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     {
         return false;
     }
-    let layout = table::layout_table(ctx, story, t, path, width, depth + 1);
+    let above = previous_style.as_ref().filter(|_| t.props.float.is_none());
+    // The paragraph above is beside the table's first one: with contextual spacing its space
+    // after goes before a paragraph of its own style, as between two paragraphs.
+    if let Some((style, true)) = above
+        && table::first_style(ctx.doc, t) == Some(style.as_str())
+    {
+        *y -= *previous_after;
+    }
+    let layout = table::layout_table(ctx, story, t, path, width, depth + 1, above.map(|(style, _)| style.as_str()));
     let (tx, ty) = match t.props.float {
         Some(float) => {
             let legacy = (ctx.doc.settings.compat_mode < 15).then(|| table::first_cell_left_margin(ctx, t));
@@ -183,7 +211,8 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     if t.props.float.is_none() {
         *y = row_y;
         *previous_after = 0.0;
-        *previous_style = None;
+        // The mark ending the table's last row is the paragraph above what follows.
+        *previous_style = Some((table::ROW_END_STYLE.into(), false));
     }
     true
 }
@@ -193,7 +222,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
 /// says where the box sits on its page, for floating objects positioned relative to the page or
 /// its margins; without it (cells, notes, text boxes) they're positioned in the box.
 pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
-    let BoxInput { story, blocks, prefix, width, context, depth, frame } = input;
+    let BoxInput { story, blocks, prefix, width, context, depth, frame, around } = input;
     // Deletions in balloons leave the body's text only: a header, note or text box keeps its own
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
@@ -223,7 +252,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let mut prev_after = 0.0f32;
     let mut prev_after_auto = false;
     let mut prev_listed = false;
-    let mut prev_style: Option<(String, bool)> = None;
+    let mut prev_style: Option<(String, bool)> = around.before.map(|style| (style.into(), false));
     let mut last_top = 0.0f32;
     // Word has no frames in a text box: a framed paragraph there (its style's frame, usually)
     // runs with the box's text (#2357).
@@ -257,10 +286,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     float_tables.push(r);
                     continue;
                 }
+                let style = table::known_style(ctx.doc, &pl.rp.style).to_string();
                 let (ctxl, before) = paragraph_spacing(ParagraphSpacing {
                     index: i,
                     listed,
-                    style: &pl.rp.style,
+                    style: &style,
                     contextual: pl.rp.contextual_spacing,
                     before_auto: pl.rp.before_auto,
                     space_before: pl.rp.space_before,
@@ -367,16 +397,15 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     items.extend(front);
                 }
                 // Automatic space after: none after the last paragraph of a cell or box. Nor
-                // contextual spacing after a cell's last paragraph in the default style (or an
-                // undefined one, formatted as Normal): the end-of-cell mark is a Normal paragraph.
+                // contextual spacing after a cell's last paragraph when the paragraph after the
+                // cell is in its style.
                 let last = i + 1 == blocks.len();
-                let normal = || pl.rp.style == "Normal" || ctx.doc.styles.get(&pl.rp.style).is_none();
-                let after = if last && (pl.rp.after_auto || (in_cell && ctxl && normal())) { 0.0 } else { pl.rp.space_after };
+                let after = if last && (pl.rp.after_auto || (ctxl && around.after == Some(style.as_str()))) { 0.0 } else { pl.rp.space_after };
                 y += edges.top + pl.height + edges.bottom + after;
                 prev_after = after;
                 prev_after_auto = pl.rp.after_auto;
                 prev_listed = listed;
-                prev_style = Some((pl.rp.style.clone(), ctxl));
+                prev_style = Some((style, ctxl));
             }
             Block::Table(t) => {
                 if !layout_table_block(TableBlockContext {
