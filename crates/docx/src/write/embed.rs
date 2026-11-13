@@ -54,6 +54,7 @@ pub(crate) struct EmbedWriter<'d> {
 }
 
 impl<'d> EmbedWriter<'d> {
+    /// Creates a new embedded parts writer initialized with default reserved package part paths.
     pub fn new(doc: &'d wordcraft_doc::Document) -> EmbedWriter<'d> {
         let manifest = doc.passthrough.get(EMBEDDED_PARTS).map(|m| EmbeddedManifest::parse(m)).unwrap_or_default();
         let mut taken: HashSet<String> = [
@@ -77,6 +78,10 @@ impl<'d> EmbedWriter<'d> {
         // The bibliography writer uses these names when sources are present (#532).
         if !doc.sources.is_empty() {
             taken.extend(["customxml/item1.xml".into(), "customxml/itemprops1.xml".into()]);
+        }
+        // The Fit One Page store is written at this path on save. A kept part must not take it.
+        if doc.fit_state.is_some() {
+            taken.insert(crate::fit::PART.to_ascii_lowercase());
         }
         // The macro project's parts keep their names (see `write_as`).
         if let Some(m) = doc.passthrough.get(VBA_RELATED) {
