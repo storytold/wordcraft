@@ -492,19 +492,55 @@ impl Paragraph {
         self.touch();
     }
 
+    fn invisible_marker_offsets(&self) -> Vec<usize> {
+        // Ordinary paragraphs need no text scan or allocation for marker-aware word moves.
+        if !self.objects.iter().any(InlineObject::is_invisible_marker) {
+            return Vec::new();
+        }
+        self.objects_with_offsets().filter(|(_, object)| object.is_invisible_marker()).map(|(offset, _)| offset).collect()
+    }
+
+    /// Cross consecutive invisible markers immediately before the offset.
+    pub fn before_invisible_markers(&self, offset: usize) -> usize {
+        let mut offset = self.clamp(offset);
+        if self.text.get(..offset).and_then(|t| t.chars().next_back()) != Some(OBJ) {
+            return offset;
+        }
+        let markers = self.invisible_marker_offsets();
+        while let Some(previous) = offset.checked_sub(OBJ.len_utf8())
+            && markers.binary_search(&previous).is_ok()
+        {
+            offset = previous;
+        }
+        offset
+    }
+
+    /// Cross consecutive invisible markers immediately after the offset.
+    pub fn after_invisible_markers(&self, offset: usize) -> usize {
+        let mut offset = self.clamp(offset);
+        if self.text.get(offset..).and_then(|t| t.chars().next()) != Some(OBJ) {
+            return offset;
+        }
+        let markers = self.invisible_marker_offsets();
+        while markers.binary_search(&offset).is_ok() {
+            offset += OBJ.len_utf8();
+        }
+        offset
+    }
+
     /// Previous caret stop before `off` (0 at start): a grapheme boundary that doesn't split a
-    /// complex-script syllable ([`crate::cluster`]).
+    /// complex-script syllable ([`crate::cluster`]); invisible range markers take no stop.
     pub fn prev_boundary(&self, off: usize) -> usize {
-        crate::cluster::prev_cluster(&self.text, self.clamp(off))
+        crate::cluster::prev_cluster(&self.text, self.before_invisible_markers(off))
     }
     /// Next caret stop after `off` (len at end), see [`Self::prev_boundary`].
     pub fn next_boundary(&self, off: usize) -> usize {
-        crate::cluster::next_cluster(&self.text, self.clamp(off))
+        crate::cluster::next_cluster(&self.text, self.after_invisible_markers(off))
     }
     /// Where Backspace at `off` deletes from: one Arabic combining mark or one character in the
     /// Brahmic scripts (Myanmar, Khmer, Devanagari, Thai…), otherwise the previous caret stop.
     pub fn backspace_from(&self, off: usize) -> usize {
-        let off = self.clamp(off);
+        let off = self.before_invisible_markers(off);
         match self.text.get(..off).and_then(|t| t.char_indices().next_back()) {
             Some((i, c)) if crate::cluster::backspaces_by_char(c) => i,
             _ => self.prev_boundary(off),
@@ -516,7 +552,8 @@ impl Paragraph {
         let Some(before) = self.text.get(..off) else { return 0 };
         let mut idx = off;
         let mut seen_word = false;
-        for (i, c) in before.char_indices().rev() {
+        let markers = self.invisible_marker_offsets();
+        for (i, c) in before.char_indices().rev().filter(|(offset, _)| markers.binary_search(offset).is_err()) {
             let w = crate::bidi::is_word_char(c);
             if w {
                 seen_word = true;
@@ -527,28 +564,36 @@ impl Paragraph {
                 idx = i;
             }
         }
-        idx
+        self.after_invisible_markers(idx)
     }
     /// End of the word after `off`, including trailing spaces (Ctrl+Right, like Word).
     pub fn word_end(&self, off: usize) -> usize {
         let off = self.clamp(off);
         let Some(after) = self.text.get(off..) else { return self.text.len() };
-        let it = after.char_indices().peekable();
+        let markers = self.invisible_marker_offsets();
+        let mut characters = after.char_indices().filter(|(offset, _)| markers.binary_search(&(off + offset)).is_err()).peekable();
         let mut end = self.text.len();
-        let first_word = after.chars().next().is_some_and(|c| crate::bidi::is_word_char(c) && c != '\'');
+        let first_word = characters.peek().is_some_and(|(_, c)| crate::bidi::is_word_char(*c) && *c != '\'');
         let mut in_space = false;
-        for (i, c) in it {
+        let mut previous_end = off;
+        for (index, (i, c)) in characters.enumerate() {
             let w = crate::bidi::is_word_char(c);
+            // A selection must stop before a word-edge marker, even before trailing spaces.
+            if index > 0 && off + i > previous_end && (in_space || !w) {
+                end = previous_end;
+                break;
+            }
+            previous_end = off + i + c.len_utf8();
             if c == ' ' || c == NBSP {
                 in_space = true;
                 continue;
             }
-            if in_space || (first_word && !w) || (!first_word && i > 0) {
-                end = off + i;
+            if in_space || (first_word && !w) || (!first_word && index > 0) {
+                end = self.before_invisible_markers(off + i);
                 break;
             }
         }
-        end
+        self.before_invisible_markers(end)
     }
     /// The word around `off` (double-click): (start, end) without trailing space.
     pub fn word_at(&self, off: usize) -> (usize, usize) {
@@ -620,6 +665,36 @@ impl Paragraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invisible_markers_before_punctuation_do_not_create_word_boundaries() {
+        let mut paragraph = Paragraph::with_text(", next", CharProps::default());
+        paragraph.insert_object(0, InlineObject::BookmarkStart { name: "mark".into() }, &CharProps::default()).unwrap();
+        assert_eq!(paragraph.word_end(0), 5);
+    }
+
+    #[test]
+    fn invisible_markers_are_skipped_at_hostile_and_cluster_offsets() {
+        let mut paragraph = Paragraph::with_text("aبَ", CharProps::default());
+        paragraph.insert_object(1, InlineObject::BookmarkStart { name: "mark".into() }, &CharProps::default()).unwrap();
+        paragraph.insert_object(4, InlineObject::CommentEnd { id: 1 }, &CharProps::default()).unwrap();
+        assert_eq!(paragraph.next_boundary(1), paragraph.len());
+        assert_eq!(paragraph.prev_boundary(7), 0);
+        assert_eq!(paragraph.backspace_from(paragraph.len()), paragraph.len() - 2);
+        for offset in [2, 3, 5, 6, 999, usize::MAX] {
+            for boundary in [paragraph.prev_boundary(offset), paragraph.next_boundary(offset), paragraph.backspace_from(offset)] {
+                assert!(paragraph.text.is_char_boundary(boundary));
+            }
+        }
+
+        // Fields and content controls still take a caret stop.
+        for object in [InlineObject::ControlStart { control: Box::default() }, InlineObject::FieldEnd] {
+            let mut paragraph = Paragraph::with_text("ab", CharProps::default());
+            paragraph.insert_object(1, object, &CharProps::default()).unwrap();
+            assert_eq!(paragraph.next_boundary(1), 4);
+            assert_eq!(paragraph.prev_boundary(4), 1);
+        }
+    }
 
     #[test]
     fn sentence_at_sentence_start() {
