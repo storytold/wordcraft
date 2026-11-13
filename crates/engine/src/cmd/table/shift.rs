@@ -199,7 +199,8 @@ fn delete_left(s: &mut Session) -> CmdResult {
             return Err(failed_merged(s));
         }
     }
-    let prefixes: Vec<Vec<u32>> = pk.rows.iter().flat_map(|(&r, cs)| cs.iter().map(move |&c| cell_prefix(&pk.tp, r, c))).collect();
+    let tp = &pk.tp;
+    let prefixes: Vec<Vec<u32>> = pk.rows.iter().flat_map(|(&r, cs)| cs.iter().map(move |&c| cell_prefix(tp, r, c))).collect();
     let spans = text_spans(s, story, &prefixes);
     if let Some(done) = guard_delete(s, &spans)? {
         return Ok(done);
