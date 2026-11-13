@@ -237,3 +237,52 @@ fn tracked_shift_up_marks_the_text_deleted_and_keeps_the_cells() {
     run(&mut s, "review.rejectAll", json!({}));
     assert!(!cells_deleted(&s, &[(0, 1)]) && s.doc.revisions.is_empty());
 }
+
+#[test]
+fn rows_go_above_the_first_selected_row_and_below_the_last() {
+    // The caret ends a selection in its last cell: the rows still go above the first selected row.
+    for (id, params) in [("table.insertCells", json!({"shift": "row"})), ("table.insertRowAbove", json!({}))] {
+        let mut s = grid3();
+        select(&mut s, (0, 1), (0, 2));
+        run(&mut s, id, params);
+        assert_eq!(cells(&s), rows(&[&["", "", ""], &["", "", ""], &["A1", "B1", "C1"], &["A2", "B2", "C2"], &["A3", "B3", "C3"]]), "{id}");
+    }
+    let mut s = grid3();
+    select(&mut s, (0, 1), (0, 2));
+    run(&mut s, "table.insertRowBelow", json!({}));
+    assert_eq!(cells(&s), rows(&[&["A1", "B1", "C1"], &["A2", "B2", "C2"], &["", "", ""], &["", "", ""], &["A3", "B3", "C3"]]));
+}
+
+#[test]
+fn shifting_up_or_down_refuses_a_selection_that_isnt_a_rectangle() {
+    // A1:B1 merged across, then column B of rows 1–2 picked: row 1 gives up its whole merged
+    // cell (columns A and B), row 2 only B2. Shifting would move A2 too, which isn't selected.
+    for (id, shift) in [("table.deleteCells", "up"), ("table.insertCells", "down")] {
+        let mut s = grid3();
+        select(&mut s, (0, 0), (0, 1));
+        run(&mut s, "table.merge", json!({}));
+        select(&mut s, (0, 1), (1, 1));
+        let before = s.doc.clone();
+        assert!(s.run(id, &json!({"shift": shift})).is_err(), "{id} {shift}");
+        assert_eq!(s.doc, before, "{id} {shift} changed the document");
+        assert!(s.status.contains("rectangle"), "{id} {shift}: {}", s.status);
+    }
+}
+
+#[test]
+fn inserting_columns_past_the_limit_is_refused_and_changes_nothing() {
+    let mut s = filled_table(62, &["x"]);
+    select(&mut s, (0, 0), (0, 1));
+    let before = s.doc.clone();
+    assert!(s.run("table.insertCells", &json!({"shift": "column"})).is_err(), "two more columns would make 64");
+    assert_eq!(s.doc, before);
+    // At the limit Insert Left used to shrink every column for a column it never added.
+    let mut s = filled_table(63, &["x"]);
+    let before = s.doc.clone();
+    assert!(s.run("table.insertColumnLeft", &json!({})).is_err());
+    assert_eq!(s.doc, before);
+    // One more still fits at 62.
+    let mut s = filled_table(62, &["x"]);
+    run(&mut s, "table.insertCells", json!({"shift": "column"}));
+    assert_eq!(table(&s).unwrap().grid.len(), 63);
+}

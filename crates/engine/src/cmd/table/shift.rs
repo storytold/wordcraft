@@ -27,6 +27,8 @@ use super::{CmdError, CmdResult, Session, Value, p};
 
 /// The refusal when a shift would cut through a vertically merged cell or a content control.
 const MERGED: &str = "Cells can't be shifted there: a vertically merged cell or a content control is in the way.";
+/// The refusal when shifting up or down a selection whose rows cover different columns.
+const RAGGED: &str = "Cells can't be shifted up or down: the selected cells don't form a rectangle.";
 
 /// The selection as the shifts see it: the table, its selected cells row by row (cell indexes,
 /// ascending) and the grid columns `g0..=g1` they cover.
@@ -72,6 +74,17 @@ impl Picked {
     fn height(&self) -> usize {
         let bottom = self.rows.keys().next_back().copied().unwrap_or(0);
         bottom.saturating_sub(self.top()).saturating_add(1)
+    }
+
+    /// Whether the selected cells of every row cover exactly grid columns `g0..=g1`: a cell merged
+    /// across columns in one row doesn't widen what the other rows give up.
+    fn rectangular(&self, t: &Table) -> bool {
+        let width = self.g1.saturating_sub(self.g0).saturating_add(1);
+        self.rows.iter().all(|(&r, cs)| {
+            let row = t.rows.get(r);
+            let covered: usize = cs.iter().filter_map(|&c| row.and_then(|x| x.cells.get(c))).map(Cell::span).sum();
+            cs.first().is_some_and(|&c| t.grid_col(r, c) == self.g0) && covered == width
+        })
     }
 
     /// The first selected cell of the top row.
@@ -263,6 +276,9 @@ fn insert_down(s: &mut Session) -> CmdResult {
     if t.rows.len().saturating_add(n) > MAX_ROWS {
         return Err(CmdError::Failed(format!("a table can't have more than {MAX_ROWS} rows")));
     }
+    if !pk.rectangular(t) {
+        return Err(refuse(s, RAGGED));
+    }
     let Some(segs) = segments(t, top, pk.g0, pk.g1) else { return Err(failed_merged(s)) };
     let last = t.rows.len().saturating_sub(1);
     let mut parts: Vec<Vec<Cell>> = Vec::with_capacity(segs.len() + n);
@@ -297,6 +313,9 @@ fn delete_up(s: &mut Session) -> CmdResult {
     let (top, n) = (pk.top(), pk.height());
     let story = s.sel.focus.story;
     let t = s.doc.table(story, &pk.tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
+    if !pk.rectangular(t) {
+        return Err(refuse(s, RAGGED));
+    }
     let Some(segs) = segments(t, top, pk.g0, pk.g1) else { return Err(failed_merged(s)) };
     let prefixes: Vec<Vec<u32>> =
         segs.iter().take(n).enumerate().flat_map(|(i, seg)| seg.clone().map(move |c| (top + i, c))).map(|(r, c)| cell_prefix(&pk.tp, r, c)).collect();
@@ -326,6 +345,11 @@ fn delete_up(s: &mut Session) -> CmdResult {
 
 /// The refusal for a shift through merged cells, also shown on the status line.
 fn failed_merged(s: &mut Session) -> CmdError {
-    s.status = MERGED.to_string();
-    CmdError::Failed(MERGED.to_string())
+    refuse(s, MERGED)
+}
+
+/// Refuses with `msg`, also shown on the status line.
+fn refuse(s: &mut Session, msg: &str) -> CmdError {
+    s.status = msg.to_string();
+    CmdError::Failed(msg.to_string())
 }

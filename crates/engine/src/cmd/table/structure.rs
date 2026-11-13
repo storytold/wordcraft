@@ -4,16 +4,19 @@ use super::layout::{fix_caret, sync_cell_widths};
 use super::{Block, CmdError, CmdResult, Paragraph, Pos, Selection, Session, Value, json, p, sel_result};
 use wordcraft_doc::Path;
 
-/// Insert Above / Below: rows like the caret's, as many as the selection spans; the caret goes into the first.
+/// Insert Above / Below: as many rows as the selection spans, above its first row or below its
+/// last (the caret's row without a selection), each like that row; the caret goes into the first.
 pub(in crate::cmd) fn row(s: &mut Session, below: bool) -> CmdResult {
     let (tp, r, c) = cell(s)?;
-    let cells = selected_cells(s);
-    let n = cells.iter().map(|x| x.0).collect::<std::collections::BTreeSet<_>>().len().max(1);
+    let rows: std::collections::BTreeSet<usize> = selected_cells(s).into_iter().map(|x| x.0).collect();
+    let n = rows.len().max(1);
+    let like = if below { rows.last() } else { rows.first() }.copied().unwrap_or(r);
+    let at = if below { like + 1 } else { like };
     let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
     for _ in 0..n {
-        t.insert_row(if below { r + 1 } else { r }, r);
+        t.insert_row(at, like);
     }
-    fix_caret(s, &tp, if below { r + 1 } else { r }, c)
+    fix_caret(s, &tp, at, c)
 }
 
 /// Insert Left / Right: a column beside the caret's cell; the caret goes into it.
@@ -30,7 +33,11 @@ pub(in crate::cmd) fn col(s: &mut Session, right: bool) -> CmdResult {
 pub(super) fn insert_cols(s: &mut Session, g: usize, n: usize, caret: (usize, usize)) -> CmdResult {
     let (tp, _, _) = cell(s)?;
     let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
-    let n = n.clamp(1, wordcraft_doc::table::MAX_COLS.saturating_sub(t.grid.len()).max(1));
+    let n = n.max(1);
+    // All of them or none: a table already at the limit would otherwise shrink for nothing.
+    if t.grid.len().saturating_add(n) > wordcraft_doc::table::MAX_COLS {
+        return Err(CmdError::Failed(format!("a table can't have more than {} columns", wordcraft_doc::table::MAX_COLS)));
+    }
     for _ in 0..n {
         t.insert_col(g);
     }
