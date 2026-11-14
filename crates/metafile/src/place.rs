@@ -136,8 +136,14 @@ impl Picture {
             match item {
                 Item::Path { segs, fill, stroke, even_odd } => {
                     let path = tf * bez(segs);
-                    if in_range(path.bounding_box()) {
-                        let stroke = stroke.map(|(c, w)| (c, f64::from(w) * k));
+                    let bounds = path.bounding_box();
+                    if in_range(bounds) {
+                        // A pen wider than twice the distance across the frame and the path
+                        // already covers the whole frame: wider adds nothing the frame shows, only
+                        // work for the renderer flattening its round caps (the width is file data).
+                        let u = bounds.union(r);
+                        let widest = 2.0 * u.width().hypot(u.height());
+                        let stroke = stroke.map(|(c, w)| (c, (f64::from(w) * k).min(widest)));
                         out.push(PlacedItem::Path { path, fill: *fill, stroke, even_odd: *even_odd });
                     }
                 }
