@@ -199,6 +199,15 @@ fn iso_datetime(v: &str) -> Option<String> {
         Some((date, time)) => (date, Some(time)),
         None => (v, None),
     };
+    // A date alone may carry a zone (`Z` or `±hh:mm`), which is left out.
+    let date = match (time, date.strip_suffix('Z')) {
+        (None, Some(d)) => d,
+        (None, None) if date.len() > 6 && date.get(date.len() - 6..).is_some_and(|z| z.starts_with(['+', '-']) && z.get(3..4) == Some(":")) => {
+            chrono::NaiveTime::parse_from_str(date.get(date.len() - 5..)?, "%H:%M").ok()?;
+            date.get(..date.len() - 6)?
+        }
+        _ => date,
+    };
     let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
     let mut out = format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day());
     if let Some(time) = time {
@@ -221,7 +230,9 @@ fn clock_time(t: &str) -> Option<chrono::NaiveTime> {
         }
         None => t,
     };
-    chrono::NaiveTime::parse_from_str(t, "%H:%M:%S%.f").or_else(|_| chrono::NaiveTime::parse_from_str(t, "%H:%M")).ok()
+    let clock = chrono::NaiveTime::parse_from_str(t, "%H:%M:%S%.f").or_else(|_| chrono::NaiveTime::parse_from_str(t, "%H:%M")).ok()?;
+    // A leap second (`23:59:60`) is not a time a cell holds.
+    (chrono::Timelike::nanosecond(&clock) < 1_000_000_000).then_some(clock)
 }
 
 /// `hh:mm`, with `:ss` when the seconds aren't zero and their fraction when it isn't.
@@ -250,7 +261,14 @@ fn iso_time(v: &str) -> Option<String> {
     let Some(t) = t.strip_prefix('P') else {
         return if negative { None } else { clock_time(t).map(hh_mm) };
     };
-    let (days, t) = t.split_once('T').unwrap_or((t, ""));
+    let (days, t, has_t) = match t.split_once('T') {
+        Some((days, time)) => (days, time, true),
+        None => (t, "", false),
+    };
+    // A `T` needs a time after it.
+    if has_t && t.is_empty() {
+        return None;
+    }
     let mut any = !days.is_empty();
     let days: u64 = if days.is_empty() { 0 } else { days.strip_suffix('D')?.parse().ok()? };
     let (mut h, mut m, mut s) = (0u64, 0u64, 0u64);
@@ -368,6 +386,27 @@ mod tests {
         assert_eq!(iso_time("PT1H2M3S").as_deref(), Some("01:02:03"));
         assert_eq!(iso_time("PT1.S"), None);
         assert_eq!(iso_time("P1000000000000000000D"), None);
+    }
+
+    #[test]
+    fn a_date_alone_drops_its_zone() {
+        assert_eq!(iso_datetime("2024-03-05Z").as_deref(), Some("2024-03-05"));
+        assert_eq!(iso_datetime("2024-03-05+02:00").as_deref(), Some("2024-03-05"));
+        assert_eq!(iso_datetime("2024-03-05-05:00").as_deref(), Some("2024-03-05"));
+        assert_eq!(iso_datetime("2024-03-05+02:99"), None);
+    }
+
+    #[test]
+    fn a_leap_second_is_not_a_time() {
+        assert_eq!(iso_datetime("2024-03-05T23:59:60Z"), None);
+        assert_eq!(iso_time("23:59:60"), None);
+    }
+
+    #[test]
+    fn a_duration_with_t_needs_a_time() {
+        assert_eq!(iso_time("P1DT"), None);
+        assert_eq!(iso_time("P0DT"), None);
+        assert_eq!(iso_time("P1D").as_deref(), Some("24:00"));
         assert_eq!(iso_time("PT.S"), None);
         assert_eq!(iso_time("13:45:00Z").as_deref(), Some("13:45"));
         assert_eq!(iso_time("-PT1H").as_deref(), Some("-01:00"));
