@@ -321,8 +321,9 @@ impl<'a> Shaped<'a> {
         match c {
             '\t' => self.push(slot, ClKind::Tab, 0.0, 0.0),
             LINE_BREAK | '\r' => self.push(slot, ClKind::LineBreak, 0.0, 0.0),
-            // Word ignores explicit page breaks in cells, preserving their source offsets.
-            PAGE_BREAK if cx.env.table.is_some() => self.push(slot, ClKind::Marker, 0.0, 0.0),
+            // Word ignores explicit page and column breaks in cells, preserving their source
+            // offsets: the text goes on in the same line.
+            PAGE_BREAK | COLUMN_BREAK if cx.env.table.is_some() => self.push(slot, ClKind::Marker, 0.0, 0.0),
             PAGE_BREAK => self.push(slot, ClKind::PageBreak, 0.0, 0.0),
             COLUMN_BREAK => self.push(slot, ClKind::ColumnBreak, 0.0, 0.0),
             _ => {
@@ -532,6 +533,13 @@ fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &Resol
 
 /// The list label, shaped; none on a paragraph containing only a page break: Word hides it there.
 /// The list counter has already advanced, so the following item keeps its number.
+///
+/// In a table cell, where Word ignores page and column breaks, a paragraph that opens with one
+/// is shown without its label from Word 2013's layout on: nothing is drawn and the line is no
+/// taller for it, but the text starts where it would after the label and the count goes on
+/// (measured in Word for Windows: bullets and numbers, a table inside a cell, a centred
+/// paragraph, a tab after the break; a space before the break, a text box and the layout
+/// before Word 2013 keep the label). The label is kept as its room alone then.
 fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
     let (p, rp) = (cx.p, cx.rp);
     let break_only =
@@ -572,6 +580,12 @@ fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
             _ => runs.push(LabelRun { style: c.style, glyphs: g0..glyphs.len(), text: chars }),
         }
         x += c.adv;
+    }
+    let hidden = cx.env.table.is_some()
+        && cx.env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT
+        && p.text.starts_with([PAGE_BREAK, COLUMN_BREAK]);
+    if hidden {
+        return Some(Label { text: String::new(), ascent: 0.0, style, glyphs: Vec::new(), runs: Vec::new(), x: 0.0, width: x });
     }
     Some(Label { text: shown(text), ascent, style, glyphs, runs, x: 0.0, width: x })
 }
