@@ -115,6 +115,59 @@ pub(super) fn all_issues(s: &mut Session, _: &Value) -> CmdResult {
     Ok(Value::Array(out))
 }
 
+/// The spelling issue under the caret and the word it marks. Grammar issues are phrases, so
+/// "every occurrence" only means something for spelling — which is also where Word offers
+/// Change All (`docs/spelling-review.md`).
+fn spelling_at_caret(s: &Session) -> Option<(Pos, Pos, String)> {
+    let (a, b, i) = issue_at(s, &s.sel.focus)?;
+    if i.kind != wordcraft_proof::IssueKind::Spelling {
+        return None;
+    }
+    let word = s.doc.para_at(&a)?.text.get(a.off..b.off)?.to_string();
+    (!word.trim().is_empty()).then_some((a, b, word))
+}
+
+/// Change All needs a misspelling to change, as Word only offers it on a flagged word.
+pub(super) fn needs_a_misspelling(s: &Session) -> Option<&'static str> {
+    spelling_at_caret(s).is_none().then_some("the caret is not on a misspelled word")
+}
+
+/// Word's Change All (#6510): replace every flagged occurrence of the misspelled word under the
+/// caret, through the same path as Change so a tracked replacement is still a reviewable revision.
+///
+/// The occurrences are the proofing issues the layout underlines, so only whole words match: a
+/// longer typo holding the word (`brwnish`) keeps its own spelling and its own suggestions. The
+/// match includes case, so a differently cased form (`Brwn` beside `brwn`) is its own misspelling
+/// with its own correction — lowercasing a sentence's first word would be wrong. The scope is the
+/// caret's story, as for Replace All (`edit.replaceAll`) and the pane's own pass.
+pub(super) fn change_all(s: &mut Session, v: &Value) -> CmdResult {
+    let text = p::req_str(v, "text")?.to_string();
+    let (_, _, word) = spelling_at_caret(s).ok_or_else(|| CmdError::Failed("the caret is not on a misspelled word".into()))?;
+    let story = s.sel.focus.story;
+    // Every occurrence is collected before the first edit, and the edits run last one first, so
+    // the positions ahead of each one stay valid even where the replacement splits a paragraph.
+    // The list is bounded by the story's own words, not by anything a caller passes.
+    let mut targets: Vec<(Pos, Pos)> = Vec::new();
+    for path in s.doc.para_paths(story) {
+        for (a, b, i) in para_issues(s, story, &path) {
+            if i.kind == wordcraft_proof::IssueKind::Spelling && s.doc.para_at(&a).and_then(|p| p.text.get(a.off..b.off)) == Some(word.as_str()) {
+                targets.push((a, b));
+            }
+        }
+    }
+    let changed = targets.len();
+    for (a, b) in targets.into_iter().rev() {
+        s.sel = Selection { anchor: a, focus: b };
+        crate::cmd::type_text(s, &text)?;
+    }
+    let mut out = crate::cmd::sel_result(s)?;
+    if let Some(o) = out.as_object_mut() {
+        o.insert("word".into(), Value::String(word));
+        o.insert("changed".into(), json!(changed));
+    }
+    Ok(out)
+}
+
 pub(super) fn suggestions(s: &mut Session, v: &Value) -> CmdResult {
     // Explicit positions are point lookups, even when they equal the selection focus.
     // Only an implicit or unparseable position keeps the exact selected issue.
