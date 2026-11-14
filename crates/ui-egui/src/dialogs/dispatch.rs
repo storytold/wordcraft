@@ -389,6 +389,7 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     }
     ui.add_space(6.0);
     if *tab == FindTab::GoTo {
+        *focus = false;
         return goto_body(app, ui, goto_what, goto_target, message);
     }
     let replace_mode = *tab == FindTab::Replace;

@@ -792,9 +792,10 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
-    // While a modal dialog ("Save changes?" too) is up, keys answer it rather than edit the
-    // document behind it, also in the frame it opens, before the canvas has given up focus.
-    if app.canvas.focused && !app.modal_open() {
+    // While a modal dialog, a focus-taking modeless dialog on its opening frame, or a widget
+    // earlier in this pass holds/claims focus, keys answer it rather than edit the document.
+    let canvas_has_focus = app.canvas.widget_id.is_none_or(|(id, _)| ui.ctx().memory(|m| m.has_focus(id)));
+    if app.canvas.focused && canvas_has_focus && !app.dialog_claims_focus() {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         app.canvas.alt_code.clear();
@@ -972,21 +973,24 @@ fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, im
     if focus_click {
         ui.memory_mut(|memory| memory.interrupt_ime());
     }
-    // Not while a modal dialog is open: it has the keyboard, and the page takes it when it closes.
-    let wants = app.canvas.want_focus && !app.modal_open();
+    // Not while a modal dialog or an opening focus-taking dialog is claiming the keyboard.
+    let modal = app.modal_open();
+    let initial_dialog = app.dialog.as_ref().is_some_and(crate::dialogs::Dialog::takes_initial_focus);
+    let claims = modal || initial_dialog;
+    let wants = app.canvas.want_focus && !claims;
     if focus_click || (wants && !resp.has_focus()) {
         resp.request_focus();
     }
-    if focus_click || wants {
+    if focus_click || wants || initial_dialog {
         app.canvas.want_focus = false;
     }
     app.canvas.widget_id = Some((resp.id, ui.ctx().cumulative_pass_nr()));
-    if resp.has_focus() {
+    if resp.has_focus() && !claims {
         ui.memory_mut(|m| {
             m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
         });
     }
-    app.canvas.focused = resp.has_focus();
+    app.canvas.focused = resp.has_focus() && !claims;
     // One observation per viewport pass, after every event and command for the pass has been
     // applied: the owner, generation, bounded surrounding text and change cause all come from
     // this same settled state.

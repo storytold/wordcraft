@@ -227,6 +227,12 @@ impl WordApp {
         self.file_browser_open() || self.dialog.as_ref().is_some_and(crate::dialogs::Dialog::is_modal) || self.colors.is_some()
     }
 
+    /// Whether an overlay/dialog drawn after the canvas either is modal or is taking initial
+    /// keyboard focus on this frame, so the canvas must yield input even before overlays draw.
+    pub(crate) fn dialog_claims_focus(&self) -> bool {
+        self.modal_open() || self.dialog.as_ref().is_some_and(crate::dialogs::Dialog::takes_initial_focus)
+    }
+
     /// Terminal feedback also reaches the normal window when printing starts through control.
     pub fn poll_printing(&mut self, ctx: &egui::Context) {
         self.printing.poll(ctx);
