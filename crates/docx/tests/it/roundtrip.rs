@@ -2232,6 +2232,34 @@ fn equation_manual_breaks_round_trip() {
     assert_eq!(r.settings.math, None);
 }
 
+/// #6071: an equation nested as deeply as the writer writes comes back whole. The writer spends
+/// one depth unit per level and the reader spent two, so everything below `MAX_DEPTH / 2`
+/// structures was written to the file and then dropped on the way back in.
+#[test]
+fn deep_equation_round_trips_with_its_innermost_content() {
+    use wordcraft_doc::math::{FracKind, MAX_DEPTH, MNode, MRun, Math};
+    let mut nodes = vec![MNode::Run(MRun::new("innermost"))];
+    for i in (1..=MAX_DEPTH).rev() {
+        nodes = vec![MNode::Frac { kind: FracKind::Bar, num: nodes, den: vec![MNode::Run(MRun::new(format!("d{i}")))] }];
+    }
+    let mut d = Document::new();
+    let math = Math { nodes: nodes.clone(), ..Default::default() };
+    let mut p = Paragraph::with_text("", CharProps::default());
+    p.insert_object(0, InlineObject::Equation { linear: "x".into(), display: false, math }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(">innermost</m:t>"), "the writer keeps all {MAX_DEPTH} levels");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r).iter().flat_map(|p| p.objects.iter()).find_map(|o| match o {
+        InlineObject::Equation { math, .. } => Some(math.nodes.clone()),
+        _ => None,
+    });
+    assert_eq!(got, Some(nodes));
+}
+
 /// #332: rotation (`a:xfrm/@rot`, 60000ths of a degree) and flips of pictures, shapes, text boxes
 /// and groups survive save and load; the effect extent written covers the rotated bounds, and
 /// reading takes that overhang back out of the effects room.
