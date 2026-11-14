@@ -102,21 +102,34 @@ fn a_field_result_is_classed_by_the_text_it_shows() {
 }
 
 #[test]
-fn a_character_grid_the_paragraph_snaps_to_turns_it_off() {
+fn a_snap_to_chars_grid_the_paragraph_snaps_to_turns_it_off() {
     crate::test_fonts();
-    let with = |kind: DocGridType, snap: bool| {
-        let mut d = Document::from_text("法院94年");
-        d.last_section.doc_grid = Some(DocGrid { kind, line_pitch: 18.0, char_space: 0 });
-        para0(&mut d).props.snap_to_grid = Some(snap);
-        d
-    };
-    let d = with(DocGridType::LinesAndChars, true);
+    let d = with_grid(DocGridType::SnapToChars, true);
     assert!(gaps(&d).iter().all(|g| *g == 0.0), "{:?}", gaps(&d));
     // A line grid alone, or a paragraph that doesn't snap, keeps it.
-    for d in [with(DocGridType::Lines, true), with(DocGridType::LinesAndChars, false)] {
+    for d in [with_grid(DocGridType::Lines, true), with_grid(DocGridType::SnapToChars, false)] {
         let q = quarter(&d);
         assert_eq!(gaps(&d), [0.0, q, 0.0, q, 0.0]);
     }
+}
+
+/// Measured in Word (#6584): on a `linesAndChars` grid every character stands where it does on a
+/// line grid, the automatic space included. Only `snapToChars` drops it.
+#[test]
+fn a_lines_and_chars_grid_keeps_it() {
+    crate::test_fonts();
+    for snap in [true, false] {
+        let d = with_grid(DocGridType::LinesAndChars, snap);
+        let q = quarter(&d);
+        assert_eq!(gaps(&d), [0.0, q, 0.0, q, 0.0], "snap_to_grid {snap}");
+    }
+}
+
+fn with_grid(kind: DocGridType, snap: bool) -> Document {
+    let mut d = Document::from_text("法院94年");
+    d.last_section.doc_grid = Some(DocGrid { kind, line_pitch: 18.0, char_space: 0 });
+    para0(&mut d).props.snap_to_grid = Some(snap);
+    d
 }
 
 #[test]
