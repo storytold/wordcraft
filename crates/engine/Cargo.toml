@@ -57,6 +57,7 @@ libc = { workspace = true }
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [dev-dependencies]
+wordcraft-layout = { workspace = true, features = ["test-limits"] }
 wordcraft-doc = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
 zip = { workspace = true }

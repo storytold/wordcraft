@@ -43,7 +43,7 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
         "rtf" => rtf::import(bytes),
         "odt" | "ott" => odt::import(bytes),
         "fodt" => odt::import_flat(bytes),
-        "tex" | "latex" | "ltx" => Ok(latex::import(bytes)),
+        "tex" | "latex" | "ltx" => latex::import(bytes),
         _ => return None,
     };
     Some(r.map(|mut d| {

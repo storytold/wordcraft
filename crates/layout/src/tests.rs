@@ -12,6 +12,7 @@ mod complex;
 mod float_top;
 mod grid;
 mod ligature;
+mod line_limit;
 pub(crate) mod linear;
 mod missing_glyphs;
 mod nbsp;
