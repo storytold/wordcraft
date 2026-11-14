@@ -553,8 +553,8 @@ impl<'a> Body<'a> {
         }
         // A body table, kept whole as the paragraphs are.
         match &ev {
-            Ev::Start(q, _) => match &mut self.kept_table {
-                Some(k) => k.clean &= keepable(q),
+            Ev::Start(q, a) => match &mut self.kept_table {
+                Some(k) => k.clean &= keepable(q, a),
                 None if q == "table:table"
                     && self.tables.is_empty()
                     && !self.raw.is_empty()
@@ -603,7 +603,7 @@ impl<'a> Body<'a> {
                     let paired = q.starts_with("office:annotation")
                         || matches!(q.as_str(), "text:change" | "text:change-start" | "text:change-end")
                         || mark_pair(q).is_some();
-                    k.clean &= (paired || keepable(q)) && k.comments.start(q, a, self.depth + 1, self.paras_done);
+                    k.clean &= (paired || keepable(q, a)) && k.comments.start(q, a, self.depth + 1, self.paras_done);
                 }
                 None if (q == "text:p" || q == "text:h")
                     && !self.raw.is_empty()
@@ -2094,9 +2094,12 @@ impl KeptComments {
 /// can't, nor
 /// marks that pair up with others elsewhere by ids the writer gives (comments and tracked
 /// changes are paired apart). Bookmarks can: their names are kept, so either end may be
-/// written as read and the other from the model.
-fn keepable(q: &str) -> bool {
+/// written as read and the other from the model. Nor an author field that doesn't say it is
+/// not fixed (§19.807 `text:fixed`): it is read as a field, and written so (see
+/// `fields::unfixed`).
+fn keepable(q: &str, a: &Attrs) -> bool {
     !(q == "draw:control"
+        || matches!(q, "text:author-name" | "text:author-initials") && get(a, "text:fixed").is_none()
         || q.starts_with("office:annotation")
         || q.starts_with("text:change")
         || q.starts_with("form:")
