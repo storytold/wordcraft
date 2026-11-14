@@ -8757,9 +8757,9 @@ fn a_cell_without_a_width_is_as_wide_as_the_table_in_it_asks_by_its_cells() {
 /// columns too, and its columns whether their widths come from its cells or, where a column has
 /// no cell with a width, from its grid (#6604). Measured on Word around cells of 50, 60 and 200
 /// pt indented by 20 pt: the cell is 341.35 pt wide and the columns keep their widths. With a
-/// first cell that gives no width the other two keep 60.00 and 200.09 pt, indented or not, and a
-/// word in the first makes it 95.76 pt wide in a cell of 367.15 pt; before, the table was
-/// narrowed by its indent.
+/// first cell that gives no width the other two keep 60.00 and 199.97 pt (60.00 and 200.09 when
+/// indented), and a word in the first makes it 95.76 pt wide in a cell of 367.15 pt; before,
+/// the table was narrowed by its indent.
 #[test]
 fn a_cell_without_a_width_makes_room_for_the_indent_of_the_table_in_it() {
     let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
