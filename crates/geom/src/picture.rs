@@ -147,7 +147,8 @@ pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8) -> Result<V
 pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let format = detect(bytes)?;
     match format {
-        CodecFormat::Png | CodecFormat::Jpeg | CodecFormat::Tiff | CodecFormat::Gif | CodecFormat::Bmp => {
+        CodecFormat::Png => png_chunks(bytes).map(|(w, h, _, _)| (w, h)),
+        CodecFormat::Jpeg | CodecFormat::Tiff | CodecFormat::Gif | CodecFormat::Bmp => {
             inspect_raster(bytes).ok().flatten().map(|i| (i.width, i.height))
         }
         CodecFormat::WebP => probe_size(bytes).ok(),
@@ -404,8 +405,7 @@ pub fn decode_for_drawing(bytes: &[u8], budget: u64, max_side: u32) -> Result<Dy
     if p.width > max_side || p.height > max_side {
         return Err(Refusal::Broken("it has no pixels or a side past the limit".into()));
     }
-    let native = (p.peak / (u64::from(p.width) * u64::from(p.height)).max(1)).clamp(1, 8);
-    if !crate::decode_peak_fits(p.width, p.height, native, budget) {
+    if !p.fits(budget) {
         return Err(Refusal::TooLarge { width: p.width, height: p.height });
     }
     let codec_fmt = to_codec_format(p.format).ok_or(Refusal::NotAPicture)?;
