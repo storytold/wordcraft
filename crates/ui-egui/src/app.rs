@@ -131,6 +131,8 @@ impl WordApp {
             fonts_frames: 0,
             applied_theme: None,
             native_scale: 1.0,
+            auto_scale_limit: f32::INFINITY,
+            monitor_zoom: 1.0,
             legacy_interface_size: None,
             // Inert until the app binary calls `watch_desktop_theme`.
             desktop_theme: desktop_theme::DesktopTheme::default(),
@@ -301,7 +303,25 @@ impl WordApp {
         {
             self.ui.interface_size = theme::migrate_legacy_interface_size(old, native);
         }
-        let zoom = self.ui.interface_size.zoom_factor(self.native_scale);
+        // Auto never draws larger than the screen holds (#4030): a system that guesses 3× on a
+        // 1366x768 panel would put the window's controls off screen. The zoom is shared by every
+        // window, so the smallest screen of all the open windows sets the cap. A viewport's
+        // `monitor_size` is in points of the zoom in force before a pending change applied, so
+        // its pixels are that size times `monitor_zoom` and the window's own native scale; each window's allowed zoom is its own, the smallest is shared.
+        let monitors: Vec<_> = self
+            .windows
+            .viewport_ids()
+            .into_iter()
+            .filter_map(|v| {
+                ctx.input_for(v, |i| {
+                    let info = i.viewport();
+                    Some(((info.monitor_size?.x, info.monitor_size?.y), info.native_pixels_per_point?))
+                })
+            })
+            .collect();
+        self.auto_scale_limit = theme::auto_scale_limit_over(monitors, self.monitor_zoom, self.native_scale);
+        self.monitor_zoom = ctx.zoom_factor();
+        let zoom = self.ui.interface_size.zoom_factor_within(self.native_scale, self.auto_scale_limit);
         if ctx.zoom_factor() != zoom {
             ctx.set_zoom_factor(zoom);
         }
@@ -410,6 +430,15 @@ impl WordApp {
     /// Pane's Tab keys and dropped files are read in the first UI pass
     /// ([`WordApp::handle_ui_input_events`]).
     pub(crate) fn window_input(&mut self, ctx: &egui::Context) {
+        // The way back when a large interface size has pushed File › Options off screen (#4030).
+        // A modal dialog keeps the keys (Customize Keyboard records them), and a command the user
+        // bound to the chord runs instead.
+        if !self.modal_open()
+            && self.session.keymap.resolve(&self.session.registry, "Mod+Shift+0").is_none()
+            && ctx.input_mut(super::consume_reset_interface_size)
+        {
+            let _ = self.run("ui.interfaceSize", serde_json::json!({"value": "auto"}));
+        }
         if self.windows.native() && ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
             self.quit();
         }
