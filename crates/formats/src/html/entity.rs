@@ -311,12 +311,18 @@ fn unescape_in(s: &str, attr: bool) -> String {
 }
 
 fn sniff_charset(head: &str) -> Option<&str> {
-    let (i, n) = head.find("charset").map(|i| (i, 7)).or_else(|| head.find("encoding").map(|i| (i, 8)))?;
-    let after = head.get(i + n..)?.trim_start().strip_prefix('=')?;
-    let trimmed = after.trim_start().trim_start_matches(['"', '\'']);
-    let end = trimmed.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ';' | '>' | '/')).unwrap_or(trimmed.len());
-    let label = trimmed[..end].trim();
-    if label.is_empty() { None } else { Some(label) }
+    // The first "charset"/"encoding" may be plain text; take the first one that is a declaration.
+    // `charset` wins over `encoding` (an XML declaration), as before.
+    let declared = |word: &'static str| {
+        head.match_indices(word).find_map(|(i, k)| {
+            let after = head.get(i + k.len()..)?.trim_start().strip_prefix('=')?;
+            let trimmed = after.trim_start().trim_start_matches(['"', '\'']);
+            let end = trimmed.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ';' | '>' | '/')).unwrap_or(trimmed.len());
+            let label = trimmed[..end].trim();
+            if label.is_empty() { None } else { Some(label) }
+        })
+    };
+    declared("charset").or_else(|| declared("encoding"))
 }
 
 /// Decode HTML bytes: BOM, then a `charset` in the first 2 KB, else UTF-8 with a legacy fallback.
@@ -361,6 +367,18 @@ pub fn decode_as(b: &[u8], charset: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn charset_word_in_text_does_not_hide_meta_declaration() {
+        let s = decode(b"<html><head><title>About charset detection</title><meta charset=\"windows-1251\"></head><body>\xE0");
+        assert!(s.ends_with('\u{0430}'), "{s:?}");
+    }
+
+    #[test]
+    fn meta_charset_wins_over_earlier_xml_encoding() {
+        let s = decode(b"<?xml version='1.0' encoding='UTF-8'?><meta charset='windows-1251'>\xE0");
+        assert!(s.ends_with('\u{0430}'), "{s:?}");
+    }
 
     #[test]
     fn bare_names_are_sorted_and_known() {
