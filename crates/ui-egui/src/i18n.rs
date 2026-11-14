@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 28] = [
+pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -83,9 +83,12 @@ pub static LANGUAGES: [LangInfo; 28] = [
     // No fixed editing language: new documents are written in the region's Spanish
     // (`Session::region_spanish`), like English.
     LangInfo { code: "es", prefer_hans: false, editing_lang: None },
-    // Brazilian Portuguese; `pt-BR` and `pt-BR-*` resolve here. Plain `pt` and `pt-PT` have no
-    // catalog yet (the European vocabulary differs), so they stay in English ([`lang_from_tag`]).
+    // Brazilian Portuguese; `pt-BR` and `pt-BR-*` resolve here. Plain `pt` and the other regions
+    // stay in English rather than falling here ([`lang_from_tag`]).
     LangInfo { code: "pt-br", prefer_hans: false, editing_lang: Some("pt-BR") },
+    // European Portuguese; `pt-PT`, `pt_PT.UTF-8` and `pt-Latn-PT` resolve here. WordCraft proofs
+    // Portuguese (craft-proof's `pt-pt` pack), so new documents are written in `pt-PT`.
+    LangInfo { code: "pt-pt", prefer_hans: false, editing_lang: Some("pt-PT") },
     // Serbian, Cyrillic script (the default per BCP 47 when no script is given); `sr`, `sr-RS`,
     // `sr-Cyrl-*` resolve here.
     LangInfo { code: "sr", prefer_hans: false, editing_lang: None },
@@ -278,13 +281,21 @@ pub fn normalize_pref(pref: &str) -> Option<&'static str> {
     Lang::from_code(pref).map(Lang::code)
 }
 
-/// Portuguese other than Brazil's (`pt`, `pt-PT`, `pt_AO.UTF-8`): WordCraft has no catalog for
-/// it (the European vocabulary differs), so it stays English rather than falling to `pt-br` as the
-/// crate's matching would.
+/// Portuguese that is neither Brazil's nor Portugal's (`pt`, `pt_AO.UTF-8`, `pt-x-PT`): there is no
+/// catalog for it (those regions write like Portugal but are not offered yet), so it stays English
+/// rather than falling to `pt-br` as the crate's matching would. `pt-PT` itself passes, so the
+/// matcher can pick the European catalog; `pt-BR` is left to the matcher too.
 fn non_brazilian_portuguese(tag: &str) -> bool {
     let tag = tag.trim().to_ascii_lowercase();
     let mut parts = tag.split(['.', '@']).next().unwrap_or("").split(['-', '_']);
-    parts.next() == Some("pt") && !parts.any(|p| p == "br")
+    if parts.next() != Some("pt") {
+        return false;
+    }
+    let rest: Vec<&str> = parts.collect();
+    // A private-use region (`pt-x-PT`) names no region the matcher can use; a plain `pt` and the
+    // other regions (`pt-AO`, `pt-MZ`) have no catalog and would fall to Brazil's. Only `pt-BR`
+    // and an explicit `pt` region get through.
+    rest.contains(&"x") || (!rest.contains(&"br") && rest.last() != Some(&"pt"))
 }
 
 /// The registered language for a locale tag such as `ja_JP.UTF-8` or `zh-Hant-TW`; `None` when
@@ -293,7 +304,23 @@ pub fn lang_from_tag(tag: &str) -> Option<Lang> {
     if non_brazilian_portuguese(tag) {
         return None;
     }
+    if european_portuguese(tag) {
+        return Lang::from_code("pt-pt");
+    }
     I18N.match_tag(tag).and_then(|lang| Lang::from_code(I18N.code(lang)))
+}
+
+/// `pt-PT` written without a script (`pt-PT`, `pt_PT.UTF-8`) or with the Latin one
+/// (`pt-Latn-PT`). The crate's candidates keep a script subtag and never try `pt-pt`, so
+/// [`lang_from_tag`] names the catalog itself for these.
+fn european_portuguese(tag: &str) -> bool {
+    let tag = tag.trim().to_ascii_lowercase();
+    let mut parts = tag.split(['.', '@']).next().unwrap_or("").split(['-', '_']);
+    if parts.next() != Some("pt") {
+        return false;
+    }
+    let rest: Vec<&str> = parts.collect();
+    rest.last() == Some(&"pt") && !rest.contains(&"x")
 }
 
 /// The first of the system's preferred languages WordCraft has, in the user's order: someone
