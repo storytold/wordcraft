@@ -138,20 +138,30 @@ pub(super) fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
                 out.push(piece(k0, k1));
             } else {
                 for k in k0..k1 {
-                    let Some(&(_, gx, base)) = glyphs.get(k) else { continue };
-                    // The em square: one em along the line (the advance to the next glyph when
-                    // known), from about 0.88 em above the baseline to 0.12 em below it.
-                    let adv = glyphs.get(k + 1).map(|g| g.1 - gx).filter(|a| *a > 0.0 && *a < size * 2.0).unwrap_or(size);
+                    let Some(&(gid, gx, base)) = glyphs.get(k) else { continue };
+                    let fits = |a: &f32| *a > 0.0 && *a < size * 2.0;
+                    // The glyph's own advance, looked up only where it is needed: a proportional
+                    // font's comma or full stop is narrower than an em (about half an em in BIZ
+                    // UDPGothic, two thirds in MS PGothic).
+                    let own = || Some(face.advance(gid) as f32 * size / face.upem.max(1.0) as f32 * x_scale).filter(fits);
+                    // Its square: along the line, the advance to the next glyph when known, else
+                    // its own advance (it may end its run: after Latin text a comma is a run of its
+                    // own, in another face), else one em; from about 0.88 em above the baseline to
+                    // 0.12 em below it.
+                    let adv = glyphs.get(k + 1).map(|g| g.1 - gx).filter(fits).or_else(own).unwrap_or(size);
                     let (cx, cy) = (gx + adv / 2.0, base - size * 0.38);
                     let mut g = piece(k, k + 1);
                     // The ideographic comma and full stop sit in the upper right of their square in
-                    // vertical text (lower left in horizontal): moved there before standing up.
+                    // vertical text (lower left in horizontal): moved there before standing up, by
+                    // half their advance and 0.05 em. That is 0.55 em for a full-width one, and keeps
+                    // a narrower one inside its own square instead of over its neighbours (#6060).
                     if let Draw::Glyphs { text, glyphs, .. } = &mut g
                         && matches!(text.chars().next(), Some('\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF0E}'))
                     {
+                        let shift = size * 0.05 + own().unwrap_or(size) / 2.0;
                         for (_, x, y) in glyphs.iter_mut() {
-                            *x += size * 0.55;
-                            *y -= size * 0.55;
+                            *x += shift;
+                            *y -= shift;
                         }
                     }
                     out.push(Draw::Rotated { cx, cy, spin: Spin::new(-90.0, false, false), items: vec![g] });
