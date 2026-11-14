@@ -203,7 +203,7 @@ fn iso_datetime(v: &str) -> Option<String> {
     let date = match (time, date.strip_suffix('Z')) {
         (None, Some(d)) => d,
         (None, None) if date.len() > 6 && date.get(date.len() - 6..).is_some_and(|z| z.starts_with(['+', '-']) && z.get(3..4) == Some(":")) => {
-            chrono::NaiveTime::parse_from_str(date.get(date.len() - 5..)?, "%H:%M").ok()?;
+            zone_offset(date.get(date.len() - 5..)?)?;
             date.get(..date.len() - 6)?
         }
         _ => date,
@@ -225,7 +225,7 @@ fn clock_time(t: &str) -> Option<chrono::NaiveTime> {
     let t = t.strip_suffix('Z').unwrap_or(t);
     let t = match t.rfind(['+', '-']) {
         Some(i) => {
-            chrono::NaiveTime::parse_from_str(t.get(i + 1..)?, "%H:%M").ok()?;
+            zone_offset(t.get(i + 1..)?)?;
             t.get(..i)?
         }
         None => t,
@@ -233,6 +233,13 @@ fn clock_time(t: &str) -> Option<chrono::NaiveTime> {
     let clock = chrono::NaiveTime::parse_from_str(t, "%H:%M:%S%.f").or_else(|_| chrono::NaiveTime::parse_from_str(t, "%H:%M")).ok()?;
     // A leap second (`23:59:60`) is not a time a cell holds.
     (chrono::Timelike::nanosecond(&clock) < 1_000_000_000).then_some(clock)
+}
+
+/// A zone offset's `hh:mm`, at most `14:00` as XML Schema allows.
+fn zone_offset(z: &str) -> Option<()> {
+    use chrono::Timelike;
+    let z = chrono::NaiveTime::parse_from_str(z, "%H:%M").ok()?;
+    (z.hour() < 14 || (z.hour() == 14 && z.minute() == 0)).then_some(())
 }
 
 /// `hh:mm`, with `:ss` when the seconds aren't zero and their fraction when it isn't.
@@ -394,6 +401,17 @@ mod tests {
         assert_eq!(iso_datetime("2024-03-05+02:00").as_deref(), Some("2024-03-05"));
         assert_eq!(iso_datetime("2024-03-05-05:00").as_deref(), Some("2024-03-05"));
         assert_eq!(iso_datetime("2024-03-05+02:99"), None);
+    }
+
+    #[test]
+    fn a_zone_is_at_most_fourteen_hours() {
+        assert_eq!(iso_datetime("2024-03-05+14:00").as_deref(), Some("2024-03-05"));
+        assert_eq!(iso_datetime("2024-03-05-14:00").as_deref(), Some("2024-03-05"));
+        assert_eq!(iso_datetime("2024-03-05+14:01"), None);
+        assert_eq!(iso_datetime("2024-03-05-15:00"), None);
+        assert_eq!(iso_datetime("2024-03-05T13:45:00+14:00").as_deref(), Some("2024-03-05 13:45"));
+        assert_eq!(iso_datetime("2024-03-05T13:45:00+14:01"), None);
+        assert_eq!(iso_time("13:45:00-15:00"), None);
     }
 
     #[test]
