@@ -1868,6 +1868,39 @@ fn left_tab_past_the_right_indent_does_not_add_a_line() {
     assert!((page.x - 72.0).abs() < 0.5, "the text after the tab starts at the indent: {}", page.x);
 }
 
+/// Beside a floating object the wrapped tab doesn't start its text in the span on the object's
+/// far side: like Word, it goes to the first line clear of the object, and its text starts at the
+/// indent there (#6577).
+#[test]
+fn left_tab_past_the_right_indent_beside_a_float_moves_clear_of_it() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    crate::test_fonts();
+    let mut d = Document::from_text("Name\tPage");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.tabs = Some(vec![TabStop { pos: 500.0, align: TabAlign::Left, leader: TabLeader::None }])
+    })
+    .unwrap();
+    // A box in the middle of the column, anchored after the text so the offsets stay those of
+    // "Name\tPage": the rows beside it have a span on each side.
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 184.0,
+        y: 0.0,
+        dist: 9.0,
+        ..Default::default()
+    };
+    let id = text_box(&mut d, 9, "", 100.0, 43.0, float);
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    let name = l.caret(&Pos::body(0, 0)).unwrap();
+    assert!((name.x - 72.0).abs() < 0.5 && name.top < r.bottom(), "the text before the tab starts beside the box: {name:?}, box {r:?}");
+    let page = l.caret(&Pos::body(0, 5)).unwrap();
+    assert!((page.x - 72.0).abs() < 0.5, "the text after the tab starts at the indent, not beside the box: {page:?}, box {r:?}");
+    assert!(page.top >= r.bottom() - 0.5, "the text after the tab starts below the box: {page:?}, box {r:?}");
+}
+
 /// A bookmark before such a tab is not text: the tab does not wrap away from it, and the
 /// paragraph breaks as it does without the bookmark (no line holding only the bookmark).
 #[test]
