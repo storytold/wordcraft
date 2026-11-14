@@ -514,16 +514,17 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             .iter()
             .map(|c| c.props.resolved_margins(margins_def))
             .fold((0.0f32, 0.0f32), |(top, bottom), m| (top.max(m[0]), bottom.max(m[2])));
-        for (ci, cell) in row.cells.iter().enumerate() {
-            let span = cell.span();
-            let x0 = colx.get(g).copied().unwrap_or(acc);
-            let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc);
-            // Right to left: grid columns run from the right edge, and the start (left) margin
-            // is on the cell's right.
-            let (x0, x1) = if rtl { ((acc - x1).max(0.0), (acc - x0).max(0.0)) } else { (x0, x1) };
-            let m = cell.props.resolved_margins(margins_def);
-            let margins = if rtl { [row_top, m[3], row_bottom, m[1]] } else { [row_top, m[1], row_bottom, m[3]] };
-            let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
+        // The row's cells' borders first: every cell of a row keeps clear of the row's widest
+        // border over it, and in the last row of the widest one under it, as it shares the row's
+        // largest margins. Measured in Word for Windows: under a 3 pt border over one cell of a
+        // row, the text of its neighbour without a border starts 3 pt lower too; so it does
+        // beside a cell that continues a vertical merge and has the table's inside border.
+        let mut row_borders_of: Vec<Borders> = Vec::with_capacity(row.cells.len());
+        let (mut band_t, mut band_b) = (0.0f32, 0.0f32);
+        let mut at = row.first_grid();
+        for cell in &row.cells {
+            let (g, span) = (at, cell.span());
+            at += span;
             let region = region_of(t, style.as_ref(), ri, g, span, ncols);
             // Conditional formatting, later parts winning (ECMA-376 §17.7.6): whole table, column
             // bands, row bands, first/last column, header/total row, corner cells.
@@ -534,11 +535,6 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 looks.push((region, region_look(st, region)));
             }
             let look = looks.iter().find(|(r, _)| *r == region).map(|(_, l)| l);
-            let fill = cell.props.shading.or(look.and_then(|l| l.fill));
-            let text = cell_text.iter().find(|(r, _)| *r == region).map(|(_, c)| c);
-            let mut cpath = path.to_vec();
-            cpath.push(ri as u32);
-            cpath.push(ci as u32);
             // Effective borders: cell > table (outer vs inside).
             let tb = tborders;
             let edge =
@@ -578,12 +574,15 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 std::mem::swap(&mut borders.left, &mut borders.right);
             }
             // Word keeps the cell's text clear of its top border (and the last row's of its bottom
-            // border): the border's width sits on top of the cell margin.
-            let band = |b: Option<Border>| b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
-            let (band_t, band_b) = (band(borders.top), if ri + 1 == nrows { band(borders.bottom) } else { 0.0 });
-            // A shared edge painted by the row above still clears this cell's text and minimum.
-            let band_t = if band_t > 0.0 || cell.props.vmerge == VMerge::Continue {
-                band_t
+            // border): the room the border takes ([`border_band`]) sits on top of the cell margin.
+            let band = |b: Option<Border>| b.as_ref().map_or(0.0, border_band);
+            let (top, bottom) = (band(borders.top), if ri + 1 == nrows { band(borders.bottom) } else { 0.0 });
+            // The edge shared with the row above takes the room of the wider of the two borders on
+            // it, this cell's top one and the bottom ones of the cells above it (measured in Word
+            // for Windows: a double 0.5 pt border under a row and a single 0.25 pt one over the
+            // next take 1.5 pt, whichever cell has which).
+            let top = if cell.props.vmerge == VMerge::Continue {
+                top
             } else {
                 rows.last()
                     .into_iter()
@@ -596,8 +595,31 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                             })
                     })
                     .map(|above| band(above.borders.bottom))
-                    .fold(0.0, f32::max)
+                    .fold(top, f32::max)
             };
+            band_t = band_t.max(top);
+            band_b = band_b.max(bottom);
+            row_borders_of.push(borders);
+        }
+        for (ci, cell) in row.cells.iter().enumerate() {
+            let span = cell.span();
+            let x0 = colx.get(g).copied().unwrap_or(acc);
+            let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc);
+            // Right to left: grid columns run from the right edge, and the start (left) margin
+            // is on the cell's right.
+            let (x0, x1) = if rtl { ((acc - x1).max(0.0), (acc - x0).max(0.0)) } else { (x0, x1) };
+            let m = cell.props.resolved_margins(margins_def);
+            let margins = if rtl { [row_top, m[3], row_bottom, m[1]] } else { [row_top, m[1], row_bottom, m[3]] };
+            let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
+            let region = region_of(t, style.as_ref(), ri, g, span, ncols);
+            let look = looks.iter().find(|(r, _)| *r == region).map(|(_, l)| l);
+            let fill = cell.props.shading.or(look.and_then(|l| l.fill));
+            let text = cell_text.iter().find(|(r, _)| *r == region).map(|(_, c)| c);
+            let mut cpath = path.to_vec();
+            cpath.push(ri as u32);
+            cpath.push(ci as u32);
+            let borders = row_borders_of.get(ci).copied().unwrap_or_default();
+            let band = |b: Option<Border>| b.as_ref().map_or(0.0, border_band);
             let insets = margins[0] + margins[2] + band_t + band_b;
             let turn = cell.props.text_direction;
             let mut turned = None;
@@ -860,7 +882,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 story,
                 clip: exact && c.h > span_h + 0.01,
             });
-            let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
+            let top = c.margins[0] + c.borders.top.as_ref().map_or(0.0, border_band);
             parts.push(CellPart { top, items: first..items.len(), end, align });
         }
         out.push(RowLayout {
@@ -1533,6 +1555,12 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
         return;
     }
     grid.copy_from_slice(&widths);
+}
+
+/// The room a visible border takes across a table row: [`Border::band`] of its width, which is
+/// read up to 12 pt.
+fn border_band(b: &Border) -> f32 {
+    if b.is_visible() { Border { width: b.width.clamp(0.0, 12.0), ..*b }.band() } else { 0.0 }
 }
 
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
