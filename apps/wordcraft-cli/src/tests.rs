@@ -621,28 +621,29 @@ fn validate_accepts_a_file_name_that_is_not_unicode() {
 /// document and an empty main relationships part. Used to drive `validate_bytes` from real bytes so
 /// a document-controlled entry name is shown to reach the report the way production does.
 fn validate_fixture_zip(extra: &[(&str, &[u8])]) -> Vec<u8> {
-    use std::io::{Cursor, Write};
-    use zip::write::SimpleFileOptions;
-    let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    w.start_file("[Content_Types].xml", opts).unwrap();
-    w.write_all(
+    let mut w = craft_zip::Writer::new();
+    w.add(
+        "[Content_Types].xml",
         br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#,
+        craft_zip::Compression::Stored,
     )
     .unwrap();
-    w.start_file("_rels/.rels", opts).unwrap();
-    w.write_all(
+    w.add(
+        "_rels/.rels",
         br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#,
+        craft_zip::Compression::Stored,
     )
     .unwrap();
-    w.start_file("word/document.xml", opts).unwrap();
-    w.write_all(br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#)
-        .unwrap();
+    w.add(
+        "word/document.xml",
+        br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#,
+        craft_zip::Compression::Stored,
+    )
+    .unwrap();
     for (name, bytes) in extra {
-        w.start_file(*name, opts).unwrap();
-        w.write_all(bytes).unwrap();
+        w.add(name, bytes, craft_zip::Compression::Stored).unwrap();
     }
-    w.finish().unwrap().into_inner()
+    w.finish().unwrap()
 }
 
 /// Finding 5: document-controlled text (a ZIP entry name) is escaped in the human report, while the
