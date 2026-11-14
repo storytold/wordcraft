@@ -364,6 +364,38 @@ fn a_composition_stays_in_its_window() {
     assert_eq!(text(&a), "B", "a commit in the other window doesn't land here");
 }
 
+/// #6306: text copied in one window pastes into another on the first Ctrl+V, also when the paste
+/// arrives in the pass that brings that window back to the front: its page kept the keyboard
+/// while the window was in the background.
+#[test]
+fn a_paste_straight_after_switching_windows_lands() {
+    let ctx = backend();
+    let mut a = app("Copied words");
+    let first = a.session.document_id();
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    let second = a.session.document_id();
+    let b = a.active_viewport();
+    focus(b);
+    frames(&ctx, &mut a, 8);
+    assert!(a.canvas.focused, "the new window's page has the keyboard");
+
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 8);
+    a.run("select.all", json!({})).unwrap();
+    EVENTS.with(|e| e.borrow_mut().entry(ViewportId::ROOT).or_default().push(egui::Event::Copy));
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.session.clipboard_text, "Copied words");
+
+    focus(b);
+    EVENTS.with(|e| e.borrow_mut().entry(b).or_default().push(egui::Event::Paste("Copied words".into())));
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.session.document_id(), second);
+    assert_eq!(text(&a), "Copied words", "the first paste lands");
+    let left = a.session.with_document(first, |s| s.doc.plain_text(StoryRef::Body)).unwrap();
+    assert_eq!(left.trim(), "Copied words", "the window copied from is unchanged");
+}
+
 /// Control-channel typing goes to the active window when it has a viewport of its own (the
 /// root's raw-input hook doesn't see that window's input), once.
 #[test]
