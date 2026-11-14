@@ -185,17 +185,17 @@ mod tests {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
         app.run("insert.shape", json!({"kind": "ellipse"})).unwrap();
         let mut h = harness(app);
-        h.get_by_role_and_label(Role::TextInput, "Description:").click();
+        h.get_by_role_and_label(Role::MultilineTextInput, "Description:").click();
         h.run_steps(2);
-        h.get_by_role_and_label(Role::TextInput, "Description:").type_text("A green circle");
+        h.get_by_role_and_label(Role::MultilineTextInput, "Description:").type_text("A green circle");
         h.run_steps(2);
-        assert_eq!(h.get_by_role_and_label(Role::TextInput, "Description:").value().as_deref(), Some("A green circle"));
+        assert_eq!(h.get_by_role_and_label(Role::MultilineTextInput, "Description:").value().as_deref(), Some("A green circle"));
         h.get_by_role_and_label(Role::CheckBox, "Mark as decorative").click();
         h.run_steps(2);
         let (_, object) = wordcraft_engine::cmd::objects::selected(&h.state().session).unwrap();
         assert_eq!(object.alt_text(), "A green circle");
         assert!(object.is_decorative());
-        assert!(h.get_by_role_and_label(Role::TextInput, "Description:").accesskit_node().is_disabled());
+        assert!(h.get_by_role_and_label(Role::MultilineTextInput, "Description:").accesskit_node().is_disabled());
     }
 
     #[test]
@@ -208,11 +208,11 @@ mod tests {
         h.get_by_role_and_label(Role::TextInput, "Title:").type_text("Prices");
         h.run_steps(2);
         assert_eq!(h.get_by_role_and_label(Role::TextInput, "Title:").value().as_deref(), Some("Prices"));
-        h.get_by_role_and_label(Role::TextInput, "Description:").click();
+        h.get_by_role_and_label(Role::MultilineTextInput, "Description:").click();
         h.run_steps(2);
-        h.get_by_role_and_label(Role::TextInput, "Description:").type_text("Prices by year");
+        h.get_by_role_and_label(Role::MultilineTextInput, "Description:").type_text("Prices by year");
         h.run_steps(2);
-        assert_eq!(h.get_by_role_and_label(Role::TextInput, "Description:").value().as_deref(), Some("Prices by year"));
+        assert_eq!(h.get_by_role_and_label(Role::MultilineTextInput, "Description:").value().as_deref(), Some("Prices by year"));
         h.get_by_role_and_label(Role::TextInput, "Title:").click();
         h.run_steps(2);
         let app = h.state();
