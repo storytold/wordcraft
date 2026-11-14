@@ -18,13 +18,13 @@ wordcraft-cli — WordCraft from the command line
 
 USAGE:
   wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc]
-                                              convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
-                                              xml); --update-fields refreshes unlocked fields before saving
+                                              convert between formats (docx, doc [read], pdf, odt, rtf, html, mht, md, tex, txt, json,
+                                              png, xml); --update-fields refreshes unlocked fields before saving
                                               (if protection blocks updates, they are skipped with a warning);
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
-                                              tracked changes in pdf/png, a comment list in html/md/txt;
+                                              tracked changes in pdf/png, a comment list in html/mht/md/txt;
                                               --strict (pdf or png output only) writes nothing and exits 3
                                               if a character can't be drawn or a picture is missing or
                                               undecodable; the report is on stderr, with one JSON line

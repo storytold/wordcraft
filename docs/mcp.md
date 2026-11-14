@@ -171,7 +171,7 @@ test source in File › Options › Language and on the bar's Install.
 | `insert_table` | insert a filled table in one call: `{values: [["Month", "Cases"], ["January", 12]], header: true, style?}` (same as `insert.spreadsheet`) |
 | `batch` | run several commands in order |
 | `new_document` | blank, sample, letter, resume, report; opens beside the open documents |
-| `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |
+| `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, mht, md, tex, txt, json; save also pdf, png |
 | `list_documents` | the open documents: `id`, `title`, `path`, `dirty`, `active` |
 | `type_text` | type at the caret (`paragraphs: true` splits lines into paragraphs: one undo
   step; each break is the Enter it stands for, so AutoFormat and AutoCorrect run and a

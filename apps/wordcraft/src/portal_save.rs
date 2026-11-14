@@ -231,7 +231,8 @@ fn chosen_type(filters: &[Filter], picked: Option<usize>) -> Option<usize> {
 /// The GTK file chooser keeps the typed name when another type is picked. Only a name that
 /// still has the extension the dialog opened with (`opened_with`, e.g. `Document1.docx` with
 /// PDF picked) or none gets the type's extension, as PolyMeilex/rfd#341 does. An extension the
-/// user explicitly typed that WordCraft saves (e.g. `art.txt` with PDF untouched) is kept,
+/// user explicitly typed that WordCraft saves (e.g. `art.txt` with PDF untouched, or a Single
+/// File Web Page's `.mhtml`) is kept,
 /// and so does one of the type's own extensions. Any extension that WordCraft does not save
 /// (e.g. `scan.2024`) is treated as part of the stem, and the type's extension is added.
 pub fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String]) -> PathBuf {
@@ -241,11 +242,11 @@ pub fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String
         .and_then(|n| Path::new(n).extension())
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
-        .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()));
+        .filter(|e| crate::file_dialogs::is_saved_ext(e));
     match ext {
         Some(ext) if chosen.contains(&ext) => path.to_path_buf(),
         Some(ext) if opened_ext.as_ref() == Some(&ext) => path.with_extension(first),
-        Some(ext) if wordcraft_engine::io::SAVE_EXTS.contains(&ext.as_str()) => path.to_path_buf(),
+        Some(ext) if crate::file_dialogs::is_saved_ext(&ext) => path.to_path_buf(),
         _ => {
             let mut name = path.as_os_str().to_owned();
             name.push(".");
@@ -457,9 +458,9 @@ pub fn is_ambiguous_filter(saved: &Saved, req: &SaveRequest) -> bool {
         .and_then(|n| Path::new(n).extension())
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
-        .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()));
+        .filter(|e| crate::file_dialogs::is_saved_ext(e));
     match ext {
-        Some(ext) if wordcraft_engine::io::SAVE_EXTS.contains(&ext.as_str()) => suggested_ext.as_ref() == Some(&ext),
+        Some(ext) if crate::file_dialogs::is_saved_ext(&ext) => suggested_ext.as_ref() == Some(&ext),
         _ => true,
     }
 }
@@ -517,6 +518,10 @@ mod tests {
             ("/docs/notes.txt", opened, &pdf, "/docs/notes.txt"),
             ("/docs/page.html", opened, &pdf, "/docs/page.html"),
             ("/docs/file.rtf", opened, &pdf, "/docs/file.rtf"),
+            // So is a format's other extension (a Single File Web Page's `.mhtml`), which the type
+            // replaces when the dialog opened with it.
+            ("/docs/page.mhtml", opened, &pdf, "/docs/page.mhtml"),
+            ("/docs/page.mhtml", Some("page.mhtml"), &pdf, "/docs/page.pdf"),
             // Already the type's: kept.
             ("/docs/letter.pdf", opened, &pdf, "/docs/letter.pdf"),
             ("/docs/letter.PDF", opened, &pdf, "/docs/letter.PDF"),
@@ -897,6 +902,9 @@ mod tests {
         // Missing filter but user explicitly typed a different format is NOT ambiguous.
         let explicit = Saved { path: PathBuf::from("/docs/Document1.pdf"), filter: None };
         assert!(!is_ambiguous_filter(&explicit, &req));
+        // So is a format's other extension typed (a Single File Web Page's `.mhtml`).
+        let alias = Saved { path: PathBuf::from("/docs/Document1.mhtml"), filter: None };
+        assert!(!is_ambiguous_filter(&alias, &req));
 
         // Single filter offered is never ambiguous even if filter is omitted.
         let single_req =
