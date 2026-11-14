@@ -5379,6 +5379,53 @@ fn a_text_may_not_make_unbounded_paragraphs() {
     assert_eq!(body_texts(&s).len(), MAX_INSERTED_PARAGRAPHS);
 }
 
+/// The cap is on paragraphs added, not split pieces: the first piece joins the paragraph at
+/// the caret. Replacement, pasted text and rich fragments must agree at the exact boundary.
+#[test]
+fn paragraph_insertion_boundary_is_consistent() {
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let replacement = "^p".repeat(MAX_INSERTED_PARAGRAPHS);
+    for track_changes in [false, true] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "x"}));
+        if track_changes {
+            run(&mut s, "review.trackChanges", json!({"value": true}));
+        }
+        run(&mut s, "edit.replaceAll", json!({"text": "x", "with": replacement}));
+    }
+
+    let mut pasted = s();
+    run(&mut pasted, "edit.pasteText", json!({"text": "x\r".repeat(MAX_INSERTED_PARAGRAPHS)}));
+    assert_eq!(body_texts(&pasted).len(), MAX_INSERTED_PARAGRAPHS + 1);
+}
+
+/// Rich HTML/RTF fragments and sample-text formula expansion cannot bypass the same
+/// request-wide paragraph limit enforced for plain text.
+#[test]
+fn rich_paste_and_sample_expansion_respect_paragraph_limit() {
+    use crate::CmdError;
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+
+    let mut rich = s();
+    let before = body_texts(&rich);
+    let html = "<p>x</p>".repeat(MAX_INSERTED_PARAGRAPHS + 1);
+    match rich.run("edit.paste", &json!({"html": html})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{m}"),
+        r => panic!("rich HTML paste was not refused: {r:?}"),
+    }
+    assert_eq!(body_texts(&rich), before, "rich paste changed the document");
+
+    let mut s = s();
+    // Each formula is ended by Enter and expands to 200 paragraphs. 51 lines would make
+    // 10,251 paragraphs despite the request itself having only 52 split pieces.
+    let text = "=rand(200,1)\n".repeat(51);
+    match s.run("text.insert", &json!({"text": text, "paragraphs": true, "raw": true})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("would make 10251 paragraphs"), "{m}"),
+        r => panic!("sample-text expansion was not refused: {r:?}"),
+    }
+    assert_eq!(body_texts(&s), vec![String::new()], "sample expansion changed the document");
+}
+
 /// A refused text leaves the document exactly as it was: the selection it would have replaced
 /// is still there, so refusing costs the user nothing and undoes to nothing.
 #[test]

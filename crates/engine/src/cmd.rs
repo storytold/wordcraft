@@ -358,13 +358,13 @@ pub(crate) struct InsertEffect {
 /// well below it: a long chapter is a few thousand paragraphs.
 pub const MAX_INSERTED_PARAGRAPHS: usize = 10_000;
 
-/// Refuse a text that would make more than [`MAX_INSERTED_PARAGRAPHS`] paragraphs, before any of
-/// it is typed or pasted, so a refused text leaves the document as it was. `paragraphs` is how
-/// many paragraphs the text would add to the document.
+/// Refuse an insertion that would make more than [`MAX_INSERTED_PARAGRAPHS`] paragraphs, before
+/// any of it is typed or pasted, so a refused text leaves the document as it was. `paragraphs` is
+/// how many paragraphs the insertion would add to the document.
 pub(super) fn check_inserted_paragraphs(paragraphs: usize) -> Result<(), CmdError> {
     if paragraphs > MAX_INSERTED_PARAGRAPHS {
         return Err(CmdError::Params(format!(
-            "the text would make {paragraphs} paragraphs; a call may make at most {MAX_INSERTED_PARAGRAPHS} paragraphs"
+            "the insertion would make {paragraphs} paragraphs; a call may make at most {MAX_INSERTED_PARAGRAPHS} paragraphs"
         )));
     }
     Ok(())
@@ -446,8 +446,13 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     // The text is counted before any of it is typed, so a text over the limit is refused with
     // the document untouched. Each piece of it is a paragraph of about a kilobyte of document,
     // so a megabyte of line breaks is a gigabyte of document.
+    //
+    // The paragraphs it makes are the breaks between its pieces, not the pieces: the first
+    // piece joins the paragraph the caret is in, so it adds nothing. The count is the same one
+    // the aggregate checks count (the breaks a replacement carries), so a text that one route
+    // accepts is not refused by another.
     if !no_breaks {
-        check_inserted_paragraphs(text.split(['\r', '\u{2029}']).count())?;
+        check_inserted_paragraphs(text.split(['\r', '\u{2029}']).count().saturating_sub(1))?;
     }
     for part in text.split(['\r', '\u{2029}']) {
         if !first && !no_breaks {

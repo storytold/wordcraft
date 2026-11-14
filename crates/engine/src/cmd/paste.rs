@@ -150,8 +150,16 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(r);
         }
         "formatted" => s.clipboard.clone().ok_or_else(|| CmdError::Failed("the clipboard is empty".into()))?,
-        "html" => adopt(s, import_html(&src)),
-        _ => adopt(s, wordcraft_formats::rtf::import(src.as_bytes()).map_err(|e| CmdError::Failed(format!("bad RTF: {e}")))?),
+        "html" => {
+            let doc = import_html(&src);
+            super::check_inserted_paragraphs(doc.paragraph_count())?;
+            adopt(s, doc)
+        }
+        _ => {
+            let doc = wordcraft_formats::rtf::import(src.as_bytes()).map_err(|e| CmdError::Failed(format!("bad RTF: {e}")))?;
+            super::check_inserted_paragraphs(doc.paragraph_count())?;
+            adopt(s, doc)
+        }
     };
     insert(s, frag)?;
     let mut r = sel_result(s)?;
@@ -255,17 +263,18 @@ fn has_content(d: &Document) -> bool {
 /// Another program's formatted copy, from the system clipboard's HTML, else its RTF (#687), as a
 /// fragment of this document. `None` when neither is given, either is larger than
 /// [`MAX_PASTE_BYTES`], or it holds nothing to paste (the caller pastes the text then).
-pub fn rich_fragment(s: &mut Session, v: &Value) -> Option<Fragment> {
+///
+/// The paragraphs the payload carries are counted before it is adopted, so a payload of nothing
+/// but paragraph marks is refused like any other text over the limit.
+pub fn rich_fragment(s: &mut Session, v: &Value) -> Result<Option<Fragment>, CmdError> {
     let fits = |k: &str| p::str(v, k).filter(|t| !t.trim().is_empty() && t.len() <= MAX_PASTE_BYTES);
-    let doc = fits("html").map(import_html);
-    let doc = match doc.filter(has_content) {
-        Some(d) => d,
-        None => {
-            let rtf = fits("rtf").filter(|t| looks_like_rtf(t))?;
-            wordcraft_formats::rtf::import(rtf.as_bytes()).ok().filter(has_content)?
-        }
-    };
-    Some(adopt(s, doc))
+    let doc = fits("html").map(import_html).filter(has_content).or_else(|| {
+        let rtf = fits("rtf").filter(|t| looks_like_rtf(t))?;
+        wordcraft_formats::rtf::import(rtf.as_bytes()).ok().filter(has_content)
+    });
+    let Some(doc) = doc else { return Ok(None) };
+    super::check_inserted_paragraphs(doc.paragraph_count())?;
+    Ok(Some(adopt(s, doc)))
 }
 
 /// What a Paste brings in.
@@ -297,7 +306,7 @@ fn clipboard_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
-    if let Some(f) = rich_fragment(s, v) {
+    if let Some(f) = rich_fragment(s, v)? {
         return Ok(Pasted::Fragment(f));
     }
     match text {
@@ -370,8 +379,54 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
     }
 }
 
+/// The paragraphs a fragment holds: its blocks, the cells of its tables, and the stories of the
+/// text boxes it carries. What a paste of it would put into the document.
+fn fragment_paragraphs(frag: &Fragment) -> usize {
+    fn count(blocks: &[Block], depth: usize) -> usize {
+        let mut n = 0;
+        for b in blocks {
+            match b {
+                Block::Para(_) => n += 1,
+                Block::Table(t) => {
+                    for row in &t.rows {
+                        for cell in &row.cells {
+                            n += count_boxes(&cell.blocks, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+        n
+    }
+    fn count_boxes(blocks: &[Arc<Block>], depth: usize) -> usize {
+        if depth > MAX_DEPTH {
+            return 0;
+        }
+        let mut n = 0;
+        for b in blocks {
+            match &**b {
+                Block::Para(_) => n += 1,
+                Block::Table(t) => {
+                    for row in &t.rows {
+                        for cell in &row.cells {
+                            n += count_boxes(&cell.blocks, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+        n
+    }
+    let body = count(&frag.blocks, 0);
+    let boxes: usize = frag.parts.values().map(|p| count_boxes(&p.blocks, 1)).sum();
+    body + boxes
+}
+
 /// Replace the selection with `frag`, marking it as an insertion under Track Changes.
 pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+    // A fragment carries its paragraphs, so it is held to the same limit as the text routes:
+    // refused before the selection is deleted and before anything is put into the document.
+    super::check_inserted_paragraphs(fragment_paragraphs(&frag))?;
     // The pasted text keeps its own formatting; what Backspace carried over is not for after it (#6518).
     s.forget_carried();
     super::controls::prepare_edit(s)?;
