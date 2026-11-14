@@ -1,9 +1,9 @@
-use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
+use super::boxes::{BoxInput, BoxLayout, Edges, frame_float, joined, layout_box, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
 use super::floats::{
-    FloatAnchor, LateFloats, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, fitting, late_floats, place_late,
-    place_objects,
+    FloatAnchor, LateFloats, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, fitting, float_rect, late_floats,
+    place_late, place_objects,
 };
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
@@ -17,7 +17,32 @@ use crate::WRAP_RELAYS;
 
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
+fn place_page_text_frame(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize) -> bool {
+    if pb.web {
+        return false;
+    }
+    let Some(fr) = ctx.doc.styles.resolve_para_in(&p.props, None).frame else { return false };
+    if fr.h_anchor != "page" || fr.v_anchor != "page" {
+        return false;
+    }
+    let width = fr.w.unwrap_or_else(|| pb.col_w()).clamp(1.0, 1584.0);
+    let label = ctx.next_label(p);
+    let pl = ctx.para_labelled(p, width, None, &[], label);
+    let height = fr.h.map_or(pl.height, |h| if fr.h_exact { h } else { h.max(pl.height) });
+    let float = frame_float(&fr);
+    let page = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+    let rect = float_rect(Some(page), (pb.col_x(), pb.col_w()), pb.y, width, height, &float);
+    let path = [block as u32];
+    if let Some(page) = pb.page() {
+        push_para(&mut page.items, (StoryRef::Body, &path), &pl, (0, pl.lines.len()), (rect.x, rect.y), width, Edges::own(&pl, 0, pl.lines.len()));
+    }
+    true
+}
+
 pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+    if place_page_text_frame(ctx, pb, p, block) {
+        return;
+    }
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
         let section = pb.sect_idx;
