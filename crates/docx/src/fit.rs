@@ -4,10 +4,8 @@
 //! never be mistaken for a user's data. It is not a document property, so it stays out of
 //! `docProps/custom.xml`.
 
+use craft_docx::DocxError;
 use wordcraft_doc::FitState;
-
-use crate::DocxError;
-use crate::xml::{El, esc};
 
 /// The part this crate writes and reads back.
 pub(crate) const PART: &str = "customxml/wordcraftfit.xml";
@@ -16,27 +14,44 @@ pub(crate) const ROOT: &str = "wordcraftFit";
 /// Namespace of the store.
 pub(crate) const NS: &str = "urn:wordcraft:fit";
 /// Marker attribute the parser keeps (namespace declarations are stripped from `El`).
-const KIND: &str = "wordcraft-fit-v1";
-
-/// Whether `root` is our store (and not a user's custom XML part with a coincidental name).
-pub(crate) fn is_state(root: &El) -> bool {
-    root.local() == ROOT && root.attr("kind") == Some(KIND)
-}
+pub(crate) const KIND: &str = "wordcraft-fit-v1";
 
 /// Serialize `fit` as the custom XML store.
 pub(crate) fn write(fit: &FitState) -> Result<Vec<u8>, DocxError> {
     let json = serde_json::to_string(fit).map_err(|e| DocxError::Xml(e.to_string()))?;
-    Ok(format!(r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}"><fitState>{}</fitState></{ROOT}>"#, esc(&json))
-        .into_bytes())
+    let esc_json = quick_xml::escape::escape(&json);
+    Ok(format!(r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}"><fitState>{}</fitState></{ROOT}>"#, esc_json).into_bytes())
 }
 
-/// Read the state from a parsed custom XML root, if it is ours.
-pub(crate) fn read(root: &El) -> Option<FitState> {
-    if !is_state(root) {
-        return None;
+/// Read the state from a custom XML part's bytes, if it is ours.
+pub(crate) fn read_from_bytes(bytes: &[u8]) -> Option<FitState> {
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    let mut buf = Vec::new();
+    let mut is_our_kind = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(ref e)) => {
+                let name = e.local_name();
+                if name.as_ref() == ROOT.as_bytes() {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.local_name().as_ref() == b"kind" && attr.value.as_ref() == KIND.as_bytes() {
+                            is_our_kind = true;
+                        }
+                    }
+                } else if name.as_ref() == b"fitState" && is_our_kind {
+                    let text = reader.read_text(e.to_end().name()).ok()?;
+                    let s = std::str::from_utf8(text.as_ref()).ok()?;
+                    let unescaped = quick_xml::escape::unescape(s).ok()?;
+                    return serde_json::from_str(&unescaped).ok();
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
     }
-    let state = root.els().find(|e| e.local() == "fitState")?;
-    serde_json::from_str(&state.text()).ok()
+    None
 }
 
 #[cfg(test)]
