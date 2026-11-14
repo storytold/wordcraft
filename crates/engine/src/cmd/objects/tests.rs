@@ -1254,6 +1254,167 @@ fn header_pictures_can_be_resized_and_dragged() {
     s.run("edit.undo", &json!({})).unwrap();
     let u = s.layout().object(&selected(&s).unwrap().0, 0).expect("laid out");
     assert!((u.rect.x - 200.0).abs() < 1.0 && (u.rect.y - 60.0).abs() < 1.0, "{:?}", u.rect);
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (wordcraft_doc::para::Anchor::Page, wordcraft_doc::para::Anchor::Page));
+    assert_eq!((float.x, float.y), (200.0, 60.0));
+}
+
+/// #5812: arrange.bounds on a header picture (or after moveWithText false) keeps page anchoring
+/// and exports a page-anchored frame in .odt with coordinates relative to the page.
+#[test]
+fn arrange_bounds_on_header_picture_writes_page_anchored_odt_frame() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.editHeader", &json!({})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 0.0, "y": 0.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (0.0, 0.0));
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+    let mut styles = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("styles.xml").unwrap(), &mut styles).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "frame should be page-anchored: {styles}");
+    assert!(styles.contains(r#"svg:x="0pt""#) && styles.contains(r#"svg:y="0pt""#), "offsets should be 0pt: {styles}");
+    assert!(!styles.contains(r#"text:anchor-type="paragraph""#), "frame should not be paragraph-anchored: {styles}");
+
+    // Also test after arrange.moveWithText false
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 10.0, "y": 20.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (10.0, 20.0));
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+    let mut styles = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("styles.xml").unwrap(), &mut styles).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "{styles}");
+    assert!(styles.contains(r#"svg:x="10pt""#) && styles.contains(r#"svg:y="20pt""#), "{styles}");
+}
+
+/// A body picture set to stay on the page (`moveWithText` off) is still placed by its paragraph
+/// once moved: the move is the placement, and the file keeps no page number to put it back
+/// (#5705). Header and footer pictures stay page-anchored (see above).
+#[test]
+fn a_moved_body_picture_is_placed_by_its_paragraph_even_when_fixed_to_the_page() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First line of paragraph.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    // Default body float moves with text
+    let (_pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Column));
+
+    // Turn off moveWithText: fixed on the page until it is moved.
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    let (_, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Page));
+
+    s.run("arrange.bounds", &json!({"page": 0, "x": 50.0, "y": 80.0})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Paragraph));
+    assert_eq!(float.page, 0);
+    let hit = s.layout().object(&pos, 0).expect("laid out");
+    assert!((hit.rect.x - 50.0).abs() < 1.0 && (hit.rect.y - 80.0).abs() < 1.0, "dropped: {:?}", hit.rect);
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut content).unwrap();
+    assert!(content.contains(r#"text:anchor-type="paragraph""#), "body picture should export with paragraph anchor: {content}");
+    assert!(!content.contains("anchor-page-number"), "{content}");
+}
+
+/// Changing `moveWithText` on an object with `h_align` set preserves its horizontal
+/// anchor relation and layout position without displacement.
+#[test]
+fn move_with_text_preserves_horizontal_position_when_h_align_set() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First body paragraph with some text.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    // Set horizontal alignment to End (right)
+    let (pos, _) = selected(&s).unwrap();
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.h_align = Some(FloatAlign::End);
+        f.h_rel = Anchor::Margin;
+    })
+    .unwrap();
+    s.touch();
+
+    let hit_before = s.layout().object(&pos, 0).unwrap();
+    let x_before = hit_before.rect.x;
+
+    // Toggle moveWithText false
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.v_rel, Anchor::Page);
+    assert_eq!(float.h_align, Some(FloatAlign::End));
+    assert_eq!(float.h_rel, Anchor::Margin);
+    s.touch();
+    let hit_after = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after.rect.x, x_before);
+
+    // Toggle moveWithText true
+    s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.v_rel, Anchor::Paragraph);
+    assert_eq!(float.h_align, Some(FloatAlign::End));
+    assert_eq!(float.h_rel, Anchor::Margin);
+    s.touch();
+    let hit_after2 = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after2.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after2.rect.x, x_before);
+}
+
+/// Toggling `moveWithText` preserves horizontal anchor relations (`Margin`, `RightMargin`,
+/// `Character`, `Column`, `Page`) and offset when the object has no horizontal alignment.
+#[test]
+fn move_with_text_preserves_horizontal_anchor_relations_without_alignment() {
+    use wordcraft_doc::para::Anchor;
+    for rel in [Anchor::Margin, Anchor::RightMargin, Anchor::Character, Anchor::Column, Anchor::Page] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "A line of body text.\n"})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+        let (pos, _) = selected(&s).unwrap();
+        super::select::edit_float(&mut s, &pos, |f| {
+            f.h_align = None;
+            f.h_rel = rel;
+            f.x = 35.0;
+        })
+        .unwrap();
+        s.touch();
+
+        // Toggle moveWithText false
+        s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Page, "expected Page v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText false");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText false");
+
+        // Toggle moveWithText true
+        s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Paragraph, "expected Paragraph v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText true");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText true");
+    }
 }
 
 /// Shape Format › Text (#369): direction and alignment on the box the caret is in, then

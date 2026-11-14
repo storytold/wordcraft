@@ -235,7 +235,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1020,6 +1020,73 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cfb"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+
+[[package]]
+name = "craft-codepage"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+
+[[package]]
+name = "craft-doc-binary"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "chrono",
+ "craft-cfb",
+ "craft-codepage",
+ "craft-wordmodel",
+ "image",
+ "log",
+ "miniz_oxide 0.9.1",
+ "sha1 0.11.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-docx"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "craft-drawingml",
+ "craft-math",
+ "craft-offcrypto",
+ "craft-opc",
+ "craft-wordmodel",
+ "craft-xml",
+ "log",
+ "quick-xml 0.41.0",
+ "thiserror 2.0.21",
+ "unicode-bidi",
+ "zeroize",
+]
+
+[[package]]
+name = "craft-drawingml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "craft-xml",
+ "kurbo",
+ "log",
+ "serde",
+]
+
+[[package]]
+name = "craft-flow"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "craft-wordmodel",
+ "image",
+ "log",
+]
+
+[[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=762a06a4c6b48b522b7d4de84a87917ef90265e6#762a06a4c6b48b522b7d4de84a87917ef90265e6"
@@ -1079,6 +1146,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-math"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "craft-xml",
+ "serde",
+]
+
+[[package]]
+name = "craft-metafile"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "encoding_rs",
+ "image",
+ "kurbo",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-offcrypto"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "aes",
+ "base64 0.23.1",
+ "craft-cfb",
+ "craft-xml",
+ "getrandom 0.3.4",
+ "hmac",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
+name = "craft-opc"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "craft-xml",
+ "craft-zip",
+ "log",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-pdf"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=6e03f65bf45181db77ba6229716e6624db9eb25b#6e03f65bf45181db77ba6229716e6624db9eb25b"
@@ -1110,6 +1225,19 @@ dependencies = [
  "miniz_oxide 0.9.1",
  "toml",
  "unicode-normalization",
+]
+
+[[package]]
+name = "craft-rtf"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "craft-codepage",
+ "craft-flow",
+ "craft-metafile",
+ "craft-wordmodel",
+ "encoding_rs",
+ "image",
 ]
 
 [[package]]
@@ -1196,6 +1324,39 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/winprint.rs?rev=417ac3c4d14d3da5485a99c7d5ce8f05664ec312#417ac3c4d14d3da5485a99c7d5ce8f05664ec312"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "craft-wordmodel"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "base64 0.23.1",
+ "craft-math",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "craft-xml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "quick-xml 0.41.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+ "zip 9.1.0",
 ]
 
 [[package]]
@@ -1707,7 +1868,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3710,7 +3871,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4210,7 +4371,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4561,7 +4722,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4620,7 +4781,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5413,7 +5574,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6460,7 +6621,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6884,40 +7045,29 @@ name = "wordcraft-docbin"
 version = "0.18.1"
 dependencies = [
  "cfb",
- "chrono",
- "image",
- "log",
- "miniz_oxide 0.9.1",
- "proptest",
+ "craft-doc-binary",
+ "craft-wordmodel",
+ "serde",
  "serde_json",
- "sha1 0.11.0",
- "thiserror 2.0.21",
  "wordcraft-doc",
- "wordcraft-geom",
 ]
 
 [[package]]
 name = "wordcraft-docx"
 version = "0.18.1"
 dependencies = [
- "aes",
  "base64 0.23.1",
  "cfb",
- "chrono",
- "getrandom 0.3.4",
- "hmac",
+ "craft-docx",
+ "craft-wordmodel",
  "image",
  "log",
  "proptest",
  "quick-xml 0.41.0",
+ "serde",
  "serde_json",
- "sha1 0.11.0",
- "sha2 0.11.1",
- "thiserror 2.0.21",
- "unicode-bidi",
  "wordcraft-doc",
  "wordcraft-geom",
- "zeroize",
  "zip 3.0.0",
 ]
 
@@ -6978,6 +7128,7 @@ dependencies = [
  "cfb",
  "chardetng",
  "chrono",
+ "craft-rtf",
  "encoding_rs",
  "getrandom 0.3.4",
  "hmac",
@@ -6990,6 +7141,7 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.1",
  "wordcraft-doc",
+ "wordcraft-docx",
  "wordcraft-geom",
  "wordcraft-metafile",
  "zeroize",
