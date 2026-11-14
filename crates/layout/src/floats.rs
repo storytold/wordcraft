@@ -477,6 +477,7 @@ fn anchor_floats_but(
     ctx.fields.page_format = pb.page_format;
     let (col_x, width) = (pb.col_x(), pb.col_w());
     let mut rects = HashMap::new();
+    let mut areas = HashMap::new();
     if !pb.web && place {
         // (A mark from a page before may be short of the areas this page started with.)
         pb.excl.truncate(excl_mark.max(pb.seeded));
@@ -513,20 +514,53 @@ fn anchor_floats_but(
             // with it known from the start (#2048).
             let above = area.as_ref().filter(|a| text_before && a.0.y < top - 0.5).map(|a| (page, a.clone()));
             ctx.floats_above.insert((block, oi), above);
-            if let Some(area) = area {
-                match early.and_then(|v| v.iter().position(|(b, k, _)| (*b, *k) == (block, oi))).filter(|k| *k < pb.seeded) {
+            let slot = if let Some(area) = area {
+                let b = area.0.bottom();
+                let k = match early.and_then(|v| v.iter().position(|(b, k, _)| (*b, *k) == (block, oi))).filter(|k| *k < pb.seeded) {
                     Some(k) => {
                         if let Some(slot) = pb.excl.get_mut(k) {
                             *slot = area;
                         }
+                        k
                     }
-                    None => pb.excl.push(area),
-                }
-            }
+                    None => {
+                        let k = pb.excl.len();
+                        pb.excl.push(area);
+                        k
+                    }
+                };
+                Some((k, b))
+            } else {
+                None
+            };
+            areas.insert(oi, slot);
         }
     }
     let rel = rel_exclusions(&body_wraps(ctx, pb), col_x, y0);
     let pl = ctx.para_labelled(p, width, None, &rel, label.clone());
+    let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0));
+    if !pb.web && place && lead > 0.0 {
+        let page = pb.pages.len().saturating_sub(1);
+        let top = y0 - before;
+        let text_before = top > pb.top + 0.5 || pb.col > 0;
+        let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+        for (oi, o) in p.objects.iter().enumerate() {
+            let Some((_, _, float)) = floating(o) else { continue };
+            let Some(&area) = areas.get(&oi) else { continue };
+            let Some(&r) = rects.get(&oi) else { continue };
+            if area.is_none_or(|(_, b)| float.y < 0.0 && b < y0 + lead - 0.5) {
+                let moved = float_rect(Some(frame), (col_x, width), top + lead, r.w, r.h, float);
+                rects.insert(oi, moved);
+                if let Some((k, _)) = area
+                    && let Some(slot) = pb.excl.get_mut(k)
+                {
+                    slot.0.y += moved.y - r.y;
+                    let above = (text_before && slot.0.y < top - 0.5).then(|| (page, slot.clone()));
+                    ctx.floats_above.insert((block, oi), above);
+                }
+            }
+        }
+    }
     (rects, pl, rel)
 }
 
