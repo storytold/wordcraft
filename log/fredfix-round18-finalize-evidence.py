@@ -18,7 +18,9 @@ gates=json.loads(Path('log/fredfix-round18-final-gate-summary.json').read_text()
 assert len(gates)==20 and all(g['accepted'] for g in gates.values())
 assert gates['workspace-tests']['baseline_exact_match'] and len(gates['workspace-tests']['failures'])==19
 assert gates['contracts']['mutations']==['140'] and gates['contracts']['rows']==['197']
-assert json.loads(Path('log/fredfix-round18-final-source-hashes.json').read_text())['unchanged_after_gates']
+source_hashes=json.loads(Path('log/fredfix-round18-final-source-hashes.json').read_text())
+assert source_hashes['unchanged_after_gates']
+assert {k:hashlib.sha256((root/k).read_bytes()).hexdigest() for k in source_hashes['hashes']}==source_hashes['hashes']
 patch=subprocess.check_output(['git','diff','--binary','8dc309af','--','.',':(exclude)log/**'])
 Path('log/fredfix-round18-reviewed.diff').write_bytes(patch)
 Path('log/fredfix-round18-reviewed-diff.json').write_text(json.dumps({'base':'8dc309afe132bb09e90e7b19faf99cbfaf82db81','implementation_diff':'log/fredfix-round18-reviewed.diff','sha256':hashlib.sha256(patch).hexdigest(),'scope':'implementation and progress documents; log evidence excluded','no_dependency_changes':not subprocess.check_output(['git','diff','8dc309af','--','Cargo.toml','Cargo.lock','crates/validate/Cargo.toml','crates/validate/observations/recognizer/Cargo.toml','crates/validate/observations/recognizer/Cargo.lock'])},indent=2)+'\n')

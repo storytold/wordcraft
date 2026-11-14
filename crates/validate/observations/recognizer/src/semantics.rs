@@ -2,7 +2,7 @@
 //! Unsupported tainted operations fail closed; this is deliberately not a Rust type checker.
 use crate::{ident, tokens};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{
@@ -121,6 +121,7 @@ pub(crate) fn analyze(sig: &Signature, block: &Block, names: &Names, file: &str,
     let mut audit = Flow {
         names: names.clone(),
         bindings: HashMap::new(),
+        scopes: vec![],
         issues: vec![],
         calls: vec![],
         file: file.into(),
@@ -162,6 +163,7 @@ pub(crate) fn analyze(sig: &Signature, block: &Block, names: &Names, file: &str,
 struct Flow {
     names: Names,
     bindings: HashMap<String, Origin>,
+    scopes: Vec<HashSet<String>>,
     issues: Vec<String>,
     calls: Vec<String>,
     file: String,
@@ -197,7 +199,11 @@ impl Flow {
     fn bind(&mut self, pat: &Pat, origin: Origin) {
         match pat {
             Pat::Ident(p) => {
-                self.bindings.insert(ident(&p.ident), origin);
+                let name = ident(&p.ident);
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.insert(name.clone());
+                }
+                self.bindings.insert(name, origin);
             }
             Pat::Type(p) => self.bind(&p.pat, origin),
             Pat::Paren(p) => self.bind(&p.pat, origin),
@@ -276,7 +282,7 @@ impl Flow {
                 match ident(&m.method).as_str() {
                     "prefix" => Origin { prefix: true, ..Origin::default() },
                     "into_complete_set" | "is_complete" | "missing" => Origin::default(),
-                    "contains" | "contains_key" | "any" | "get" | "find" | "is_none" | "is_some" | "is_some_and" => {
+                    "contains" | "contains_key" | "any" | "all" | "get" | "find" | "is_none" | "is_some" | "is_some_and" => {
                         Origin { membership: origin.prefix || origin.raw, ..origin }
                     }
                     _ => origin,
@@ -371,8 +377,17 @@ impl<'ast> Visit<'ast> for Flow {
     fn visit_block(&mut self, block: &'ast Block) {
         let saved = self.bindings.clone();
         let names = self.names.clone();
+        self.scopes.push(HashSet::new());
         visit::visit_block(self, block);
-        self.bindings = saved;
+        if let Some(declared) = self.scopes.pop() {
+            for name in declared {
+                if let Some(previous) = saved.get(&name) {
+                    self.bindings.insert(name, previous.clone());
+                } else {
+                    self.bindings.remove(&name);
+                }
+            }
+        }
         self.names = names;
     }
     fn visit_local(&mut self, local: &'ast Local) {
@@ -395,6 +410,8 @@ impl<'ast> Visit<'ast> for Flow {
                 }
                 self.visit_expr(diverge);
             }
+        } else {
+            self.bind(&local.pat, Origin::default());
         }
     }
     fn visit_expr(&mut self, expr: &'ast Expr) {
@@ -499,8 +516,14 @@ impl<'ast> Visit<'ast> for Flow {
                 }
                 if self.returns_absence
                     && origin.raw
-                    && ((self.negative && matches!(method.as_str(), "any" | "contains" | "contains_key")) || method == "is_none")
+                    && ((self.negative && matches!(method.as_str(), "any" | "contains" | "contains_key"))
+                        || matches!(method.as_str(), "is_none" | "all"))
                     && !(self.file == "package.rs" && self.function == "canonical")
+                    && !(self.file == "lib.rs"
+                        && self.function == "note_sources_complete"
+                        && !self.negative
+                        && method == "all"
+                        && tokens(m).starts_with("pkg . entries . iter () . filter (| e | ! e . is_dir) . all ("))
                     && !matches!(
                         tokens(m).as_str(),
                         "pkg . rels . iter () . any (| rp | rp . incomplete)"
@@ -643,7 +666,8 @@ impl<'ast> Visit<'ast> for Flow {
                     if old.prefix || old.outcome || old.callable.is_some() {
                         self.issue("reassignment of tracked observation/callable provenance is unsupported");
                     }
-                    self.bindings.insert(tokens(p), self.origin(&a.right));
+                    let next = self.origin(&a.right);
+                    self.bindings.insert(tokens(p), Origin { raw: old.raw || next.raw, ..next });
                 }
                 visit::visit_expr(self, expr);
             }
@@ -652,5 +676,39 @@ impl<'ast> Visit<'ast> for Flow {
         if state_root {
             self.state_depth -= 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn analyze_fn(code: &str) -> Vec<String> {
+        let item: ItemFn = syn::parse_str(code).unwrap();
+        let names = Names::default();
+        let value = analyze(&item.sig, &item.block, &names, "package.rs", "");
+        value["issues"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn nested_assignment_retains_outer_raw_provenance() {
+        let issues = analyze_fn(
+            "fn f(entries: &[Entry], name: &str) -> bool { let mut items: &[Entry] = &[]; { items = entries; } !items.iter().any(|e| e.name == name) }",
+        );
+        assert!(issues.iter().any(|i| i.contains("raw absence")), "expected raw absence issue: {issues:?}");
+    }
+
+    #[test]
+    fn nested_shadowing_restores_outer_binding() {
+        let issues = analyze_fn(
+            "fn f(entries: &[Entry], name: &str) -> bool { let items = entries; { let items: &[Entry] = &[]; let _ = items; } !items.iter().any(|e| e.name == name) }",
+        );
+        assert!(issues.iter().any(|i| i.contains("raw absence")), "expected raw absence issue: {issues:?}");
+    }
+
+    #[test]
+    fn raw_iterator_all_absence_is_rejected() {
+        let issues = analyze_fn("fn f(entries: &[Entry], name: &str) -> bool { entries.iter().all(|e| e.name != name) }");
+        assert!(issues.iter().any(|i| i.contains("raw absence")), "expected raw absence issue for Iterator::all: {issues:?}");
     }
 }

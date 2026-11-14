@@ -478,6 +478,9 @@ fn rejected_extra_fields_cannot_manufacture_duplicates() {
         let added = field.len();
         z.splice(extra_start..extra_start, field);
         z[rejected + 30..rejected + 32].copy_from_slice(&(68 + added as u16).to_le_bytes());
+        let eocd_cd_size = z.len() - 10;
+        let old_cd_size = u32::from_le_bytes(z[eocd_cd_size..eocd_cd_size + 4].try_into().unwrap());
+        z[eocd_cd_size..eocd_cd_size + 4].copy_from_slice(&(old_cd_size + added as u32).to_le_bytes());
         assert!(embedded + added < z.len().saturating_sub(22 + 0xFFFF));
         let mut a = zip::ZipArchive::new(Cursor::new(z.as_slice())).unwrap();
         assert_eq!(a.central_directory_start(), u64::from(start), "{label}");
@@ -504,6 +507,55 @@ fn reader_tolerated_extra_io_remains_accepted() {
         le16(&mut extra, 0);
         z[record + 30..record + 32].copy_from_slice(&4u16.to_le_bytes());
         z.splice(after_name..after_name, extra);
+        let eocd_cd_size = z.len() - 10;
+        let old_cd_size = u32::from_le_bytes(z[eocd_cd_size..eocd_cd_size + 4].try_into().unwrap());
+        z[eocd_cd_size..eocd_cd_size + 4].copy_from_slice(&(old_cd_size + 4).to_le_bytes());
         assert_clean(&run(label, &z));
     }
+}
+
+/// Standard IEEE CRC-32 for Info-ZIP 0x7075 Unicode Path header checks.
+fn crc32_ieee(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for &b in bytes {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+/// CodeRabbit PR#18: distinct raw ZIP names that Unicode-decode to a case collision must fire PKG-CASE-COLLISION.
+#[test]
+fn unicode_path_case_collision_fires_from_decoded_names() {
+    let mut p = Pkg::new();
+    p.put("word/x1.xml", "<a/>");
+    p.put("word/x2.xml", "<b/>");
+    let mut z = p.build();
+    for (raw_name, unicode_name) in [("word/x1.xml", "word/Alpha.xml"), ("word/x2.xml", "word/alpha.xml")] {
+        let (record, after_name, old_extra_len) = {
+            let mut a = zip::ZipArchive::new(Cursor::new(z.as_slice())).unwrap();
+            let f = a.by_name(raw_name).unwrap();
+            let record = f.central_header_start() as usize;
+            let old_extra_len = u16::from_le_bytes(z[record + 30..record + 32].try_into().unwrap());
+            (record, record + 46 + f.name().len(), old_extra_len)
+        };
+        let mut payload = Vec::new();
+        payload.push(1);
+        payload.extend_from_slice(&crc32_ieee(raw_name.as_bytes()).to_le_bytes());
+        payload.extend_from_slice(unicode_name.as_bytes());
+        let mut field = Vec::new();
+        le16(&mut field, 0x7075);
+        le16(&mut field, payload.len() as u16);
+        field.extend_from_slice(&payload);
+        let added = field.len();
+        z[record + 30..record + 32].copy_from_slice(&(old_extra_len + added as u16).to_le_bytes());
+        z.splice(after_name..after_name, field);
+        let eocd_cd_size = z.len() - 10;
+        let old_cd_size = u32::from_le_bytes(z[eocd_cd_size..eocd_cd_size + 4].try_into().unwrap());
+        z[eocd_cd_size..eocd_cd_size + 4].copy_from_slice(&(old_cd_size + added as u32).to_le_bytes());
+    }
+    let report = validate_bytes(&z);
+    assert!(report.findings.iter().any(|f| f.rule == "PKG-CASE-COLLISION"), "{report:?}");
 }

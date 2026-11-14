@@ -3301,18 +3301,17 @@ fn validate_path_on_missing_file_is_an_io_error() {
 }
 
 /// Recursively collect all `.docx` files within a directory in sorted order.
-fn docx_files(dir: &Path) -> Vec<PathBuf> {
+fn docx_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else { return found };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
         if path.is_dir() {
-            found.extend(docx_files(&path));
+            found.extend(docx_files(&path)?);
         } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docx")) {
             found.push(path);
         }
     }
-    found
+    Ok(found)
 }
 
 #[test]
@@ -3585,7 +3584,7 @@ fn corpus_hook() {
     let Ok(dir) = std::env::var("WORDCRAFT_VALIDATE_CORPUS") else {
         return;
     };
-    let files = docx_files(Path::new(&dir));
+    let files = docx_files(Path::new(&dir)).expect("WORDCRAFT_VALIDATE_CORPUS directory is readable");
     assert!(
         !files.is_empty(),
         "WORDCRAFT_VALIDATE_CORPUS is set to {dir} but it contains no .docx files; an empty configured corpus is a broken gate"
@@ -5555,4 +5554,166 @@ fn round6_auxiliary_eof_guards_do_not_manufacture_conclusions() {
     eprintln!("unclosed commentsIds: {report:?}");
     assert!(report.findings.iter().any(|f| f.rule == "XML-MALFORMED"));
     assert!(!report.findings.iter().any(|f| f.message.contains("counterpart")));
+}
+
+/// CodeRabbit PR#18: merging part.exemptions keeps skipped w:contentPart exemptions alongside native InkML.
+#[test]
+fn coderabbit_exemptions_merge_skipped_content_part_and_native_inkml() {
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="{MC_NS}" xmlns:w14="{W14_NS}" mc:Ignorable="w14">
+  <w:body>
+    <mc:AlternateContent>
+      <mc:Choice Requires="w99"><w:p><w:r><w:contentPart r:id="rSkip"/></w:r></w:p></mc:Choice>
+      <mc:Fallback><w:p/></mc:Fallback>
+    </mc:AlternateContent>
+    <w:p><w14:contentPart r:id="rInk"/></w:p>
+  </w:body>
+</w:document>"#
+        ),
+    );
+    d.add_with_override("word/customText.xml", "text/xml", r#"<customData xmlns="urn:example:custom"/>"#);
+    d.add_with_override("word/ink1.xml", "application/inkml+xml", r#"<ink xmlns="http://www.w3.org/2003/InkML"/>"#);
+    d.set_doc_rels(
+        r#"<Relationship Id="rSkip" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="customText.xml"/>
+<Relationship Id="rInk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="ink1.xml"/>"#,
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "CT-MISMATCH"), "skipped w:contentPart exemption was lost: {report:?}");
+}
+
+/// CodeRabbit PR#18: REL-TYPED image reference dedup keys on (attr, rel_id), not rel_id alone.
+#[test]
+fn coderabbit_image_ref_dedups_by_attr_and_rel_id() {
+    const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="{A_NS}">
+  <w:body><w:p><a:blip r:link="rExt" r:embed="rExt"/></w:p></w:body>
+</w:document>"#
+        ),
+    );
+    d.set_doc_rels(
+        r#"<Relationship Id="rExt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.com/a.png" TargetMode="External"/>"#,
+    );
+    let report = validate(&d);
+    let finding = assert_finding(&report, "REL-TYPED", Some("word/document.xml"));
+    assert!(finding.message.contains("rExt"), "{finding:?}");
+}
+
+/// CodeRabbit PR#18: skipped AlternateContent separates syntax completion from bookmark pairing completeness.
+#[test]
+fn coderabbit_alternate_content_bookmark_pairing_stays_incomplete() {
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="{W_NS}" xmlns:mc="{MC_NS}">
+  <w:body>
+    <w:bookmarkStart w:id="1" w:name="b1"/>
+    <mc:AlternateContent>
+      <mc:Choice Requires="w99"><w:bookmarkEnd w:id="1"/></mc:Choice>
+      <mc:Fallback><w:p/></mc:Fallback>
+    </mc:AlternateContent>
+  </w:body>
+</w:document>"#
+        ),
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "BOOKMARK-UNPAIRED"), "{report:?}");
+    assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+}
+
+/// CodeRabbit PR#18: deeply nested AlternateContent paths compare linearly and branch 0 collisions still fire.
+#[test]
+fn coderabbit_paths_conflict_deep_alternate_content_and_branch_zero() {
+    let mut nested = String::from(
+        r#"<mc:AlternateContent><mc:Choice Requires="w99"><w:p w14:paraId="00000001"/></mc:Choice><mc:Fallback><w:p w14:paraId="00000001"/></mc:Fallback></mc:AlternateContent>"#,
+    );
+    for _ in 0..24 {
+        nested =
+            format!(r#"<mc:AlternateContent><mc:Choice Requires="w99">{nested}</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent>"#);
+    }
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="{W_NS}" xmlns:mc="{MC_NS}" xmlns:w14="{W14_NS}" mc:Ignorable="w14"><w:body>{nested}</w:body></w:document>"#
+        ),
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "PARAID-DUP"), "{report:?}");
+
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="{W_NS}" xmlns:w14="{W14_NS}" mc:Ignorable="w14" xmlns:mc="{MC_NS}">
+  <w:body><w:p w14:paraId="00000001"/><w:p w14:paraId="00000001"/></w:body>
+</w:document>"#
+        ),
+    );
+    let dup_report = validate(&d);
+    assert_finding(&dup_report, "PARAID-DUP", Some("word/document.xml"));
+}
+
+/// CodeRabbit PR#18: named general entities validate against predefined XML and complete internal DOCTYPE subsets.
+#[test]
+fn coderabbit_doctype_entities_and_unresolved_general_refs() {
+    // Unresolved named reference reports XML-MALFORMED.
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>&undeclared;</w:t></w:r></w:p></w:body></w:document>"#),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "XML-MALFORMED", Some("word/document.xml"));
+
+    // Declared internal DOCTYPE entity passes.
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY greet "hi">]><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>&greet;</w:t></w:r></w:p></w:body></w:document>"#
+        ),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+
+    // External DTD subset leaves unresolved entity names incomplete instead of XML-MALFORMED.
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document SYSTEM "ext.dtd" [<!ENTITY greet "hi">]><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>&fromExt;</w:t></w:r></w:p></w:body></w:document>"#
+        ),
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "XML-MALFORMED"), "{report:?}");
+    assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+
+    // Parameter entity in internal subset leaves unresolved entity names incomplete instead of XML-MALFORMED.
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY % pe "<!ENTITY greet 'hi'>">%pe;]><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>&greet;</w:t></w:r></w:p></w:body></w:document>"#
+        ),
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "XML-MALFORMED"), "{report:?}");
+    assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+
+    // Predefined numeric reference behavior stays intact.
+    d.set(
+        "word/document.xml",
+        format!(r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>&#65;&#x0;</w:t></w:r></w:p></w:body></w:document>"#),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "XML-INVALID-CHAR", Some("word/document.xml"));
 }

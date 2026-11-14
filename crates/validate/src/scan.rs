@@ -10,7 +10,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, NamespaceResolver, QName, ResolveResult};
 use quick_xml::reader::NsReader;
 
-use crate::observed::{CompleteSet, Observed};
+use crate::observed::{CompleteSet, Completeness, Observed};
 use crate::{Acc, NS_DS, NS_M, NS_MC, NS_R, NS_W, NS_W14, NS_W15, NS_W16CID, NS_WP};
 
 /// Parsed numeric value; invalid spellings remain explicitly separate from valid keys.
@@ -381,6 +381,8 @@ pub(crate) struct PartScan {
     pub note_capped: bool,
     /// The generic fact budget dropped at least one fact in this part.
     pub fact_capped: bool,
+    /// The per-part reference budget dropped at least one `r:id`/`r:embed`/`r:link`.
+    pub refs_capped: bool,
     /// All XML events and story facts were examined; absence joins may use this part.
     pub facts_complete: bool,
     /// XML events completed independently of individual fact/reference allocation caps.
@@ -834,7 +836,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "-";
-        collections: "access.invalidate*1,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*4,field.frames*9,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.refs*2,field.special_notes*2,field.unknown_prefixes*4,type.Vec*9";
+        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*4,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.refs*2,field.special_notes*2,field.unknown_prefixes*4,parser.parse_doctype_entities*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -860,12 +862,16 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         note_listings: (Vec::new(), Vec::new()),
         note_capped: false,
         fact_capped: false,
+        refs_capped: false,
         facts_complete: false,
         syntax_complete: false,
     };
     let mut root_count = 0usize;
     let mut events = 0usize;
     let mut budget_stopped = false;
+    let mut doctype_seen = false;
+    let mut complete_entities = Observed::complete(HashSet::new()).into_complete_set();
+    let mut entity_incomplete_noted = false;
     loop {
         if events >= acc.limits.events {
             acc.note(format!("{part} has more than {} XML events; the rest of the part was not checked", acc.limits.events));
@@ -1000,13 +1006,20 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     break;
                 }
             }
-            Ok(Event::GeneralRef(e)) => {
-                if state.frames.is_empty() {
-                    let msg = if root_count == 0 { "a reference before the document element" } else { "content after the document element" };
-                    out.malformed = Some(msg.to_string());
+            Ok(Event::DocType(e)) => {
+                if doctype_seen || !state.frames.is_empty() || root_count > 0 {
+                    out.malformed = Some("unexpected DOCTYPE declaration".to_string());
                     break;
                 }
-                scan_general_ref(part, e.as_ref(), acc);
+                doctype_seen = true;
+                complete_entities = parse_doctype_entities(e.as_ref(), acc.limits.facts).into_complete_set();
+            }
+            Ok(Event::GeneralRef(e)) => {
+                if handle_general_ref_event(part, state.frames.is_empty(), root_count, &mut entity_incomplete_noted, &mut out, acc, |acc| {
+                    scan_general_ref(part, e.as_ref(), complete_entities.as_ref(), acc)
+                }) {
+                    break;
+                }
             }
             Ok(Event::CData(_)) if state.frames.is_empty() => {
                 out.malformed = Some("CDATA outside the document element".to_string());
@@ -1030,35 +1043,81 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     // marked INCOMPLETE at its own site; on the malformed path, a discarded completion-dependent set
     // that would have reported something marks the run INCOMPLETE below (the malformed part itself
     // is Warning-only by calibration).
-    let scan_complete = out.malformed.is_none() && !budget_stopped && !state.fact_capped && !state.refs_capped;
+    let skipped_content = state.alt_noted;
+    let scan_complete = out.malformed.is_none() && !budget_stopped && !state.fact_capped && !state.refs_capped && !skipped_content;
     out.facts_complete = scan_complete;
     out.syntax_complete = out.malformed.is_none() && !budget_stopped;
     if !out.syntax_complete || role.conflicting() {
         state.facts.invalidate("XML source or role incomplete");
+    } else if skipped_content {
+        state.facts.invalidate("mc:AlternateContent subtree skipped");
     }
     finish_prefix(&state, part, acc);
-    if scan_complete {
-        finish_completion(&state, part, acc);
-    } else if out.malformed.is_some() && completion_dependent_pending(&state) {
-        // No INCOMPLETE is marked by a malformed part itself, but here a completion-dependent
-        // pairing check could not run and would have reported something: the run could not examine
-        // everything a finding depends on. Name the part and the check that could not complete.
-        acc.note(format!("{part} ends before its field/move/bookmark pairing checks could complete; they were not run"));
-        acc.set_incomplete();
-    }
-    if state.fact_capped || state.refs_capped {
-        acc.note(format!("{part} exceeded the {}-entry fact/reference budget; later facts or references were not recorded", acc.limits.facts));
-        acc.set_incomplete();
-    }
+    note_scan_incomplete(part, &state, &out, scan_complete, skipped_content, acc);
     out.facts = state.facts;
     out.compat_97_2003 = state.compat_97;
     out.special_notes = std::mem::take(&mut state.special_notes);
     out.note_listings = (std::mem::take(&mut state.note_listings_f), std::mem::take(&mut state.note_listings_e));
     out.note_capped = state.note_capped;
     out.fact_capped = state.fact_capped;
+    out.refs_capped = state.refs_capped;
     out.unknown_prefixes.sort_unstable();
     out.unknown_prefixes.dedup();
     out
+}
+
+/// Apply entity reference validation and update malformed/incomplete status; returns `true` to stop scanning.
+fn handle_general_ref_event(
+    part: &str,
+    outside_element: bool,
+    root_count: usize,
+    entity_incomplete_noted: &mut bool,
+    out: &mut PartScan,
+    acc: &mut Acc,
+    resolve: impl FnOnce(&mut Acc) -> GeneralRefOutcome,
+) -> bool {
+    if outside_element {
+        let msg = if root_count == 0 { "a reference before the document element" } else { "content after the document element" };
+        out.malformed = Some(msg.to_string());
+        return true;
+    }
+    match resolve(acc) {
+        GeneralRefOutcome::Ok => false,
+        GeneralRefOutcome::Malformed(msg) => {
+            out.malformed = Some(msg);
+            true
+        }
+        GeneralRefOutcome::UnresolvedSubset => {
+            if !*entity_incomplete_noted {
+                acc.note(format!(
+                    "{part} uses a named entity reference with an unresolvable DOCTYPE subset; entity declarations could not be verified"
+                ));
+                acc.set_incomplete();
+                *entity_incomplete_noted = true;
+            }
+            false
+        }
+    }
+}
+
+/// Emit completion-dependent pairing or budget incompleteness notes once scanning stops.
+fn note_scan_incomplete(part: &str, state: &State, out: &PartScan, scan_complete: bool, skipped_content: bool, acc: &mut Acc) {
+    if scan_complete {
+        finish_completion(state, part, acc);
+    } else if out.malformed.is_some() && completion_dependent_pending(state) {
+        // No INCOMPLETE is marked by a malformed part itself, but here a completion-dependent
+        // pairing check could not run and would have reported something: the run could not examine
+        // everything a finding depends on. Name the part and the check that could not complete.
+        acc.note(format!("{part} ends before its field/move/bookmark pairing checks could complete; they were not run"));
+        acc.set_incomplete();
+    } else if skipped_content && completion_dependent_pending(state) {
+        acc.note(format!("{part} has open field/move/bookmark ranges across skipped mc:AlternateContent; pairing checks were not run"));
+        acc.set_incomplete();
+    }
+    if state.fact_capped || state.refs_capped {
+        acc.note(format!("{part} exceeded the {}-entry fact/reference budget; later facts or references were not recorded", acc.limits.facts));
+        acc.set_incomplete();
+    }
 }
 
 /// Collect an element's attributes, turning an iterator error (a duplicate or malformed attribute)
@@ -1497,10 +1556,17 @@ type ParaPath = Vec<(u32, u32)>;
 /// branch of a block is ever selected. A branch instance of 0 (the
 /// occurrence sits directly under the block) excuses nothing.
 fn paths_conflict(a: &ParaPath, b: &ParaPath) -> bool {
-    for (seq_a, branch_a) in a {
-        for (seq_b, branch_b) in b {
-            if seq_a == seq_b && *branch_a != 0 && *branch_b != 0 && branch_a != branch_b {
-                return false;
+    let (mut i, mut j) = (0usize, 0usize);
+    while let (Some(&(seq_a, branch_a)), Some(&(seq_b, branch_b))) = (a.get(i), b.get(j)) {
+        match seq_a.cmp(&seq_b) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                if branch_a != 0 && branch_b != 0 && branch_a != branch_b {
+                    return false;
+                }
+                i += 1;
+                j += 1;
             }
         }
     }
@@ -2503,25 +2569,197 @@ fn is_whitespace(e: &quick_xml::events::BytesText) -> bool {
     e.as_ref().iter().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
 }
 
-/// `XML-INVALID-CHAR` for a general entity reference: a character reference (`&#…;`) to a
-/// character illegal in XML 1.0. Named entities are ignored.
-fn scan_general_ref(part: &str, content: &[u8], acc: &mut Acc) {
+enum GeneralRefOutcome {
+    Ok,
+    Malformed(String),
+    UnresolvedSubset,
+}
+
+fn has_unquoted_keyword(text: &str, keyword: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut token = String::new();
+    for ch in text.chars() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+        } else if ch == '"' || ch == '\'' {
+            if token == keyword {
+                return true;
+            }
+            token.clear();
+            quote = Some(ch);
+        } else if ch.is_ascii_whitespace() {
+            if token == keyword {
+                return true;
+            }
+            token.clear();
+        } else {
+            token.push(ch);
+        }
+    }
+    quote.is_none() && token == keyword
+}
+
+fn find_decl_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut quote: Option<u8> = None;
+    let mut i = start;
+    while let Some(&b) = bytes.get(i) {
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+        } else if b == b'"' || b == b'\'' {
+            quote = Some(b);
+        } else if b == b'>' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract declared general entities from a part's DOCTYPE internal subset.
+/// Returns an incomplete `Observed` when an external subset, parameter entity,
+/// external general entity, or declaration budget prevents full resolution.
+fn parse_doctype_entities(raw: &[u8], cap: usize) -> Observed<HashSet<String>> {
     observation_contract! {
-        rules: "XML-INVALID-CHAR";
-        collections: "field.first*1";
+        rules: "-";
+        collections: "access.invalidate*2,parser.parse_doctype_entities*1,type.HashSet*5,type.Observed*6";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
         package_loss: "independent";
     }
 
-    if content.first() != Some(&b'#') {
-        return;
+    let text = String::from_utf8_lossy(raw);
+    let bytes = text.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut open_bracket = None;
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+        } else if b == b'"' || b == b'\'' {
+            quote = Some(b);
+        } else if b == b'[' {
+            open_bracket = Some(i);
+            break;
+        }
+        i += 1;
     }
+    let header = open_bracket.and_then(|idx| text.get(..idx)).unwrap_or(text.as_ref());
+    if quote.is_some() || has_unquoted_keyword(header, "SYSTEM") || has_unquoted_keyword(header, "PUBLIC") {
+        let mut obs = Observed::complete(HashSet::new());
+        obs.invalidate("external DOCTYPE subset");
+        return obs;
+    }
+    let Some(open) = open_bracket else {
+        return Observed::complete(HashSet::new());
+    };
+    let Some(close) = text.rfind(']').filter(|&c| c > open) else {
+        let mut obs = Observed::complete(HashSet::new());
+        obs.invalidate("unterminated DOCTYPE internal subset");
+        return obs;
+    };
+    let subset = text.get(open + 1..close).unwrap_or_default();
+    let sb = subset.as_bytes();
+    let mut set = HashSet::new();
+    let mut unresolved = false;
+    let mut pos = 0;
+    while let Some(&b) = sb.get(pos) {
+        if b.is_ascii_whitespace() {
+            pos += 1;
+            continue;
+        }
+        if sb.get(pos..pos + 4) == Some(b"<!--") {
+            let Some(rel_end) = subset.get(pos + 4..).and_then(|s| s.find("-->")) else {
+                unresolved = true;
+                break;
+            };
+            pos += 4 + rel_end + 3;
+            continue;
+        }
+        if sb.get(pos..pos + 2) == Some(b"<?") {
+            let Some(rel_end) = subset.get(pos + 2..).and_then(|s| s.find("?>")) else {
+                unresolved = true;
+                break;
+            };
+            pos += 2 + rel_end + 2;
+            continue;
+        }
+        if b == b'%' {
+            unresolved = true;
+            break;
+        }
+        if sb.get(pos..pos + 2) == Some(b"<!") {
+            let Some(decl_end) = find_decl_end(sb, pos + 2) else {
+                unresolved = true;
+                break;
+            };
+            let decl = subset.get(pos + 2..decl_end).unwrap_or_default();
+            if let Some(rest) = decl.strip_prefix("ENTITY")
+                && rest.starts_with(|c: char| c.is_ascii_whitespace())
+            {
+                let rest = rest.trim_start();
+                if rest.starts_with('%') {
+                    unresolved = true;
+                    break;
+                }
+                let name_end = rest.find(|c: char| c.is_ascii_whitespace()).unwrap_or(rest.len());
+                let name = rest.get(..name_end).unwrap_or_default();
+                let val_part = rest.get(name_end..).unwrap_or_default().trim_start();
+                if name.is_empty() || (!val_part.starts_with('"') && !val_part.starts_with('\'')) {
+                    unresolved = true;
+                    break;
+                }
+                if set.len() >= cap {
+                    unresolved = true;
+                    break;
+                }
+                set.insert(name.to_string());
+            }
+            pos = decl_end + 1;
+            continue;
+        }
+        unresolved = true;
+        break;
+    }
+    if unresolved { Observed::with_status(set, Completeness::Incomplete("unresolvable DOCTYPE subset")) } else { Observed::complete(set) }
+}
+
+/// Check a general entity reference: numeric character references for `XML-INVALID-CHAR`, and named
+/// references against the five predefined XML 1.0 entities and complete DOCTYPE internal subset declarations.
+fn scan_general_ref(part: &str, content: &[u8], entities: Option<&CompleteSet<String>>, acc: &mut Acc) -> GeneralRefOutcome {
+    observation_contract! {
+        rules: "XML-INVALID-CHAR";
+        collections: "access.missing*1,field.first*1,type.CompleteSet*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
     let body = String::from_utf8_lossy(content);
-    if let Some(desc) = bad_char_ref(&format!("&{body};")) {
-        acc.add("XML-INVALID-CHAR", Some(part.to_string()), format!("{part} contains {desc}, which is illegal in XML 1.0"));
+    if content.first() == Some(&b'#') {
+        if let Some(desc) = bad_char_ref(&format!("&{body};")) {
+            acc.add("XML-INVALID-CHAR", Some(part.to_string()), format!("{part} contains {desc}, which is illegal in XML 1.0"));
+        }
+        return GeneralRefOutcome::Ok;
     }
+    if matches!(body.as_ref(), "lt" | "gt" | "amp" | "apos" | "quot") {
+        return GeneralRefOutcome::Ok;
+    }
+    let Some(declared) = entities else {
+        return GeneralRefOutcome::UnresolvedSubset;
+    };
+    let name = body.into_owned();
+    if declared.missing(&name) {
+        return GeneralRefOutcome::Malformed(format!("undefined entity reference `&{name};`"));
+    }
+    GeneralRefOutcome::Ok
 }
 
 /// `XML-INVALID-CHAR` for an illegal character reference inside any attribute value.

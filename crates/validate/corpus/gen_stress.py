@@ -546,7 +546,7 @@ def textbox_xml(ctx):
               '<a:ln w="12700"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:ln></wps:spPr>'
               f'<wps:txbx><w:txbxContent>{inner}</w:txbxContent></wps:txbx>'
               '<wps:bodyPr rot="0" vert="horz" wrap="square" lIns="91440" tIns="45720" '
-              'rIns="91440" bIns="45720" anchor="t"><a:lstStyle/></wps:bodyPr>'
+              'rIns="91440" bIns="45720" anchor="t"/>'
               '</wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing>')
     fallback = ('<w:pict>' + SHAPETYPE +
                 f'<v:shape id="_x0000_s{1024 + d}" type="#_x0000_t202" '
@@ -926,7 +926,7 @@ def render_comments_ids(ctx):
     out = [XML_DECL, f'<w16cid:commentsIds xmlns:w16cid="{NS["w16cid"]}">']
     for c in ctx.all_comments:
         out.append(f'<w16cid:commentId w16cid:paraId="{c["paraId"]}" '
-                   f'w16cid:durableId="{c["durable"]}"/>')
+                   f'w16cid:durableId="{c["durable"]:08X}"/>')
     out.append("</w16cid:commentsIds>")
     return "".join(out)
 
@@ -1086,26 +1086,26 @@ def render_chart(ctx):
     pts = "".join(f'<c:pt idx="{i}"><c:v>{esc(c)}</c:v></c:pt>' for i, c in enumerate(cats))
     vpts = "".join(f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>' for i, v in enumerate(vals))
     xml = (XML_DECL + f'<c:chartSpace xmlns:c="{NS["c"]}" xmlns:a="{NS["a"]}" xmlns:r="{NS["r"]}">'
-           '<c:chart><c:autoTitleDeleted c:val="1"/><c:plotArea><c:layout/>'
-           '<c:barChart><c:barDir c:val="col"/><c:grouping c:val="clustered"/>'
-           '<c:varyColors c:val="0"/><c:ser><c:idx c:val="0"/><c:order c:val="0"/>'
-           '<c:tx><c:strRef><c:strCache><c:ptCount c:val="1"/>'
+           '<c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:layout/>'
+           '<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>'
+           '<c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/>'
+           '<c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:ptCount val="1"/>'
            '<c:pt idx="0"><c:v>Series 1</c:v></c:pt></c:strCache></c:strRef></c:tx>'
-           f'<c:cat><c:strRef><c:strCache><c:ptCount c:val="{len(cats)}"/>{pts}</c:strCache></c:strRef></c:cat>'
-           f'<c:val><c:numRef><c:numCache><c:formatCode>General</c:formatCode>'
-           f'<c:ptCount c:val="{len(vals)}"/>{vpts}</c:numCache></c:numRef></c:val></c:ser>'
-           '<c:gapWidth c:val="150"/><c:axId c:val="111111111"/><c:axId c:val="222222222"/>'
+           f'<c:cat><c:strRef><c:f>Sheet1!$A$2:$A${1 + len(cats)}</c:f><c:strCache><c:ptCount val="{len(cats)}"/>{pts}</c:strCache></c:strRef></c:cat>'
+           f'<c:val><c:numRef><c:f>Sheet1!$B$2:$B${1 + len(vals)}</c:f><c:numCache><c:formatCode>General</c:formatCode>'
+           f'<c:ptCount val="{len(vals)}"/>{vpts}</c:numCache></c:numRef></c:val></c:ser>'
+           '<c:gapWidth val="150"/><c:axId val="111111111"/><c:axId val="222222222"/>'
            '</c:barChart>'
-           '<c:catAx><c:axId c:val="111111111"/><c:scaling><c:orientation c:val="minMax"/></c:scaling>'
-           '<c:delete c:val="0"/><c:axPos c:val="b"/><c:tickLblPos c:val="nextTo"/>'
-           '<c:crossAx c:val="222222222"/><c:crosses c:val="autoZero"/><c:auto c:val="1"/>'
-           '<c:lblAlgn c:val="ctr"/><c:lblOffset c:val="100"/></c:catAx>'
-           '<c:valAx><c:axId c:val="222222222"/><c:scaling><c:orientation c:val="minMax"/></c:scaling>'
-           '<c:delete c:val="0"/><c:axPos c:val="l"/><c:majorGridlines/>'
-           '<c:tickLblPos c:val="nextTo"/><c:crossAx c:val="111111111"/>'
-           '<c:crosses c:val="autoZero"/><c:crossBetween c:val="between"/></c:valAx>'
-           '</c:plotArea><c:plotVisOnly c:val="1"/></c:chart>'
-           '<c:externalData r:id="rId1"><c:autoUpdate c:val="0"/></c:externalData></c:chartSpace>')
+           '<c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling>'
+           '<c:delete val="0"/><c:axPos val="b"/><c:tickLblPos val="nextTo"/>'
+           '<c:crossAx val="222222222"/><c:crosses val="autoZero"/><c:auto val="1"/>'
+           '<c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>'
+           '<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling>'
+           '<c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/>'
+           '<c:tickLblPos val="nextTo"/><c:crossAx val="111111111"/>'
+           '<c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>'
+           '</c:plotArea><c:plotVisOnly val="1"/></c:chart>'
+           '<c:externalData r:id="rId1"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>')
     return xml, make_xlsx(cats, vals)
 
 
@@ -1127,7 +1127,8 @@ def render_glossary(ctx):
         guid = "{%08X-%04X-%04X-%04X-%012X}" % (
             rng.randrange(0, 0xFFFFFFFF), rng.randrange(0, 0xFFFF), rng.randrange(0, 0xFFFF),
             rng.randrange(0, 0xFFFF), rng.randrange(0, 0xFFFFFFFFFFFF))
-        gallery = "autoTxt" if i % 2 == 0 else "quickParts"
+        gallery = "autoTxt" if i % 2 == 0 else "custQuickParts"
+        entry_type = "autoExp" if i % 2 == 0 else "normal"
         body = para(ctx, run(ctx, f"Building block {i}: " + ctx.sentence()),
                     part="word/glossary/document.xml")
         body += para(ctx, run(ctx, ctx.sentence()), part="word/glossary/document.xml")
@@ -1135,7 +1136,7 @@ def render_glossary(ctx):
             '<w:docPart><w:docPartPr>'
             f'<w:name w:val="Stress Block {i}"/>'
             f'<w:category><w:name w:val="General"/><w:gallery w:val="{gallery}"/></w:category>'
-            f'<w:types><w:type w:val="{gallery}"/></w:types>'
+            f'<w:types><w:type w:val="{entry_type}"/></w:types>'
             '<w:behaviors><w:behavior w:val="content"/></w:behaviors>'
             f'<w:description w:val="Generated building block {i}"/>'
             f'<w:guid w:val="{guid}"/></w:docPartPr>'
@@ -1430,7 +1431,7 @@ def build_document(knobs, seed):
     ctx.doc_rels.add(REL + "/comments", "comments.xml")
     ctx.doc_rels.add("http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
                      "commentsExtended.xml")
-    ctx.doc_rels.add("http://schemas.microsoft.com/office/2011/relationships/commentsIds",
+    ctx.doc_rels.add("http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
                      "commentsIds.xml")
     ctx.doc_rels.add("http://schemas.microsoft.com/office/2011/relationships/people", "people.xml")
     if knobs["glossary"]:
@@ -1792,6 +1793,20 @@ KNOB_ARGS = [
 ]
 
 
+def _positive_int(value):
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
+def _nonneg_int(value):
+    n = int(value)
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"must be non-negative, got {n}")
+    return n
+
+
 def main(argv=None):
     """CLI entry point to generate stress corpus documents."""
     ap = argparse.ArgumentParser(description=__doc__,
@@ -1803,7 +1818,8 @@ def main(argv=None):
         os.path.dirname(os.path.abspath(__file__)), "corpus"))
     ap.add_argument("-o", "--out", help="single output file")
     for name, typ in KNOB_ARGS:
-        ap.add_argument("--" + name.replace("_", "-"), type=typ, default=None)
+        arg_type = _positive_int if name == "sections" else (_nonneg_int if typ is int else typ)
+        ap.add_argument("--" + name.replace("_", "-"), type=arg_type, default=None)
     ap.add_argument("--chart", action="store_true", default=None)
     ap.add_argument("--no-chart", dest="chart", action="store_false")
     ap.add_argument("--glossary", action="store_true", default=None)

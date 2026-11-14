@@ -9,6 +9,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -39,11 +40,15 @@ class CheckoutTests(unittest.TestCase):
         (ROOT / "log").mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=ROOT / "log", prefix="fredapps-checkout-") as tmp:
             checkout = pathlib.Path(tmp)
+            git_env = {
+                k: v for k, v in os.environ.items()
+                if k not in {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"}
+            }
             for path in paths:
                 path = path.resolve()
                 rel = path.relative_to(ROOT)
                 attr = subprocess.check_output(
-                    ["git", "check-attr", "eol", "--", str(rel)], cwd=ROOT, text=True
+                    ["git", "check-attr", "eol", "--", str(rel)], cwd=ROOT, env=git_env, text=True
                 ).strip().rsplit(": ", 1)[-1]
                 data = path.read_bytes().replace(b"\r\n", b"\n")
                 if attr != "lf":
