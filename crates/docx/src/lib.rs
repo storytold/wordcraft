@@ -3,8 +3,8 @@
 //! [`read`] turns a `.docx` package into a [`wordcraft_doc::Document`]; [`write`] does the
 //! reverse. Both are written from the public specification. The reader is lenient (unknown
 //! markup is skipped, bad numbers fall back to defaults) and bounded (zip entry sizes, total
-//! decompressed size, XML depth and element counts are capped), so hostile input yields an
-//! error or a best-effort document, never a panic.
+//! decompressed size, XML depth, element counts per part and a package-wide element budget are
+//! capped), so hostile input yields an error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod bibliography;
