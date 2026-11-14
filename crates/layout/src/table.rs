@@ -28,6 +28,8 @@ pub struct RowLayout {
     pub edge: f32,
     /// The row's cells: the items each one owns and where its content ends.
     pub cells: Vec<CellPart>,
+    /// Cells' behind-text runs in `items`, by z: the page draws them in one layer.
+    pub(crate) behind: Vec<(u32, std::ops::Range<usize>)>,
 }
 
 /// A cell of a [`RowLayout`].
@@ -351,6 +353,8 @@ fn region_borders(parts: &[(TablePart, Borders)], rows: (usize, usize), edges: (
 
 struct CellBox {
     items: Vec<Placed>,
+    /// The behind-text runs that start `items` (see [`BoxLayout::behind`]).
+    behind: Vec<(u32, usize)>,
     h: f32,
     x: f32,
     w: f32,
@@ -601,6 +605,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let insets = margins[0] + margins[2] + band_t + band_b;
             let turn = cell.props.text_direction;
             let mut turned = None;
+            let mut behind = Vec::new();
             let (items, h) = if cell.props.vmerge == VMerge::Continue {
                 (Vec::new(), 0.0)
             } else if turn.is_turned() {
@@ -622,7 +627,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
                 (items, len)
             } else {
-                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } = layout_box(
+                let BoxLayout { mut items, behind: runs, mut height, floats_bottom, last_top, .. } = layout_box(
                     ctx,
                     BoxInput {
                         context: BoxContext::Cell { text, left: -margins[1], right: x1 - x0 - margins[1], clamp: true },
@@ -639,6 +644,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 for it in &mut items {
                     it.translate(x0 + margins[1], margins[0] + band_t);
                 }
+                behind = runs;
                 // The cell grows to hold its floating tables.
                 (items, height.max(floats_bottom))
             };
@@ -654,6 +660,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             }
             cells.push(CellBox {
                 items,
+                behind,
                 h,
                 x: x0,
                 w: x1 - x0,
@@ -747,6 +754,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         let rh = heights.get(ri).copied().unwrap_or(0.0);
         let exact = t.rows.get(ri).is_some_and(|r| r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0));
         let mut items = Vec::new();
+        let mut behind = Vec::new();
         let mut parts = Vec::with_capacity(cells.len());
         for (ci, c) in cells.into_iter().enumerate() {
             let first = items.len();
@@ -826,6 +834,11 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 }
             }
             let content = items.len();
+            let mut start = content;
+            for (z, len) in c.behind {
+                behind.push((z, start..start + len));
+                start += len;
+            }
             for mut it in cell_items {
                 it.translate(0.0, dy);
                 items.push(it);
@@ -869,6 +882,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             bottom: bottoms.get(ri).copied().unwrap_or(0.0),
             edge: edges.get(ri).copied().unwrap_or(0.0),
             cells: parts,
+            behind,
         });
     }
     TableLayout { x, width: total, rows: out }
@@ -1151,8 +1165,8 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     }
     // The part left on the page is placed and never split again.
     Some((
-        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new() },
-        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts },
+        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new(), behind: Vec::new() },
+        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts, behind: Vec::new() },
     ))
 }
 

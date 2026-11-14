@@ -206,8 +206,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let allow_same_style_space =
         in_cell && ctx.doc.settings.allow_space_of_same_style_in_table && matches!(ctx.doc.settings.compat_mode, 11 | 12 | 14);
     let mut items = Vec::new();
-    // Pictures behind the text go first; `behind` counts them.
+    // Pictures behind the text go first; `behind` counts them, `behind_runs` by object and z.
     let mut behind = 0;
+    let mut behind_runs = Vec::new();
     // Wrap areas of the box's floating objects.
     let mut excl: Vec<WrapArea> = Vec::new();
     // Areas of the box's floating tables, which other floating tables may have to avoid.
@@ -340,7 +341,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                         pinned: Some(&pinned),
                         late: None,
                     };
-                    let (back, front) = place_objects(
+                    let (back, front, runs) = place_objects(
                         ctx,
                         &ObjectPlacement {
                             story,
@@ -364,6 +365,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     let at = behind.min(items.len());
                     behind += back.len();
                     items.splice(at..at, back);
+                    behind_runs.extend(runs);
                     items.extend(front);
                 }
                 // Automatic space after: none after the last paragraph of a cell or box. Nor
@@ -404,7 +406,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    BoxLayout { items, behind: behind_runs, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -459,6 +461,8 @@ fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
 /// height without it).
 pub(crate) struct BoxLayout {
     pub(crate) items: Vec<Placed>,
+    /// The behind-text runs that start `items`, in order: each object's z and item count.
+    pub(crate) behind: Vec<(u32, usize)>,
     pub(crate) table_areas: Vec<Rect>,
     pub(crate) page_table_wraps: Vec<WrapArea>,
     pub(crate) height: f32,
