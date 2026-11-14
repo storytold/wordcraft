@@ -144,6 +144,36 @@ fn a_table_styles_look_is_written_into_its_cells() {
 }
 
 #[test]
+fn a_table_styles_no_colour_is_written_into_its_cells_as_word_paints_it() {
+    // A part's `w:fill="auto"` covers the style's colour where `w:val="nil"` lets it show, and a
+    // cell's own No Color covers it too: the cells ODF gets are the ones Word paints.
+    use wordcraft_doc::styles::{FillOff, TablePart, TableStyleParts};
+    let red = Rgb(255, 0, 0);
+    let shadings = |off: Option<FillOff>, own_auto: bool| {
+        let mut d = Document::new();
+        let parts = TableStyleParts { fill: Some(red), fills_off: off.map(|o| (TablePart::FirstRow, o)).into_iter().collect(), ..Default::default() };
+        std::sync::Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+            id: "Probe".into(),
+            name: "Probe".into(),
+            kind: wordcraft_doc::StyleKind::Table,
+            table: Some(parts),
+            ..Default::default()
+        });
+        let mut t = wordcraft_doc::Table::new(3, 2, 288.0);
+        t.props.style = Some("Probe".into());
+        t.props.look.header_row = true;
+        t.rows[1].cells[0].props.shading_auto = own_auto;
+        d.body = vec![std::sync::Arc::new(Block::Table(t)), wordcraft_doc::para_block(wordcraft_doc::Paragraph::default())];
+        cells(&import(&export(&d).unwrap()).unwrap()).iter().map(|c| c.shading).collect::<Vec<_>>()
+    };
+    let r = Some(red);
+    assert_eq!(shadings(None, false), [r; 6], "the style's colour in every cell");
+    assert_eq!(shadings(Some(FillOff::Auto), false), [None, None, r, r, r, r], "auto covers it in the header");
+    assert_eq!(shadings(Some(FillOff::Nil), false), [r; 6], "nil lets it show");
+    assert_eq!(shadings(None, true), [r, r, None, r, r, r], "a cell's own No Color covers it");
+}
+
+#[test]
 fn a_cells_background_picture_is_read_drawn_and_written() {
     // LibreOffice's elegant agenda: a small gradient at the top left of a cell (§17.3
     // `style:background-image`, no-repeat, top left), under its text.

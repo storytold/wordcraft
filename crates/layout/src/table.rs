@@ -332,7 +332,7 @@ fn region_look(st: &TableStyleProps, region: Region) -> RegionLook {
     let mut out = RegionLook { fill: None, v_align: None, borders: Vec::new() };
     for part in region.iter() {
         let f = st.part(part);
-        out.fill = f.fill.or(out.fill);
+        out.fill = st.parts.fill_over(part, out.fill);
         out.v_align = f.v_align.or(out.v_align);
         // The whole table's borders are the table borders, applied on their own.
         if part != TablePart::WholeTable
@@ -534,7 +534,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 looks.push((region, region_look(st, region)));
             }
             let look = looks.iter().find(|(r, _)| *r == region).map(|(_, l)| l);
-            let fill = cell.props.shading.or(look.and_then(|l| l.fill));
+            let fill = cell.props.shading.or(if cell.props.shading_auto { None } else { look.and_then(|l| l.fill) });
             let text = cell_text.iter().find(|(r, _)| *r == region).map(|(_, c)| c);
             let mut cpath = path.to_vec();
             cpath.push(ri as u32);

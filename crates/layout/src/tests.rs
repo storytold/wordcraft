@@ -5231,6 +5231,65 @@ fn row_bands_shade_only_with_a_band_size() {
     assert_eq!(shaded_rows(&d), vec![1, 2], "bands of two rows");
 }
 
+/// Which colour each row's cells get from a table style, and from a cell's own No Color. Measured
+/// in Word (all in modes 12, 14 and 15): a part's `w:fill="auto"` covers the style's colour where a
+/// `w:val="nil"` lets it show, a cell's the same, and `w:tblPr/w:shd` paints nothing.
+#[test]
+fn table_style_shading_and_no_colour_paint_as_in_word() {
+    use wordcraft_doc::styles::{FillOff, TablePart, TableStyleParts};
+    let (red, pink, yellow) = (wordcraft_doc::props::Rgb(255, 0, 0), wordcraft_doc::props::Rgb(255, 0, 255), wordcraft_doc::props::Rgb(255, 255, 0));
+    let colours = |parts: TableStyleParts, own_auto: bool| {
+        let mut d = styled_table_doc(Some("Probe"), 3);
+        Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+            id: "Probe".into(),
+            name: "Probe".into(),
+            kind: wordcraft_doc::StyleKind::Table,
+            table: Some(parts),
+            ..Default::default()
+        });
+        let Block::Table(t) = Arc::make_mut(&mut d.body[1]) else { panic!("table") };
+        t.props.look.header_row = true;
+        t.rows[1].cells[0].props.shading_auto = own_auto;
+        let l = lay(&d);
+        let cells: Vec<(usize, usize, wordcraft_geom::Rect)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Cell { rect, row, cell, .. } = i { Some((*row, *cell, *rect)) } else { None })
+            .collect();
+        let mut got: Vec<(usize, usize, wordcraft_doc::props::Rgb)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Fill { rect, color } = i { Some((*rect, *color)) } else { None })
+            .filter_map(|(f, color)| {
+                let (x, y) = (f.x + f.w / 2.0, f.y + f.h / 2.0);
+                cells.iter().find(|(_, _, c)| c.x <= x && x <= c.right() && c.y <= y && y <= c.bottom()).map(|(r, g, _)| (*r, *g, color))
+            })
+            .collect();
+        got.sort_by_key(|(r, g, _)| (*r, *g));
+        got
+    };
+    let whole = TableStyleParts { fill: Some(red), ..Default::default() };
+    // Every cell, each once, in the style's colour: the exact list the other cases are read against.
+    let all = colours(whole.clone(), false);
+    let grid: Vec<(usize, usize)> = all.iter().map(|(r, g, _)| (*r, *g)).collect();
+    assert_eq!(grid, (0..3).flat_map(|r| (0..2).map(move |g| (r, g))).collect::<Vec<_>>(), "one fill per cell");
+    assert!(all.iter().all(|(_, _, c)| *c == red));
+    let painted = |f: &dyn Fn(usize, usize) -> Option<wordcraft_doc::props::Rgb>| {
+        grid.iter().filter_map(|&(r, g)| f(r, g).map(|c| (r, g, c))).collect::<Vec<_>>()
+    };
+    // Only `w:tblPr/w:shd`: nothing.
+    assert!(colours(TableStyleParts { table_shading: Some(yellow), ..Default::default() }, false).is_empty());
+    // A header over the style's colour, and a cell's own No Color.
+    let header = colours(TableStyleParts { header_fill: Some(pink), ..whole.clone() }, false);
+    assert_eq!(header, painted(&|r, _| Some(if r == 0 { pink } else { red })));
+    let own = colours(whole.clone(), true);
+    assert_eq!(own, painted(&|r, g| ((r, g) != (1, 0)).then_some(red)), "No Color covers the style's colour");
+    // A header with no colour: `auto` covers the style's, `nil` lets it show.
+    let off = |o: FillOff| TableStyleParts { fills_off: [(TablePart::FirstRow, o)].into_iter().collect(), ..whole.clone() };
+    assert_eq!(colours(off(FillOff::Auto), false), painted(&|r, _| (r != 0).then_some(red)));
+    assert_eq!(colours(off(FillOff::Nil), false), all);
+}
+
 /// The paragraph's own style (Normal included) and direct formatting beat the table style; the
 /// table style only fills in what they leave unset.
 #[test]
