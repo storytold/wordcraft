@@ -84,9 +84,12 @@ fn val<'a>(pr: Option<&'a El>, name: &str) -> Option<&'a str> {
     pr.and_then(|p| p.child(name)).and_then(|c| c.attr("m:val"))
 }
 
-/// The argument held by child `name` of `e`.
+/// The argument held by child `name` of `e`, at `depth` (its structure's own depth plus one, as
+/// [`node`] counts it). It adds nothing of its own: a structure costs one depth unit, as
+/// [`write_equation`](crate::write::math::write_equation) spends one per level, so [`MAX_DEPTH`]
+/// means the same nesting in both and a round trip keeps what it read (#6071).
 fn sub_arg(e: &El, name: &str, depth: usize) -> Arg {
-    e.child(name).map(|c| arg(c, depth + 1)).unwrap_or_default()
+    e.child(name).map(|c| arg(c, depth)).unwrap_or_default()
 }
 
 /// Read the math content of an element (`m:oMath`, `m:e`, `m:num`…).
@@ -102,6 +105,8 @@ fn arg(e: &El, depth: usize) -> Arg {
 }
 
 fn node(k: &El, depth: usize, out: &mut Arg) {
+    // The one depth unit this node costs: the depth of its arguments, and of the content of a
+    // transparent wrapper (`w:ins`, `mc:AlternateContent`…), which is what bounds that recursion.
     let d = depth + 1;
     match k.name.as_str() {
         "m:r" => {
@@ -474,6 +479,50 @@ mod tests {
             }
         });
         assert_eq!(font, Some(None), "mapped symbol text takes the text font");
+    }
+
+    /// How many fractions deep the tree's first node goes (iterative: these chains are deeper
+    /// than a test helper should recurse).
+    fn frac_depth(a: &[MNode]) -> usize {
+        let (mut d, mut cur) = (0, a);
+        while let Some(MNode::Frac { num, .. }) = cur.first() {
+            d += 1;
+            cur = num;
+        }
+        d
+    }
+
+    /// A chain of `n` fractions, `inner` in the innermost numerator.
+    fn frac_chain(n: usize, inner: &str) -> String {
+        let mut s = inner.to_string();
+        for i in (1..=n).rev() {
+            s = format!("<m:f><m:num>{s}</m:num><m:den>{}</m:den></m:f>", t(&format!("d{i}")));
+        }
+        s
+    }
+
+    /// #6071: a structure costs one depth unit, as the writer spends one per level, so the reader
+    /// keeps the nesting the writer is willing to write. It used to spend two (`node` added one
+    /// and `sub_arg` another), so it gave up after `MAX_DEPTH / 2` structures and a round trip
+    /// lost the innermost content.
+    #[test]
+    fn deep_fraction_chain_keeps_its_innermost_text() {
+        let mut m = read_omath(&omath(&frac_chain(MAX_DEPTH, &t("innermost"))), MathJc::CenterGroup);
+        assert_eq!(frac_depth(&m.nodes), MAX_DEPTH);
+        assert!(texts(&mut m).contains(&"innermost".to_string()), "{:?}", texts(&mut m));
+    }
+
+    /// #6071: the limit still bounds what it bounded, one structure past `MAX_DEPTH`: the
+    /// argument isn't read, and a chain far deeper than the limit stops there all the same.
+    #[test]
+    fn fraction_chain_past_the_limit_stops_there() {
+        let mut m = read_omath(&omath(&frac_chain(MAX_DEPTH + 1, &t("innermost"))), MathJc::CenterGroup);
+        assert_eq!(frac_depth(&m.nodes), MAX_DEPTH + 1);
+        assert!(!texts(&mut m).contains(&"innermost".to_string()), "past the limit: {:?}", texts(&mut m));
+        // Well past it (within the XML reader's own depth limit): bounded, and no panic.
+        let mut m = read_omath(&omath(&frac_chain(100, &t("innermost"))), MathJc::CenterGroup);
+        assert_eq!(frac_depth(&m.nodes), MAX_DEPTH + 1);
+        assert!(!texts(&mut m).contains(&"innermost".to_string()));
     }
 
     /// Hostile nesting through the wrappers is bounded (no stack overflow, no panic).
