@@ -64,16 +64,7 @@ fn object_value_from_shared(source: craft_wordmodel::para::InlineObject) -> Resu
     use wordcraft_doc::para::InlineObject as Target;
 
     match source {
-        Source::Image {
-            media,
-            w,
-            h,
-            alt,
-            float,
-            crop,
-            fx,
-            ole,
-        } => Ok(Target::Image {
+        Source::Image { media, w, h, alt, float, crop, fx, ole } => Ok(Target::Image {
             media,
             w,
             h,
@@ -235,17 +226,45 @@ fn sanitize_para_props(mut props: wordcraft_doc::ParaProps) -> wordcraft_doc::Pa
             wordcraft_doc::props::LineSpacing::AtLeast(v) => *v = finite(*v),
         }
     }
-    if let Some(v) = &mut props.indent_left { if !v.is_finite() { *v = 0.0; } }
-    if let Some(v) = &mut props.indent_right { if !v.is_finite() { *v = 0.0; } }
-    if let Some(v) = &mut props.indent_first { if !v.is_finite() { *v = 0.0; } }
-    if let Some(v) = &mut props.space_before { if !v.is_finite() { *v = 0.0; } }
-    if let Some(v) = &mut props.space_after { if !v.is_finite() { *v = 0.0; } }
+    if let Some(v) = &mut props.indent_left {
+        if !v.is_finite() {
+            *v = 0.0;
+        }
+    }
+    if let Some(v) = &mut props.indent_right {
+        if !v.is_finite() {
+            *v = 0.0;
+        }
+    }
+    if let Some(v) = &mut props.indent_first {
+        if !v.is_finite() {
+            *v = 0.0;
+        }
+    }
+    if let Some(v) = &mut props.space_before {
+        if !v.is_finite() {
+            *v = 0.0;
+        }
+    }
+    if let Some(v) = &mut props.space_after {
+        if !v.is_finite() {
+            *v = 0.0;
+        }
+    }
     props
 }
 
 fn sanitize_char_props(mut props: wordcraft_doc::CharProps) -> wordcraft_doc::CharProps {
-    if let Some(v) = &mut props.size { if !v.is_finite() { *v = 0.0; } }
-    if let Some(v) = &mut props.spacing { if !v.is_finite() { *v = 0.0; } }
+    if let Some(v) = &mut props.size {
+        if !v.is_finite() {
+            *v = 0.0;
+        }
+    }
+    if let Some(v) = &mut props.spacing {
+        if !v.is_finite() {
+            *v = 0.0;
+        }
+    }
     props
 }
 
@@ -265,31 +284,17 @@ fn paragraph_value_to_shared(source: &wordcraft_doc::para::Paragraph) -> Result<
 }
 
 fn object_value_to_shared(source: &wordcraft_doc::para::InlineObject) -> Result<craft_wordmodel::para::InlineObject, DocxError> {
-    use wordcraft_doc::para::InlineObject as Source;
     use craft_wordmodel::para::InlineObject as Target;
+    use wordcraft_doc::para::InlineObject as Source;
 
     match source {
-        Source::Image {
-            media,
-            w,
-            h,
-            alt,
-            float,
-            crop,
-            fx,
-            ole,
-        } => Ok(Target::Image {
+        Source::Image { media, w, h, alt, float, crop, fx, ole } => Ok(Target::Image {
             media: media.clone(),
             w: finite(*w),
             h: finite(*h),
             alt: alt.clone(),
             float: convert_ref(float)?,
-            crop: [
-                finite(crop[0]),
-                finite(crop[1]),
-                finite(crop[2]),
-                finite(crop[3]),
-            ],
+            crop: [finite(crop[0]), finite(crop[1]), finite(crop[2]), finite(crop[3])],
             fx: convert_ref(fx)?,
             ole: ole.as_ref().map(|o| convert_ref(o.as_ref()).map(Arc::new)).transpose()?,
         }),
@@ -336,11 +341,7 @@ fn cell_value_to_shared(source: &wordcraft_doc::table::Cell) -> Result<craft_wor
 }
 
 fn part_value_to_shared(source: &wordcraft_doc::Part) -> Result<craft_wordmodel::Part, DocxError> {
-    Ok(craft_wordmodel::Part {
-        kind: convert_ref(&source.kind)?,
-        blocks: blocks_to_shared(&source.blocks)?,
-        body: convert_ref(&source.body)?,
-    })
+    Ok(craft_wordmodel::Part { kind: convert_ref(&source.kind)?, blocks: blocks_to_shared(&source.blocks)?, body: convert_ref(&source.body)? })
 }
 
 fn glossary_value_to_shared(source: &wordcraft_doc::BuildingBlock) -> Result<craft_wordmodel::BuildingBlock, DocxError> {

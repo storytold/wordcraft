@@ -1,7 +1,7 @@
 //! Rich Text Format adapter using craft-rtf.
 
-pub use craft_rtf::{dttm_to_iso, iso_to_dttm};
 pub use craft_rtf::doc::esc;
+pub use craft_rtf::{dttm_to_iso, iso_to_dttm};
 
 /// Import RTF bytes into WordCraft's document model.
 pub fn import(bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
