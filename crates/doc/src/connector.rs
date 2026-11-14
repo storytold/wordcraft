@@ -199,6 +199,10 @@ pub struct ShapeExtra {
     pub start_style: ArrowStyle,
     #[serde(skip_serializing_if = "ArrowStyle::is_default")]
     pub end_style: ArrowStyle,
+    /// A connector's preset and adjust values when they aren't the default elbow or curve through
+    /// the middle of its frame: what a document from Word routes around shapes with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector: Option<ConnectorGeom>,
     /// A rounded rectangle's corner radius (`roundRect`'s `adj`, ECMA-376 §20.1.10.56): in
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -365,36 +369,144 @@ pub fn ends(x: f32, y: f32, w: f32, h: f32, flip_h: bool, flip_v: bool) -> ((f32
     ((xa, ya), (xb, yb))
 }
 
+/// An elbow or curved connector's DrawingML preset (`bentConnector2`…`5`, `curvedConnector2`…`5`)
+/// and adjust values, ECMA-376 presetShapeDefinitions: 3 bends where `adj1` says (a fraction of the
+/// frame's width), 4 adds a crossing leg at `adj2` (of its height), 5 a third leg at `adj3` (of
+/// its width), and 2 is a single bend at the far corner.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorGeom {
+    /// The number in the preset's name, 2 to 5.
+    pub preset: u8,
+    /// The adjust values in 100000ths, as many as the preset takes; a missing one is
+    /// [`ConnectorGeom::DEFAULT_ADJ`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adj: Vec<i32>,
+}
+
+impl ConnectorGeom {
+    /// Every adjust value's default (the middle).
+    pub const DEFAULT_ADJ: i32 = 50_000;
+    /// Adjust values further out than a hundred frames are clamped: a file can hold anything.
+    pub const MAX_ADJ: i64 = 10_000_000;
+
+    /// How many adjust values `preset` takes.
+    pub fn adj_count(preset: u8) -> usize {
+        usize::from(preset.clamp(2, 5)) - 2
+    }
+
+    /// `preset` with `adj` (missing ones take the default, extra ones are dropped, every one is
+    /// clamped to ±[`Self::MAX_ADJ`]); `None` for the default: preset 3 bending at the middle.
+    pub fn new(preset: u8, adj: impl IntoIterator<Item = Option<i64>>) -> Option<ConnectorGeom> {
+        let preset = preset.clamp(2, 5);
+        let mut adj: Vec<i32> = adj
+            .into_iter()
+            .take(Self::adj_count(preset))
+            .map(|v| v.map_or(Self::DEFAULT_ADJ, |v| v.clamp(-Self::MAX_ADJ, Self::MAX_ADJ) as i32))
+            .collect();
+        adj.resize(Self::adj_count(preset), Self::DEFAULT_ADJ);
+        (preset != 3 || adj != [Self::DEFAULT_ADJ]).then_some(ConnectorGeom { preset, adj })
+    }
+
+    /// This geometry as [`ConnectorGeom::new`] would make it: the preset clamped to 2..=5, as
+    /// many adjust values as it takes, each clamped. Geometry read back from a saved document
+    /// doesn't go through `new`, so writers normalize it first.
+    pub fn normalized(&self) -> Option<ConnectorGeom> {
+        Self::new(self.preset, self.adj.iter().map(|&v| Some(i64::from(v))))
+    }
+
+    /// Adjust value `i`, in 100000ths.
+    fn value(&self, i: usize) -> f32 {
+        self.adj.get(i).copied().unwrap_or(Self::DEFAULT_ADJ) as f32
+    }
+}
+
 /// The path of a connector `kind` in a `w` × `h` frame at the origin, from its top-left to its
-/// bottom-right corner (flips are the frame's turn): straight, an elbow through the middle (out
-/// horizontally, across, in horizontally), or an S-curve. `None` for other kinds.
-pub fn connector_segs(kind: ShapeKind, w: f32, h: f32) -> Option<Vec<PathSeg>> {
+/// bottom-right corner (flips are the frame's turn): straight, an elbow or a curve. The elbow
+/// and the curve follow `geom`'s preset and adjust values, or bend through the middle without
+/// one, as presetShapeDefinitions draws them. `None` for other kinds.
+pub fn connector_segs(kind: ShapeKind, w: f32, h: f32, geom: Option<&ConnectorGeom>) -> Option<Vec<PathSeg>> {
     let (w, h) = (wordcraft_geom::finite(w), wordcraft_geom::finite(h));
-    let mx = w / 2.0;
+    let preset = geom.map_or(3, |g| g.preset);
+    // `*/ w adj 100000`, multiplied first as the spec's operator is: exact for whole points
+    let at = |len: f32, i: usize| len * geom.map_or(ConnectorGeom::DEFAULT_ADJ as f32, |g| g.value(i)) / 100_000.0;
+    let (m, l, c) = (PathSeg::Move, PathSeg::Line, PathSeg::Cubic);
     Some(match kind {
-        ShapeKind::StraightConnector => vec![PathSeg::Move(0.0, 0.0), PathSeg::Line(w, h)],
-        ShapeKind::ElbowConnector => vec![PathSeg::Move(0.0, 0.0), PathSeg::Line(mx, 0.0), PathSeg::Line(mx, h), PathSeg::Line(w, h)],
-        ShapeKind::CurvedConnector => vec![PathSeg::Move(0.0, 0.0), PathSeg::Cubic(mx, 0.0, mx, h, w, h)],
+        ShapeKind::StraightConnector => vec![m(0.0, 0.0), l(w, h)],
+        ShapeKind::ElbowConnector => match preset {
+            2 => vec![m(0.0, 0.0), l(w, 0.0), l(w, h)],
+            4 => {
+                let (x1, y2) = (at(w, 0), at(h, 1));
+                vec![m(0.0, 0.0), l(x1, 0.0), l(x1, y2), l(w, y2), l(w, h)]
+            }
+            5 => {
+                let (x1, y2, x3) = (at(w, 0), at(h, 1), at(w, 2));
+                vec![m(0.0, 0.0), l(x1, 0.0), l(x1, y2), l(x3, y2), l(x3, h), l(w, h)]
+            }
+            _ => {
+                let x1 = at(w, 0);
+                vec![m(0.0, 0.0), l(x1, 0.0), l(x1, h), l(w, h)]
+            }
+        },
+        ShapeKind::CurvedConnector => match preset {
+            2 => vec![m(0.0, 0.0), c(w / 2.0, 0.0, w, h / 2.0, w, h)],
+            4 => {
+                let (x2, y4) = (at(w, 0), at(h, 1));
+                let (x1, x3) = (x2 / 2.0, (w + x2) / 2.0);
+                let (x4, x5, y1) = ((x2 + x3) / 2.0, (x3 + w) / 2.0, y4 / 2.0);
+                let (y2, y3, y5) = (y1 / 2.0, (y1 + y4) / 2.0, (h + y4) / 2.0);
+                vec![m(0.0, 0.0), c(x1, 0.0, x2, y2, x2, y1), c(x2, y3, x4, y4, x3, y4), c(x5, y4, w, y5, w, h)]
+            }
+            5 => {
+                let (x3, y4, x6) = (at(w, 0), at(h, 1), at(w, 2));
+                let x1 = (x3 + x6) / 2.0;
+                let (x2, x4, x5, x7) = (x3 / 2.0, (x3 + x1) / 2.0, (x6 + x1) / 2.0, (x6 + w) / 2.0);
+                let y1 = y4 / 2.0;
+                let (y2, y3, y5) = (y1 / 2.0, (y1 + y4) / 2.0, (h + y4) / 2.0);
+                let (y6, y7) = ((y5 + y4) / 2.0, (y5 + h) / 2.0);
+                vec![m(0.0, 0.0), c(x2, 0.0, x3, y2, x3, y1), c(x3, y3, x4, y4, x1, y4), c(x5, y4, x6, y6, x6, y5), c(x6, y7, x7, h, w, h)]
+            }
+            _ => {
+                let x2 = at(w, 0);
+                vec![m(0.0, 0.0), c(x2 / 2.0, 0.0, x2, h / 4.0, x2, h / 2.0), c(x2, h * 0.75, (x2 + w) / 2.0, h, w, h)]
+            }
+        },
         _ => return None,
     })
 }
 
 /// The direction (unit vector) a line or connector `kind` arrives at its end (`at_end`) or
-/// leaves its start, in its unflipped `w` × `h` frame: where an arrowhead points.
-pub fn end_direction(kind: ShapeKind, w: f32, h: f32, at_end: bool) -> (f32, f32) {
+/// leaves its start, in its unflipped `w` × `h` frame: where an arrowhead points. An elbow's or
+/// curve's is its first or last leg's, which `geom` decides: a 2- or 4-bend elbow ends vertically.
+pub fn end_direction(kind: ShapeKind, w: f32, h: f32, at_end: bool, geom: Option<&ConnectorGeom>) -> (f32, f32) {
     let (dx, dy) = match kind {
-        ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => {
-            if w.abs() > 0.01 || h.abs() < 0.01 {
-                (1.0, 0.0)
-            } else {
-                (0.0, 1.0)
-            }
-        }
+        ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => leg_direction(&connector_segs(kind, w, h, geom).unwrap_or_default(), at_end),
         _ => (w, h),
     };
     let len = (dx * dx + dy * dy).sqrt();
     let (ux, uy) = if len > 1e-6 && len.is_finite() { (dx / len, dy / len) } else { (1.0, 0.0) };
     if at_end { (ux, uy) } else { (-ux, -uy) }
+}
+
+/// The direction of travel along `segs` at its end (or its start), skipping legs of no length:
+/// the last (first) control point or vertex that differs from the end (start) point. Along +x
+/// when the whole path has no length.
+fn leg_direction(segs: &[PathSeg], at_end: bool) -> (f32, f32) {
+    let mut pts = Vec::new();
+    for s in segs {
+        match *s {
+            PathSeg::Move(x, y) | PathSeg::Line(x, y) => pts.push((x, y)),
+            PathSeg::Cubic(a, b, c, d, e, f) => pts.extend([(a, b), (c, d), (e, f)]),
+            PathSeg::Close => {}
+        }
+    }
+    let far = |p: &(f32, f32), q: &(f32, f32)| (p.0 - q.0).abs() > 1e-4 || (p.1 - q.1).abs() > 1e-4;
+    let pick = if at_end {
+        pts.last().and_then(|e| pts.iter().rev().find(|p| far(p, e)).map(|p| (e.0 - p.0, e.1 - p.1)))
+    } else {
+        pts.first().and_then(|s| pts.iter().find(|p| far(p, s)).map(|p| (p.0 - s.0, p.1 - s.1)))
+    };
+    pick.unwrap_or((1.0, 0.0))
 }
 
 /// Re-route a group's glued connectors. Resolved ends use the shapes' connection sites in child
@@ -476,6 +588,102 @@ pub fn reroute_group(group: &mut InlineObject) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The vertices, and the cubics' end points, of a connector's path.
+    fn joints(kind: ShapeKind, w: f32, h: f32, geom: Option<&ConnectorGeom>) -> Vec<(f32, f32)> {
+        connector_segs(kind, w, h, geom)
+            .unwrap()
+            .iter()
+            .filter_map(|s| match *s {
+                PathSeg::Move(x, y) | PathSeg::Line(x, y) | PathSeg::Cubic(_, _, _, _, x, y) => Some((x, y)),
+                PathSeg::Close => None,
+            })
+            .collect()
+    }
+
+    // ECMA-376 presetShapeDefinitions: bentConnector2 l,t → r,t → r,b; 3 l,t → x1,t → x1,b → r,b;
+    // 4 adds the leg x1,y2 → r,y2; 5 runs x1,y2 → x3,y2 → x3,b (x1 = w·adj1, y2 = h·adj2, x3 =
+    // w·adj3). Every elbow bent at the middle before.
+    #[test]
+    fn elbows_follow_their_preset_and_adjust_values() {
+        let e = ShapeKind::ElbowConnector;
+        let g = |p: u8, adj: &[i64]| ConnectorGeom::new(p, adj.iter().map(|&v| Some(v)));
+        assert_eq!(joints(e, 200.0, 100.0, None), [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (200.0, 100.0)], "the default");
+        assert_eq!(joints(e, 200.0, 100.0, g(2, &[]).as_ref()), [(0.0, 0.0), (200.0, 0.0), (200.0, 100.0)]);
+        assert_eq!(joints(e, 200.0, 100.0, g(3, &[-30000]).as_ref()), [(0.0, 0.0), (-60.0, 0.0), (-60.0, 100.0), (200.0, 100.0)]);
+        assert_eq!(joints(e, 200.0, 100.0, g(4, &[20000, 80000]).as_ref()), [(0.0, 0.0), (40.0, 0.0), (40.0, 80.0), (200.0, 80.0), (200.0, 100.0)]);
+        assert_eq!(
+            joints(e, 200.0, 100.0, g(5, &[25000, 75000, 60000]).as_ref()),
+            [(0.0, 0.0), (50.0, 0.0), (50.0, 75.0), (120.0, 75.0), (120.0, 100.0), (200.0, 100.0)]
+        );
+    }
+
+    // curvedConnector2 is one cubic through (wd2, t) and (r, hd2); 3 two cubics meeting at
+    // (x2, vc); 4 and 5 bend where the elbows do. The curve was one S-shaped cubic before.
+    #[test]
+    fn curves_follow_their_preset_and_adjust_values() {
+        let c = ShapeKind::CurvedConnector;
+        let g = |p: u8| ConnectorGeom::new(p, []);
+        assert_eq!(connector_segs(c, 200.0, 100.0, g(2).as_ref()).unwrap()[1], PathSeg::Cubic(100.0, 0.0, 200.0, 50.0, 200.0, 100.0));
+        assert_eq!(
+            connector_segs(c, 200.0, 100.0, None).unwrap(),
+            [PathSeg::Move(0.0, 0.0), PathSeg::Cubic(50.0, 0.0, 100.0, 25.0, 100.0, 50.0), PathSeg::Cubic(100.0, 75.0, 150.0, 100.0, 200.0, 100.0)]
+        );
+        assert_eq!(joints(c, 200.0, 100.0, g(4).as_ref()), [(0.0, 0.0), (100.0, 25.0), (150.0, 50.0), (200.0, 100.0)]);
+        assert_eq!(joints(c, 200.0, 100.0, g(5).as_ref()), [(0.0, 0.0), (100.0, 25.0), (100.0, 50.0), (100.0, 75.0), (200.0, 100.0)]);
+    }
+
+    // An arrowhead points along the leg it ends: a 2- or 4-bend elbow arrives going down.
+    #[test]
+    fn arrowheads_follow_the_end_legs() {
+        let e = ShapeKind::ElbowConnector;
+        assert_eq!(end_direction(e, 200.0, 100.0, true, None), (1.0, 0.0), "the default arrives along +x");
+        assert_eq!(end_direction(e, 200.0, 100.0, false, None), (-1.0, 0.0));
+        let two = ConnectorGeom::new(2, []);
+        assert_eq!(end_direction(e, 200.0, 100.0, true, two.as_ref()), (0.0, 1.0));
+        assert_eq!(end_direction(e, 200.0, 100.0, false, two.as_ref()), (-1.0, 0.0));
+        let four = ConnectorGeom::new(4, [Some(20000), Some(80000)]);
+        assert_eq!(end_direction(e, 200.0, 100.0, true, four.as_ref()), (0.0, 1.0));
+        // a frame with no width is a vertical line, as before
+        assert_eq!(end_direction(e, 0.0, 100.0, true, None), (0.0, 1.0));
+        assert_eq!(end_direction(e, 0.0, 0.0, true, None), (1.0, 0.0));
+    }
+
+    // A preset with no adjust values saves without `adj`, and must read back (noted in review).
+    #[test]
+    fn connector_geometry_round_trips_through_json() {
+        for g in [ConnectorGeom::new(2, []), ConnectorGeom::new(4, [Some(20000), Some(80000)]), ConnectorGeom::new(5, [Some(-1), None, Some(3)])] {
+            let extra = ShapeExtra { connector: g.clone(), ..ShapeExtra::default() };
+            let json = serde_json::to_value(&extra).unwrap();
+            let back: ShapeExtra = serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{json}: {e}"));
+            assert_eq!(back.connector, g, "{json}");
+        }
+    }
+
+    // What a document says is normalized before it is written: a preset clamped, extra values
+    // dropped, every value clamped (noted in review).
+    #[test]
+    fn normalized_geometry_is_what_new_makes() {
+        let raw = |preset, adj: Vec<i32>| ConnectorGeom { preset, adj };
+        assert_eq!(raw(2, vec![25000]).normalized(), Some(raw(2, vec![])));
+        assert_eq!(raw(9, vec![1, 2, 3, 4]).normalized(), Some(raw(5, vec![1, 2, 3])));
+        assert_eq!(raw(4, vec![i32::MAX]).normalized(), Some(raw(4, vec![10_000_000, 50000])));
+        assert_eq!(raw(3, vec![50000]).normalized(), None, "the default");
+    }
+
+    #[test]
+    fn connector_geometry_keeps_only_what_differs_from_the_default() {
+        assert_eq!(ConnectorGeom::new(3, []), None);
+        assert_eq!(ConnectorGeom::new(3, [Some(50000)]), None);
+        assert_eq!(ConnectorGeom::new(3, [None, Some(1)]), None, "an extra value is dropped");
+        assert_eq!(ConnectorGeom::new(4, [None, Some(1)]), Some(ConnectorGeom { preset: 4, adj: vec![50000, 1] }));
+        assert_eq!(ConnectorGeom::new(9, []).map(|g| g.preset), Some(5), "clamped to 2..=5");
+        assert_eq!(ConnectorGeom::new(3, [Some(i64::MIN)]).unwrap().adj, [-10_000_000]);
+        for v in [f32::NAN, f32::INFINITY] {
+            let segs = connector_segs(ShapeKind::ElbowConnector, v, 100.0, ConnectorGeom::new(5, [Some(i64::MAX)]).as_ref()).unwrap();
+            assert!(segs.iter().all(|s| !matches!(s, PathSeg::Line(x, y) if !(x.is_finite() && y.is_finite()))), "{segs:?}");
+        }
+    }
     use crate::para::{Float, GroupChild};
 
     /// Older JSON retains flat ends without adding a property; non-flat values round-trip.
