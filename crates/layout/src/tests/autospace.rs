@@ -85,6 +85,32 @@ fn spaces_punctuation_hangul_and_latin_alone_get_nothing() {
     }
 }
 
+/// Word adds no automatic space, on either side, beside an ideograph whose run names an installed
+/// East Asian font without ideographs, even though a substituted face draws it (#6591: 0.00 pt
+/// with `w:eastAsia="Times New Roman"`). A font that isn't installed keeps the space.
+#[test]
+fn an_east_asian_font_without_ideographs_turns_it_off() {
+    crate::test_fonts();
+    let with = |latin: Option<&str>, asian: &str| {
+        let mut d = Document::from_text("法院94年A字");
+        let p = para0(&mut d);
+        let len = p.text.len();
+        p.format(0, len, &|c: &mut CharProps| {
+            c.font = latin.map(str::to_string);
+            c.font_ea = Some(asian.to_string());
+        })
+        .unwrap();
+        d
+    };
+    // Source Serif 4 is installed for the tests and has no ideographs.
+    for d in [with(None, "Source Serif 4"), with(Some("Source Serif 4"), "Source Serif 4")] {
+        assert!(gaps(&d).iter().all(|g| *g == 0.0), "{:?}", gaps(&d));
+    }
+    let d = with(None, "No Such East Asian Font 6591");
+    let q = quarter(&d);
+    assert_eq!(gaps(&d), [0.0, q, 0.0, q, q, q, 0.0], "a font that isn't installed");
+}
+
 #[test]
 fn a_field_result_is_classed_by_the_text_it_shows() {
     crate::test_fonts();

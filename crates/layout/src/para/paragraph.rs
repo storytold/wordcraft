@@ -643,6 +643,22 @@ fn shown_text(cx: &Cx) -> Option<String> {
     Some(shown)
 }
 
+/// Each run's end byte and the installed East Asian font (`w:eastAsia`) it names, `None` when it
+/// names none or one that isn't installed. Empty when `wanted` is false or the text is ASCII, which
+/// has no East Asian characters to look the fonts up for.
+fn installed_east_asian_fonts(cx: &Cx, wanted: bool) -> Vec<(usize, Option<wordcraft_fonts::FaceRef>)> {
+    if !wanted || cx.p.text.is_ascii() {
+        return Vec::new();
+    }
+    cx.p.run_ranges()
+        .map(|(range, props)| {
+            let rc = cx.res.char(props);
+            let face = rc.font_ea.as_deref().filter(|f| !f.trim().is_empty()).map(|f| wordcraft_fonts::word::resolve(f, rc.bold, rc.italic));
+            (range.end, face.filter(|r| !r.substituted).map(|r| r.face))
+        })
+        .collect()
+}
+
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     #[cfg(test)]
@@ -674,8 +690,15 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         snap_chars(&mut sh.b, &p.text, &env.grid);
     }
     // Text on a character grid keeps to its cells.
-    let auto_space =
-        if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    let auto_space = if rp.snap_to_grid && env.grid.chars.is_some() {
+        Vec::new()
+    } else {
+        let ea = installed_east_asian_fonts(&cx, rp.auto_space_de || rp.auto_space_dn);
+        let ea_lacks = |at: usize, c: char| {
+            ea.iter().find(|(end, _)| at < *end).and_then(|(_, face)| *face).is_some_and(|f: wordcraft_fonts::FaceRef| !f.covers(c))
+        };
+        auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn, ea_lacks)
+    };
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
