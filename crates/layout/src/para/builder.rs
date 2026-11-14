@@ -95,7 +95,9 @@ impl<'a> Builder<'a> {
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
                 _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
-                Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
+                // (A non-breaking hyphen goes by its own rule below, also right after a character
+                // from a fallback face that has one.)
+                Some(SegKey { face: Some(face), .. }) if face.covers(dc) && dc != NB_HYPHEN => Some(face),
                 _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
                 _ => {
                     let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };

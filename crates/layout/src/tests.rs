@@ -1474,6 +1474,17 @@ fn a_non_breaking_hyphen_the_font_lacks_is_drawn_with_its_own_hyphen() {
     // line may end after it, as one may after the hyphen it is drawn with.
     assert_eq!(bytes, [(0, 1), (1, 2), (2, 5), (5, 6), (6, 7)]);
     assert_eq!((breaks.get(2), own_breaks.get(2)), (Some(&false), Some(&true)));
+    // Right after a character taken from another face that has a non-breaking hyphen too, the
+    // hyphen still isn't taken from that face along with it.
+    const LIGATURE: char = '\u{FB01}';
+    let other = wordcraft_fonts::FontDb::global().fallback_styled(LIGATURE, mono.face.id(), false, false).map(|f| wordcraft_fonts::FaceRef::of(&f));
+    assert!(
+        !mono.face.covers(LIGATURE) && other.is_some_and(|f| f != mono.face && f.covers('\u{2011}')),
+        "the fixture font lacks a character whose fallback face has the hyphen"
+    );
+    let (faces, advances, ..) = line("ab\u{FB01}\u{2011}cd");
+    assert_eq!((faces.get(2).copied(), faces.get(3).copied()), (other, Some(mono.face)), "the hyphen after a fallback character: {faces:?}");
+    assert_eq!(advances.get(3), own_advances.get(2), "it is the font's own hyphen");
 }
 
 #[test]
