@@ -375,6 +375,34 @@ fn eqarr_row_without_an_align_marker_wider_than_the_columns_widens_the_array() {
     assert!(left[1] > 1.0, "the aligned row is centred under the wide one: {left:?}");
 }
 
+/// #6595: laying a structure out costs one depth unit, so layout draws every level the model
+/// keeps ([`MAX_DEPTH`]). It cost two — `node` spent one for the structure's arguments and `row`
+/// another for the node itself — so the `depth > MAX_DEPTH` guards stopped at half of
+/// `MAX_DEPTH` and the innermost content of anything deeper was silently left undrawn.
+#[test]
+fn an_equation_nested_as_deep_as_the_model_keeps_is_drawn_whole() {
+    crate::test_fonts();
+    use wordcraft_doc::math::*;
+    // Built here rather than read from a file, so only the layout path is under test.
+    let chain = |n: usize| {
+        let mut nodes = vec![MNode::Run(MRun::new("z"))];
+        for i in (1..=n).rev() {
+            nodes = vec![MNode::Frac { kind: FracKind::Bar, num: nodes, den: vec![MNode::Run(MRun::new(format!("d{i}")))] }];
+        }
+        Math { nodes, ..Default::default() }
+    };
+    let drawn = |m: &MathLayout| lines(m).iter().any(|(_, gs)| gs.iter().any(|(_, t)| t.contains('z')));
+    let deep = lay_in(&chain(MAX_DEPTH), "", false, 400.0, &MathProps::default());
+    assert!(drawn(&deep), "{MAX_DEPTH} fractions deep: the innermost content is drawn, got {:?}", lines(&deep));
+    // The guards still bound the recursion where they did: one structure past the limit the
+    // innermost argument isn't laid out, and a chain far deeper than the limit costs no more.
+    for n in [MAX_DEPTH + 1, 1000] {
+        let m = lay_in(&chain(n), "", false, 400.0, &MathProps::default());
+        assert!(!drawn(&m), "{n} fractions deep: nothing past the limit is drawn, got {:?}", lines(&m));
+        assert!(m.width.is_finite() && m.ascent.is_finite() && m.descent.is_finite(), "{n} fractions deep: {m:?}");
+    }
+}
+
 #[test]
 fn hostile_trees_never_panic() {
     crate::test_fonts();
