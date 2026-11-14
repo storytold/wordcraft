@@ -92,6 +92,10 @@ hmac = "0.13"
 base64 = "0.23"
 getrandom = "0.3"
 zeroize = "1"
+# LibreOffice 24.2+ password-protected ODT (the whole package encrypted): AES-256-GCM and Argon2id,
+# RustCrypto, both Apache-2.0 OR MIT, pure Rust.
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
 # Unix open flags (O_NONBLOCK for the engine's checked file reads, #3666); already in the lock as a
 # dependency of other crates.
 libc = "0.2"

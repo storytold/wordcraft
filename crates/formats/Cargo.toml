@@ -30,6 +30,9 @@ sha2 = { workspace = true }
 hmac = { workspace = true }
 getrandom = { workspace = true }
 zeroize = { workspace = true }
+# LibreOffice 24.2+ encryption (the whole package): AES-256-GCM, Argon2id.
+aes-gcm = { workspace = true }
+argon2 = { workspace = true }
 miniz_oxide = { workspace = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
