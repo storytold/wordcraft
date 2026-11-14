@@ -3020,3 +3020,22 @@ fn tables_are_tagged_with_table_tr_th_and_td() {
     assert!(raw.contains("/S/TD") || raw.contains("/S /TD"), "missing /S /TD in:\n{raw}");
     assert!(raw.contains("/Scope/Column") || raw.contains("/Scope /Column"), "missing /Scope /Column on TH");
 }
+
+/// A blank cell still gets its TD or TH, so a filled cell after it keeps its column.
+#[test]
+fn blank_table_cells_keep_their_td_and_th() {
+    use wordcraft_doc::{Cell, Row, Table, props::RowProps};
+    let mut d = Document::from_text("A table.");
+    let header = Row {
+        props: RowProps { header: true, ..Default::default() },
+        cells: vec![Cell::with_text(""), Cell::with_text("Col2")],
+        ..Default::default()
+    };
+    let body = Row { cells: vec![Cell::with_text(""), Cell::with_text("Cell11")], ..Default::default() };
+    let t = Table { grid: vec![120.0, 120.0], rows: vec![header, body], ..Default::default() };
+    d.body.push(Arc::new(wordcraft_doc::Block::Table(t)));
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { tagged: true, compress: false, ..Default::default() }).unwrap()).into_owned();
+    let count = |tag: &str| raw.matches(&format!("/S/{tag}")).count() + raw.matches(&format!("/S /{tag}")).count();
+    assert_eq!(count("TH"), 2, "both header cells, including the blank one");
+    assert_eq!(count("TD"), 2, "both body cells, including the blank one");
+}

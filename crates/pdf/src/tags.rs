@@ -76,13 +76,12 @@ struct CellNode {
 pub(crate) fn build_tag_tree(doc: &Document, tags: Vec<TagEntry>) -> TagTree {
     let mut roots = Vec::new();
     for e in tags {
-        if e.children.is_empty() {
-            continue;
-        }
-        let group = TagGroup::with_children(e.kind, e.children);
-        match e.source {
-            Some((story, path)) if path.0.len() >= 4 => insert_into_nodes(&mut roots, story, &path, group),
-            _ => roots.push(StructNode::Leaf(group)),
+        let group = (!e.children.is_empty()).then(|| TagGroup::with_children(e.kind, e.children));
+        match (e.source, group) {
+            // A blank cell still gets its TD/TH, so the row keeps every column's position.
+            (Some((story, path)), group) if path.0.len() >= 4 => insert_into_nodes(&mut roots, story, &path, group),
+            (_, Some(group)) => roots.push(StructNode::Leaf(group)),
+            _ => {}
         }
     }
     let mut tree = TagTree::new().with_lang(doc.styles.default_chr.lang.clone());
@@ -92,7 +91,7 @@ pub(crate) fn build_tag_tree(doc: &Document, tags: Vec<TagEntry>) -> TagTree {
     tree
 }
 
-fn insert_into_nodes(mut nodes: &mut Vec<StructNode>, story: StoryRef, path: &DocPath, group: TagGroup) {
+fn insert_into_nodes(mut nodes: &mut Vec<StructNode>, story: StoryRef, path: &DocPath, group: Option<TagGroup>) {
     let mut k = 0usize;
     while k.saturating_add(3) < path.0.len() {
         let Some(prefix) = path.0.get(..=k) else { break };
@@ -133,7 +132,9 @@ fn insert_into_nodes(mut nodes: &mut Vec<StructNode>, story: StoryRef, path: &Do
         nodes = &mut cell.children;
         k = k.saturating_add(3);
     }
-    nodes.push(StructNode::Leaf(group));
+    if let Some(group) = group {
+        nodes.push(StructNode::Leaf(group));
+    }
 }
 
 fn into_tag_group(doc: &Document, node: StructNode) -> TagGroup {
