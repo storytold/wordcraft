@@ -1,10 +1,11 @@
 use super::{Ui, WordApp, json};
 
 /// The spelling suggestions and synonyms the context menu offers for the selection or the word
-/// at the caret.
+/// at the caret, and whether it offers Accept and Reject Change: worked out once, as it opens.
 pub(super) fn context_suggestions(app: &mut WordApp) {
     app.canvas.context_issue = app.session.run("review.suggestions", &json!({})).ok().filter(|v| !v.is_null());
     app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
+    app.canvas.context_change = wordcraft_engine::cmd::review::change_at_selection(&app.session);
 }
 
 /// Right-click inside an equation: its structures' actions, display and conversion.
@@ -59,6 +60,8 @@ pub(crate) fn issue_heading(issue: &serde_json::Value) -> String {
     tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).to_string()
 }
 
+/// The text's right-click menu: a proofing issue's suggestions, Accept and Reject Change on a
+/// tracked change, then Cut, Copy, Paste and the rest (an equation has a menu of its own).
 pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if app.session.math.is_some() {
         return equation_menu(app, ui);
@@ -92,6 +95,12 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Ignore All", "review.ignoreAll", json!({}));
             item(ui, app, "Add to Dictionary", "review.addToDictionary", json!({}));
         }
+        ui.separator();
+    }
+    // A tracked change at the caret or in the selection: resolve it from here, as in Word.
+    if app.canvas.context_change {
+        item(ui, app, "Accept Change", "review.accept", json!({}));
+        item(ui, app, "Reject Change", "review.reject", json!({}));
         ui.separator();
     }
     item(ui, app, "Cut", "edit.cut", json!({}));

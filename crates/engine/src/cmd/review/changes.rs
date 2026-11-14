@@ -80,13 +80,7 @@ fn resolve_para(
 /// cell's own. Returns whether there were any.
 fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, accept: bool) -> Result<bool, CmdError> {
     let Some((tp, r, c)) = path.cell() else { return Ok(false) };
-    let has = s.doc.table(story, &tp).is_some_and(|t| {
-        let row = t.rows.get(r);
-        t.props.fmt_change.is_some()
-            || row.is_some_and(|x| x.props.fmt_change.is_some())
-            || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.fmt_change.is_some())
-    });
-    if !has {
+    if !cell_has_change(s, story, path) {
         return Ok(false);
     }
     let t = s.doc.table_mut(story, &tp)?;
@@ -100,13 +94,20 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     Ok(true)
 }
 
+/// Whether any style definition has a tracked change.
+fn has_style_changes(s: &Session) -> bool {
+    s.doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some())
+}
+
+/// Whether `a..b` is the whole body: a selection that also takes in the style-definition changes.
+fn is_whole_body(s: &Session, a: &Pos, b: &Pos) -> bool {
+    a != b && *a == s.doc.start_of(StoryRef::Body) && *b == s.doc.end_of(StoryRef::Body)
+}
+
 /// Accept or reject every style-definition change when the whole body is selected. A text range
 /// that merely begins at the document start must not resolve unrelated style revisions.
 fn resolve_styles_sel(s: &mut Session, whole_body: bool, accept: bool) -> Result<bool, CmdError> {
-    if !whole_body {
-        return Ok(false);
-    }
-    if !s.doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
+    if !whole_body || !has_style_changes(s) {
         return Ok(false);
     }
     for st in &mut std::sync::Arc::make_mut(&mut s.doc.styles).styles {
@@ -132,11 +133,16 @@ fn navigated_style(s: &Session) -> Option<StyleTarget> {
     s.review_style.clone().filter(|t| t.document == s.document_id() && t.sel == s.sel)
 }
 
+/// Whether the style change `t` is still there: that revision in that style.
+fn style_change_exists(s: &Session, t: &StyleTarget) -> bool {
+    let revs = |st: &wordcraft_doc::styles::Style| [st.para_change.as_ref().map(|c| c.rev), st.chr_change.as_ref().map(|c| c.rev)];
+    s.doc.styles.styles.iter().any(|st| st.id == t.style && revs(st).contains(&Some(t.rev)))
+}
+
 /// Accept or reject the navigated style change alone: that revision in that style. Returns whether
 /// it was still there.
 fn resolve_style_change(s: &mut Session, t: &StyleTarget, accept: bool) -> bool {
-    let revs = |st: &wordcraft_doc::styles::Style| [st.para_change.as_ref().map(|c| c.rev), st.chr_change.as_ref().map(|c| c.rev)];
-    if !s.doc.styles.styles.iter().any(|st| st.id == t.style && revs(st).contains(&Some(t.rev))) {
+    if !style_change_exists(s, t) {
         return false;
     }
     for st in std::sync::Arc::make_mut(&mut s.doc.styles).styles.iter_mut().filter(|st| st.id == t.style) {
@@ -149,6 +155,17 @@ fn resolve_style_change(s: &mut Session, t: &StyleTarget, accept: bool) -> bool 
 fn select_change(s: &mut Session, c: &Change) {
     s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
     s.review_style = c.style.clone().zip(c.rev).map(|(style, rev)| StyleTarget { document: s.document_id(), sel: s.sel.clone(), style, rev });
+}
+
+/// Whether the table cell `path` is in has changes of its own: the table's, its row's or the cell's.
+fn cell_has_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> bool {
+    let Some((tp, r, c)) = path.cell() else { return false };
+    s.doc.table(story, &tp).is_some_and(|t| {
+        let row = t.rows.get(r);
+        t.props.fmt_change.is_some()
+            || row.is_some_and(|x| x.props.fmt_change.is_some())
+            || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.fmt_change.is_some())
+    })
 }
 
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
@@ -324,6 +341,67 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
     Some(start..end)
 }
 
+/// What Accept or Reject resolves at a caret, in the order it looks: the tracked run around it,
+/// else the paragraph mark right after it, else the paragraph's formatting, else the table cell's.
+enum CaretChange {
+    Run(std::ops::Range<usize>),
+    Mark,
+    Props,
+    Cell,
+}
+
+/// The change Accept or Reject resolves at the caret `a`, if any (see [`CaretChange`]). Shared by
+/// `resolve_sel` and [`change_at_selection`], so the context menu and the commands agree.
+fn caret_change(s: &Session, a: &Pos) -> Option<CaretChange> {
+    let p = s.doc.para_at(a);
+    if let Some(r) = p.and_then(|p| revision_span(p, a.off)) {
+        return Some(CaretChange::Run(r));
+    }
+    // The mark's own formatting, or the section break's on it (resolve_para takes both with the mark).
+    let mark_fmt = p.is_some_and(|p| a.off == p.len() && (p.mark.fmt_change.is_some() || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some())));
+    if mark_fmt || mark_change(s, a.story, &a.path).is_some_and(|m| m.a == *a) {
+        return Some(CaretChange::Mark);
+    }
+    if p.is_some_and(|p| p.props.fmt_change.is_some() || p.props.num_change.is_some()) {
+        return Some(CaretChange::Props);
+    }
+    cell_has_change(s, a.story, &a.path).then_some(CaretChange::Cell)
+}
+
+/// Whether Accept or Reject would resolve a change where the selection is, rather than move on to
+/// the next one: the style change navigation selected, the change at a caret, or any change a
+/// range touches (with the whole body, the style changes too). The canvas context menu offers
+/// Accept and Reject only then.
+pub fn change_at_selection(s: &Session) -> bool {
+    if navigated_style(s).is_some_and(|t| style_change_exists(s, &t)) {
+        return true;
+    }
+    let (a, b) = s.sel.ordered();
+    if a == b {
+        return caret_change(s, &a).is_some();
+    }
+    if is_whole_body(s, &a, &b) && has_style_changes(s) {
+        return true;
+    }
+    s.doc.paths_between(&a, &b).iter().any(|path| {
+        let Some(p) = s.doc.para(a.story, path) else { return false };
+        let from = if *path == a.path { a.off } else { 0 };
+        let to = if *path == b.path { b.off } else { p.len() };
+        let run = p.run_ranges().any(|(r, c)| r.start < to && from < r.end && (c.ins.is_some() || c.del.is_some() || c.fmt_change.is_some()));
+        // As in resolve_sel: the mark when the range goes on past it, the formatting when it has text.
+        let mark = *path != b.path
+            && (p.mark.ins.is_some()
+                || p.mark.del.is_some()
+                || p.mark.fmt_change.is_some()
+                || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some()));
+        let props = (*path != b.path || to > from) && (p.props.fmt_change.is_some() || p.props.num_change.is_some());
+        run || mark || props || cell_has_change(s, a.story, path)
+    })
+}
+
+/// `review.accept` / `review.reject`: accept (`accept`) or reject the change at the caret or the
+/// changes in the selection, then with `next` select the next one; with nothing to resolve at a
+/// caret, move to the next change instead.
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     // The style change Next / Previous Change selected: that one alone. A caret put at the
     // document start any other way resolves no style change.
@@ -337,34 +415,28 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // Capture this before text revisions are resolved: accepting a deletion or rejecting an
     // insertion can change the body's end position.
-    let whole_body = a != b && a == s.doc.start_of(StoryRef::Body) && b == s.doc.end_of(StoryRef::Body);
+    let whole_body = is_whole_body(s, &a, &b);
     // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
     let mut caret_mark = None;
     // A caret in a paragraph whose own formatting changed (and no tracked text around it).
     let mut caret_props = None;
     let ranged = a != b;
     let (a, b) = if a == b {
-        // The change at the caret: the run around it, else the paragraph mark right after it,
-        // else the paragraph's formatting, else the table cell's.
-        let found = s.doc.para_at(&a).and_then(|p| revision_span(p, a.off));
-        let para_fmt = s.doc.para_at(&a).is_some_and(|p| p.props.fmt_change.is_some() || p.props.num_change.is_some());
-        let mark_fmt = s.doc.para_at(&a).is_some_and(|p| a.off == p.len() && p.mark.fmt_change.is_some());
-        match found {
-            Some(r) => (Pos { off: r.start, ..a.clone() }, Pos { off: r.end, ..a }),
-            None if mark_fmt || mark_change(s, a.story, &a.path).is_some_and(|m| m.a == a) => {
+        match caret_change(s, &a) {
+            Some(CaretChange::Run(r)) => (Pos { off: r.start, ..a.clone() }, Pos { off: r.end, ..a }),
+            Some(CaretChange::Mark) => {
                 caret_mark = Some(a.path.clone());
                 (a.clone(), a)
             }
-            None if para_fmt => {
+            Some(CaretChange::Props) => {
                 caret_props = Some(a.path.clone());
                 (a.clone(), a)
             }
-            None => {
-                if resolve_cell(s, a.story, &a.path, accept)? {
-                    return if next { select_next_unresolved(s) } else { sel_result(s) };
-                }
-                return nav_change(s, 1);
+            Some(CaretChange::Cell) => {
+                resolve_cell(s, a.story, &a.path, accept)?;
+                return if next { select_next_unresolved(s) } else { sel_result(s) };
             }
+            None => return nav_change(s, 1),
         }
     } else {
         (a, b)
