@@ -1,6 +1,6 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
-use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
+use super::justify::{HYPHENATION_ZONE, hyphen_glyph, leading_blank, shrink_line_spaces, space_room};
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
@@ -586,7 +586,7 @@ impl<'e> Breaker<'e> {
             let room = pl.clusters.get(tj).map_or(0.0, |c| c.adv);
             let space =
                 |k: usize| pl.clusters.get(k).is_some_and(|c| c.kind == ClKind::Space) && sc.xs.get(k - c0).is_some_and(|x| *x < content_end - 0.01);
-            let first = (align_from..c1).find(|k| pl.clusters.get(*k).is_some_and(|c| !matches!(c.kind, ClKind::Space | ClKind::Marker)));
+            let first = (align_from..c1).find(|k| pl.clusters.get(*k).is_some_and(|c| !leading_blank(c)));
             let stretches = justify && (rp.align == Align::Distribute || first.is_some_and(|f| (f..c1).any(space)));
             let ink_end = if sc.hyphen_w > 0.0 { sc.xs.last().copied().unwrap_or(content_end) } else { content_end };
             let delta = if stretches { -room } else { (sc.right_edge - ink_end).max(-room) };
@@ -782,12 +782,7 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
     // text indented with spaces stays where the spaces put it. Zero-width markers (a bookmark,
     // hidden text), floating objects' anchors and the break a line ends with don't count as a
     // character.
-    let blank = |k: usize| {
-        pl.clusters.get(k).is_some_and(|c| {
-            matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)
-                || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
-        })
-    };
+    let blank = |k: usize| pl.clusters.get(k).is_some_and(leading_blank);
     let text_from = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);
     // Spaces inside the content.
     let spaces: Vec<usize> = (text_from..c1)

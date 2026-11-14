@@ -2061,6 +2061,44 @@ fn a_centre_tab_that_moves_on_or_ends_in_a_hyphen_keeps_its_line_in_bounds() {
     assert!(((from + to) / 2.0 - stop).abs() < 0.05 || (to - WIDTH).abs() < 0.05, "the text and its hyphen run from {from} to {to} around {stop}");
 }
 
+/// What counts as text after a centre tab is what counts when a line is stretched (#6619): the
+/// spaces before the first character don't, nor the anchor of a floating object before them. A
+/// stretched line with only such spaces after the tab has nothing to stretch, so its text ends
+/// at the edge like a ragged line's.
+#[test]
+fn an_anchor_and_leading_spaces_after_a_centre_tab_are_not_text_to_stretch() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    const WIDTH: f32 = 468.0;
+    // Where "abcd" ends in `2) <tab>    abcd<line break>tail`, justified: the manual line break
+    // ends a line that is stretched.
+    let word_end = |anchored: bool| {
+        let text = format!("2) \t    abcd{}tail", wordcraft_doc::para::LINE_BREAK);
+        let mut d = Document::from_text("x");
+        d.body[0] = wordcraft_doc::para_block(Paragraph::with_text(&text, Default::default()));
+        d.settings.compat_mode = 15;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(vec![TabStop { pos: WIDTH - 5.0, align: TabAlign::Center, leader: TabLeader::None }]);
+            p.align = Some(Align::Justify);
+        })
+        .unwrap();
+        if anchored {
+            d.insert_object(&Pos::body(0, 4), rect_shape(20.0, 20.0, page_float(400.0, 600.0)), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(para) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+            panic!("no lines")
+        };
+        let line = &para.lines[0];
+        assert_eq!(line.end, crate::para::LineEnd::LineBreak, "the first line ends at the line break");
+        // The line break is the line's last cluster: it stands where the word ends.
+        line.xs.get(line.c1 - 1 - line.c0).copied().unwrap_or(f32::NAN)
+    };
+    for anchored in [false, true] {
+        let end = word_end(anchored);
+        assert!((end - WIDTH).abs() < 0.05, "anchored {anchored}: the word ends at {end}");
+    }
+}
+
 /// A bookmark before such a tab is not text: the tab does not wrap away from it, and the
 /// paragraph breaks as it does without the bookmark (no line holding only the bookmark).
 #[test]
