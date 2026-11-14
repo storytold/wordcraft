@@ -1009,6 +1009,12 @@ impl FTable {
                             }
                             x += cc.colspan.clamp(1, 63) as usize;
                         }
+                        if at < row.len() && x == g && row[at].covered {
+                            // Row already has an explicit covered cell at this grid column
+                            // (e.g. from Word HTML `mso-yfti-vmerge:continue`). Avoid adding
+                            // a duplicate synthetic covered cell which would make the row ragged.
+                            continue;
+                        }
                         if row.len() < 64 {
                             row.insert(at, Cell { colspan: span as u32, covered: true, ..Default::default() });
                         }

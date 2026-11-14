@@ -988,3 +988,130 @@ fn insert_fragment_remaps_conflicting_media_keys() {
     let remapped = para.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
     assert_eq!(remapped, other_key);
 }
+
+/// #5906: Copying a range spanning from inside a table to an outside paragraph preserves the table.
+#[test]
+fn copy_range_preserves_table_structure_across_blocks() {
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("A1", CharProps::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("B1", CharProps::default()))];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("A2", CharProps::default()))];
+    t.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("B2", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::with_text("Trailing", CharProps::default())))];
+    let start = d.start_of(StoryRef::Body);
+    let end = d.end_of(StoryRef::Body);
+    let frag = d.copy_range(&start, &end);
+    assert_eq!(frag.blocks.len(), 2, "expected table and trailing paragraph, got {:?}", frag.blocks);
+    let Block::Table(tbl) = &frag.blocks[0] else { panic!("first block should be Table") };
+    assert_eq!(tbl.rows.len(), 2, "copied table row count");
+    assert_eq!(tbl.cols(), 2, "copied table col count");
+    let c00 = tbl.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c00, Some("A1"), "cell (0, 0) text");
+    let Block::Para(trail) = &frag.blocks[1] else { panic!("second block should be Para") };
+    assert_eq!(trail.text.as_str(), "Trailing");
+}
+
+/// #5906: Copying a range enclosing a table between paragraphs preserves the table block.
+#[test]
+fn copy_range_preserves_table_between_paragraphs() {
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("A1", CharProps::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("B1", CharProps::default()))];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("A2", CharProps::default()))];
+    t.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("B2", CharProps::default()))];
+    d.body = vec![
+        Arc::new(Block::Para(Paragraph::with_text("Intro", CharProps::default()))),
+        Arc::new(Block::Table(t)),
+        Arc::new(Block::Para(Paragraph::with_text("Outro", CharProps::default()))),
+    ];
+    let start = Pos { story: StoryRef::Body, path: Path(vec![0]), off: 0 };
+    let end = d.end_of(StoryRef::Body);
+    let frag = d.copy_range(&start, &end);
+    assert_eq!(frag.blocks.len(), 3, "expected intro, table, and outro, got {:?}", frag.blocks);
+    assert!(matches!(&frag.blocks[0], Block::Para(p) if p.text == "Intro"));
+    let Block::Table(tbl) = &frag.blocks[1] else { panic!("second block should be Table") };
+    assert_eq!(tbl.rows.len(), 2, "copied table row count");
+    assert_eq!(tbl.cols(), 2, "copied table col count");
+    assert!(matches!(&frag.blocks[2], Block::Para(p) if p.text == "Outro"));
+}
+
+/// #5906: Copy range across cells inside a table preserves all traversed paragraphs in linear order.
+#[test]
+fn copy_range_linear_cross_cells_preserves_all_traversed_paragraphs() {
+    let mut d = Document::new();
+    let mut t = Table::new(3, 3, 300.0);
+    for r in 0..3 {
+        for c in 0..3 {
+            t.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text(&format!("R{r}C{c}"), CharProps::default()))];
+        }
+    }
+    d.body = vec![Arc::new(Block::Table(t))];
+    // Start at (0, 1) offset 1 ("0C1"), end at (1, 1) offset 3 ("R1C")
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 1 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![0, 1, 1, 0]), off: 3 };
+    let frag = d.copy_range(&a, &b);
+    assert_eq!(frag.blocks.len(), 4, "all 4 traversed cells in linear order");
+    let texts: Vec<&str> = frag
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Para(p) => Some(p.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["0C1", "R0C2", "R1C0", "R1C"]);
+}
+
+/// #5906: Copy range from paragraph before table into non-corner cell preserves all traversed text in linear order.
+#[test]
+fn copy_range_from_para_before_table_to_non_corner_cell() {
+    let mut d = Document::new();
+    let mut t = Table::new(3, 3, 300.0);
+    for r in 0..3 {
+        for c in 0..3 {
+            t.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text(&format!("R{r}C{c}"), CharProps::default()))];
+        }
+    }
+    d.body = vec![Arc::new(Block::Para(Paragraph::with_text("LeadingText", CharProps::default()))), Arc::new(Block::Table(t))];
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0]), off: 7 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![1, 1, 1, 0]), off: 3 };
+    let frag = d.copy_range(&a, &b);
+    let texts: Vec<&str> = frag
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Para(p) => Some(p.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["Text", "R0C0", "R0C1", "R0C2", "R1C0", "R1C"]);
+}
+
+/// #5906: Copy range from non-corner cell into following paragraph preserves all traversed text in linear order.
+#[test]
+fn copy_range_from_cell_into_para_after_table() {
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Hello", CharProps::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("World", CharProps::default()))];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("Foo", CharProps::default()))];
+    t.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("Bar", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::with_text("Trailing", CharProps::default())))];
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 1 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![1]), off: 5 };
+    let frag = d.copy_range(&a, &b);
+    let texts: Vec<&str> = frag
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Para(p) => Some(p.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["orld", "Foo", "Bar", "Trail"]);
+}

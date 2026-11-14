@@ -50,6 +50,27 @@ struct TableB {
     row: Option<Vec<Cell>>,
     /// The table or one of its cells asks for borders.
     bordered: bool,
+    /// Explicit column widths from `<col>` and childless `<colgroup>`.
+    col_widths: Vec<Option<f32>>,
+    /// Pending `<colgroup>`: `(span, width, has_child_cols)`.
+    pending_colgroup: Option<(usize, Option<f32>, bool)>,
+}
+
+impl TableB {
+    /// Commit pending colgroup widths: if childless, push span columns with group width.
+    /// When child `<col>` elements are present, they have already received the group width
+    /// during `<col>` handling; columns from earlier groups are never backfilled.
+    fn commit_pending_colgroup(&mut self) {
+        if let Some((span, group_w, has_child_cols)) = self.pending_colgroup.take()
+            && !has_child_cols
+        {
+            for _ in 0..span {
+                if self.col_widths.len() < MAX_TABLE_COLS {
+                    self.col_widths.push(group_w);
+                }
+            }
+        }
+    }
 }
 
 struct ElementStyle {
@@ -818,6 +839,15 @@ impl<'r> Builder<'r> {
         }
     }
 
+    /// Finalize an open HTML element popped from the stack.
+    ///
+    /// Side effects:
+    /// - Flushes any buffered inline text into the current block container.
+    /// - Sets `pending_page_break` if the element requests page break before or after.
+    /// - For `Cell`: pops the cell container, attaches generated blocks to the cell, and pushes into the active row.
+    /// - For `Tr`: commits any pending `<colgroup>` definitions and pushes the completed row into the active table.
+    /// - For `Table`: commits pending colgroup widths, finalizes table rows with `insert_covered` (bounded to `MAX_ROWS`),
+    ///   resolves explicit column widths from colgroups/cells, and appends the resulting table to the enclosing container.
     fn close(&mut self, e: &El) {
         if e.page_break_after || e.page_break {
             self.pending_page_break = true;
@@ -836,14 +866,16 @@ impl<'r> Builder<'r> {
                 }
             }
             ElKind::Tr => {
-                if let Some(t) = self.tables.last_mut()
-                    && let Some(r) = t.row.take()
-                {
-                    t.rows.push(r);
+                if let Some(t) = self.tables.last_mut() {
+                    t.commit_pending_colgroup();
+                    if let Some(r) = t.row.take() {
+                        t.rows.push(r);
+                    }
                 }
             }
             ElKind::Table => {
                 if let Some(mut t) = self.tables.pop() {
+                    t.commit_pending_colgroup();
                     if let Some(r) = t.row.take() {
                         t.rows.push(r);
                     }
@@ -852,10 +884,34 @@ impl<'r> Builder<'r> {
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
                     let rows: Vec<_> = t.rows.into_iter().filter(|r| !r.is_empty()).take(wordcraft_doc::table::MAX_ROWS).collect();
                     let mut ft = FTable { rows, widths: Vec::new(), borderless, extra: None, kept: None, wrap: None };
+                    let col_widths = &t.col_widths;
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
-                        // Columns keep the widths their cells give when every column has one.
-                        if ft.cols() <= MAX_TABLE_COLS {
+                        if !col_widths.is_empty() && ft.cols() <= MAX_TABLE_COLS {
+                            let mut widths = vec![None; ft.cols()];
+                            for (i, &cw) in col_widths.iter().take(ft.cols()).enumerate() {
+                                if let Some(w) = cw {
+                                    widths[i] = Some(w);
+                                }
+                            }
+                            for row in &ft.rows {
+                                let mut g = 0;
+                                for c in row {
+                                    if let (Some(w), Some(slot)) = (c.width, widths.get_mut(g)) {
+                                        slot.get_or_insert(w);
+                                    }
+                                    g += c.colspan.clamp(1, 63) as usize;
+                                }
+                            }
+                            if widths.iter().any(Option::is_some) {
+                                let known_sum: f32 = widths.iter().filter_map(|w| *w).sum();
+                                let known_count = widths.iter().filter(|w| w.is_some()).count();
+                                let default_w = (known_sum / known_count as f32).max(36.0);
+                                ft.widths = widths.into_iter().map(|w| w.unwrap_or(default_w)).collect();
+                            } else {
+                                ft.widths_from_cells();
+                            }
+                        } else if ft.cols() <= MAX_TABLE_COLS {
                             ft.widths_from_cells();
                         }
                         self.container().push(FBlock::Table(ft));
@@ -951,6 +1007,14 @@ impl<'r> Builder<'r> {
         }
     }
 
+    /// Process void or special HTML elements (`br`, `hr`, `wbr`, `col`, `colgroup`, `img`).
+    ///
+    /// Side effects:
+    /// - `br` / `wbr`: inserts line break or zero-width break into the active paragraph.
+    /// - `hr`: inserts a thematic horizontal rule block with borders and spacing into the container.
+    /// - `col`: extracts span and explicit CSS width, resolves against active `<colgroup>`, and appends up to `MAX_TABLE_COLS` column widths to the table.
+    /// - `colgroup`: commits any previous pending colgroup and buffers new span and width styles until child cols or closing tag arrive.
+    /// - `img`: parses dimensions, styles, and data/remote sources, creating an image block or inline image run.
     fn start_special(&mut self, name: &str, attrs: &[(String, String)]) -> bool {
         match name {
             "br" => {
@@ -969,6 +1033,34 @@ impl<'r> Builder<'r> {
             "wbr" => {
                 let fmt = self.fmt();
                 self.start_para().push_text("\u{200B}", &fmt);
+            }
+            "col" => {
+                let css = self.css_of(name, attrs);
+                let span = attr(attrs, "span").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, MAX_TABLE_COLS);
+                let w = cell_width(&css, attrs);
+                if let Some(t) = self.tables.last_mut() {
+                    let group_w = if let Some((_, group_w, has_child_cols)) = &mut t.pending_colgroup {
+                        *has_child_cols = true;
+                        *group_w
+                    } else {
+                        None
+                    };
+                    let effective_w = w.or(group_w);
+                    for _ in 0..span {
+                        if t.col_widths.len() < MAX_TABLE_COLS {
+                            t.col_widths.push(effective_w);
+                        }
+                    }
+                }
+            }
+            "colgroup" => {
+                let css = self.css_of(name, attrs);
+                let span = attr(attrs, "span").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, MAX_TABLE_COLS);
+                let w = cell_width(&css, attrs);
+                if let Some(t) = self.tables.last_mut() {
+                    t.commit_pending_colgroup();
+                    t.pending_colgroup = Some((span, w, false));
+                }
             }
             "img" => {
                 let alt = attr(attrs, "alt").unwrap_or("").to_string();
@@ -1056,6 +1148,16 @@ impl<'r> Builder<'r> {
         ElementStyle { fmt, align, preserve, page_break, page_break_after }
     }
 
+    /// Begin an HTML element, pushing it onto the element stack.
+    ///
+    /// Side effects:
+    /// - Processes head metadata (`title`, `meta`, `style`) if within `<head>`.
+    /// - Flushes inline runs for non-inline elements and computes cascading CSS properties.
+    /// - For `Table`: pushes a new `TableB` state tracker with border and column width buffers.
+    /// - For `Tr`: commits any pending colgroup widths and initializes a new row buffer.
+    /// - For `Cell`: ensures an active row exists, records colspan, rowspan, background shading, borders,
+    ///   vertical alignment, and Word vertical merge continuation flags, and opens a new block container.
+    /// - For other block elements: creates paragraphs, headings, or list item containers.
     pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
         if self.start_head_metadata(name, attrs) {
             return;
@@ -1091,12 +1193,19 @@ impl<'r> Builder<'r> {
         let css = self.css_of(name, attrs);
         let ElementStyle { mut fmt, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind, &css);
         match kind {
-            ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, &css, true) }),
+            ElKind::Table => self.tables.push(TableB {
+                rows: Vec::new(),
+                row: None,
+                bordered: declares_border(attrs, &css, true),
+                col_widths: Vec::new(),
+                pending_colgroup: None,
+            }),
             ElKind::Tr => {
-                if let Some(t) = self.tables.last_mut()
-                    && let Some(r) = t.row.take()
-                {
-                    t.rows.push(r);
+                if let Some(t) = self.tables.last_mut() {
+                    t.commit_pending_colgroup();
+                    if let Some(r) = t.row.take() {
+                        t.rows.push(r);
+                    }
                 }
             }
             ElKind::Cell => {
@@ -1130,11 +1239,13 @@ impl<'r> Builder<'r> {
                         _ => {}
                     }
                 }
+                let is_mso_vmerge_continue = decls(&css).any(|(k, v)| k == "mso-yfti-vmerge" && v.trim().eq_ignore_ascii_case("continue"));
+                let rowspan = attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 1000)).unwrap_or(1);
                 self.cells.push(Cell {
                     blocks: Vec::new(),
                     colspan,
-                    rowspan: attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 1000)).unwrap_or(1),
-                    covered: false,
+                    rowspan,
+                    covered: is_mso_vmerge_continue,
                     header: name == "th",
                     shading,
                     borders: cell_borders(&css),
@@ -1160,6 +1271,12 @@ impl<'r> Builder<'r> {
         if name == "title" {
             if let Some(t) = self.title.take() {
                 self.meta.title = t.split_whitespace().collect::<Vec<_>>().join(" ");
+            }
+            return;
+        }
+        if name == "colgroup" {
+            if let Some(t) = self.tables.last_mut() {
+                t.commit_pending_colgroup();
             }
             return;
         }
