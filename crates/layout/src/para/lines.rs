@@ -1,6 +1,6 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
-use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
+use super::justify::{HYPHENATION_ZONE, hyphen_glyph, leading_blank, shrink_line_spaces, space_room};
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
@@ -94,8 +94,11 @@ struct Scan {
     pending_tab: Option<(usize, TabStop, f32)>,
     /// The text after a pending decimal tab looked at so far for its '.'.
     decimal: Option<DecimalScan>,
-    /// The width of the spaces so far on this line.
+    /// The width of the spaces so far on this line, those before its first character apart:
+    /// they keep their width, so they give no room to shrink into.
     space_w: f32,
+    /// No character has come on this line yet.
+    leading: bool,
     has_tab: bool,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
@@ -281,6 +284,7 @@ impl<'e> Breaker<'e> {
             pending_tab: None,
             decimal: None,
             space_w: 0.0,
+            leading: true,
             has_tab: false,
             skip: false,
         }
@@ -734,12 +738,7 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
     // text indented with spaces stays where the spaces put it. Zero-width markers (a bookmark,
     // hidden text), floating objects' anchors and the break a line ends with don't count as a
     // character.
-    let blank = |k: usize| {
-        pl.clusters.get(k).is_some_and(|c| {
-            matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)
-                || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
-        })
-    };
+    let blank = |k: usize| pl.clusters.get(k).is_some_and(leading_blank);
     let text_from = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);
     // Spaces inside the content.
     let spaces: Vec<usize> = (text_from..c1)
@@ -903,7 +902,9 @@ impl Scan {
         }
         self.xs.push(self.x);
         self.x += c.adv;
-        if c.kind == ClKind::Space {
+        if !leading_blank(c) {
+            self.leading = false;
+        } else if c.kind == ClKind::Space && !self.leading {
             self.space_w += c.adv;
         }
         self.shift_pending_tab(pl);

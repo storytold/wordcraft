@@ -6393,6 +6393,55 @@ fn justified_spaces_shrink_a_quarter_at_most_and_by_the_word() {
     }
 }
 
+/// The spaces before a justified line's first character take no part when the line's spaces
+/// shrink to fit one more word (#6621): they keep their width, as they do when the line is
+/// stretched, and give no room. Measured in Word for Windows (compatibility mode 15, 9 pt Arial,
+/// the right indent moved in steps of 0.2 pt): with one, two and four spaces before the text the
+/// word that only fits with shrunk spaces goes to the next line 2.5, 5.0 and 10.0 pt of line
+/// width earlier than without them, their full width. WordCraft counted them with the others, so
+/// the word stayed on the line for a quarter of their width longer, and they shrank with the rest.
+#[test]
+fn leading_spaces_give_a_justified_line_no_room_to_shrink() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let para = |text: &str, align: Align, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(align), indent_right: Some(right), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    // Words on the first line, and where its first character starts.
+    let first = |d: &Document, lead: usize| {
+        let l = lay(d);
+        let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &para.lines[0];
+        let words = d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop].split_whitespace().count();
+        (words, para.x_of(0, lead).unwrap())
+    };
+    // A long word, so that the quarter of the spaces' width is what limits the overrun.
+    let (word, n) = ("nnnnnnnn", 12);
+    let probe = para(&format!("{word} {word}"), Align::Left, 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    let full = probe.last_section.text_width();
+    let room = 0.25 * n as f32 * sw;
+    assert!(room < 0.355 * (w + sw), "the spaces limit the overrun");
+    for lead in [0, 1, 4] {
+        let text = format!("{}{}", " ".repeat(lead), vec![word; 3 * n].join(" "));
+        // The leading spaces at their full width, then n + 1 words with n spaces between them.
+        let width = |overrun: f32| lead as f32 * sw + (n + 1) as f32 * w + n as f32 * sw - overrun;
+        let (_, left) = first(&para(&text, Align::Left, 0.0), lead);
+        for (overrun, words) in [(room - 0.1, n + 1), (room + 0.1, n)] {
+            let (fitted, x) = first(&para(&text, Align::Justify, full - width(overrun)), lead);
+            assert_eq!(fitted, words, "{lead} leading spaces: overrun {overrun:.2} of {room:.2} allowed");
+            assert!((x - left).abs() < 0.01, "{lead} leading spaces, overrun {overrun:.2}: the first character is at {x}, left-aligned at {left}");
+        }
+    }
+}
+
 #[test]
 fn space_shrinking_is_only_for_justified_text() {
     crate::test_fonts();

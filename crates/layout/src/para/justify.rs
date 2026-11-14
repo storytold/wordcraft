@@ -1,4 +1,4 @@
-use super::model::ClKind;
+use super::model::{ClKind, Cluster};
 use super::proof::{ProofRun, lang_at};
 use super::{ParaLayout, SOFT_HYPHEN};
 
@@ -22,10 +22,20 @@ pub(super) fn space_room(spaces: f32, word: f32) -> f32 {
     (spaces * MAX_SPACE_SHRINK).min(word.max(0.0) * MAX_WORD_OVERRUN)
 }
 
+/// Not a character where a line's leading spaces are looked for: a space, a zero-width marker (a
+/// bookmark, hidden text), a floating object's anchor or the break a line ends with. The spaces
+/// before a line's first character keep their width when the line is stretched or shrunk.
+pub(super) fn leading_blank(c: &Cluster) -> bool {
+    matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)
+        || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
+}
+
 /// Take `-slack` (an overflow) out of the line's inner spaces, in proportion to their widths and
-/// never more than [`MAX_SPACE_SHRINK`] of them. Trailing spaces hang and are left alone.
+/// never more than [`MAX_SPACE_SHRINK`] of them. Trailing spaces hang and are left alone, and so
+/// are the spaces before the line's first character.
 pub(super) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], c0: usize, c1: usize, content_end: f32, slack: f32) {
-    let spaces: Vec<(usize, f32)> = (c0..c1)
+    let text_from = (c0..c1).find(|k| !pl.clusters.get(*k).is_some_and(leading_blank)).unwrap_or(c1);
+    let spaces: Vec<(usize, f32)> = (text_from..c1)
         .filter_map(|k| {
             let c = pl.clusters.get(k).filter(|c| c.kind == ClKind::Space)?;
             (xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01).then_some((k, c.adv))
@@ -38,7 +48,7 @@ pub(super) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], c0: usize, c1:
     let ratio = (-slack / total).clamp(0.0, MAX_SPACE_SHRINK);
     let mut take = 0.0;
     let mut next = spaces.iter().peekable();
-    for k in c0..c1 {
+    for k in text_from..c1 {
         if let Some(v) = xs.get_mut(k - c0) {
             *v -= take;
         }
