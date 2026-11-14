@@ -170,7 +170,7 @@ test source in File › Options › Language and on the bar's Install.
 | `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` (an empty table; for a filled one use `insert_table`) |
 | `insert_table` | insert a filled table in one call: `{values: [["Month", "Cases"], ["January", 12]], header: true, style?}` (same as `insert.spreadsheet`) |
 | `batch` | run several commands in order |
-| `new_document` | blank, sample, letter, resume, report; opens beside the open documents |
+| `new_document` | blank, sample, letter, resume, report, memo, agenda, minutes, invoice, cover-letter, proposal, flyer; opens beside the open documents |
 | `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |
 | `list_documents` | the open documents: `id`, `title`, `path`, `dirty`, `active` |
 | `type_text` | type at the caret (`paragraphs: true` splits lines into paragraphs: one undo
