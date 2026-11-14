@@ -211,6 +211,10 @@ pub struct CanvasState {
     pub(crate) crop: Option<wordcraft_doc::Pos>,
     /// A crop handle being dragged.
     pub(crate) crop_drag: Option<crate::crop::CropDrag>,
+    /// Background Removal mode (Picture Format › Remove Background) on a picture.
+    pub(crate) bg_removal: Option<crate::background::Removal>,
+    /// Set Transparent Color is waiting for a click on the picture here.
+    pub(crate) pick_color: Option<wordcraft_doc::Pos>,
     /// An ink stroke being drawn with a pen (Draw tab).
     pub(crate) ink: Option<crate::ink::InkDrag>,
     /// The eraser is down: whether it has erased anything in this drag yet.
@@ -424,6 +428,8 @@ impl Default for CanvasState {
             obj_drag: None,
             crop: None,
             crop_drag: None,
+            bg_removal: None,
+            pick_color: None,
             ink: None,
             erasing: None,
             ink_ui: Default::default(),

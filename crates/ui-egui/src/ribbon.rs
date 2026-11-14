@@ -90,6 +90,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         reading_toolbar(app, ui, t);
         return;
     }
+    // Background Removal mode ends with its picture (another selection, undo), its tab with it.
+    crate::background::sync(app);
     // Editing an equation brings up the Equation tab; leaving it goes back.
     if app.session.math.is_some() {
         if app.equation_prev_tab.is_none() {
@@ -123,6 +125,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             tabs.insert(1.min(tabs.len()), (ct.to_string(), false));
         } else if !tabs.iter().any(|(n, _)| n == ct) {
             tabs.push((ct.to_string(), false));
+        }
+        // Background Removal comes before Picture Format while its mode is on, as in Word.
+        if ct == "Picture Format" && crate::background::active(app).is_some() {
+            let at = tabs.len().saturating_sub(1);
+            tabs.insert(at, (crate::background::TAB.to_string(), false));
         }
     }
     {
@@ -453,6 +460,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Table Layout" => table_layout(app, ui),
                         "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
                         "Picture Format" => picture_format(app, ui),
+                        crate::background::TAB => picture::background_removal(app, ui),
                         "Shape Format" => shape_format(app, ui),
                         "SmartArt Design" => smart_art_design(app, ui),
                         "Outlining" => outlining(app, ui),

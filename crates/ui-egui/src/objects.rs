@@ -248,6 +248,9 @@ fn screen(pages: &[Rect], scale: f32, page: usize, r: wordcraft_geom::Rect) -> O
 /// Pressing, dragging, releasing or double-clicking on an object (or a frame handle). Returns
 /// true when it was about an object, so the text doesn't also get it.
 pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect], layout: &DocLayout, scale: f32, at: Pos2) -> bool {
+    if let Some(taken) = crate::background::pointer(app, ui, resp, pages, layout, scale, at) {
+        return taken;
+    }
     if let Some(taken) = crate::crop::pointer(app, ui, resp, pages, layout, scale, at) {
         return taken;
     }
@@ -792,7 +795,7 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
 
 /// Draw the frame of the active object, or the drag preview.
 pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
-    if crate::crop::paint(app, painter, t, layout, pages, scale) {
+    if crate::background::paint(app, painter, t, layout, pages, scale) || crate::crop::paint(app, painter, t, layout, pages, scale) {
         return;
     }
     if let Some(d) = app.canvas.obj_drag.as_ref().filter(|d| d.end.is_some()) {
@@ -922,7 +925,7 @@ fn paint_end_drag(app: &WordApp, d: &ObjectDrag, painter: &Painter, t: &Tokens, 
 
 /// The pointer over an object or a handle (or dragging): its cursor.
 pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<egui::CursorIcon> {
-    if let Some(c) = crate::crop::cursor(app, layout, pages, scale, at) {
+    if let Some(c) = crate::background::cursor(app, layout, pages, scale, at).or_else(|| crate::crop::cursor(app, layout, pages, scale, at)) {
         return Some(c);
     }
     if let Some(d) = &app.canvas.obj_drag {
@@ -953,8 +956,8 @@ fn hover_cursor(app: &WordApp, o: &ObjectHit, g: Grab) -> egui::CursorIcon {
 /// Keys for a selected object: arrows nudge a floating one; typing or Enter goes into a text box.
 /// Returns true if handled.
 pub fn key(app: &mut WordApp, key: egui::Key, m: egui::Modifiers) -> bool {
-    // Crop mode takes Esc and Enter (leaving it, the crop kept).
-    if crate::crop::key(app, key) {
+    // Background Removal and crop mode take Esc and Enter (leaving them, the changes kept).
+    if crate::background::key(app, key) || crate::crop::key(app, key) {
         return true;
     }
     if selected(app).is_none() {

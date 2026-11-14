@@ -1412,6 +1412,77 @@ fn paint_file_and_tools(pen: &Pen, name: &str) -> bool {
             pen.line_c(&[(6.0, 2.0), (6.0, 14.0), (18.0, 14.0)], c);
             pen.line_c(&[(2.0, 6.0), (14.0, 6.0), (14.0, 18.0)], a);
         }
+        // Picture Format › Adjust (#3344). Remove Background: a figure kept on a see-through
+        // checkerboard.
+        "removeBackground" => {
+            let light = Color32::from_rgb(0xC8, 0xC8, 0xC8);
+            for (x, y) in
+                [(3.0, 4.0), (7.0, 4.0), (11.0, 4.0), (15.0, 4.0), (5.0, 6.0), (13.0, 6.0), (3.0, 8.0), (15.0, 8.0), (5.0, 10.0), (13.0, 10.0)]
+            {
+                pen.frect(x, y, x + 2.0, y + 2.0, light);
+            }
+            pen.rect(2.5, 3.5, 17.5, 16.5, c);
+            pen.fcircle(10.0, 8.0, 2.6, a);
+            pen.fill(&[(4.5, 16.5), (6.5, 12.0), (13.5, 12.0), (15.5, 16.5)], a);
+        }
+        // Corrections: a sun, half in shade.
+        "corrections" => {
+            pen.circle(10.0, 10.0, 4.0, c);
+            pen.fill(&[(10.0, 6.0), (12.8, 7.2), (14.0, 10.0), (12.8, 12.8), (10.0, 14.0)], a);
+            for (x0, y0, x1, y1) in [(10.0, 2.0, 10.0, 4.0), (10.0, 16.0, 10.0, 18.0), (2.0, 10.0, 4.0, 10.0), (16.0, 10.0, 18.0, 10.0)] {
+                pen.line_c(&[(x0, y0), (x1, y1)], c);
+            }
+            for (x0, y0, x1, y1) in [(4.3, 4.3, 5.7, 5.7), (14.3, 14.3, 15.7, 15.7), (15.7, 4.3, 14.3, 5.7), (4.3, 15.7, 5.7, 14.3)] {
+                pen.line_c(&[(x0, y0), (x1, y1)], c);
+            }
+        }
+        // Color: three overlapping drops of colour.
+        "pictureColor" => {
+            pen.fcircle(7.5, 8.0, 4.0, Color32::from_rgba_unmultiplied(0xD1, 0x3B, 0x3B, 0xD0));
+            pen.fcircle(12.5, 8.0, 4.0, Color32::from_rgba_unmultiplied(0x2E, 0x8B, 0x57, 0xD0));
+            pen.fcircle(10.0, 12.5, 4.0, Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 0xD0));
+        }
+        // Artistic Effects: a brush and the stroke it left.
+        "artisticEffects" => {
+            pen.line_c(&[(17.0, 3.0), (10.5, 9.5)], c);
+            pen.fill(&[(10.5, 8.0), (12.0, 9.5), (9.0, 13.0), (6.5, 12.5), (7.0, 10.5)], a);
+            pen.line_c(&[(2.5, 17.0), (5.0, 15.0), (7.5, 16.5), (10.0, 14.5), (12.5, 16.5)], a);
+        }
+        // Transparency: a square half see-through.
+        "transparency" => {
+            let light = Color32::from_rgb(0xC8, 0xC8, 0xC8);
+            for (x, y) in [(10.0, 4.0), (14.0, 8.0), (10.0, 12.0), (14.0, 16.0), (12.0, 6.0), (16.0, 10.0), (12.0, 14.0)] {
+                pen.frect(x, y, (x + 2.0).min(17.0), (y + 2.0).min(17.0), light);
+            }
+            pen.frect(3.0, 3.0, 10.0, 17.0, a);
+            pen.rect(3.0, 3.0, 17.0, 17.0, c);
+        }
+        // Compress Pictures: a picture with its corners pressed in.
+        "compressPictures" => {
+            pen.rect(6.0, 6.0, 14.0, 14.0, c);
+            pen.fill(&[(7.0, 13.0), (10.0, 9.0), (13.0, 13.0)], a);
+            for (x, y, dx, dy) in [(2.0, 2.0, 1.0, 1.0), (18.0, 2.0, -1.0, 1.0), (2.0, 18.0, 1.0, -1.0), (18.0, 18.0, -1.0, -1.0)] {
+                let (tx, ty) = (x + 3.0 * dx, y + 3.0 * dy);
+                pen.line_c(&[(x, y), (tx, ty)], c);
+                pen.line_c(&[(tx - 2.0 * dx, ty), (tx, ty), (tx, ty - 2.0 * dy)], c);
+            }
+        }
+        // Background Removal's pens: a pencil with a plus (keep) or a minus (remove).
+        "markKeep" | "markRemove" => {
+            pen.closed(&[(13.0, 3.0), (17.0, 7.0), (8.0, 16.0), (4.0, 16.0), (4.0, 12.0)], c);
+            pen.line_c(&[(11.0, 5.0), (15.0, 9.0)], c);
+            let (mark, x, y) = (if name == "markKeep" { Color32::from_rgb(0x1E, 0x9E, 0x4A) } else { red }, 15.0, 15.5);
+            pen.line_c(&[(x - 3.0, y), (x + 3.0, y)], mark);
+            if name == "markKeep" {
+                pen.line_c(&[(x, y - 3.0), (x, y + 3.0)], mark);
+            }
+        }
+        // Set Transparent Color: an eyedropper.
+        "transparentColor" => {
+            pen.fill(&[(13.0, 3.5), (16.5, 7.0), (14.5, 9.0), (11.0, 5.5)], c);
+            pen.closed(&[(12.0, 7.5), (5.0, 14.5), (4.0, 17.0), (6.5, 16.0), (13.5, 9.0)], c);
+            pen.fcircle(4.5, 16.5, 1.2, a);
+        }
         "textBoxLink" | "textBoxUnlink" => {
             // Two boxes, the text running from the first into the second (broken: cut through).
             pen.rect(2.0, 3.0, 8.5, 11.0, c);

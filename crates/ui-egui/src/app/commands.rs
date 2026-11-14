@@ -887,6 +887,29 @@ impl WordApp {
                 Ok(v) => v,
                 Err(e) => return Some(Err(e)),
             },
+            // Picture Format › Remove Background: Background Removal mode on the selected picture;
+            // its tab's Mark Areas to Keep / to Remove, Discard All Changes and Keep Changes (#3344).
+            "ui.removeBackground" => match crate::background::start(self) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            },
+            "ui.markAreasToKeep" | "ui.markAreasToRemove" | "ui.discardBackgroundChanges" | "ui.keepBackgroundChanges" => {
+                let what = match id {
+                    "ui.markAreasToKeep" => "keep",
+                    "ui.markAreasToRemove" => "remove",
+                    "ui.discardBackgroundChanges" => "discard",
+                    _ => "done",
+                };
+                match crate::background::action(self, what) {
+                    Ok(v) => v,
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            // Picture Format › Color › Set Transparent Color: the next click on the picture.
+            "ui.setTransparentColor" => match crate::background::start_pick(self) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            },
             "ui.linkTextBox" => {
                 let from = wordcraft_engine::cmd::objects::text_box_target(&self.session).filter(|_| widgets::enabled(self, "shape.link"));
                 let Some((pos, _)) = from else { return Some(Err("select a text box that isn't linked yet first".into())) };

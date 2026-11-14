@@ -1,13 +1,13 @@
 use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
-use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
+use super::look;
+use super::picture::{adjust, crop, remove_background, reset, size};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_placeable, has_shape,
     has_shape_or_canvas, has_sizable, obj_size, objects_list, selected, with_float, with_obj,
 };
 use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
-use wordcraft_doc::picfx::PicFx;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -31,45 +31,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("object.altText", "Alt Text", "Shape Format › Accessibility", alt_text)
             .params(r#"{"text"?: string, "title"?: string, "decorative"?: bool} (the selected picture, shape, text box, group or chart)"#)
             .when(has_object),
-        CommandSpec::new("picture.corrections", "Corrections", "Picture Format › Adjust", |s, v| {
-            let b = p::f32(v, "brightness").unwrap_or(0.0).clamp(-100.0, 100.0);
-            let c = p::f32(v, "contrast").unwrap_or(0.0).clamp(-100.0, 100.0);
-            let sharpen = p::f32(v, "sharpen").unwrap_or(0.0).clamp(-100.0, 100.0);
-            // Absolute from the original (like transparency): re-setting all three to 0
-            // restores the original pixels instead of stacking on the last pass.
-            // The file's own brightness and contrast (`fx`) are replaced, not stacked on.
-            let base = original_media(s)?;
-            adjust_media(s, &base, clear_lum, move |img| {
-                let mut img = img;
-                if b != 0.0 {
-                    img = image::DynamicImage::ImageRgba8(image::imageops::colorops::brighten(&img, (b * 2.55) as i32));
-                }
-                if c != 0.0 {
-                    img = image::DynamicImage::ImageRgba8(image::imageops::colorops::contrast(&img, c));
-                }
-                if sharpen > 0.0 {
-                    img = img.unsharpen(1.0 + sharpen / 50.0, 2);
-                } else if sharpen < 0.0 && (-sharpen / 25.0).is_normal() {
-                    // `blur` asserts on a subnormal width.
-                    img = img.blur(-sharpen / 25.0);
-                }
-                Ok(img)
-            })
-        })
-        .params(r#"{"brightness"?: -100..100, "contrast"?: -100..100, "sharpen"?: -100..100}"#)
-        .when(has_picture),
-        CommandSpec::new("picture.color", "Color", "Picture Format › Adjust", |s, v| {
-            let mode = p::str(v, "mode").unwrap_or("grayscale").to_string();
-            let sat = p::f32(v, "saturation").unwrap_or(100.0);
-            // Absolute from the original (like transparency): saturation 100 restores it.
-            // Color and Corrections are independent, as in Word: only Washout, which Word stores
-            // as brightness and contrast (`a:lum`), replaces the file's own (`fx`).
-            let base = original_media(s)?;
-            let fx: fn(&mut PicFx) = if mode == "washout" { clear_lum } else { |_| {} };
-            adjust_media(s, &base, fx, move |img| Ok(recolor(img, &mode, sat)))
-        })
-        .params(r#"{"mode": "grayscale|sepia|washout|blackAndWhite|saturation|tint", "saturation"?: 0..400}"#)
-        .when(has_picture),
+        // Corrections, Color, Artistic Effects, Transparency, Remove Background, Set Transparent
+        // Color, Picture Styles and Picture Border are one stack (`look`): each replaces only its own
+        // setting, and the picture is drawn again from the bitmap under all of them.
+        CommandSpec::new("picture.corrections", "Corrections", "Picture Format › Adjust", |s, v| look::apply(s, "picture.corrections", v))
+            .params(r#"{"brightness"?: -100..100, "contrast"?: -100..100, "sharpen"?: -100..100 (negative softens)}  (a value left out keeps its setting; replaces the file's own brightness and contrast)"#)
+            .when(has_picture),
+        CommandSpec::new("picture.color", "Color", "Picture Format › Adjust", |s, v| look::apply(s, "picture.color", v))
+            .params(r#"{"saturation"?: 0..400 (100: as it is), "temperature"?: 1500..12000 (Color Tone, kelvin; 6500: as it is), "recolor"?: "none|grayscale|sepia|washout|blackAndWhite|tint|dark|light", "color"?: "RRGGBB" (dark, light), "threshold"?: 0..100 (blackAndWhite: white above this brightness, default 50), "mode"?: "saturation|grayscale|sepia|washout|blackAndWhite|tint" (older scripts)}  (a part left out keeps its setting; none at all is Grayscale)"#)
+            .when(has_picture),
         CommandSpec::new("picture.iconColor", "Icon Color", "Picture Format › Adjust", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse).ok_or_else(|| CmdError::Params("`color` (RRGGBB) is required".into()))?;
             // One colour everywhere, transparency kept: recolours an inserted icon or other
@@ -84,38 +54,31 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB"}"#)
         .when(has_picture),
-        CommandSpec::new("picture.effects", "Artistic Effects", "Picture Format › Adjust", |s, v| {
-            // One effect at a time, as in Word: a second one replaces the first (#2052).
-            let e = p::str(v, "effect").unwrap_or("blur").to_string();
-            relook(s, move |l| l.effect = (e != "none").then_some(e))
-        })
-        .params(r#"{"effect": "blur|sharpen|invert|posterize|pixelate|none"} (replaces the picture's effect)"#)
-        .when(has_picture),
-        CommandSpec::new("picture.transparency", "Transparency", "Picture Format › Adjust", |s, v| {
-            let t = p::f32(v, "percent").unwrap_or(50.0).clamp(0.0, 100.0);
-            // Absolute, not compounding: 0% is always the original pixels fully opaque.
-            // The base is the pre-edit original (kept for Reset Picture), so dragging a
-            // slider back and forth never fades what a previous pass already faded.
-            // (Combining with other pixel edits then re-setting transparency drops those
-            // edits; a full live-effect stack is future work.)
-            // The file's own transparency (`fx`, `a:alphaModFix`) is replaced too: it's baked
-            // into the pixels from here on.
-            let base = original_media(s)?;
-            adjust_media(s, &base, |fx: &mut PicFx| fx.transparency = 0, move |img| {
-                let mut rgba = img.to_rgba8();
-                for px in rgba.pixels_mut() {
-                    px.0[3] = (px.0[3] as f32 * (1.0 - t / 100.0)) as u8;
-                }
-                Ok(image::DynamicImage::ImageRgba8(rgba))
-            })
-        })
-        .params(r#"{"percent": 0..100}"#)
-        .when(has_picture),
+        CommandSpec::new("picture.effects", "Artistic Effects", "Picture Format › Adjust", |s, v| look::apply(s, "picture.effects", v))
+            .params(
+                r#"{"effect": "none|marker|pencilGrayscale|pencilSketch|lineDrawing|chalkSketch|paintStrokes|paintBrush|glowDiffused|blur|lightScreen|watercolorSponge|filmGrain|mosaicBubbles|glass|cement|texturizer|crisscrossEtching|pastelsSmooth|plasticWrap|cutout|photocopy|glowEdges|sharpen|invert|posterize|pixelate"} (replaces the picture's effect)"#,
+            )
+            .when(has_picture),
+        CommandSpec::new("picture.transparency", "Transparency", "Picture Format › Adjust", |s, v| look::apply(s, "picture.transparency", v))
+            .params(r#"{"percent": 0..100}  (absolute: 0 is the picture opaque again; replaces the file's own transparency)"#)
+            .when(has_picture),
         CommandSpec::new("picture.removeBackground", "Remove Background", "Picture Format › Adjust", |s, v| {
-            let tol = p::f32(v, "tolerance").unwrap_or(30.0).clamp(0.0, 255.0);
-            adjust(s, move |img| Ok(remove_background(img, tol)))
+            // The one-colour fill scripts have used since before the subject was found: it clears
+            // the top-left corner's colour wherever it reaches from the edge, on the bitmap as it is.
+            if let Some(tol) = p::f32(v, "tolerance") {
+                let tol = tol.clamp(0.0, 255.0);
+                return adjust(s, move |img| Ok(remove_background(img, tol)));
+            }
+            look::apply(s, "picture.removeBackground", v)
         })
-        .params(r#"{"tolerance"?: 0..255}"#)
+        .params(
+            r#"{"marks"?: [{"keep": bool, "points": [[x, y], …], "width"?: 0.002..0.05}], "discard"?: bool, "tolerance"?: 0..255}  (finds the subject and clears the background around it; marks: Mark Areas to Keep (keep: true) and to Remove, points 0 to 1 across and down the uncropped picture, pen width a share of its longer side, a later mark wins, 500 marks and 4000 points at most; running it again replaces the marks; discard: Discard All Changes, the background back; tolerance: instead clear the top-left corner's colour reaching from the edge, the older one-colour fill. Returns `kept`, the share of the picture kept)"#,
+        )
+        .when(has_picture),
+        CommandSpec::new("picture.transparentColor", "Set Transparent Color", "Picture Format › Adjust › Color", |s, v| {
+            look::apply(s, "picture.transparentColor", v)
+        })
+        .params(r#"{"color": "RRGGBB" | null} | {"x": 0..1, "y": 0..1}  (that colour, or the colour at that point of the uncropped picture, becomes transparent everywhere on it; null: none)"#)
         .when(has_picture),
         CommandSpec::new("picture.compress", "Compress Pictures", "Picture Format › Adjust", |s, v| {
             let max = p::u64(v, "maxPixels").unwrap_or(1600).clamp(32, 20000) as u32;
@@ -123,7 +86,9 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"maxPixels"?: n}"#)
         .when(has_picture),
-        CommandSpec::new("picture.reset", "Reset Picture", "Picture Format › Adjust", reset).when(has_picture),
+        CommandSpec::new("picture.reset", "Reset Picture", "Picture Format › Adjust", reset)
+            .params(r#"{"size"?: bool}  (every adjustment and the crop removed; size: Reset Picture & Size, the original size too)"#)
+            .when(has_picture),
         CommandSpec::new("picture.change", "Change Picture", "Picture Format › Adjust", |s, v| {
             let bytes = if let Some(d) = p::str(v, "data") {
                 crate::cmd::insert::base64_decode(d).ok_or_else(|| CmdError::Params("bad base64".into()))?
@@ -157,24 +122,12 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"path"?: string, "data"?: base64}"#)
         .when(has_picture),
-        CommandSpec::new("picture.style", "Picture Styles", "Picture Format › Picture Styles", |s, v| {
-            // A style replaces the picture's style and border, as Word's gallery does (#2052).
-            let style = p::str(v, "style").unwrap_or("simpleFrame").to_string();
-            relook(s, move |l| {
-                l.style = Some(style);
-                l.border = None;
-            })
-        })
-        .params(r#"{"style": "simpleFrame|thickFrame|rounded|softEdge|shadow"} (replaces the picture's style and border)"#)
-        .when(has_picture),
-        CommandSpec::new("picture.border", "Picture Border", "Picture Format › Picture Styles", |s, v| {
-            let c = p::str(v, "color").and_then(Rgb::parse).unwrap_or(Rgb::BLACK);
-            let w = p::u64(v, "width").unwrap_or(4).clamp(1, 200) as u32;
-            // Replaces the picture's border, keeping its style (#2052).
-            relook(s, move |l| l.border = Some((c, w)))
-        })
-        .params(r#"{"color"?: "RRGGBB", "width"?: px} (replaces the picture's border)"#)
-        .when(has_picture),
+        CommandSpec::new("picture.style", "Picture Styles", "Picture Format › Picture Styles", |s, v| look::apply(s, "picture.style", v))
+            .params(r#"{"style": "simpleFrame|thickFrame|rounded|softEdge|shadow|none"} (replaces the picture's style and border)"#)
+            .when(has_picture),
+        CommandSpec::new("picture.border", "Picture Border", "Picture Format › Picture Styles", |s, v| look::apply(s, "picture.border", v))
+            .params(r#"{"color"?: "RRGGBB" | null, "width"?: px}  (replaces the picture's border, keeping its style; null: No Outline; a part left out keeps the border's own)"#)
+            .when(has_picture),
         CommandSpec::new("arrange.rotate", "Rotate", "Layout › Arrange", |s, v| {
             // Turns and flips are the object's angle and mirroring (DrawingML `a:xfrm`): the
             // picture's pixels are never rewritten. A flip mirrors what is on the page, so a

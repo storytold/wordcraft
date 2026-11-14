@@ -14,7 +14,10 @@ use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 mod arrange;
+pub mod cutout;
+mod effects;
 mod group;
+pub mod look;
 mod picture;
 mod select;
 mod shape;
@@ -24,7 +27,8 @@ pub use arrange::moves_with_text;
 pub(crate) use arrange::{anchor_paragraph, nearest_line};
 #[cfg(test)]
 use group::ungroup;
-pub use picture::{OriginalSize, PictureLook, cropped_original_size, fit_size, original_size};
+pub use look::PictureLook;
+pub use picture::{OriginalSize, cropped_original_size, fit_size, original_size};
 #[cfg(test)]
 use picture::{clear_background, grown, picture_style};
 #[cfg(test)]
