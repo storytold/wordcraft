@@ -79,15 +79,25 @@ pub struct StyleRun {
 }
 
 impl StyleRun {
+    /// The run's line ascent and descent at its full font size. A superscript or subscript is
+    /// drawn smaller, but Word sizes its line at the full size, and so the line of an empty
+    /// paragraph whose mark is one, and the empty line after a closing line break (measured in
+    /// Word for Windows: between two 20 pt lines an empty paragraph takes 23 pt whether its
+    /// mark is plain, superscript or subscript).
+    pub fn full_size_extent(&self) -> (f32, f32) {
+        let draw = self.rc.draw_size();
+        let k = if draw > 0.0 { self.rc.size / draw } else { 1.0 };
+        (self.ascent * k, self.descent * k)
+    }
+
     /// How far the run reaches above and below the line's baseline. Word sizes a superscript
     /// or subscript's line at the full font size and leaves out its raise or drop; only a
     /// `w:position` raise or lowering counts (Word for Mac: an 11pt subscript beside 11pt text
     /// keeps the 12.675pt line, and a line of 24pt subscript is as tall as plain 24pt text).
     pub fn line_extent(&self) -> (f32, f32) {
-        let draw = self.rc.draw_size();
-        let k = if draw > 0.0 { self.rc.size / draw } else { 1.0 };
         let raise = self.rc.position;
-        let (mut a, mut d) = (self.ascent * k + raise.max(0.0), self.descent * k + (-raise).max(0.0));
+        let (full_a, full_d) = self.full_size_extent();
+        let (mut a, mut d) = (full_a + raise.max(0.0), full_d + (-raise).max(0.0));
         // Emphasis marks sit above the characters (or below), and the line makes room for them
         // (see `display::lines::emphasis_mark`).
         let size = if self.rc.size.is_finite() { self.rc.size.clamp(0.0, 1638.0) } else { 0.0 };
