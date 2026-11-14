@@ -125,7 +125,7 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
         let sheet = book.sheets.get(i).ok_or("no such sheet")?;
         let rows = cells_to_rows(&sheet.cells, |c| {
             if !c.text.is_empty() {
-                clamp_cell(c.text.clone())
+                c.text.chars().take(MAX_CELL_CHARS).collect()
             } else if let Some(v) = c.value() {
                 format_value(&v)
             } else {
@@ -180,13 +180,6 @@ fn resolve(names: &[String], pick: Pick<'_>) -> Result<usize, String> {
             .or_else(|| names.iter().position(|n| n.eq_ignore_ascii_case(want)))
             .ok_or_else(|| format!("no sheet named `{want}`")),
     }
-}
-
-fn clamp_cell(mut s: String) -> String {
-    if s.chars().count() > MAX_CELL_CHARS {
-        s = s.chars().take(MAX_CELL_CHARS).collect();
-    }
-    s
 }
 
 fn format_value(v: &Value) -> String {
@@ -352,5 +345,16 @@ mod tests {
         );
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["a"]]);
         assert!(read_rows(&book, Pick::Index(2)).is_err());
+    }
+
+    /// A long OpenDocument cell keeps its first [`MAX_CELL_CHARS`] characters.
+    #[test]
+    fn a_long_ods_cell_keeps_the_cell_limit() {
+        let long = "é".repeat(MAX_CELL_CHARS + 5);
+        let book = craft_ods::testing::spreadsheet(&format!(
+            r#"<table:table table:name="S"><table:table-row><table:table-cell office:value-type="string"><text:p>{long}</text:p></table:table-cell></table:table-row></table:table>"#
+        ));
+        let rows = read_rows(&book, Pick::Index(0)).unwrap().1;
+        assert_eq!(rows, [["é".repeat(MAX_CELL_CHARS)]]);
     }
 }
