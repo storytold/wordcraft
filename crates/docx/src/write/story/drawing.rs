@@ -115,8 +115,20 @@ impl Writer<'_> {
             ShapeKind::ArrowLeft => "leftArrow",
             ShapeKind::ArrowUp => "upArrow",
             ShapeKind::ArrowDown => "downArrow",
-            ShapeKind::Star => "star5",
+            ShapeKind::ArrowLeftRight => "leftRightArrow",
+            ShapeKind::ArrowUpDown => "upDownArrow",
             ShapeKind::Heart => "heart",
+            // Each star writes back the preset it was read from (`star4` … `star32`).
+            ShapeKind::Star
+            | ShapeKind::Star4
+            | ShapeKind::Star6
+            | ShapeKind::Star7
+            | ShapeKind::Star8
+            | ShapeKind::Star10
+            | ShapeKind::Star12
+            | ShapeKind::Star16
+            | ShapeKind::Star24
+            | ShapeKind::Star32 => kind.star_preset().unwrap_or("star5"),
         };
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),

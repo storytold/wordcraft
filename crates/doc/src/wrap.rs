@@ -92,14 +92,19 @@ pub fn shape_outline(kind: ShapeKind, w: f32, h: f32, corner: Option<u32>) -> Op
         ShapeKind::Triangle => vec![(0.5, 0.0), (1.0, 1.0), (0.0, 1.0)],
         ShapeKind::RightTriangle => vec![(0.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
         ShapeKind::Diamond => vec![(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)],
-        ShapeKind::Arrow | ShapeKind::ArrowLeft | ShapeKind::ArrowUp | ShapeKind::ArrowDown => arrow_outline(kind, w, h),
-        ShapeKind::Star => (0..10)
-            .map(|i| {
-                let a = PI * i as f32 / 5.0 - FRAC_PI_2;
-                let r = if i % 2 == 0 { 0.5 } else { 0.2 };
-                (0.5 + r * a.cos(), 0.5 + r * a.sin())
-            })
-            .collect(),
+        ShapeKind::Arrow | ShapeKind::ArrowLeft | ShapeKind::ArrowUp | ShapeKind::ArrowDown | ShapeKind::ArrowLeftRight | ShapeKind::ArrowUpDown => {
+            arrow_outline(kind, w, h)
+        }
+        ShapeKind::Star
+        | ShapeKind::Star4
+        | ShapeKind::Star6
+        | ShapeKind::Star7
+        | ShapeKind::Star8
+        | ShapeKind::Star10
+        | ShapeKind::Star12
+        | ShapeKind::Star16
+        | ShapeKind::Star24
+        | ShapeKind::Star32 => return star_outline(kind),
         ShapeKind::Heart => {
             let curves = [
                 [(0.5, 0.3), (0.5, 0.0), (0.0, 0.0), (0.0, 0.3)],
@@ -123,23 +128,72 @@ pub fn shape_outline(kind: ShapeKind, w: f32, h: f32, corner: Option<u32>) -> Op
 }
 
 /// A block arrow's outline in unit coordinates (0..1 across a `w` × `h` frame), pointing the way
-/// `kind` says (right for anything but the left, up and down arrows). The head is half the arrow's
-/// thickness long, the shaft 40% of the thickness thick.
+/// `kind` says (right for anything but the left, up, down and double-headed arrows). Each head is
+/// half the arrow's thickness long and never more than half its length, as the presets' `adj2`
+/// of 50000 over `min(w, h)` gives (ECMA-376 Part 1 §20.1.10.56); the shaft is 40% of the
+/// thickness thick.
 pub fn arrow_outline(kind: ShapeKind, w: f32, h: f32) -> Vec<(f32, f32)> {
-    let vertical = matches!(kind, ShapeKind::ArrowUp | ShapeKind::ArrowDown);
+    let vertical = matches!(kind, ShapeKind::ArrowUp | ShapeKind::ArrowDown | ShapeKind::ArrowUpDown);
     let (len, thick) = if vertical { (h, w) } else { (w, h) };
-    let head = if len > 0.0 { (0.5 * thick / len).min(1.0) } else { 0.5 };
-    // Pointing right: `u` runs along the arrow from its tail, `v` across it.
-    let right = [(0.0, 0.3), (1.0 - head, 0.3), (1.0 - head, 0.0), (1.0, 0.5), (1.0 - head, 1.0), (1.0 - head, 0.7), (0.0, 0.7)];
-    right
-        .iter()
+    let head = if len > 0.0 { (0.5 * thick / len).min(0.5) } else { 0.5 };
+    // Pointing right: `u` runs along the arrow from its tail, `v` across it. A double-headed
+    // arrow has no tail: a head at each end of the shaft.
+    let one = [(0.0, 0.3), (1.0 - head, 0.3), (1.0 - head, 0.0), (1.0, 0.5), (1.0 - head, 1.0), (1.0 - head, 0.7), (0.0, 0.7)];
+    let two = [
+        (0.0, 0.5),
+        (head, 0.0),
+        (head, 0.3),
+        (1.0 - head, 0.3),
+        (1.0 - head, 0.0),
+        (1.0, 0.5),
+        (1.0 - head, 1.0),
+        (1.0 - head, 0.7),
+        (head, 0.7),
+        (head, 1.0),
+    ];
+    let pts: &[(f32, f32)] = if matches!(kind, ShapeKind::ArrowLeftRight | ShapeKind::ArrowUpDown) { &two } else { &one };
+    pts.iter()
         .map(|&(u, v)| match kind {
             ShapeKind::ArrowLeft => (1.0 - u, v),
             ShapeKind::ArrowUp => (v, 1.0 - u),
-            ShapeKind::ArrowDown => (v, u),
+            ShapeKind::ArrowDown | ShapeKind::ArrowUpDown => (v, u),
             _ => (u, v),
         })
         .collect()
+}
+
+/// A star preset's outline in unit coordinates (0..1 across its frame): one point at the top and
+/// the rest evenly round it, with a notch between each pair ([`ShapeKind::star`] gives the counts
+/// and the notch radius). `None` for a kind that is not a star.
+///
+/// The star is stretched to fill its frame, which is what the preset definitions' `hf` and `vf`
+/// factors do (ECMA-376 Part 1 §20.1.10.56): for `star5` this gives Word's 1.05146 across and
+/// 1.10557 down, and for `star6` its 1.15470 across.
+pub fn star_outline(kind: ShapeKind) -> Option<Vec<(f32, f32)>> {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let (points, notch) = kind.star()?;
+    // Both come from `ShapeKind::star`; the limits only keep the loop and the radius sane. The
+    // most points a preset has is 32, which is exactly [`MAX_DERIVED_POINTS`] corners.
+    let n = points.clamp(2, (MAX_DERIVED_POINTS / 2) as u32);
+    let notch = if notch.is_finite() { notch.clamp(0.0, 1.0) } else { 0.5 };
+    let pts: Vec<(f32, f32)> = (0..2 * n)
+        .map(|i| {
+            let a = PI * i as f32 / n as f32 - FRAC_PI_2;
+            let r = if i % 2 == 0 { 1.0 } else { notch };
+            (r * a.cos(), r * a.sin())
+        })
+        .collect();
+    let bounds = |f: fn(&(f32, f32)) -> f32| {
+        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for p in &pts {
+            lo = lo.min(f(p));
+            hi = hi.max(f(p));
+        }
+        // A span of nothing (a notch radius of 1 on two points) leaves the star on its frame's edge.
+        if lo.is_finite() && hi - lo > 1.0e-6 { (lo, hi - lo) } else { (0.0, 1.0) }
+    };
+    let ((x0, sw), (y0, sh)) = (bounds(|p| p.0), bounds(|p| p.1));
+    Some(pts.iter().map(|(x, y)| (((x - x0) / sw).clamp(0.0, 1.0), ((y - y0) / sh).clamp(0.0, 1.0))).collect())
 }
 
 /// Largest side of the grid [`alpha_outline`] looks at.
@@ -240,6 +294,80 @@ mod tests {
         assert_eq!(tip(ShapeKind::ArrowDown), (0.5, 1.0));
     }
 
+    /// #6391: each star preset draws its own number of points, with the notch radius Word's
+    /// default `adj` gives, stretched to fill its frame as the presets' `hf` and `vf` do.
+    #[test]
+    fn star_outlines_keep_their_point_count() {
+        for kind in ShapeKind::STARS {
+            let (points, notch) = kind.star().unwrap_or((0, 0.0));
+            let pts = shape_outline(kind, 100.0, 60.0, None).unwrap();
+            assert_eq!(pts.len(), 2 * points as usize, "{kind:?} draws {points} points");
+            // One point at the top, and the star reaches all four sides of its frame.
+            assert_eq!(pts.first().map(|(x, y)| ((x * 1000.0).round(), *y)), Some((500.0, 0.0)), "{kind:?}");
+            let span = |f: fn(&(f32, f32)) -> f32| pts.iter().fold((1.0f32, 0.0f32), |(lo, hi), p| (lo.min(f(p)), hi.max(f(p))));
+            assert_eq!(span(|p| p.0), (0.0, 1.0), "{kind:?} fills its frame across");
+            assert_eq!(span(|p| p.1), (0.0, 1.0), "{kind:?} fills its frame down");
+            // In a square frame, a star whose own bounds are square (every one but the 5, 6, 7
+            // and 10 point stars) keeps its radii: the points reach the frame, the notches the
+            // preset's fraction of it.
+            if matches!(kind, ShapeKind::Star4 | ShapeKind::Star8 | ShapeKind::Star12 | ShapeKind::Star16 | ShapeKind::Star24 | ShapeKind::Star32) {
+                let square = shape_outline(kind, 80.0, 80.0, None).unwrap();
+                let radius = |i: usize| square.get(i).map_or(0.0, |(x, y)| 2.0 * (x - 0.5f32).hypot(y - 0.5));
+                for i in 0..square.len() {
+                    let want = if i % 2 == 0 { 1.0 } else { notch };
+                    assert!((radius(i) - want).abs() < 0.001, "{kind:?} point {i}: radius {} is not {want}", radius(i));
+                }
+            }
+        }
+        // The five-point star is pinned to Word's own proportions: `hf` 1.05146 across and `vf`
+        // 1.10557 down put its right-hand point on the frame's edge, 38.2% of the way down, and
+        // its lower points on the bottom edge.
+        let five = shape_outline(ShapeKind::Star, 90.0, 90.0, None).unwrap();
+        let at = |i: usize| five.get(i).copied().unwrap_or_default();
+        assert!((at(2).0 - 1.0).abs() < 0.001 && (at(2).1 - 0.381_97).abs() < 0.001, "{:?}", at(2));
+        assert!((at(4).0 - 0.809_02).abs() < 0.001 && (at(4).1 - 1.0).abs() < 0.001, "{:?}", at(4));
+        // A six-point star has a point at the top and the bottom, and reaches the sides between.
+        let six = shape_outline(ShapeKind::Star6, 90.0, 90.0, None).unwrap();
+        assert_eq!(six.len(), 12);
+        assert!((six[6].0 - 0.5).abs() < 0.001 && (six[6].1 - 1.0).abs() < 0.001, "{:?}", six[6]);
+        // An eight-point star has more corners than a five-point one: the regression this fixes.
+        assert!(shape_outline(ShapeKind::Star8, 90.0, 90.0, None).unwrap().len() > five.len());
+        // Junk sizes and counts never panic, and give an outline inside the frame.
+        for (w, h) in [(0.0, 0.0), (f32::NAN, 10.0), (-5.0, f32::INFINITY), (1.0e12, 0.5)] {
+            for kind in ShapeKind::STARS {
+                let pts = shape_outline(kind, w, h, None).unwrap_or_default();
+                assert!(pts.iter().all(|(x, y)| (0.0..=1.0).contains(x) && (0.0..=1.0).contains(y)), "{kind:?} {w}x{h}: {pts:?}");
+            }
+        }
+        assert_eq!(star_outline(ShapeKind::Heart), None);
+        assert_eq!(star_outline(ShapeKind::Rectangle), None);
+    }
+
+    /// #6391: `leftRightArrow` and `upDownArrow` have a head at each end, where both used to draw
+    /// as the single right-pointing arrow (and, in a tall frame, as a triangle).
+    #[test]
+    fn double_headed_arrows_have_a_head_at_each_end() {
+        // 100 × 40: each head is half the thickness long, a fifth of the length.
+        let wide = shape_outline(ShapeKind::ArrowLeftRight, 100.0, 40.0, None).unwrap();
+        assert_eq!(wide, [(0.0, 0.5), (0.2, 0.0), (0.2, 0.3), (0.8, 0.3), (0.8, 0.0), (1.0, 0.5), (0.8, 1.0), (0.8, 0.7), (0.2, 0.7), (0.2, 1.0)]);
+        // Turned a quarter: the same arrow pointing up and down.
+        let tall = shape_outline(ShapeKind::ArrowUpDown, 40.0, 100.0, None).unwrap();
+        assert_eq!(tall, wide.iter().map(|&(u, v)| (v, u)).collect::<Vec<_>>());
+        // A head is never longer than half the arrow, so the two never cross in a square frame.
+        for (w, h) in [(40.0, 40.0), (20.0, 100.0), (100.0, 20.0), (0.0, 0.0), (f32::NAN, 5.0)] {
+            for kind in [ShapeKind::ArrowLeftRight, ShapeKind::ArrowUpDown] {
+                let pts = shape_outline(kind, w, h, None).unwrap();
+                assert_eq!(pts.len(), 10, "{kind:?} {w}x{h}");
+                assert!(pts.iter().all(|(x, y)| (0.0..=1.0).contains(x) && (0.0..=1.0).contains(y)), "{kind:?} {w}x{h}: {pts:?}");
+                let (lo, hi) = pts.iter().fold((1.0f32, 0.0f32), |(lo, hi), p| (lo.min(p.0.min(p.1)), hi.max(p.0.max(p.1))));
+                assert!(lo == 0.0 && hi == 1.0, "{kind:?} {w}x{h} fills its frame");
+            }
+        }
+        // The single arrows are untouched: one head, a tail across the whole shaft.
+        let right = shape_outline(ShapeKind::Arrow, 100.0, 40.0, None).unwrap();
+        assert_eq!(right, [(0.0, 0.3), (0.8, 0.3), (0.8, 0.0), (1.0, 0.5), (0.8, 1.0), (0.8, 0.7), (0.0, 0.7)]);
+    }
+
     #[test]
     fn shape_outlines_stay_in_the_frame() {
         for kind in [
@@ -252,7 +380,12 @@ mod tests {
             ShapeKind::ArrowLeft,
             ShapeKind::ArrowUp,
             ShapeKind::ArrowDown,
+            ShapeKind::ArrowLeftRight,
+            ShapeKind::ArrowUpDown,
             ShapeKind::Star,
+            ShapeKind::Star4,
+            ShapeKind::Star7,
+            ShapeKind::Star32,
             ShapeKind::Heart,
         ] {
             for (w, h) in [(100.0, 50.0), (0.0, 0.0), (f32::NAN, 10.0)] {

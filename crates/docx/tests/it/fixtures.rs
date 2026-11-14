@@ -2832,7 +2832,8 @@ fn vml_preset_shapes_are_drawn() {
     assert_eq!(kind(17), Some((ShapeKind::Ellipse, false)));
     assert_eq!(shape(18), Some((ShapeKind::ArrowLeft, 60.0, 20.0, Some(Rgb(0xFF, 0xA5, 0x00)), black, 0.75, true, false)));
     assert_eq!(kind(19), Some((ShapeKind::Rectangle, false)));
-    assert_eq!(kind(20), Some((ShapeKind::Star, false)));
+    // Shape type 187 is `star4`, which keeps its four points (#6391).
+    assert_eq!(kind(20), Some((ShapeKind::Star4, false)));
     assert_eq!(shape(21), None);
     assert_eq!(shape(22), None);
 }
@@ -3052,6 +3053,64 @@ fn drawingml_shapes_survive_saving() {
     std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
     assert_eq!(xml.matches("<wps:wsp>").count(), 7);
     for p in presets.iter().chain(&["straightConnector1"]) {
+        assert!(xml.contains(&format!(r#"<a:prstGeom prst="{p}">"#)), "{p} is written");
+    }
+}
+
+/// #6391: Word's stars all came in as the five-point star and were saved back as `star5`, and
+/// `leftRightArrow` and `upDownArrow` as the single right-pointing arrow (which in their own tall
+/// or wide frame drew as a triangle). Each preset now keeps its own shape through reading, the
+/// outline that is drawn and wrapped around, and saving.
+#[test]
+fn star_and_double_arrow_presets_keep_their_shape() {
+    let presets = ["star4", "star5", "star6", "star7", "star8", "star10", "star12", "star16", "star24", "star32", "leftRightArrow", "upDownArrow"];
+    let body: String = presets
+        .iter()
+        .map(|p| anchored_wsp(p, 914400, 914400, &format!(r#"<a:prstGeom prst="{p}"><a:avLst/></a:prstGeom>"#), "", "<wps:cNvSpPr/>"))
+        .collect();
+    let kinds = |d: &Document| {
+        paras(d)[0]
+            .objects
+            .iter()
+            .map(|o| match o {
+                InlineObject::Shape { kind, .. } => *kind,
+                o => panic!("{o:?}"),
+            })
+            .collect::<Vec<ShapeKind>>()
+    };
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(
+        kinds(&d),
+        [
+            ShapeKind::Star4,
+            ShapeKind::Star,
+            ShapeKind::Star6,
+            ShapeKind::Star7,
+            ShapeKind::Star8,
+            ShapeKind::Star10,
+            ShapeKind::Star12,
+            ShapeKind::Star16,
+            ShapeKind::Star24,
+            ShapeKind::Star32,
+            ShapeKind::ArrowLeftRight,
+            ShapeKind::ArrowUpDown,
+        ]
+    );
+    // The point count reaches the outline that is drawn and wrapped around, and the double-headed
+    // arrow has a tip on each of the two sides it points to.
+    let outline = |kind, w, h| wordcraft_doc::wrap::shape_outline(kind, w, h, None).unwrap();
+    assert_eq!(outline(ShapeKind::Star, 72.0, 72.0).len(), 10);
+    assert_eq!(outline(ShapeKind::Star8, 72.0, 72.0).len(), 16);
+    assert_eq!(outline(ShapeKind::Star32, 72.0, 72.0).len(), 64);
+    let wide = outline(ShapeKind::ArrowLeftRight, 100.0, 40.0);
+    assert!(wide.contains(&(0.0, 0.5)) && wide.contains(&(1.0, 0.5)), "{wide:?}");
+    // Saving writes each preset back, where every star used to be saved as `star5`.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    assert_eq!(kinds(&wordcraft_docx::read(&bytes).unwrap()), kinds(&d), "every preset survives saving");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    for p in presets {
         assert!(xml.contains(&format!(r#"<a:prstGeom prst="{p}">"#)), "{p} is written");
     }
 }

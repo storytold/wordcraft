@@ -229,6 +229,10 @@ fn line_of(sp: &El, sppr: Option<&El>, theme: &[Rgb]) -> (Option<Rgb>, f32) {
 
 /// The preset's own [`ShapeKind`], for the presets that have one. `None` means a polygon.
 fn kind_of(prst: &str) -> Option<ShapeKind> {
+    // Each star preset has its own kind, point count and all (`star4` … `star32`).
+    if let Some(star) = ShapeKind::from_star_preset(prst) {
+        return Some(star);
+    }
     Some(match prst {
         "roundRect" => ShapeKind::RoundedRectangle,
         "ellipse" => ShapeKind::Ellipse,
@@ -238,7 +242,6 @@ fn kind_of(prst: &str) -> Option<ShapeKind> {
         // kind draws the other diagonal).
         "line" | "straightConnector1" => return None,
         "rightArrow" => ShapeKind::Arrow,
-        "star5" | "star4" | "star6" => ShapeKind::Star,
         "heart" => ShapeKind::Heart,
         "leftArrow" | "upArrow" | "downArrow" | "leftRightArrow" | "upDownArrow" | "chevron" | "homePlate" | "hexagon" | "pentagon" | "trapezoid"
         | "parallelogram" | "rtTriangle" | "pie" | "blockArc" => return None,
@@ -300,7 +303,9 @@ fn outline(prst: &str, w: f64, h: f64, geom: Option<&El>) -> Option<Poly> {
     let pts = match prst {
         "line" | "straightConnector1" => return Some((vec![(0.0, 0.0), (w, h)], false)),
         "pie" | "blockArc" => return Some(sector(prst == "blockArc", w, h, geom)),
-        "ellipse" | "heart" | "star5" | "star4" | "star6" => return None,
+        "ellipse" | "heart" => return None,
+        // Every star preset is drawn by its own shape kind, not as a polygon.
+        prst if ShapeKind::from_star_preset(prst).is_some() => return None,
         "roundRect" => return Some((rounded(w, h, lim(ss * a("adj", 0.16667), ss / 2.0)), true)),
         "triangle" => {
             let apex = lim(w * a("adj", 0.5), w);

@@ -193,19 +193,23 @@ pub(crate) fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Opti
             pb.move_to(x0, y0);
             pb.line_to(x1, y1);
         }
-        ShapeKind::Arrow | ShapeKind::ArrowLeft | ShapeKind::ArrowUp | ShapeKind::ArrowDown => {
+        ShapeKind::Arrow | ShapeKind::ArrowLeft | ShapeKind::ArrowUp | ShapeKind::ArrowDown | ShapeKind::ArrowLeftRight | ShapeKind::ArrowUpDown => {
             let pts: Vec<(f32, f32)> =
                 wordcraft_doc::wrap::arrow_outline(kind, r.w, r.h).iter().map(|&(u, v)| (x0 + u * r.w, y0 + v * r.h)).collect();
             poly(&mut pb, &pts)
         }
-        ShapeKind::Star => {
-            let pts: Vec<(f32, f32)> = (0..10)
-                .map(|i| {
-                    let a = std::f32::consts::PI * i as f32 / 5.0 - std::f32::consts::FRAC_PI_2;
-                    let rad = if i % 2 == 0 { 1.0 } else { 0.4 };
-                    (cx + a.cos() * r.w / 2.0 * rad, cy + a.sin() * r.h / 2.0 * rad)
-                })
-                .collect();
+        ShapeKind::Star
+        | ShapeKind::Star4
+        | ShapeKind::Star6
+        | ShapeKind::Star7
+        | ShapeKind::Star8
+        | ShapeKind::Star10
+        | ShapeKind::Star12
+        | ShapeKind::Star16
+        | ShapeKind::Star24
+        | ShapeKind::Star32 => {
+            let pts: Vec<(f32, f32)> =
+                wordcraft_doc::wrap::star_outline(kind).unwrap_or_default().iter().map(|&(u, v)| (x0 + u * r.w, y0 + v * r.h)).collect();
             poly(&mut pb, &pts);
         }
         ShapeKind::Heart => {

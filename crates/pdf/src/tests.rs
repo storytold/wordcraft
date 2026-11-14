@@ -486,10 +486,16 @@ fn shapes_have_paths() {
         ShapeKind::ArrowLeft,
         ShapeKind::ArrowUp,
         ShapeKind::ArrowDown,
+        ShapeKind::ArrowLeftRight,
+        ShapeKind::ArrowUpDown,
         ShapeKind::Line,
         ShapeKind::Diamond,
         ShapeKind::Triangle,
-    ] {
+    ]
+    .into_iter()
+    // #6391: every star preset, each with its own point count, has a path of its own.
+    .chain(ShapeKind::STARS)
+    {
         assert!(shape_path(k, &r, None).is_some(), "{k:?}");
     }
     // A line or connector may be flat (horizontal or vertical); a closed shape may not.
