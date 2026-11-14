@@ -11984,6 +11984,30 @@ fn cell_widths_override_grid() {
     }
 }
 
+// Word sizes an autofit table whose width matches its rows from the rows, not a stale grid.
+#[test]
+fn ordinary_table_takes_row_widths() {
+    crate::test_fonts();
+    let mut t = Table::new(3, 2, 132.0);
+    t.grid = vec![70.0, 62.0];
+    t.props.width = Some(120.0);
+    for row in &mut t.rows {
+        for (cell, width) in row.cells.iter_mut().zip([40.0, 80.0]) {
+            cell.props.width = Some(width);
+            cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
+        }
+    }
+    t.rows[0].cells.truncate(1);
+    t.rows[0].cells[0].props.span = 2;
+    t.rows[0].cells[0].props.width = Some(120.0);
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let [(x0, _, _)] = para_at(&l, &[0, 1, 0, 0])[..] else { panic!("cell missing") };
+    let [(x1, _, _)] = para_at(&l, &[0, 1, 1, 0])[..] else { panic!("cell missing") };
+    assert!((x1 - x0 - 40.0).abs() < 0.01, "{}", x1 - x0);
+}
+
 #[test]
 fn ambiguous_widths_keep_grid() {
     crate::test_fonts();
