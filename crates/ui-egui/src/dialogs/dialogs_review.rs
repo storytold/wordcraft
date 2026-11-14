@@ -256,6 +256,9 @@ fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
         crate::rtl::Table::new("compare_show").columns(2).spacing(vec2(24.0, 2.0)).top().show(ui, |t| {
             t.row(|r| {
                 r.cell(|ui| {
+                    // Not the grid's last column: it starts at the grid's minimum cell width, so
+                    // text that wraps would wrap to that and keep the column that narrow (#6046).
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     crate::rtl::vertical(ui, |ui| {
                         heading(ui, "Show changes at:");
                         ui.radio_value(&mut f.character_level, false, tl!("Word level"));
@@ -914,6 +917,35 @@ mod tests {
             h.step();
         }
         assert!(texts(&h).iter().any(|t| t.contains("(none)")), "no matches: the hint shows");
+    }
+
+    /// #6046: Compare › More shows "Show changes at:" and its two choices each on one line. The
+    /// column is not the grid's last, so it first gets the grid's minimum cell width; wrapped to
+    /// that, its text broke after every few letters and the column stayed that narrow.
+    #[test]
+    fn compare_more_keeps_the_show_changes_at_column_on_one_line() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app("Original text.");
+        app.run("review.compare", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_label("More >>").click();
+        h.run_steps(4);
+        let one_line = h.get_by_label("New document").rect().height();
+        for label in ["Show changes at:", "Word level", "Character level"] {
+            let r = h.get_by_label(label).rect();
+            assert!(r.height() <= one_line + 1.0, "{label} wraps: {r:?}, one line is {one_line}");
+        }
+        // The next column starts after the widest of them.
+        let (left, right) = (h.get_by_label("Character level").rect(), h.get_by_label("Show changes in:").rect());
+        assert!(right.left() >= left.right(), "the columns overlap: {left:?} {right:?}");
     }
 
     /// #2848 through the real dialog: tick "Add a period with double-space" on the AutoFormat As
