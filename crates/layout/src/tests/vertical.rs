@@ -107,6 +107,44 @@ fn east_asian_characters_stand_upright_in_top_to_bottom_text() {
     assert!(turned.iter().any(|ds| text_of(ds).contains("Vertical") && ds.iter().all(|x| !matches!(x, display::Draw::Rotated { .. }))));
 }
 
+/// #6059: symbols whose Unicode vertical orientation is upright (UAX #50 `U` or `Tu`) stand up
+/// in top-to-bottom text like the ideographs around them: geometric shapes, stars, the reference
+/// mark, circled digits, Roman numerals, the degree Celsius sign. Latin letters, digits and
+/// arrows (`R`) still lie with the line.
+#[test]
+fn upright_symbols_stand_upright_in_top_to_bottom_text() {
+    crate::test_fonts();
+    let symbols = "記号▲△■◆●★☆※①②Ⅳ℃の向き";
+    let mut d = Document::from_text(&format!("{symbols}\nA1→B"));
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    // The text drawn upright (turned back on its own) and the text drawn lying with the line.
+    let (mut upright, mut lying) = (String::new(), String::new());
+    for d in &draws {
+        let display::Draw::Turned { items, .. } = d else { continue };
+        for x in items {
+            match x {
+                display::Draw::Glyphs { text, .. } => lying.push_str(text),
+                display::Draw::Rotated { items, .. } => {
+                    upright.extend(items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }))
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(upright, symbols, "lying with the line: {lying:?}");
+    assert_eq!(lying.trim(), "A1→B");
+    // Either side of where the property changes inside a block, and the usual cases.
+    for c in ['■', '◿', '☀', '❶', '➓', '①', '⓿', 'Ⅰ', '℃', '№', '※', '‰', '∞', '⌚', '⬛', '😀', '🀄', '、', 'ア', '日']
+    {
+        assert!(display::upright_in_vertical(c), "{c} U+{:04X} stands upright", c as u32);
+    }
+    for c in ['A', '1', '→', '─', '▟', '❨', '➔', '⟨', '≠', '⬀', '🠀', 'ー', '「', '：', '＜', 'ｱ', '§', '×'] {
+        assert!(!display::upright_in_vertical(c), "{c} U+{:04X} lies with the line", c as u32);
+    }
+}
+
 #[test]
 fn headers_stay_horizontal_and_a_vertical_section_starts_a_page() {
     crate::test_fonts();
