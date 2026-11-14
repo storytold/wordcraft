@@ -363,14 +363,20 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
             // A table formula reads the cells around its own cell again.
             if instr.trim_start().starts_with('=') {
+                let default_lang = crate::cmd::default_lang(s);
                 if let Some((tp, r, c)) = path.cell()
                     && let Some(t) = s.doc.table(StoryRef::Body, &tp)
                 {
-                    let default_lang = crate::cmd::default_lang(s);
                     let text = match crate::cmd::table_formula::evaluate_field_with(t, Some(&s.doc), default_lang.as_deref(), r, c, instr) {
                         Ok(text) => text,
                         Err(e) => format!("!{e}"),
                     };
+                    updates.push((k, text));
+                } else if path.cell().is_none()
+                    && let Ok(text) = crate::cmd::table_formula::evaluate_field_detached(Some(&s.doc), default_lang.as_deref(), instr)
+                {
+                    // Outside a table (`{ = 1 + 2026 }`): numbers only. A formula that cannot be
+                    // worked out there keeps its stored result.
                     updates.push((k, text));
                 }
                 continue;

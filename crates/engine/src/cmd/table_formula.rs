@@ -36,6 +36,19 @@ pub fn evaluate_with(
     c: usize,
     formula: &str,
 ) -> Result<f64, CmdError> {
+    evaluate_core(t, false, doc, default_lang, r, c, formula)
+}
+
+/// [`evaluate_with`]; `detached` is a formula outside any table, which has no cells to read.
+fn evaluate_core(
+    t: &Table,
+    detached: bool,
+    doc: Option<&wordcraft_doc::Document>,
+    default_lang: Option<&str>,
+    r: usize,
+    c: usize,
+    formula: &str,
+) -> Result<f64, CmdError> {
     if formula.len() > MAX_FORMULA {
         return Err(syntax(format!("the formula is longer than {MAX_FORMULA} characters")));
     }
@@ -46,7 +59,7 @@ pub fn evaluate_with(
     if parser.pos != parser.toks.len() {
         return Err(syntax("unexpected text after the formula".into()));
     }
-    let here = Here { t, doc, default_lang, r, c, g: t.grid_col(r, c), visits: std::cell::Cell::new(0) };
+    let here = Here { t, detached, doc, default_lang, r, c, g: t.grid_col(r, c), visits: std::cell::Cell::new(0) };
     match eval(&expr, &here)? {
         Val::Num(x) => finite(x),
         Val::List(_) => Err(syntax("a range or ABOVE/LEFT/RIGHT/BELOW needs a function, such as SUM".into())),
@@ -73,8 +86,28 @@ pub fn evaluate_field_with(
     c: usize,
     instr: &str,
 ) -> Result<String, CmdError> {
+    field_core(t, false, doc, default_lang, r, c, instr)
+}
+
+/// The text a formula field outside any table shows (`{ = 1 + 2026 }`): numbers and arithmetic
+/// only, since there are no cells to read. Cell references, ranges and ABOVE/LEFT/RIGHT/BELOW are
+/// errors.
+pub fn evaluate_field_detached(doc: Option<&wordcraft_doc::Document>, default_lang: Option<&str>, instr: &str) -> Result<String, CmdError> {
+    let nowhere = Table::new(1, 1, 0.0);
+    field_core(&nowhere, true, doc, default_lang, 0, 0, instr)
+}
+
+fn field_core(
+    t: &Table,
+    detached: bool,
+    doc: Option<&wordcraft_doc::Document>,
+    default_lang: Option<&str>,
+    r: usize,
+    c: usize,
+    instr: &str,
+) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
-    let value = evaluate_with(t, doc, default_lang, r, c, formula)?;
+    let value = evaluate_core(t, detached, doc, default_lang, r, c, formula)?;
     let text = match switch.and_then(picture_of) {
         Some(picture) => format_picture(value, &picture),
         None => {
@@ -536,6 +569,8 @@ fn cell_ref(name: &str) -> Option<(usize, usize)> {
 /// Where the formula's cell sits.
 struct Here<'a> {
     t: &'a Table,
+    /// The formula is not in a table: cell references, ranges and ABOVE/LEFT/RIGHT/BELOW fail.
+    detached: bool,
     doc: Option<&'a wordcraft_doc::Document>,
     default_lang: Option<&'a str>,
     r: usize,
@@ -546,6 +581,11 @@ struct Here<'a> {
 }
 
 impl Here<'_> {
+    /// Fail a formula outside a table that reads cells.
+    fn need_table(&self) -> Result<(), CmdError> {
+        if self.detached { Err(CmdError::Failed("not in a table".into())) } else { Ok(()) }
+    }
+
     /// Count `n` more cells read, failing once the evaluation has read too many.
     fn visit(&self, n: usize) -> Result<(), CmdError> {
         let total = self.visits.get().saturating_add(n);
@@ -590,10 +630,12 @@ fn eval(e: &Expr, here: &Here) -> Result<Val, CmdError> {
     Ok(match e {
         Expr::Num(x) => Val::Num(*x),
         Expr::Cell(row, col, name) => {
+            here.need_table()?;
             let x = here.number_at(*row, *col)?.ok_or_else(|| CmdError::Failed(format!("{name} doesn't hold a number")))?;
             Val::Num(x)
         }
         Expr::Range(r0, g0, r1, g1) => {
+            here.need_table()?;
             // Only the part of the range inside the table holds cells.
             let mut v = Vec::new();
             let (r_end, g_end) = (here.t.rows.len().min(r1.saturating_add(1)), here.t.cols().min(g1.saturating_add(1)));
@@ -610,7 +652,10 @@ fn eval(e: &Expr, here: &Here) -> Result<Val, CmdError> {
             }
             Val::List(v)
         }
-        Expr::Side(side) => Val::List(side_numbers(here, *side)?),
+        Expr::Side(side) => {
+            here.need_table()?;
+            Val::List(side_numbers(here, *side)?)
+        }
         Expr::Neg(inner) => Val::Num(-scalar(eval(inner, here)?)?),
         Expr::Bin(op, a, b) => {
             let (x, y) = (scalar(eval(a, here)?)?, scalar(eval(b, here)?)?);

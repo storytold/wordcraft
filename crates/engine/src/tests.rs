@@ -4721,6 +4721,45 @@ fn update_fields_clears_dirty() {
     assert!(matches!(objs.first(), Some(wordcraft_doc::InlineObject::Field { result, .. }) if result == "Report"), "{objs:?}");
 }
 
+/// A `=` formula field outside a table (`{ = 1 + 2026 }`, as in a case study that counts years
+/// from the date) is worked out by F9. It reads no cells, so a cell reference or ABOVE has nothing
+/// to read and the field keeps its stored result instead of showing a wrong number.
+#[test]
+fn update_fields_evaluates_formulas_outside_tables() {
+    let mut s = s();
+    let mut p = wordcraft_doc::Paragraph::new();
+    let cases = [("= 1 + 2026", "1999"), ("=2*(3+4) \\# \"0.0\"", "stale"), ("=A1+1", "stale"), ("=SUM(ABOVE)", "stale"), ("=1/0", "stale")];
+    for (instr, result) in cases {
+        let end = p.len();
+        p.insert_object(
+            end,
+            wordcraft_doc::InlineObject::Field {
+                instr: instr.into(),
+                result: result.into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &wordcraft_doc::props::CharProps::default(),
+        )
+        .unwrap();
+    }
+    s.doc.body = vec![wordcraft_doc::para_block(p)];
+    run(&mut s, "references.updateFields", json!({}));
+    let results: Vec<String> = s.doc.body[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, ["2027", "14.0", "stale", "stale", "stale"]);
+}
+
 /// #877/#878: an imported TOC field whose begin marker carries `w:dirty` (a generator wrote a
 /// placeholder result and asked Word to refresh it on open) keeps the flag through saves until
 /// WordCraft computes the entries: Update Table replaces the placeholder in place (#878) and
