@@ -132,6 +132,13 @@ fn native_stationary_strokes_paint_their_round_nib() {
     assert!(render(vec![(5.0, 5.0), (5.0, 5.0), (15.0, 5.0)]).pixels == control.pixels, "moving strokes keep their full path");
 }
 
+#[test]
+fn native_taps_obey_the_transformed_path_extent_guard() {
+    let draw = Draw::NativeInk { pts: vec![(0.0, 0.0)], color: Rgb::BLACK, width: 900_000.0, alpha: 1.0 };
+    let rendered = render_items(&Document::new(), &[draw], Rect::new(0.0, 0.0, 8.0, 8.0), 4.0, &RenderOptions::default());
+    assert!(rendered.pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 0), "oversized tap was painted");
+}
+
 /// Mask outlines obey the same transformed-path size guard as other rendered paths.
 #[test]
 fn mask_ink_obeys_the_shared_path_extent_guard() {

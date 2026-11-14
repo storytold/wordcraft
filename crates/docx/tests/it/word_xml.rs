@@ -11,6 +11,19 @@ fn paras(doc: &Document) -> Vec<&Paragraph> {
     doc.body.iter().filter_map(|b| b.as_para()).collect()
 }
 
+#[test]
+fn word_2003_process_content_keeps_children_in_order() {
+    let xml = br#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:f="urn:future" mc:Ignorable="f" mc:ProcessContent="f:wrapper">
+        <w:body><f:wrapper><w:p><w:r><w:t>first</w:t></w:r></w:p></f:wrapper>
+        <f:hidden><w:p><w:r><w:t>hidden</w:t></w:r></w:p></f:hidden>
+        <w:p><f:wrapper><w:r><w:t>second</w:t></w:r></f:wrapper></w:p></w:body>
+        </w:wordDocument>"#;
+    let doc = read_xml(xml).unwrap();
+    assert_eq!(paras(&doc).iter().map(|p| p.plain_text()).collect::<Vec<_>>(), ["first", "second"]);
+}
+
 fn part_text(doc: &Document, id: Option<u32>) -> String {
     id.and_then(|i| doc.parts.get(&i))
         .map(|p| p.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect::<Vec<_>>().join("\n"))

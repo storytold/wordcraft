@@ -231,6 +231,12 @@ impl Conv {
         if depth > MAX_DEPTH {
             return Vec::new();
         }
+        if e.attrs.iter().any(|(name, _)| name == "?ignore") {
+            return Vec::new();
+        }
+        if e.attrs.iter().any(|(name, _)| name == "?process") {
+            return self.kids(e, part, depth);
+        }
         match e.name.as_str() {
             "wx:sect" | "wx:sub-section" | "wx:pBdrGroup" => return self.kids(e, part, depth),
             "w:binData" | "w:fonts" | "w:docPr" | "w:lists" | "w:styles" | "w:latentStyles" | "w:versionOfBuiltInStyleNames" => return Vec::new(),

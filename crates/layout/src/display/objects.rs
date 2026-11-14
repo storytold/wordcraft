@@ -27,13 +27,14 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
 }
 
 fn ink_preview_style(g: &Graphic, draw: &mut Draw) {
-    if let Draw::Image { media, crop, fx, .. } = draw
+    if let Draw::Image { media, crop, fx, alpha, .. } = draw
         && g.kind == GraphicKind::Ink
         && g.ink_fallback.as_deref() == Some(media.as_str())
         && let Some(style) = &g.ink_fallback_style
     {
         *crop = style.crop;
         *fx = style.fx;
+        *alpha *= style.fx.opacity();
     }
 }
 

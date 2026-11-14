@@ -994,7 +994,10 @@ fn draw_ink(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     // coordinates collapsed by page-space rounding. Native taps still paint their nib.
     if matches!(it, Draw::NativeInk { .. }) && bounds.width() == 0.0 && bounds.height() == 0.0 {
         let radius = f64::from(width) / 2.0;
-        ctx.fill_path(&shape_path(ShapeKind::Ellipse, bounds.inflate(radius, radius), None));
+        let nib = shape_path(ShapeKind::Ellipse, bounds.inflate(radius, radius), None);
+        if path_extent_ok(fr.view, &nib) {
+            ctx.fill_path(&nib);
+        }
         return;
     }
     ctx.set_stroke(kurbo::Stroke::new(width as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
