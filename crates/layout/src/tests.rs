@@ -8512,6 +8512,189 @@ fn without_cell_widths_columns_follow_their_content_whatever_the_grid() {
     assert!(narrow[0] < placeholder[0] / 2.0, "{narrow:?} vs {placeholder:?}");
 }
 
+/// The edges of a two-column table of one row (left, between the columns, right), from the left
+/// margin. A width of 0 leaves the cell automatic; `set` changes the table before it is laid out.
+fn two_column_edges(widths: [f32; 2], texts: [&str; 2], mode: u32, set: impl Fn(&mut Table)) -> [f32; 3] {
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let mut t = Table::new(1, 2, 468.0);
+    t.grid = widths.iter().map(|w| w.max(40.0)).collect();
+    t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+    for ((c, w), s) in t.rows[0].cells.iter_mut().zip(widths).zip(texts) {
+        c.props.width = (w > 0.0).then_some(w);
+        c.blocks = vec![text(s)];
+    }
+    set(&mut t);
+    let mut d = Document::from_text("After");
+    d.settings.compat_mode = mode;
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let (Some(a), Some(b)) = (cell_rect(&l, 0, 0, 0), cell_rect(&l, 0, 0, 1)) else { panic!("cells missing") };
+    [a.x - 72.0, b.x - 72.0, b.right() - 72.0]
+}
+
+/// A table whose width comes from its columns (no `w:tblW` of its own) is narrowed to the room
+/// it has, however little wider its cells make it (#6604). From Word 2013's layout on the room
+/// is the text width less the table's indent and the outer halves of its outer borders; before
+/// it the table starts its first cell's margin before the text and may run its last cell's
+/// margin past it. Every column keeps its longest word and the rest is shared by how far each
+/// preferred width exceeds it. Measured on Word with synthetic documents: a 100 pt and a 412 pt
+/// cell in 481.9 pt of text come out 94.34 and 387.2 pt wide between 0.5 pt borders, 93.85 and
+/// 385.04 between 3 pt ones, and 95.88 and 365.6 after a 20 pt indent.
+#[test]
+fn a_table_sized_by_its_columns_is_narrowed_to_the_room_it_has() {
+    fn borders(width: f32) -> impl Fn(&mut Table) {
+        move |t| t.props.borders = Some(Borders::all(Border::single(width)))
+    }
+    fn indent(by: f32) -> impl Fn(&mut Table) {
+        move |t| {
+            t.props.indent = Some(by);
+            t.props.borders = Some(Borders::all(Border::single(0.5)));
+        }
+    }
+    let both = ["ii", "ii"];
+    // What a column of that one word needs: the word and the cell's margins.
+    let [x0, x1, _] = two_column_edges([0.0, 0.0], both, 15, borders(0.5));
+    let min = x1 - x0;
+    assert!((14.0..30.0).contains(&min), "a short word's column is {min} pt wide");
+    let first = |w: [f32; 2], room: f32| min + (room - 2.0 * min) * (w[0] - min) / (w[0] + w[1] - 2.0 * min);
+    let close = |got: [f32; 3], want: [f32; 3], what: &str| {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.02), "{what}: {got:?}, expected {want:?}");
+    };
+    // 5 pt wider than the 468 pt of text: the outer borders stand inside the margins.
+    let w = [100.0, 373.0];
+    close(two_column_edges(w, both, 15, borders(0.5)), [0.25, 0.25 + first(w, 467.5), 467.75], "5 pt wider");
+    // As wide as the text: narrowed by the outer halves of its 3 pt borders.
+    let w = [100.0, 368.0];
+    close(two_column_edges(w, both, 15, borders(3.0)), [1.5, 1.5 + first(w, 465.0), 466.5], "3 pt borders");
+    // Without borders the room is the text width, and 4 twips too many are taken off.
+    let w = [100.0, 368.2];
+    close(two_column_edges(w, both, 15, borders(0.0)), [0.0, first(w, 468.0), 468.0], "no borders");
+    // An indent takes from the room, a negative one adds to it.
+    let w = [100.0, 368.0];
+    close(two_column_edges(w, both, 15, indent(20.0)), [20.25, 20.25 + first(w, 447.5), 467.75], "indent");
+    close(two_column_edges([100.0, 387.5], both, 15, indent(-20.0)), [-19.75, 80.25, 467.75], "negative indent");
+    // A centred table has no indent.
+    let centred = |t: &mut Table| {
+        indent(20.0)(t);
+        t.props.align = Some(Align::Center);
+    };
+    close(two_column_edges([100.0, 373.0], both, 15, centred), [0.25, 0.25 + first([100.0, 373.0], 467.5), 467.75], "centred");
+    // Before Word 2013's layout: both outer cell margins beyond the text are the table's too.
+    close(two_column_edges([100.0, 378.8], both, 14, borders(0.5)), [-5.4, 94.6, 473.4], "before 2013, as wide as its room");
+    let w = [100.0, 398.0];
+    close(two_column_edges(w, both, 14, borders(0.5)), [-5.4, -5.4 + first(w, 478.8), 473.4], "before 2013, 30 pt wider");
+    // A table with a width of its own keeps it.
+    let own = |t: &mut Table| {
+        borders(0.5)(t);
+        t.props.width = Some(473.0);
+    };
+    close(two_column_edges([100.0, 373.0], both, 15, own), [0.25, 100.25, 473.25], "its own width");
+}
+
+/// A column narrower than its longest word grows to it, and a table whose width comes from its
+/// columns grows with it while there is room: the other columns keep their widths (#6604).
+/// Measured on Word: cells of 50 and 250 pt, the first holding an 85 pt word, come out 95.78 and
+/// 250.01 pt wide; with a width of 300 pt for the table, 95.78 and 204.29.
+#[test]
+fn a_column_narrower_than_its_longest_word_widens_a_table_sized_by_its_columns() {
+    let texts = ["Incomprehensibilities", "ii"];
+    let [x0, x1, _] = two_column_edges([0.0, 0.0], texts, 15, |_| {});
+    let word = x1 - x0;
+    assert!(word > 60.0, "the long word's column is {word} pt wide");
+    let [left, mid, right] = two_column_edges([50.0, 250.0], texts, 15, |_| {});
+    assert!((mid - left - word).abs() < 0.02, "the first column is {} pt wide, its word needs {word}", mid - left);
+    assert!((right - mid - 250.0).abs() < 0.02, "the second column is {} pt wide", right - mid);
+    // With a width of its own the table keeps it and the other column gives the difference.
+    let [left, mid, right] = two_column_edges([50.0, 250.0], texts, 15, |t| t.props.width = Some(300.0));
+    assert!((mid - left - word).abs() < 0.02 && (right - left - 300.0).abs() < 0.02, "{left} {mid} {right}");
+}
+
+/// A table whose width comes from its columns takes them from its cells, whatever its saved
+/// grid says (#6604): each column is as wide as the widest of the cells that occupy it alone,
+/// what a cell over several columns lacks goes to the last of them, and an automatic cell asks
+/// for nothing. Measured on Word over a grid of 40, 175 and 235 pt (the columns' widths, pt).
+#[test]
+fn a_table_sized_by_its_columns_takes_them_from_its_cells() {
+    type Cells<'a> = &'a [(u32, Option<f32>)];
+    let columns = |rows: &[Cells]| {
+        let mut t = Table::new(rows.len(), 3, 450.0);
+        t.grid = vec![40.0, 175.0, 235.0];
+        for (row, cells) in t.rows.iter_mut().zip(rows) {
+            row.cells.truncate(cells.len());
+            for (cell, (span, width)) in row.cells.iter_mut().zip(cells.iter()) {
+                cell.props.span = *span;
+                cell.props.width = *width;
+                cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
+            }
+        }
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        // The last row has a cell in every column.
+        let widths: Vec<f32> = (0..3).filter_map(|c| cell_rect(&l, 0, rows.len() - 1, c)).map(|r| r.w).collect();
+        assert_eq!(widths.len(), 3, "cells missing");
+        widths
+    };
+    let close = |got: Vec<f32>, want: [f32; 3], what: &str| {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.02), "{what}: {got:?}, expected {want:?}");
+    };
+    let plain: Cells = &[(1, Some(50.0)), (1, Some(60.0)), (1, Some(340.0))];
+    let wider: Cells = &[(1, Some(60.0)), (1, Some(60.0)), (1, Some(340.0))];
+    // Word: 50.06, 60.00 and 340.04 over the grid's 40, 175 and 235.
+    close(columns(&[plain, plain]), [50.0, 60.0, 340.0], "the same total as the grid");
+    // Word: 60.02, 60.00 and 340.04, both ways.
+    close(columns(&[wider, wider]), [60.0, 60.0, 340.0], "another total than the grid");
+    close(columns(&[wider, plain]), [60.0, 60.0, 340.0], "rows that disagree");
+    // Word: 50.06, 60.00 and 340.04: a cell over two columns that fits them changes nothing,
+    // and neither does an automatic cell.
+    close(columns(&[&[(2, Some(50.0)), (1, Some(340.0))], plain]), [50.0, 60.0, 340.0], "a merged pair that fits");
+    close(columns(&[&[(1, None), (1, Some(60.0)), (1, Some(340.0))], plain]), [50.0, 60.0, 340.0], "an automatic cell");
+    // What a merged pair lacks goes to its last column (Word, squeezed into its room: 46.1,
+    // 134.07 and 301.37 for a 200 pt pair over 50 and 60 pt beside 340).
+    let narrow: Cells = &[(1, Some(50.0)), (1, Some(60.0)), (1, Some(200.0))];
+    close(columns(&[&[(2, Some(200.0)), (1, Some(200.0))], narrow]), [50.0, 150.0, 200.0], "a merged pair wider than its columns");
+}
+
+/// A nested table whose width comes from its columns is narrowed to the cell it is in and
+/// doesn't widen that cell's column (#6604). Measured on Word: cells of 100 and 200 pt in a
+/// column of 240.77 pt come out 75.74 and 153.75 pt wide, and the outer columns stay equal.
+#[test]
+fn a_nested_table_sized_by_its_columns_is_narrowed_to_its_cell() {
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let mut inner = Table::new(1, 2, 300.0);
+    inner.grid = vec![100.0, 200.0];
+    for (c, w) in inner.rows[0].cells.iter_mut().zip([100.0, 200.0]) {
+        c.props.width = Some(w);
+        c.blocks = vec![text("ii")];
+    }
+    let mut outer = Table::new(1, 2, 468.0);
+    outer.props.width_pct = Some(100.0);
+    outer.rows[0].cells[0].blocks = vec![text("ii")];
+    outer.rows[0].cells[1].blocks = vec![Arc::new(Block::Table(inner)), text("")];
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+    let l = lay(&d);
+    let cells = |depth: usize| -> Vec<wordcraft_geom::Rect> {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Cell { rect, table, .. } = i { (table.0.len() == depth).then_some(*rect) } else { None })
+            .collect()
+    };
+    let (outer_cells, inner_cells) = (cells(1), cells(4));
+    let ([a, b], [c, d]) = (&outer_cells[..], &inner_cells[..]) else { panic!("cells missing: {outer_cells:?} {inner_cells:?}") };
+    assert!((a.w - b.w).abs() < 0.02, "the outer columns are {} and {} pt wide", a.w, b.w);
+    assert!(
+        c.x >= b.x && d.right() <= b.right() + 0.01,
+        "the nested table runs from {} to {}, its cell from {} to {}",
+        c.x,
+        d.right(),
+        b.x,
+        b.right()
+    );
+    assert!(c.w < 100.0 && d.w < 200.0 && d.w > c.w, "the nested columns are {} and {} pt wide", c.w, d.w);
+}
+
 #[test]
 fn an_inherited_footer_sizes_its_percentage_table_by_its_own_section() {
     crate::test_fonts();
@@ -12079,15 +12262,21 @@ fn ambiguous_widths_keep_grid() {
             cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
         }
     }
+    // With a width of its own a table whose cells conflict, total something else or span
+    // columns keeps its grid; one sized by its columns takes them from its cells
+    // (`a_table_sized_by_its_columns_takes_them_from_its_cells`).
     let mut conflicting = t.clone();
+    conflicting.props.width = Some(450.0);
     conflicting.rows[1].cells[0].props.width = Some(60.0);
     let mut percentage = t.clone();
     percentage.rows[0].cells[0].props.width_pct = Some(10.0);
     let mut invalid = t.clone();
     invalid.rows[0].cells[0].props.width = Some(f32::NAN);
     let mut different_total = t.clone();
+    different_total.props.width = Some(450.0);
     different_total.rows.iter_mut().for_each(|r| r.cells[0].props.width = Some(60.0));
     let mut spanned = t;
+    spanned.props.width = Some(450.0);
     spanned.rows[0].cells.remove(1);
     spanned.rows[0].cells[0].props.span = 2;
     for table in [conflicting, percentage, invalid, different_total, spanned] {
@@ -13562,7 +13751,8 @@ fn footer_float_wraps_body() {
     crate::test_fonts();
     use wordcraft_doc::props::LineSpacing;
     const FLOAT_TOP: f32 = 100.0;
-    const FLOAT_RIGHT: f32 = 468.0;
+    // The table's cell makes it as wide as the text; its outer borders (0.5 pt) stand inside that.
+    const FLOAT_RIGHT: f32 = 467.5;
     for text in ["", "Decoration"] {
         for height in [20.0, 60.0, 100.0] {
             let mut doc = absolute_footer(text, height);
@@ -13609,6 +13799,8 @@ fn footer_table_wrap_bounds() {
     const FLOAT_TOP: f32 = 100.0;
     const ROW_HEIGHT: f32 = 40.0;
     const TABLE_WIDTH: f32 = 468.0;
+    // The table's outer borders (0.5 pt) stand inside the width its cells give it.
+    const TABLE_RIGHT: f32 = TABLE_WIDTH - 0.5;
     let mut doc = Document::from_text(&format!("Anchor\n{}", "Original body words ".repeat(60)));
     for block in &mut doc.body {
         let Block::Para(p) = Arc::make_mut(block) else { panic!("paragraph") };
@@ -13629,7 +13821,7 @@ fn footer_table_wrap_bounds() {
     let lines = line_boxes(&layout, 0, 1, doc.last_section.margin_left);
     let beside: Vec<_> = lines.iter().filter(|(_, top, _, bottom)| *bottom > FLOAT_TOP + ROW_HEIGHT && *top < FLOAT_TOP + ROW_HEIGHT * 2.0).collect();
     assert!(!beside.is_empty());
-    assert!(beside.iter().all(|(left, _, _, _)| *left >= TABLE_WIDTH - 0.01), "omitted cells must not open a hole in table wrapping: {beside:?}");
+    assert!(beside.iter().all(|(left, _, _, _)| *left >= TABLE_RIGHT - 0.01), "omitted cells must not open a hole in table wrapping: {beside:?}");
 }
 
 #[test]

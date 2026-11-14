@@ -378,6 +378,94 @@ struct TableFrame {
     x: f32,
 }
 
+/// The table's borders: its style's, overlaid by its own side by side.
+fn table_borders(t: &Table, style: Option<&TableStyleProps>) -> Borders {
+    let mut borders = style.and_then(|s| s.parts.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        borders.overlay(&own);
+    }
+    borders
+}
+
+/// What of the width it is given a table whose width comes from its columns cannot use
+/// (measured on Word with synthetic documents: the table start-aligned, centred and end-aligned,
+/// floating, in a text box, in a cell and in a section's column):
+/// - from Word 2013's layout on (compatibility mode 15), its indent and the outer halves of its
+///   outer borders, which stand inside the margins;
+/// - before it, its indent less its outer cell margins: the table starts its first cell's start
+///   margin before the margin and may run its last cell's end margin past the other one, its
+///   borders centred on those edges.
+///
+/// A centred, end-aligned or floating table has no indent: a floating one has the same room
+/// wherever it is put, and runs off the page from there.
+fn outside(ctx: &Ctx, t: &Table, margins_def: [f32; 4], tborders: &Borders) -> f32 {
+    let placed = t.props.float.is_some() || matches!(t.props.align, Some(Align::Center | Align::Right));
+    let indent = if placed { 0.0 } else { t.props.indent.unwrap_or(0.0) };
+    let row = t.rows.first();
+    let (first, last) = (row.and_then(|r| r.cells.first()), row.and_then(|r| r.cells.last()));
+    if ctx.doc.settings.compat_mode >= 15 {
+        let half =
+            |own: Option<Border>, table: Option<Border>| own.or(table).filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0);
+        let start = half(first.and_then(|c| c.props.borders.and_then(|b| b.left)), tborders.left);
+        let end = half(last.and_then(|c| c.props.borders.and_then(|b| b.right)), tborders.right);
+        indent + start + end
+    } else {
+        let margins = |c: Option<&wordcraft_doc::Cell>| c.map_or(margins_def, |c| c.props.resolved_margins(margins_def));
+        indent - margins(first)[1] - margins(last)[3]
+    }
+}
+
+/// The room a table whose width comes from its columns has in `avail`: Word narrows the table
+/// to it (see [`outside`]).
+fn own_room(ctx: &Ctx, t: &Table, avail: f32, margins_def: [f32; 4], tborders: &Borders) -> f32 {
+    let room = avail - outside(ctx, t, margins_def, tborders);
+    if room.is_finite() && room > 0.0 { room } else { avail }
+}
+
+/// The columns of a table whose width comes from its columns, as Word takes them, whatever the
+/// saved grid says: each as wide as the widest of the cells that occupy it alone, and what a
+/// cell over several columns lacks goes to the last of them. An automatic cell asks for
+/// nothing. (Measured: cells of 100 and 250 pt over a grid of 150 and 332 make a 350 pt table;
+/// rows giving a column 50 and 60 pt make it 60; a 200 pt cell over columns of 50 and 60 makes
+/// them 50 and 150.) `None`, the grid standing, when a cell gives a percentage or a width that
+/// is no number, or a column has no cell of its own with a width.
+fn cell_widths(t: &Table, ncols: usize) -> Option<Vec<f32>> {
+    let mut widths = vec![0.0f32; ncols];
+    let mut spans = Vec::new();
+    for row in &t.rows {
+        let mut g = row.first_grid();
+        for cell in &row.cells {
+            let span = cell.span();
+            if cell.props.width_pct.is_some() {
+                return None;
+            }
+            match cell.props.width {
+                Some(w) if w.is_finite() && w > 0.0 && span == 1 => {
+                    let col = widths.get_mut(g)?;
+                    *col = col.max(w.min(UNBOUNDED));
+                }
+                Some(w) if w.is_finite() && w > 0.0 => spans.push((g, span, w.min(UNBOUNDED))),
+                Some(w) if !w.is_finite() => return None,
+                _ => {}
+            }
+            g = g.saturating_add(span);
+        }
+    }
+    if widths.iter().any(|w| *w <= 0.0) {
+        return None;
+    }
+    for (g, span, w) in spans {
+        let cols = widths.get_mut(g..g.saturating_add(span).min(ncols))?;
+        let lack = w - cols.iter().sum::<f32>();
+        if lack > 0.0
+            && let Some(last) = cols.last_mut()
+        {
+            *last += lack;
+        }
+    }
+    Some(widths)
+}
+
 // Nested measurement needs the same preferred weights as layout before sharing span minima.
 fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
     let ncols = grid_cols(t).max(1);
@@ -393,8 +481,6 @@ fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
 
 fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option<&TableStyleProps>) -> TableFrame {
     let ncols = grid_cols(t).max(1);
-    let mut grid = preferred_grid(t, avail);
-    let mut total: f32 = grid.iter().sum();
     // A top-level table in an inherited header or footer takes its share of the defining
     // section's width (`Ctx::pct_base`).
     let pct_base = if depth <= 1 { ctx.pct_base.unwrap_or(avail) } else { avail };
@@ -404,6 +490,13 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
         (_, Some(w)) if w > 0.0 => Some(w),
         _ => None,
     };
+    // Whether the table's width comes from its columns (no `w:tblW` of its own, not fixed).
+    let by_columns = target.is_none() && !t.props.fixed;
+    let mut grid = preferred_grid(t, avail);
+    if by_columns && let Some(widths) = cell_widths(t, ncols) {
+        grid = widths;
+    }
+    let mut total: f32 = grid.iter().sum();
     if let Some(tw) = target {
         if total > 0.0 && total < 1.0 {
             // Divide first: a tiny positive total can overflow the scale factor.
@@ -414,16 +507,21 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
         }
         total = tw;
     }
+    let margins_def = default_margins(t, style);
+    let tborders = table_borders(t, style);
     // An autofit table whose width comes from its columns (no `w:tblW` of its own) is squeezed
-    // into its room when they add up to more; the preferred widths are kept for `autofit` to
-    // share the room out by. A table that sets its own width keeps it, past the margin and even
-    // past the page (Word, observed with synthetic documents: 1.1 to 2 times the text area).
-    let mut preferred = None;
-    if total > avail * 1.02 && !t.props.fixed && target.is_none() {
-        preferred = Some(grid.clone());
-        let k = avail / total.max(1.0);
+    // into its room when they add up to more, however little; the preferred widths are kept for
+    // `autofit` to share the room out by. A table that sets its own width keeps it, past the
+    // margin and even past the page (Word, observed with synthetic documents: 1.1 to 2 times the
+    // text area).
+    let room = if by_columns { own_room(ctx, t, avail, margins_def, &tborders) } else { avail };
+    // Cells that give percentages share the table's width: those are narrowed in proportion.
+    let shares = || t.rows.iter().any(|r| r.cells.iter().any(|c| c.props.width_pct.is_some()));
+    let preferred = (by_columns && !shares()).then(|| grid.clone());
+    if by_columns && total > room + 0.01 {
+        let k = room / total.max(1.0);
         grid.iter_mut().for_each(|w| *w *= k);
-        total = avail;
+        total = room;
     }
     if !t.props.fixed {
         // Measuring lays paragraphs out once more; it mustn't count their equations twice.
@@ -431,10 +529,10 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
         let content = column_content(ctx, t, style, depth, &grid);
         ctx.eq_count = eq_count;
         if let Some(content) = content {
-            autofit(&mut grid, &content, t, avail, preferred.as_deref(), target);
+            autofit(&mut grid, &content, t, room, preferred.as_deref(), target);
             // Never wider than the room it had, however long an unbreakable word.
             let fitted: f32 = grid.iter().sum();
-            let cap = avail.max(total);
+            let cap = room.max(total);
             if fitted > cap {
                 grid.iter_mut().for_each(|w| *w *= cap / fitted);
             }
@@ -450,13 +548,7 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     colx.push(acc);
     // Word 2013 and later (compatibility mode 15) put the table's border at the margin (plus its
     // indent); earlier modes line the first cell's text up with it instead.
-    let margins_def = default_margins(t, style);
     let indent = t.props.indent.unwrap_or(0.0);
-    // The style's borders, overlaid by the table's own side by side.
-    let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
-    if let Some(own) = t.props.borders {
-        tborders.overlay(&own);
-    }
     let first_cell = t.rows.first().and_then(|r| r.cells.first());
     // A right-to-left table (`w:bidiVisual`) mirrors: its first column stands at the right, its
     // start alignment and indent are measured from the right margin, and each cell's start
@@ -1440,7 +1532,9 @@ fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth
                 ctx.para_measured(p, UNBOUNDED, text, label, para_content)
             }
             // A nested table: its fixed width, else its columns' but at least its preferred width
-            // (its own, else its grid's when it has preferred widths at all).
+            // (its own, else its grid's when it has preferred widths at all). One whose width
+            // comes from its columns is narrowed to the cell, as far as its columns' longest
+            // words, and doesn't widen the cell before that.
             Block::Table(nt) if depth < 8 => {
                 let grid = if is_automatic(nt) { 0.0 } else { nt.grid.iter().filter(|w| w.is_finite()).map(|w| w.max(0.0)).sum() };
                 let width = nt.props.width.filter(|w| w.is_finite()).unwrap_or(grid).clamp(0.0, UNBOUNDED);
@@ -1451,7 +1545,12 @@ fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth
                     let weights = preferred_grid(nt, width);
                     let cols = column_content(ctx, nt, style.as_ref(), depth + 1, &weights).unwrap_or_default();
                     let (l, h) = cols.iter().fold((0.0, 0.0), |(l, h), c| (l + c.0, h + c.1));
-                    (width.max(l), width.max(h))
+                    if nt.props.width.is_none() && nt.props.width_pct.is_none() && !nt.props.fixed && !is_automatic(nt) {
+                        let out = outside(ctx, nt, default_margins(nt, style.as_ref()), &table_borders(nt, style.as_ref()));
+                        ((l + out).max(0.0), width.max(h))
+                    } else {
+                        (width.max(l), width.max(h))
+                    }
                 }
             }
             Block::Table(_) => (0.0, 0.0),
@@ -1546,13 +1645,17 @@ fn no_cell_widths(t: &Table) -> bool {
 ///   table with a width of its own and room to spare is stretched to it, every column in
 ///   proportion to its widest line (measured on Word: 102.8, 217.0 and 131.5 pt laid out, 102.7,
 ///   216.7 and 131.5 drawn). Without a width of its own the table stays as narrow as its content.
-/// - A table whose `preferred` widths are wider than the room (a template library writes cells
-///   of 6000 and 24000 twips on an A4 page) is squeezed the way Word does it: every column gets
-///   its longest word, and the room left is shared in proportion to how far each preferred
-///   width exceeds that, so a column of short labels keeps most of its lines whole while one of
-///   running text wraps. (Measured against Word: 116 pt predicted, 116 pt drawn.)
-/// - Otherwise the grid stands, but no column is narrower than its longest word: the columns with
-///   room to spare give up the difference.
+/// - A table whose width comes from its columns (`preferred`, see `table_frame`) keeps them
+///   while they fit `avail`, its room: a column narrower than its longest word grows to it, and
+///   the table with it (measured on Word: cells of 50 and 250 pt, the first holding an 85 pt
+///   word, come out 95.78 and 250.01 pt wide). Wider than the room (a template library writes
+///   cells of 6000 and 24000 twips on an A4 page) the table is squeezed the way Word does it:
+///   every column gets its longest word, and the room left is shared in proportion to how far
+///   each preferred width exceeds that, so a column of short labels keeps most of its lines
+///   whole while one of running text wraps. (Measured against Word: 116 pt predicted, 116 pt
+///   drawn; 94.35 and 387.05 predicted, 94.34 and 387.20 drawn.)
+/// - Otherwise (a table with a width of its own) the grid stands, but no column is narrower
+///   than its longest word: the columns with room to spare give up the difference.
 fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32, preferred: Option<&[f32]>, target: Option<f32>) {
     if grid.len() != content.len() || !avail.is_finite() {
         return;
@@ -1575,14 +1678,19 @@ fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32, pref
         return;
     }
     if let Some(pref) = preferred.filter(|p| p.len() == grid.len()) {
-        let mins: Vec<f32> = content.iter().map(|c| if c.0.is_finite() { c.0.max(4.0) } else { 4.0 }).collect();
+        // No column under 4 pt, unless it is given narrower: Word saves slivers of half a point
+        // beside a ragged edge and keeps them.
+        let floor = |p: &f32| if p.is_finite() { p.clamp(0.0, 4.0) } else { 4.0 };
+        let mins: Vec<f32> = content.iter().zip(pref).map(|(c, p)| if c.0.is_finite() { c.0.max(floor(p)) } else { floor(p) }).collect();
         let lo: f32 = mins.iter().sum();
         let room = (avail - lo).max(0.0);
         let give: Vec<f32> = pref.iter().zip(&mins).map(|(p, m)| if p.is_finite() { (p - m).max(0.0) } else { 0.0 }).collect();
         let total_give: f32 = give.iter().sum();
-        let even = 1.0 / grid.len().max(1) as f32;
+        // While they fit, the preferred widths stand and a column narrower than its longest word
+        // grows to it, the table with it.
+        let k = if total_give > 0.01 { (room / total_give).min(1.0) } else { 0.0 };
         for ((w, m), g) in grid.iter_mut().zip(&mins).zip(&give) {
-            *w = m + room * if total_give > 0.01 { g / total_give } else { even };
+            *w = m + g * k;
         }
         return;
     }
