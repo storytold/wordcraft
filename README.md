@@ -451,7 +451,8 @@ Copyright (c) 2026 ArtCraft Team and the WordCraft contributors. Required notice
 Bundled fonts, icons, images and other assets keep their own open licenses; each one is listed
 with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
 
-English spelling uses dialect-specific SCOWL 2026 dictionaries when built with language data;
+English spelling first tries a matching Hunspell dictionary from the Dictionaries folder.
+Otherwise it uses dialect-specific SCOWL 2026 dictionaries when built with language data;
 without it, spelling falls back to system Hunspell dictionaries or Grady Ward's public-domain
 Moby Hyphenator II word list. English hyphenation uses the Moby list and patterns trained from it. Polish spelling reads the Hunspell `pl_PL` dictionary installed on the system (not bundled), as
 do Russian, Portuguese, Czech, Italian, Croatian and Turkish spelling (how to install them:
