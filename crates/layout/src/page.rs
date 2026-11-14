@@ -497,7 +497,9 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
     // A wrapping float anchored to the header's text reaches with it: the body clears the
     // logo, not just the header's lines (#2361). Page-fixed and non-wrapping floats (a
     // watermark box, #149) don't count. Items sit in the box's frame, whose top is the
-    // header offset.
+    // header offset. A margin-anchored float is measured from the rendered body top when the
+    // header is placed (`headers_footers`, #2485), so it follows the body instead of pushing
+    // it down: only anchors that keep their place in the header count here.
     let mut bottom = bl.height;
     for it in &bl.items {
         let Placed::Object { rect, spin, story, path, off, wrap, .. } = it else { continue };
@@ -509,15 +511,18 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
             .para(*story, path)
             .and_then(|p| p.object_at(*off))
             .and_then(InlineObject::frame)
-            .is_some_and(|(_, _, f)| matches!(f.v_rel, Anchor::Paragraph | Anchor::Line | Anchor::Margin));
+            .is_some_and(|(_, _, f)| matches!(f.v_rel, Anchor::Paragraph | Anchor::Line));
         if anchored {
             bottom = bottom.max(spin.bounds(*rect).bottom());
         }
     }
     // Word starts the body right below a header that reaches past the top margin, no gap;
-    // ODF keeps the header's spacing.
+    // ODF keeps the header's spacing. A wrapped object can be taller than the page, so cap
+    // what the header may take: the body keeps the 36 pt minimum `body_bottom` and
+    // `new_page` reserve for it, rather than starting below the page.
     let gap = if sect.header_gap.is_finite() { sect.header_gap.clamp(0.0, 1584.0) } else { 0.0 };
-    sect.margin_top.max(sect.header + bottom + gap)
+    let limit = sect.page_h - sect.margin_bottom - 36.0;
+    sect.margin_top.max((sect.header + bottom + gap).min(limit))
 }
 
 /// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.

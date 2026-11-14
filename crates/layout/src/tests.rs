@@ -11185,6 +11185,43 @@ fn a_centred_text_frame_in_a_footer_floats_beside_footer_text() {
     assert!(frame.x > text.x + 100.0, "the footer text wraps beside the centred frame: {} vs {}", frame.x, text.x);
 }
 
+/// The same footer page number with a page-anchored frame: the header's exception is limited to
+/// header parts, so the frame still floats and takes no line above the footer text.
+#[test]
+fn a_page_anchored_text_frame_in_a_footer_floats_beside_footer_text() {
+    use wordcraft_doc::props::TextFrame;
+    let mut control = Document::from_text("Body");
+    let id = control.add_part(
+        wordcraft_doc::PartKind::Footer,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Footer text", Default::default()))],
+    );
+    control.last_section.footers.default = Some(id);
+    let control_top = {
+        let l = lay(&control);
+        l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }).expect("the footer text is laid out").top
+    };
+
+    let mut d = Document::from_text("Body");
+    let mut framed = wordcraft_doc::Paragraph::with_text("7", Default::default());
+    framed.props.frame = Some(TextFrame {
+        w: Some(72.0),
+        x_align: Some("center".into()),
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    });
+    let footer_text = wordcraft_doc::Paragraph::with_text("Footer text", Default::default());
+    let id = d.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(framed), wordcraft_doc::para_block(footer_text)]);
+    d.last_section.footers.default = Some(id);
+    let l = lay(&d);
+    let frame = l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }).expect("the framed footer paragraph is laid out");
+    let text = l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(1), off: 0 }).expect("the footer text is laid out");
+    assert!((text.top - control_top).abs() < 0.5, "the frame takes no line above the footer text: {} vs {control_top}", text.top);
+    assert!((frame.x - (d.last_section.page_w - 72.0) / 2.0).abs() < 0.5, "the frame is centred on the page: {}", frame.x);
+    assert!(frame.x > text.x + 100.0, "the footer text wraps beside the centred frame: {} vs {}", frame.x, text.x);
+}
+
 #[test]
 fn a_page_anchored_frame_in_a_header_cell_still_floats() {
     use wordcraft_doc::props::TextFrame;
@@ -11207,6 +11244,80 @@ fn a_page_anchored_frame_in_a_header_cell_still_floats() {
     let (frame, text) = (at(0), at(1));
     assert!((frame.top - text.top).abs() < 0.5, "the frame takes no vertical room: {} vs {}", frame.top, text.top);
     assert!(frame.x > text.x + 200.0, "the frame stays right-aligned in the cell");
+}
+
+/// A square-wrapped header picture taller than the page would otherwise push the body past the
+/// bottom margin: the header's contribution is capped so the body keeps the 36 pt minimum that
+/// `body_bottom` and `new_page` reserve, and body text stays on the page.
+#[test]
+fn an_oversized_square_wrapped_header_image_keeps_the_body_on_the_page() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Body text.");
+    let logo = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 0.0, dist: 9.0, ..Default::default() };
+    let mut hp = wordcraft_doc::Paragraph::with_text("Header label", Default::default());
+    hp.insert_object(
+        0,
+        InlineObject::Image {
+            media: "logo.wmf".into(),
+            w: 200.0,
+            h: 1000.0,
+            alt: String::new(),
+            float: logo,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let limit = page.h - d.last_section.margin_bottom - 36.0;
+    let body = first_line_top(&page.items);
+    assert!(body <= limit + 0.5, "the body starts at {body}, on the page below the capped header (limit {limit})");
+    assert!(body >= d.last_section.margin_top - 0.5, "the body stays below the top margin: {body}");
+}
+
+/// A margin-anchored header float is placed from the rendered body top, so it follows the body
+/// instead of pushing it down. The body start stays at the top margin and the float is drawn at
+/// its offset from that body top.
+#[test]
+fn a_margin_anchored_header_float_follows_the_body_top() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Body text.");
+    let logo = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Margin, y: 200.0, dist: 9.0, ..Default::default() };
+    let mut hp = wordcraft_doc::Paragraph::with_text("Header label", Default::default());
+    hp.insert_object(
+        0,
+        InlineObject::Image {
+            media: "logo.wmf".into(),
+            w: 200.0,
+            h: 40.0,
+            alt: String::new(),
+            float: logo,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    let logo_top = l.pages[0]
+        .header
+        .iter()
+        .find_map(|i| match i {
+            Placed::Image { rect, .. } => Some(rect.y),
+            _ => None,
+        })
+        .expect("the logo is drawn in the header");
+    let body = first_line_top(&l.pages[0].items);
+    assert!((body - d.last_section.margin_top).abs() < 0.5, "the body starts at the top margin: {body}");
+    assert!((logo_top - (body + 200.0)).abs() < 0.5, "the float is placed 200 pt below the body top: {logo_top} vs {body}");
 }
 
 /// Where a list paragraph's text starts when its style has indents of its own (measured in Word,
