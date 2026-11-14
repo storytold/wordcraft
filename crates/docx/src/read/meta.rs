@@ -58,6 +58,11 @@ impl Reader<'_> {
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
                 "w:doNotHyphenateCaps" => s.hyphenate_caps = !on_off(k),
+                "w:characterSpacingControl" => {
+                    if let Some(v) = k.attr("w:val").and_then(wordcraft_doc::CharSpacing::from_ooxml) {
+                        s.char_spacing = v;
+                    }
+                }
                 "w:hyphenationZone" => {
                     if let Some(v) = tw(k, "w:val").filter(|v| v.is_finite() && *v >= 0.0) {
                         s.hyphenation_zone = v.min(1584.0);

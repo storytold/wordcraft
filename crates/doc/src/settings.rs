@@ -166,6 +166,8 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// East Asian punctuation compression (`w:characterSpacingControl`, ECMA-376 §17.15.1.18).
+    pub char_spacing: CharSpacing,
     /// The document was opened from ODF: the standard's rules that differ from Word's apply as
     /// it is laid out.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -183,6 +185,46 @@ pub struct OdfLayout {
     /// explicit stops are held from the margin either way; the default ones are counted from the
     /// indent.
     pub tabs_from_indent: bool,
+}
+
+/// Which East Asian characters give up the blank half of their em (`w:characterSpacingControl`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CharSpacing {
+    /// Every character keeps its full advance; ECMA-376's default when the element is absent.
+    #[default]
+    DoNotCompress,
+    /// Adjacent full-width punctuation shares one blank half (`compressPunctuation`).
+    CompressPunctuation,
+    /// Punctuation and Japanese kana (`compressPunctuationAndJapaneseKana`); kana are laid out
+    /// at their full advance for now.
+    CompressPunctuationAndJapaneseKana,
+}
+
+impl CharSpacing {
+    /// The `w:val` of `w:characterSpacingControl`.
+    pub fn to_ooxml(self) -> &'static str {
+        match self {
+            CharSpacing::DoNotCompress => "doNotCompress",
+            CharSpacing::CompressPunctuation => "compressPunctuation",
+            CharSpacing::CompressPunctuationAndJapaneseKana => "compressPunctuationAndJapaneseKana",
+        }
+    }
+
+    /// Parses a `w:val`; `None` for an unknown value.
+    pub fn from_ooxml(v: &str) -> Option<Self> {
+        Some(match v {
+            "doNotCompress" => CharSpacing::DoNotCompress,
+            "compressPunctuation" => CharSpacing::CompressPunctuation,
+            "compressPunctuationAndJapaneseKana" => CharSpacing::CompressPunctuationAndJapaneseKana,
+            _ => return None,
+        })
+    }
+
+    /// Whether punctuation is compressed.
+    pub fn compresses_punctuation(self) -> bool {
+        self != CharSpacing::DoNotCompress
+    }
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -328,6 +370,7 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            char_spacing: CharSpacing::DoNotCompress,
             odf: None,
         }
     }

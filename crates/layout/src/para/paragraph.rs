@@ -1,7 +1,7 @@
 use super::bidi::{Dir, bidi_levels, visual_order};
 use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
-use super::grid::{auto_space, snap_chars};
+use super::grid::{auto_space, compress_punct, snap_chars};
 use super::justify::hyphenation_points;
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
@@ -673,9 +673,39 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     if rp.snap_to_grid {
         snap_chars(&mut sh.b, &p.text, &env.grid);
     }
-    // Text on a character grid keeps to its cells.
-    let auto_space =
+    // Text on a character grid keeps to its cells; compression applies there too (WPS).
+    let mut auto_space =
         if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    // Compatibility mode 15 squeezes justified lines only, and only they get a closing mark's
+    // blank half free at the line end; older modes do both on every line (WPS).
+    let justified = matches!(rp.align, wordcraft_doc::props::Align::Justify | wordcraft_doc::props::Align::Distribute);
+    let squeeze_rule =
+        if doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT { super::SqueezeRule::Justified } else { super::SqueezeRule::HalfEm };
+    let compresses = doc.settings.char_spacing.compresses_punctuation() && (justified || squeeze_rule == super::SqueezeRule::HalfEm);
+    let mut end_marks = Vec::new();
+    let squeeze = if compresses {
+        let (mut squeeze, end_blank) = compress_punct(&sh.b, &p.text);
+        // Mode 14 and older squeeze an automatic space by up to half on an overflowing line, in
+        // the same pool as the marks (WPS, F13).
+        if squeeze_rule == super::SqueezeRule::HalfEm {
+            for &(k, gap) in &auto_space {
+                if gap > 0.0 {
+                    squeeze.push(super::Squeeze { k, room: gap / 2.0, left: false, em: gap * 4.0, gap: true });
+                }
+            }
+            squeeze.sort_by_key(|s| s.k);
+        }
+        end_marks = end_blank.iter().map(|e| e.0).collect();
+        for (k, room) in end_blank {
+            match auto_space.binary_search_by_key(&k, |a| a.0) {
+                Ok(i) => auto_space.get_mut(i).into_iter().for_each(|a| a.1 += room),
+                Err(i) => auto_space.insert(i, (k, room)),
+            }
+        }
+        squeeze
+    } else {
+        Vec::new()
+    };
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
@@ -710,6 +740,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        squeeze,
+        squeeze_rule,
+        end_marks,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
@@ -866,12 +899,39 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         found.sort_unstable();
         found.dedup();
     }
+    // Unicode 15.1 (LB19a) lets a line break before an opening curly quote and after a closing
+    // one between East Asian characters ("确保|“双减”|工作"); unicode-linebreak follows 15.0, which
+    // never breaks beside them, so a Chinese line ending before “ lost its last character.
+    let quote_breaks = curly_quote_breaks(text);
+    if !quote_breaks.is_empty() {
+        found.extend(quote_breaks);
+        found.sort_unstable();
+        found.dedup();
+    }
     // UAX #14 breaks between a full stop and an opening parenthesis; Word keeps
     // "2023.(Example" whole and wraps it at the space before.
     found.retain(|&i| !(text.get(..i).is_some_and(|t| t.ends_with('.')) && text.get(i..).is_some_and(|t| t.starts_with('('))));
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
     found
+}
+
+/// LB19a's break opportunities beside curly quotes with East Asian characters on both sides:
+/// before an opening quote (“ ‘) and after a closing one (” ’). Kinsoku then removes those a line
+/// may not take (a closing mark starting the next line).
+fn curly_quote_breaks(text: &str) -> Vec<usize> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let east_asian = |k: Option<&(usize, char)>| k.is_some_and(|(_, c)| super::grid::is_east_asian(*c));
+    let mut out = Vec::new();
+    for (k, &(i, c)) in chars.iter().enumerate() {
+        let (before, after) = (k.checked_sub(1).and_then(|j| chars.get(j)), chars.get(k + 1));
+        match c {
+            '“' | '‘' if k > 0 && east_asian(before) && east_asian(after) => out.push(i),
+            '”' | '’' if east_asian(before) && east_asian(after) => out.push(i + c.len_utf8()),
+            _ => {}
+        }
+    }
+    out
 }
 
 #[cfg(test)]
