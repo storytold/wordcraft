@@ -925,15 +925,19 @@ impl DocLayout {
                         }
                         continue;
                     }
-                    let x0 = para.x_of(li, from).unwrap_or(l.left);
-                    let mut x1 = para.x_of(li, to).unwrap_or(x0);
+                    // Spaces hanging past the right margin are highlighted only up to where the
+                    // caret stops (#6434).
+                    let limit = para.caret_limit(li);
+                    let clamp = |x: f32| limit.map_or(x, |m| x.min(m));
+                    let x0 = clamp(para.x_of(li, from).unwrap_or(l.left));
+                    let mut x1 = clamp(para.x_of(li, to).unwrap_or(x0));
                     // Selection continuing past the paragraph end shows the paragraph mark.
                     let last_line = li + 1 == para.lines.len();
                     if last_line && path != b.path {
                         x1 += PARA_MARK_WIDTH;
                     }
                     if path == b.path && to >= l.stop && li + 1 < para.lines.len() && b.off > l.stop {
-                        x1 = para.x_of(li, l.stop).unwrap_or(x1);
+                        x1 = clamp(para.x_of(li, l.stop).unwrap_or(x1));
                     }
                     if x1 <= x0 && !(last_line && path != b.path) {
                         continue;

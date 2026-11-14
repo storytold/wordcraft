@@ -2900,6 +2900,70 @@ fn caret_after_hanging_spaces_stays_at_the_margin() {
     }
 }
 
+/// "a" and 200 spaces hanging past the right margin: at the paragraph's end, before a letter that
+/// wraps, before a bookmark (a zero-width marker) and before a line break.
+fn hanging_space_paragraphs() -> Vec<(&'static str, wordcraft_doc::Paragraph)> {
+    let spaces = format!("a{}", " ".repeat(200));
+    let mut marked = wordcraft_doc::Paragraph::with_text(&spaces, Default::default());
+    marked.insert_object(spaces.len(), InlineObject::BookmarkStart { name: "end".into() }, &Default::default()).unwrap();
+    let text = |t: &str| wordcraft_doc::Paragraph::with_text(t, Default::default());
+    vec![
+        ("at the end", text(&spaces)),
+        ("before a wrap", text(&format!("{spaces}b"))),
+        ("before a bookmark", marked),
+        ("before a line break", text(&format!("{spaces}{}b", wordcraft_doc::para::LINE_BREAK))),
+    ]
+}
+
+/// The selection highlight over spaces hanging past the right margin stops at the margin with the
+/// caret (#6434), whatever follows the spaces. Selected through the paragraph's end, its mark
+/// shows just past the margin.
+#[test]
+fn selection_over_hanging_spaces_stops_at_the_margin() {
+    crate::test_fonts();
+    for (case, p) in hanging_space_paragraphs() {
+        let len = p.text.len();
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p), wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+        let right = d.last_section.page_w - d.last_section.margin_right;
+        let l = lay(&d);
+        let c = l.caret(&Pos::body(0, 201)).unwrap();
+        assert!(c.x <= right + 0.5, "{case}: caret after the spaces at {} past the margin at {right}", c.x);
+        for (end, mark) in [(Pos::body(0, len), 0.0), (Pos::body(1, 0), crate::para::PARA_MARK_WIDTH)] {
+            let rects = l.selection_rects(&d, &Pos::body(0, 0), &end, 0);
+            assert!(rects.iter().any(|(_, r)| r.right() >= right - 0.5), "{case} to {end:?}: the highlight reaches the margin: {rects:?}");
+            for (_, r) in &rects {
+                assert!(r.right() <= right + mark + 0.5, "{case} to {end:?}: highlight {r:?} past the margin at {right}");
+            }
+        }
+    }
+}
+
+/// The grammar underline over a run of spaces hanging past the right margin ("Extra space") stops
+/// at the margin with the caret (#6434), whatever follows the spaces.
+#[test]
+fn proofing_marks_over_hanging_spaces_stop_at_the_margin() {
+    crate::test_fonts();
+    for (case, p) in hanging_space_paragraphs() {
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let right = d.last_section.page_w - d.last_section.margin_right;
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { proofing: true, ..Default::default() });
+        let issues = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.issues.clone()) } else { None });
+        assert!(issues.as_ref().is_some_and(|v| v.contains(&(1, 201, true))), "{case}: the spaces are a grammar issue: {issues:?}");
+        let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+        let underlines: Vec<(f32, f32)> = items
+            .iter()
+            .filter_map(|i| match i {
+                display::Draw::Line { x0, x1, stroke: display::Stroke::Double, .. } => Some((*x0, *x1)),
+                _ => None,
+            })
+            .collect();
+        assert!(underlines.iter().any(|&(_, x1)| x1 >= right - 0.5), "{case}: the underline reaches the margin: {underlines:?}");
+        assert!(underlines.iter().all(|&(_, x1)| x1 <= right + 0.5), "{case}: {underlines:?} past the margin at {right}");
+    }
+}
+
 #[test]
 fn tall_first_page_header_pushes_body_down() {
     crate::test_fonts();

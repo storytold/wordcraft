@@ -677,11 +677,14 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 }
 
 fn proofing_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
+    // Spaces hanging past the right margin are marked only up to where the caret stops (#6434).
+    let limit = ctx.pl.caret_limit(ctx.li);
     for (start, end, grammar) in &ctx.pl.issues {
         if *end <= ctx.line.start || *start >= ctx.line.stop {
             continue;
         }
         for (x0, x1) in ctx.pl.x_spans(ctx.li, (*start).max(ctx.line.start), (*end).min(ctx.line.stop)) {
+            let (x0, x1) = limit.map_or((x0, x1), |m| (x0.min(m), x1.min(m)));
             if x1 - x0 < 1.0 {
                 continue;
             }
