@@ -75,6 +75,63 @@ fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
     assert!(app.ui.backstage, "File stays open");
 }
 
+/// #3314: a missing row is named for assistive technology and remains actionable; clicking
+/// it keeps the existing open error instead of silently disabling or removing the entry.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn missing_recent_row_is_marked_and_still_opens_with_an_error() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    let missing = std::env::temp_dir().join(format!("wordcraft-recent-row-{}-missing.docx", std::process::id()));
+    let path = missing.to_string_lossy().into_owned();
+    app.ui.recent = vec![path.clone()];
+    app.ui.backstage = true;
+    app.ui.backstage_page = "open".into();
+    let mut h = recovery_harness(app);
+    let name = format!("{}. File not found", missing.file_name().unwrap().to_string_lossy());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        h.run_steps(2);
+        if h.query_by_label(&name).is_some() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    h.get_by_label(&name).click();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage);
+    assert_eq!(h.state().ui.recent, vec![path]);
+    assert!(!h.state().ctx.as_ref().unwrap().data(|d| d.get_temp::<String>(super::open_error_id())).unwrap_or_default().is_empty());
+}
+
+/// Missing documents with the same name keep both their path and availability in the spoken label.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn missing_recent_duplicate_names_keep_paths_and_status() {
+    use egui::accesskit::Role;
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    let dir = std::env::temp_dir().join(format!("wordcraft-missing-duplicate-{}", std::process::id()));
+    let paths: Vec<_> = ["spring", "autumn"].iter().map(|folder| dir.join(folder).join("Report.docx").to_string_lossy().into_owned()).collect();
+    app.ui.recent = paths.clone();
+    app.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = a11y_harness(app);
+    let labels: Vec<_> = paths.iter().map(|p| format!("Report.docx, {p}. File not found")).collect();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        h.run_steps(2);
+        if labels.iter().all(|label| h.query_by_role_and_label(Role::Button, label).is_some()) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "both missing paths must be named separately");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    h.get_by_role_and_label(Role::Button, &labels[0]).click();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage);
+    assert_eq!(h.state().ui.recent, paths);
+    assert!(h.query_by_role_and_label(Role::Button, &labels[1]).is_some());
+}
+
 /// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain
 /// control inset in full screen.
 #[test]
@@ -545,7 +602,12 @@ fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
         a,
     );
     h.run_steps(4);
-    let row = |h: &egui_kittest::Harness<WordApp>, name: &str| h.query_all_by_role_and_label(Role::Button, name).next().map(|n| n.rect());
+    let row = |h: &egui_kittest::Harness<WordApp>, name: &str| {
+        h.query_all_by_role_and_label(Role::Button, name)
+            .next()
+            .map(|n| n.rect())
+            .or_else(|| h.query_all_by_role_and_label(Role::Button, &format!("{name}. File not found")).next().map(|n| n.rect()))
+    };
     assert!(row(&h, "alpha.docx").is_some() && row(&h, "beta.docx").is_some(), "both rows show");
     // The × inside alpha's row, not beta's: click it and only alpha goes.
     let remove_in = |h: &mut egui_kittest::Harness<WordApp>, name: &str| {
@@ -598,10 +660,15 @@ fn home_and_new_show_different_sections() {
 fn templates_and_recent_documents_are_named_buttons() {
     use egui::accesskit::Role;
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    let dir = std::env::temp_dir().join("wordcraft-3176-missing");
+    let dir = std::env::temp_dir().join(format!("wordcraft-3176-existing-{}", std::process::id()));
     let path = |folder: &str, file: &str| dir.join(folder).join(file).to_string_lossy().into_owned();
     let (spring, autumn) = (path("spring", "Report.docx"), path("autumn", "Report.docx"));
     a.ui.recent = vec![path("notes", "Quarterly notes.docx"), spring.clone(), autumn.clone()];
+    for file in &a.ui.recent {
+        let file = std::path::Path::new(file);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, b"synthetic metadata fixture").unwrap();
+    }
     a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
     let mut h = a11y_harness(a);
     for (label, _) in TEMPLATES.into_iter().take(HOME_TEMPLATES) {
@@ -616,6 +683,7 @@ fn templates_and_recent_documents_are_named_buttons() {
     h.run_steps(4);
     assert!(!h.state().ui.backstage, "the Letter button opens the template");
     assert!(!h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "with the template's text");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Clicking the back arrow closes the File page and gives the keyboard back to the page,
@@ -1127,7 +1195,7 @@ fn file_page_wheel_at(x: f32) -> (f32, f32, egui::Rect) {
         .filter(|r| r.height() > r.width())
         .max_by(|a, b| a.height().total_cmp(&b.height()))
         .expect("the File page's vertical scrollbar");
-    let before = h.get_by_label("doc0.docx").rect();
+    let before = h.query_by_label("doc0.docx").or_else(|| h.query_by_label("doc0.docx. File not found")).expect("recent document").rect();
     h.event(egui::Event::PointerMoved(egui::pos2(x, 300.0)));
     h.event(egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
@@ -1137,7 +1205,11 @@ fn file_page_wheel_at(x: f32) -> (f32, f32, egui::Rect) {
         source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(4);
-    (before.min.y, h.get_by_label("doc0.docx").rect().min.y, bar)
+    (
+        before.min.y,
+        h.query_by_label("doc0.docx").or_else(|| h.query_by_label("doc0.docx. File not found")).expect("recent document").rect().min.y,
+        bar,
+    )
 }
 
 /// #5282: the File page scrolls with the wheel over its right side.
