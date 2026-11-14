@@ -201,6 +201,8 @@ same way. The engine takes `strict: true` on `file.save`, `file.saveAs`, `file.e
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
 
+Experimental Android ARM64: build the native APK from the full workspace with the [Android build guide](apps/wordcraft-android/README.md).
+
 ## For agents: CLI and MCP
 
 WordCraft was designed to be driven by people *and* by AI agents.
