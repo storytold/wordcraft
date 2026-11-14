@@ -225,6 +225,21 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
     theme_picker(app, ui);
     interface_size_picker(app, ui);
+    ui.horizontal(|ui| {
+        use wordcraft_engine::cmd::view::PaperColor;
+        let label = ui.label(tl!("Screen paper color:"));
+        let selected = app.session.prefs.paper_color;
+        let combo = craft_ui::ComboBox::from_id_salt("screen_paper_color").selected_text(tl!(selected.label())).width(220.0).show_ui(ui, |ui| {
+            for color in PaperColor::ALL {
+                if ui.selectable_label(selected == color, tl!(color.label())).clicked() {
+                    let _ = app.run("view.paperColor", json!({"value": color}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id).on_hover_text(tl!(
+            "Screen only. Document backgrounds, printing and exports keep their colours. Dark page and explicit Read Mode colours take precedence."
+        ));
+    });
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
@@ -312,6 +327,9 @@ fn display(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.ruler", json!({"value": ruler}));
     }
     numeral_picker(app, ui);
+    ui.add_space(8.0);
+    section(ui, "Status bar");
+    status_count_picker(app, ui);
     ui.add_space(8.0);
     section(ui, "Printing");
     ui.checkbox(&mut app.ui.print_backgrounds, tl!("Print the page color"));
@@ -657,6 +675,9 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         templates_folder(app, ui);
     }
     ui.add_space(8.0);
+    section(ui, "Scrolling");
+    scroll_speed_picker(app, ui);
+    ui.add_space(8.0);
     section(ui, "Customize");
     ui.horizontal(|ui| {
         ui.label(tl!("Keyboard shortcuts:"));
@@ -721,6 +742,25 @@ fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
         });
         combo.response.labelled_by(label.id);
     });
+}
+
+/// What the status bar's live count shows (#2797): words (as Word's status bar counts), characters
+/// with spaces, or characters without spaces. Right-clicking the count in the status bar offers
+/// the same choices.
+fn status_count_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::StatusCount;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Status bar count:"));
+        let combo = craft_ui::ComboBox::from_id_salt("status_count").selected_text(tl!(app.ui.status_count.label())).width(220.0).show_ui(ui, |ui| {
+            for c in StatusCount::ALL {
+                if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                    let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    note(ui, "You can also right-click the count in the status bar to change it.");
 }
 
 /// Interface size (#475, #822): Auto, which keeps the system's display scale and shows the size it
@@ -801,6 +841,42 @@ fn display_server_picker(app: &mut WordApp, ui: &mut Ui) {
         combo.response.labelled_by(label.id);
     });
     note(ui, "Applies the next time WordCraft starts.");
+}
+
+/// Scroll speed preferences (#6146): mouse wheel and touchpad (Wayland / macOS).
+fn scroll_speed_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::scroll::ScrollSpeed;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Mouse wheel scroll speed:"));
+        let combo = craft_ui::ComboBox::from_id_salt("scroll_speed").selected_text(tl!(app.ui.scroll_speed.label())).width(220.0).show_ui(ui, |ui| {
+            for s in ScrollSpeed::ALL {
+                if ui.selectable_label(app.ui.scroll_speed == s, tl!(s.label())).clicked() {
+                    let _ = app.run("ui.scrollSpeed", json!({"value": s.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    // Windows and browsers do not report touchpads in points.
+    if !cfg!(any(target_os = "windows", target_arch = "wasm32")) {
+        let row = ui.horizontal(|ui| {
+            let label = ui.label(tl!("Touchpad scroll speed:"));
+            let combo = craft_ui::ComboBox::from_id_salt("touchpad_scroll_speed")
+                .selected_text(tl!(app.ui.touchpad_scroll_speed.label()))
+                .width(220.0)
+                .show_ui(ui, |ui| {
+                    for s in ScrollSpeed::ALL {
+                        if ui.selectable_label(app.ui.touchpad_scroll_speed == s, tl!(s.label())).clicked() {
+                            let _ = app.run("ui.touchpadScrollSpeed", json!({"value": s.code()}));
+                        }
+                    }
+                });
+            combo.response.labelled_by(label.id);
+        });
+        if !cfg!(target_os = "macos") {
+            row.response.on_hover_text(tl!("On X11, the touchpad follows the mouse wheel speed."));
+        }
+    }
 }
 
 /// Interface language: follow the system (the default) or pick one (#8).
