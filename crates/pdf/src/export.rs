@@ -3,8 +3,8 @@ use super::metadata::metadata;
 use super::options::{PdfError, PdfOptions};
 use super::paint::{clamp_side, ok, rect_path};
 use super::{
-    DocLayout, Document, FillRule, HashMap, HashSet, KrillaError, LayoutCache, LayoutOptions, Page, PageSettings, Rect, Size, Transform, WriteError,
-    Writer, imposition, krilla, layout, write,
+    DocLayout, Document, FillRule, HashMap, HashSet, KrillaError, LayoutCache, Page, PageSettings, Rect, Size, Transform, WriteError, Writer,
+    imposition, krilla, layout, write,
 };
 
 /// Lay out `doc` and write it as PDF. Without markup the layout is the final text: tracked
@@ -13,15 +13,7 @@ use super::{
 /// pages, as Word's export fills them in.
 pub fn export(doc: &Document, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
     write::guard(|| {
-        let lo = LayoutOptions {
-            hide_deleted: !opts.include_markup,
-            comment_balloons: opts.comments,
-            numeral: opts.numeral,
-            output_page_refs: true,
-            bookmark_error: opts.bookmark_error.clone(),
-            ..Default::default()
-        };
-        let lay = layout(doc, &mut LayoutCache::new(), &lo);
+        let lay = layout(doc, &mut LayoutCache::new(), &opts.layout_options());
         export_layout_inner(doc, &lay, opts)
     })
 }
