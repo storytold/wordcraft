@@ -53,6 +53,14 @@ impl Session {
             && !self.md_source.as_ref().is_some_and(|src| src.is_pending())
     }
 
+    /// A navigated style change is for the Accept or Reject that follows: a command that edits
+    /// or moves the selection forgets it.
+    fn forget_review_style(&mut self, id: &str, mutates: bool) {
+        if (mutates && !matches!(id, "review.accept" | "review.reject")) || id.starts_with("caret.") || id.starts_with("select.") {
+            self.review_style = None;
+        }
+    }
+
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
@@ -86,6 +94,7 @@ impl Session {
         let ime_text_join = self.ime_text_join.take();
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
+        self.forget_review_style(id, spec.mutates);
         let join = join
             || (equation_join && matches!(id, "equation.type" | "equation.backspace"))
             || (id == "text.insert" && ime_text_join.as_ref().is_some_and(|sel| sel == &self.sel));
