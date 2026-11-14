@@ -29,7 +29,8 @@ pub(super) fn space_room(spaces: f32, word: f32) -> f32 {
 /// `c0` is the first cluster on the line, and `from` is where space shrinking begins (the cluster
 /// following the line's last tab, or `c0` when there are no tabs on the line). `c1` is the end of
 /// the line's cluster range.
-pub(crate) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], (c0, from): (usize, usize), c1: usize, content_end: f32, slack: f32) {
+pub(super) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], (c0, from): (usize, usize), c1: usize, content_end: f32, slack: f32) {
+    let from = from.max(c0);
     let spaces: Vec<(usize, f32)> = (from..c1)
         .filter_map(|k| {
             let c = pl.clusters.get(k).filter(|c| c.kind == ClKind::Space)?;
@@ -37,7 +38,7 @@ pub(crate) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], (c0, from): (u
         })
         .collect();
     let total: f32 = spaces.iter().map(|s| s.1).sum();
-    if total <= 0.0 || !slack.is_finite() {
+    if !total.is_finite() || total <= 0.0 || !slack.is_finite() {
         return;
     }
     let ratio = (-slack / total).clamp(0.0, MAX_SPACE_SHRINK);
