@@ -659,7 +659,7 @@ impl WordApp {
                         }
                         None => {
                             return Some(Err(format!(
-                                "`percent` must be \"auto\" or a number from {} to {}",
+                                "`percent` must be \"auto\" or a finite number (clamped between {} and {})",
                                 theme::InterfaceSize::MIN,
                                 theme::InterfaceSize::MAX
                             )));
