@@ -163,3 +163,92 @@ fn do_not_track_moves_round_trips() {
     assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
     assert!(!wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
 }
+
+/// `xml` with every self-closed element written in expanded form (`<a x="1"/>` →
+/// `<a x="1"></a>`), as Word writes `w:compatSetting`. The fixtures hold no `/>` in values.
+fn expand_empty(xml: &str) -> String {
+    let mut out = String::new();
+    let mut rest = xml;
+    while let Some(i) = rest.find("/>") {
+        let head = &rest[..i];
+        let lt = head.rfind('<').unwrap();
+        let name: String = head[lt + 1..].chars().take_while(|c| !c.is_whitespace()).collect();
+        out.push_str(head);
+        out.push_str(&format!("></{name}>"));
+        rest = &rest[i + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// One start tag as `<name a="v" …>`, attributes sorted.
+fn open_tag(e: &quick_xml::events::BytesStart) -> String {
+    let mut attrs: Vec<String> = e
+        .attributes()
+        .map(|a| {
+            let a = a.unwrap();
+            format!("{}=\"{}\"", String::from_utf8_lossy(a.key.as_ref()), String::from_utf8_lossy(&a.value))
+        })
+        .collect();
+    attrs.sort();
+    format!("<{} {}>", String::from_utf8_lossy(e.name().as_ref()), attrs.join(" "))
+}
+
+/// The element structure of `xml`, with a self-closed element and its expanded form alike
+/// (`<a>`, `</a>`). Panics when `xml` is not well-formed (mismatched or stray end tags).
+fn element_events(xml: &str) -> Vec<String> {
+    use quick_xml::events::Event;
+    let mut r = quick_xml::Reader::from_str(xml);
+    let mut out = Vec::new();
+    loop {
+        match r.read_event() {
+            Err(e) => panic!("not well-formed XML near byte {}: {e}\n{xml}", r.buffer_position()),
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => out.push(open_tag(&e)),
+            Ok(Event::Empty(e)) => {
+                out.push(open_tag(&e));
+                out.push(format!("</{}>", String::from_utf8_lossy(e.name().as_ref())));
+            }
+            Ok(Event::End(e)) => out.push(format!("</{}>", String::from_utf8_lossy(e.name().as_ref()))),
+            Ok(_) => {}
+        }
+    }
+    out
+}
+
+/// #6125: Word writes `w:compatSetting` (and other empty settings) in expanded form,
+/// `<w:compatSetting …></w:compatSetting>`. Saving such a file (an identity compare does) spliced
+/// the generated, self-closed `compatibilityMode` over the original's start tag only, leaving the
+/// original's end tag behind: `<w:compatSetting …/></w:compatSetting>`, a part Word refuses to
+/// open. Every element of the settings part is expanded here, so the check covers more than
+/// `w:compat`: the saved part must be well-formed, the same as for the self-closed original, and
+/// keep every element and attribute of the original.
+#[test]
+fn expanded_empty_settings_save_as_well_formed_xml() {
+    let expanded = expand_empty(SETTINGS);
+    assert!(!expanded.contains("/>"), "{expanded}");
+    assert_eq!(expanded.matches("></w:compatSetting>").count(), 3, "{expanded}");
+    assert!(expanded.contains(r#"<w:zoom w:percent="120"></w:zoom>"#), "{expanded}");
+    assert_eq!(element_events(&expanded), element_events(SETTINGS), "the helper only changes the form");
+
+    let saved = |settings: &str| text(&save(&wordcraft_docx::read(&with_settings(settings)).unwrap()), "word/settings.xml");
+    let out = saved(&expanded);
+    let events = element_events(&out);
+    // Saved like the self-closed original, which keeps its bytes as before.
+    assert_eq!(events, element_events(&saved(SETTINGS)), "{out}");
+    // All three compatibility settings, once each, with their attributes.
+    for name in ["compatibilityMode", "overrideTableStyleFontSizeAndJustification", "enableOpenTypeFeatures"] {
+        let n = events.iter().filter(|e| e.starts_with("<w:compatSetting ") && e.contains(&format!("w:name=\"{name}\""))).count();
+        assert_eq!(n, 1, "{name}: {out}");
+    }
+    assert_eq!(events.iter().filter(|e| *e == "</w:compatSetting>").count(), 3, "{out}");
+    // Every element of the original survives with its attributes, except the mail merge (its
+    // data source is a relationship that isn't carried).
+    let input = element_events(&expanded);
+    let dropped = ["<w:mailMerge ", "<w:mainDocumentType ", "<w:dataSource "];
+    for tag in input.iter().filter(|e| !e.starts_with("</") && !dropped.iter().any(|d| e.starts_with(d))) {
+        let want = input.iter().filter(|e| *e == tag).count();
+        let got = events.iter().filter(|e| *e == tag).count();
+        assert!(got >= want, "{tag} lost: {out}");
+    }
+}
