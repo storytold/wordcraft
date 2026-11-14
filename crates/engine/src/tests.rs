@@ -7797,8 +7797,9 @@ fn border_sides_apply_exactly() {
 }
 
 /// #3076: Page Border's Apply to "This section – First page only" / "All except first page" sets
-/// the section's `w:display`, which a .docx keeps; Whole document and This section put the
-/// border back on every page, and removing the border drops the setting with it.
+/// the section's `w:display`; Whole document and This section put the border back on every page,
+/// and removing the border drops the setting with it. Keeping the attribute through a .docx is
+/// the reader and writer's side, now craft-libs' (storytold/craft-libs#1414) and tested there.
 #[test]
 fn page_borders_apply_to_the_first_page_or_all_but_it() {
     let mut s = s();
@@ -7807,9 +7808,6 @@ fn page_borders_apply_to_the_first_page_or_all_but_it() {
         run(&mut s, "design.pageBorders", json!({"kind": "box", "applyTo": apply}));
         assert!(s.doc.last_section.page_borders.is_some(), "{apply}");
         assert_eq!(display(&s).as_deref(), Some(apply));
-        let bytes = crate::io::save_bytes("cover.docx", &s.doc).unwrap();
-        let back = crate::io::open_bytes("cover.docx", &bytes).unwrap();
-        assert_eq!(back.last_section.page_borders_display.as_deref(), Some(apply), "{apply}: kept in the .docx");
     }
     for apply in ["section", "document"] {
         run(&mut s, "design.pageBorders", json!({"kind": "box", "applyTo": "firstPage"}));
