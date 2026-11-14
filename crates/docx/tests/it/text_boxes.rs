@@ -307,3 +307,53 @@ fn an_outline_that_is_not_drawn_has_the_width_word_gives_it_room_for() {
     assert_eq!(document_xml(&saved).matches(r#"<a:ln w="38100"><a:noFill/>"#).count(), 1, "the width of the outline that is not drawn");
     assert_eq!(outlines(&wordcraft_docx::read(&saved).unwrap()), want);
 }
+
+#[test]
+fn a_vml_stroke_element_turns_the_line_on_or_off_before_the_attribute() {
+    // Measured in Word for Windows (16.0.20625) with 19 shapes of a 3 pt line: the text starts
+    // 1.5 pt further in where the line is on. A `v:stroke` child's `on` decides before the
+    // `stroked` attribute beside it, and what the shape says, either way, before its shapetype.
+    let content = r#"<w:txbxContent><w:p><w:r><w:t>Text</w:t></w:r></w:p></w:txbxContent>"#;
+    let rect = |attrs: &str, stroke: &str| {
+        format!(
+            r#"<w:p><w:r><w:pict><v:rect style="width:300pt;height:60pt" strokeweight="3pt" {attrs}>{stroke}<v:textbox>{content}</v:textbox></v:rect></w:pict></w:r></w:p>"#
+        )
+    };
+    let typed = |n: usize, type_attrs: &str, type_stroke: &str, attrs: &str, stroke: &str| {
+        format!(
+            r##"<w:p><w:r><w:pict><v:shapetype id="t{n}" coordsize="21600,21600" path="m,l,21600r21600,l21600,xe" {type_attrs}>{type_stroke}</v:shapetype><v:shape type="#t{n}" style="width:300pt;height:60pt" strokeweight="3pt" {attrs}>{stroke}<v:textbox>{content}</v:textbox></v:shape></w:pict></w:r></w:p>"##
+        )
+    };
+    let (off, on) = (r#"<v:stroke on="f"/>"#, r#"<v:stroke on="t"/>"#);
+    let cases = [
+        (rect("", ""), true),
+        (rect("", off), false),
+        (rect("", r#"<v:stroke on="false"/>"#), false),
+        (rect("", r#"<v:stroke on="0"/>"#), false),
+        (rect("", r#"<v:stroke dashstyle="dash"/>"#), true),
+        (rect(r#"stroked="f""#, on), true),
+        (rect(r#"stroked="t""#, off), false),
+        (typed(1, "", off, "", ""), false),
+        (typed(2, "", off, "", on), true),
+        (typed(3, "", off, r#"stroked="t""#, ""), true),
+        (typed(4, "", on, r#"stroked="f""#, ""), false),
+        (typed(5, r#"stroked="f""#, "", "", on), true),
+        (typed(6, r#"stroked="t""#, "", "", off), false),
+        (typed(7, r#"stroked="t""#, off, "", ""), false),
+        (typed(8, r#"stroked="f""#, "", "", ""), false),
+    ];
+    let body: String = cases.iter().map(|(xml, _)| xml.as_str()).collect();
+    let doc = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:body>{body}</w:body></w:document>"#
+    );
+    let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
+    let mut lines = Vec::new();
+    d.objects_in_reading_order(&mut |o| {
+        if let InlineObject::Shape { stroke, stroke_width, .. } = o {
+            lines.push((stroke.is_some(), *stroke_width));
+        }
+    });
+    let want: Vec<(bool, f32)> = cases.iter().map(|(_, on)| (*on, if *on { 3.0 } else { 0.0 })).collect();
+    assert_eq!(lines, want);
+}
