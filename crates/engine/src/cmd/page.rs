@@ -25,10 +25,10 @@ pub fn specs() -> Vec<CommandSpec> {
             with_sect(s, |x| x.set_landscape(land))
         })
         .params(r#"{"value": "portrait|landscape"}"#),
-        CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
+        CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name": "Letter|Legal|A4|…"} | {"width": pt, "height": pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
         CommandSpec::new("layout.columns", "Columns", "Layout › Page Setup", columns)
             .params(
-                r#"{"count": 1-12, "space"?: pt, "separator"?: bool, "preset"?: "left|right", "widths"?: [[width pt, space after pt], …] (unequal columns; sets the count), "apply"?: "section|document|forward|selection"} (default: selection when text is selected in the main text — section breaks around it — else section)"#,
+                r#"{"count"?: 1-12 (default 1; left/right presets default 2), "space"?: pt, "separator"?: bool, "preset"?: "left|right", "widths"?: [[width pt, space after pt], …] (unequal columns; sets the count), "apply"?: "section|document|forward|selection"} (default: selection when text is selected in the main text — section breaks around it — else section)"#,
             ),
         CommandSpec::new("layout.break", "Breaks", "Layout › Page Setup", breaks)
             .params(r#"{"kind": "page|column|textWrapping|nextPage|continuous|evenPage|oddPage"}"#),
