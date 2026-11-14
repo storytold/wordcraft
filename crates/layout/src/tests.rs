@@ -1964,6 +1964,43 @@ fn a_none_format_label_shows_its_text_and_tabs_to_the_indent() {
     }
 }
 
+/// An empty paragraph whose mark is superscript or subscript is as tall as one with a plain
+/// mark, and so is the empty line after a closing line break: Word sizes those lines at the
+/// mark's full font size, though it draws such text smaller (#6613). Measured in Word for
+/// Windows: between two 20 pt Arial lines an empty paragraph takes 23 pt whichever its mark
+/// is, and so does the empty line after "text" and a line break.
+#[test]
+fn an_empty_line_of_a_superscript_mark_is_as_tall_as_a_plain_one() {
+    crate::test_fonts();
+    use wordcraft_doc::para::LINE_BREAK;
+    use wordcraft_doc::props::VertAlign;
+    // The height of the middle paragraph, holding `text`, with a 20 pt mark set to `va`.
+    let height = |text: &str, va: VertAlign| {
+        let mut d = Document::from_text("Before\n\nAfter");
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.mark.vert_align = Some(va);
+        p.mark.size = Some(20.0);
+        d.body[1] = wordcraft_doc::para_block(p);
+        let l = lay(&d);
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Placed::Lines { path, para, .. } if *path == Path::top(1) => Some((para.height, para.lines.len())),
+                _ => None,
+            })
+            .unwrap()
+    };
+    for (text, lines) in [(String::new(), 1), (format!("Text{LINE_BREAK}"), 2)] {
+        let plain = height(&text, VertAlign::Baseline);
+        assert_eq!(plain.1, lines, "{text:?}");
+        for va in [VertAlign::Superscript, VertAlign::Subscript] {
+            let got = height(&text, va);
+            assert!((got.0 - plain.0).abs() < 0.01 && got.1 == lines, "{text:?} with a {va:?} mark is {got:?}, with a plain one {plain:?}");
+        }
+    }
+}
+
 #[test]
 fn break_only_list_has_no_label() {
     crate::test_fonts();
