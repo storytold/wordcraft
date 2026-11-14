@@ -87,6 +87,26 @@ struct Turned {
     top: f32,
 }
 
+/// The minimum height of the rows a vertically merged cell starting at row `ri`, grid column
+/// `g`, spans, when it spans more than one and each has a minimum (`w:hRule="atLeast"`): Word
+/// wraps the cell's turned text to it when the lines fit across the column.
+fn merged_min_height(t: &Table, ri: usize, g: usize) -> Option<f32> {
+    let starts = t.cell_at_grid(ri, g).and_then(|ci| t.rows.get(ri)?.cells.get(ci)).is_some_and(|c| c.props.vmerge == VMerge::Restart);
+    if !starts {
+        return None;
+    }
+    let min = |r: &Row| r.props.height.filter(|h| h.is_finite() && *h > 0.0 && r.props.height_rule == HeightRule::AtLeast);
+    let mut total = min(t.rows.get(ri)?)?;
+    let mut k = ri + 1;
+    while let Some(r) = t.rows.get(k)
+        && t.cell_at_grid(k, g).is_some_and(|ci| t.grid_col(k, ci) == g && r.cells.get(ci).is_some_and(|c| c.props.vmerge == VMerge::Continue))
+    {
+        total += min(r)?;
+        k += 1;
+    }
+    (k > ri + 1).then_some(total)
+}
+
 /// The number of grid columns of `t` ([`Table::cols`]), which walks every row (each row counted
 /// as a step of [`crate::work`]).
 fn grid_cols(t: &Table) -> usize {
@@ -606,11 +626,21 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             } else if turn.is_turned() {
                 collapsed = false;
                 // Turned text: its lines run along the cell's height. An exact row height sets
-                // their length; otherwise they get the length the text needs unwrapped and the row
-                // grows to fit (the second pass lays them out again if the row ends up taller).
+                // their length, and a minimum height does when the lines fit across the column;
+                // otherwise they get the length the text needs unwrapped and the row grows to fit
+                // (the second pass lays them out again if the row ends up taller).
                 let snap = (ctx.counters.clone(), ctx.eq_count);
-                let len = match (row.props.height, row.props.height_rule) {
-                    (Some(h), HeightRule::Exact) if h > 0.0 => (h + row_bottom - insets).clamp(4.0, TURNED_LIMIT),
+                let merged = merged_min_height(t, ri, g);
+                let preferred = merged.or(row.props.height.filter(|h| h.is_finite() && *h > 0.0)).map(|h| h.clamp(4.0, TURNED_LIMIT));
+                let at_least = merged.is_some() || row.props.height_rule == HeightRule::AtLeast;
+                let wrapped = preferred.filter(|_| !ctx.boxes.inside() && at_least).filter(|h| {
+                    let probe = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, *h, text, depth));
+                    (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
+                    probe.height.max(probe.floats_bottom) <= cw + 0.01
+                });
+                let len = match (row.props.height, row.props.height_rule, wrapped) {
+                    (Some(h), HeightRule::Exact, _) if h > 0.0 => (h + row_bottom - insets).clamp(4.0, TURNED_LIMIT),
+                    (_, _, Some(h)) => h,
                     _ => {
                         let probe = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, TURNED_MAX, text, depth)).items;
                         (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
