@@ -2000,6 +2000,65 @@ fn the_text_after_a_centre_tab_stays_within_its_line() {
     let (l, tab) = lines(WIDTH - 50.0, long.trim_end(), (true, 100.0, 15));
     assert!(l.len() > 1 && near(l[0].1, WIDTH) && near(l[0].0, tab), "the line of a stop past the right indent: {:?}, the tab at {tab}", &l[..2]);
     assert!(near(l[1].1, WIDTH - 100.0), "the next line ends at the right indent: {:?}", l[1]);
+
+    // A tab after text that is held at the edge goes on to the next line. The centre tab is the
+    // line's last again: justified, the line is stretched and the tab has no room (Word: the
+    // text starts 2.56 pt after "2)", the gaps are 21 pt wide).
+    let (l, tab) = lines(WIDTH - 20.0, "abcd abcd abcd abcd\t12", justified);
+    assert!(l.len() == 2 && near(l[0].0, tab) && near(l[0].1, WIDTH), "a second tab that goes on: {l:?}, the tab at {tab}");
+}
+
+/// Two ways a line with a centre tab ends other than in the tab's text (#6619). A tab that took
+/// its line out to the margin and then goes on to the next line, with a word too wide for the
+/// line, leaves the line at its right indent: Word justifies it to 438.2 pt where the indent is
+/// at 438.6 and the margin at 538.6. And a hyphen the line ends with is centred with the text
+/// before it: Word puts "abcdefghij-" at 493.7 to 537.8 pt around a stop at 515.6.
+#[test]
+fn a_centre_tab_that_moves_on_or_ends_in_a_hyphen_keeps_its_line_in_bounds() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    const WIDTH: f32 = 468.0;
+    // The lines of a justified paragraph with one centre stop: the first cluster, the x of each
+    // cluster and of the line's end, and whether it ends with a hyphen.
+    let lines = |text: &str, stop: f32, indent_right: f32| {
+        let mut d = Document::from_text(text);
+        d.settings.compat_mode = 15;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(vec![TabStop { pos: stop, align: TabAlign::Center, leader: TabLeader::None }]);
+            p.indent_right = Some(indent_right);
+            p.align = Some(Align::Justify);
+        })
+        .unwrap();
+        let l = lay(&d);
+        let Some(para) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+            panic!("no lines")
+        };
+        para.lines.iter().map(|l| (l.c0, l.xs.clone(), l.hyphen.is_some())).collect::<Vec<_>>()
+    };
+    let end = |line: &(usize, Vec<f32>, bool)| line.1.last().copied().unwrap_or(f32::NAN);
+
+    // The word after the tab is wider than the line: the tab goes on with it, and the six words
+    // before it are stretched to the right indent, not to the margin the tab would have reached.
+    let words = "ab ab ab ab ab ab";
+    let l = lines(&format!("{words}\t{} ab", "W".repeat(90)), WIDTH - 50.0, 100.0);
+    assert_eq!(l[1].0, words.len(), "the tab starts the second line: {:?}", l.iter().map(|l| l.0).collect::<Vec<_>>());
+    assert!((end(&l[0]) - (WIDTH - 100.0)).abs() < 0.05, "the line the tab left ends at {}", end(&l[0]));
+
+    // "abcdefghij-" after a centre tab near the margin: the hyphen counts as text, so the two
+    // are centred on the stop together, or end at the margin where that would pass it.
+    let ten = "abcdefghij";
+    let probe = lines(ten, 10.0, 0.0);
+    let w = end(&probe[0]) - probe[0].1[0];
+    let stop = WIDTH - w / 2.0 - 1.0;
+    let found = (1..80).find_map(|n| {
+        let before = "ab ".repeat(n);
+        let l = lines(&format!("{before}\t{ten}\u{ad}{} ab", "k".repeat(40)), stop, 0.0);
+        let tab = before.len();
+        // The first line holds the tab and ends with the hyphen.
+        (l[0].2 && l[1].0 > tab + 1).then(|| (l[0].1[tab + 1], end(&l[0])))
+    });
+    let Some((from, to)) = found else { panic!("no line ends in the hyphen") };
+    assert!(to <= WIDTH + 0.05, "the hyphen ends at {to}, past the margin");
+    assert!(((from + to) / 2.0 - stop).abs() < 0.05 || (to - WIDTH).abs() < 0.05, "the text and its hyphen run from {from} to {to} around {stop}");
 }
 
 /// A bookmark before such a tab is not text: the tab does not wrap away from it, and the
