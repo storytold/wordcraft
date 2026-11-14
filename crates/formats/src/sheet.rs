@@ -88,19 +88,16 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
                 for cell in &row.cells {
                     if (cell.at.col as usize) < MAX_COLS {
                         let value = cell.value.resolve(&strings, wb.date_1904);
-                        let kind = match &value {
-                            Value::Number(n) => match (formats.get(cell.style as usize).and_then(|f| f.date_kind(*n)), &cell.value) {
-                                (Some(kind), _) => Some(kind),
-                                // A `t="d"` cell is shown as written: a date, a time, or both.
-                                (None, craft_xlsx::CellValue::Date(text)) => {
-                                    Some(match (text.split(['T', ':']).next().is_some_and(|d| d.contains('-')), text.contains(':')) {
-                                        (true, true) => DateKind::DateTime,
-                                        (false, true) => DateKind::Time,
-                                        _ => DateKind::Date,
-                                    })
-                                }
-                                (None, _) => None,
-                            },
+                        let kind = match (&value, &cell.value) {
+                            // A `t="d"` cell is shown as written, whatever its style: a date, a time, or both.
+                            (Value::Number(_), craft_xlsx::CellValue::Date(text)) => {
+                                Some(match (text.split(['T', ':']).next().is_some_and(|d| d.contains('-')), text.contains(':')) {
+                                    (true, true) => DateKind::DateTime,
+                                    (false, true) => DateKind::Time,
+                                    _ => DateKind::Date,
+                                })
+                            }
+                            (Value::Number(n), _) => formats.get(cell.style as usize).and_then(|f| f.date_kind(*n)),
                             _ => None,
                         };
                         let s = display(&value, kind, wb.date_1904);
@@ -217,10 +214,11 @@ fn number(x: f64) -> String {
         return x.to_string();
     }
     // Whole numbers keep every digit the stored value has, so identifiers such as account
-    // numbers are unchanged.
-    if x.fract() == 0.0 && x.abs() < 1e21 {
+    // numbers are unchanged. From 1E21 on they are written as the shortest exponent that reads
+    // back as the same value.
+    if x.fract() == 0.0 {
         // `+ 0.0` turns negative zero into positive zero, which would print as "-0".
-        return format!("{:.0}", x + 0.0);
+        return if x.abs() < 1e21 { format!("{:.0}", x + 0.0) } else { format!("{x:E}") };
     }
     let rounded: f64 = format!("{x:.14e}").parse().unwrap_or(x);
     if rounded.abs() >= 1e15 || rounded.abs() < 1e-9 { format!("{rounded:E}") } else { rounded.to_string() }
@@ -253,7 +251,7 @@ impl NumFmt<'_> {
     fn date_kind(self, value: f64) -> Option<DateKind> {
         match self {
             NumFmt::Builtin(id) => builtin_date(id),
-            NumFmt::Code(code) => custom_date(format_section(code, value)),
+            NumFmt::Code(code) => format_section(code, value).and_then(custom_date),
         }
     }
 }
@@ -287,7 +285,8 @@ fn builtin_date(id: u32) -> Option<DateKind> {
     }
 }
 
-/// The sections of a format code, split at `;` outside quotes, brackets and escapes.
+/// The sections of a format code, split at `;` outside quotes, brackets, escapes and the
+/// character after `_` or `*` padding.
 fn format_sections(code: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let (mut start, mut quoted, mut bracket, mut escaped) = (0, false, false, false);
@@ -295,6 +294,7 @@ fn format_sections(code: &str) -> Vec<&str> {
         match c {
             _ if escaped => escaped = false,
             '\\' if !quoted => escaped = true,
+            '_' | '*' if !quoted && !bracket => escaped = true,
             '"' if !bracket => quoted = !quoted,
             '[' if !quoted => bracket = true,
             ']' if !quoted => bracket = false,
@@ -333,9 +333,9 @@ fn section_condition(section: &str, value: f64) -> Option<bool> {
 }
 
 /// The section of a format code that shows `value` (§18.8.31): the first section whose condition
-/// holds, else the first without one; with no conditions, the positive, negative and zero
-/// sections in that order.
-fn format_section(code: &str, value: f64) -> &str {
+/// holds, else the first without one, else none; with no conditions, the positive, negative and
+/// zero sections in that order.
+fn format_section(code: &str, value: f64) -> Option<&str> {
     let sections = format_sections(code);
     let numeric = &sections[..sections.len().min(3)];
     if numeric.iter().any(|s| section_condition(s, value).is_some()) {
@@ -343,9 +343,7 @@ fn format_section(code: &str, value: f64) -> &str {
             .iter()
             .find(|s| section_condition(s, value) == Some(true))
             .or_else(|| numeric.iter().find(|s| section_condition(s, value).is_none()))
-            .or(numeric.last())
-            .copied()
-            .unwrap_or(code);
+            .copied();
     }
     let i = if value < 0.0 && numeric.len() > 1 {
         1
@@ -354,7 +352,7 @@ fn format_section(code: &str, value: f64) -> &str {
     } else {
         0
     };
-    numeric.get(i).copied().unwrap_or(code)
+    Some(numeric.get(i).copied().unwrap_or(code))
 }
 
 /// Whether a format section shows a date or time: without quoted text, escaped characters,
@@ -611,5 +609,28 @@ mod tests {
         let rows = r#"<row r="1"><c r="A1" t="d"><v>06:00</v></c><c r="B1" t="d"><v>2024-03-05T00:00:00</v></c></row>"#;
         let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["06:00", "2024-03-05 00:00"]]);
+    }
+
+    #[test]
+    fn a_styled_date_cell_keeps_its_time() {
+        let rows = r#"<row r="1"><c r="A1" s="1" t="d"><v>2024-03-05T13:45:00</v></c><c r="B1" s="2" t="d"><v>2024-03-05</v></c></row>"#;
+        let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="20"/>"#);
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["2024-03-05 13:45", "2024-03-05"]]);
+    }
+
+    #[test]
+    fn large_whole_numbers_keep_their_value() {
+        let big = 1_000_000_000_000_000_131_072.0;
+        assert_eq!(number(big), "1.0000000000000001E21");
+        assert_eq!(number(big).parse::<f64>(), Ok(big));
+        assert_eq!(number(1e21), "1E21");
+        assert_eq!(number(-1e300), "-1E300");
+    }
+
+    #[test]
+    fn padding_and_unmatched_conditions_in_sections() {
+        assert_eq!(NumFmt::Code("mm_;ss").date_kind(0.5), Some(DateKind::Time));
+        assert_eq!(NumFmt::Code("[>40000]0;[=0]yyyy-mm-dd").date_kind(12.0), None);
+        assert_eq!(NumFmt::Code("[>40000]0;[=0]yyyy-mm-dd").date_kind(0.0), Some(DateKind::Date));
     }
 }
