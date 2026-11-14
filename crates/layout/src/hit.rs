@@ -866,8 +866,9 @@ impl DocLayout {
                 continue;
             }
             let l = para.lines.get(li)?;
-            let next = para.lines.get(li.saturating_add(1));
-            let end = next.map_or(l.stop, |n| if n.start > l.start { n.start } else { l.stop }).max(l.start);
+            let next_li = li.saturating_add(1);
+            let next = para.lines.get(next_li);
+            let end = if para.is_line_continuation(next_li) { l.stop } else { next.map_or(l.stop, |n| n.start) }.max(l.start);
             let mk = |off| Pos { story: pos.story, path: pos.path.clone(), off };
             return Some((mk(l.start), mk(end), next.is_none()));
         }

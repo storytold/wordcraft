@@ -16161,3 +16161,41 @@ fn field_result_mixed_styles_in_word_preserves_cluster_styles_without_breaking()
         );
     }
 }
+
+/// Selection-bar `line_span` on the first line of a wrapped field preceded by text includes
+/// the field on that line rather than stopping at the continuation line's `start`.
+#[test]
+fn line_span_includes_wrapped_field_after_prefix() {
+    let mut doc = Document::new();
+    doc.last_section.margin_left = 200.0;
+    doc.last_section.margin_right = 200.0;
+    let prefix = "Prefix ";
+    let mut p = Paragraph::with_text(prefix, Default::default());
+    let long_text = "The quick brown fox jumps over the lazy dog and runs across the wide open fields ".repeat(3);
+    p.insert_object(
+        prefix.len(),
+        InlineObject::Field { instr: "DOCVARIABLE summary".into(), result: long_text, locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+
+    let mut cache = LayoutCache::new();
+    let l = layout(&doc, &mut cache, &LayoutOptions::default());
+    let Placed::Lines { para, .. } = &l.pages[0].items[0] else {
+        panic!("expected laid out paragraph");
+    };
+    assert!(para.lines.len() >= 2, "expected wrapped lines, got {}", para.lines.len());
+    assert!(para.is_line_continuation(1), "expected line 1 to continue the field from line 0");
+
+    let obj_len = wordcraft_doc::para::OBJ.len_utf8();
+    let expected_end = prefix.len() + obj_len;
+    assert_eq!(para.lines[0].start, 0);
+    assert_eq!(para.lines[0].stop, expected_end);
+    assert_eq!(para.lines[1].start, prefix.len());
+
+    let (start, end, is_last) = l.line_span(&Pos::body(0, 0), 0).expect("line_span should succeed");
+    assert_eq!(start, Pos::body(0, 0));
+    assert_eq!(end, Pos::body(0, expected_end));
+    assert!(!is_last);
+}
