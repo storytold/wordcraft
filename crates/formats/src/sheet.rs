@@ -234,6 +234,16 @@ impl Grid {
         }
         let s = value();
         if s.is_empty() {
+            // A cell written again as empty is empty.
+            if let Some(cols) = self.rows.get_mut(&row) {
+                let width = |cols: &BTreeMap<u32, String>| cols.keys().next_back().map_or(0, |&c| c as usize + 1);
+                let before = width(cols);
+                if let Some(old) = cols.remove(&col) {
+                    self.text = self.text.saturating_sub(old.len());
+                    // The row is as wide as its last value now.
+                    self.cells = self.cells.saturating_sub(before - width(cols));
+                }
+            }
             return;
         }
         let cols = self.rows.get(&row);
@@ -307,6 +317,26 @@ mod tests {
         grid.insert(1, 0, || "next".to_string());
         assert!(!grid.full);
         assert_eq!(grid.into_rows(), [["short"], ["next"]]);
+    }
+
+    /// A cell written again as empty is empty, and its text no longer counts.
+    #[test]
+    fn a_cell_rewritten_as_empty_is_released() {
+        let mut grid = Grid::default();
+        grid.insert(0, 0, || "x".repeat(MAX_TEXT_BYTES - 1));
+        grid.insert(0, 0, String::new);
+        grid.insert(1, 0, || "y".repeat(MAX_TEXT_BYTES - 1));
+        assert!(!grid.full);
+        assert_eq!(grid.into_rows().len(), 1);
+        // Clearing a row's last value gives back the blank cells before it.
+        let mut grid = Grid::default();
+        for row in 0..2_000 {
+            grid.insert(row, 999, || "1".to_string());
+            grid.insert(row, 999, String::new);
+        }
+        grid.insert(2_000, 999, || "1".to_string());
+        assert!(!grid.full);
+        assert_eq!(grid.cells, 1_000);
     }
 
     #[test]
