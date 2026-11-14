@@ -8,6 +8,7 @@ mod autospace;
 mod bidi;
 mod budget;
 mod cell_floats;
+mod closing_border_room;
 mod complex;
 mod float_top;
 mod grid;
@@ -4649,7 +4650,9 @@ fn exact_rows_move_on_whole() {
 /// A nested table's cell the page bottom cuts through goes on at the top of the next page with
 /// what is left of it, and the paragraph after the nested table below it, while its neighbour's
 /// text runs on too. The cell's shift used to come from that paragraph (below the page bottom),
-/// which squashed the nested cell to 2pt on the next page.
+/// which squashed the nested cell to 2pt on the next page. The cell is 300pt tall by the space
+/// after its second line: a row made that tall by its height, exact or at least, goes on whole
+/// (`tests::closing_border_room`).
 #[test]
 fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
     crate::test_fonts();
@@ -4659,8 +4662,26 @@ fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
         p.props.space_after = Some(0.0);
     }
     let mut inner = Table::new(1, 1, 150.0);
-    inner.rows[0].props.height = Some(300.0);
-    inner.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+    inner.rows[0].cells[0].blocks = ["One", "Two"]
+        .into_iter()
+        .map(|text| {
+            let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    let tall = |inner: &mut Table, lines: f32| {
+        if let Some(wordcraft_doc::Block::Para(p)) = inner.rows[0].cells[0].blocks.last_mut().map(std::sync::Arc::make_mut) {
+            p.props.space_after = Some(300.0 - lines);
+        }
+    };
+    // The two lines' own height, from the cell with no space after them.
+    let lines = {
+        let mut d = Document::from_text("Filler");
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(inner.clone())).unwrap();
+        lay(&d).pages[0].items.iter().find_map(|it| if let Placed::Cell { rect, .. } = it { Some(rect.h) } else { None }).unwrap_or(0.0)
+    };
+    tall(&mut inner, lines);
     let mut t = Table::new(1, 2, 400.0);
     let text = "Dotted leader lines to fill in by hand later on. ".repeat(40);
     t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
@@ -4739,6 +4760,7 @@ fn split_row_rejects_a_hostile_cut() {
         items: vec![line(0.0), line(150.0)],
         bottom,
         cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0), align: None }],
+        inner: Vec::new(),
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -8921,6 +8943,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
         cells: vec![CellPart { top: 2.0, items: 0..4, end: None, align: None }],
+        inner: Vec::new(),
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -12582,6 +12605,7 @@ fn split_cell_moves_image_frame() {
             edge: 0.0,
             items: vec![kept, image, frame],
             cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None }],
+            inner: Vec::new(),
         };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);
