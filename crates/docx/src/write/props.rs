@@ -37,6 +37,11 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(cs) = &c.font_cs {
         fonts.push(("w:cs", cs));
     }
+    match c.hint_ea {
+        Some(true) => fonts.push(("w:hint", "eastAsia")),
+        Some(false) => fonts.push(("w:hint", "default")),
+        None => {}
+    }
     if !fonts.is_empty() {
         w.empty("w:rFonts", &fonts);
     }
