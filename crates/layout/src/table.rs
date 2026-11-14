@@ -1514,14 +1514,17 @@ fn is_automatic(t: &Table) -> bool {
 }
 
 /// Cell widths given as percentages of the table's (`w:tcW w:type="pct"`), the same in every
-/// row, replace a stale grid: each column takes its share of the grid's total, to a twentieth of
-/// a point as Word keeps widths. Whether the cells' widths are such percentages.
+/// row, replace a stale grid: each column takes its share of the grid's total, its edges on
+/// whole twentieths of a point as Word keeps them, so the columns add up to that total. Whether
+/// the cells' widths are such percentages.
 ///
 /// Measured in Word for Windows with three equal grid columns under cells of 50, 25 and 25%: the
 /// columns are 240.8, 120.3 and 120.4 pt of a 481.5 pt table, in a fixed-layout table too, and
-/// 150, 75 and 75 pt of a 300 pt one; cells of 40, 20 and 20% give the same columns, so the
-/// shares are of their sum. Shares that add up to more than the table are left to the grid: Word
-/// then gives the first columns their percentages and the last one what is left.
+/// 150, 75 and 75 pt of a 300 pt one; cells of 40, 20 and 20% give the same columns, so shares
+/// of less than the table are shares of their sum. Shares of more than the table are taken in
+/// order and the last column gets what is left: 50, 25 and 45% give those same columns again,
+/// 60, 30 and 30% give 288.9, 144.5 and 48.1 pt. Where that leaves the last column no room the
+/// grid stays as it is (Word then takes the room for that column's content from the others).
 ///
 /// A grid that is as near the shares as a percentage can say (a fiftieth of a percent of the
 /// table, and a twentieth of a point for rounding) is the one Word wrote from them, and stays as
@@ -1532,21 +1535,37 @@ fn apply_cell_shares(t: &Table, grid: &mut [f32]) -> bool {
     let shares: Option<Vec<f32>> = first.cells.iter().map(share).collect();
     let Some(shares) = shares else { return false };
     let (sum, total): (f32, f32) = (shares.iter().sum(), grid.iter().sum());
-    if shares.len() != grid.len() || !(sum > 0.0 && sum <= 100.5) || !(total.is_finite() && total > 0.0) {
+    if shares.len() != grid.len() || !(sum > 0.0 && sum.is_finite()) || !(total.is_finite() && total > 0.0) {
         return false;
     }
     let same = |r: &Row| r.cells.len() == shares.len() && r.cells.iter().zip(&shares).all(|(c, p)| share(c).is_some_and(|q| (q - p).abs() < 0.01));
     if !t.rows.iter().all(same) {
         return false;
     }
+    // What the shares are shares of: their sum, or the whole table when they add up to more.
+    let whole = sum.min(100.0);
     let twip = |w: f32| (w * 20.0).round() / 20.0;
-    let widths: Vec<f32> = shares.iter().map(|p| twip(total * p / sum)).collect();
+    let mut widths = Vec::with_capacity(shares.len());
+    let (mut taken, mut left) = (0.0f32, 0.0f32);
+    for (k, p) in shares.iter().enumerate() {
+        taken += p;
+        let right = if k + 1 == shares.len() { total } else { twip(total * (taken / whole).min(1.0)) };
+        widths.push(right - left);
+        left = right;
+    }
+    if widths.last().is_none_or(|w| *w < MIN_LAST_SHARE) {
+        return false;
+    }
     let near = total / 5000.0 + 0.051;
     if grid.iter().zip(&widths).any(|(g, w)| (g - w).abs() > near) {
         grid.copy_from_slice(&widths);
     }
     true
 }
+
+/// The least room, in points, that percentages adding up to more than the table must leave the
+/// last column for [`apply_cell_shares`] to follow them.
+const MIN_LAST_SHARE: f32 = 4.0;
 
 /// Consistent cell widths replace a stale grid without changing the table's total width.
 /// Conflicting widths, spans and mixed points and percentages need the full shared-grid
