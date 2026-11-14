@@ -177,6 +177,9 @@ fn bounded(img: DynamicImage) -> RgbaImage {
     }
     let k = (EFFECT_PIXELS as f64 / n as f64).sqrt();
     let (nw, nh) = (((f64::from(w) * k) as u32).max(1), ((f64::from(h) * k) as u32).max(1));
+    // Clamping a thin picture's short side to one can exceed the processing budget.
+    let nh = nh.min((EFFECT_PIXELS / u64::from(nw)) as u32).max(1);
+    let nw = nw.min((EFFECT_PIXELS / u64::from(nh)) as u32).max(1);
     image::imageops::thumbnail(&img.into_rgba8(), nw, nh)
 }
 
@@ -448,4 +451,19 @@ fn bubbles(img: &RgbaImage, cell: u32) -> RgbaImage {
         };
         image::Rgba([out[0].clamp(0.0, 255.0) as u8, out[1].clamp(0.0, 255.0) as u8, out[2].clamp(0.0, 255.0) as u8, a])
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thin_pictures_stay_within_the_effect_pixel_budget() {
+        for (w, h) in [(8_000_000, 1), (1, 8_000_000), (4, 3)] {
+            let img = bounded(DynamicImage::ImageRgba8(RgbaImage::new(w, h)));
+            assert!(img.width() > 0 && img.height() > 0);
+            assert!(img.width() <= w && img.height() <= h);
+            assert!(u64::from(img.width()) * u64::from(img.height()) <= EFFECT_PIXELS, "{w}×{h} became {:?}", img.dimensions());
+        }
+    }
 }

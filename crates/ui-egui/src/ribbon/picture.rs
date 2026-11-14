@@ -370,15 +370,20 @@ fn color_menu(ui: &mut Ui, app: &mut WordApp) {
 
 /// Compress Pictures: the picture's pixels down to what a resolution needs at its size.
 fn compress_menu(ui: &mut Ui, app: &mut WordApp) {
-    let long = match wordcraft_engine::cmd::objects::selected(&app.session) {
-        Some((_, wordcraft_doc::para::InlineObject::Image { w, h, .. })) => w.max(h),
-        _ => 0.0,
+    let (w, h, crop) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+        Some((_, wordcraft_doc::para::InlineObject::Image { w, h, crop, .. })) => (w, h, crop),
+        _ => (0.0, 0.0, [0.0; 4]),
     };
     for (label, ppi) in [("High fidelity: 330 ppi", 330.0), ("Print: 220 ppi", 220.0), ("Web: 150 ppi", 150.0), ("E-mail: 96 ppi", 96.0)] {
-        // Points are 1/72 in: the longer side's pixels at that resolution.
-        let px = (long / 72.0 * ppi).ceil().clamp(32.0, 20000.0);
-        mi(ui, app, label, "picture.compress", json!({"maxPixels": px}));
+        mi(ui, app, label, "picture.compress", json!({"maxPixels": compression_pixels(w, h, crop, ppi)}));
     }
+}
+
+/// Compression resizes the whole source bitmap, so its limit includes the cropped-away area.
+fn compression_pixels(w: f32, h: f32, crop: [f32; 4], ppi: f32) -> u32 {
+    let full = |len: f32, lo: f32, hi: f32| f64::from(len).max(0.0) / f64::from((1.0 - lo - hi).max(0.05));
+    let long = full(w, crop[0], crop[2]).max(full(h, crop[1], crop[3]));
+    (long / 72.0 * f64::from(ppi)).ceil().clamp(32.0, 20000.0) as u32
 }
 
 fn heading(ui: &mut Ui, text: &str) {
@@ -424,44 +429,70 @@ const TILE: f32 = 52.0;
 /// The longest side of the copy the tiles are drawn from (pixels).
 const TILE_PX: u32 = 72;
 
-/// The tiles drawn for one picture look, kept in egui's memory: (media, tiles by gallery and item).
-type Tiles = (String, HashMap<(String, usize), Option<egui::TextureHandle>>);
+/// Galleries for one picture look. Retaining the media Arc lets us
+/// distinguish replacements after undo without hashing the whole bitmap each frame.
+#[derive(Clone)]
+struct Tiles {
+    media: Arc<Vec<u8>>,
+    source: Arc<image::RgbaImage>,
+    items: HashMap<(String, usize), Tile>,
+}
+
+#[derive(Clone)]
+struct Tile {
+    command: &'static str,
+    params: Value,
+    texture: Option<egui::TextureHandle>,
+}
+
+fn gallery_tiles(app: &WordApp, ctx: &egui::Context, key: &str, items: &[Item], base: &str) -> Option<Vec<Option<egui::TextureHandle>>> {
+    let (_, wordcraft_doc::para::InlineObject::Image { media, .. }) = wordcraft_engine::cmd::objects::selected(&app.session)? else { return None };
+    let media = app.session.doc.media.get(&media)?;
+    let source = tile_source(app, ctx, base)?;
+    let store = egui::Id::unique("picture_gallery_tiles");
+    let mut tiles = ctx
+        .data(|d| d.get_temp::<Tiles>(store))
+        .filter(|tiles| Arc::ptr_eq(&tiles.media, media) && Arc::ptr_eq(&tiles.source, &source))
+        .unwrap_or_else(|| Tiles { media: media.clone(), source: source.clone(), items: HashMap::new() });
+    let textures = items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| {
+            let slot = (key.to_string(), i);
+            if let Some(tile) = tiles.items.get(&slot)
+                && tile.command == it.id
+                && tile.params == it.params
+            {
+                return tile.texture.clone();
+            }
+            let texture = look::preview(&app.session, &source, it.id, &it.params).map(|img| {
+                let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+                ctx.load_texture(format!("picture_gallery_{key}_{i}"), ci, egui::TextureOptions::LINEAR)
+            });
+            tiles.items.insert(slot, Tile { command: it.id, params: it.params.clone(), texture: texture.clone() });
+            texture
+        })
+        .collect();
+    ctx.data_mut(|d| d.insert_temp(store, tiles));
+    Some(textures)
+}
 
 /// A grid of the selected picture as each item would leave it; a click runs that item. The one
 /// matching the picture's setting now is outlined. Without a picture to draw, plain items.
 fn gallery(ui: &mut Ui, app: &mut WordApp, key: &str, items: &[Item], cols: usize) {
     let current = look::current(&app.session);
-    let media = match wordcraft_engine::cmd::objects::selected(&app.session) {
-        Some((_, wordcraft_doc::para::InlineObject::Image { media, .. })) => media,
-        _ => String::new(),
-    };
-    let thumb = current.as_ref().and_then(|l| tile_source(app, ui.ctx(), &l.base));
+    let textures = current.as_ref().and_then(|l| gallery_tiles(app, ui.ctx(), key, items, &l.base));
     let t = crate::theme::Tokens::get(ui.ctx());
-    let store = egui::Id::unique("picture_gallery_tiles");
-    let mut tiles: Tiles =
-        ui.ctx().data(|d| d.get_temp::<Tiles>(store)).filter(|(m, _)| *m == media).unwrap_or_else(|| (media.clone(), HashMap::new()));
     let mut clicked = None;
     egui::Grid::new(("picture_gallery", key)).spacing(egui::vec2(4.0, 4.0)).show(ui, |ui| {
         for (i, it) in items.iter().enumerate() {
-            let tex = match &thumb {
-                Some(thumb) => tiles
-                    .1
-                    .entry((key.to_string(), i))
-                    .or_insert_with(|| {
-                        look::preview(&app.session, thumb, it.id, &it.params).map(|img| {
-                            let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
-                            ui.ctx().load_texture(format!("picture_gallery_{key}_{i}"), ci, egui::TextureOptions::LINEAR)
-                        })
-                    })
-                    .clone(),
-                None => None,
-            };
+            let tex = textures.as_ref().and_then(|tiles| tiles.get(i)).and_then(Option::as_ref);
             let on = current.as_ref().is_some_and(|l| is_current(l, it.id, &it.params));
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(TILE, TILE), egui::Sense::click());
             let painter = ui.painter();
             // A checkerboard shows what an item makes see-through.
             painter.rect_filled(rect, 2.0, egui::Color32::WHITE);
-            if let Some(tex) = &tex {
+            if let Some(tex) = tex {
                 let size = tex.size_vec2();
                 let k = (TILE - 6.0) / size.x.max(size.y).max(1.0);
                 painter.image(
@@ -491,7 +522,6 @@ fn gallery(ui: &mut Ui, app: &mut WordApp, key: &str, items: &[Item], cols: usiz
             }
         }
     });
-    ui.ctx().data_mut(|d| d.insert_temp(store, tiles));
     if let Some(it) = clicked.and_then(|i| items.get(i)) {
         crate::widgets::run_from_ribbon(app, it.id, it.params.clone());
         ui.close();
@@ -536,13 +566,17 @@ fn color_part(cur: &look::PictureLook, k: &str) -> bool {
 /// The copy of `base` the tiles are drawn from, kept in egui's memory per media item.
 fn tile_source(app: &WordApp, ctx: &egui::Context, base: &str) -> Option<Arc<image::RgbaImage>> {
     let bytes = app.session.doc.media.get(base)?;
-    let id = egui::Id::unique(("picture_gallery_source", base, bytes.len()));
-    if let Some(t) = ctx.data(|d| d.get_temp::<Option<Arc<image::RgbaImage>>>(id)) {
+    type Cached = (Arc<Vec<u8>>, Option<Arc<image::RgbaImage>>);
+    let id = egui::Id::unique("picture_gallery_source");
+    if let Some((_, t)) = ctx.data(|d| d.get_temp::<Cached>(id)).filter(|(old, _)| Arc::ptr_eq(old, bytes)) {
         return t;
     }
     let img = wordcraft_geom::picture::decode(bytes, wordcraft_geom::MAX_DECODED_BYTES)
         .ok()
         .map(|img| Arc::new(img.thumbnail(TILE_PX, TILE_PX).into_rgba8()));
-    ctx.data_mut(|d| d.insert_temp(id, img.clone()));
+    ctx.data_mut(|d| d.insert_temp(id, (bytes.clone(), img.clone())));
     img
 }
+
+#[cfg(test)]
+mod tests;

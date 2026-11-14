@@ -349,7 +349,11 @@ impl Work {
         let fixed_at = |x: usize, y: usize| {
             let (wx, wy) = (((x as f32 + 0.5) * sx) as usize, ((y as f32 + 0.5) * sy) as usize);
             let i = at(wx.min(self.w - 1), wy.min(self.h - 1));
-            matches!((self.label.get(i).copied(), self.band.get(i).copied()), (Some(FG), _) | (Some(BG), Some(false)))
+            match (self.label.get(i).copied(), self.band.get(i).copied()) {
+                (Some(FG), _) => Some(1.0),
+                (Some(BG), Some(false)) => Some(0.0),
+                _ => None,
+            }
         };
         let mut p = Vec::with_capacity(rw * rh);
         for (i, px) in guide.pixels().enumerate() {
@@ -363,21 +367,24 @@ impl Work {
             let top = fg_at(x0, y0) * (1.0 - tx) + fg_at(x1, y0) * tx;
             let bottom = fg_at(x0, y1) * (1.0 - tx) + fg_at(x1, y1) * tx;
             let mut v = top * (1.0 - ty) + bottom * ty;
-            if v > 0.0 && v < 1.0 && !fixed_at(x, y) {
-                if let Some((f, g)) = models {
-                    let z = [f32::from(px.0[0]), f32::from(px.0[1]), f32::from(px.0[2])];
-                    let d = (g.nll(z) - f.nll(z)).clamp(-30.0, 30.0) as f32;
-                    v = 0.5 * v + 0.5 / (1.0 + (-d).exp());
-                }
+            if v > 0.0
+                && v < 1.0
+                && fixed_at(x, y).is_none()
+                && let Some((f, g)) = models
+            {
+                let z = [f32::from(px.0[0]), f32::from(px.0[1]), f32::from(px.0[2])];
+                let d = (g.nll(z) - f.nll(z)).clamp(-30.0, 30.0) as f32;
+                v = 0.5 * v + 0.5 / (1.0 + (-d).exp());
             }
             p.push(v);
         }
         let r = ((rw as f32 / self.w as f32).round() as usize).max(1);
         let q = guided_filter(&gray, &p, rw, rh, r, 2e-3);
         let mut out = GrayImage::new(rw as u32, rh as u32);
-        // Marked and see-through pixels are already 0 or 1 in `p` (not decided again above), so
-        // their edges come out of the filter smooth rather than in steps of the working size.
-        for (o, v) in out.pixels_mut().zip(q) {
+        // Smoothing can erase a narrow keep mark or fill a remove mark. Restore fixed labels
+        // after filtering; only unconstrained pixels may take the smoothed value.
+        for (i, (o, v)) in out.pixels_mut().zip(q).enumerate() {
+            let v = fixed_at(i % rw, i / rw).unwrap_or(v);
             o.0[0] = (((v - 0.35) / 0.3).clamp(0.0, 1.0) * 255.0).round() as u8;
         }
         if (rw as u32, rh as u32) == (w, h) { out } else { image::imageops::resize(&out, w, h, image::imageops::FilterType::Triangle) }
@@ -967,10 +974,9 @@ impl Flow {
                 if room > 0
                     && self.tree(q) == side
                     && let Some(d) = self.rooted(q)
+                    && best.is_none_or(|(_, bd)| d < bd)
                 {
-                    if best.is_none_or(|(_, bd)| d < bd) {
-                        best = Some((a, d));
-                    }
+                    best = Some((a, d));
                 }
             }
             if let Some((a, d)) = best {

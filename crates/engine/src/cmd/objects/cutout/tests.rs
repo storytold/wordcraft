@@ -111,6 +111,17 @@ fn marks_keep_and_remove_what_they_cover() {
 }
 
 #[test]
+fn a_single_marked_pixel_survives_refinement_among_opposite_marks() {
+    let img = RgbaImage::from_pixel(100, 100, image::Rgba([128, 128, 128, 255]));
+    for keep in [true, false] {
+        let marks = [Mark { keep: !keep, points: vec![[0.505, 0.505]], width: 0.05 }, Mark { keep, points: vec![[0.505, 0.505]], width: 0.002 }];
+        let mask = foreground(&img, &marks);
+        assert_eq!(mask.get_pixel(50, 50).0[0], if keep { 255 } else { 0 }, "the later mark wins, keep={keep}");
+        assert_eq!(mask.get_pixel(51, 50).0[0], if keep { 0 } else { 255 }, "the surrounding mark still applies");
+    }
+}
+
+#[test]
 fn a_transparent_background_stays_transparent_and_marks_cannot_bring_it_back() {
     let subject = ellipse(0.5, 0.5, 0.25, 0.25);
     let mut img = photo(160, 160, &subject);
@@ -249,5 +260,67 @@ fn the_cut_is_a_minimum_cut_on_random_grids() {
         let (tr, edges) = (g.tr.clone(), g.edges.clone());
         let side = g.min_cut(&mut FLOW_BUDGET.clone());
         assert_eq!(cut_cost(&tr, &edges, &side), reference_max_flow(&tr, &edges), "case {case}: {w}×{h}");
+    }
+}
+
+/// Cost of a labelling in the original graph, before the production solver changes capacities.
+fn cut_cost(tr: &[i64], edges: &[(u32, u32, i64, i64)], side: &[bool]) -> i64 {
+    let terminals: i64 = tr.iter().zip(side).map(|(&pull, &source)| if source { (-pull).max(0) } else { pull.max(0) }).sum();
+    terminals
+        + edges
+            .iter()
+            .map(|&(a, b, ab, ba)| match (side[a as usize], side[b as usize]) {
+                (true, false) => ab,
+                (false, true) => ba,
+                _ => 0,
+            })
+            .sum::<i64>()
+}
+
+/// Independent Edmonds–Karp reference for the small random graphs above. A dense residual
+/// matrix and breadth-first augmenting paths avoid sharing the production solver's tree logic.
+fn reference_max_flow(tr: &[i64], edges: &[(u32, u32, i64, i64)]) -> i64 {
+    let (source, sink) = (tr.len(), tr.len() + 1);
+    let nodes = tr.len() + 2;
+    let mut residual = vec![vec![0i64; nodes]; nodes];
+    for (i, &pull) in tr.iter().enumerate() {
+        residual[source][i] = pull.max(0);
+        residual[i][sink] = (-pull).max(0);
+    }
+    for &(a, b, ab, ba) in edges {
+        residual[a as usize][b as usize] += ab;
+        residual[b as usize][a as usize] += ba;
+    }
+    let mut flow = 0;
+    loop {
+        let mut parent = vec![usize::MAX; nodes];
+        parent[source] = source;
+        let mut queue = std::collections::VecDeque::from([source]);
+        while let Some(u) = queue.pop_front() {
+            for (v, &capacity) in residual[u].iter().enumerate() {
+                if capacity > 0 && parent[v] == usize::MAX {
+                    parent[v] = u;
+                    queue.push_back(v);
+                }
+            }
+        }
+        if parent[sink] == usize::MAX {
+            return flow;
+        }
+        let mut amount = i64::MAX;
+        let mut v = sink;
+        while v != source {
+            let u = parent[v];
+            amount = amount.min(residual[u][v]);
+            v = u;
+        }
+        v = sink;
+        while v != source {
+            let u = parent[v];
+            residual[u][v] -= amount;
+            residual[v][u] += amount;
+            v = u;
+        }
+        flow += amount;
     }
 }

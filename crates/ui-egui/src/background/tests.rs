@@ -94,6 +94,72 @@ fn discard_all_changes_leaves_the_picture_or_takes_its_removal_away() {
 }
 
 #[test]
+fn transparent_color_pick_preserves_unapplied_removal_marks() {
+    let mut app = app_with_photo(0.0);
+    app.run("ui.removeBackground", json!({})).unwrap();
+    let mark = Mark { keep: true, points: vec![[0.5, 0.5]], width: DEFAULT_PEN };
+    app.canvas.bg_removal.as_mut().unwrap().marks.push(mark.clone());
+    let depth = app.session.undo_depth();
+    let before = bitmap(&app);
+
+    let error = app.run("ui.setTransparentColor", json!({})).unwrap_err();
+    assert!(error.contains("Background Removal"), "{error}");
+    assert_eq!(app.status_msg.as_ref().map(|(message, _)| message.as_str()), Some(error.as_str()));
+    assert!(active(&app).is_some());
+    assert!(app.canvas.pick_color.is_none());
+    assert_eq!(app.canvas.bg_removal.as_ref().unwrap().marks, vec![mark]);
+    assert_eq!(app.session.undo_depth(), depth);
+    assert_eq!(bitmap(&app), before);
+
+    app.run("ui.discardBackgroundChanges", json!({})).unwrap();
+    assert!(app.run("ui.setTransparentColor", json!({})).is_ok());
+}
+
+#[test]
+fn removal_preview_refreshes_after_discard_or_undo_and_reentry() {
+    for discard in [true, false] {
+        let mut app = app_with_photo(0.0);
+        let ctx = egui::Context::default();
+        let tint = Color32::from_rgb(180, 44, 200);
+        app.run("picture.removeBackground", json!({"marks": [{"keep": false, "points": [[0.5, 0.5]], "width": 0.05}]})).unwrap();
+        app.run("ui.removeBackground", json!({})).unwrap();
+        let marked = preview(&app, &ctx, tint).unwrap();
+        assert_eq!(preview(&app, &ctx, tint).unwrap().id(), marked.id(), "unchanged marks reuse the preview");
+        if discard {
+            app.run("ui.discardBackgroundChanges", json!({})).unwrap();
+        } else {
+            app.run("edit.undo", json!({})).unwrap();
+            sync(&mut app);
+        }
+        app.run("ui.removeBackground", json!({})).unwrap();
+        assert!(app.canvas.bg_removal.as_ref().unwrap().marks.is_empty());
+        let plain = preview(&app, &ctx, tint).unwrap();
+        assert_ne!(plain.id(), marked.id(), "discard={discard}: discarded marks must not remain in the preview");
+        assert_eq!(preview(&app, &ctx, tint).unwrap().id(), plain.id());
+    }
+}
+
+#[test]
+fn removal_thumbnail_refreshes_when_a_media_key_is_reused() {
+    let mut app = app_with_photo(0.0);
+    let ctx = egui::Context::default();
+    let mut replacement = Vec::new();
+    RgbaImage::from_pixel(100, 100, image::Rgba([10, 200, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut replacement), image::ImageFormat::Png)
+        .unwrap();
+    let mut original = app.session.doc.media.get("m").unwrap().as_ref().clone();
+    let len = original.len().max(replacement.len());
+    original.resize(len, 0);
+    replacement.resize(len, 0);
+    app.session.doc.media.insert("m".into(), Arc::new(original));
+    let before = thumb(&app, &ctx, "m").unwrap();
+    app.session.doc.media.insert("m".into(), Arc::new(replacement));
+    let after = thumb(&app, &ctx, "m").unwrap();
+    assert_eq!(after.get_pixel(50, 50).0, [10, 200, 30, 255]);
+    assert_ne!(after.get_pixel(50, 50), before.get_pixel(50, 50));
+}
+
+#[test]
 fn the_mode_ends_unapplied_when_the_picture_is_no_longer_selected() {
     let mut app = app_with_photo(0.0);
     app.run("ui.removeBackground", json!({})).unwrap();
@@ -188,7 +254,7 @@ fn a_mark_drawn_with_the_mouse_is_kept_with_the_changes() {
     assert_eq!(h.state().session.undo_depth(), depth + 1);
     let img = bitmap(h.state());
     assert_eq!(img.get_pixel(50, 50).0[3], 0, "the subject's middle, marked, is removed");
-    assert_eq!(img.get_pixel(50, 25).0[3], 255, "the rest of the subject stays");
+    assert_eq!(img.get_pixel(50, 25).0[3], 255, "the rest of the subject stays; marks: {marks:?}");
 }
 
 /// Set Transparent Color: the next click on the picture clears the colour there.

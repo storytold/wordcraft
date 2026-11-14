@@ -13,6 +13,7 @@
 //! with the point; Esc or a click elsewhere cancels it.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use egui::{Color32, Painter, Pos2, Rect, Ui, pos2};
 use image::RgbaImage;
@@ -32,6 +33,14 @@ pub const TAB: &str = "Background Removal";
 const PREVIEW_MAX_PX: u32 = 480;
 /// Pointer travel between two points of a mark (screen points).
 const STEP: f32 = 2.0;
+
+/// Preview textures outlive removal mode in egui memory, so separate sessions must not reuse
+/// a generation even when their picture and position are the same.
+static PREVIEW_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    PREVIEW_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Background Removal mode, on one picture.
 pub struct Removal {
@@ -112,7 +121,7 @@ pub fn start(app: &mut WordApp) -> Result<Value, String> {
     app.canvas.crop_drag = None;
     app.canvas.pick_color = None;
     app.canvas.bg_removal =
-        Some(Removal { pos: s.pos, media: s.media, base: look.base, marks, had, pen: None, stroke: None, generation: 0, prev_tab });
+        Some(Removal { pos: s.pos, media: s.media, base: look.base, marks, had, pen: None, stroke: None, generation: next_generation(), prev_tab });
     app.ui.tab = TAB.into();
     Ok(json!({"backgroundRemoval": true}))
 }
@@ -182,6 +191,11 @@ pub fn sync(app: &mut WordApp) {
 
 /// `ui.setTransparentColor`: the next click on the picture picks the colour to clear.
 pub fn start_pick(app: &mut WordApp) -> Result<Value, String> {
+    if active(app).is_some() {
+        let msg = tl!("Keep or discard Background Removal changes before setting a transparent color").to_string();
+        app.status(msg.clone());
+        return Err(msg);
+    }
     let Some((_, InlineObject::Image { .. })) = crate::objects::selected(app) else {
         return Err(tl!("select a picture first").to_string());
     };
@@ -282,7 +296,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             }
         } else if let (Some((points, _)), Some(keep)) = (r.stroke.take(), r.pen) {
             r.marks.push(Mark { keep, points, width: DEFAULT_PEN });
-            r.generation += 1;
+            r.generation = next_generation();
         }
         return Some(true);
     }
@@ -319,15 +333,16 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
 /// The base bitmap shrunk for the preview, kept in egui's memory per media item.
 fn thumb(app: &WordApp, ctx: &egui::Context, base: &str) -> Option<Arc<RgbaImage>> {
     let bytes = app.session.doc.media.get(base)?;
-    let id = egui::Id::unique(("bg_removal_thumb", base, bytes.len()));
-    if let Some(t) = ctx.data(|d| d.get_temp::<Option<Arc<RgbaImage>>>(id)) {
+    type Cached = (Arc<Vec<u8>>, Option<Arc<RgbaImage>>);
+    let id = egui::Id::unique("bg_removal_thumb");
+    if let Some((_, t)) = ctx.data(|d| d.get_temp::<Cached>(id)).filter(|(old, _)| Arc::ptr_eq(old, bytes)) {
         return t;
     }
     let img = wordcraft_geom::picture::decode(bytes, wordcraft_geom::MAX_DECODED_BYTES).ok().map(|img| {
         let img = if img.width().max(img.height()) > PREVIEW_MAX_PX { img.thumbnail(PREVIEW_MAX_PX, PREVIEW_MAX_PX) } else { img };
         Arc::new(img.into_rgba8())
     });
-    ctx.data_mut(|d| d.insert_temp(id, img.clone()));
+    ctx.data_mut(|d| d.insert_temp(id, (bytes.clone(), img.clone())));
     img
 }
 
@@ -355,18 +370,20 @@ pub fn preview_image(thumb: &RgbaImage, marks: &[Mark], tint: Color32) -> RgbaIm
 /// The preview texture for the mode's marks, found again when they change (one kept at a time).
 fn preview(app: &WordApp, ctx: &egui::Context, tint: Color32) -> Option<egui::TextureHandle> {
     let r = app.canvas.bg_removal.as_ref()?;
-    let key = (r.base.clone(), r.generation, r.pos.clone());
+    let source = thumb(app, ctx, &r.base)?;
+    type Cached = (u64, Color32, Arc<RgbaImage>, egui::TextureHandle);
     let id = egui::Id::unique("bg_removal_preview");
-    if let Some((k, tex)) = ctx.data(|d| d.get_temp::<((String, u64, Pos), egui::TextureHandle)>(id))
-        && k == key
+    if let Some((generation, color, old, tex)) = ctx.data(|d| d.get_temp::<Cached>(id))
+        && generation == r.generation
+        && color == tint
+        && Arc::ptr_eq(&old, &source)
     {
         return Some(tex);
     }
-    let source = thumb(app, ctx, &r.base)?;
     let img = preview_image(&source, &r.marks, tint);
     let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
     let tex = ctx.load_texture("bg_removal_preview", ci, egui::TextureOptions::LINEAR);
-    ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
+    ctx.data_mut(|d| d.insert_temp(id, (r.generation, tint, source, tex.clone())));
     Some(tex)
 }
 
