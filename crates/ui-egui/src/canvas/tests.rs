@@ -1392,6 +1392,7 @@ fn selection_bar_of_a_right_to_left_paragraph_is_on_the_right() {
 #[test]
 fn an_armed_format_painter_changes_the_pointer() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.canvas.drawn_ibeam = true;
     a.run("text.insert", json!({"text": "Paint this formatting"})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
@@ -1416,15 +1417,18 @@ fn an_armed_format_painter_changes_the_pointer() {
         h.step();
         h.output().platform_output.cursor_icon
     };
-    // Where the I-beam is drawn (Windows, #1746) the system pointer over the text is hidden.
-    let ibeam = if h.state().canvas.drawn_ibeam { egui::CursorIcon::None } else { egui::CursorIcon::Text };
+    // The contrasting Windows bitmap retains the native Text cursor.
+    let ibeam = egui::CursorIcon::Text;
     assert_eq!(pointer_after(&mut h, None), ibeam, "no painter yet");
+    assert!(h.output().platform_output.cursor_image.is_some());
     assert_eq!(pointer_after(&mut h, Some("edit.formatPainter")), egui::CursorIcon::Copy, "armed");
+    assert!(h.output().platform_output.cursor_image.is_none(), "the I-beam must not mask Format Painter");
     assert_eq!(pointer_after(&mut h, Some("edit.formatPainter")), ibeam, "turned off");
     h.state_mut().run("edit.formatPainter", json!({})).unwrap();
     h.event(egui::Event::PointerMoved(over_bar));
     h.step();
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "the selection bar keeps its arrow");
+    assert!(h.output().platform_output.cursor_image.is_none(), "the I-beam must not mask the selection bar");
 }
 
 /// #4410: with the Format Painter armed, a double-click on a word paints that word, and the
