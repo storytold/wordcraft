@@ -1206,6 +1206,104 @@ fn decorative_pictures_are_artifacts_not_figures() {
     }
 }
 
+/// #5534 review: a floating picture or text box in front of the text is drawn after the shaded
+/// paragraph below its anchor, so the shading doesn't cover it, but a tagged PDF still reads it
+/// (the picture's Figure, the box's paragraph) right after its anchor paragraph, not after the
+/// rest of the page.
+#[test]
+fn a_floating_object_is_read_after_its_anchor_though_drawn_over_the_text_below() {
+    use hayro_syntax::object::{Dict, Name, Object};
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    // The marked content in a structure element: its ids number the content in drawing order.
+    fn marked(o: Object<'_>, out: &mut Vec<i64>) {
+        match o {
+            Object::Number(n) => out.push(n.as_i64()),
+            Object::Array(a) => a.iter::<Object>().for_each(|o| marked(o, out)),
+            Object::Dict(d) => match (d.get::<Object>(b"MCID"), d.get::<Object>(b"K")) {
+                (Some(id), _) | (None, Some(id)) => marked(id, out),
+                (None, None) => {}
+            },
+            _ => {}
+        }
+    }
+    let shaded = |text: &str| {
+        let mut p = Paragraph::with_text(text, CharProps::default());
+        p.props.shading = Some(wordcraft_doc::Rgb(0xEE, 0xEE, 0xEE));
+        p
+    };
+    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 100.0, y: 4.0, ..Default::default() };
+    for (name, text_box, expected) in [("picture", false, ["P", "Div", "P"]), ("text box", true, ["P", "P", "P"])] {
+        let mut d = Document::new();
+        let object = if text_box {
+            let story = d.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(Paragraph::with_text("Inside the box", CharProps::default()))]);
+            InlineObject::Shape {
+                kind: ShapeKind::TextBox,
+                w: 120.0,
+                h: 60.0,
+                fill: None,
+                stroke: None,
+                stroke_width: 0.0,
+                float: float.clone(),
+                story: Some(story),
+                freeform: None,
+                effects: Default::default(),
+                extra: Default::default(),
+            }
+        } else {
+            let media = d.add_media(red_right_half_emf(), "emf");
+            InlineObject::Image {
+                media,
+                w: 70.0,
+                h: 70.0,
+                alt: "A red square".into(),
+                float: float.clone(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            }
+        };
+        let mut first = shaded("Anchor");
+        first.insert_object(0, object, &CharProps::default()).unwrap();
+        d.body = vec![para_block(first), para_block(shaded("After"))];
+        let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+        let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+        let root = pdf.xref().get::<Dict>(pdf.xref().root_id()).unwrap().get::<Dict>(b"StructTreeRoot").unwrap();
+        let mut tops: Vec<Dict> = match root.get::<Object>(b"K") {
+            Some(Object::Array(a)) => a.iter::<Dict>().collect(),
+            Some(Object::Dict(d)) => vec![d],
+            _ => Vec::new(),
+        };
+        // A document element holding them all is looked through.
+        while let [only] = tops.as_slice()
+            && only.get::<Name>(b"S").is_some_and(|s| s.as_str() == "Document")
+        {
+            tops = match only.get::<Object>(b"K") {
+                Some(Object::Array(a)) => a.iter::<Dict>().collect(),
+                Some(Object::Dict(d)) => vec![d],
+                _ => Vec::new(),
+            };
+        }
+        let read: Vec<(String, Vec<i64>)> = tops
+            .iter()
+            .map(|e| {
+                let mut ids = Vec::new();
+                if let Some(k) = e.get::<Object>(b"K") {
+                    marked(k, &mut ids);
+                }
+                (e.get::<Name>(b"S").map(|s| s.as_str().to_string()).unwrap_or_default(), ids)
+            })
+            .collect();
+        let names: Vec<&str> = read.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(names, expected, "{name}: three elements: {read:?}");
+        // The second element read is the object's: it is drawn after the third, the paragraph below.
+        let (object, after) = (&read[1].1, &read[2].1);
+        assert!(
+            !object.is_empty() && !after.is_empty() && object.iter().min() > after.iter().max(),
+            "{name}: read after its anchor paragraph, drawn after the paragraph below it: {read:?}"
+        );
+    }
+}
+
 /// A row of exact height cuts its cell's lines (one clip around them): text and a picture in
 /// it are tagged as they are in a row that fits, the text as the paragraph's, the picture as a
 /// Figure with its alt text.
@@ -1485,6 +1583,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
+        at: (0, 0),
         links: Vec::new(),
         bookmarks: std::cell::OnceCell::new(),
     };

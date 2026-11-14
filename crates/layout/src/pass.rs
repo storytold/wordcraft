@@ -213,6 +213,7 @@ fn new_page_builder<'p>(
         seps: NoteSeps::default(),
         para_end: None,
         behind: Vec::new(),
+        front: Vec::new(),
         max_y: 0.0,
         content_bottom: 0.0,
         balance: None,
@@ -432,6 +433,7 @@ fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionPro
         pb.flush_notes();
     }
     pb.carry.clear();
+    pb.raise_front();
     let mut pages = pb.pages;
     if !web {
         for p in &mut pages {
@@ -633,9 +635,9 @@ struct Snap<'a> {
 impl<'a> Snap<'a> {
     fn take(pb: &mut PageBuilder<'a>, ctx: &Ctx) -> Self {
         // The pages stay out of the copy: it would cost the whole document per block.
-        let (pages, behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (pages, behind, front) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.front));
         let copy = pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.front) = (pages, behind, front);
         Snap {
             pb: copy,
             pages: pb.pages.len(),
@@ -652,9 +654,15 @@ impl<'a> Snap<'a> {
     /// Go back to this state: drop the pages added since and what was added to the last one
     /// (appended, or inserted at the front behind the text).
     fn restore(&self, pb: &mut PageBuilder<'a>, ctx: &mut Ctx) {
-        let (mut pages, mut behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (mut pages, mut behind, mut front) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.front));
         pages.truncate(self.pages);
         behind.truncate(self.pages);
+        front.truncate(self.pages);
+        // The objects in front of the text that were added to the last page since go with them.
+        let kept = self.items.saturating_sub(self.behind);
+        if let Some(f) = front.last_mut() {
+            f.retain(|r| r.end <= kept);
+        }
         if let Some(pg) = pages.last_mut() {
             let k = behind.last().copied().unwrap_or(0).saturating_sub(self.behind).min(pg.items.len());
             pg.items.drain(..k);
@@ -664,7 +672,7 @@ impl<'a> Snap<'a> {
             *b = self.behind;
         }
         *pb = self.pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.front) = (pages, behind, front);
         ctx.counters = self.counters.clone();
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;

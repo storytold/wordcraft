@@ -35,6 +35,8 @@ pub(crate) struct Exporter<'a> {
     pub(crate) vectors: HashMap<String, Option<Arc<Vector>>>,
     pub(crate) tags: Vec<TagEntry>,
     pub(crate) tag_index: HashMap<(StoryRef, DocPath), usize>,
+    /// Where the item being drawn is read ([`TagEntry::at`]).
+    pub(crate) at: (usize, usize),
     /// Link rectangles on the current page: (x0, y0, x1, y1, target).
     pub(crate) links: Vec<(f32, f32, f32, f32, String)>,
     /// Bookmark positions by name (the first of a name wins), gathered once: looking each internal
@@ -145,7 +147,7 @@ impl Exporter<'_> {
                 s.end_tagged();
                 let alt = alt.map(str::to_string).filter(|a| !a.is_empty()).or_else(|| Some("picture".to_string()));
                 let g = TagGroup::with_children(Tag::Figure(alt), vec![Node::Leaf(id)]);
-                self.tags.push(TagEntry { kind: Tag::Div.into(), children: vec![Node::Group(g)] });
+                self.tags.push(TagEntry { kind: Tag::Div.into(), children: vec![Node::Group(g)], at: self.at });
             }
         }
     }
@@ -221,6 +223,7 @@ impl Exporter<'_> {
     }
 
     pub(crate) fn page(&mut self, s: &mut Surface, page: &Page, w: f32, h: f32) {
+        self.at = (self.at.0.saturating_add(1), 0);
         if let Some(c) = self.doc.settings.page_color
             && let Some(p) = rect_path(&Rect::new(0.0, 0.0, w, h))
         {
@@ -251,7 +254,8 @@ impl Exporter<'_> {
                 }
             });
         }
-        for it in &page.items {
+        for (i, it) in page.items.iter().enumerate() {
+            self.at.1 = page.reading.get(i).copied().unwrap_or(i);
             let draws = shown.draws(it, &dopts);
             match it {
                 Placed::Lines { story, path, para, .. } => {
@@ -327,7 +331,7 @@ impl Exporter<'_> {
             }
             _ => Tag::P.into(),
         };
-        self.tags.push(TagEntry { kind, children: Vec::new() });
+        self.tags.push(TagEntry { kind, children: Vec::new(), at: self.at });
         let i = self.tags.len() - 1;
         self.tag_index.insert((story, path.clone()), i);
         i
@@ -335,7 +339,12 @@ impl Exporter<'_> {
 
     pub(crate) fn tag_tree(&mut self) -> TagTree {
         let mut tree = TagTree::new().with_lang(self.doc.styles.default_chr.lang.clone());
-        for e in std::mem::take(&mut self.tags) {
+        // In reading order: a floating object drawn over the text after it is read after its
+        // anchor (#5534). The sort is stable, so what is read at one place keeps its order.
+        let mut tags = std::mem::take(&mut self.tags);
+        tags.sort_by_key(|e| e.at);
+        self.tag_index.clear();
+        for e in tags {
             if e.children.is_empty() {
                 continue;
             }
