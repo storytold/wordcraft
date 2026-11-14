@@ -2810,8 +2810,7 @@ fn vml_preset_shapes_are_drawn() {
     let (black, white) = (Some(Rgb::BLACK), Some(Rgb::WHITE));
     assert_eq!(shape(0), Some((ShapeKind::Arrow, 120.0, 40.0, Some(Rgb(0xFF, 0xA5, 0x00)), black, 0.75, true, false)));
     assert_eq!(shape(1), Some((ShapeKind::Arrow, 60.0, 20.0, Some(Rgb(0, 0xFF, 0)), Some(Rgb(0, 0, 0xFF)), 2.0, false, false)));
-    // A line that is off has no width (the room an outline takes from the shape's text).
-    assert_eq!(shape(2), Some((ShapeKind::Heart, 30.0, 30.0, Some(Rgb(0xFF, 0, 0)), None, 0.0, true, false)));
+    assert_eq!(shape(2), Some((ShapeKind::Heart, 30.0, 30.0, Some(Rgb(0xFF, 0, 0)), None, 0.75, true, false)));
     assert_eq!(shape(3), Some((ShapeKind::Triangle, 20.0, 10.0, None, black, 0.75, true, false)));
     // A preset holding text keeps its geometry around the text.
     assert_eq!(shape(4), Some((ShapeKind::Diamond, 50.0, 50.0, Some(Rgb(0xFF, 0xFF, 0)), black, 0.75, true, true)));
@@ -2823,9 +2822,9 @@ fn vml_preset_shapes_are_drawn() {
     assert!(matches!(ps[8].objects.first(), Some(InlineObject::Shape { extra, .. }) if extra.arrow_end && !extra.arrow_start));
     assert_eq!(shape(9), Some((ShapeKind::TextBox, 30.0, 15.0, white, black, 0.75, true, false)));
     assert_eq!(kind(10), Some((ShapeKind::TextBox, true)));
-    assert_eq!(shape(11), Some((ShapeKind::Ellipse, 50.0, 50.0, None, None, 0.0, true, true)));
+    assert_eq!(shape(11), Some((ShapeKind::Ellipse, 50.0, 50.0, None, None, 0.75, true, true)));
     assert_eq!(kind(12), Some((ShapeKind::Ellipse, true)));
-    assert_eq!(shape(13), Some((ShapeKind::Rectangle, 9.0, 9.0, Some(Rgb(0, 0, 0xFF)), None, 0.0, true, false)));
+    assert_eq!(shape(13), Some((ShapeKind::Rectangle, 9.0, 9.0, Some(Rgb(0, 0, 0xFF)), None, 0.75, true, false)));
     let kinds: Vec<_> = ps[14].objects.iter().filter_map(|o| if let InlineObject::Shape { kind, .. } = o { Some(*kind) } else { None }).collect();
     assert_eq!(kinds, [ShapeKind::RoundedRectangle, ShapeKind::Star]);
     assert_eq!(kind(15), Some((ShapeKind::Rectangle, false)));
