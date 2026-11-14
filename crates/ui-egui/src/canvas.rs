@@ -56,6 +56,7 @@ use links::{field_link, is_followable_link, is_generated_bookmark_link};
 use margins::MIN_TEXT;
 #[cfg(test)]
 pub(crate) use margins::{MarginEdge, dragged_margin, margin_drag};
+pub(crate) use navigation::page_by_screen;
 #[cfg(test)]
 use navigation::top_page;
 pub use navigation::{nearest_page, page_at, page_to_screen};

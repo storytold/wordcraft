@@ -61,6 +61,10 @@ impl WordApp {
             });
             return Ok(json!({"pending": "saveChanges"}));
         }
+        // In Print Layout, Page Up and Page Down move one screen, as in Word (#5680).
+        if let Some(r) = crate::canvas::page_by_screen(self, id, &params) {
+            return r;
+        }
         // The ribbon and context-menu Paste commands send no text: read the system clipboard's, as
         // Ctrl+V's paste event carries it (#584), and its HTML and RTF, which egui's paste event
         // doesn't carry (#687).
