@@ -8,10 +8,9 @@ mod fit;
 mod model_bridge;
 
 pub use craft_docx::{
-    DEFAULT_SPIN_COUNT, DocxError, EmbeddedFont, Flavor, MAX_PASSWORD_CHARS, MAX_SOURCES,
-    MAX_XML_FILE, PASSWORD_REQUIRED, PasswordCheck, WRONG_PASSWORD, XmlKind, check_password,
-    check_protection_password, encrypt, encrypt_standard_for_tests,
-    encrypt_with_spin_count, package_title, protection_hash, sniff_xml,
+    DEFAULT_SPIN_COUNT, DocxError, EmbeddedFont, Flavor, MAX_PASSWORD_CHARS, MAX_SOURCES, MAX_XML_FILE, PASSWORD_REQUIRED, PasswordCheck,
+    WRONG_PASSWORD, XmlKind, check_password, check_protection_password, encrypt, encrypt_standard_for_tests, encrypt_with_spin_count, package_title,
+    protection_hash, sniff_xml,
 };
 
 pub fn decrypt(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, DocxError> {
@@ -56,19 +55,13 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<wordcr
 pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Document, DocxError> {
     let bridge_importer = |shared_chunk: &craft_docx::AltChunk| -> Option<craft_wordmodel::Document> {
         let importer = opts.chunks?;
-        let chunk = AltChunk {
-            content_type: shared_chunk.content_type,
-            part: shared_chunk.part,
-            bytes: shared_chunk.bytes,
-        };
+        let chunk = AltChunk { content_type: shared_chunk.content_type, part: shared_chunk.part, bytes: shared_chunk.bytes };
         let doc = importer(&chunk)?;
         to_shared_model(&doc).ok()
     };
 
-    let shared_opts = craft_docx::ReadOptions {
-        password: opts.password,
-        chunks: opts.chunks.as_ref().map(|_| &bridge_importer as craft_docx::ChunkImporter),
-    };
+    let shared_opts =
+        craft_docx::ReadOptions { password: opts.password, chunks: opts.chunks.as_ref().map(|_| &bridge_importer as craft_docx::ChunkImporter) };
 
     let shared = craft_docx::read_with(bytes, &shared_opts)?;
     from_shared_model(shared)
@@ -105,21 +98,22 @@ pub fn write_wordml2003(doc: &wordcraft_doc::Document) -> Result<Vec<u8>, DocxEr
 }
 
 /// Draw a chart.
-pub fn chart_items(
-    spec: &wordcraft_doc::chart::ChartSpec,
-    theme: &[wordcraft_doc::Rgb],
-    w: f32,
-    h: f32,
-) -> Vec<wordcraft_doc::graphic::GraphicItem> {
-    let shared_spec: craft_wordmodel::chart::ChartSpec = model_bridge::convert_ref(spec).expect("chart spec convert");
-    let shared_theme: Vec<craft_wordmodel::props::Rgb> = model_bridge::convert_ref(theme).expect("theme convert");
+pub fn chart_items(spec: &wordcraft_doc::chart::ChartSpec, theme: &[wordcraft_doc::Rgb], w: f32, h: f32) -> Vec<wordcraft_doc::graphic::GraphicItem> {
+    let (Ok(shared_spec), Ok(shared_theme)) = (
+        model_bridge::convert_ref::<_, craft_wordmodel::chart::ChartSpec>(spec),
+        model_bridge::convert_ref::<_, Vec<craft_wordmodel::props::Rgb>>(theme),
+    ) else {
+        return Vec::new();
+    };
     let shared_items = craft_docx::chart_items(&shared_spec, &shared_theme, w, h);
-    model_bridge::convert(shared_items).expect("chart items convert")
+    model_bridge::convert(shared_items).unwrap_or_default()
 }
 
 /// Write a chart part.
 pub fn chart_xml(spec: &wordcraft_doc::chart::ChartSpec) -> Vec<u8> {
-    let shared_spec: craft_wordmodel::chart::ChartSpec = model_bridge::convert_ref(spec).expect("chart spec convert");
+    let Ok(shared_spec) = model_bridge::convert_ref(spec) else {
+        return Vec::new();
+    };
     craft_docx::chart_xml(&shared_spec).into_bytes()
 }
 
@@ -130,19 +124,20 @@ pub fn smart_art_items(
     w: f32,
     h: f32,
 ) -> Vec<wordcraft_doc::graphic::GraphicItem> {
-    let shared_spec: craft_wordmodel::smart_art::SmartArtSpec = model_bridge::convert_ref(spec).expect("smart art spec convert");
-    let shared_theme: Vec<craft_wordmodel::props::Rgb> = model_bridge::convert_ref(theme).expect("theme convert");
+    let (Ok(shared_spec), Ok(shared_theme)) = (
+        model_bridge::convert_ref::<_, craft_wordmodel::smart_art::SmartArtSpec>(spec),
+        model_bridge::convert_ref::<_, Vec<craft_wordmodel::props::Rgb>>(theme),
+    ) else {
+        return Vec::new();
+    };
     let shared_items = craft_docx::smart_art_items(&shared_spec, &shared_theme, w, h);
-    model_bridge::convert(shared_items).expect("smart art items convert")
+    model_bridge::convert(shared_items).unwrap_or_default()
 }
 
 /// Read bibliography sources from a `b:Sources` file.
 pub fn read_sources(bytes: &[u8]) -> Result<Sources, DocxError> {
     let shared = craft_docx::read_sources(bytes)?;
-    Ok(Sources {
-        sources: model_bridge::convert(shared.sources).map_err(|e| DocxError::Xml(e.to_string()))?,
-        style: shared.style,
-    })
+    Ok(Sources { sources: model_bridge::convert(shared.sources).map_err(|e| DocxError::Xml(e.to_string()))?, style: shared.style })
 }
 
 /// The font files embedded in the document's font table.
