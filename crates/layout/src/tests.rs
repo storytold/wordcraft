@@ -4651,8 +4651,9 @@ fn exact_rows_move_on_whole() {
 /// what is left of it, and the paragraph after the nested table below it, while its neighbour's
 /// text runs on too. The cell's shift used to come from that paragraph (below the page bottom),
 /// which squashed the nested cell to 2pt on the next page. The cell is 300pt tall by the space
-/// after its second line: a row made that tall by its height, exact or at least, goes on whole
-/// (`tests::closing_border_room`).
+/// after its second line, which that line needs on its page: the first line stays and the second
+/// goes on with the rest of the cell, as in Word for Windows. A row made that tall by its height,
+/// exact or at least, goes on whole (`tests::closing_border_room`).
 #[test]
 fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
     crate::test_fonts();
@@ -4695,7 +4696,17 @@ fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
     };
     let (Some(a), Some(b)) = (nested(0), nested(1)) else { panic!("the nested cell is on both pages") };
     assert!((a.bottom() - 720.0).abs() < 0.5, "cut at the page bottom: {a:?}");
-    assert!(a.h + b.h >= 300.0 - 0.5 && a.h + b.h <= 300.0 + 2.5, "the nested cell keeps its height: {a:?} + {b:?}");
+    // Line `k` of the nested cell on page `pg`: its top and height.
+    let line = |pg: usize, k: u32| {
+        l.pages[pg].items.iter().find_map(|it| match it {
+            Placed::Lines { path, y, para, .. } if path.0 == vec![1, 0, 1, 0, 0, 0, k] => Some((*y, para.lines.first().map_or(0.0, |l| l.height))),
+            _ => None,
+        })
+    };
+    assert!(line(0, 0).is_some() && line(0, 1).is_none(), "the first line stays, the second doesn't");
+    let Some((y, h)) = line(1, 1) else { panic!("the second line goes on") };
+    assert!((b.y - 0.01..b.y + 2.0).contains(&y), "at the top of what is left of the cell: {y} in {b:?}");
+    assert!((b.bottom() - (y + h + 300.0 - lines)).abs() < 2.0, "the nested cell keeps its rest, the space after that line: {a:?} + {b:?}");
     let after = l.pages[1].items.iter().find_map(|it| match it {
         Placed::Lines { path, y, .. } if path.0 == vec![1, 0, 1, 1] => Some(*y),
         _ => None,
@@ -4761,6 +4772,7 @@ fn split_row_rejects_a_hostile_cut() {
         bottom,
         cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0), align: None }],
         inner: Vec::new(),
+        least: None,
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -8944,6 +8956,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         bottom: 0.0,
         cells: vec![CellPart { top: 2.0, items: 0..4, end: None, align: None }],
         inner: Vec::new(),
+        least: None,
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -12606,6 +12619,7 @@ fn split_cell_moves_image_frame() {
             items: vec![kept, image, frame],
             cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None }],
             inner: Vec::new(),
+            least: None,
         };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);

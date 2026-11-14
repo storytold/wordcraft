@@ -31,6 +31,10 @@ pub struct RowLayout {
     /// The rows of the tables in the row's cells, for where a page ends in the row (see
     /// [`InnerRow`]).
     pub inner: Vec<InnerRow>,
+    /// The least height of an at-least row as Word lays it out: the height asked for with the
+    /// cells' margins and border bands on top. `None` for any other row and for the parts of a
+    /// split one.
+    pub least: Option<f32>,
 }
 
 /// A row of a table in a cell, as the split of the row around it needs it. Where a page ends
@@ -45,9 +49,11 @@ pub struct InnerRow {
     /// The room the closing border needs under it; none under the table's last row, which has
     /// that border in its own height.
     pub edge: f32,
+    /// The room it keeps below its text: its own [`RowLayout::bottom`].
+    pub below: f32,
     /// It never splits: marked "can't split", or of an exact height.
     pub fixed: bool,
-    /// Its least height, for an at-least row.
+    /// Its least height, for an at-least row: its own [`RowLayout::least`].
     pub least: Option<f32>,
 }
 
@@ -55,6 +61,13 @@ impl InnerRow {
     /// Whether the text at `path` is in this row (in a table in one of its cells too).
     pub(crate) fn holds(&self, path: &[u32]) -> bool {
         path.get(..self.table.len()) == Some(self.table.as_slice()) && path.get(self.table.len()).is_some_and(|r| usize::try_from(*r) == Ok(self.row))
+    }
+
+    /// The cell of this row that the text at `path` is in: the table, the row and the cell's
+    /// number in it.
+    fn cell_of(&self, path: &[u32]) -> Option<(&[u32], usize, u32)> {
+        let cell = path.get(self.table.len() + 1).filter(|_| self.holds(path))?;
+        Some((self.table.as_slice(), self.row, *cell))
     }
 }
 
@@ -526,6 +539,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     let mut bottoms: Vec<f32> = Vec::with_capacity(nrows);
     let mut edges: Vec<f32> = Vec::with_capacity(nrows);
     let mut inners: Vec<Vec<InnerRow>> = Vec::with_capacity(nrows);
+    let mut leasts: Vec<Option<f32>> = Vec::with_capacity(nrows);
     for (ri, row) in t.rows.iter().enumerate() {
         let mut g = row.first_grid();
         let mut cells = Vec::with_capacity(row.cells.len());
@@ -722,11 +736,12 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         bottoms.push(row_below);
         edges.push(row_edge);
         inners.push(row_inner);
+        leasts.push(row.props.height.filter(|h| *h > 0.0 && row.props.height_rule == HeightRule::AtLeast).map(|h| h + row_insets));
         heights.push(if collapsed && !cells.is_empty() { rh.max(0.0) } else { rh.max(4.0) });
         rows.push(cells);
     }
     grow_vertical_merges(&rows, &mut heights);
-    finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, inners, x, total })
+    finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, inners, leasts, x, total })
 }
 
 fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
@@ -760,12 +775,13 @@ struct TableRows<'a> {
     bottoms: Vec<f32>,
     edges: Vec<f32>,
     inners: Vec<Vec<InnerRow>>,
+    leasts: Vec<Option<f32>>,
     x: f32,
     total: f32,
 }
 
 fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
-    let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, mut inners, x, total } = input;
+    let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, mut inners, leasts, x, total } = input;
     // Grid columns holding a vertical-merge continuation, per row.
     let cont: Vec<Vec<usize>> = t
         .rows
@@ -911,6 +927,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             edge: edges.get(ri).copied().unwrap_or(0.0),
             cells: parts,
             inner: inners.get_mut(ri).map(std::mem::take).unwrap_or_default(),
+            least: leasts.get(ri).copied().flatten(),
         });
     }
     TableLayout { x, width: total, rows: out }
@@ -944,13 +961,17 @@ pub(crate) fn split_row_through(row: &RowLayout, cut: f32) -> Option<(RowLayout,
 /// cut, runs below it (#4272). A line is never split, and an inline picture is one line, so a
 /// cell holding only a picture taller than the room keeps nothing there; rather than leave the
 /// other cells' text beside an empty cell, the row moves on whole (see `docs/layout-parity.md`,
-/// Tables). Content of a cell aligned below the cut doesn't count.
+/// Tables). So it does when what the cell starts with is a row of a table that goes on whole
+/// (see [`inner_rows_going`]; measured in Word for Windows: beside a cell of long text, a cell
+/// starting with a nested row of 300 pt takes the whole row on with 120 pt of room). Content of
+/// a cell aligned below the cut doesn't count.
 pub fn split_row_keeping_cells(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     split_row_with(row, cut, true, true)
 }
 
-/// What of a cell's content goes on whole with a row of a table in it: everything from `top`
-/// down to `bottom`, the end of the cell's tables, between `x0` and `x1`.
+/// What of a cell's content goes on whole with a row of a table in it: everything of that table
+/// from `top` down to `bottom`, its end, between `x0` and `x1`. Another table beside it in the
+/// same cell has a region of its own, or none.
 #[derive(Clone, Copy)]
 struct Gone {
     top: f32,
@@ -968,12 +989,17 @@ impl Gone {
         top >= self.top - 0.01 && bottom <= self.bottom + 0.26 && x.0 >= self.x0 - slack && x.1 <= self.x1 + slack
     }
 
-    /// Whether `it`, an area, shading or border, goes on whole with it, and if so whether it
-    /// stays on the page as well: the border above the row that goes on, where that closes the
-    /// table.
+    /// Whether `it`, an area, shading, border or picture, goes on whole with it, and if so
+    /// whether it stays on the page as well: the border above the row that goes on, where that
+    /// closes the table.
     fn takes(&self, it: &Placed, own_depth: Option<usize>) -> Option<bool> {
         match it {
-            Placed::Fill { rect, .. } => self.holds((rect.y, rect.bottom()), (rect.x, rect.x + rect.w), 0.3).then_some(false),
+            Placed::Fill { rect, .. }
+            | Placed::Image { rect, .. }
+            | Placed::Shape { rect, .. }
+            | Placed::Graphic { rect, .. }
+            | Placed::Clip { rect, .. }
+            | Placed::Object { rect, .. } => self.holds((rect.y, rect.bottom()), (rect.x, rect.x + rect.w), 0.3).then_some(false),
             Placed::Cell { rect, table, .. } if Some(table.0.len()) > own_depth => {
                 self.holds((rect.y, rect.bottom()), (rect.x, rect.x + rect.w), 0.3).then_some(false)
             }
@@ -1000,57 +1026,65 @@ impl Gone {
     }
 }
 
-/// The rows of the tables in the cells of `row` that go on whole when the text of the part of
-/// `row` left on the page ends at `limit`, and what goes on with them in each cell: the ones
-/// that start above it, don't fit there with the border their table closes with under them, and
-/// can't keep a part there. A row keeps a part when it may split (it is neither marked "can't
-/// split" nor of an exact height, and an at-least row's least height fits), and a cell of
-/// several lines keeps its first one above the closing border.
+/// The rows of the tables in the cells of `row` that go on whole when the part of `row` left on
+/// the page is cut at `cut`, its text ending at `limit`, and what goes on with them in each cell:
+/// the ones that start above the cut, don't fit above the limit with the border their table
+/// closes with under them, and keep no part there. A row keeps a part when it may split (it is
+/// neither marked "can't split" nor of an exact height, and an at-least row's least height fits)
+/// and `splits`, the lines that stay by themselves, leaves it one: the last line of a cell needs
+/// the cell's end on the page, and widow and orphan control has had its say there.
 ///
 /// Measured in Word for Windows with one-line rows of 15 pt in a cell, the room moved in steps of
 /// 0.1 pt: the third row stays from where the room is its bottom plus the nested table's bottom
 /// border plus the outer row's bottom band, for automatic, at-least and exact rows alike; a row
 /// of two lines keeps the first one from where that line and the borders fit; and a row of
 /// 300 pt, exact or at least, with 120 pt of room goes on whole, with one line or with thirty.
-/// Each table in the row breaks where its own rows say: a row that goes on in one cell takes
-/// nothing along in another. None go on whole when `whole` is off.
+/// A row's least height is the one Word lays it out with, the cell margins and borders on top of
+/// the height asked for ([`RowLayout::least`]): a row of at least 60 pt with margins of 10 pt
+/// and twelve lines goes on whole with 81 pt of room and splits with 83. With widow control a
+/// paragraph of two lines takes its row on whole where only its first line fits, and one of
+/// three where two do; without, those lines stay.
+/// Each table in the row breaks where its own rows say: a row that goes on in one cell, or in one
+/// of two tables side by side in a cell, takes nothing along in the other. None go on whole when
+/// `whole` is off.
 fn inner_rows_going<'a>(
     row: &'a RowLayout,
     cells: &CellItems<'_>,
+    splits: &[Vec<usize>],
     own_depth: Option<usize>,
-    limit: f32,
+    (limit, cut): (f32, f32),
     whole: bool,
-) -> (Vec<&'a InnerRow>, Vec<Option<Gone>>) {
-    let mut gone: Vec<Option<Gone>> = vec![None; cells.len()];
+) -> (Vec<&'a InnerRow>, Vec<Vec<Gone>>) {
+    let mut gone: Vec<Vec<Gone>> = vec![Vec::new(); cells.len()];
     if row.inner.is_empty() || !whole {
         return (Vec::new(), gone);
     }
     // Each row's cell of `row`, its top, where its shortest cell ends (a vertically merged cell
-    // runs past its own row) and its sides, and the lines in each of its cells with where the
-    // first one ends.
+    // runs past its own row) and its sides, and whether any of its lines would stay.
     struct Band {
         cell: usize,
         top: f32,
         bottom: f32,
         x: (f32, f32),
-        lines: std::collections::BTreeMap<u32, (usize, f32, f32)>,
+        keeps: bool,
     }
     let mut bands: std::collections::BTreeMap<(&[u32], usize), Band> = std::collections::BTreeMap::new();
-    // Where the tables of each cell end.
-    let mut ends = vec![f32::MIN; cells.len()];
-    for (ci, (items, end)) in cells.iter().zip(&mut ends).enumerate() {
+    // Where each table ends.
+    let mut ends: std::collections::BTreeMap<&[u32], f32> = std::collections::BTreeMap::new();
+    for (ci, items) in cells.iter().enumerate() {
         for it in items.iter() {
             let Placed::Cell { rect, table, row: r, .. } = it else { continue };
             if Some(table.0.len()) <= own_depth {
                 continue;
             }
+            let end = ends.entry(table.0.as_slice()).or_insert(f32::MIN);
             *end = end.max(rect.bottom());
             let band = bands.entry((table.0.as_slice(), *r)).or_insert(Band {
                 cell: ci,
                 top: rect.y,
                 bottom: rect.bottom(),
                 x: (rect.x, rect.x + rect.w),
-                lines: Default::default(),
+                keeps: false,
             });
             (band.top, band.bottom) = (band.top.min(rect.y), band.bottom.min(rect.bottom()));
             band.x = (band.x.0.min(rect.x), band.x.1.max(rect.x + rect.w));
@@ -1058,16 +1092,12 @@ fn inner_rows_going<'a>(
     }
     // Text in a table in one of a row's cells is that row's text too.
     let depths: std::collections::BTreeSet<usize> = bands.keys().map(|k| k.0.len()).collect();
-    for it in cells.iter().flat_map(|c| c.iter()) {
-        let Placed::Lines { path, para, l0, l1, y, .. } = it else { continue };
-        let Some(first) = para.lines.get(*l0).map(|l| y + l.height) else { continue };
-        for &d in &depths {
-            let (Some(table), Some(&r), Some(&cell)) = (path.0.get(..d), path.0.get(d), path.0.get(d + 1)) else { continue };
-            let Some(band) = usize::try_from(r).ok().and_then(|r| bands.get_mut(&(table, r))) else { continue };
-            let lines = band.lines.entry(cell).or_insert((0, f32::MAX, 0.0));
-            lines.0 = lines.0.saturating_add(l1.saturating_sub(*l0));
-            if *y < lines.1 {
-                (lines.1, lines.2) = (*y, first);
+    for (it, &split) in cells.iter().zip(splits).flat_map(|(items, splits)| items.iter().zip(splits)) {
+        let Placed::Lines { path, l0, .. } = it else { continue };
+        for &d in depths.iter().filter(|_| split > *l0) {
+            let (Some(table), Some(&r)) = (path.0.get(..d), path.0.get(d)) else { continue };
+            if let Some(band) = usize::try_from(r).ok().and_then(|r| bands.get_mut(&(table, r))) {
+                band.keeps = true;
             }
         }
     }
@@ -1075,30 +1105,78 @@ fn inner_rows_going<'a>(
     for n in &row.inner {
         let Some(band) = bands.get(&(n.table.as_slice(), n.row)) else { continue };
         let fits = |end: f32| end + n.edge.max(0.0) <= limit + 0.01;
-        let keeps_part = !n.fixed && n.least.is_none_or(|h| fits(band.top + h)) && band.lines.values().any(|l| l.0 > 1 && fits(l.2));
-        if band.top < limit && !fits(band.bottom) && !keeps_part {
+        let keeps_part = !n.fixed && n.least.is_none_or(|h| fits(band.top + h)) && band.keeps;
+        if band.top < cut && !fits(band.bottom) && !keeps_part {
             going.push(n);
-            let (Some(g), Some(&bottom)) = (gone.get_mut(band.cell), ends.get(band.cell)) else { continue };
-            let from = g.get_or_insert(Gone { top: band.top, bottom, x0: band.x.0, x1: band.x.1, under_a_row: n.row > 0 });
-            if band.top < from.top {
-                (from.top, from.under_a_row) = (band.top, n.row > 0);
+            let (Some(regions), Some(&bottom)) = (gone.get_mut(band.cell), ends.get(n.table.as_slice())) else { continue };
+            // One region a table: from the highest of its rows that go on.
+            match regions.iter_mut().find(|g| (g.x0, g.x1, g.bottom) == (band.x.0, band.x.1, bottom)) {
+                Some(g) if band.top < g.top => (g.top, g.under_a_row) = (band.top, n.row > 0),
+                Some(_) => {}
+                None => regions.push(Gone { top: band.top, bottom, x0: band.x.0, x1: band.x.1, under_a_row: n.row > 0 }),
             }
-            (from.x0, from.x1) = (from.x0.min(band.x.0), from.x1.max(band.x.1));
         }
     }
     (going, gone)
 }
 
-/// [`line_split`] for the lines `it` of a cell of `row`. A line of a table in the cell goes on
-/// with a row `going` on whole, and stays above the border its table closes with where the page
-/// ends (see [`InnerRow`]), on top of the row's own bottom band.
-fn inner_line_split(row: &RowLayout, going: &[&InnerRow], it: &Placed, limit: f32, end: Option<f32>) -> usize {
-    let Placed::Lines { path, para, l0, l1, y, .. } = it else { return 0 };
-    if going.iter().any(|n| n.holds(&path.0)) {
-        return *l0;
+/// The first line of each paragraph of the cells of `row` that moves on when the text of the
+/// part left on the page ends at `limit` (`l1` when all of them stay), by cell and item.
+///
+/// A cell's last paragraph ends with the cell's content, its space after (see [`line_split`]).
+/// A table in a cell is laid out the same way within it: its lines stay above the room its row
+/// keeps below its text and the border its table closes with where the page ends (see
+/// [`InnerRow`]), on top of the row's own bottom band, and the last paragraph of one of its
+/// cells needs its space after there too. Measured in Word for Windows with 120 pt of room: of
+/// two one-line paragraphs in a nested cell, the second with 280 pt after it, the first stays
+/// and the second goes on; one paragraph with that space after it goes on with its row; and
+/// with a bottom cell margin of 280 pt both lines do.
+fn part_splits(row: &RowLayout, cells: &CellItems<'_>, ends: &[Option<f32>], limit: f32) -> Vec<Vec<usize>> {
+    let bottom = |it: &Placed| text_lines(it).and_then(|(p, l0, l1, y)| crate::item_bottom(y, p, l0, l1));
+    cells
+        .iter()
+        .zip(ends)
+        .map(|(items, end)| {
+            // Where the cell's text ends, and the text of each cell of the tables in it: the
+            // paragraph ending lowest is a cell's last.
+            let lowest = items.iter().filter_map(bottom).fold(f32::MIN, f32::max);
+            let mut nested: std::collections::BTreeMap<(&[u32], usize, u32), f32> = std::collections::BTreeMap::new();
+            for (it, b) in items.iter().filter_map(|it| Some((it, bottom(it)?))) {
+                for key in row.inner.iter().filter_map(|n| n.cell_of(lines_path(it))) {
+                    let lowest = nested.entry(key).or_insert(f32::MIN);
+                    *lowest = lowest.max(b);
+                }
+            }
+            items
+                .iter()
+                .map(|it| {
+                    let Some((para, l0, l1, y)) = text_lines(it) else { return 0 };
+                    let last = |lowest: f32| bottom(it).filter(|b| l1 == para.lines.len() && *b >= lowest - 0.01);
+                    // The innermost row of a table in the cell that holds it.
+                    let Some(n) = row.inner.iter().filter(|n| n.holds(lines_path(it))).max_by_key(|n| n.table.len()) else {
+                        return line_split(para, (l0, l1), y, limit, end.filter(|_| last(lowest).is_some()));
+                    };
+                    // What the rows it is in keep below it, and where its own cell's content ends.
+                    let below: f32 = row.inner.iter().filter(|n| n.holds(lines_path(it))).map(|n| (n.below + n.edge).max(0.0)).sum();
+                    let end =
+                        n.cell_of(lines_path(it)).and_then(|key| nested.get(&key)).and_then(|&lowest| last(lowest)).map(|b| b + para.rp.space_after);
+                    line_split(para, (l0, l1), y, limit - below.min(limit.max(0.0)), end)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// `splits` with none of the lines of the rows `going` on whole left on the page.
+fn without_going(cells: &CellItems<'_>, mut splits: Vec<Vec<usize>>, going: &[&InnerRow]) -> Vec<Vec<usize>> {
+    for (it, split) in cells.iter().zip(&mut splits).flat_map(|(items, splits)| items.iter().zip(splits)) {
+        if let Placed::Lines { path, l0, .. } = it
+            && going.iter().any(|n| n.holds(&path.0))
+        {
+            *split = *l0;
+        }
     }
-    let closing: f32 = row.inner.iter().filter(|n| n.holds(&path.0)).map(|n| n.edge.max(0.0)).sum();
-    line_split(para, (*l0, *l1), *y, limit - closing.min(limit.max(0.0)), end)
+    splits
 }
 
 /// Whether widow/orphan control leaves a cell with nothing above `limit`, though its first line
@@ -1135,49 +1213,38 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool, inner_whole: boo
     let (mut cells, mut ends, realign) = cells_from_top(row, limit);
     // A nested table's cell is deeper than the row's own.
     let own_depth = row.items.iter().filter_map(|it| if let Placed::Cell { table, .. } = it { Some(table.0.len()) } else { None }).min();
-    // The rows of the tables in the cells that go on whole: none of their text stays, and
-    // nothing of what is under them in their cell (none when such rows split too).
-    let (going, gone) = inner_rows_going(row, &cells, own_depth, limit, inner_whole);
     // The first line of each paragraph that moves on (`l1` when all of them stay), by cell and
     // item.
-    let splits: Vec<Vec<usize>> = cells
-        .iter()
-        .zip(&ends)
-        .map(|(items, end)| {
-            // Where the cell's text ends: the paragraph ending lowest is the cell's last.
-            let lowest =
-                items.iter().filter_map(|it| text_lines(it).and_then(|(p, l0, l1, y)| crate::item_bottom(y, p, l0, l1))).fold(f32::MIN, f32::max);
-            items
-                .iter()
-                .map(|it| {
-                    let Some((para, l0, l1, y)) = text_lines(it) else { return 0 };
-                    // The cell's last paragraph ends with the cell's content (its space after).
-                    let last = l1 == para.lines.len() && crate::item_bottom(y, para, l0, l1).is_some_and(|b| b >= lowest - 0.01);
-                    inner_line_split(row, &going, it, limit, end.filter(|_| last))
-                })
-                .collect()
-        })
-        .collect();
+    let splits = part_splits(row, &cells, &ends, limit);
+    // The rows of the tables in the cells that go on whole: none of their text stays, and
+    // nothing of their tables under them (none when such rows split too).
+    let (going, gone) = inner_rows_going(row, &cells, &splits, own_depth, (limit, cut), inner_whole);
+    let splits = without_going(&cells, splits, &going);
     if widows_empty_a_cell(&cells, &splits, limit) {
         return None;
     }
+    // Turned text moves as a whole, like a picture: it stays where it fits, unless its row goes on.
+    let turned_stays = |it: &Placed, r: Rect| fits(r.bottom()) && !going.iter().any(|n| n.holds(lines_path(it)));
     align_in_part(row, &mut cells, &splits, &realign, &mut ends, cut);
     // The top of the first thing that moves on in each cell: a row that goes on whole goes on
     // from its top.
-    let mut moved: Vec<f32> = gone.iter().map(|g| g.map_or(f32::MAX, |g| g.top)).collect();
+    let mut moved: Vec<f32> = gone.iter().map(|g| g.iter().map(|g| g.top).fold(f32::MAX, f32::min)).collect();
     // Whether each cell keeps anything on this page, and whether a line or picture of it that
-    // moves on starts above the cut but runs below it (its space after aside).
+    // moves on starts above the cut but runs below it (its space after aside), or a row of a
+    // table in it that goes on whole does.
     let mut kept_cells = vec![false; cells.len()];
-    let mut cut_through = vec![false; cells.len()];
-    for ((((items, splits), m), kept), through) in cells.iter().zip(&splits).zip(&mut moved).zip(&mut kept_cells).zip(&mut cut_through) {
-        for (it, &split) in items.iter().zip(splits) {
+    let mut cut_through: Vec<bool> = gone.iter().map(|g| g.iter().any(|g| g.top < limit - 0.01)).collect();
+    for (((((items, splits), m), kept), through), gone) in
+        cells.iter().zip(&splits).zip(&mut moved).zip(&mut kept_cells).zip(&mut cut_through).zip(&gone)
+    {
+        // What goes on whole with a row is no part of what the cell keeps or cuts.
+        for (it, &split) in items.iter().zip(splits).filter(|(it, _)| !gone.iter().any(|g| g.takes(it, own_depth).is_some())) {
             if background(it) {
                 continue;
             }
             let mut runs_over = |top: f32, bottom: f32| *through |= top < limit - 0.01 && bottom > limit + 0.01;
             let top = if let Some(r) = it.turned_bounds() {
-                // Turned text moves as a whole, like a picture.
-                if fits(r.bottom()) {
+                if turned_stays(it, r) {
                     *kept = true;
                     None
                 } else {
@@ -1249,9 +1316,10 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool, inner_whole: boo
         let start = b.len();
         for (it, &split) in items.iter().zip(splits) {
             // A background picture: the part above the cut stays, and the continuation's area
-            // shows the rest of it, from the cut down.
+            // shows the rest of it, from the cut down. Not one of a row that goes on whole.
             if let Placed::Clip { rect, spin, items: pictures } = it
                 && background(it)
+                && gone.iter().all(|g| g.takes(it, own_depth).is_none())
             {
                 let (above, below) = split_rect(*rect, cut, geo_shift(rect.bottom(), shift));
                 a.extend(above.map(|rect| Placed::Clip { rect, spin: *spin, items: pictures.clone() }));
@@ -1266,7 +1334,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool, inner_whole: boo
             }
             if let Some(r) = it.turned_bounds() {
                 let mut it = it.clone();
-                if fits(r.bottom()) {
+                if turned_stays(&it, r) {
                     a.push(it);
                 } else {
                     it.translate(0.0, -shift);
@@ -1278,7 +1346,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool, inner_whole: boo
                 // The areas, shading and borders of a row of a table in the cell that goes on
                 // whole, and of the rows under it, go on with it; the border above them stays
                 // here too, as the one the table closes with.
-                _ if gone.is_some_and(|g| g.place(it, own_depth, shift, &mut a, &mut b)) => {}
+                _ if gone.iter().any(|g| g.place(it, own_depth, shift, &mut a, &mut b)) => {}
                 Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
                     let base = para.lines.get(*l0).map(|l| l.top).unwrap_or(0.0);
                     if split > *l0 {
@@ -1365,8 +1433,8 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool, inner_whole: boo
     }
     // The part left on the page is placed and never split again.
     Some((
-        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new(), inner: Vec::new() },
-        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts, inner: row.inner.clone() },
+        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new(), inner: Vec::new(), least: None },
+        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts, inner: row.inner.clone(), least: None },
     ))
 }
 
@@ -1453,6 +1521,11 @@ fn shift_content(items: &mut std::borrow::Cow<[Placed]>, c: &CellPart, al: &Cell
             it.translate(0.0, dy);
         }
     }
+}
+
+/// Where in the document the lines `it` are (nowhere for anything else).
+fn lines_path(it: &Placed) -> &[u32] {
+    if let Placed::Lines { path, .. } = it { &path.0 } else { &[] }
 }
 
 /// A cell paragraph's placed lines (not turned text): the paragraph, its lines `l0..l1` and the

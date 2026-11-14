@@ -189,13 +189,14 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
         // For a cell of a row split across pages: its rows, and the rows of the tables in their
         // own cells.
         for (ri, (row, laid)) in t.rows.iter().zip(&layout.rows).enumerate() {
-            let height = row.props.height.filter(|h| *h > 0.0);
+            let exact = row.props.height_rule == wordcraft_doc::props::HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0);
             inner.push(table::InnerRow {
                 table: path.to_vec(),
                 row: ri,
                 edge: laid.edge,
-                fixed: row.props.cant_split || (row.props.height_rule == wordcraft_doc::props::HeightRule::Exact && height.is_some()),
-                least: height.filter(|_| row.props.height_rule == wordcraft_doc::props::HeightRule::AtLeast),
+                below: laid.bottom,
+                fixed: row.props.cant_split || exact,
+                least: laid.least,
             });
             inner.extend(laid.inner.iter().cloned());
         }
