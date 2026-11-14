@@ -4738,7 +4738,7 @@ fn split_row_rejects_a_hostile_cut() {
         height,
         items: vec![line(0.0), line(150.0)],
         bottom,
-        cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0), align: None }],
+        cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0), align: None, page_top: None }],
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -4752,8 +4752,8 @@ fn split_row_rejects_a_hostile_cut() {
     }
     // Cell ranges past the items are ignored.
     let mut r = row(200.0, 4.0);
-    r.cells.push(CellPart { top: 2.0, items: 5..9, end: None, align: None });
-    r.cells.push(CellPart { top: 2.0, items: std::ops::Range { start: 2, end: 1 }, end: None, align: None });
+    r.cells.push(CellPart { top: 2.0, items: 5..9, end: None, align: None, page_top: None });
+    r.cells.push(CellPart { top: 2.0, items: std::ops::Range { start: 2, end: 1 }, end: None, align: None, page_top: None });
     assert!(split_row(&r, 100.0).is_some());
 }
 
@@ -8732,6 +8732,201 @@ fn an_at_least_row_at_the_top_of_a_page_splits_instead_of_moving_on() {
     }
 }
 
+/// A table with the borders `around` it, `between` its rows and `own` at the top of each cell
+/// (points; none at the sides).
+#[cfg(test)]
+fn page_top_borders(t: &mut Table, around: f32, between: f32, own: Option<f32>) {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let line = |width: f32| Some(Border { style: if width > 0.0 { BorderStyle::Single } else { BorderStyle::None }, width, color: None, space: 0.0 });
+    t.props.borders =
+        Some(Borders { top: line(around), left: line(0.0), bottom: line(around), right: line(0.0), between: line(between), inside_v: line(0.0) });
+    if let Some(own) = own {
+        for cell in t.rows.iter_mut().flat_map(|r| &mut r.cells) {
+            cell.props.borders = Some(Borders { top: line(own), ..Default::default() });
+        }
+    }
+}
+
+/// The tops of the text lines on page 2 and the widths of the borders drawn at the page's top.
+#[cfg(test)]
+fn page_two_top(l: &DocLayout) -> (Vec<f32>, Vec<f32>) {
+    let page = &l.pages[1];
+    let mut lines: Vec<f32> = page.items.iter().filter_map(|it| if let Placed::Lines { y, .. } = it { Some(*y) } else { None }).collect();
+    lines.sort_by(f32::total_cmp);
+    let top = page.body.y;
+    let rules = page
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Rule { y0, y1, border, .. } if (y0 - top).abs() < 0.01 && (y1 - top).abs() < 0.01 => Some(border.width),
+            _ => None,
+        })
+        .collect();
+    (lines, rules)
+}
+
+/// Where a page ends between two rows, Word opens the next page with the border the row there
+/// would have as the table's first: the cell's own top border, else the table's. The line between
+/// the rows is not drawn there and takes no room. Measured in Word for Windows with eleven
+/// tables (0.5 and 3 pt lines round the table, between its rows and on its cells).
+#[test]
+fn a_row_at_the_top_of_a_page_opens_with_the_border_of_a_first_row() {
+    crate::test_fonts();
+    // (round the table, between the rows, at each cell's top): the band over the first row's
+    // text on page 2, and the one over the next row's.
+    for ((around, between, own), opening, inside) in
+        [((0.0, 3.0, None), 0.0, 3.0), ((3.0, 0.5, None), 3.0, 0.5), ((0.0, 0.5, Some(3.0)), 3.0, 3.0), ((3.0, 3.0, Some(0.0)), 0.0, 3.0)]
+    {
+        // Four rows of one 14 pt line and 40 pt left on the page: the third row starts page 2.
+        let (l, pages) = at_least_rows(40.0, 4, |t| page_top_borders(t, around, between, own));
+        assert_eq!(pages, vec![vec![0, 1], vec![2, 3]], "{around} {between} {own:?}");
+        let (lines, rules) = page_two_top(&l);
+        let top = l.pages[1].body.y;
+        assert!((lines[0] - (top + opening)).abs() < 0.05, "{around} {between} {own:?}: the first row's text at {}, page top {top}", lines[0]);
+        assert!((lines[1] - (lines[0] + 14.0 + inside)).abs() < 0.05, "{around} {between} {own:?}: the next row's text at {}", lines[1]);
+        if opening > 0.0 {
+            assert!(
+                !rules.is_empty() && rules.iter().all(|w| (w - opening).abs() < 0.01),
+                "{around} {between} {own:?}: borders at the top {rules:?}"
+            );
+        } else {
+            assert!(rules.is_empty(), "{around} {between} {own:?}: borders at the top {rules:?}");
+        }
+    }
+}
+
+/// The part of a row that goes on to the next page opens the same way: with the cell's own top
+/// border, else the table's, whatever is between the row and the one above (measured in Word
+/// for Windows).
+#[test]
+fn the_part_of_a_row_that_goes_on_opens_with_the_border_of_a_first_row() {
+    crate::test_fonts();
+    for ((around, between, own), opening) in [((0.0, 3.0, None), 0.0), ((3.0, 0.5, None), 3.0), ((0.0, 0.5, Some(3.0)), 3.0)] {
+        // A one-line row and a row of six lines with 40 pt left: the second row splits.
+        let (l, pages) = at_least_rows(40.0, 2, |t| {
+            page_top_borders(t, around, between, own);
+            t.rows[1].cells[0].blocks = lines_in_cell(6, "Line");
+        });
+        assert_eq!(pages, vec![vec![0, 1], vec![1]], "{around} {between} {own:?}");
+        let (lines, rules) = page_two_top(&l);
+        let top = l.pages[1].body.y;
+        assert!((lines[0] - (top + opening)).abs() < 0.05, "{around} {between} {own:?}: the text that goes on at {}, page top {top}", lines[0]);
+        if opening > 0.0 {
+            assert!(
+                !rules.is_empty() && rules.iter().all(|w| (w - opening).abs() < 0.01),
+                "{around} {between} {own:?}: borders at the top {rules:?}"
+            );
+        } else {
+            assert!(rules.is_empty(), "{around} {between} {own:?}: borders at the top {rules:?}");
+        }
+    }
+}
+
+/// Under the table's repeated header rows the part of a row that goes on keeps clear of its
+/// opening border all the same, and the border drawn on that edge is the one the row has in the
+/// table. A row that starts there whole keeps the edge it has in the table. Measured in Word
+/// for Windows with ten tables: under the header row of a table with a 3 pt top border and
+/// 0.5 pt lines between its rows the text that goes on starts 3 pt below the header row, and
+/// the line drawn there is 0.5 pt wide.
+#[test]
+fn under_repeated_header_rows_the_part_that_goes_on_keeps_its_opening_room() {
+    crate::test_fonts();
+    // (round the table, between the rows): the room over the text that goes on, and over the
+    // text of a row that starts under the header rows whole.
+    for ((around, between), opening) in [((3.0, 0.5), 3.0), ((0.0, 3.0), 0.0)] {
+        // A header row, a one-line row and a row of six lines with 60 pt left: the last splits.
+        let (l, pages) = at_least_rows(60.0, 3, |t| {
+            page_top_borders(t, around, between, None);
+            t.rows[0].props.header = true;
+            t.rows[2].cells[0].blocks = lines_in_cell(6, "Line");
+        });
+        assert_eq!(pages, vec![vec![0, 1, 2], vec![0, 2]], "{around} {between}");
+        let (lines, _) = page_two_top(&l);
+        let top = l.pages[1].body.y;
+        // The header row: its border, its line, and the edge under it.
+        let edge = top + around + 14.0;
+        assert!((lines[0] - (top + around)).abs() < 0.05, "{around} {between}: the header's text at {}", lines[0]);
+        assert!(
+            (lines[1] - (edge + opening)).abs() < 0.05,
+            "{around} {between}: the text that goes on at {}, the header row ends at {edge}",
+            lines[1]
+        );
+        let drawn: Vec<f32> = l.pages[1]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Rule { y0, y1, border, .. } if (y0 - edge).abs() < 0.01 && (y1 - edge).abs() < 0.01 => Some(border.width),
+                _ => None,
+            })
+            .collect();
+        assert!(!drawn.is_empty() && drawn.iter().all(|w| (w - between).abs() < 0.01), "{around} {between}: borders under the header row {drawn:?}");
+        // A row that moves under the header rows whole keeps the line between the rows over it.
+        let (l, pages) = at_least_rows(40.0, 4, |t| {
+            page_top_borders(t, around, between, None);
+            t.rows[0].props.header = true;
+        });
+        assert_eq!(pages, vec![vec![0, 1], vec![0, 2, 3]], "{around} {between}");
+        let (lines, _) = page_two_top(&l);
+        let top = l.pages[1].body.y;
+        assert!((lines[1] - (top + around + 14.0 + between)).abs() < 0.05, "{around} {between}: the row under the header at {}", lines[1]);
+    }
+}
+
+/// A row of a table inside a cell opens the part of the outer row that goes on in the same way,
+/// under the outer row's own opening border: a nested row that moves on whole, and one that goes
+/// on itself. Measured in Word for Windows with fourteen tables.
+#[test]
+fn a_nested_row_opens_the_part_that_goes_on_with_the_border_of_a_first_row() {
+    crate::test_fonts();
+    use wordcraft_doc::props::LineSpacing;
+    let line = |text: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        (p.props.line_spacing, p.props.space_before, p.props.space_after) = (Some(LineSpacing::Exactly(14.0)), Some(0.0), Some(0.0));
+        wordcraft_doc::para_block(p)
+    };
+    // (round the nested table, between its rows, at each of its cells' tops), the lines in each
+    // of its rows, and the band over the text that opens page 2.
+    for ((around, between, own), per_row, opening) in [
+        ((0.5, 0.5, None), 1, 0.5),
+        ((0.0, 3.0, None), 1, 0.0),
+        ((3.0, 0.5, None), 1, 3.0),
+        // No line between the nested rows: their text starts at their top edge in the table.
+        ((3.0, 0.0, None), 1, 3.0),
+        ((3.0, 0.0, None), 4, 3.0),
+        ((0.0, 0.5, Some(3.0)), 1, 3.0),
+        ((0.5, 0.5, None), 4, 0.5),
+        ((0.0, 3.0, None), 4, 0.0),
+        ((3.0, 0.5, None), 4, 3.0),
+    ] {
+        let mut inner = Table::new(6, 1, 400.0);
+        page_top_borders(&mut inner, around, between, own);
+        for (r, row) in inner.rows.iter_mut().enumerate() {
+            row.cells[0].blocks = (0..per_row).map(|k| line(&format!("Row {r} line {k}"))).collect();
+        }
+        // An outer table without borders; 40 pt left on the page.
+        let (l, pages) = at_least_rows(40.0, 1, |t| {
+            page_top_borders(t, 0.0, 0.0, None);
+            t.rows[0].cells[0].blocks = vec![Arc::new(Block::Table(inner.clone())), line("")];
+        });
+        assert_eq!(pages.len(), 2, "{around} {between} {own:?} {per_row}");
+        let (lines, rules) = page_two_top(&l);
+        let top = l.pages[1].body.y;
+        assert!(
+            (lines[0] - (top + opening)).abs() < 0.05,
+            "{around} {between} {own:?}, {per_row} lines a row: the nested text at {}, page top {top}",
+            lines[0]
+        );
+        if opening > 0.0 {
+            assert!(
+                !rules.is_empty() && rules.iter().all(|w| (w - opening).abs() < 0.01),
+                "{around} {between} {own:?} {per_row}: borders at the top {rules:?}"
+            );
+        } else {
+            assert!(rules.is_empty(), "{around} {between} {own:?} {per_row}: borders at the top {rules:?}");
+        }
+    }
+}
+
 #[test]
 fn repeated_header_moves_with_a_first_row_that_moves_on_whole() {
     crate::test_fonts();
@@ -8920,7 +9115,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         height: 200.0,
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
-        cells: vec![CellPart { top: 2.0, items: 0..4, end: None, align: None }],
+        cells: vec![CellPart { top: 2.0, items: 0..4, end: None, align: None, page_top: None }],
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -12581,7 +12776,7 @@ fn split_cell_moves_image_frame() {
             bottom: 4.0,
             edge: 0.0,
             items: vec![kept, image, frame],
-            cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None }],
+            cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None, page_top: None }],
         };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);
