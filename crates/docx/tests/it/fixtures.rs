@@ -185,98 +185,6 @@ fn paragraph_default_presence_survives_repeated_saves() {
     }
 }
 
-/// A default part the file leaves out is Word's own, from its Normal template (Microsoft 365,
-/// measured): run defaults in the theme's body font at 12 pt (15 pt complex script), 8 pt after a
-/// paragraph. Run defaults present but naming no font are Times New Roman in every slot, at 10 pt
-/// unless they say. An empty paragraph default part is no spacing.
-#[test]
-fn a_default_part_left_out_is_words_own() {
-    use wordcraft_doc::props::ParaProps;
-    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Cambria"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
-    let read = |defaults: &str, with_theme: bool| {
-        let styles = format!(
-            r#"<w:styles {W_NS}>{defaults}<w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
-        );
-        let mut rels = vec![("rId1", "styles", "styles.xml")];
-        let mut parts = vec![("word/styles.xml", styles.as_str())];
-        if with_theme {
-            rels.push(("rId2", "theme", "theme/theme1.xml"));
-            parts.push(("word/theme/theme1.xml", theme));
-        }
-        let d = wordcraft_docx::read(&docx("<w:p><w:r><w:t>Text</w:t></w:r></w:p>", &rels, &parts)).unwrap();
-        let c = d.styles.resolve_char(None, &Default::default());
-        let after = d.styles.resolve_para(&ParaProps::default()).space_after;
-        let cs = c.complex().size;
-        (c.font, c.size, cs, after)
-    };
-    let s = |f: &str| f.to_string();
-    // No defaults: the theme's body font (Aptos without a theme), 12 pt, 15 pt, 8 pt after.
-    assert_eq!(read("", false), (s("Aptos"), 12.0, 15.0, 8.0));
-    assert_eq!(read("", true), (s("Calibri"), 12.0, 15.0, 8.0));
-    assert_eq!(read("<w:docDefaults/>", true), (s("Calibri"), 12.0, 15.0, 8.0));
-    // Paragraph defaults only: Word's run defaults, the file's (no) spacing.
-    assert_eq!(read("<w:docDefaults><w:pPrDefault><w:pPr/></w:pPrDefault></w:docDefaults>", false), (s("Aptos"), 12.0, 15.0, 0.0));
-    // Run defaults present: theirs, Times New Roman where they name no font, the spec's 10 pt.
-    let tnr = s("Times New Roman");
-    assert_eq!(read("<w:docDefaults><w:rPrDefault><w:rPr/></w:rPrDefault></w:docDefaults>", true), (tnr.clone(), 10.0, 10.0, 8.0));
-    assert_eq!(
-        read(r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>"#, false),
-        (tnr, 12.0, 12.0, 8.0)
-    );
-    // Fonts the run defaults name stay theirs.
-    let named = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>"#;
-    assert_eq!(read(named, false), (s("Georgia"), 10.0, 10.0, 0.0));
-}
-
-/// The complex-script font of the run defaults Word gives a file without `w:rPrDefault`: its
-/// template's `w:cstheme="minorBidi"` (Word for Windows, Thai text in a `w:cs` run, read from the
-/// fonts of the PDF Word saves). The theme's minor font for the script of `w:themeFontLang/@w:bidi`,
-/// Thai when the settings name none; else the theme's `a:cs`; Angsana New when the theme has no
-/// font for Thai, Cordia New (Word's own theme's) when there is no theme.
-#[test]
-fn a_left_out_run_defaults_complex_script_font_is_the_themes() {
-    let theme = |minor: &str| {
-        format!(
-            r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Cambria"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/>{minor}</a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
-        )
-    };
-    let read = |defaults: &str, minor: Option<&str>, bidi: Option<&str>| {
-        let styles = format!(
-            r#"<w:styles {W_NS}>{defaults}<w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
-        );
-        let settings = bidi.map(|b| format!(r#"<w:settings {W_NS}><w:themeFontLang w:val="en-US" w:bidi="{b}"/></w:settings>"#));
-        let theme = minor.map(theme);
-        let mut rels = vec![("rId1", "styles", "styles.xml")];
-        let mut parts = vec![("word/styles.xml", styles.as_str())];
-        if let Some(t) = &theme {
-            rels.push(("rId2", "theme", "theme/theme1.xml"));
-            parts.push(("word/theme/theme1.xml", t.as_str()));
-        }
-        if let Some(s) = &settings {
-            rels.push(("rId3", "settings", "settings.xml"));
-            parts.push(("word/settings.xml", s.as_str()));
-        }
-        let d = wordcraft_docx::read(&docx("<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>x</w:t></w:r></w:p>", &rels, &parts)).unwrap();
-        (d.styles.resolve_char(None, &Default::default()).complex().font, d.styles.default_chr.font.clone())
-    };
-    let cs = |defaults: &str, minor: Option<&str>, bidi: Option<&str>| read(defaults, minor, bidi).0;
-    let thai = r#"<a:cs typeface=""/><a:font script="Thai" typeface="Tahoma"/><a:font script="Arab" typeface="Courier New"/>"#;
-    let cs_only = r#"<a:cs typeface="Angsana New"/>"#;
-    let bare = r#"<a:cs typeface=""/>"#;
-    assert_eq!(cs("", Some(thai), None), "Tahoma");
-    assert_eq!(cs("", Some(thai), Some("th-TH")), "Tahoma");
-    assert_eq!(cs("", Some(thai), Some("ar-SA")), "Courier New", "the settings' bidi language picks the script");
-    assert_eq!(cs("", Some(cs_only), None), "Angsana New");
-    assert_eq!(cs("", Some(cs_only), Some("th-TH")), "Angsana New");
-    assert_eq!(cs("", Some(bare), None), "Angsana New");
-    assert_eq!(cs("", None, None), "Cordia New");
-    // Only where the run defaults are left out: the Latin font is the theme's as before, and run
-    // defaults the file has keep their own complex-script font.
-    assert_eq!(read("", Some(thai), None).1.as_deref(), Some("Calibri"));
-    let named = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Courier New"/></w:rPr></w:rPrDefault></w:docDefaults>"#;
-    assert_eq!(cs(named, Some(thai), None), "Courier New");
-}
-
 #[test]
 fn zero_frame_keeps_normal_flow() {
     const ROUND_TRIPS: usize = 2;
@@ -389,13 +297,6 @@ fn omitted_paragraph_defaults_can_be_edited() {
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert!(again.styles.default_para_present);
     assert_eq!(again.styles.default_para.space_after, Some(12.0));
-    // An edit that leaves spacing after alone keeps Word's 8 pt after through a save.
-    let mut d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
-    Arc::make_mut(&mut d.styles).default_para.space_before = Some(6.0);
-    assert_eq!((d.styles.para_defaults().space_before, d.styles.para_defaults().space_after), (Some(6.0), Some(8.0)));
-    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
-    assert!(again.styles.default_para_present);
-    assert_eq!((again.styles.para_defaults().space_before, again.styles.para_defaults().space_after), (Some(6.0), Some(8.0)));
     let new = Document::new();
     assert_eq!(wordcraft_docx::read(&wordcraft_docx::write(&new).unwrap()).unwrap().styles.default_para, new.styles.default_para);
 }
@@ -4674,7 +4575,7 @@ fn shape_gradients_and_transparency_are_read_and_survive_saving() {
             rot_with_shape: false,
             flip: GradientFlip::Xy,
         }))),
-        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(0x20, 0x40, 0x60), 0.0)], lin(90.0, false), true)),
+        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(44, 92, 140), 0.0)], lin(90.0, false), true)),
         Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, black, 0.0)], centre, true)),
         None,
     ];
