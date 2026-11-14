@@ -1,6 +1,6 @@
 # European Portuguese interface and proofing
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-11 · **Change:** trivial (the catalog has 3,210 entries and keeps its language name in `common.tsv`; a Portuguese variant without its own dictionary reads the other variant's pack; Insert › Date & Time and three region names are left to do; previously trivial: the `pt-pt` Language pack is installed from Add a language… in File › Options › Language; previously trivial: WordCraft's craft-proof pin reads `pt-PT` text against its own dictionary, the `pt-pt` Language pack included, checked with the Natura dictionary; previously minor: proofing moved to craft-proof in storytold/craft-libs, #5202, which reads `pt-PT` text against its own `pt_PT` dictionary; previously trivial: the dictionary's source and licences; previously minor: pt-PT spelling from the installed `pt_PT` dictionary, Review › Language and the Region list; the interface catalog goes to storytold/craft-i18n as `locales/pt-pt/wordcraft.tsv`) · **Target:** WordCraft 0.10.0
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-14 · **Change:** trivial (the two open items, Insert › Date & Time and three region names, link their pull requests); previously trivial (the catalog has 3,210 entries and keeps its language name in `common.tsv`; a Portuguese variant without its own dictionary reads the other variant's pack; Insert › Date & Time and three region names are left to do; previously trivial: the `pt-pt` Language pack is installed from Add a language… in File › Options › Language; previously trivial: WordCraft's craft-proof pin reads `pt-PT` text against its own dictionary, the `pt-pt` Language pack included, checked with the Natura dictionary; previously minor: proofing moved to craft-proof in storytold/craft-libs, #5202, which reads `pt-PT` text against its own `pt_PT` dictionary; previously trivial: the dictionary's source and licences; previously minor: pt-PT spelling from the installed `pt_PT` dictionary, Review › Language and the Region list; the interface catalog goes to storytold/craft-i18n as `locales/pt-pt/wordcraft.tsv`) · **Target:** WordCraft 0.10.0
 
 ## Language menu and region
 
@@ -89,14 +89,18 @@ Not covered yet:
 - a review of the catalog by a second native speaker, which is welcome;
 - the strings WordCraft gained after `560565cd`, which the catalog gets when it is synced again;
 - Insert › Date & Time offers English (United States) and Portuguese (Brazil) only, and turns a
-  `pt-PT` language into `pt-BR`;
+  `pt-PT` language into `pt-BR` ([#6376](https://github.com/storytold/wordcraft/pull/6376) adds
+  Portuguese (Portugal));
 - Review › Language names `pt-GW`, `pt-ST` and `pt-TL` by their codes (*Portuguese (GW)*), as
-  Guinea-Bissau, São Tomé and Príncipe and Timor-Leste have no region name yet.
+  Guinea-Bissau, São Tomé and Príncipe and Timor-Leste have no region name yet
+  ([#6379](https://github.com/storytold/wordcraft/pull/6379), with their translations in
+  [storytold/craft-i18n#251](https://github.com/storytold/craft-i18n/pull/251)).
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | trivial | Insert › Date & Time (#6376) and the names for Guinea-Bissau, São Tomé and Príncipe and Timor-Leste (#6379, craft-i18n#251) link their pull requests |
 | 2026-11-11 | trivial | The catalog has 3,210 entries (WordCraft's strings at `560565cd`) and keeps its language name in `common.tsv`; a Portuguese variant without its own dictionary reads the other variant's pack; `pt-PT` in the Region list is tested; Insert › Date & Time, three region names and the strings added since `560565cd` are listed as left to do |
 | 2026-11-04 | trivial | The `pt-pt` Language pack is installed from Add a language… in File › Options › Language (main's Options › Language redesign) |
 | 2026-11-03 | trivial | WordCraft's craft-proof pin (`47c9f62`) reads `pt-PT` text against its own dictionary, the `pt-pt` Language pack included; checked with the Natura dictionary; the other regions wait for storytold/craft-libs#523 |
