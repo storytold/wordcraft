@@ -46,7 +46,7 @@ fn structures_symbols_and_navigation() {
     s.run("equation.type", &json!({"text": "n"})).unwrap();
     s.run("equation.move", &json!({"dir": "next"})).unwrap();
     s.run("equation.type", &json!({"text": "k"})).unwrap();
-    assert_eq!(linear(&s), "1/π∑_(k=1)^n▒k");
+    assert_eq!(linear(&s), "1/π ∑_(k=1)^n▒k", "the space keeps the sum out of the denominator (#4253)");
     let r = s.run("equation.get", &json!({})).unwrap();
     assert!(r["latex"].as_str().unwrap().contains("\\sum"));
     // Moving right past the end leaves the equation.
@@ -298,6 +298,30 @@ fn a_built_script_keeps_the_letter_typed_after_it() {
         .collect();
     assert_eq!(subs, ["i", "j"], "{nodes:#?}");
     assert!(nodes.iter().all(|n| matches!(n, MNode::Script { .. }) || matches!(n, MNode::Run(r) if r.text.trim().is_empty())), "{nodes:#?}");
+}
+
+#[test]
+fn a_built_fraction_keeps_the_letter_typed_after_it() {
+    // #4253: `3/2 x` built (3/2)·x, then the next build-up space pulled x into the denominator.
+    fn dens(s: &Session) -> Vec<String> {
+        let nodes = nodes_of(s, &s.math.as_ref().unwrap().at).unwrap();
+        nodes.iter().filter_map(|n| if let MNode::Frac { den, .. } = n { Some(to_linear(den)) } else { None }).collect()
+    }
+    let cases: [(&[&str], &str); 2] = [(&["3/2", " ", "x", " ", "+1", " "], "2"), (&["3/(2x)", " ", "+1", " "], "2x")];
+    for (typed, den) in cases {
+        let mut s = session();
+        s.run("insert.equation", &json!({})).unwrap();
+        for t in typed {
+            s.run("equation.type", &json!({"text": t})).unwrap();
+        }
+        assert_eq!(dens(&s), [den], "{typed:?}");
+        s.run("equation.convert", &json!({"to": "linear"})).unwrap();
+        s.run("equation.convert", &json!({"to": "professional"})).unwrap();
+        assert_eq!(dens(&s), [den], "{typed:?} after linear and back");
+        let mut back = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        back.run("equation.edit", &json!({})).unwrap();
+        assert_eq!(dens(&back), [den], "{typed:?} after save and reopen");
+    }
 }
 
 /// Returns the session's current IME state revision, allocating a new one when the caret state changed.
