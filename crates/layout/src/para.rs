@@ -101,9 +101,18 @@ pub struct ParaLayout {
     /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
     /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
     pub auto_space: Vec<(usize, f32)>,
+    /// It goes on from the last line of the paragraph before, whose mark is hidden, and shares
+    /// that line ([`ParaEnv::joined`]).
+    pub joined: bool,
 }
 
 impl ParaLayout {
+    /// Whether its first line is the one it shares with the paragraph before, whose mark is
+    /// hidden (#3986), rather than a line of its own below it (its first word didn't fit there).
+    pub(crate) fn shares_line(&self) -> bool {
+        self.joined && self.lines.first().is_some_and(|l| l.top <= 0.01)
+    }
+
     /// The room a horizontal rule at cluster `k` is placed in, from its left edge to the end of
     /// what the line has left. A first-line indent moves that end along (Word, measured with
     /// 50 % and fixed-width rules beside floats on either side and with first-line and hanging
@@ -359,6 +368,7 @@ mod label_spacing_tests {
             read_line_spacing: None,
             fit_objects: false,
             fitted: &[],
+            joined: false,
         };
         let mut p = Paragraph::with_text(if wrap { "Alpha probe synthetic business text repeated" } else { "Alpha probe" }, Default::default());
         p.props.line_spacing = Some(spacing);
