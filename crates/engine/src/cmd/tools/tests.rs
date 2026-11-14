@@ -717,6 +717,37 @@ fn compare_distinguishes_field_codes_differing_in_quoted_spaces() {
 }
 
 #[test]
+fn compare_distinguishes_field_codes_differing_after_an_escaped_quote() {
+    // In `INCLUDETEXT "A\"B  C"` the `\"` is text, so the spaces after it are still inside the
+    // quotes: `"A\"B  C"` and `"A\"B C"` name different files.
+    fn with_include(arg: &str, text: &str) -> Session {
+        let mut s = Session::new(Document::from_text(text));
+        s.run("caret.set", &json!({"pos": Pos::body(0, text.len())})).unwrap();
+        s.run("insert.field", &json!({"instr": format!("INCLUDETEXT \"{arg}\""), "result": ""})).unwrap();
+        s
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-escaped-quote-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &with_include(r#"A\"B C"#, "New ").doc).unwrap();
+    let mut s = with_include(r#"A\"B  C"#, "Old ");
+    s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let fields: Vec<(String, bool, bool)> = p
+        .objects_with_offsets()
+        .filter_map(|(off, o)| match o {
+            InlineObject::Field { instr, .. } => {
+                let c = p.props_of_char(off);
+                Some((instr.clone(), c.del.is_some(), c.ins.is_some()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields.len(), 2, "{fields:?}");
+    assert!(fields.iter().any(|(i, d, _)| i.contains("B  C") && *d), "{fields:?}");
+    assert!(fields.iter().any(|(i, _, n)| i.contains("B C") && *n), "{fields:?}");
+    let _ = std::fs::remove_file(&rev_path);
+}
+
+#[test]
 fn compare_bounds_total_diff_work() {
     // Many long, slightly different paragraphs: each pair alone fits one comparison table,
     // but the work over all pairs must stay bounded. Pairs past the budget are compared

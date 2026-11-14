@@ -424,10 +424,18 @@ enum Key {
 /// text argument can hold meaningful spaces.
 fn collapse_outside_quotes(instr: &str) -> String {
     let mut out = String::with_capacity(instr.len());
-    let (mut quoted, mut pending) = (false, false);
+    let (mut quoted, mut pending, mut escaped) = (false, false, false);
     for c in instr.chars() {
         if quoted {
-            quoted = c != '"';
+            // Inside quotes a backslash escapes the next character, so `\"` does not end them
+            // (the way `field_words` reads them).
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else {
+                quoted = c != '"';
+            }
             out.push(c);
         } else if c.is_whitespace() {
             pending = !out.is_empty();
