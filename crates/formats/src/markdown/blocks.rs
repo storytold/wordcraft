@@ -638,6 +638,32 @@ fn parse_table(lines: &[String], i: &mut usize, t: &str, ctx: &mut BlockCtx<'_>,
     true
 }
 
+/// Charges the tables in `blocks` (and in their cells) to the document's cell budget, dropping
+/// the rows that do not fit as [`parse_table`] does for a pipe table: the budget is the
+/// document's, so a file of HTML tables cannot make more cells than one of pipe tables. A table
+/// left with no rows goes. Recursion is bounded: the HTML reader nests tables `MAX_DEPTH` deep.
+fn fit_cell_budget(blocks: &mut Vec<FBlock>, budget: &std::cell::Cell<usize>) {
+    for b in blocks.iter_mut() {
+        let FBlock::Table(t) = b else { continue };
+        let mut kept = 0usize;
+        for row in &t.rows {
+            if budget.get() < row.len() {
+                break;
+            }
+            budget.set(budget.get() - row.len());
+            kept += 1;
+        }
+        if kept < t.rows.len() {
+            t.rows.truncate(kept);
+            model::dropped(model::Dropped::TableCells);
+        }
+        for cell in t.rows.iter_mut().flatten() {
+            fit_cell_budget(&mut cell.blocks, budget);
+        }
+    }
+    blocks.retain(|b| !matches!(b, FBlock::Table(t) if t.rows.is_empty()));
+}
+
 /// The HTML block starting at `lines[from]`, which runs to the line before the next blank one or
 /// to the end of the input (CommonMark's end condition for start condition 6). Its raw text goes
 /// to the HTML reader this crate already has (`crate::html`, the one the same bytes go through as
@@ -654,7 +680,8 @@ fn parse_html_block(lines: &[String], from: usize, ctx: &mut BlockCtx<'_>, out: 
     let end = from + rest.iter().position(|l| is_blank(l)).unwrap_or(rest.len());
     let rows = lines.get(from..end).unwrap_or_default();
     if rows.iter().fold(0usize, |n, l| n.saturating_add(l.len()).saturating_add(1)) <= MAX_HTML_BLOCK {
-        let blocks = crate::html::parse(&rows.join("\n")).blocks;
+        let mut blocks = crate::html::parse(&rows.join("\n")).blocks;
+        fit_cell_budget(&mut blocks, ctx.budget);
         ctx.record_lines(from, blocks.len());
         out.extend(blocks);
     } else {

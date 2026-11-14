@@ -402,6 +402,17 @@ fn tables_share_one_cell_budget() {
     let [FBlock::Table(t)] = flow.blocks.as_slice() else { panic!("{:?}", flow.blocks) };
     assert_eq!(t.rows.len(), 2);
     assert!(!crate::model::Dropped::TableCells.reported());
+
+    // A table written as an HTML block shares that one budget (#6499): the HTML reader has no
+    // budget of its own, so a file of HTML tables could otherwise make far more cells than the
+    // same file of pipe tables.
+    let html_table = format!("<table>{}</table>\n\n", "<tr><td>x</td></tr>".repeat(500));
+    crate::model::begin_import();
+    let flow = parse(&html_table.repeat(600));
+    let cells: usize =
+        flow.blocks.iter().filter_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).flat_map(|t| &t.rows).map(Vec::len).sum();
+    assert!(cells <= crate::markdown::MAX_TABLE_CELLS, "{cells} cells");
+    assert!(crate::model::Dropped::TableCells.reported(), "the rows left out are logged");
 }
 
 #[test]
