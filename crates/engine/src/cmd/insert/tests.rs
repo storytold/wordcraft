@@ -416,3 +416,145 @@ fn local_civil_date_follows_the_utc_offset() {
         assert!(crate::cmd::local_offset_secs(unix).abs() <= 26 * 3600);
     }
 }
+
+/// The width of the first table's columns together.
+fn new_table_width(s: &Session) -> f32 {
+    s.doc.body.iter().find_map(|b| b.as_table()).map_or(0.0, |t| t.grid.iter().sum())
+}
+
+/// #6303: as in Word, Insert Table splits the text width of the section the caret is in among
+/// the columns, not the first section's; in a section set in columns, the caret's column's.
+#[test]
+fn a_new_table_takes_the_width_of_the_caret_s_section_and_column() {
+    let close = |a: f32, b: f32| (a - b).abs() < 0.5;
+    // A landscape second section: 9" of text, not the first section's 6.5".
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Portrait"})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    let first = s.doc.sections().first().map(|(_, x)| x.text_width()).unwrap();
+    let here = crate::cmd::page::sect(&s).text_width();
+    assert!(close(first, 468.0) && close(here, 648.0), "{first} {here}");
+    s.run("insert.table", &json!({"rows": 2, "cols": 3})).unwrap();
+    assert!(close(new_table_width(&s), here), "{} in a section {here} wide", new_table_width(&s));
+
+    // Narrow margins first, wide ones where the caret is: the table stays within them.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.margins", &json!({"preset": "narrow"})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.margins", &json!({"preset": "wide"})).unwrap();
+    let here = crate::cmd::page::sect(&s).text_width();
+    assert!(here < s.doc.sections().first().map(|(_, x)| x.text_width()).unwrap() - 100.0);
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), here), "{} in a section {here} wide", new_table_width(&s));
+
+    // Two equal columns: one column's width.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.columns", &json!({"count": 2, "space": 36.0})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), 216.0), "{}", new_table_width(&s));
+
+    // Unequal columns: the width of the column the caret is in.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.columns", &json!({"widths": [[144.0, 36.0], [288.0, 0.0]]})).unwrap();
+    s.run("text.insert", &json!({"text": "Left"})).unwrap();
+    s.run("layout.break", &json!({"kind": "column"})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), 288.0), "{}", new_table_width(&s));
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.columns", &json!({"widths": [[144.0, 36.0], [288.0, 0.0]]})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), 144.0), "{}", new_table_width(&s));
+
+    // A single-section document is as before.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.table", &json!({"rows": 1, "cols": 4})).unwrap();
+    assert!(close(new_table_width(&s), 468.0), "{}", new_table_width(&s));
+}
+
+/// #6303 review: unequal columns with no space between them share an edge, where the caret
+/// stands at the start of the second column. The table takes the second column's width.
+#[test]
+fn a_new_table_at_the_start_of_a_touching_column_takes_that_column_s_width() {
+    let close = |a: f32, b: f32| (a - b).abs() < 0.5;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.columns", &json!({"widths": [[144.0, 0.0], [324.0, 0.0]]})).unwrap();
+    s.run("text.insert", &json!({"text": "Left"})).unwrap();
+    s.run("layout.break", &json!({"kind": "column"})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), 324.0), "{}", new_table_width(&s));
+}
+
+/// #6303 review: with a selection across a section break, Insert Table first deletes the
+/// selection; the table takes the width of the section it ends up in, whichever way the
+/// selection was made.
+#[test]
+fn a_new_table_replacing_a_selection_across_sections_takes_its_own_section_s_width() {
+    for backward in [false, true] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "Portrait"})).unwrap();
+        s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+        s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+        s.run("text.insert", &json!({"text": "Landscape"})).unwrap();
+        let widths: Vec<f32> = s.doc.sections().iter().map(|(_, x)| x.text_width()).collect();
+        assert_eq!(widths.len(), 2, "{widths:?}");
+        let last = s.doc.body.len() as u32 - 1;
+        let (a, b) = (Pos { story: StoryRef::Body, path: Path(vec![0]), off: 4 }, Pos { story: StoryRef::Body, path: Path(vec![last]), off: 4 });
+        s.sel = if backward { Selection { anchor: b, focus: a } } else { Selection { anchor: a, focus: b } };
+        let before = s.doc.plain_text(StoryRef::Body);
+        s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+        let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+        let own = s.doc.sections().get(s.doc.section_index_of(at)).map(|(_, x)| x.text_width()).unwrap();
+        assert!((new_table_width(&s) - own).abs() < 0.5, "backward={backward}: {} in a section {own} wide ({widths:?})", new_table_width(&s));
+        // Deleting the selection and inserting the table are one step to undo.
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), before, "backward={backward}");
+    }
+}
+
+/// #6303 review: in a right-to-left section the columns run leftwards, the first at the right.
+/// The table takes the width of the column the caret is in, read by its left edge.
+#[test]
+fn a_new_table_in_a_right_to_left_section_takes_its_column_s_width() {
+    let close = |a: f32, b: f32| (a - b).abs() < 0.5;
+    for (widths, first, second) in [(json!([[144.0, 36.0], [288.0, 0.0]]), 144.0, 288.0), (json!([[144.0, 0.0], [324.0, 0.0]]), 144.0, 324.0)] {
+        // The first column, at the right.
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("layout.columns", &json!({"widths": widths})).unwrap();
+        s.run("layout.sectionRtl", &json!({"value": true})).unwrap();
+        s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+        assert!(close(new_table_width(&s), first), "{widths}: first column, {}", new_table_width(&s));
+        // The second, at the left.
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("layout.columns", &json!({"widths": widths})).unwrap();
+        s.run("layout.sectionRtl", &json!({"value": true})).unwrap();
+        s.run("text.insert", &json!({"text": "First"})).unwrap();
+        s.run("layout.break", &json!({"kind": "column"})).unwrap();
+        s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+        assert!(close(new_table_width(&s), second), "{widths}: second column, {}", new_table_width(&s));
+    }
+}
+
+/// #6303 review: the caret's column is read from the pages as they are once the selection is
+/// deleted, not as they were laid out before. A selection from a right-to-left section into a
+/// left-to-right one leaves the caret's paragraph in the left-to-right section's first column.
+#[test]
+fn a_new_table_replacing_a_selection_reads_the_caret_s_column_after_the_deletion() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.columns", &json!({"widths": [[144.0, 36.0], [288.0, 0.0]]})).unwrap();
+    s.run("layout.sectionRtl", &json!({"value": true})).unwrap();
+    s.run("text.insert", &json!({"text": "Right"})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.sectionRtl", &json!({"value": false})).unwrap();
+    s.run("text.insert", &json!({"text": "Left"})).unwrap();
+    let last = s.doc.body.len() as u32 - 1;
+    s.sel = Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path(vec![0]), off: 2 },
+        focus: Pos { story: StoryRef::Body, path: Path(vec![last]), off: 2 },
+    };
+    // The pages as the window last drew them.
+    let _ = s.layout();
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(!crate::cmd::page::sect(&s).rtl, "the left-to-right section's properties are left");
+    assert!((new_table_width(&s) - 144.0).abs() < 0.5, "{}", new_table_width(&s));
+}

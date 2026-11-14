@@ -23,18 +23,59 @@ fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError
     Ok(insert_at)
 }
 
+/// The width a new table's columns share, as in Word (#6303): the text width of the section the
+/// caret is in, or in a section set in columns, the width of the caret's column. Headers,
+/// footers and notes take their section's text width.
+fn table_width_at_caret(s: &mut Session) -> f32 {
+    let sect = crate::cmd::page::sect(s);
+    let boxes = sect.column_boxes();
+    let Some(&(_, first)) = boxes.first().filter(|_| boxes.len() > 1 && s.sel.focus.story == StoryRef::Body) else {
+        return sect.text_width();
+    };
+    if boxes.iter().all(|(_, w)| (w - first).abs() < 0.01) {
+        return first;
+    }
+    // Unequal columns: the one the caret is laid out in (the first when it isn't laid out). The
+    // caret's lines start at their column's left edge whatever their direction; the caret's own x
+    // can't tell touching columns apart, as the start of one column is the end of the other.
+    let focus = s.sel.focus.clone();
+    let l = s.layout();
+    let Some((caret, page)) = l.caret(&focus).and_then(|c| Some((c, l.pages.get(c.page)?))) else { return first };
+    let lines_x = page.items.iter().find_map(|it| match it {
+        wordcraft_layout::Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, .. }
+            if *path == focus.path && (*l0..*l1).contains(&para.line_of(focus.off)) =>
+        {
+            Some(*x)
+        }
+        _ => None,
+    });
+    let x = lines_x.unwrap_or(caret.x) - page.body.x;
+    // The column with the rightmost left edge at or before x. `column_boxes` is in reading order,
+    // which in a right-to-left section runs leftwards, so pick by edge, not by position in it.
+    boxes.iter().filter(|(cx, _)| x >= cx - 0.5).max_by(|a, b| a.0.total_cmp(&b.0)).map_or(first, |(_, w)| *w)
+}
+
 pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
     let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, 1000) as usize;
     let cols = p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize;
-    let width = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
-    let mut t = Table::new(rows, cols, width);
-    if let Some(st) = p::str(v, "style") {
-        let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
-        t.props.style = Some(id);
-    }
+    let style = match p::str(v, "style") {
+        Some(st) => Some(s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?),
+        None => None,
+    };
     // Like Word, a table inserted in a right-to-left paragraph is a right-to-left table (#2634):
     // its first cell stands at the right, so Tab, which follows reading order, moves leftwards.
-    if s.doc.para_at(&s.sel.focus).is_some_and(|p| s.doc.styles.resolve_para(&p.props).bidi) {
+    let bidi = s.doc.para_at(&s.sel.focus).is_some_and(|p| s.doc.styles.resolve_para(&p.props).bidi);
+    // The table replaces the selection: sized for where it goes once the selection is deleted, as
+    // a selection across a section break leaves one section's properties.
+    delete_selection(s)?;
+    // A new revision, so the caret's column is read from the document after the deletion, not
+    // from pages laid out before it.
+    s.touch();
+    let mut t = Table::new(rows, cols, table_width_at_caret(s));
+    if style.is_some() {
+        t.props.style = style;
+    }
+    if bidi {
         t.props.bidi_visual = true;
     }
     let story = s.sel.focus.story;
