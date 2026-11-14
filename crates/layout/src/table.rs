@@ -1293,6 +1293,14 @@ fn align_in_part(
             }
         }
     }
+    // The part of an at-least row is at least as tall as the row's height says (see
+    // `grow_to_floor`), whatever room the page has under it, and its cells line up within that.
+    // Measured in Word for Windows: a row of at least 12.75 pt that keeps one line of 9.2 pt has
+    // it 1.8 pt down in a centred cell and 3.6 pt down in a bottom-aligned one, whether the
+    // cell's text goes on or not; without a least height the same line stands at the top.
+    if kept > f32::MIN {
+        kept = kept.max((row.floor - row.bottom).min(limit));
+    }
     let part = if kept > f32::MIN { kept + row.bottom } else { cut };
     for (((((items, al), c), end), own), lowered) in cells.iter_mut().zip(realign).zip(&row.cells).zip(ends).zip(own).zip(&mut lowered) {
         let Some(e) = *end else { continue };
@@ -1304,7 +1312,7 @@ fn align_in_part(
             }
             // Its text goes on: what it keeps here, against the tallest text kept.
             (None, Some(al)) if own > f32::MIN => {
-                let room = (kept - own).max(0.0);
+                let room = (kept - own).max(0.0).min((limit - own).max(0.0));
                 *lowered = if al.valign == VAlign::Center { room / 2.0 } else { room };
                 *lowered
             }
