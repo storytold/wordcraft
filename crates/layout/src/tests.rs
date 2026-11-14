@@ -2595,6 +2595,40 @@ fn turned_text_wraps_in_an_exact_row() {
 }
 
 #[test]
+fn turned_text_uses_min_height() {
+    crate::test_fonts();
+    for turn in [TextDirection::Up, TextDirection::Down] {
+        let mut d = Document::from_text("After");
+        let mut t = Table::new(1, 2, 160.0);
+        t.props.style = None;
+        t.rows[0].props.height = Some(80.0);
+        t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::AtLeast;
+        t.rows[0].cells[1].props.text_direction = turn;
+        t.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Compensation pad type", Default::default()))];
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let rect = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Cell { rect, cell: 1, .. } => Some(*rect),
+                _ => None,
+            })
+            .unwrap();
+        assert!((rect.h - 80.0).abs() < 0.01, "{rect:?}");
+        let lines = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { path, l0, l1, .. } if path.0 == [0, 0, 1, 0] => Some(l1 - l0),
+                _ => None,
+            })
+            .unwrap();
+        assert!(lines > 1);
+    }
+}
+
+#[test]
 fn hostile_turned_cells_never_panic() {
     crate::test_fonts();
     // Empty, huge and nested turned cells, in exact rows too small for anything.
