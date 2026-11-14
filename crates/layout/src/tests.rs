@@ -6402,6 +6402,52 @@ fn space_shrinking_is_only_for_justified_text() {
     }
 }
 
+/// #6508: a word stays on its line only if it fits. Measured in Word for Windows (16.0.20625,
+/// compatibility mode 15; Arial and Times New Roman at 9 to 12 pt; 348 lines whose text needs
+/// at most a fifth of a twip more than a whole number of twips, set at that many twips, and 348
+/// that need as little less, set likewise): a word 0.0002 pt too wide for what is left of its
+/// line wraps, one up to about 0.001 pt too wide stays when the line's spaces shrink to take
+/// it, and a word with as little as 0.0001 pt to spare always stays. WordCraft kept a word up
+/// to a hundredth of a point too wide: one in five of the words that miss their line by less
+/// than a twip, the step indents, margins and cell widths are written in.
+#[test]
+fn a_word_a_hair_too_wide_for_its_line_wraps() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let para = |text: &str, align: Align, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(align), indent_right: Some(right), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    // Words on the first line.
+    let first = |d: &Document| {
+        let l = lay(d);
+        let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &para.lines[0];
+        d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop].split_whitespace().count()
+    };
+    let (n, word) = (12, "nnnn");
+    // The word's and the space's widths, from a left-aligned line.
+    let probe = para(&format!("{word} {word}"), Align::Left, 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    let full = probe.last_section.text_width();
+    let text = vec![word; 3 * n].join(" ");
+    // What thirteen words need, and what their twelve spaces can give up in a justified line.
+    let natural = (n + 1) as f32 * w + n as f32 * sw;
+    let room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    for (align, needs) in [(Align::Left, natural), (Align::Justify, natural - room)] {
+        for (short, words) in [(-0.005, n + 1), (0.005, n)] {
+            let d = para(&text, align, full - (needs - short));
+            assert_eq!(first(&d), words, "{align:?}: a line {short} pt short of what thirteen words need");
+        }
+    }
+}
+
 /// #3924: a justified line that ends in a manual line break is stretched to the margin like a
 /// wrapped one; the last line of the paragraph stays short. `w:doNotExpandShiftReturn` keeps it short.
 #[test]
