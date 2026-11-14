@@ -599,10 +599,11 @@ fn find_link(s: &Session, url: &str) -> Option<(Pos, Pos)> {
 }
 
 /// Where the body references note `id`.
-fn note_ref_pos(s: &Session, id: u32) -> Option<Pos> {
+pub(crate) fn note_ref_pos(s: &Session, id: u32) -> Option<Pos> {
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        let hit = p.object_offsets().into_iter().find(|o| matches!(p.object_at(*o), Some(InlineObject::NoteRef { id: n, .. }) if *n == id));
+        // One pass over the objects: `object_at` per offset counted the objects before each one.
+        let hit = p.objects_with_offsets().find(|(_, o)| matches!(o, InlineObject::NoteRef { id: n, .. } if *n == id)).map(|(off, _)| off);
         if let Some(off) = hit {
             return Some(Pos::new(StoryRef::Body, path, off));
         }
