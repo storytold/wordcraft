@@ -5665,6 +5665,17 @@ fn exporting_a_copy_keeps_the_documents_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A copy with no path would open the Save As picker, whose answer is an ordinary save that adopts
+/// the file: refused instead, and the picker stays closed (#6131 review).
+#[test]
+fn a_copy_without_a_path_is_refused() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "x"}));
+    let e = s.run("file.save", &json!({"copy": true})).unwrap_err();
+    assert!(e.to_string().contains("copy"), "{e}");
+    assert!(s.ui_requests.is_empty(), "no picker opens");
+}
+
 /// A save that fails to write (no permission, disk full, a bad path) leaves the document's own
 /// save stamps untouched: `stamp_save` runs before the fallible write, so a prior version of this
 /// left `modified`/`created`/`last_modified_by`/`revision`/`zoom` changed for a save that never

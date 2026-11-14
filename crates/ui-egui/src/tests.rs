@@ -5012,6 +5012,20 @@ fn host_save_as_a_copy_format_is_not_save_as() {
     assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("report.docx")));
 }
 
+/// A copy named like the opened file can't go to the host page, whose Save would overwrite the
+/// opened file with it (#6131 review).
+#[test]
+fn host_copy_with_the_opened_name_is_refused() {
+    let (mut a, got) = host_app(false);
+    host_open(&mut a, "report.docx");
+    let e = a.execute("file.saveAs", json!({"path": "report.docx", "copy": true})).unwrap_err();
+    assert!(e.contains("same name"), "{e}");
+    assert!(got.borrow().is_empty(), "nothing reached the host");
+    assert!(a.session.dirty);
+    a.execute("file.saveAs", json!({"path": "other.docx", "copy": true})).unwrap();
+    assert!(a.session.dirty);
+}
+
 /// The page not getting the file is a failed save: the document keeps its changes.
 #[test]
 fn a_host_save_that_fails_leaves_the_document_unsaved() {

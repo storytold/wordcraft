@@ -368,6 +368,10 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let path = match p::str(v, "path").map(std::path::PathBuf::from).or_else(|| s.path.clone()) {
         Some(p) => p,
         None => {
+            // The picker's answer would run an ordinary save, which adopts the file.
+            if p::bool(v, "copy") == Some(true) {
+                return Err(CmdError::Params("`copy` needs a `path`: the copy has to go somewhere".into()));
+            }
             s.push_ui_request(json!({"open": "saveAs"}));
             return Ok(json!({"saved": false}));
         }

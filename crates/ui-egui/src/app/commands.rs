@@ -145,6 +145,14 @@ impl WordApp {
             // `copy` (File › Export, #6131) writes a copy: the document keeps its unsaved changes,
             // its name and its save stamps, as for a PDF.
             let as_copy = params.get("copy").and_then(Value::as_bool) == Some(true);
+            // The host page's Save writes the opened file under its own name and its flag can't say
+            // "copy": a copy named like the opened file would overwrite it with unsaved text.
+            if as_copy && self.services.host_save.is_some() {
+                let opened = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+                if opened.as_deref() == Some(name.as_str()) {
+                    return Err("a copy can't have the same name as the open document: choose another name".into());
+                }
+            }
             // A save with a password encrypts this and later saves (`file.save`'s `password`).
             if matches!(id, "file.save" | "file.saveAs")
                 && let Some(pw) = params.get("password").filter(|v| !v.is_null())
