@@ -53,6 +53,57 @@ fn the_table_grid_previews_the_hovered_table_until_the_click() {
     assert_eq!(h.state().canvas.table_preview, None, "the inserted table isn't previewed again");
 }
 
+/// #6439: in an Arabic interface Insert › Table's grid grows from its top-right corner, as in
+/// Word, whose right-to-left interface is mirrored: the square at the right edge is one column,
+/// the next one in is two, and the leftmost is ten. In English the first column stays at the left.
+#[test]
+fn the_table_grid_starts_at_the_right_in_a_right_to_left_interface() {
+    use egui_kittest::kittest::Queryable;
+    for rtl in [true, false] {
+        let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+        let ar = crate::i18n::fixture_lang("ar", "\tInsert Table\tInsert Table\n");
+        // The grid as the ribbon's menu shows it: a body aligned to the reading start.
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 400.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                crate::i18n::set_current(if rtl { ar } else { crate::i18n::Lang::EN });
+                crate::rtl::sync(ui.ctx());
+                assert_eq!(crate::rtl::on(), rtl);
+                crate::rtl::root(ui, |ui| table_grid_picker(ui, app));
+                crate::i18n::set_current(crate::i18n::Lang::EN);
+            },
+            a,
+        );
+        h.run_steps(3);
+        let spacing = h.ctx.global_style().spacing.clone();
+        let title = h.get_by_label("Insert Table").rect();
+        // Ten grid columns and eight rows at least `interact_size` wide and tall, 2 apart, each
+        // cell with its 16-point square at its top left; the grid sits against the title's
+        // leading edge (its right when mirrored).
+        let (col, row_pitch) = (spacing.interact_size.x.max(16.0) + 2.0, spacing.interact_size.y.max(16.0) + 2.0);
+        let left = if rtl { title.right() - (10.0 * col - 2.0) } else { title.left() };
+        let square = |row: usize, place: usize| {
+            let from_left = if rtl { 10 - place } else { place - 1 };
+            egui::pos2(left + from_left as f32 * col + 8.0, title.bottom() + spacing.item_spacing.y + (row - 1) as f32 * row_pitch + 8.0)
+        };
+        // (row, square counted from the reading start) → the table that square previews.
+        for (row, place, table) in [(3, 4, (3, 4)), (1, 1, (1, 1)), (2, 10, (2, 10)), (8, 7, (8, 7))] {
+            h.event(egui::Event::PointerMoved(square(row, place)));
+            h.run_steps(2);
+            assert_eq!(h.state().canvas.table_preview, Some(table), "rtl {rtl}: row {row}, square {place} from the reading start");
+        }
+        let at = square(3, 4);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        assert!(h.query_by_label("4×3 Table").is_some(), "rtl {rtl}: the title reads columns × rows");
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        let t = h.state().session.doc.body.iter().find_map(|b| b.as_table()).expect("the click inserts the table");
+        assert_eq!((t.rows.len(), t.cols()), (3, 4), "rtl {rtl}");
+    }
+}
+
 /// Go To's page box (#712): a number, +n / -n from the current page (a typographic minus
 /// too), empty for the next page; anything else is refused.
 #[test]

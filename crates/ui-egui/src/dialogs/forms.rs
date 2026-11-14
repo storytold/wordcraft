@@ -343,9 +343,14 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
     });
     let mut new_hover = (0, 0);
     let mut clicked = None;
+    // An `egui::Grid` places its columns from the left even in a mirrored menu, so there the
+    // squares are added last column first: as in Word's Arabic interface, the grid then grows
+    // from its top-right corner, the first column at the right (#6439).
+    let mirrored = crate::rtl::flows(ui);
     crate::rtl::grid(ui, egui::Grid::new("tgp").spacing(vec2(2.0, 2.0)), |ui| {
         for r in 1..=8 {
-            for c in 1..=10 {
+            for slot in 1..=10 {
+                let c = if mirrored { 11 - slot } else { slot };
                 let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
                 let on = r <= hover.0 && c <= hover.1;
                 ui.painter().rect(
