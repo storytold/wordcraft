@@ -111,7 +111,10 @@ mod tests {
     fn every_reference_is_charged_to_the_budget() {
         let msg = craft_mime::parse(PAGE, &craft_mime::Limits::DEFAULT);
         let pictures = Pictures::new(&msg.root, "file:///c:/page.htm", 10);
-        assert!(pictures.load("a.png").is_some());
+        // The first copy stays alive, so the second load is a reference to it.
+        let first = pictures.load("a.png");
+        assert!(first.is_some());
         assert!(pictures.load("a.png").is_none(), "6 more bytes do not fit in the 4 left");
+        drop(first);
     }
 }
