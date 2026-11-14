@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::date::{DateKind, builtin_date, custom_date, iso_datetime, serial_date};
 use super::{
     BTreeMap, Ev, Grid, HashMap, MAX_CELLS, MAX_COLS, MAX_ROWS, MAX_SHARED, MAX_SHEETS, MAX_XFS, Package, TextBudget, attr, push_capped, walk,
@@ -263,7 +265,7 @@ pub(super) fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<Str
                     row.resize(c.col + 1, String::new());
                 }
                 if let Some(slot) = row.get_mut(c.col) {
-                    *slot = text;
+                    *slot = text.into_owned();
                 }
             }
             _ => {}
@@ -276,12 +278,15 @@ pub(super) fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<Str
     Ok(grid.rows)
 }
 
-fn xlsx_value(c: &XCell, shared: &[String], formats: &[Option<DateKind>], date1904: bool) -> String {
+/// A cell's text: a shared string borrowed, so a cell the sheet then refuses (past the text
+/// budget, the columns or the rows) costs no copy of it.
+fn xlsx_value<'a>(c: &XCell, shared: &'a [String], formats: &[Option<DateKind>], date1904: bool) -> Cow<'a, str> {
     let v = c.value.trim();
     let kind = c.kind.trim();
     if kind.eq_ignore_ascii_case("s") {
-        v.parse::<usize>().ok().and_then(|i| shared.get(i)).cloned().unwrap_or_default()
-    } else if kind.eq_ignore_ascii_case("inlineStr") {
+        return Cow::Borrowed(v.parse::<usize>().ok().and_then(|i| shared.get(i)).map_or("", String::as_str));
+    }
+    Cow::Owned(if kind.eq_ignore_ascii_case("inlineStr") {
         if c.inline.is_empty() { c.value.clone() } else { c.inline.clone() }
     } else if kind.eq_ignore_ascii_case("str") || kind.eq_ignore_ascii_case("e") {
         c.value.clone()
@@ -292,12 +297,12 @@ fn xlsx_value(c: &XCell, shared: &[String], formats: &[Option<DateKind>], date19
     } else if v.is_empty() {
         c.inline.clone()
     } else {
-        let Ok(x) = v.parse::<f64>() else { return v.to_string() };
+        let Ok(x) = v.parse::<f64>() else { return Cow::Owned(v.to_string()) };
         match formats.get(c.style).copied().flatten() {
             Some(kind) => serial_date(x, date1904, kind).unwrap_or_else(|| number(x)),
             None => number(x),
         }
-    }
+    })
 }
 
 /// A number as a spreadsheet shows it in General format: up to 15 significant digits, no
