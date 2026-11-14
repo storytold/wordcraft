@@ -12,6 +12,7 @@ pub fn primary_button(ui: &Ui, text: impl Into<String>) -> egui::Button<'static>
 pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
     let st = drawn_state(ui, &resp, false);
     ui.painter().rect_filled(r, CornerRadius::same(4), st.fill);
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon, t.accent);
