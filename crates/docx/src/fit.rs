@@ -20,8 +20,7 @@ pub(crate) const KIND: &str = "wordcraft-fit-v1";
 pub(crate) fn write(fit: &FitState) -> Result<Vec<u8>, DocxError> {
     let json = serde_json::to_string(fit).map_err(|e| DocxError::Xml(e.to_string()))?;
     let esc_json = quick_xml::escape::escape(&json);
-    Ok(format!(r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}"><fitState>{}</fitState></{ROOT}>"#, esc_json)
-        .into_bytes())
+    Ok(format!(r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}"><fitState>{}</fitState></{ROOT}>"#, esc_json).into_bytes())
 }
 
 /// Read the state from a custom XML part's bytes, if it is ours.
