@@ -26,6 +26,10 @@ pub struct RowLayout {
     /// row's top band). Word wants it on the page too: the row fits only where its height and
     /// this border do.
     pub edge: f32,
+    /// The least height of a part of an at-least row that goes on to another page: the row's
+    /// height, its cells' margins and the bands of the borders around the part there (the
+    /// table's top border and the last row's bottom border). Zero for a row without one.
+    pub floor: f32,
     /// The row's cells: the items each one owns and where its content ends.
     pub cells: Vec<CellPart>,
 }
@@ -497,6 +501,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     let mut heights: Vec<f32> = Vec::with_capacity(nrows);
     let mut bottoms: Vec<f32> = Vec::with_capacity(nrows);
     let mut edges: Vec<f32> = Vec::with_capacity(nrows);
+    let mut floors: Vec<f32> = Vec::with_capacity(nrows);
     for (ri, row) in t.rows.iter().enumerate() {
         let mut g = row.first_grid();
         let mut cells = Vec::with_capacity(row.cells.len());
@@ -680,13 +685,22 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             (Some(h), _) if h > 0.0 => rh.max(h + row_insets),
             _ => rh,
         };
+        // A part of an at-least row that goes on to another page is that tall as well, with the
+        // cells' margins and the bands of the borders around it there: the table's top border,
+        // which Word draws at the top of the part whatever the row's own top border is, and the
+        // last row's bottom border.
+        let top_band = tborders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
+        floors.push(match (row.props.height, row.props.height_rule) {
+            (Some(h), HeightRule::AtLeast) if h > 0.0 => h + row_top + row_below + top_band,
+            _ => 0.0,
+        });
         bottoms.push(row_below);
         edges.push(row_edge);
         heights.push(if collapsed && !cells.is_empty() { rh.max(0.0) } else { rh.max(4.0) });
         rows.push(cells);
     }
     grow_vertical_merges(&rows, &mut heights);
-    finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total })
+    finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, floors, x, total })
 }
 
 fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
@@ -719,12 +733,13 @@ struct TableRows<'a> {
     heights: Vec<f32>,
     bottoms: Vec<f32>,
     edges: Vec<f32>,
+    floors: Vec<f32>,
     x: f32,
     total: f32,
 }
 
 fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
-    let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total } = input;
+    let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, floors, x, total } = input;
     // Grid columns holding a vertical-merge continuation, per row.
     let cont: Vec<Vec<usize>> = t
         .rows
@@ -871,6 +886,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             items,
             bottom: bottoms.get(ri).copied().unwrap_or(0.0),
             edge: edges.get(ri).copied().unwrap_or(0.0),
+            floor: floors.get(ri).copied().unwrap_or(0.0),
             cells: parts,
         });
     }
@@ -887,8 +903,9 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
 /// either side of the break. A cell aligned to the middle or bottom of the row is aligned within
 /// the part left on the page when all its text fits there, and starts at the top of the cell
 /// otherwise. Each cell's text goes on at the top of the continuation, and the
-/// continuation is as tall as the cell needing the most room, and at least the rest of the row
-/// (a minimum height holds over the pages).
+/// continuation is as tall as the cell needing the most room, and at least the rest of the row;
+/// an at-least row's continuation grows to the row's least height where it is placed (see
+/// [`grow_to_floor`]).
 pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     split_row_with(row, cut, false)
 }
@@ -1155,9 +1172,47 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     }
     // The part left on the page is placed and never split again.
     Some((
-        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new() },
-        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts },
+        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, floor: 0.0, cells: Vec::new() },
+        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, floor: row.floor, cells: parts },
     ))
+}
+
+/// Grow `row`, the part of an at-least row that goes on from the page before, to the row's least
+/// height, as far as the `room` on its page allows.
+///
+/// Measured in Word for Windows: every part of such a row is at least as tall as the row's
+/// height says, the cells' margins and the bands of the table's top border and the last row's
+/// bottom border on top, and a part that tall would not fit on the page ends at the page's
+/// bottom. The text that goes on stays at the top of the part, also in cells aligned to the
+/// middle or bottom; the cells' areas, shading and borders that run to the part's bottom follow
+/// it down.
+pub fn grow_to_floor(row: &mut RowLayout, room: f32) {
+    let height = row.floor.min(room);
+    // Also rejects NaN.
+    if !(row.height > 0.0 && height.is_finite() && height > row.height + 0.01) {
+        return;
+    }
+    let (old, grow) = (row.height, height - row.height);
+    let to_bottom = |y: f32| y >= old - 0.01;
+    for it in &mut row.items {
+        match it {
+            Placed::Fill { rect, .. } | Placed::Cell { rect, .. } if rect.y <= 0.01 && to_bottom(rect.bottom()) => rect.h += grow,
+            Placed::Rule { y0, y1, .. } => {
+                if (*y0 - *y1).abs() < 0.01 {
+                    if to_bottom(*y0) {
+                        *y0 += grow;
+                        *y1 += grow;
+                    }
+                } else if *y1 >= *y0 && to_bottom(*y1) {
+                    *y1 += grow;
+                } else if *y0 > *y1 && to_bottom(*y0) {
+                    *y0 += grow;
+                }
+            }
+            _ => {}
+        }
+    }
+    row.height = height;
 }
 
 type CellItems<'a> = Vec<std::borrow::Cow<'a, [Placed]>>;

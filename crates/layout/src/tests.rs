@@ -4795,31 +4795,68 @@ fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
     assert_eq!(Some(lines), total);
 }
 
-/// A row of a minimum ("at least") height taller than its text that splits across pages keeps
-/// its height over them: the continuation holds the rest of the row, not just the rest of the
-/// text (no public Word reference crosses a page with such a row; this keeps the earlier
-/// behaviour).
+/// Every part of a row of a minimum ("at least") height split across pages is at least that
+/// tall, as measured in Word for Windows (rows at least 30 to 320 pt tall, split over two to four
+/// pages): the part that goes on to the next page holds the text left for it at its top, also
+/// in a cell aligned to the bottom, and what follows the row starts below the whole part.
 #[test]
-fn a_split_at_least_row_keeps_its_height() {
+fn every_part_of_a_split_at_least_row_is_at_least_that_tall() {
     crate::test_fonts();
-    let mut d = Document::from_text("Filler");
-    let mut t = Table::new(1, 1, 400.0);
-    t.rows[0].props.height = Some(1200.0);
-    t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::AtLeast;
-    let text = "Dotted leader lines to fill in by hand later on. ".repeat(80);
-    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
-    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
-    let l = lay(&d);
-    let parts: Vec<f32> = l
-        .pages
-        .iter()
-        .flat_map(|pg| &pg.items)
-        .filter_map(|it| if let Placed::Cell { rect, table, .. } = it { (table.0.len() == 1).then_some(rect.h) } else { None })
-        .collect();
-    assert_eq!(parts.len(), 2, "{parts:?}");
-    // 1200pt and the 0.5pt top and bottom border bands.
-    let sum: f32 = parts.iter().sum();
-    assert!((sum - 1201.0).abs() < 0.05, "{parts:?}");
+    use wordcraft_doc::props::{HeightRule, VAlign};
+    for valign in [VAlign::Top, VAlign::Bottom] {
+        // 140 pt left on the page: a row at least 100 pt tall starts there, and a few of its
+        // twelve 14 pt lines go on to the next page.
+        let (l, pages) = at_least_rows(140.0, 2, |t| {
+            t.rows[0].props.height = Some(100.0);
+            t.rows[0].props.height_rule = HeightRule::AtLeast;
+            t.rows[0].cells[0].props.valign = Some(valign);
+            t.rows[0].cells[0].blocks = lines_in_cell(12, "Line");
+        });
+        assert_eq!(pages, vec![vec![0], vec![0, 1]], "{valign:?}");
+        let page = &l.pages[1];
+        let cell = |row: usize| {
+            page.items.iter().find_map(|it| if let Placed::Cell { row: r, rect, .. } = it { (*r == row).then_some((rect.y, rect.h)) } else { None })
+        };
+        let lines: Vec<f32> = page
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { path, y, .. } if path.0.len() == 4 && path.0[..3] == [1, 0, 0] => Some(*y),
+                _ => None,
+            })
+            .collect();
+        let (Some((top, height)), Some((next, _))) = (cell(0), cell(1)) else { panic!("{valign:?}: no cells on page 2") };
+        // The lines left need less than half of it.
+        assert!(!lines.is_empty() && lines.len() < 4, "{valign:?}: {lines:?}");
+        // 100 pt and the 0.5 pt top border band, as for the row on one page.
+        assert!((height - 100.5).abs() < 0.05, "{valign:?}: the part that goes on is {height} pt tall");
+        assert!((lines[0] - (top + 0.5)).abs() < 0.05, "{valign:?}: its text starts at its top ({top}): {lines:?}");
+        assert!((next - (top + height)).abs() < 0.05, "{valign:?}: the next row at {next} follows the whole part");
+    }
+    // The band at the top of the part is that of the table's top border, which Word draws there,
+    // not of the row's own top border: in a table with 3 pt lines between its rows and none
+    // around it the part of the second row is 100 pt tall, and 103 pt with a 3 pt top border.
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let line = |width: f32| Some(Border { style: if width > 0.0 { BorderStyle::Single } else { BorderStyle::None }, width, color: None, space: 0.0 });
+    for (around, tall) in [(0.0, 100.0), (3.0, 103.0)] {
+        let (l, pages) = at_least_rows(160.0, 3, |t| {
+            t.props.borders =
+                Some(Borders { top: line(around), left: line(0.0), bottom: line(0.0), right: line(0.0), between: line(3.0), inside_v: line(0.0) });
+            t.rows[1].props.height = Some(100.0);
+            t.rows[1].props.height_rule = HeightRule::AtLeast;
+            t.rows[1].cells[0].blocks = lines_in_cell(12, "Line");
+        });
+        assert_eq!(pages, vec![vec![0, 1], vec![1, 2]], "top border {around}");
+        let cell = |row: usize| {
+            l.pages[1]
+                .items
+                .iter()
+                .find_map(|it| if let Placed::Cell { row: r, rect, .. } = it { (*r == row).then_some((rect.y, rect.h)) } else { None })
+        };
+        let (Some((top, height)), Some((next, _))) = (cell(1), cell(2)) else { panic!("top border {around}: no cells on page 2") };
+        assert!((height - tall).abs() < 0.05, "top border {around}: the part that goes on is {height} pt tall");
+        assert!((next - (top + height)).abs() < 0.05, "top border {around}: the next row at {next} follows the part at {top}");
+    }
 }
 
 /// A cut that is NaN or infinite, or a row of a NaN height, splits nothing (`clamp` used to panic
@@ -4836,6 +4873,7 @@ fn split_row_rejects_a_hostile_cut() {
     let line = |y: f32| Placed::Lines { story, path: path.clone(), para: para.clone(), l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal };
     let row = |height: f32, bottom: f32| RowLayout {
         edge: 0.0,
+        floor: 0.0,
         height,
         items: vec![line(0.0), line(150.0)],
         bottom,
@@ -8784,10 +8822,18 @@ fn an_at_least_row_at_the_top_of_a_page_splits_instead_of_moving_on() {
         t.rows[0].props.height_rule = HeightRule::AtLeast;
         t.rows[0].cells[0].blocks = lines_in_cell(80, "Line");
     });
+    // Every part of the row is at least 700 pt tall, down to its page's bottom at most (measured
+    // in Word): the part that goes on fills page 2, and the paragraph after the table starts
+    // page 3.
     assert!(
-        pages.len() >= 2 && pages.iter().all(|p| p == &vec![0]),
+        pages == vec![vec![0], vec![0], vec![]],
         "{pages:?}; helper retains body block1 \"Text above the table\" after table block0{}",
         pagination_fixture_diagnostics("at_least_row/top_of_page", None, &l)
+    );
+    let part = l.pages[1].items.iter().find_map(|it| if let Placed::Cell { rect, .. } = it { Some((rect.y, rect.h)) } else { None });
+    assert!(
+        part.is_some_and(|(y, h)| (y - 72.0).abs() < 0.05 && (h - 648.0).abs() < 0.05),
+        "the part that goes on ends at the page's bottom: {part:?}"
     );
     let data_lines = |layout: &DocLayout, row: u32| {
         let mut paragraphs = std::collections::BTreeSet::new();
@@ -8818,7 +8864,7 @@ fn an_at_least_row_at_the_top_of_a_page_splits_instead_of_moving_on() {
         t.rows[1].cells[0].blocks = lines_in_cell(80, "Line");
     });
     assert!(
-        pages.len() >= 3 && pages.iter().all(|p| p == &vec![0, 1]),
+        pages.iter().filter(|p| !p.is_empty()).count() >= 3 && pages.iter().all(|p| p.is_empty() || p == &vec![0, 1]),
         "{pages:?}; repeated100pt header plus minimum600pt row{}",
         pagination_fixture_diagnostics("at_least_row/repeated_header", None, &l)
     );
@@ -9018,6 +9064,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
     // The row's own shading (from its top) and a nested cell's shading starting below the cut.
     let row = RowLayout {
         edge: 0.0,
+        floor: 0.0,
         height: 200.0,
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
@@ -12681,6 +12728,7 @@ fn split_cell_moves_image_frame() {
             height: 200.0,
             bottom: 4.0,
             edge: 0.0,
+            floor: 0.0,
             items: vec![kept, image, frame],
             cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None }],
         };
