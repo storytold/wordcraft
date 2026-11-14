@@ -151,8 +151,73 @@ pub fn watermark_run(wm: &wordcraft_doc::Watermark, max_chars: usize) -> Option<
 /// in the face its font name resolves to (no fallback face), so a character that face lacks shapes
 /// to glyph id 0. Strict export checks these same glyphs, so the check and the exporters can't
 /// drift.
-pub fn metafile_text_run(t: &wordcraft_metafile::Text) -> (wordcraft_fonts::FaceRef, Vec<ShapedGlyph>) {
-    let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
+pub struct MetafileTextLayout {
+    pub em: f64,
+    pub baseline: f64,
+    pub glyphs: Vec<(f64, f64)>,
+}
+
+/// Lay out shaped glyphs for a metafile text run.
+pub fn layout_metafile_text(
+    t: &craft_metafile::Text,
+    upem: f64,
+    ascent: f64,
+    descent: f64,
+    glyphs: &[(usize, f64, f64, f64)],
+) -> Option<MetafileTextLayout> {
+    let upem = if upem.is_finite() && upem > 0.0 { upem } else { 1000.0 };
+    let cell_h = ascent + descent;
+    let size = if t.font.height == 0.0 { 12.0 } else { f64::from(t.font.height.abs()) };
+    let cell = t.font.height > 0.0;
+    let em = if cell && cell_h.is_finite() && cell_h > 0.0 { size * upem / cell_h } else { size };
+    if !em.is_finite() || em <= 0.0 {
+        return None;
+    }
+    let k = em / upem;
+    let starts: Vec<usize> = t.text.char_indices().map(|(i, _)| i).collect();
+    let dx = (t.dx.len() == starts.len() && !starts.is_empty()).then(|| {
+        let mut cum = Vec::with_capacity(t.dx.len() + 1);
+        let mut x = 0.0;
+        cum.push(x);
+        for d in &t.dx {
+            x += f64::from(*d);
+            cum.push(x);
+        }
+        cum
+    });
+    let mut out = Vec::with_capacity(glyphs.len());
+    let (mut pen, mut cluster_pen, mut last) = (0.0, 0.0, None);
+    for &(cluster, adv, xo, yo) in glyphs {
+        let ci = starts.partition_point(|&b| b <= cluster).saturating_sub(1);
+        if last != Some(ci) {
+            cluster_pen = pen;
+            last = Some(ci);
+        }
+        let x = match &dx {
+            Some(cum) => cum.get(ci).copied().unwrap_or(0.0) + pen - cluster_pen,
+            None => pen,
+        };
+        out.push((x + xo * k, -yo * k));
+        pen += adv * k;
+    }
+    let width = dx.as_ref().and_then(|c| c.last().copied()).unwrap_or(pen);
+    let hoff = match t.h_align {
+        craft_metafile::HAlign::Left => 0.0,
+        craft_metafile::HAlign::Center => -width / 2.0,
+        craft_metafile::HAlign::Right => -width,
+    };
+    let baseline = match t.v_align {
+        craft_metafile::VAlign::Top => ascent * k,
+        craft_metafile::VAlign::Baseline => 0.0,
+        craft_metafile::VAlign::Bottom => -descent * k,
+    };
+    let glyphs = out.into_iter().map(|(x, y)| (x + hoff, y + baseline)).collect();
+    Some(MetafileTextLayout { em, baseline, glyphs })
+}
+
+pub fn metafile_text_run(t: &craft_metafile::Text) -> (wordcraft_fonts::FaceRef, Vec<ShapedGlyph>) {
+    let bold = t.font.weight >= 600;
+    let face = wordcraft_fonts::word::resolve(&t.font.family, bold, t.font.italic).face;
     let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
     (face, shaped)
 }
@@ -265,19 +330,19 @@ impl Found {
 
 /// The text runs of a metafile picture that the exporters draw (a run whose layout fails is not).
 fn meta_runs(bytes: &[u8]) -> Vec<MetaRun> {
-    if !wordcraft_metafile::is_metafile(bytes) {
+    if !craft_metafile::is_metafile(bytes) {
         return Vec::new();
     }
-    let Ok(pic) = wordcraft_metafile::parse(bytes) else { return Vec::new() };
+    let Ok(pic) = craft_metafile::parse(bytes) else { return Vec::new() };
     if !pic.has_size() {
         return Vec::new();
     }
     let mut out = Vec::new();
     for item in &pic.items {
-        let wordcraft_metafile::Item::Text(t) = item else { continue };
+        let craft_metafile::Item::Text(t) = item else { continue };
         let (face, shaped) = metafile_text_run(t);
         let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
-        if t.layout(face.upem, face.ascent, face.descent, &glyphs).is_none() {
+        if layout_metafile_text(t, face.upem, face.ascent, face.descent, &glyphs).is_none() {
             continue;
         }
         let ranges = cluster_ranges(&t.text, &shaped);

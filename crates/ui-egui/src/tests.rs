@@ -6629,9 +6629,8 @@ fn going_to_file_and_back_keeps_the_tab() {
 
 fn png_bytes(c: [u8; 4]) -> Vec<u8> {
     let img = image::RgbaImage::from_fn(20, 10, |_, _| image::Rgba(c));
-    let mut b = Vec::new();
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
-    b
+
+    wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap()
 }
 
 fn insert_picture(a: &mut WordApp, c: [u8; 4]) {

@@ -354,6 +354,15 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
 
     let (cd, directory_disagreement) = reader_checked_directory(bytes, &zip, acc.limits.entries, acc);
     unknown_unreadable |= directory_disagreement;
+    if directory_disagreement {
+        // The reader may have retained an arbitrary decoded-name twin. Even a
+        // source-local finding would attribute that record's contents to an
+        // unproven part identity, so do not inspect the selected bodies.
+        acc.note("the selected entry bodies were not checked because their directory identities could not be established".to_string());
+        acc.set_unknown_unreadable();
+        acc.set_incomplete();
+        return None;
+    }
     let (collapsed_names, unexplained) = check_duplicate_entries(cd.as_ref(), zip.len(), acc);
     unknown_unreadable |= unexplained;
     if unknown_unreadable {
