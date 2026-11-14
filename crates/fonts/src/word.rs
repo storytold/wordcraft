@@ -276,8 +276,8 @@ pub fn twin_with(face: &crate::FontFace, c: char, bold: bool, italic: bool) -> O
     found
 }
 
-/// [`twin_with`] among `groups`, uncached.
-fn twin_among(groups: &[&[&'static str]], db: &FontDb, face: &crate::FontFace, c: char, bold: bool, italic: bool) -> Option<FaceRef> {
+/// [`twin_with`] among `groups` of fonts that measure alike, uncached.
+pub fn twin_among(groups: &[&[&'static str]], db: &FontDb, face: &crate::FontFace, c: char, bold: bool, italic: bool) -> Option<FaceRef> {
     twins_in(groups, charset_base_family(&face.family))
         .filter(|twin| db.has_family(twin))
         .map(|twin| (twin, resolve(twin, bold, italic).face))
