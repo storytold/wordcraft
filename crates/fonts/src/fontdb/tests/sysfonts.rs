@@ -579,6 +579,24 @@ fn east_asian_fonts_are_listed_for_the_asian_text_font_box() {
     assert_eq!(listed(&db), 1);
 }
 
+#[test]
+fn an_east_asian_faces_average_character_width_is_its_half_width_cell() {
+    // #6583: Word's automatic space beside East Asian text is half the average character width
+    // of the face before it, and a platform's text metrics report a double-byte font's average
+    // as the width of its half-width cell, not the full-width figure its OS/2 table carries. The
+    // two faces here share one OS/2 table and differ only in their code pages.
+    let dir = font_dir("avgcharwidth");
+    let song = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, "Songti Width")]);
+    std::fs::write(dir.join("song.ttf"), with_code_pages(&song, 1 << 18)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let latin = db.face(FAMILY, "Regular");
+    let asian = db.face("Songti Width", "Regular");
+    assert!(latin.upem > 0.0 && !latin.is_east_asian() && asian.is_east_asian());
+    // The Latin face keeps the table's figure, which is not half the em.
+    assert!(latin.avg_char_width > latin.upem / 2.0, "{} of {}", latin.avg_char_width, latin.upem);
+    assert_eq!(asian.avg_char_width, asian.upem / 2.0);
+}
+
 /// #848: browsing the font list drew each family's name in its own face, loading every family
 /// shown for good (tens of megabytes per trip through the Font box). Preview faces are read for
 /// the preview alone: however many families are previewed, the database keeps no font data, and

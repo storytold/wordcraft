@@ -1,7 +1,20 @@
-//! Automatic space between Asian text and Latin text or digits (`w:autoSpaceDE`, `w:autoSpaceDN`,
-//! #2358). Word's PDF of the issue's file shows about a quarter of the font size between 院 and 94
-//! at 16 pt. Assertions compare a layout with the flags on to the same layout with them off, never
-//! font metrics (fonts differ between machines; CJK glyphs may be missing).
+//! Automatic space between Asian text and Latin text or digits (`w:autoSpaceDE`, `w:autoSpaceDN`).
+//! The room goes after the first of the two characters and takes that character's own size.
+//!
+//! - **In front of a Latin run** it is a quarter of the font size: Word's PDF of the #2358 file
+//!   shows about that between 院 and 94 at 16 pt, as JIS X 4051 asks.
+//! - **After a Latin run** it is half the Latin face's average character width — 0.1986 of the
+//!   font size for Times New Roman, 0.2203 for Arial, 0.2575 for Calibri, 0.2980 for Courier New,
+//!   0.3041 for Cambria. Measured in Word 16.0.17932.21056 over 26 faces, both orders, 10.5 to
+//!   400 pt, Japanese and Chinese (#6583), from
+//!   `Range.Information(wdHorizontalPositionRelativeToPage)` rather than a PDF, because
+//!   `ExportAsFixedFormat` hung on the machine it was measured on. The room in front stayed a
+//!   quarter of the size whatever face the Latin text used, and the room after a Latin run of
+//!   several characters followed the last of them.
+//!
+//! Assertions compare a layout with the flags on to the same layout with them off, and read the
+//! average character width from the face the layout actually drew with rather than naming a
+//! figure (fonts differ between machines; CJK glyphs may be missing).
 
 use crate::para::ClKind;
 use crate::*;
@@ -41,39 +54,74 @@ fn gaps(d: &Document) -> Vec<f32> {
     panic!("the layouts with and without the automatic space draw with other faces");
 }
 
-/// The default font size of `d`'s first paragraph, a quarter of it.
+/// The default font size of `d`'s first paragraph, a quarter of it: the room in front of a Latin
+/// run (#2358).
 fn quarter(d: &Document) -> f32 {
     let pl = first_para(&lay(d));
     let size = pl.clusters.first().and_then(|c| pl.styles.get(c.style as usize)).unwrap().size;
     (size / 4.0 * 100.0).round() / 100.0
 }
 
-#[test]
-fn digits_and_latin_beside_asian_text_get_a_quarter_of_the_font_size() {
-    crate::test_fonts();
-    let mut d = Document::from_text("法院94年A字");
-    let q = quarter(&d);
-    assert!(q > 0.0);
-    // 院|9 and 4|年 (DN), 年|A and A|字 (DE): the space follows the first of the two.
-    assert_eq!(gaps(&d), [0.0, q, 0.0, q, q, q, 0.0]);
-    para0(&mut d).props.auto_space_dn = Some(false);
-    assert_eq!(gaps(&d), [0.0, 0.0, 0.0, 0.0, q, q, 0.0], "numbers off");
-    let p = para0(&mut d);
-    p.props.auto_space_dn = None;
-    p.props.auto_space_de = Some(false);
-    assert_eq!(gaps(&d), [0.0, q, 0.0, q, 0.0, 0.0, 0.0], "Latin off");
+/// Half the average character width of the face that draws the cluster starting at byte `at`:
+/// the room after a Latin character (#6583).
+fn after(d: &Document, at: usize) -> f32 {
+    let pl = first_para(&lay(d));
+    let c = pl.clusters.iter().find(|c| c.start == at).unwrap();
+    let st = pl.styles.get(c.style as usize).unwrap();
+    let room = st.size * (st.face.avg_char_width / st.face.upem) as f32 / 2.0;
+    (room * 100.0).round() / 100.0
 }
 
 #[test]
-fn the_space_crosses_runs_and_takes_the_asian_size() {
+fn digits_and_latin_beside_asian_text_get_a_quarter_in_front_and_the_latin_average_after() {
+    crate::test_fonts();
+    let mut d = Document::from_text("法院94年A字");
+    let q = quarter(&d);
+    // 4 is at byte 7, A at byte 11: the room after each follows the face that draws it.
+    let (a4, aa) = (after(&d, 7), after(&d, 11));
+    assert!(q > 0.0 && a4 > 0.0 && aa > 0.0);
+    assert_ne!(a4, q, "the test face must not average half its em, or this proves nothing");
+    // 院|9 and 4|年 (DN), 年|A and A|字 (DE): the room follows the first of the two.
+    assert_eq!(gaps(&d), [0.0, q, 0.0, a4, q, aa, 0.0]);
+    para0(&mut d).props.auto_space_dn = Some(false);
+    assert_eq!(gaps(&d), [0.0, 0.0, 0.0, 0.0, q, aa, 0.0], "numbers off");
+    let p = para0(&mut d);
+    p.props.auto_space_dn = None;
+    p.props.auto_space_de = Some(false);
+    assert_eq!(gaps(&d), [0.0, q, 0.0, a4, 0.0, 0.0, 0.0], "Latin off");
+}
+
+#[test]
+fn the_space_crosses_runs_and_takes_the_size_of_the_character_before_it() {
     crate::test_fonts();
     let mut d = Document::from_text("漢A漢");
     let size = |s: f32| move |c: &mut CharProps| c.size = Some(s);
     let p = para0(&mut d);
     p.format(0, 3, &size(20.0)).unwrap();
-    p.format(3, 4, &size(10.0)).unwrap();
+    p.format(3, 4, &size(12.0)).unwrap();
     p.format(4, 7, &size(20.0)).unwrap();
-    assert_eq!(gaps(&d), [5.0, 5.0, 0.0]);
+    // 漢|A takes a quarter of the 20 pt 漢. A|漢 takes the 12 pt A, not the 20 pt 漢: in Word a
+    // 100 pt digit before a 400 pt ideograph moved it 19.85 pt and a 400 pt digit before a
+    // 100 pt one moved it 80.65 pt, both the Latin figure at the Latin size (#6583).
+    let a = after(&d, 3);
+    assert!(a > 0.0 && a < 5.0);
+    assert_eq!(gaps(&d), [5.0, a, 0.0]);
+}
+
+#[test]
+fn the_room_after_a_latin_run_follows_the_latin_face() {
+    crate::test_fonts();
+    // Two faces whose average character widths differ: the room after the digit differs with
+    // them, while the room in front of it stays a quarter of the size.
+    let mut rooms = Vec::new();
+    for family in ["Source Sans 3", "JetBrains Mono"] {
+        let mut d = Document::from_text("漢9漢");
+        para0(&mut d).format(3, 4, &|c: &mut CharProps| c.font = Some(family.to_string())).unwrap();
+        let (q, a) = (quarter(&d), after(&d, 3));
+        assert_eq!(gaps(&d), [q, a, 0.0], "{family}");
+        rooms.push(a);
+    }
+    assert_ne!(rooms[0], rooms[1], "the two faces must differ in average character width");
 }
 
 #[test]
@@ -97,8 +145,9 @@ fn a_field_result_is_classed_by_the_text_it_shows() {
     assert!(pl.shown.iter().any(|s| s.0 == at && s.1 == "12"), "the field shows its result: {:?}", pl.shown);
     let q = quarter(&d);
     assert_eq!(pl.clusters[at].kind, ClKind::Text);
-    // 漢|1 and 2|漢: the field's first and last characters, not the object it stands for.
-    assert_eq!(gaps(&d), [q, q, 0.0]);
+    // 漢|1 and 2|漢: the field's first and last characters, not the object it stands for. The
+    // room after the field follows the face it draws its result in.
+    assert_eq!(gaps(&d), [q, after(&d, 3), 0.0]);
 }
 
 #[test]
@@ -114,8 +163,7 @@ fn a_character_grid_the_paragraph_snaps_to_turns_it_off() {
     assert!(gaps(&d).iter().all(|g| *g == 0.0), "{:?}", gaps(&d));
     // A line grid alone, or a paragraph that doesn't snap, keeps it.
     for d in [with(DocGridType::Lines, true), with(DocGridType::LinesAndChars, false)] {
-        let q = quarter(&d);
-        assert_eq!(gaps(&d), [0.0, q, 0.0, q, 0.0]);
+        assert_eq!(gaps(&d), [0.0, quarter(&d), 0.0, after(&d, 7), 0.0]);
     }
 }
 
