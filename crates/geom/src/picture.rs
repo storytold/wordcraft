@@ -259,14 +259,14 @@ pub fn decode_for_drawing(bytes: &[u8], budget: u64, max_side: u32) -> Result<Dy
     // Header-only size check before anything is allocated: the decoder's buffer at its own pixel
     // size (8 bytes for 16-bit RGBA) and the RGBA conversion are charged.
     let (hw, hh, native) = {
-        let d = reader()?.into_decoder().map_err(broken)?;
+        let d = reader()?.into_decoder().map_err(|error| broken(&error))?;
         let (w, h) = d.dimensions();
         (w, h, u64::from(d.color_type().bytes_per_pixel()))
     };
     if !crate::decode_peak_fits(hw, hh, native, budget) {
         return Err(Refusal::TooLarge { width: hw, height: hh });
     }
-    let img = reader()?.decode().map_err(broken)?;
+    let img = reader()?.decode().map_err(|error| broken(&error))?;
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 || w > max_side || h > max_side {
         return Err(Refusal::Broken("it has no pixels or a side past the limit".into()));
