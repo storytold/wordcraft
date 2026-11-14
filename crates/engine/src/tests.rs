@@ -5415,15 +5415,32 @@ fn rich_paste_and_sample_expansion_respect_paragraph_limit() {
     }
     assert_eq!(body_texts(&rich), before, "rich paste changed the document");
 
-    let mut s = s();
-    // Each formula is ended by Enter and expands to 200 paragraphs. 51 lines would make
-    // 10,251 paragraphs despite the request itself having only 52 split pieces.
+    let mut expanded = s();
+    // Each formula is ended by Enter and expands to 200 paragraphs of its own. 51 of them
+    // make 10,200 paragraphs, though the request itself has only 52 lines.
     let text = "=rand(200,1)\n".repeat(51);
-    match s.run("text.insert", &json!({"text": text, "paragraphs": true, "raw": true})) {
-        Err(CmdError::Params(m)) => assert!(m.contains("would make 10251 paragraphs"), "{m}"),
+    match expanded.run("text.insert", &json!({"text": text, "paragraphs": true, "raw": true})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("would make 10200 paragraphs"), "{m}"),
         r => panic!("sample-text expansion was not refused: {r:?}"),
     }
-    assert_eq!(body_texts(&s), vec![String::new()], "sample expansion changed the document");
+    assert_eq!(body_texts(&expanded), vec![String::new()], "sample expansion changed the document");
+
+    // A formula already at the caret is expanded by the first Enter, so it counts too:
+    // 49 more of them and one plain line make 10,001 paragraphs.
+    let mut at_caret = s();
+    run(&mut at_caret, "text.insert", json!({"text": "=rand(200,1)", "raw": true}));
+    let text = format!("\n{}", "=rand(200,1)\n".repeat(49)) + "x\n";
+    match at_caret.run("text.insert", &json!({"text": text, "paragraphs": true, "raw": true})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("would make 10001 paragraphs"), "{m}"),
+        r => panic!("the formula at the caret was not counted: {r:?}"),
+    }
+    assert_eq!(body_texts(&at_caret), vec!["=rand(200,1)"], "the expansion changed the document");
+
+    // At the cap the expansion still goes in: 50 formulas make exactly 10,000 paragraphs.
+    let mut at_cap = s();
+    let text = "=rand(200,1)\n".repeat(50);
+    run(&mut at_cap, "text.insert", json!({"text": text, "paragraphs": true, "raw": true}));
+    assert_eq!(at_cap.doc.paragraph_count(), MAX_INSERTED_PARAGRAPHS + 1);
 }
 
 /// A refused text leaves the document exactly as it was: the selection it would have replaced
@@ -5442,6 +5459,22 @@ fn a_refused_text_leaves_the_selection_alone() {
         r => panic!("not refused: {r:?}"),
     }
     assert_eq!(body_texts(&s), before, "the selection was deleted anyway");
+}
+
+/// The count runs before the text is inserted, so a refused text leaves the selection it
+/// would have replaced alone: the helper itself refuses it, not the command around it.
+#[test]
+fn a_refused_text_leaves_the_selection_alone_without_the_command() {
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "keep this"}));
+    run(&mut s, "select.text", json!({"text": "keep"}));
+    let before = body_texts(&s);
+    let selection = s.sel.clone();
+    let over = "x\r".repeat(MAX_INSERTED_PARAGRAPHS + 1);
+    assert!(crate::cmd::type_text(&mut s, &over).is_err(), "not refused");
+    assert_eq!(body_texts(&s), before, "the selection was deleted anyway");
+    assert_eq!(s.sel, selection, "the selection moved");
 }
 
 fn hostile_junk() -> [serde_json::Value; 10] {

@@ -363,11 +363,14 @@ pub const MAX_INSERTED_PARAGRAPHS: usize = 10_000;
 /// how many paragraphs the insertion would add to the document.
 pub(super) fn check_inserted_paragraphs(paragraphs: usize) -> Result<(), CmdError> {
     if paragraphs > MAX_INSERTED_PARAGRAPHS {
-        return Err(CmdError::Params(format!(
-            "the insertion would make {paragraphs} paragraphs; a call may make at most {MAX_INSERTED_PARAGRAPHS} paragraphs"
-        )));
+        return Err(too_many_paragraphs(paragraphs));
     }
     Ok(())
+}
+
+/// The error an insertion over the limit gives.
+fn too_many_paragraphs(paragraphs: usize) -> CmdError {
+    CmdError::Params(format!("the insertion would make {paragraphs} paragraphs; a call may make at most {MAX_INSERTED_PARAGRAPHS} paragraphs"))
 }
 
 /// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
@@ -399,6 +402,20 @@ pub fn type_text_with_lang(s: &mut Session, text: &str, language: Option<&str>) 
 /// right-to-left direction when its first strong letter is RTL, and returns whether content or state
 /// changed.
 fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>) -> Result<InsertEffect, CmdError> {
+    // The text is counted before any of it is typed, so a text over the limit is refused with
+    // the document untouched. Each piece of it is a paragraph of about a kilobyte of document,
+    // so a megabyte of line breaks is a gigabyte of document.
+    //
+    // The paragraphs it makes are the breaks between its pieces, not the pieces: the first
+    // piece joins the paragraph the caret is in, so it adds nothing. The count is the same one
+    // the aggregate checks count (the breaks a replacement carries), so a text that one route
+    // accepts is not refused by another.
+    let breaks = text.split(['\r', '\u{2029}']).count().saturating_sub(1);
+    // A one-line control takes no paragraph break: the text stays one paragraph there, so the
+    // count does not apply to it.
+    if breaks > MAX_INSERTED_PARAGRAPHS && !(enter && controls::suppresses_paragraph_breaks(s)) {
+        return Err(too_many_paragraphs(breaks));
+    }
     // Formatting Backspace carried over is for typing at the place it was deleted (#6518).
     if enter {
         s.drop_stale_carried();
@@ -414,6 +431,12 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     let placeholder_changed = prepared.is_some();
     if let Some(p) = prepared {
         props = p;
+    }
+    // The caret may have moved since the count (a field end, a check box that is left before
+    // the text goes in), so the count is checked again here, before the selection is deleted:
+    // a refused text leaves the document and the selection as they were.
+    if breaks > MAX_INSERTED_PARAGRAPHS && !(enter && controls::refuses_paragraph(s)) {
+        return Err(too_many_paragraphs(breaks));
     }
     // Pasted text is text: pending properties left by AutoCorrect don't give it a symbol's font (#2036).
     if !enter {
@@ -443,17 +466,6 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     // nothing, so the lines run together and the control stays one paragraph (pasted text keeps
     // its breaks, as before).
     let no_breaks = enter && controls::refuses_paragraph(s);
-    // The text is counted before any of it is typed, so a text over the limit is refused with
-    // the document untouched. Each piece of it is a paragraph of about a kilobyte of document,
-    // so a megabyte of line breaks is a gigabyte of document.
-    //
-    // The paragraphs it makes are the breaks between its pieces, not the pieces: the first
-    // piece joins the paragraph the caret is in, so it adds nothing. The count is the same one
-    // the aggregate checks count (the breaks a replacement carries), so a text that one route
-    // accepts is not refused by another.
-    if !no_breaks {
-        check_inserted_paragraphs(text.split(['\r', '\u{2029}']).count().saturating_sub(1))?;
-    }
     for part in text.split(['\r', '\u{2029}']) {
         if !first && !no_breaks {
             at = split_para_as(s, &at, enter)?;

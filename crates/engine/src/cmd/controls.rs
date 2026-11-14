@@ -349,6 +349,15 @@ pub fn refuses_paragraph(s: &Session) -> bool {
     })
 }
 
+/// Whether the paragraph breaks in a text are suppressed where it goes in: a one-line
+/// control takes no paragraph break, so the text stays one paragraph there. A control that
+/// takes no typing (a check box, a drop-down) is left before the text goes in, so its
+/// breaks are honored like any other text's.
+pub fn suppresses_paragraph_breaks(s: &Session) -> bool {
+    let Some(r) = s.doc.control_at(&s.sel.focus) else { return false };
+    refuses_paragraph(s) && r.control.kind.takes_typing()
+}
+
 /// Before a deletion of `a..b`: refuse deleting a control that can't be deleted, or editing
 /// content that can't be edited.
 pub fn check_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<(), CmdError> {

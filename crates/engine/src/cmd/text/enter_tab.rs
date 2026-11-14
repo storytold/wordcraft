@@ -41,13 +41,19 @@ fn sample_formula(text: &str) -> Option<(usize, usize, &'static [&'static str])>
     Some((paragraphs, lines, sentences))
 }
 
-/// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
-fn sample_text(s: &Session) -> Option<String> {
+/// The paragraph the sample-text formula would expand, if the caret is at the end of one.
+fn sample_paragraph(s: &Session) -> Option<&wordcraft_doc::Paragraph> {
     let at = &s.sel.focus;
     let para = s.doc.para_at(at)?;
     if !s.sel.is_collapsed() || at.off != para.len() {
         return None;
     }
+    Some(para)
+}
+
+/// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
+fn sample_text(s: &Session) -> Option<String> {
+    let para = sample_paragraph(s)?;
     let (paragraphs, lines, sentences) = sample_formula(&para.text)?;
     let mut text = String::new();
     for _ in 0..paragraphs {
@@ -60,6 +66,13 @@ fn sample_text(s: &Session) -> Option<String> {
         text.push('\r');
     }
     Some(text)
+}
+
+/// The paragraphs the sample-text formula at the caret expands into, if Enter would expand
+/// it now.
+fn sample_expansion_paragraphs(s: &Session) -> Option<usize> {
+    let para = sample_paragraph(s)?;
+    sample_formula(&para.text).map(|(paragraphs, _, _)| paragraphs)
 }
 
 /// `text.newParagraph`: Enter, unless the selection is in a control that takes no paragraph break.
@@ -106,11 +119,24 @@ pub(super) fn insert_paragraphs(s: &mut Session, text: &str) -> CmdResult {
         )));
     }
     typing_options(s, &text);
+    // The paragraphs the call really makes are counted as it goes: before each Enter, what
+    // that Enter will make is known — a plain break, the paragraphs a sample-text formula
+    // expands into, or the cells of the table a table line becomes. A request over the limit
+    // is refused before the paragraphs are made.
+    let mut made = 0usize;
     for (i, line) in lines.iter().enumerate() {
         if i > 0 {
             if crate::cmd::controls::refuses_paragraph(s) {
                 return Err(CmdError::Disabled("text.insert: this content control takes no paragraph breaks".into()));
             }
+            let adds = paragraphs_of_enter(s);
+            if made + adds > MAX_TYPED_PARAGRAPHS {
+                return Err(CmdError::Params(format!(
+                    "text.insert: `text` would make {} paragraphs; type at most {MAX_TYPED_PARAGRAPHS} paragraphs per call",
+                    made + adds
+                )));
+            }
+            made += adds;
             enter(s, false)?;
         }
         if !line.is_empty() {
@@ -120,25 +146,63 @@ pub(super) fn insert_paragraphs(s: &mut Session, text: &str) -> CmdResult {
     sel_result(s)
 }
 
+/// The paragraphs the Enter at the caret makes: a plain break, the paragraphs a
+/// sample-text formula expands into, or the cells of the table a table line becomes.
+fn paragraphs_of_enter(s: &Session) -> usize {
+    if let Some(paragraphs) = sample_expansion_paragraphs(s) {
+        return paragraphs;
+    }
+    if let Some(cols) = super::autoformat::table_line(s, &s.sel.focus) {
+        // The line's paragraph becomes a table of one row: a paragraph per cell, less the
+        // paragraph it replaces.
+        return cols.len().saturating_sub(1);
+    }
+    1
+}
+
 /// The paragraphs `lines` would make: the breaks between them, plus the paragraphs a
 /// sample-text formula expands to when Enter ends it.
 ///
-/// A formula expands only when it ends a paragraph of its own, so the first line is counted
-/// only when the caret is in an empty paragraph: it joins the paragraph it is typed into
-/// otherwise.
+/// A formula expands only when it ends a paragraph of its own, so what the first Enter
+/// expands is the paragraph the first line is typed into: the caret's paragraph with the
+/// selection replaced by that line.
 fn paragraphs_made(s: &Session, lines: &[&str]) -> usize {
     let mut n = lines.len().saturating_sub(1);
-    let first_alone = s.doc.para_at(&s.sel.focus).is_some_and(|p| p.text.is_empty());
-    // Only a line an Enter follows is expanded.
-    for (i, line) in lines.iter().take(lines.len().saturating_sub(1)).enumerate() {
-        if i == 0 && !first_alone {
-            continue;
-        }
+    // The first Enter ends the paragraph the first line is typed into.
+    if let Some(text) = lines.first().and_then(|first| first_paragraph_text(s, first))
+        && let Some((paragraphs, _, _)) = sample_formula(&text)
+    {
+        n += paragraphs - 1;
+    }
+    // The other Enters end the paragraph of the line before them.
+    for line in lines.iter().skip(1).take(lines.len().saturating_sub(2)) {
         if let Some((paragraphs, _, _)) = sample_formula(line) {
-            n += paragraphs;
+            n += paragraphs - 1;
         }
     }
     n
+}
+
+/// The text of the paragraph the first line is typed into, as it will be when the first
+/// Enter ends it: the caret's paragraph with the selection replaced by that line.
+///
+/// `None` when the first line does not leave the caret at the end of that paragraph, which
+/// is where a formula has to be for Enter to expand it.
+fn first_paragraph_text(s: &Session, first: &str) -> Option<String> {
+    let para = s.doc.para_at(&s.sel.focus)?;
+    let text = para.text.as_str();
+    let path = &s.sel.focus.path;
+    let (a, b) = s.sel.ordered();
+    // The caret ends where the first line ends: at the paragraph's end only when the
+    // selection ended there.
+    if &b.path != path || b.off != text.len() {
+        return None;
+    }
+    let start = if &a.path == path { a.off.min(text.len()) } else { 0 };
+    let mut out = String::with_capacity(text.len() + first.len());
+    out.push_str(text.get(..start)?);
+    out.push_str(first);
+    Some(out)
 }
 
 /// Enter's paragraph break once a control has allowed it: `=rand()` sample text, AutoFormat of a
