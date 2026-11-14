@@ -66,6 +66,11 @@ pub struct ResolvedChar {
     pub rtl: bool,
     /// The whole run uses the complex-script properties (`w:cs`).
     pub cs: bool,
+    /// The run says it is not complex script (`w:cs w:val="0"`): its Thai, Indic, Arabic or
+    /// Hebrew characters take its other font, size, bold and italic, as Word draws them in a run
+    /// that isn't complex script or right to left.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cs_off: bool,
     /// Complex-script font, size, bold and italic (Arabic, Persian, Hebrew… text).
     pub font_cs: String,
     /// East Asian font (Chinese, Japanese and Korean text), when one is set.
@@ -115,6 +120,7 @@ impl ResolvedChar {
             lang: c.lang.clone(),
             rtl: c.rtl.unwrap_or(false),
             cs: c.cs.unwrap_or(false),
+            cs_off: c.cs == Some(false),
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
             font_ea: c.font_ea.clone(),
             size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
@@ -133,9 +139,11 @@ impl ResolvedChar {
     pub fn kerned(&self) -> bool {
         self.kern > 0.0 && self.size >= self.kern
     }
-    /// Does a character of this run use the complex-script properties?
+    /// Does a character of this run use the complex-script properties? Every character of a
+    /// right-to-left or complex-script run does; otherwise a complex-script character does,
+    /// unless the run says it is not complex script.
     pub fn uses_complex(&self, c: char) -> bool {
-        self.rtl || self.cs || crate::bidi::is_complex_script(c)
+        self.rtl || self.cs || (!self.cs_off && crate::bidi::is_complex_script(c))
     }
     /// The size glyphs are drawn and measured at. Word sets superscript and subscript text at
     /// 0.65 of the run's size rounded to the half point, a font size the format can store
@@ -625,5 +633,23 @@ mod tests {
         let back: ResolvedPara = serde_json::from_value(v).unwrap();
         assert_eq!(back.padding, [0.0; 4]);
         assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
+    }
+
+    /// Measured in Word: Thai text in a run that says it is not complex script (`w:cs w:val="0"`)
+    /// is drawn in the run's other font and size, while a run that says nothing still draws Thai,
+    /// Lao and Indic characters with the complex-script formatting, and a complex-script or
+    /// right-to-left run draws every character with it.
+    #[test]
+    fn a_run_that_is_not_complex_script_draws_thai_in_its_own_formatting() {
+        let s = StyleSheet::builtin();
+        let rc = |c: CharProps| s.resolve_char(None, &c);
+        let plain = rc(CharProps::default());
+        assert!(plain.uses_complex('ท') && plain.uses_complex('क') && !plain.uses_complex('a'));
+        let off = rc(CharProps { cs: Some(false), ..Default::default() });
+        assert!(!off.uses_complex('ท') && !off.uses_complex('ລ') && !off.uses_complex('क') && !off.uses_complex('a'));
+        let on = rc(CharProps { cs: Some(true), ..Default::default() });
+        assert!(on.uses_complex('ท') && on.uses_complex('a'));
+        let rtl = rc(CharProps { cs: Some(false), rtl: Some(true), ..Default::default() });
+        assert!(rtl.uses_complex('ท') && rtl.uses_complex('a'), "a right-to-left run stays complex script");
     }
 }
