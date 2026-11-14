@@ -578,12 +578,15 @@ fn page_setup_launcher_opens_the_dialog() {
 #[test]
 fn smart_art_picker_inserts_and_design_tab_follows_the_selection() {
     let mut app = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
-    // Insert › SmartArt without a layout opens the picker.
+    // Insert › Diagram without a layout opens the picker.
     let _ = app.run("insert.smartArt", json!({}));
     assert_eq!(app.dialog.as_ref().map(crate::dialogs::Dialog::name), Some("insertSmartArt"));
     app.dialog = None;
     app.run("insert.smartArt", json!({"layout": "cycle"})).unwrap();
     assert!(contextual_tabs(&app.session).contains(&"SmartArt Design"));
+    app.run("ui.tab", json!({"tab": "SmartArt Design"})).unwrap();
+    assert_eq!(app.ui.tab, "SmartArt Design");
+    assert_eq!(crate::i18n::tr(crate::i18n::Lang::EN, &app.ui.tab), "Diagram Design");
     app.run("smartArt.textPane", json!({})).unwrap();
     assert!(app.session.view.smart_art_pane);
     app.session.run("select.collapse", &json!({"end": true})).unwrap();

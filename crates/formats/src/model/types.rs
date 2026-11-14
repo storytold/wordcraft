@@ -56,6 +56,7 @@ pub(crate) enum Dropped {
     /// Runs' links and fonts past [`MAX_RUN_STRINGS`].
     RunStrings,
     /// A style name cut to [`MAX_FONT_NAME`].
+    #[allow(dead_code)]
     StyleName,
     /// ODT `text:s` spaces past the document's budget.
     Spaces,
