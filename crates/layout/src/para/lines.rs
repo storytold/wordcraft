@@ -7,7 +7,7 @@ use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
 use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
 
 /// Narrow cells and float spans must retain their usable width.
-const MIN_LINE_WIDTH: f32 = 1.0;
+pub(super) const MIN_LINE_WIDTH: f32 = 1.0;
 
 /// What a paragraph's lines are broken with: the paragraph's measures and the state the lines
 /// are broken in, from one to the next.
@@ -127,7 +127,7 @@ struct DecimalScan {
 }
 
 /// The objects' exclusions mirrored across a line of `width`, for a right-to-left paragraph.
-fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
+pub(super) fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
     exclusions
         .iter()
         .map(|e| Exclusion {
@@ -168,6 +168,7 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
 }
 
 impl<'e> Breaker<'e> {
+    /// Create a line breaker for laying out `pl` within the given environment and exclusions.
     fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
@@ -196,7 +197,7 @@ impl<'e> Breaker<'e> {
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
-            bidi: rp.bidi || !pl.bidi_levels.is_empty(),
+            bidi: rp.bidi || !pl.bidi_levels.is_empty() || pl.clusters.iter().any(|c| c.level.is_some_and(|l| l > 0)),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
             // Keep the existing estimate for shapes and for non-exact spacing.
@@ -1062,7 +1063,7 @@ impl Scan {
 
 /// Narrowest span text flows into beside a floating object, points. Word puts an empty
 /// paragraph beside a floating table in a 21.3pt gap but not in an 18.6pt one.
-const MIN_SPAN: f32 = 20.0;
+pub(super) const MIN_SPAN: f32 = 20.0;
 
 /// How far below a line's top its baseline sits. Multiple spacing at or above single keeps the
 /// text at the top of the line and puts the extra leading below the baseline; below single it
@@ -1079,7 +1080,7 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
 /// here, try again at `y` (below what's in the way).
-fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
+pub(super) fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
     let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.intersects_row(top, h, table_h, lo, hi)).collect();
     if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {
         return Err(below);

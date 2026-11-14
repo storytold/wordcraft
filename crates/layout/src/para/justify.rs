@@ -127,7 +127,7 @@ pub(super) fn hyphenation_points(
         .clusters
         .iter()
         .enumerate()
-        .filter(|(_, c)| matches!(c.kind, ClKind::Text | ClKind::Marker) && bytes.binary_search(&c.end).is_ok())
+        .filter(|(_, c)| c.start < c.end && matches!(c.kind, ClKind::Text | ClKind::Marker) && bytes.binary_search(&c.end).is_ok())
         .map(|(i, _)| i as u32)
         .collect();
     out.dedup();

@@ -667,7 +667,18 @@ fn output_shows_fresh_seq_styleref_and_ref_results() {
             .iter()
             .flat_map(|pg| &pg.items)
             .flat_map(|it| match it {
-                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                wordcraft_layout::Placed::Lines { para, .. } => {
+                    let mut by_obj: Vec<(usize, String)> = Vec::new();
+                    for (k, s, _) in &para.shown {
+                        let start = para.clusters.get(*k).map(|c| c.start).unwrap_or(*k);
+                        if let Some(last) = by_obj.last_mut().filter(|(st, _)| *st == start) {
+                            last.1.push_str(s);
+                        } else {
+                            by_obj.push((start, s.clone()));
+                        }
+                    }
+                    by_obj.into_iter().map(|(_, s)| s).collect()
+                }
                 _ => vec![],
             })
             .collect()
@@ -855,7 +866,18 @@ fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
             .items
             .iter()
             .flat_map(|it| match it {
-                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                wordcraft_layout::Placed::Lines { para, .. } => {
+                    let mut by_obj: Vec<(usize, String)> = Vec::new();
+                    for (k, s, _) in &para.shown {
+                        let start = para.clusters.get(*k).map(|c| c.start).unwrap_or(*k);
+                        if let Some(last) = by_obj.last_mut().filter(|(st, _)| *st == start) {
+                            last.1.push_str(s);
+                        } else {
+                            by_obj.push((start, s.clone()));
+                        }
+                    }
+                    by_obj.into_iter().map(|(_, s)| s).collect()
+                }
                 _ => vec![],
             })
             .collect()

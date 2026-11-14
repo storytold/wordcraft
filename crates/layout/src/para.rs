@@ -222,6 +222,7 @@ impl ParaLayout {
             let next_start = self.lines.get(i + 1).map(|n| n.start);
             match next_start {
                 Some(ns) if off < ns => return i,
+                Some(ns) if off == ns && self.clusters.get(l.c0..l.c1).is_some_and(|cs| cs.iter().any(|c| c.start == off)) => return i,
                 Some(_) => {}
                 None => return i,
             }
@@ -268,18 +269,46 @@ impl ParaLayout {
         }
     }
 
+    /// Returns whether cluster `k` on line `li` is a continuation fragment of an inline
+    /// object that started on an earlier line.
+    pub(crate) fn is_continuation_cluster(&self, li: usize, k: usize) -> bool {
+        let Some(l) = self.lines.get(li) else { return false };
+        if l.c0 == 0 || k < l.c0 || k >= l.c1 {
+            return false;
+        }
+        let Some(c) = self.clusters.get(k) else { return false };
+        if c.start >= c.end {
+            return false;
+        }
+        self.clusters.get(l.c0 - 1).is_some_and(|prev| prev.start == c.start && prev.end == c.end)
+    }
+
+    /// Returns whether line `li` begins with a continuation fragment of an inline
+    /// object that started on an earlier line.
+    pub(crate) fn is_line_continuation(&self, li: usize) -> bool {
+        let Some(l) = self.lines.get(li) else { return false };
+        self.is_continuation_cluster(li, l.c0)
+    }
+
     /// Caret offsets a click or arrow key can reach on line `li`: whole-grapheme starts and the
     /// line end, except after a line-ending break or past a wrapped line's trailing space.
     pub fn line_offsets(&self, li: usize) -> Vec<usize> {
         let Some(l) = self.lines.get(li) else { return Vec::new() };
-        let mut v: Vec<usize> =
-            (l.c0..l.c1).filter_map(|k| self.clusters.get(k).filter(|c| self.is_edit_boundary(c.start)).map(|c| c.start)).collect();
+        let mut v: Vec<usize> = (l.c0..l.c1)
+            .filter_map(|k| {
+                let c = self.clusters.get(k)?;
+                let off = if self.is_continuation_cluster(li, k) { c.end } else { c.start };
+                self.is_edit_boundary(off).then_some(off)
+            })
+            .collect();
+        v.dedup();
         let last_break =
             l.c1 > l.c0 && self.clusters.get(l.c1 - 1).is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak));
         let wrapped = l.c1 > l.c0 && l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some();
         if !last_break && !wrapped || l.c1 == l.c0 {
             v.push(l.stop);
         }
+        v.dedup();
         v
     }
 
@@ -296,11 +325,17 @@ impl ParaLayout {
             }
             return best.0;
         }
-        let mut best = l.start;
+        let mut best =
+            if l.c1 > l.c0 && self.is_continuation_cluster(li, l.c0) { self.clusters.get(l.c0).map(|c| c.end).unwrap_or(l.start) } else { l.start };
         let mut bestd = f32::MAX;
         for k in l.c0..=l.c1 {
             let Some(cx) = l.xs.get(k - l.c0) else { break };
-            let off = if k < l.c1 { self.clusters.get(k).map(|c| c.start).unwrap_or(l.stop) } else { l.stop };
+            let off = if k < l.c1 {
+                let c = self.clusters.get(k);
+                if self.is_continuation_cluster(li, k) { c.map(|c| c.end).unwrap_or(l.stop) } else { c.map(|c| c.start).unwrap_or(l.stop) }
+            } else {
+                l.stop
+            };
             if !self.is_edit_boundary(off) {
                 continue;
             }
