@@ -597,3 +597,25 @@ fn citation_at_document_end_stays_closed() {
     let back = wordcraft_engine::io::open_bytes("probe.docx", &bytes).unwrap();
     assert_eq!(back.field_ranges(StoryRef::Body).len(), 1);
 }
+
+#[test]
+fn better_notes_html_citations_are_found_as_zotero_fields() {
+    // #5581: Better Notes for Zotero writes citations and the bibliography as Word's HTML field
+    // markup in `supportFields` comments (in a .docx `w:altChunk`); Refresh must find them.
+    let field = |code: &str, result: &str| {
+        format!(
+            "<!--[if supportFields]>\n<span style='mso-element:field-begin'></span>\n<span style='mso-spacerun:yes'> </span>\nADDIN ZOTERO_{code}\n<span style='mso-element:field-separator'></span>\n<span style='mso-no-proof:yes'>{result}</span>\n<span style='mso-element:field-end'></span>\n<![endif]-->"
+        )
+    };
+    let esc = |s: &str| s.replace('"', "&quot;");
+    let html = format!(
+        "<html><body><p>As shown {} here.</p><p>{}</p></body></html>",
+        field(&esc(CITE), "(Doe, 2020)"),
+        field(&esc(BIBL), "Doe, J. (2020). A title.")
+    );
+    let doc = wordcraft_formats::html::import_page(&html, &|_| None);
+    let found = fields::list(&doc);
+    assert_eq!(found.iter().map(|f| f.code.as_str()).collect::<Vec<_>>(), [CITE, BIBL]);
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(text.contains("As shown (Doe, 2020) here."), "{text}");
+}
