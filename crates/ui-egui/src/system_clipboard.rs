@@ -47,7 +47,18 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         let own = app.clipboard_published && app.services.clipboard_is_own.as_ref().is_some_and(|f| f());
         o.insert("privateClipboard".into(), Value::Bool(own));
     }
-    if !o.contains_key("text")
+    // Out of reach, the host's clipboard holds nothing, or only another program's earlier copy
+    // that the compositor gave Xwayland: read none of it.
+    let unreachable = app.services.clipboard_unreachable.as_ref().is_some_and(|f| f());
+    if unreachable
+        && params.get("text").is_none()
+        && let Some(r) = defer(app, id, params)
+    {
+        return Some(r);
+    }
+    let o = params.as_object_mut()?;
+    if !unreachable
+        && !o.contains_key("text")
         && let Some(text) = app.services.clipboard_text.as_ref().and_then(|f| f()).filter(|t| !t.is_empty())
     {
         // Picture files copied in a file manager reach us as their paths: paste the pictures,
@@ -60,15 +71,11 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
             return Some(r);
         }
         o.insert("text".into(), Value::String(text));
-    } else if !o.contains_key("text")
-        && let Some(r) = defer(app, id, params)
-    {
-        return Some(r);
     }
     let o = params.as_object_mut()?;
     // Keep Text Only needs nothing more; a caller that passed formats of its own (an agent, Paste
     // Special's OK) has them already.
-    if id == "edit.pasteText" || ["html", "rtf", "picture"].iter().any(|k| o.contains_key(*k)) {
+    if id == "edit.pasteText" || unreachable || ["html", "rtf", "picture"].iter().any(|k| o.contains_key(*k)) {
         return None;
     }
     let fits = |t: &String| !t.trim().is_empty() && t.len() <= MAX_PASTE_BYTES;
@@ -170,9 +177,10 @@ pub(crate) enum Scan {
 }
 
 /// When the host can't open the system clipboard at all (a Wayland session without a working
-/// data-control protocol and with no X11 fallback, #1368, #6635), the menu and ribbon Paste found
-/// no text and failed while Ctrl+V worked: Ctrl+V's text comes through egui's own Wayland
-/// clipboard. Ask egui for a paste the same way and run the command when its text arrives
+/// data-control protocol and with no X11 fallback, #1368, #6635), or sees only what the
+/// compositor copies over to Xwayland (a Wayland session without data-control), the menu and
+/// ribbon Paste found no text, or another program's earlier copy, while Ctrl+V worked: Ctrl+V's
+/// text comes through egui's own Wayland clipboard. Called only then ([`fill`]). Ask egui for a paste the same way and run the command when its text arrives
 /// ([`deliver`]), once the menu it came from has closed ([`tick`]). Paste Special waits the same
 /// way, and its dialog then lists the text (#6635); its dialog's OK, which names the format
 /// chosen, runs at once. egui answers in the input of the window that asked: the main window's
@@ -182,10 +190,7 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
     // A paste that brings its own content (an agent's html, rtf or picture) has what it needs;
     // only Keep Text Only must have the clipboard's text.
     let brings_content = ["html", "rtf", "picture"].iter().any(|k| params.get(*k).is_some());
-    if (id == "edit.pasteSpecial" && params.get("as").is_some())
-        || (brings_content && id != "edit.pasteText")
-        || !app.services.clipboard_unreachable.as_ref().is_some_and(|f| f())
-    {
+    if (id == "edit.pasteSpecial" && params.get("as").is_some()) || (brings_content && id != "edit.pasteText") {
         return None;
     }
     let ctx = app.ctx.clone()?;
@@ -833,6 +838,29 @@ mod tests {
         let (_, left) = frame(&mut a, &ctx, 0.2, vec![paste("again")]);
         assert_eq!(left.len(), 1, "a later paste event is Ctrl+V's own");
         assert_eq!(first_para(&a), "from another program");
+    }
+
+    /// A Wayland session without data-control, where the host's clipboard opens through Xwayland
+    /// but holds only another program's earlier copy: the menu Paste still waits for egui's text,
+    /// and pastes neither that copy's text nor its HTML.
+    #[test]
+    fn menu_paste_ignores_the_hosts_copy_when_it_is_out_of_reach() {
+        let services = Services {
+            clipboard_text: Some(Box::new(|| Some("an older copy".into()))),
+            clipboard_html: Some(Box::new(|| Some("<p>an <b>older</b> copy</p>".into()))),
+            clipboard_unreachable: Some(Box::new(|| true)),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        let ctx = egui::Context::default();
+        let (r, _) = menu_paste(&mut a, &ctx, "edit.paste");
+        assert_eq!(r.unwrap(), json!({"pending": "paste"}));
+        frame(&mut a, &ctx, 0.01, vec![]);
+        frame(&mut a, &ctx, 0.02, vec![]);
+        assert!(frame(&mut a, &ctx, 0.03, vec![]).0, "egui is asked");
+        frame(&mut a, &ctx, 0.1, vec![paste("the current copy")]);
+        assert_eq!(first_para(&a), "the current copy");
+        assert!(!bold_at(&a, 4), "the earlier copy's HTML isn't pasted");
     }
 
     /// The text goes to the document the Paste was chosen in: with another one shown by the time

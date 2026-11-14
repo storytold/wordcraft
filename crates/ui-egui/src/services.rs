@@ -89,8 +89,10 @@ pub struct Services {
     /// is there instead of "empty" (#833).
     pub clipboard_formats: Option<Box<dyn Fn() -> Vec<String>>>,
     /// Desktop: `true` when the system clipboard can't be opened at all, so the hooks above read
-    /// nothing: a Wayland session without a working data-control protocol and with no X11
-    /// fallback. The menu and ribbon Paste then read the text the way Ctrl+V does (#1368).
+    /// nothing (a Wayland session without a working data-control protocol and with no X11
+    /// fallback), or when they would read only what the compositor copies over to Xwayland (a
+    /// Wayland session without data-control). The menu and ribbon Paste then read the text the
+    /// way Ctrl+V does and leave the hooks above unread (#1368).
     pub clipboard_unreachable: Option<Box<dyn Fn() -> bool>>,
     /// Web: keep a font the user added (stored file name, original bytes) for the next visit
     /// (#582). Desktop fonts are stored by the font database itself, in the app's font folder.

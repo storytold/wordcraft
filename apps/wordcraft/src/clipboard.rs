@@ -174,9 +174,11 @@ pub fn rtf() -> Option<String> {
 }
 
 /// `true` when the system clipboard can't be opened at all (a Wayland session without a working
-/// data-control protocol and with no X11 fallback): the menu Paste then reads through egui.
+/// data-control protocol and with no X11 fallback), or holds only what the compositor copies over
+/// to Xwayland (a Wayland session without data-control: see the module docs): the menu Paste then
+/// reads through egui.
 pub fn unreachable() -> bool {
-    arboard::Clipboard::new().is_err()
+    !platform::can_set() || arboard::Clipboard::new().is_err()
 }
 
 /// The names of the formats on the clipboard, where the platform lists them (Wayland, Windows).
