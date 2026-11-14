@@ -1,3 +1,4 @@
+use super::pages::gridline_cells;
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
@@ -3561,6 +3562,102 @@ fn table_gridlines_include_header_and_footer_tables() {
     assert_eq!(ys(Some(StoryRef::Part(1))), [10.0]);
     assert_eq!(ys(Some(StoryRef::Part(2))), [200.0]);
     assert!(ys(None).is_empty(), "closing header/footer editing removes the automatic guides");
+}
+
+/// #5967: gridlines show only where a cell has no printed border, as in Word; drawn over the
+/// border they tinted every bordered table blue.
+#[test]
+fn table_gridlines_skip_edges_a_border_draws() {
+    use wordcraft_geom::Point;
+    let cell = Placed::Cell {
+        rect: wordcraft_geom::Rect::new(0.0, 0.0, 10.0, 20.0),
+        covered: false,
+        table: Default::default(),
+        row: 0,
+        cell: 0,
+        story: StoryRef::Body,
+        clip: false,
+    };
+    let rule = |x0, y0, x1, y1, border| Placed::Rule { x0, y0, x1, y1, border };
+    let line = wordcraft_doc::props::Border::single(0.5);
+    let none = wordcraft_doc::props::Border::single(0.0);
+    let page = Page {
+        items: vec![
+            // Top border over the whole edge (run on past the corners, as layout draws it).
+            rule(-0.25, 0.0, 10.25, 0.0, line),
+            // Left border over the top half only.
+            rule(0.0, 0.0, 0.0, 10.0, line),
+            // A zero-width border draws nothing, so the right edge keeps its gridline.
+            rule(10.0, 0.0, 10.0, 20.0, none),
+            cell,
+        ],
+        ..Default::default()
+    };
+    // Overlapping rules out of order on one line leave only the gap between them: the bottom
+    // edge keeps 4..6 alone.
+    let mut gapped = page.clone();
+    gapped.items.extend([
+        rule(5.0, 20.0, 10.0, 20.0, line),
+        rule(-0.25, 20.0, 3.0, 20.0, line),
+        rule(1.0, 20.0, 4.0, 20.0, line),
+        rule(6.0, 20.0, 5.5, 20.0, line),
+    ]);
+    assert_eq!(gridline_segments(&gapped, true, None).first(), Some(&(Point::new(4.0, 20.0), Point::new(5.0, 20.0))));
+    assert_eq!(gridline_segments(&gapped, true, None).len(), 3);
+    let segs = gridline_segments(&page, true, None);
+    assert_eq!(
+        segs,
+        [
+            (Point::new(0.0, 20.0), Point::new(10.0, 20.0)), // bottom: no border
+            (Point::new(0.0, 10.0), Point::new(0.0, 20.0)),  // left: below the border
+            (Point::new(10.0, 0.0), Point::new(10.0, 20.0)), // right: invisible border
+        ]
+    );
+}
+
+/// #5967: the gridlines of a table with very many rows are found in one pass over the rules, not
+/// by re-sorting every rule on a line for each cell edge on it (a long table repainted slowly).
+#[test]
+fn table_gridlines_of_a_many_row_table_are_fast() {
+    const ROWS: usize = 30_000;
+    let line = wordcraft_doc::props::Border::single(0.5);
+    let mut items = Vec::new();
+    for i in 0..ROWS {
+        let y = i as f32 * 10.0;
+        items.push(Placed::Cell {
+            rect: wordcraft_geom::Rect::new(0.0, y, 10.0, 10.0),
+            covered: false,
+            table: Default::default(),
+            row: i,
+            cell: 0,
+            story: StoryRef::Body,
+            clip: false,
+        });
+        // One border piece per row on each side, so both vertical lines carry a rule per row.
+        for x in [0.0, 10.0] {
+            items.push(Placed::Rule { x0: x, y0: y, x1: x, y1: y + 10.0, border: line });
+        }
+    }
+    let page = Page { items, ..Default::default() };
+    let start = std::time::Instant::now();
+    let segs = gridline_segments(&page, true, None);
+    // Both sides are covered; the top and bottom of every cell are not.
+    assert_eq!(segs.len(), 2 * ROWS);
+    assert!(segs.iter().all(|(a, b)| a.y == b.y));
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
+}
+
+/// #5967: a new table has borders on every edge, so it shows no gridline at all; with its
+/// borders removed every edge shows one.
+#[test]
+fn a_bordered_table_shows_no_gridlines() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.table", json!({"rows": 2, "cols": 3})).unwrap();
+    assert!(a.session.view.table_gridlines, "View Gridlines is on by default");
+    let segs = |a: &mut WordApp| gridline_segments(&a.session.layout().pages[0], true, None).len();
+    assert_eq!(segs(&mut a), 0);
+    a.run("table.borders", json!({"kind": "none"})).unwrap();
+    assert_eq!(segs(&mut a), 6 * 4, "every edge of the six cells");
 }
 
 #[test]
