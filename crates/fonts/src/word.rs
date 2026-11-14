@@ -35,7 +35,29 @@ pub fn has_named_substitutes(family: &str) -> bool {
     if family.contains(';') {
         return list_class(family).named;
     }
-    substitutes_by_name(charset_base_family(family)).1
+    provided(family).is_some() || substitutes_by_name(charset_base_family(family)).1
+}
+
+/// Named substitutes supplied by the embedding application, consulted before the built-in lists:
+/// given a requested family (as the document names it), the families to try in order, or `None`
+/// to fall through. When none of them is installed, the built-in lists are tried next.
+pub type SubstituteProvider = fn(&str) -> Option<&'static [&'static str]>;
+
+static SUBSTITUTE_PROVIDER: OnceLock<SubstituteProvider> = OnceLock::new();
+
+/// Install the application's [`SubstituteProvider`] (for example regional document fonts such as
+/// 仿宋_GB2312 → FangSong). Set it before the first [`resolve`]: resolutions are cached. Only the
+/// first call takes effect; it returns whether this one did.
+pub fn set_substitute_provider(provider: SubstituteProvider) -> bool {
+    SUBSTITUTE_PROVIDER.set(provider).is_ok()
+}
+
+/// The [`SubstituteProvider`]'s list for `family`: asked with the name as the document gives it,
+/// then with its charset alias removed ("仿宋_GB2312 CE" → "仿宋_GB2312").
+fn provided(family: &str) -> Option<&'static [&'static str]> {
+    let provider = SUBSTITUTE_PROVIDER.get()?;
+    let base = base_family(family);
+    provider(family).or_else(|| if base == family { None } else { provider(base) })
 }
 
 const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
@@ -428,7 +450,7 @@ fn classify_thai(family: &str) -> bool {
 /// Whether any family of the list has substitutes of its own: what [`has_named_substitutes`]
 /// answers.
 fn classify_named(family: &str) -> bool {
-    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| substitutes_by_name(charset_base_family(f)).1)
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| provided(f).is_some() || substitutes_by_name(charset_base_family(f)).1)
 }
 
 /// Khmer document fonts: the Khmer OS family, Khmer Mool1 and the like, Windows' and the Mac's
@@ -445,10 +467,15 @@ fn is_hebrew(f: &str) -> bool {
     NAMES.contains(&f) || f.contains("hebrew")
 }
 
-/// The first installed substitute for a missing `family`. For a Thai font, the first with Latin
-/// letters and digits as well as Thai ones (a Thai face without Latin would leave a mixed run in
-/// two fonts, #1549), else the first with Thai letters, else the first installed.
-fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
+/// The first installed substitute for a missing `family` (`requested` is the name as the document
+/// gives it): the [`SubstituteProvider`]'s first installed candidate, else the built-in lists'. For
+/// a Thai font, the first with Latin letters and digits as well as Thai ones (a Thai face without
+/// Latin would leave a mixed run in two fonts, #1549), else the first with Thai letters, else the
+/// first installed.
+fn substitute(db: &FontDb, requested: &str, family: &str) -> Option<&'static str> {
+    if let Some(s) = provided(requested).and_then(|list| list.iter().copied().find(|s| db.has_family(s))) {
+        return Some(s);
+    }
     // A twin draws the text as the font would: Carlito for Calibri, Helvetica for Arial on a Mac.
     if let Some(twin) = metric_twins(family).find(|t| db.has_family(t)) {
         return Some(twin);
@@ -578,7 +605,7 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
         } else if base != family && db.has_family(base) {
             (base.to_string(), false)
         } else {
-            (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
+            (substitute(db, family, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
         };
     }
 
@@ -618,7 +645,7 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     for &cand in &candidates {
         let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
         if is_thai_family(base)
-            && let Some(sub) = substitute(db, base)
+            && let Some(sub) = substitute(db, cand, base)
         {
             return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
         }
@@ -632,8 +659,8 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     for &cand in &candidates {
         let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
         let (subs, named) = substitutes_by_name(base);
-        if (named || is_thai_family(base) || subs != SANS)
-            && let Some(sub) = substitute(db, base)
+        if (named || provided(cand).is_some() || is_thai_family(base) || subs != SANS)
+            && let Some(sub) = substitute(db, cand, base)
         {
             return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
         }
@@ -642,12 +669,18 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     // Fall back to the first candidate's substitute:
     if let Some(&first) = candidates.first() {
         let base = if first.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(first) };
-        if let Some(sub) = substitute(db, base) {
+        if let Some(sub) = substitute(db, first, base) {
             return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
         }
     }
 
     remember_list_resolution(generation, list_key, family, (crate::FALLBACK_FAMILY.to_string(), true))
+}
+
+/// The family `family` stands for: Symbol for a printer-driver Symbol alias (same encoding), else
+/// the name without its charset alias. The provider and the built-in lists both look it up.
+fn base_family(family: &str) -> &str {
+    if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) }
 }
 
 /// Resolve `family` with bold/italic to a face (memoised until user fonts are added or removed,
@@ -792,6 +825,45 @@ mod tests {
         assert!(!resolve_cache().lock().unwrap_or_else(|e| e.into_inner()).1.keys().any(|k| k.0.len() > 1000));
     }
 
+    /// The application's provider is asked with the document's own name first, its first installed
+    /// candidate wins, and with none installed the built-in lists still apply. The provider is
+    /// global, so it answers only for names no other test uses. Its candidates (bundled Inter and
+    /// Source Serif 4) differ from the built-in result for these names, which is a sans face.
+    #[test]
+    fn substitute_provider_comes_first_and_falls_through() {
+        fn provider(family: &str) -> Option<&'static [&'static str]> {
+            match family {
+                "Wc Provided Face" | "Wc Provided Face Cyr" => Some(&["Wc Not Installed", "Inter"]),
+                "Wc Precedence Face" => Some(&["Inter"]),
+                "Wc Precedence Face Cyr" => Some(&["Source Serif 4"]),
+                "Wc Provided Serif" => Some(&["Wc Not Installed"]),
+                _ => None,
+            }
+        }
+        set_substitute_provider(provider);
+        let inter = resolve("Inter", false, false).face;
+        for name in ["Wc Provided Face", "Wc Provided Face Cyr", "Wc Provided Face Greek"] {
+            assert!(has_named_substitutes(name), "{name}");
+            let r = resolve(name, false, false);
+            assert!(r.substituted && r.face == inter, "{name}");
+        }
+        // In a fallback list (`A;B`) a provided candidate counts like a named one.
+        let list = "Wc Unlisted Missing Face;Wc Provided Face";
+        assert!(has_named_substitutes(list));
+        let r = resolve(list, false, false);
+        assert!(r.substituted && r.face == inter, "{list}");
+        // The exact name wins over its charset base.
+        let base = resolve("Wc Precedence Face", false, false);
+        let exact = resolve("Wc Precedence Face Cyr", false, false);
+        assert!(base.substituted && base.face == inter);
+        assert!(exact.substituted && exact.face == resolve("Source Serif 4", false, false).face);
+        // Nothing installed: the built-in serif list, not the default sans.
+        assert!(has_named_substitutes("Wc Provided Serif"));
+        assert_eq!(resolve("Wc Provided Serif", false, false).face, resolve("Wc Missing Serif", false, false).face);
+        assert_ne!(resolve("Wc Provided Serif", false, false).face, resolve("Wc Unknown Face", false, false).face);
+        assert!(!has_named_substitutes("Wc Unknown Face"));
+    }
+
     #[test]
     fn metric_compatible_substitutes_are_known() {
         assert!(metric_compatible("Calibri", "Carlito"));
@@ -871,6 +943,8 @@ mod tests {
 
     #[test]
     fn pcl6_symbol_resolves_as_symbol() {
+        // The substitute provider is asked for Symbol too ([`provided`] shares the alias).
+        assert_eq!(base_family("Symbol (PCL6)"), "Symbol");
         let actual = resolve("Symbol (PCL6)", false, false);
         let db = FontDb::global();
         if db.has_family("Symbol (PCL6)") {
@@ -1084,7 +1158,7 @@ mod tests {
     #[test]
     fn thai_fallback_list_prefers_thai_substitute_before_later_metric_twin() {
         let db = FontDb::global();
-        let Some(thai_sub) = substitute(db, "NonExistentThaiUPC") else {
+        let Some(thai_sub) = substitute(db, "NonExistentThaiUPC", "NonExistentThaiUPC") else {
             eprintln!("skipped: no Thai substitute installed");
             return;
         };
