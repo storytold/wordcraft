@@ -188,13 +188,18 @@ fn trim_num(v: f32) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// Generate HTML attribute string (including `style="..."`) for paragraph styling such
+/// as alignment, page breaks, and background shading.
 fn para_attrs(p: &Para) -> String {
-    let mut css: Vec<&str> = Vec::new();
+    let mut css: Vec<String> = Vec::new();
     if let Some(a) = align_css(p.align) {
-        css.push(a);
+        css.push(a.to_string());
     }
     if p.page_break {
-        css.push("break-before:page;page-break-before:always");
+        css.push("break-before:page;page-break-before:always".to_string());
+    }
+    if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
+        css.push(format!("background-color:#{}", bg.hex()));
     }
     if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
 }
@@ -211,6 +216,8 @@ fn para_html(p: &Para) -> String {
     }
 }
 
+/// Serialize a formatted table into HTML table markup, formatting cell spans, borders,
+/// and nested cell blocks up to the maximum recursion depth.
 fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("<table style=\"border-collapse:collapse\">\n");
     for row in &t.rows {
@@ -240,7 +247,11 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
                 css.push(format!("background-color:#{}", s.hex()));
             }
             let single = match c.blocks.as_slice() {
-                [FBlock::Para(p)] if p.kind == Kind::Normal && p.list.is_none() && !p.page_break => Some(p),
+                [FBlock::Para(p)]
+                    if p.kind == Kind::Normal && p.list.is_none() && !p.page_break && p.extra.as_ref().and_then(|x| x.shading).is_none() =>
+                {
+                    Some(p)
+                }
                 _ => None,
             };
             if let Some(a) = single.and_then(|p| align_css(p.align)) {
@@ -261,6 +272,8 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("</table>\n");
 }
 
+/// Serialize a slice of formatted blocks (tables and paragraphs) into HTML markup,
+/// handling nested tables and list groupings.
 fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
     let mut i = 0;
     while let Some(b) = blocks.get(i) {
@@ -310,10 +323,13 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                 out.push('\n');
             }
             FBlock::Para(p) if p.kind == Kind::Code => {
-                out.push_str("<pre><code>");
+                // One `<pre>` per run of code paragraphs whose attributes match: they share the
+                // `<pre>`'s shading, so a different background starts a new block.
+                let attrs = para_attrs(p);
+                out.push_str(&format!("<pre{attrs}><code>"));
                 let mut first = true;
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
-                    if q.kind != Kind::Code || q.list.is_some() {
+                    if q.kind != Kind::Code || q.list.is_some() || para_attrs(q) != attrs {
                         break;
                     }
                     if !first {
@@ -357,14 +373,14 @@ fn close_list(stack: &mut Vec<(bool, bool)>, out: &mut String) {
 
 /// A complete HTML document.
 pub fn export(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
     export_flow(&flow, doc.styles.default_chr.lang.as_deref().unwrap_or("en"))
 }
 
 /// `doc`'s content as an HTML fragment (no head or style sheet): what a copy puts on the system
 /// clipboard beside its text, equations as MathML (#816).
 pub fn export_fragment(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
     let mut out = String::from("<meta charset=\"utf-8\">");
     blocks_html(&flow.blocks, &mut out, 0);
     out

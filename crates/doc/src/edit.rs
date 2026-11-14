@@ -1505,6 +1505,7 @@ impl Document {
         if self.para_at(pos).is_none() {
             return Err(DocError::BadPath(pos.path.to_string()));
         }
+        let destination_shading = self.para_at(pos).and_then(|p| self.styles.resolve_para(&p.props).shading);
         let mut parts = frag.parts.clone();
         if !media_remap.is_empty() {
             for b in &mut blocks {
@@ -1531,6 +1532,7 @@ impl Document {
             && let Some(Block::Para(src)) = blocks.first()
         {
             let src = src.clone();
+            let src_shading = self.styles.resolve_para(&src.props).shading;
             let target = self.para_mut(pos.story, &pos.path)?;
             let tail = target.split_off(pos.off)?;
             let added = src.len();
@@ -1541,6 +1543,12 @@ impl Document {
             target.append(src);
             target.append(tail);
             target.props = keep;
+            // Paragraph shading is the pasted text's background (HTML container backgrounds
+            // become paragraph shading), so an unshaded destination takes the source's. The
+            // destination's style shading counts as shaded, so it is not overridden.
+            if destination_shading.is_none() {
+                target.props.shading = src_shading;
+            }
             target.section = sect;
             return Ok(Pos { off: pos.off + added, ..pos.clone() });
         }
@@ -1552,13 +1560,28 @@ impl Document {
         let mut idx = left.last() + 1;
         match first {
             Block::Para(p) => {
+                let src_shading = self.styles.resolve_para(&p.props).shading;
                 let l = self.para_mut(pos.story, &left)?;
                 let keep = l.props.clone();
+                let keep_empty = keep.is_empty();
+                let keep_shading = keep.shading;
                 let mut p2 = p;
                 let pprops = p2.props.clone();
                 p2.section = None;
                 l.append(p2);
-                l.props = if keep.is_empty() { pprops } else { keep };
+                l.props = if keep_empty { pprops } else { keep };
+                if destination_shading.is_some() {
+                    // When adopting a source paragraph style into an empty destination,
+                    // preserve the destination background as a direct override so the
+                    // source style's shading does not win over it (#6157).
+                    if keep_empty && l.props.style.is_some() {
+                        l.props.shading = destination_shading;
+                    } else {
+                        l.props.shading = keep_shading;
+                    }
+                } else if l.props.shading.is_none() {
+                    l.props.shading = src_shading;
+                }
             }
             t @ Block::Table(_) => {
                 self.insert_block(pos.story, &left.with_last(idx), t)?;

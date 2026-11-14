@@ -1827,6 +1827,61 @@ fn paste_keeps_source_formatting_from_other_programs() {
     assert_eq!(props_at(&s, 4).italic, Some(true));
 }
 
+/// Verify that pasting syntax-highlighted code from VS Code retains syntax colors and font styling
+/// without inheriting dark background shading strips from outer container elements (#6157).
+#[test]
+fn pasted_code_from_vscode_has_syntax_colors_and_no_character_shading() {
+    // #6157: VS Code wraps copied code in an outer div with `background-color: #1e1e1e`.
+    // In Word and per CSS (background-color does not inherit), pasting into a document keeps the
+    // syntax colors and mono font without painting dark character shading strips over the runs.
+    let mut s = s();
+    let vscode_html = r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-weight: normal;font-size: 14px;line-height: 19px;white-space: pre;"><div><span style="color: #569cd6;">const</span><span style="color: #d4d4d4;"> x = </span><span style="color: #b5cea8;">1</span><span style="color: #d4d4d4;">;</span></div></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "const x = 1;", "html": vscode_html}));
+    assert_eq!(text(&s), "const x = 1;");
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    for r in &p.runs {
+        assert_eq!(r.props.shading, None, "character should have no shading from container div");
+    }
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "container background is kept as paragraph shading");
+    assert!(p.runs.iter().any(|r| r.props.color == Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0x56, 0x9c, 0xd6)))));
+}
+
+/// A multi-block paste keeps the first pasted paragraph's shading when the destination has its own properties (#6157).
+#[test]
+fn multi_block_paste_keeps_first_paragraph_shading() {
+    let mut s = s();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    let html = r#"<div style="background-color:#1e1e1e"><p>one</p><p>two</p></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "one\ntwo", "html": html}));
+    assert_eq!(text(&s), "one\ntwo");
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "first pasted paragraph keeps its shading");
+}
+
+/// A destination paragraph whose style shades keeps that shading when a shaded paragraph is pasted (#6157).
+#[test]
+fn paste_keeps_destination_style_shading() {
+    let mut s = s();
+    Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
+        id: "Shaded".into(),
+        name: "Shaded".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: wordcraft_doc::props::ParaProps { shading: Some(wordcraft_doc::Rgb(0x22, 0x22, 0x22)), ..Default::default() },
+        ..Default::default()
+    });
+    run(&mut s, "para.style", json!({"style": "Shaded"}));
+    let html = r#"<div style="background-color:#1e1e1e"><span>text</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "text", "html": html}));
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None, "source shading must not override the destination style");
+    assert_eq!(
+        s.doc.styles.resolve_para(&p.props).shading,
+        Some(wordcraft_doc::Rgb(0x22, 0x22, 0x22)),
+        "destination style shading remains effective"
+    );
+}
+
 /// A CF_HTML ("HTML Format") clipboard payload around `html`, with the byte offsets Windows writes.
 fn cf_html(html: &str) -> String {
     let n = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n".len();

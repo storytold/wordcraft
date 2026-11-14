@@ -767,3 +767,741 @@ fn hostile_style_sheets_never_panic() {
         let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
     }
 }
+
+/// Ensure container elements (such as `div` and `p`) with background colors do not leak
+/// character shading onto their child text runs (#6157).
+#[test]
+fn container_background_color_does_not_leak_into_character_shading() {
+    let html = r#"<div style="background-color:#1e1e1e;color:#d4d4d4"><span>code</span></div>"#;
+    let doc = import(html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert!(!p.runs.is_empty(), "expected nonempty runs");
+    assert_eq!(&p.text, "code");
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "container div background is preserved as paragraph shading");
+    for r in &p.runs {
+        assert_eq!(r.props.shading, None, "character should have no shading from container div");
+    }
+}
+
+/// Verify that table background colors cascade down to cell shading through implicit or explicit
+/// row groups (`tbody`, `thead`, `tfoot`), but do not leak into cell character shading.
+#[test]
+fn table_background_inherits_through_row_groups() {
+    let html = r#"<table style="background-color:#e8f0fa"><tbody><tr><td>cell1</td></tr></tbody></table>
+                  <table><tbody style="background-color:#d0e0f0"><tr><td>cell2</td></tr></tbody></table>
+                  <table><thead style="background-color:#c0d0e0"><tr><th>head</th></tr></thead></table>"#;
+    let doc = import(html);
+    let tables: Vec<_> = doc
+        .body
+        .iter()
+        .filter_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tables.len(), 3);
+    for (t, want_hex) in tables.iter().zip(["e8f0fa", "d0e0f0", "c0d0e0"]) {
+        let cell = &t.rows[0].cells[0];
+        assert_eq!(
+            cell.props.shading.map(|c| c.hex().to_ascii_lowercase()),
+            Some(want_hex.to_string()),
+            "cell should inherit shading from table or row group"
+        );
+        let p = &cell.blocks[0];
+        let wordcraft_doc::Block::Para(p) = &**p else {
+            panic!("expected table cell block to be a paragraph");
+        };
+        assert!(!p.runs.is_empty(), "expected nonempty runs");
+        for r in &p.runs {
+            assert_eq!(r.props.shading, None, "cell text should have no character shading");
+        }
+    }
+}
+
+/// Verify that block-level container backgrounds (`p`, `pre`, `div`) are preserved as paragraph
+/// shading on paragraphs rather than character shading on individual runs (#6157).
+#[test]
+fn block_element_backgrounds_preserve_paragraph_shading() {
+    let html = r#"<p style="background:#1e1e1e;color:white">text</p><pre style="background:#2a2a2a">code</pre><div style="background:#3a3a3a"><p>inner</p></div>"#;
+    let doc = import(html);
+    assert_eq!(doc.body.len(), 3);
+    let wordcraft_doc::Block::Para(p1) = &*doc.body[0] else { panic!("expected Para") };
+    let wordcraft_doc::Block::Para(p2) = &*doc.body[1] else { panic!("expected Para") };
+    let wordcraft_doc::Block::Para(p3) = &*doc.body[2] else { panic!("expected Para") };
+    assert_eq!(p1.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+    assert_eq!(p2.props.shading, Some(wordcraft_doc::Rgb(0x2a, 0x2a, 0x2a)));
+    assert_eq!(p3.props.shading, Some(wordcraft_doc::Rgb(0x3a, 0x3a, 0x3a)));
+    assert_eq!(&p1.text, "text");
+    assert_eq!(&p2.text, "code");
+    assert_eq!(&p3.text, "inner");
+    assert!(!p1.runs.is_empty());
+    assert!(!p2.runs.is_empty());
+    assert!(!p3.runs.is_empty());
+    for r in &p1.runs {
+        assert_eq!(r.props.shading, None, "character should have no shading from paragraph background");
+    }
+    for r in &p2.runs {
+        assert_eq!(r.props.shading, None, "character should have no shading from pre background");
+    }
+    for r in &p3.runs {
+        assert_eq!(r.props.shading, None, "character should have no shading from container div background");
+    }
+}
+
+/// Verify that paragraph shading created by a container background survives an HTML round trip (#6157).
+#[test]
+fn paragraph_shading_survives_an_html_round_trip() {
+    let html = r#"<div style="background-color:#1e1e1e"><p>code</p></div><pre style="background-color:#2a2a2a">pre</pre>"#;
+    let doc = import(html);
+    let out = crate::html::export(&doc);
+    assert!(out.contains("background-color:#1E1E1E"), "paragraph shading is exported: {out}");
+    assert!(out.contains("background-color:#2A2A2A"), "code block shading is exported: {out}");
+
+    let back = import(&out);
+    let wordcraft_doc::Block::Para(p1) = &*back.body[0] else { panic!("expected Para") };
+    let wordcraft_doc::Block::Para(p2) = &*back.body[1] else { panic!("expected Para") };
+    assert_eq!(p1.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+    assert_eq!(p2.props.shading, Some(wordcraft_doc::Rgb(0x2a, 0x2a, 0x2a)));
+}
+
+/// Verify that paragraph shading inside a single-paragraph table cell survives an HTML round trip (#6157).
+#[test]
+fn table_cell_paragraph_shading_survives_an_html_round_trip() {
+    let html = r#"<table><tr><td><p style="background-color:#123456">text</p></td></tr></table>"#;
+    let doc = import(html);
+    let out = crate::html::export(&doc);
+    assert!(out.contains("background-color:#123456"), "paragraph shading is exported: {out}");
+
+    let back = import(&out);
+    let table = back
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("expected table");
+    let cell = &table.rows[0].cells[0];
+    assert_eq!(cell.props.shading, None, "paragraph shading must not become cell shading");
+    let wordcraft_doc::Block::Para(p) = &*cell.blocks[0] else { panic!("expected Para") };
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)));
+}
+
+/// Verify that consecutive code paragraphs with different backgrounds export their own `<pre>`.
+#[test]
+fn consecutive_code_blocks_keep_their_own_shading() {
+    let html = r#"<pre style="background-color:#111111">a</pre><pre style="background-color:#222222">b</pre>"#;
+    let out = crate::html::export(&import(html));
+    assert!(out.contains("<pre style=\"background-color:#111111\"><code>a</code></pre>"), "{out}");
+    assert!(out.contains("<pre style=\"background-color:#222222\"><code>b</code></pre>"), "{out}");
+}
+
+/// Verify that paragraph shading inherited from a paragraph style is exported (#6157).
+#[test]
+fn paragraph_shading_from_a_style_survives_html_export() {
+    let mut doc = Document::new();
+    std::sync::Arc::make_mut(&mut doc.styles).styles.push(wordcraft_doc::Style {
+        id: "Shaded".into(),
+        name: "Shaded".into(),
+        para: wordcraft_doc::props::ParaProps { shading: Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut p = wordcraft_doc::Paragraph::with_text("text", wordcraft_doc::CharProps::default());
+    p.props.style = Some("Shaded".into());
+    doc.body = vec![wordcraft_doc::para_block(p)];
+
+    let out = crate::html::export(&doc);
+    assert!(out.contains("background-color:#123456"), "style shading is exported: {out}");
+}
+
+/// A closing parenthesis without an opening one invalidates the declaration (#6157).
+#[test]
+fn background_shorthand_unbalanced_closing_paren_is_ignored() {
+    let html = r#"<span style="background-color:#ff0000"><span style="background: ) none repeat">text</span></span>"#;
+    let doc = import(html);
+    let wordcraft_doc::Block::Para(p) = &*doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(0xff, 0x00, 0x00)), "invalid shorthand must not clear inherited shading");
+}
+
+/// A shaded paragraph keeps its shading on both sides of an internal page break (#6157).
+#[test]
+fn paragraph_shading_survives_an_internal_page_break() {
+    let mut p = wordcraft_doc::Paragraph::with_text("before\u{000C}after", wordcraft_doc::CharProps::default());
+    p.props.shading = Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56));
+    let mut doc = Document::new();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+    let out = crate::html::export(&doc);
+    assert_eq!(out.matches("background-color:#123456").count(), 2, "{out}");
+}
+
+/// Verify that CSS-escaped quote characters in background shorthand URLs remain part of the URL
+/// content and do not cause the shorthand declaration to be rejected.
+#[test]
+fn background_shorthand_escaped_quotes_in_url() {
+    let doc = import(r#"<p><span style='background: #123456 url("a\"b.png")'>text</span></p>"#);
+    let wordcraft_doc::Block::Para(p) = &*doc.body[0] else { panic!("expected Para") };
+    assert_eq!(&p.text, "text");
+    assert!(!p.runs.is_empty());
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)));
+}
+
+/// Verify that valid multi-token CSS background shorthands without a color (such as `none repeat`)
+/// reset character shading, while invalid declarations are ignored.
+#[test]
+fn background_shorthand_without_color_resets_background() {
+    let html = r#"<span style="background-color: #ff0000"><span style="background: none repeat">plain</span></span>"#;
+    let doc = import(html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, None);
+
+    let html_invalid = r#"<span style="background-color: #ff0000"><span style="background: none invalid_xyz">shaded</span></span>"#;
+    let doc_invalid = import(html_invalid);
+    let p_invalid = match &*doc_invalid.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_invalid.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+}
+
+/// Verify that CSS `background: inherit` keeps inherited character shading instead of removing it (#6157).
+#[test]
+fn background_inherit_retains_inline_shading() {
+    let html = r#"<span style="background-color: #ff0000"><span style="background: inherit">shaded</span></span>"#;
+    let doc = import(html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)), "background: inherit should retain inherited character shading");
+
+    // Also verify background-color: inherit retains shading.
+    let html_color = r#"<span style="background-color: #ff0000"><span style="background-color: inherit">shaded</span></span>"#;
+    let doc_color = import(html_color);
+    let p_color = match &*doc_color.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(
+        p_color.runs[0].props.shading,
+        Some(wordcraft_doc::Rgb(255, 0, 0)),
+        "background-color: inherit should retain inherited character shading"
+    );
+
+    // CSS-wide keyword inherit mixed with other values is invalid and ignored.
+    let html_mixed = r#"<span style="background-color: #00ff00"><span style="background: red inherit">green</span></span>"#;
+    let doc_mixed = import(html_mixed);
+    let p_mixed = match &*doc_mixed.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_mixed.runs[0].props.shading, Some(wordcraft_doc::Rgb(0, 255, 0)), "invalid shorthand mixing inherit with values should be ignored");
+}
+
+/// Verify that hostile background declarations with deeply nested slashes do not cause stack overflow (#6157).
+#[test]
+fn hostile_background_slashes_never_stack_overflow() {
+    let slashes = "/".repeat(20_000);
+    let html = format!(r#"<span style="background: {slashes}">hostile</span>"#);
+    let doc = import(&html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, None);
+}
+
+/// Verify that non-breaking space (U+00A0) is not treated as CSS whitespace when splitting tokens (#6157).
+#[test]
+fn background_whitespace_preserves_nbsp() {
+    let html = "<span style=\"background-color: #ff0000\"><span style=\"background: none\u{00A0}repeat\">shaded</span></span>";
+    let doc = import(html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)), "non-breaking space is not CSS whitespace and should not clear shading");
+}
+
+/// Verify that background shorthands exceeding the token limit are rejected and unapplied (#6157).
+#[test]
+fn background_shorthand_truncated_rejects_unapplied() {
+    let mut layers = String::new();
+    for i in 0..64 {
+        layers.push_str(&format!("url(img{i}.png), "));
+    }
+    layers.push_str("#00ff00");
+    let html = format!(r#"<span style="background-color: #ff0000"><span style="background: {layers}">retained</span></span>"#);
+    let doc = import(&html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(
+        p.runs[0].props.shading,
+        Some(wordcraft_doc::Rgb(255, 0, 0)),
+        "truncated shorthand should be rejected and leave inherited background untouched"
+    );
+}
+
+/// Verify that shorthands with image-set or calc functions parse and preserve colors (#6157).
+#[test]
+fn background_shorthand_valid_functions_preserve_color() {
+    let html_image_set = r#"<span style="background: #123456 image-set(url(a.png) 1x)">image-set</span>"#;
+    let doc = import(html_image_set);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)));
+
+    let html_calc = r#"<span style="background: #123456 url(a.png) calc(50% - 2px)">calc</span>"#;
+    let doc_calc = import(html_calc);
+    let p_calc = match &*doc_calc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_calc.runs[0].props.shading, Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)));
+}
+
+/// Verify that multi-layer background shorthands validate slashes per layer and preserve final-layer color (#6157).
+#[test]
+fn background_shorthand_multi_layer_slashes_apply_color() {
+    let html = r#"<span style="background: url(a) center/cover, url(b) center/contain #123456">multi-layer</span>"#;
+    let doc = import(html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)));
+
+    // Color in a non-final layer is invalid CSS and must be ignored.
+    let html_invalid_color = r#"<span style="background-color: #ff0000"><span style="background: #123456, url(b)">invalid</span></span>"#;
+    let doc_invalid_color = import(html_invalid_color);
+    let p_invalid_color = match &*doc_invalid_color.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_invalid_color.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+
+    // Multiple slashes in a single layer makes the declaration invalid.
+    let html_multi_slash =
+        r#"<span style="background-color: #ff0000"><span style="background: url(a) center/cover/extra, #123456">invalid</span></span>"#;
+    let doc_multi_slash = import(html_multi_slash);
+    let p_multi_slash = match &*doc_multi_slash.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_multi_slash.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+}
+
+/// Verify that background shorthands with empty layers (leading, trailing, or double commas) are rejected (#6157).
+#[test]
+fn background_shorthand_rejects_empty_layers() {
+    // Leading comma
+    let html_leading = r#"<span style="background-color: #ff0000"><span style="background: , #00ff00">leading</span></span>"#;
+    let doc_leading = import(html_leading);
+    let p_leading = match &*doc_leading.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_leading.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+
+    // Trailing comma
+    let html_trailing = r#"<span style="background-color: #ff0000"><span style="background: transparent,">trailing</span></span>"#;
+    let doc_trailing = import(html_trailing);
+    let p_trailing = match &*doc_trailing.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_trailing.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+
+    // Double comma
+    let html_double = r#"<span style="background-color: #ff0000"><span style="background: #00ff00,,#0000ff">double</span></span>"#;
+    let doc_double = import(html_double);
+    let p_double = match &*doc_double.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_double.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+}
+
+/// Verify that zero-alpha colors in background shorthands or declarations remain transparent (#6157).
+#[test]
+fn background_zero_alpha_colors_are_transparent() {
+    for decl in ["rgb(0 0 0 / 0)", "rgba(0, 0, 0, 0)", "#0000", "#00000000", "#ffffff00", "hsla(120, 100%, 50%, 0)", "hsl(120 100% 50% / 0)"] {
+        let html = format!(r#"<span style="background-color: #ff0000"><span style="background: {decl}">transparent</span></span>"#);
+        let doc = import(&html);
+        let p = match &*doc.body[0] {
+            wordcraft_doc::Block::Para(p) => p,
+            _ => panic!("expected paragraph"),
+        };
+        assert_eq!(p.runs[0].props.shading, None, "zero-alpha color `{decl}` must clear background rather than composite over white");
+    }
+}
+
+/// Verify that ancestor table shading is preserved beneath transparent table layers (#6157).
+#[test]
+fn transparent_table_layers_preserve_ancestor_table_shading() {
+    let html = r#"<table style="background-color:#e8f0fa">
+        <tbody style="background-color:transparent">
+            <tr style="background:transparent">
+                <td>transparent_layers</td>
+                <td style="background-color:#123456">explicit_cell</td>
+            </tr>
+        </tbody>
+    </table>"#;
+    let doc = import(html);
+    let table = doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        table.rows[0].cells[0].props.shading,
+        Some(wordcraft_doc::Rgb(0xe8, 0xf0, 0xfa)),
+        "table background must show through transparent tbody, tr, and td"
+    );
+    assert_eq!(
+        table.rows[0].cells[1].props.shading,
+        Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)),
+        "cell with explicit background must override table background"
+    );
+}
+
+/// Verify that block-level container background is available to immediate inline children using explicit `inherit` (#6157).
+#[test]
+fn block_background_explicit_inherit() {
+    // When the immediate parent <p> has no background, an inline span inheriting background gets transparent (None):
+    let html_indirect = r#"<div style="background-color: #ff0000"><p><span style="background-color: inherit">text</span></p></div>"#;
+    let doc_indirect = import(html_indirect);
+    let p_indirect = match &*doc_indirect.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_indirect.runs[0].props.shading, None);
+
+    // When the span is an immediate child of the styled div, it inherits the div's computed background:
+    let html_direct = r#"<div style="background-color: #ff0000"><span style="background-color: inherit">text</span></div>"#;
+    let doc_direct = import(html_direct);
+    let p_direct = match &*doc_direct.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_direct.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+
+    let html_shorthand = r#"<div style="background: #00ff00"><span style="background: inherit">text</span></div>"#;
+    let doc_shorthand = import(html_shorthand);
+    let p_shorthand = match &*doc_shorthand.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_shorthand.runs[0].props.shading, Some(wordcraft_doc::Rgb(0, 255, 0)));
+}
+
+/// Verify that CSS-escaped quotes inside background URLs do not close the quote or drop declaration colors (#6157).
+#[test]
+fn background_escaped_quote_url() {
+    let html = r#"<span style='background: #123456 url("a\"b.png")'>text</span>"#;
+    let doc = import(html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)));
+
+    let html_single = r#"<span style="background: #654321 url('a\'b.png')">text</span>"#;
+    let doc_single = import(html_single);
+    let p_single = match &*doc_single.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_single.runs[0].props.shading, Some(wordcraft_doc::Rgb(0x65, 0x43, 0x21)));
+}
+
+/// Verify that invalid hex color declarations like `#ggg0` do not clear inherited shading (#6157).
+#[test]
+fn background_invalid_hex_retains_shading() {
+    let html = r#"<span style="background-color: #ff0000"><span style="background-color: #ggg0">text</span></span>"#;
+    let doc = import(html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+}
+
+/// Verify that background size keywords (`cover`, `contain`) without preceding position and slash are invalid and retain shading (#6157).
+#[test]
+fn background_cover_without_slash_invalid() {
+    let html_cover = r#"<span style="background-color: #ff0000"><span style="background: cover">text</span></span>"#;
+    let doc_cover = import(html_cover);
+    let p_cover = match &*doc_cover.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_cover.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+
+    let html_contain = r#"<span style="background-color: #ff0000"><span style="background: contain">text</span></span>"#;
+    let doc_contain = import(html_contain);
+    let p_contain = match &*doc_contain.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_contain.runs[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+
+    let html_valid = r#"<span style="background-color: #ff0000"><span style="background: center / cover">text</span></span>"#;
+    let doc_valid = import(html_valid);
+    let p_valid = match &*doc_valid.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p_valid.runs[0].props.shading, None);
+}
+
+/// Verify that table backgrounds declared on thead or tbody are applied to cells (#6157).
+#[test]
+fn table_row_group_background_inheritance() {
+    let html = r#"<table>
+        <thead style="background-color: #00ff00">
+            <tr><th>head</th></tr>
+        </thead>
+        <tbody style="background-color: #0000ff">
+            <tr><td>body</td></tr>
+        </tbody>
+    </table>"#;
+    let doc = import(html);
+    let table = doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(table.rows[0].cells[0].props.shading, Some(wordcraft_doc::Rgb(0, 255, 0)));
+    assert_eq!(table.rows[1].cells[0].props.shading, Some(wordcraft_doc::Rgb(0, 0, 255)));
+}
+
+/// Verify that background shorthand with slashes inside URL functions correctly identifies the position/size slash (#6157).
+#[test]
+fn background_url_with_slashes_and_position_size() {
+    let html = r#"<span style="background: url(/img/bg.png) center/cover #123456">text</span>"#;
+    let doc = import(html);
+    let p = match &*doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)));
+}
+
+/// Verify that a table inside an inline element with background shading does not turn character shading into table/cell background (#6157).
+#[test]
+fn table_inside_inline_element_does_not_inherit_character_shading() {
+    let html = r#"<a style="background: #ff0000"><table><tr><td>cell</td></tr></table></a>"#;
+    let doc = import(html);
+    let table = doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(table.rows[0].cells[0].props.shading, None);
+}
+
+/// Verify that a child with `background: inherit` inside an unstyled cell in a shaded table does not inherit the table fallback (#6157).
+#[test]
+fn cell_inherit_uses_cell_background_not_table_fallback() {
+    let html = r#"<table style="background: #ff0000"><tr><td><span style="background: inherit">text</span></td></tr></table>"#;
+    let doc = import(html);
+    let table = doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(table.rows[0].cells[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+    let p = match &*table.rows[0].cells[0].blocks[0] {
+        wordcraft_doc::Block::Para(p) => p,
+        _ => panic!("expected paragraph"),
+    };
+    assert_eq!(p.runs[0].props.shading, None);
+}
+
+/// Verify that CSS `background: transparent` overrides HTML `bgcolor` presentational attribute (#6157).
+#[test]
+fn bgcolor_overridden_by_css_transparent() {
+    let html = r##"<table bgcolor="#ff0000" style="background: transparent"><tr><td>cell</td></tr></table>"##;
+    let doc = import(html);
+    let table = doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(table.rows[0].cells[0].props.shading, None);
+}
+
+/// Verify that nested container shading is preserved when merging list continuation paragraphs (#6157).
+#[test]
+fn list_continuation_preserves_nested_container_shading() {
+    let html = r#"<ul><li>before<div style="background:#111111;color:white">inside</div>after</li></ul>"#;
+    let flow = parse(html);
+    assert_eq!(flow.blocks.len(), 1);
+    let FBlock::Para(p) = &flow.blocks[0] else { panic!("expected Para") };
+    assert!(p.list.is_some(), "expected list item");
+    let dark = Some(wordcraft_doc::Rgb(0x11, 0x11, 0x11));
+    let inside = p
+        .inlines
+        .iter()
+        .find_map(|i| match i {
+            Inline::Text(t, fmt) if t.contains("inside") => Some(fmt.background),
+            _ => None,
+        })
+        .expect("inside text inline");
+    assert_eq!(inside, dark, "nested container shading should be preserved on merged run");
+
+    let doc = import(html);
+    let wordcraft_doc::Block::Para(p_doc) = &*doc.body[0] else { panic!("expected Para") };
+    let mut offset = 0usize;
+    let mut inside_shading = None;
+    for r in &p_doc.runs {
+        let text_slice = &p_doc.text[offset..offset + r.len];
+        if text_slice.contains("inside") {
+            inside_shading = Some(r.props.shading);
+        } else if text_slice.contains("before") || text_slice.contains("after") {
+            assert_eq!(r.props.shading, None);
+        }
+        offset += r.len;
+    }
+    assert_eq!(inside_shading, Some(dark));
+}
+
+/// Verify that starting a new row group implicitly closes any preceding sibling row group so
+/// cell shading is not inherited from an omitted-end-tag preceding group (#6157).
+#[test]
+fn consecutive_row_groups_with_omitted_end_tag_do_not_leak_shading() {
+    let html = r#"<table><tbody style="background:red"><tr><td>a</td></tr><tbody><tr><td>b</td></tr></table>"#;
+    let doc = import(html);
+    let table = doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(table.rows[0].cells[0].props.shading, Some(wordcraft_doc::Rgb(255, 0, 0)));
+    assert_eq!(table.rows[1].cells[0].props.shading, None, "second cell should not inherit shading from closed tbody");
+}
+
+/// Verify that a list item with a shaded container followed by unshaded text preserves separate
+/// background regions so the trailing text does not inherit the container's background (#6157).
+#[test]
+fn shaded_container_first_in_list_item_preserves_unshaded_trailing_text() {
+    let html = r#"<ul><li style="color:#111111"><div style="background:#111111;color:white">inside</div>after</li></ul>"#;
+    let doc = import(html);
+    assert_eq!(doc.body.len(), 1);
+    let wordcraft_doc::Block::Para(p) = &*doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p.props.shading, None, "list paragraph as a whole should have no background when regions differ");
+    let dark = Some(wordcraft_doc::Rgb(0x11, 0x11, 0x11));
+    let mut offset = 0usize;
+    let mut inside_shading = None;
+    let mut after_shading = None;
+    for r in &p.runs {
+        let text_slice = &p.text[offset..offset + r.len];
+        if text_slice.contains("inside") {
+            inside_shading = Some(r.props.shading);
+        } else if text_slice.contains("after") {
+            after_shading = Some(r.props.shading);
+        }
+        offset += r.len;
+    }
+    assert_eq!(inside_shading, Some(dark));
+    assert_eq!(after_shading, Some(None), "trailing text should have no shading");
+}
+
+/// Verify that container backgrounds behind tables are preserved on table cells (#6157).
+#[test]
+fn container_background_behind_table_preserved_on_cells() {
+    let html = r#"<div style="background:#111111;color:white"><table><tr><td>text</td></tr></table></div>"#;
+    let doc = import(html);
+    let table = doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(table.rows[0].cells[0].props.shading, Some(wordcraft_doc::Rgb(0x11, 0x11, 0x11)));
+
+    // Nested table inside an unshaded cell stops at the cell boundary:
+    let nested_html = r#"<div style="background:#111111"><table><tr><td><table><tr><td>nested</td></tr></table></td></tr></table></div>"#;
+    let nested_doc = import(nested_html);
+    let outer_table = nested_doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(outer_table.rows[0].cells[0].props.shading, Some(wordcraft_doc::Rgb(0x11, 0x11, 0x11)));
+    let inner_table = match &*outer_table.rows[0].cells[0].blocks[0] {
+        wordcraft_doc::Block::Table(t) => t,
+        _ => panic!("expected nested Table"),
+    };
+    assert_eq!(inner_table.rows[0].cells[0].props.shading, None, "nested table in unshaded cell must stop at cell boundary");
+}
+
+/// Verify that page imports preserve root (body/html) backgrounds while pasted fragments do not (#6157).
+#[test]
+fn root_background_preserved_on_page_import_only() {
+    let html = r#"<body style="background:#111111;color:white"><p>text</p></body>"#;
+    let page_doc = crate::html::import_page(html, &|_| None);
+    let wordcraft_doc::Block::Para(p_page) = &*page_doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p_page.props.shading, Some(wordcraft_doc::Rgb(0x11, 0x11, 0x11)), "page import must preserve body background on paragraphs");
+    assert_eq!(
+        p_page.runs[0].props.color,
+        Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0xff, 0xff, 0xff))),
+        "page import keeps the root foreground with its background"
+    );
+
+    let frag_doc = import(html);
+    let wordcraft_doc::Block::Para(p_frag) = &*frag_doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p_frag.props.shading, None, "fragment paste must not turn body background into paragraph shading");
+    assert_eq!(p_frag.runs[0].props.color, None, "fragment paste drops the root foreground with its background");
+}
+
+/// Verify that an inline child with `background: inherit` does not receive character shading from a pasted body background (#6157).
+#[test]
+fn pasted_body_background_not_inherited_by_inline_child() {
+    let html = r#"<body style="background:#111111"><span style="background:inherit">text</span></body>"#;
+    let frag_doc = import(html);
+    let wordcraft_doc::Block::Para(p_frag) = &*frag_doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p_frag.runs[0].props.shading, None, "inline child in pasted fragment must not inherit character shading from body background");
+
+    let page_doc = crate::html::import_page(html, &|_| None);
+    let wordcraft_doc::Block::Para(p_page) = &*page_doc.body[0] else { panic!("expected Para") };
+    assert_eq!(
+        p_page.runs[0].props.shading,
+        Some(wordcraft_doc::Rgb(0x11, 0x11, 0x11)),
+        "inline child in page import inherits body background via inherit"
+    );
+}
