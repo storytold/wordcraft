@@ -4606,6 +4606,107 @@ fn split_row_cells_each_continue_at_the_top() {
     }
 }
 
+/// A middle or bottom cell whose text goes on to the next page is lined up, by the text it keeps,
+/// in the part of the row left on the first page; on the next page every cell starts at the top.
+/// Measured in Word for Windows (16.0.20625) with a row cut after 17 lines of 11.5 pt: beside a
+/// cell that keeps all 17, a cell of three-line paragraphs keeps 15 (a paragraph of three lines
+/// moves on whole) and starts 11.5 pt down when it is centred, 23 pt down when it is
+/// bottom-aligned; also when the 17 lines are a centred cell's own. WordCraft lined up only the
+/// cells whose text ended on the first page and ran the others from the top.
+#[test]
+fn a_split_rows_middle_and_bottom_cells_are_lined_up_by_the_text_they_keep() {
+    crate::test_fonts();
+    use wordcraft_doc::props::VAlign;
+    let para = |s: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(s, Default::default());
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        p.props.widow_control = Some(true);
+        wordcraft_doc::para_block(p)
+    };
+    let br = wordcraft_doc::para::LINE_BREAK;
+    // A row of three cells pushed `push` down the page: `singles` one-line paragraphs, and
+    // twice twelve paragraphs of three lines, each cell aligned as `valigns` says; a paragraph
+    // follows the table.
+    let row_of = |singles: usize, push: f32, valigns: [Option<VAlign>; 3]| {
+        let mut d = Document::from_text("Filler\nAfter");
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+            p.props.space_before = Some(push);
+            p.props.space_after = Some(0.0);
+        }
+        let mut t = Table::new(1, 3, 450.0);
+        t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+        let cells = &mut t.rows[0].cells;
+        cells[0].blocks = (0..singles).map(|i| para(&format!("One {i}"))).collect();
+        for cell in &mut cells[1..] {
+            cell.blocks = (0..12).map(|i| para(&format!("A{i}{br}B{i}{br}C{i}"))).collect();
+        }
+        for (cell, valign) in cells.iter_mut().zip(valigns) {
+            cell.props.valign = valign;
+        }
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        lay(&d)
+    };
+    let row = |push: f32, valigns: [Option<VAlign>; 3]| row_of(40, push, valigns);
+    // On page `page`, each cell's first line top and the lines it has there.
+    let cells = |l: &DocLayout, page: usize| -> [(f32, usize); 3] {
+        let mut out = [(f32::MAX, 0); 3];
+        for it in &l.pages[page].items {
+            if let Placed::Lines { path, l0, l1, y, .. } = it
+                && path.0.len() == 4
+                && let Some(c) = out.get_mut(path.0[2] as usize)
+            {
+                *c = (c.0.min(*y), c.1 + l1 - l0);
+            }
+        }
+        out
+    };
+    // The line pitch and where the row's text starts, from the row whole on its page.
+    let l = row(0.0, [None; 3]);
+    let ys: Vec<f32> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Lines { path, y, .. } = it { (path.0.len() == 4 && path.0[2] == 0).then_some(*y) } else { None })
+        .collect();
+    let (top, line) = (ys[0], ys[1] - ys[0]);
+    // Seventeen lines of the first cell stay above the page bottom (720), with 3 pt to spare.
+    let push = 720.0 - 3.0 - (top + 17.0 * line);
+    for (what, valigns, offsets) in [
+        ("top, middle, bottom", [None, Some(VAlign::Center), Some(VAlign::Bottom)], [0.0, 0.5, 1.0]),
+        ("middle, middle, top", [Some(VAlign::Center), Some(VAlign::Center), None], [0.0, 0.5, 0.0]),
+        ("bottom, bottom, middle", [Some(VAlign::Bottom), Some(VAlign::Bottom), Some(VAlign::Center)], [0.0, 1.0, 0.5]),
+    ] {
+        let l = row(push, valigns);
+        assert_eq!(l.pages.len(), 2, "{what}: the row splits over two pages");
+        let first = cells(&l, 0);
+        assert_eq!(first.map(|c| c.1), [17, 15, 15], "{what}: lines kept on the first page");
+        // Two lines fewer than the first cell: one line down in the middle, two at the bottom.
+        for (k, (cell, share)) in first.iter().zip(offsets).enumerate() {
+            let down = cell.0 - first[0].0;
+            assert!(
+                (down - 2.0 * line * share).abs() < 0.05,
+                "{what}: cell {k} starts {down} pt below the first on the first page, expected {}",
+                2.0 * line * share
+            );
+        }
+        let next = cells(&l, 1);
+        assert_eq!(next.map(|c| c.1), [23, 21, 21], "{what}: lines on the second page");
+        assert!(next.iter().all(|c| (c.0 - next[0].0).abs() < 0.05), "{what}: every cell goes on at the top: {next:?}");
+    }
+    // The rest of the row is as tall as without the lining up, also when the cells lined up are
+    // the ones with the most text left: the paragraph after the table stays where it is.
+    let after = |l: &DocLayout| {
+        l.pages[1].items.iter().find_map(|it| if let Placed::Lines { path, y, .. } = it { (path.0 == [2]).then_some(*y) } else { None })
+    };
+    let plain = after(&row_of(30, push, [None; 3])).expect("the paragraph after the table");
+    for valigns in [[None, Some(VAlign::Center), Some(VAlign::Bottom)], [Some(VAlign::Center); 3], [Some(VAlign::Bottom); 3]] {
+        let l = row_of(30, push, valigns);
+        assert_eq!(cells(&l, 1).map(|c| c.1), [13, 21, 21], "{valigns:?}: lines on the second page");
+        let y = after(&l).expect("the paragraph after the table");
+        assert!((y - plain).abs() < 0.05, "{valigns:?}: the paragraph after the table is at {y}, without the lining up at {plain}");
+    }
+}
+
 /// Word never splits a row of an exact height: one the page bottom cuts through, its text
 /// included, moves to the next page whole. An at-least row also moves when the remaining
 /// room is less than its minimum height.
