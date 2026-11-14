@@ -862,6 +862,22 @@ fn bounded_scans_keep_ordinary_markdown_and_entities() {
     assert!(t.contains(&"a".repeat(40)), "{t}");
 }
 
+/// A block whose first word is not in the source as written (an entity here) starts at the next
+/// line with text, and the search for the block after it starts below that line instead of
+/// reading the rest of the text again.
+#[test]
+fn block_lines_move_past_blocks_whose_words_are_not_in_the_source() {
+    let md = "&amp;one\n\n&amp;two\n\nthree\n\n&amp;four\n";
+    let (doc, lines) = crate::markdown::import_on_with_lines(md, &Default::default());
+    assert_eq!(doc.body.len(), 4);
+    assert_eq!(lines, [0, 2, 4, 6]);
+    // Thousands of such blocks: each gets its own line.
+    let md: String = (0..5_000).map(|n| format!("&amp;w{n}\n\n")).collect();
+    let (_, lines) = crate::markdown::import_on_with_lines(&md, &Default::default());
+    assert_eq!(lines.len(), 5_000);
+    assert!(lines.iter().enumerate().all(|(i, &l)| l == 2 * i), "{:?}", &lines[..8]);
+}
+
 /// A document's hyperlink can be `javascript:` (WordCraft refuses to follow it); the exported
 /// HTML and Markdown must not hand it to a browser either. Web, mail, bookmark and relative links
 /// still export as links.
