@@ -1299,3 +1299,19 @@ fn a_path_in_a_message_is_isolated_in_a_right_to_left_interface() {
     set_current(Lang::EN);
     assert_eq!(msg, "تعذر فتح \u{2066}C:\\\u{200E}ملفات\\\u{200E}تقرير\u{200E}.docx\u{2069}: \u{2068}bad\u{2069}");
 }
+
+#[test]
+fn diagram_tab_display_keeps_the_legacy_identity() {
+    assert!(wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&"SmartArt Design"));
+    assert_eq!(tr(Lang::EN, "SmartArt Design"), "Diagram Design");
+    assert_eq!(trc(Lang::EN, "preview", "SmartArt Design"), "Diagram Design");
+    assert_eq!(tr(Lang::EN, "Home"), "Home");
+    let fx = fixture_lang("x-fixture", "\tDiagram Design\tDiagram-FX\npreview\tDiagram Design\tDiagram-Preview-FX\n\tDiagram Styles\tStyles-FX\n");
+    assert!(has(fx, "SmartArt Design"));
+    assert_eq!(tr(fx, "SmartArt Design"), "Diagram-FX");
+    assert_eq!(trc(fx, "preview", "SmartArt Design"), "Diagram-Preview-FX");
+    set_current(fx);
+    assert_eq!(get("preview", "SmartArt Design"), Some("Diagram-Preview-FX"));
+    assert_eq!(location("SmartArt Design › Diagram Styles"), "Diagram-FX › Styles-FX");
+    set_current(Lang::EN);
+}
