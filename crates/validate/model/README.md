@@ -30,7 +30,7 @@ SHA-256 of the checked-in files:
 
 | File | SHA-256 |
 |---|---|
-| `extract_content_model.py` | `259d43e4cfe6785c2a62e5b4a68ca61f971332d7205b643c25a5ee1b66b81466` |
+| `extract_content_model.py` | `2e4e0ce8a564074fe31c52852b15c1a25f43fe0025fbc7b1a526e00d83ebb53e` |
 | `generate_model.py` | `0732c987ce12378365e9a36c88690fb0bde757830d027af7706bbbe23a55f1fe` |
 | `content_model_v2.json` | `f36a42e324bae4cf4d6ce03ebbfb53e2e5729d76ae5f4929332a272d02545978` |
 | `content_model_v2_transitional.json` | `92c433577c914785908f42553718cc41b4f12161125596383ab6836ac3c54fbf` |
@@ -42,12 +42,17 @@ SHA-256 of the checked-in files:
 
 The seven byte-pinned files above keep LF checkout bytes through narrowly scoped
 `.gitattributes` rules, including `../src/model.rs`, even with `core.autocrlf=true`.
-Use `extract_model_lf.py` for extraction: it calls the unchanged builder in
-`extract_content_model.py` and explicitly requests LF when writing JSON. The original
-extractor remains byte-identical for its recorded hash and the tables' provenance;
-its legacy platform-default output entry point is superseded by the LF entry point.
-The generator already explicitly requests LF for its Rust output. No model content
-or existing SHA-256 value changes for this checkout fix.
+Use `extract_model_lf.py` for extraction: it calls the shared builder in
+`extract_content_model.py` and explicitly requests LF when writing JSON. The legacy
+platform-default output entry point is superseded by the LF entry point.
+The generator already explicitly requests LF for its Rust output.
+
+The extractor now rejects a missing required schema before either entry point opens
+its output. Its recorded hash reflects this input-validation change. The four JSON
+tables and generated Rust remain byte-identical: no tables were regenerated and no
+schema provenance or table hashes were rewritten. Complete-input extraction logic
+is unchanged. Run `python3 test_missing_schemas.py` for both profiles and entry points,
+including missing directories, individual missing files and existing-output preservation.
 
 Run `python3 test_model_checkout.py` to simulate autocrlf checkout bytes from Git's
 attributes and verify them, and to check the LF entry point's output options without

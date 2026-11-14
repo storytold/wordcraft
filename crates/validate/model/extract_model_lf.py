@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """LF-output entry point for the byte-pinned content-model extractor.
 
-The extraction algorithm and its recorded SHA-256 remain in extract_content_model.py.
-This entry point uses that unchanged builder and explicitly writes LF on every platform.
+The extraction algorithm and input validation live in extract_content_model.py.
+This entry point uses that shared builder and explicitly writes LF on every platform.
 It accepts the same positional schema directory/output path and optional --profile argument.
 """
 

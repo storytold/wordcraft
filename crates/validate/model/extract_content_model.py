@@ -167,9 +167,10 @@ class Schema:
     def _load(self):
         for fname in self.scope_files:
             path = os.path.join(self.dir, fname)
-            if not os.path.exists(path):
-                self.unresolved.add(f"missing file {fname}")
-                continue
+            # A missing required input is not an unresolved vocabulary reference.
+            # Stop before either entry point can replace output with a partial model.
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"required schema file is missing: {path}")
             with open(path, "rb") as fh:
                 raw = fh.read()
             self.file_hashes[fname] = hashlib.sha256(raw).hexdigest()

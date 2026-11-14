@@ -11,6 +11,7 @@ import io
 import json
 import pathlib
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -51,7 +52,7 @@ class CheckoutTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
             result = subprocess.run(
-                ["python3", str(checkout / "crates/validate/model/verify_model.py")],
+                [sys.executable, str(checkout / "crates/validate/model/verify_model.py")],
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
