@@ -313,6 +313,9 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
     let top = body_top_for(ctx, prev, ph.default);
     pb.foot_top = foot_top_for(ctx, prev, pf.default);
     pb.new_page(block, top);
+    if let Some(page) = pb.pages.last_mut() {
+        page.blank = true;
+    }
 }
 
 /// Start the section on a new page, after the blank one that puts it on the right side if any.
