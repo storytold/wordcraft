@@ -454,6 +454,9 @@ fn cell_widths(t: &Table, ncols: usize) -> Option<Vec<f32>> {
     if widths.iter().any(|w| *w <= 0.0) {
         return None;
     }
+    // Left to right by their last columns: a cell over several columns is settled once the
+    // columns before its last one are, so the order of the rows doesn't change the result.
+    spans.sort_by_key(|&(g, span, _)| g.saturating_add(span));
     for (g, span, w) in spans {
         let cols = widths.get_mut(g..g.saturating_add(span).min(ncols))?;
         let lack = w - cols.iter().sum::<f32>();
@@ -1534,7 +1537,9 @@ fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth
             // A nested table: its fixed width, else its columns' but at least its preferred width
             // (its own, else its grid's when it has preferred widths at all). One whose width
             // comes from its columns is narrowed to the cell, as far as its columns' longest
-            // words, and doesn't widen the cell before that.
+            // words, and doesn't widen the cell before that; with room to spare it is as wide as
+            // layout makes it: its cells' widths, a column narrower than its longest word as wide
+            // as the word, whatever its saved grid says and however long its text.
             Block::Table(nt) if depth < 8 => {
                 let grid = if is_automatic(nt) { 0.0 } else { nt.grid.iter().filter(|w| w.is_finite()).map(|w| w.max(0.0)).sum() };
                 let width = nt.props.width.filter(|w| w.is_finite()).unwrap_or(grid).clamp(0.0, UNBOUNDED);
@@ -1542,12 +1547,16 @@ fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth
                     (width, width)
                 } else {
                     let style = table_style(ctx, nt);
-                    let weights = preferred_grid(nt, width);
+                    let by_columns = nt.props.width.is_none() && nt.props.width_pct.is_none() && !nt.props.fixed && !is_automatic(nt);
+                    let own = if by_columns { cell_widths(nt, grid_cols(nt).max(1)) } else { None };
+                    let weights = own.clone().unwrap_or_else(|| preferred_grid(nt, width));
                     let cols = column_content(ctx, nt, style.as_ref(), depth + 1, &weights).unwrap_or_default();
                     let (l, h) = cols.iter().fold((0.0, 0.0), |(l, h), c| (l + c.0, h + c.1));
-                    if nt.props.width.is_none() && nt.props.width_pct.is_none() && !nt.props.fixed && !is_automatic(nt) {
+                    if by_columns {
                         let out = outside(ctx, nt, default_margins(nt, style.as_ref()), &table_borders(nt, style.as_ref()));
-                        ((l + out).max(0.0), width.max(h))
+                        let word = |i: usize| cols.get(i).map_or(0.0, |c: &(f32, f32)| if c.0.is_finite() { c.0 } else { 0.0 });
+                        let wide = own.map_or(width.max(h), |own| own.iter().enumerate().map(|(i, w)| w.max(word(i))).sum::<f32>() + out);
+                        ((l + out).max(0.0), wide.max(0.0))
                     } else {
                         (width.max(l), width.max(h))
                     }
