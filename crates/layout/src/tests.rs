@@ -4732,6 +4732,30 @@ fn every_part_of_a_split_at_least_row_is_at_least_that_tall() {
         assert!((lines[0] - (top + 0.5)).abs() < 0.05, "{valign:?}: its text starts at its top ({top}): {lines:?}");
         assert!((next - (top + height)).abs() < 0.05, "{valign:?}: the next row at {next} follows the whole part");
     }
+    // The band at the top of the part is that of the table's top border, which Word draws there,
+    // not of the row's own top border: in a table with 3 pt lines between its rows and none
+    // around it the part of the second row is 100 pt tall, and 103 pt with a 3 pt top border.
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let line = |width: f32| Some(Border { style: if width > 0.0 { BorderStyle::Single } else { BorderStyle::None }, width, color: None, space: 0.0 });
+    for (around, tall) in [(0.0, 100.0), (3.0, 103.0)] {
+        let (l, pages) = at_least_rows(160.0, 3, |t| {
+            t.props.borders =
+                Some(Borders { top: line(around), left: line(0.0), bottom: line(0.0), right: line(0.0), between: line(3.0), inside_v: line(0.0) });
+            t.rows[1].props.height = Some(100.0);
+            t.rows[1].props.height_rule = HeightRule::AtLeast;
+            t.rows[1].cells[0].blocks = lines_in_cell(12, "Line");
+        });
+        assert_eq!(pages, vec![vec![0, 1], vec![1, 2]], "top border {around}");
+        let cell = |row: usize| {
+            l.pages[1]
+                .items
+                .iter()
+                .find_map(|it| if let Placed::Cell { row: r, rect, .. } = it { (*r == row).then_some((rect.y, rect.h)) } else { None })
+        };
+        let (Some((top, height)), Some((next, _))) = (cell(1), cell(2)) else { panic!("top border {around}: no cells on page 2") };
+        assert!((height - tall).abs() < 0.05, "top border {around}: the part that goes on is {height} pt tall");
+        assert!((next - (top + height)).abs() < 0.05, "top border {around}: the next row at {next} follows the part at {top}");
+    }
 }
 
 /// A cut that is NaN or infinite, or a row of a NaN height, splits nothing (`clamp` used to panic

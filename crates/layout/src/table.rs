@@ -26,8 +26,9 @@ pub struct RowLayout {
     /// row's top band). Word wants it on the page too: the row fits only where its height and
     /// this border do.
     pub edge: f32,
-    /// The least height of an at-least row, its cells' margins and border bands included; zero
-    /// for a row without one. Every part of the row split across pages is at least this tall.
+    /// The least height of a part of an at-least row that goes on to another page: the row's
+    /// height, its cells' margins and the bands of the borders around the part there (the
+    /// table's top border and the last row's bottom border). Zero for a row without one.
     pub floor: f32,
     /// The row's cells: the items each one owns and where its content ends.
     pub cells: Vec<CellPart>,
@@ -684,9 +685,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             (Some(h), _) if h > 0.0 => rh.max(h + row_insets),
             _ => rh,
         };
-        // Every part of an at-least row split across pages is as tall as that, too.
+        // A part of an at-least row that goes on to another page is that tall as well, with the
+        // cells' margins and the bands of the borders around it there: the table's top border,
+        // which Word draws at the top of the part whatever the row's own top border is, and the
+        // last row's bottom border.
+        let top_band = tborders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
         floors.push(match (row.props.height, row.props.height_rule) {
-            (Some(h), HeightRule::AtLeast) if h > 0.0 => h + row_insets,
+            (Some(h), HeightRule::AtLeast) if h > 0.0 => h + row_top + row_below + top_band,
             _ => 0.0,
         });
         bottoms.push(row_below);
@@ -1172,10 +1177,11 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
 /// height, as far as the `room` on its page allows.
 ///
 /// Measured in Word for Windows: every part of such a row is at least as tall as the row's
-/// height says (its cells' margins and border bands on top, as for a row on one page), and a
-/// part that tall would not fit on the page ends at the page's bottom. The text that goes on
-/// stays at the top of the part, also in cells aligned to the middle or bottom; the cells'
-/// areas, shading and borders that run to the part's bottom follow it down.
+/// height says, the cells' margins and the bands of the table's top border and the last row's
+/// bottom border on top, and a part that tall would not fit on the page ends at the page's
+/// bottom. The text that goes on stays at the top of the part, also in cells aligned to the
+/// middle or bottom; the cells' areas, shading and borders that run to the part's bottom follow
+/// it down.
 pub fn grow_to_floor(row: &mut RowLayout, room: f32) {
     let height = row.floor.min(room);
     // Also rejects NaN.
