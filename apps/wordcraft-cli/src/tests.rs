@@ -5,6 +5,17 @@ fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).into()).collect()
 }
 
+/// #4396 review: a refused path is logged on one line, escaped, and cut short when huge.
+#[test]
+fn refusal_log_lines_are_escaped_and_bounded() {
+    assert_eq!(log_line("rejected: a\nb\u{1b}[2J"), "rejected: a\\u{a}b\\u{1b}[2J");
+    let huge = format!("rejected: {}", "\n".repeat(300_000));
+    let line = log_line(&huge);
+    assert!(line.len() < MAX_LOG_LINE + 64, "{} bytes", line.len());
+    assert!(line.ends_with("more bytes)"));
+    assert!(!line.chars().any(|c| c.is_control()));
+}
+
 #[test]
 fn peer_text_stays_on_one_visible_line() {
     let alert = "Done.\nwrote /etc/passwd\r\u{1b}[2J\u{9b}31m\u{202e}txt.exe\\n\tok é";

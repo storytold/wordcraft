@@ -88,32 +88,56 @@ impl AutomationRoots {
 
     /// May the file or folder at `path` be read (or written)? `Err` says why not.
     pub fn check(&self, path: &str, access: Access) -> Result<(), String> {
+        self.decide(path, access).map_err(|r| r.error)
+    }
+
+    /// [`check`](Self::check), with what the check had resolved when it refused, for the log.
+    fn decide(&self, path: &str, access: Access) -> Result<(), Refusal> {
+        let refused = |error: String| Refusal { error, resolved: None };
         let root = match access {
             Access::Read => self.read.as_ref(),
             Access::Write => self.write.as_ref(),
         };
+        // No authority: refused before the path is touched at all.
         let Some(Root { resolved: folder, shown }) = root else {
-            return match access {
-                Access::Read => Err(format!("automation filesystem access is not granted: read authority is absent: {path}")),
-                Access::Write => Err(format!("automation filesystem access is not granted: write authority is absent: {path}")),
-            };
+            return Err(refused(match access {
+                Access::Read => format!("automation filesystem access is not granted: read authority is absent: {path}"),
+                Access::Write => format!("automation filesystem access is not granted: write authority is absent: {path}"),
+            }));
         };
-        // Writing replaces or removes the directory entry `path` names (a safe save renames its
-        // temporary file over it, a rename removes it): that entry must be inside the root too,
-        // not only what a link there leads to (#3735).
-        let entry_inside = || match access {
-            Access::Read => Ok(true),
-            Access::Write => resolve_entry(path).map(|entry| inside(&entry, folder)),
+        let show = |p: &Path| plain(p.to_path_buf()).display().to_string();
+        let target = resolve(path).map_err(refused)?;
+        let resolved = if inside(&target, folder) {
+            if access == Access::Read {
+                return Ok(());
+            }
+            // Writing replaces or removes the directory entry `path` names (a safe save renames its
+            // temporary file over it, a rename removes it): that entry must be inside the root too,
+            // not only what a link there leads to (#3735).
+            let entry = resolve_entry(path).map_err(|error| Refusal { error, resolved: Some(show(&target)) })?;
+            if inside(&entry, folder) {
+                return Ok(());
+            }
+            format!("{}, entry {}", show(&target), show(&entry))
+        } else {
+            show(&target)
         };
-        if inside(&resolve(path)?, folder) && entry_inside()? {
-            return Ok(());
-        }
         let root = shown.display();
-        match access {
-            Access::Read => Err(format!("automation path rejected: outside the read root {root}: {path}")),
-            Access::Write => Err(format!("automation path rejected: outside the write root {root}: {path}")),
-        }
+        Err(Refusal {
+            error: match access {
+                Access::Read => format!("automation path rejected: outside the read root {root}: {path}"),
+                Access::Write => format!("automation path rejected: outside the write root {root}: {path}"),
+            },
+            resolved: Some(resolved),
+        })
     }
+}
+
+/// A refused path: the message, and the path as the check resolved it (`None` when it resolved
+/// nothing: no authority of that kind, or the path couldn't be resolved).
+struct Refusal {
+    error: String,
+    resolved: Option<String>,
 }
 
 /// Where the roots are in force on a thread ([`confine`], [`unconfined`]).
@@ -190,14 +214,36 @@ fn plain(path: PathBuf) -> PathBuf {
     }
 }
 
-/// May `path` be read here? Always, without roots in force.
+/// May `path` be read here? Always, without roots in force. A refusal is logged ([`logged`]).
 pub fn check_read(path: &str) -> Result<(), String> {
-    current().map_or(Ok(()), |r| r.check(path, Access::Read))
+    logged(path, Access::Read)
 }
 
-/// May `path` be written here? Always, without roots in force.
+/// May `path` be written here? Always, without roots in force. A refusal is logged ([`logged`]).
 pub fn check_write(path: &str) -> Result<(), String> {
-    current().map_or(Ok(()), |r| r.check(path, Access::Write))
+    logged(path, Access::Write)
+}
+
+/// [`check_read`] without the log line, for code that only skips what it may not read (a folder
+/// listing, a file it probes before opening it for real), so one request logs at most one line.
+pub fn may_read(path: &str) -> bool {
+    current().is_none_or(|r| r.check(path, Access::Read).is_ok())
+}
+
+/// The roots' answer for `path`; a refusal is also a warning (target `automation`) with the path as
+/// given and as the check resolved it, so the person running the server can review what an agent
+/// tried to reach (#4396). A refused write through a link also names the entry it would replace
+/// (#3735). Nothing is resolved for the log alone (a UNC path would reach the network, #3697). The
+/// text is the agent's: the logger escapes it.
+fn logged(path: &str, access: Access) -> Result<(), String> {
+    let Some(roots) = current() else { return Ok(()) };
+    roots.decide(path, access).map_err(|Refusal { error, resolved }| {
+        match resolved {
+            Some(resolved) => log::warn!(target: "automation", "{error} (resolved: {resolved})"),
+            None => log::warn!(target: "automation", "{error}"),
+        }
+        error
+    })
 }
 
 /// `path` made absolute with its links followed; for a path that doesn't exist (yet), its nearest

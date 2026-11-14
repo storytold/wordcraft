@@ -7011,6 +7011,7 @@ name = "wordcraft-cli"
 version = "0.18.1"
 dependencies = [
  "image",
+ "log",
  "serde_json",
  "sys-locale",
  "wordcraft-doc",
