@@ -174,6 +174,9 @@ impl WordApp {
     /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn give_up_file_dialog(&mut self) {
+        if let Some(cancel) = &self.services.cancel_file_dialog {
+            cancel();
+        }
         if let Some(d) = self.file_dialog.take() {
             let _ = self.finish_pick(d.after, None);
         }
