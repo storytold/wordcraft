@@ -991,7 +991,8 @@ impl Gone {
 
     /// Whether `it`, an area, shading, border or picture, goes on whole with it, and if so
     /// whether it stays on the page as well: the border above the row that goes on, where that
-    /// closes the table.
+    /// closes the table. A picture or shape goes with it when it lies within the region; one
+    /// that reaches past its edges is placed like any other, by whether it fits on the page.
     fn takes(&self, it: &Placed, own_depth: Option<usize>) -> Option<bool> {
         match it {
             Placed::Fill { rect, .. }
