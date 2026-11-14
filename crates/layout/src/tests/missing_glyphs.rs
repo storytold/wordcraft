@@ -266,7 +266,7 @@ fn meta_text(height: f32, dx: Vec<f32>) -> craft_metafile::Text {
 #[test]
 fn metafile_text_heights() {
     let glyphs = [(0, 500.0, 0.0, 0.0), (1, 500.0, 0.0, 0.0)];
-    let em = |h| crate::metafile_text_layout(&meta_text(h, Vec::new()), 1000.0, 900.0, 300.0, &glyphs).map(|l| l.em);
+    let em = |h| crate::layout_metafile_text(&meta_text(h, Vec::new()), 1000.0, 900.0, 300.0, &glyphs).map(|l| l.em);
     let near = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-9);
     assert!(near(em(0.0), 16.0 * 1000.0 / 1200.0), "{:?}", em(0.0));
     assert!(near(em(-10.0), 10.0), "{:?}", em(-10.0));
@@ -298,6 +298,6 @@ fn negative_crop_sides_are_no_crop() {
 #[test]
 fn metafile_text_cell_spans_backward_advances() {
     let glyphs = [(0, 500.0, 0.0, 0.0), (1, 500.0, 0.0, 0.0)];
-    let lay = crate::metafile_text_layout(&meta_text(-10.0, vec![50.0, -40.0]), 1000.0, 800.0, 200.0, &glyphs).expect("a layout");
+    let lay = crate::layout_metafile_text(&meta_text(-10.0, vec![50.0, -40.0]), 1000.0, 800.0, 200.0, &glyphs).expect("a layout");
     assert_eq!(lay.cell, [0.0, -8.0, 50.0, 2.0]);
 }

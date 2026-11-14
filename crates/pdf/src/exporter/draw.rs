@@ -282,11 +282,7 @@ impl Exporter<'_> {
         if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
             return;
         }
-        let dims = self
-            .doc
-            .media
-            .get(&pic.media)
-            .and_then(|b| image::ImageReader::new(std::io::Cursor::new(b.as_slice())).with_guessed_format().ok()?.into_dimensions().ok());
+        let dims = self.doc.media.get(&pic.media).and_then(|b| wordcraft_geom::picture::dimensions(b.as_slice()));
         // Centred once at its natural size (an ODT page background that doesn't repeat).
         if let Some((pw, ph)) = dims.filter(|_| pic.fill_type.eq_ignore_ascii_case("center")) {
             let (iw, ih) = centred_size(pw, ph, w, h);

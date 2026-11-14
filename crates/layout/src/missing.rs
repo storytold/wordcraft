@@ -182,7 +182,7 @@ pub struct MetafileTextLayout {
 /// baseline. The font height is the em size when negative and the cell height (ascent plus
 /// descent) when positive. The per-character advances `dx` place each cluster when there is one
 /// per character. None when the size is not finite and positive.
-pub fn metafile_text_layout(
+pub fn layout_metafile_text(
     t: &craft_metafile::Text,
     upem: f64,
     ascent: f64,
@@ -365,7 +365,7 @@ fn meta_runs(bytes: &[u8]) -> Vec<MetaRun> {
         let craft_metafile::Item::Text(t) = item else { continue };
         let (face, shaped) = metafile_text_run(t);
         let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
-        if metafile_text_layout(t, face.upem, face.ascent, face.descent, &glyphs).is_none() {
+        if layout_metafile_text(t, face.upem, face.ascent, face.descent, &glyphs).is_none() {
             continue;
         }
         let ranges = cluster_ranges(&t.text, &shaped);

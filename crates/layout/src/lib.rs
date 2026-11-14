@@ -49,6 +49,7 @@ use wordcraft_geom::{Point, Rect, Spin};
 
 pub use fields::FieldCtx;
 pub use hit::VisualStep;
+pub use missing::{MetafileTextLayout, layout_metafile_text};
 pub use para::{LineEnd, ParaLayout};
 pub use table::{autofit_widths, cell_margins, measure_table_columns};
 
@@ -86,9 +87,7 @@ use headers::MAX_HEADER_ITEMS;
 use headers::placed_cost;
 use headers::placed_cost_by;
 pub use metafile::{MAX_METAFILE_DASHES, crop_sides, crop_window, metafile_average_color, metafile_dashes, metafile_miter_limit};
-pub use missing::{
-    MAX_MISSING_GLYPHS, MetafileTextLayout, MissingGlyphs, metafile_text_layout, metafile_text_run, missing_watermark_glyphs, watermark_run,
-};
+pub use missing::{MAX_MISSING_GLYPHS, MissingGlyphs, metafile_text_run, missing_watermark_glyphs, watermark_run};
 pub use notes::DECOR_STORY;
 pub(crate) use notes::NOTE_SEP_W;
 use notes::{MAX_NOTE_PASSES, footnote_pages};

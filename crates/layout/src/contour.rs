@@ -377,11 +377,7 @@ mod tests {
     #[test]
     fn pictures_wrap_around_their_opaque_pixels() {
         crate::test_fonts();
-        let png = |img: image::DynamicImage| {
-            let mut buf = Vec::new();
-            img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
-            buf
-        };
+        let png = |img: image::DynamicImage| wordcraft_geom::picture::encode_format(&img, image::ImageFormat::Png).unwrap();
         // An opaque disc in the middle of a transparent 64 × 64 picture.
         let disc = image::RgbaImage::from_fn(64, 64, |x, y| {
             let (dx, dy) = (x as f32 + 0.5 - 32.0, y as f32 + 0.5 - 32.0);

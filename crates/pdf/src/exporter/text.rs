@@ -185,7 +185,7 @@ impl Exporter<'_> {
     pub(crate) fn vector_text(&mut self, s: &mut Surface, t: &craft_metafile::Text, tf: kurbo::Affine) {
         let (face, shaped) = wordcraft_layout::metafile_text_run(t);
         let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
-        let Some(lay) = wordcraft_layout::metafile_text_layout(t, face.upem, face.ascent, face.descent, &glyphs) else { return };
+        let Some(lay) = wordcraft_layout::layout_metafile_text(t, face.upem, face.ascent, face.descent, &glyphs) else { return };
         let font = self.font(&face);
         if font.is_none() && !self.outlined.contains(&face.id()) {
             return;

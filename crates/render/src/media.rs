@@ -119,7 +119,7 @@ pub(crate) fn premul_pixmap(w: u32, h: u32, rgba: &[u8]) -> Option<Pixmap> {
 
 /// Pixel size of an encoded image.
 pub fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
+    wordcraft_geom::picture::dimensions(bytes)
 }
 
 /// The natural size in points of a Windows Metafile or Enhanced Metafile picture, and the file
@@ -394,7 +394,7 @@ fn pen(width: f64, pixel: f64, line: &craft_metafile::LineStyle, path: &kurbo::B
 fn draw_vector_text(ctx: &mut RenderContext, t: &craft_metafile::Text, tf: Affine) {
     let (face, shaped) = wordcraft_layout::metafile_text_run(t);
     let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
-    let Some(lay) = wordcraft_layout::metafile_text_layout(t, face.upem, face.ascent, face.descent, &glyphs) else { return };
+    let Some(lay) = wordcraft_layout::layout_metafile_text(t, face.upem, face.ascent, face.descent, &glyphs) else { return };
     let k = lay.em / face.upem.max(1.0);
     let canvas = kurbo::Rect::new(0.0, 0.0, f64::from(ctx.width()), f64::from(ctx.height()));
     // An opaque background mode fills the character cells first.

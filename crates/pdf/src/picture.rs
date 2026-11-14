@@ -236,7 +236,7 @@ pub(crate) fn load_image(data: &Arc<Vec<u8>>, fx: PicFx) -> Option<Image> {
 
 /// [`load_image`] with an explicit RGBA byte budget (a small one in tests).
 pub(crate) fn load_image_within(data: &Arc<Vec<u8>>, fx: PicFx, budget: u64) -> Option<Image> {
-    let fmt = image::guess_format(data).ok()?;
+    let fmt = wordcraft_geom::picture::guess_format(data)?;
     // The decision to draw or not is the shared one (`wordcraft_geom::picture`), the one strict
     // export checks with.
     let dec = wordcraft_geom::picture::decode_for_drawing(data, budget, MAX_IMAGE_SIDE).ok()?;
