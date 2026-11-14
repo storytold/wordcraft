@@ -3061,3 +3061,37 @@ fn link_annotations_are_tagged_with_link_and_objr() {
         "Link element missing MCID or OBJR for {annot_id}: {links:?}"
     );
 }
+
+/// Linked text split by unlinked text keeps reading order: two Link elements, not one that
+/// swallows the later run ahead of the text between.
+#[test]
+fn separated_link_runs_are_separate_link_elements() {
+    use hayro_syntax::object::{Array, Dict, Name, Object};
+
+    let link_props = CharProps { link: Some("https://example.com".into()), ..Default::default() };
+    let mut p = Paragraph::with_text("A", link_props.clone());
+    p.insert_text(p.len(), ".", &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "B", &link_props).unwrap();
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    let root = pdf.xref().get::<Dict>(pdf.xref().root_id()).unwrap();
+    let tree = root.get::<Dict>(b"StructTreeRoot").expect("StructTreeRoot");
+
+    fn count(dict: &Dict) -> usize {
+        let mut n = usize::from(dict.get::<Name>(b"S").is_some_and(|s| s.as_ref() == b"Link"));
+        if let Some(k) = dict.get::<Array>(b"K") {
+            for item in k.iter::<Object>() {
+                if let Object::Dict(c) = item {
+                    n += count(&c);
+                }
+            }
+        } else if let Some(c) = dict.get::<Dict>(b"K") {
+            n += count(&c);
+        }
+        n
+    }
+    assert_eq!(count(&tree), 2, "each separated link run needs its own Link element");
+}

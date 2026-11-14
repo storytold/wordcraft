@@ -158,6 +158,15 @@ impl Exporter<'_> {
         }
     }
 
+    /// Whether a link's `Link` group is still the last content of its paragraph, so more linked text
+    /// can join it without being read ahead of unlinked text drawn since. Untagged links always continue.
+    fn link_run_continues(&self, tag: Option<(usize, usize)>) -> bool {
+        match tag {
+            None => true,
+            Some((p, c)) => self.tags.get(p).is_some_and(|e| e.children.len() == c + 1),
+        }
+    }
+
     pub(super) fn link_rect(&mut self, face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], link: &str) {
         let (Some(first), Some(last)) = (glyphs.first(), glyphs.last()) else { return };
         let adv = face.advance(last.0) as f32 * size / face.upem.max(1.0) as f32;
@@ -169,10 +178,12 @@ impl Exporter<'_> {
         if self.link_target(link).is_none() {
             return;
         }
+        let continues = self.links.last().is_some_and(|prev| self.link_run_continues(prev.tag));
         if let Some(prev) = self.links.last_mut()
             && prev.target == link
             && (prev.y0 - y0).abs() < 0.5
             && x0 - prev.x1 < size
+            && continues
         {
             prev.x0 = prev.x0.min(x0);
             prev.x1 = prev.x1.max(x1);
