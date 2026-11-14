@@ -1,5 +1,5 @@
 use super::builder::Builder;
-use super::model::ClKind;
+use super::model::{ClKind, StyleRun};
 use super::{Arc, CharProps, Document, WrapText};
 
 /// The section's document grid as layout applies it (`w:docGrid`, ECMA-376 §17.6.5).
@@ -73,19 +73,40 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     }
 }
 
-/// Automatic spacing (`w:autoSpaceDE`, `w:autoSpaceDN`): a quarter of the Asian character's font
-/// size between Asian text and Latin text or digits that touch, across runs. Measured on Word's
-/// PDF of a Chinese document at 16 pt (#2358), as JIS X 4051 asks. A field or note number is
-/// classed by the text it shows. The room goes after the first of the two characters; returns it
-/// by cluster index.
+/// The room automatic spacing leaves after a Latin character drawn in `st`: half its face's
+/// average character width, the figure a platform's text metrics report. Times New Roman gives
+/// 0.199 of the font size, Calibri 0.258, Cambria 0.304 (see [`auto_space`]). A face that is
+/// itself East Asian averages its half-width cell, so a digit set in SimSun gives a quarter of
+/// the size like the East Asian text around it.
+fn auto_space_room(st: &StyleRun) -> f32 {
+    let ratio = if st.face.upem > 0.0 { st.face.avg_char_width / st.face.upem } else { 0.5 };
+    let ratio = if ratio.is_finite() { ratio.clamp(0.0, 1.0) as f32 } else { 0.5 };
+    if st.size.is_finite() { (st.size * ratio / 2.0).clamp(0.0, 400.0) } else { 0.0 }
+}
+
+/// Automatic spacing (`w:autoSpaceDE`, `w:autoSpaceDN`): room between Asian text and Latin text or
+/// digits that touch, across runs. The room goes after the first of the two characters and takes
+/// that character's own size: a quarter of it in front of a Latin run, half the Latin face's
+/// average character width after it ([`auto_space_room`]). A field or note number is classed by
+/// the text it shows. Returns the room by cluster index.
+///
+/// The quarter in front is Word's PDF of a Chinese document at 16 pt (#2358), as JIS X 4051 asks.
+/// The room after a Latin run was measured in Word 16.0.17932.21056 over 26 faces, both orders,
+/// 10.5 to 400 pt, Japanese and Chinese (#6583), through
+/// `Range.Information(wdHorizontalPositionRelativeToPage)` rather than a PDF, since
+/// `ExportAsFixedFormat` hung: the room in front of a Latin run is a quarter of the font size
+/// whatever face the Latin text uses, while the room after it follows that face — 0.1986 of the
+/// size for Times New Roman, 0.2203 for Arial, 0.2575 for Calibri, 0.2980 for Courier New,
+/// 0.3041 for Cambria — which is half each face's average character width. With different sizes
+/// either side, the room after the Latin run takes the Latin size, not the Asian one.
 pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
     let mut out = Vec::new();
     if !de && !dn {
         return out;
     }
     let mut shown = b.shown.iter().map(|s| (s.0, s.1.as_str())).peekable();
-    // The previous text cluster: index, its last character, its font size.
-    let mut prev: Option<(usize, char, f32)> = None;
+    // The previous text cluster: index and its last character.
+    let mut prev: Option<(usize, char)> = None;
     for k in 0..b.clusters.len() {
         let Some(c) = b.clusters.get(k) else { break };
         match c.kind {
@@ -105,18 +126,23 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
             prev = None;
             continue;
         };
-        let size = b.styles.get(c.style as usize).map_or(0.0, |st| st.size);
-        if let Some((pk, pc, psize)) = prev
+        if let Some((pk, pc)) = prev
             && let Some(side) = crate::kinsoku::auto_space(pc, first, de, dn)
         {
-            let asian = if side == crate::kinsoku::AsianSide::Left { psize } else { size };
-            let gap = if asian.is_finite() { (asian / 4.0).clamp(0.0, 400.0) } else { 0.0 };
+            let style = b.clusters.get(pk).map(|p| p.style as usize);
+            let st = style.and_then(|i| b.styles.get(i));
+            let gap = match side {
+                // In front of the Latin run the Asian character carries the room (#2358).
+                crate::kinsoku::AsianSide::Left => st.map_or(0.0, |st| if st.size.is_finite() { (st.size / 4.0).clamp(0.0, 400.0) } else { 0.0 }),
+                // After it the Latin character carries the room, so its own face decides (#6583).
+                crate::kinsoku::AsianSide::Right => st.map_or(0.0, auto_space_room),
+            };
             if let Some(pc) = b.clusters.get_mut(pk) {
                 pc.adv += gap;
                 out.push((pk, gap));
             }
         }
-        prev = Some((k, last, size));
+        prev = Some((k, last));
     }
     out
 }
