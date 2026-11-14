@@ -483,8 +483,8 @@ impl Session {
         self.add(doc, 0)
     }
 
-    /// Adds `doc` to the session and makes it active, parking the previously active document
-    /// and applying any pending Markdown Source text first.
+    /// Adds `doc` with its own opening zoom, parking the previous document and applying
+    /// any pending Markdown Source text first.
     fn add(&mut self, mut doc: Document, untitled: u32) -> u64 {
         crate::cmd::md_source::apply(self);
         doc.ensure_nonempty();
@@ -497,6 +497,9 @@ impl Session {
         self.swap_doc(&mut d);
         self.others.push(d);
         self.stop_reading_elsewhere();
+        if self.prefs.default_zoom.is_some() {
+            self.apply_document_zoom();
+        }
         id
     }
 
@@ -569,6 +572,9 @@ impl Session {
                 let mut fresh = DocState::new(doc, self.untitled_count, view);
                 self.order = vec![fresh.document_id];
                 self.swap_doc(&mut fresh);
+                if self.prefs.default_zoom.is_some() {
+                    self.apply_document_zoom();
+                }
                 self.forget_recovery_copy(&fresh);
             }
         }

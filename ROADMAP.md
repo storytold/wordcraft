@@ -1,5 +1,6 @@
 # WordCraft roadmap
 
+> **PR update:** 2026-11-14 · Integrate default document zoom with main f8c66d06; preserve Markdown Source handoff, mirrored Advanced options and current upstream progress. Readiness estimates unchanged.
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
@@ -406,6 +407,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-21 | Read Aloud on Linux speaks through Speech Dispatcher when neither `espeak-ng` nor `espeak` is installed (#4576). It talks to the server over its own socket (SSIP), so the text is never taken for a command and stopping cancels only WordCraft's own speech, not a screen reader's; each sentence goes in its language, region included, and a sentence a screen reader's announcement cuts off is said again after a short pause; if another program keeps stopping it, reading pauses on it with a message. With no speech program at all, Read Aloud names the package to install, and the `.deb` and `.rpm` packages recommend one. |
 | 2026-10-31 | trivial | Preserve recipient columns after an unquoted whitespace-only prefix in a headered CSV (#4249); keep quoted headers, headerless whitespace records and shared CSV parsing. |
 | 2026-10-31 | trivial | Integrate complete-record recipient CSV delimiter detection (#4249) with current main; preserve leading blank-line detection (#5042), original regressions and readiness estimates. |
+| 2026-10-21 | Default document zoom (#2080): percentage or fit mode for New/Open; saved zoom wins unless explicitly overridden. |
 | 2026-10-28 | **Arabic diacritic editing (#4757):** Backspace removes the last stored Arabic combining mark, so its base letter can stay while the mark is replaced. Caret movement and forward Delete keep their cluster rules. Synthetic command, history, protection and native/DOCX fresh-reopen checks; no native Word comparison or readiness change. |
 | 2026-10-29 | Insert › Shapes shows the basic shapes as a grid of code-drawn icon tiles, each with an accessible name and tooltip, instead of a text list (#4349) |
 | 2026-11-03 | A password-protected file named on the command line (double-clicked in the file manager) asks for its password when the first blank document was replaced because File › Options chose a region; the window now follows that replacement at once, so the first frame no longer takes it for a document switch and drops the Password box (#5299) |
@@ -1001,6 +1003,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
 | 2026-11-02 | trivial | Honor page break before at a continuous section's mid-page top (#5287); its later-column case remains unmeasured in Word. Readiness unchanged. |
+| 2026-11-02 | trivial | Default document zoom (#2080): preferences, saved-zoom precedence and independent views; readiness unchanged. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |
