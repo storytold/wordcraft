@@ -323,6 +323,10 @@ impl Borders {
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
     }
+    /// Any side is drawn ([`Border::is_drawn`]), a line of width 0 included.
+    pub fn any_drawn(&self) -> bool {
+        [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_drawn)
+    }
     /// Every side at the width it is drawn at ([`Border::as_drawn`]).
     pub fn as_drawn(&self) -> Borders {
         let side = |s: Option<Border>| s.map(|b| b.as_drawn());

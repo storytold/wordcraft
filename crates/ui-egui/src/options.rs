@@ -675,6 +675,9 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         templates_folder(app, ui);
     }
     ui.add_space(8.0);
+    section(ui, "Scrolling");
+    scroll_speed_picker(app, ui);
+    ui.add_space(8.0);
     section(ui, "Customize");
     ui.horizontal(|ui| {
         ui.label(tl!("Keyboard shortcuts:"));
@@ -838,6 +841,42 @@ fn display_server_picker(app: &mut WordApp, ui: &mut Ui) {
         combo.response.labelled_by(label.id);
     });
     note(ui, "Applies the next time WordCraft starts.");
+}
+
+/// Scroll speed preferences (#6146): mouse wheel and touchpad (Wayland / macOS).
+fn scroll_speed_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::scroll::ScrollSpeed;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Mouse wheel scroll speed:"));
+        let combo = craft_ui::ComboBox::from_id_salt("scroll_speed").selected_text(tl!(app.ui.scroll_speed.label())).width(220.0).show_ui(ui, |ui| {
+            for s in ScrollSpeed::ALL {
+                if ui.selectable_label(app.ui.scroll_speed == s, tl!(s.label())).clicked() {
+                    let _ = app.run("ui.scrollSpeed", json!({"value": s.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    // Windows and browsers do not report touchpads in points.
+    if !cfg!(any(target_os = "windows", target_arch = "wasm32")) {
+        let row = ui.horizontal(|ui| {
+            let label = ui.label(tl!("Touchpad scroll speed:"));
+            let combo = craft_ui::ComboBox::from_id_salt("touchpad_scroll_speed")
+                .selected_text(tl!(app.ui.touchpad_scroll_speed.label()))
+                .width(220.0)
+                .show_ui(ui, |ui| {
+                    for s in ScrollSpeed::ALL {
+                        if ui.selectable_label(app.ui.touchpad_scroll_speed == s, tl!(s.label())).clicked() {
+                            let _ = app.run("ui.touchpadScrollSpeed", json!({"value": s.code()}));
+                        }
+                    }
+                });
+            combo.response.labelled_by(label.id);
+        });
+        if !cfg!(target_os = "macos") {
+            row.response.on_hover_text(tl!("On X11, the touchpad follows the mouse wheel speed."));
+        }
+    }
 }
 
 /// Interface language: follow the system (the default) or pick one (#8).

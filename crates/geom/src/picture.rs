@@ -6,9 +6,12 @@
 //! all (a TIFF with JPEG strips, #3645).
 
 use std::borrow::Cow;
-use std::io::Cursor;
 
-use image::{DynamicImage, ImageDecoder, ImageFormat};
+use craft_image_codecs::{
+    ChannelLayout, CodecError, DecodeOptions, EncodeOptions, Format as CodecFormat, Image as CodecImage, Limits as CodecLimits, RasterColorType,
+    SampleType, decode_as_with, detect, encode as codec_encode, inspect_raster, probe_size,
+};
+use image::{DynamicImage, ImageBuffer, ImageFormat};
 
 /// Why a picture isn't decoded.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,8 +39,131 @@ impl std::fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-fn broken(e: image::ImageError) -> Refusal {
+fn broken(e: impl std::fmt::Display) -> Refusal {
     Refusal::Broken(e.to_string())
+}
+
+fn to_codec_format(format: ImageFormat) -> Option<CodecFormat> {
+    match format {
+        ImageFormat::Png => Some(CodecFormat::Png),
+        ImageFormat::Jpeg => Some(CodecFormat::Jpeg),
+        ImageFormat::Gif => Some(CodecFormat::Gif),
+        ImageFormat::WebP => Some(CodecFormat::WebP),
+        ImageFormat::Bmp => Some(CodecFormat::Bmp),
+        ImageFormat::Tiff => Some(CodecFormat::Tiff),
+        _ => None,
+    }
+}
+
+fn from_codec_format(format: CodecFormat) -> Option<ImageFormat> {
+    match format {
+        CodecFormat::Png => Some(ImageFormat::Png),
+        CodecFormat::Jpeg => Some(ImageFormat::Jpeg),
+        CodecFormat::Gif => Some(ImageFormat::Gif),
+        CodecFormat::WebP => Some(ImageFormat::WebP),
+        CodecFormat::Bmp => Some(ImageFormat::Bmp),
+        CodecFormat::Tiff => Some(ImageFormat::Tiff),
+        _ => None,
+    }
+}
+
+fn codec_limits(max_width: Option<u32>, max_height: Option<u32>, max_bytes: u64) -> CodecLimits {
+    let mut limits = CodecLimits::default();
+    if let Some(w) = max_width {
+        limits.max_width = w;
+    }
+    if let Some(h) = max_height {
+        limits.max_height = h;
+    }
+    if let (Some(w), Some(h)) = (max_width, max_height) {
+        limits.max_pixels = u64::from(w).saturating_mul(u64::from(h));
+    }
+    limits.max_alloc = max_bytes;
+    limits
+}
+
+fn dynamic_to_codec(img: &DynamicImage) -> Result<CodecImage, String> {
+    let (w, h) = (img.width(), img.height());
+    match img {
+        DynamicImage::ImageLuma8(b) => CodecImage::from_u8(w, h, ChannelLayout::Gray, b.as_raw().clone()),
+        DynamicImage::ImageLumaA8(b) => CodecImage::from_u8(w, h, ChannelLayout::GrayA, b.as_raw().clone()),
+        DynamicImage::ImageRgb8(b) => CodecImage::from_u8(w, h, ChannelLayout::Rgb, b.as_raw().clone()),
+        DynamicImage::ImageRgba8(b) => CodecImage::from_u8(w, h, ChannelLayout::Rgba, b.as_raw().clone()),
+        DynamicImage::ImageLuma16(b) => CodecImage::from_u16(w, h, ChannelLayout::Gray, b.as_raw()),
+        DynamicImage::ImageLumaA16(b) => CodecImage::from_u16(w, h, ChannelLayout::GrayA, b.as_raw()),
+        DynamicImage::ImageRgb16(b) => CodecImage::from_u16(w, h, ChannelLayout::Rgb, b.as_raw()),
+        DynamicImage::ImageRgba16(b) => CodecImage::from_u16(w, h, ChannelLayout::Rgba, b.as_raw()),
+        _ => CodecImage::from_u8(w, h, ChannelLayout::Rgba, img.to_rgba8().into_raw()),
+    }
+    .map_err(|e| e.to_string())
+}
+
+fn codec_to_dynamic(img: CodecImage) -> Result<DynamicImage, Refusal> {
+    let (w, h) = (img.width(), img.height());
+    let layout = img.layout();
+    let st = img.sample_type();
+    if st == SampleType::U8 {
+        let raw = img.data().to_vec();
+        return match layout {
+            ChannelLayout::Gray => ImageBuffer::from_raw(w, h, raw).map(DynamicImage::ImageLuma8),
+            ChannelLayout::GrayA => ImageBuffer::from_raw(w, h, raw).map(DynamicImage::ImageLumaA8),
+            ChannelLayout::Rgb => ImageBuffer::from_raw(w, h, raw).map(DynamicImage::ImageRgb8),
+            ChannelLayout::Rgba => ImageBuffer::from_raw(w, h, raw).map(DynamicImage::ImageRgba8),
+            _ => None,
+        }
+        .ok_or_else(|| Refusal::Broken("decoded image buffer size mismatch".into()));
+    }
+    let rgba8 = img.to_rgba8();
+    ImageBuffer::from_raw(w, h, rgba8).map(DynamicImage::ImageRgba8).ok_or_else(|| Refusal::Broken("decoded image buffer size mismatch".into()))
+}
+
+/// Encode `img` as PNG via `craft-image-codecs`.
+pub fn encode_png(img: &DynamicImage) -> Result<Vec<u8>, String> {
+    encode_format(img, ImageFormat::Png)
+}
+
+/// Encode `img` in `format` via `craft-image-codecs`.
+pub fn encode_format(img: &DynamicImage, format: ImageFormat) -> Result<Vec<u8>, String> {
+    let codec_img = dynamic_to_codec(img)?;
+    let codec_fmt = to_codec_format(format).ok_or_else(|| format!("unsupported format: {format:?}"))?;
+    codec_encode(&codec_img, codec_fmt, &EncodeOptions::default()).map_err(|e| e.to_string())
+}
+
+/// Decode a raster image from memory using `craft-image-codecs` with default limits.
+pub fn decode_memory(bytes: &[u8]) -> Result<DynamicImage, Refusal> {
+    let codec_fmt = detect(bytes).ok_or(Refusal::NotAPicture)?;
+    let img = decode_as_with(codec_fmt, bytes, &DecodeOptions { limits: CodecLimits::default(), keep_orientation: true }).map_err(broken)?;
+    codec_to_dynamic(img)
+}
+
+/// Encode tightly-packed RGB8 pixels as JPEG at `quality` (1..=100) via `craft-image-codecs`.
+pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8) -> Result<Vec<u8>, String> {
+    let codec_img = CodecImage::from_u8(width, height, ChannelLayout::Rgb, rgb.to_vec()).map_err(|e| e.to_string())?;
+    let opts = EncodeOptions { jpeg_quality: quality.clamp(1, 100), ..EncodeOptions::default() };
+    codec_encode(&codec_img, CodecFormat::Jpeg, &opts).map_err(|e| e.to_string())
+}
+
+/// Read `(width, height)` from a raster image header without decoding pixels.
+pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let format = detect(bytes)?;
+    match format {
+        CodecFormat::Png => png_chunks(bytes).map(|(w, h, _, _)| (w, h)),
+        CodecFormat::Jpeg | CodecFormat::Tiff | CodecFormat::Gif | CodecFormat::Bmp => {
+            inspect_raster(bytes).ok().flatten().map(|i| (i.width, i.height))
+        }
+        CodecFormat::WebP => probe_size(bytes).ok(),
+        _ => None,
+    }
+}
+
+/// Guess the raster [`ImageFormat`] from magic bytes.
+pub fn guess_format(bytes: &[u8]) -> Option<ImageFormat> {
+    detect(bytes).and_then(from_codec_format)
+}
+
+/// Whether a raster picture's header indicates an alpha channel.
+pub fn header_has_alpha(bytes: &[u8]) -> bool {
+    probe(bytes).is_ok_and(|p| p.has_alpha())
 }
 
 /// What a picture's header says: its format, its size and the memory decoding it takes. Reading
@@ -45,14 +171,11 @@ fn broken(e: image::ImageError) -> Refusal {
 #[derive(Clone, Debug)]
 pub struct Probe<'a> {
     bytes: Cow<'a, [u8]>,
-    /// A DIB: a BMP without its file header, as the Windows clipboard holds one.
-    dib: bool,
     pub format: ImageFormat,
     pub width: u32,
     pub height: u32,
     peak: u64,
-    /// Whether a PNG has transparency, read from its chunk headers; `None` for other formats.
-    png_alpha: Option<bool>,
+    alpha: bool,
 }
 
 /// TIFF compressions decoded within the caller's limits: none, CCITT Group 4, LZW, Deflate (both
@@ -62,7 +185,8 @@ const TIFF_COMPRESSIONS: [u16; 6] = [1, 4, 5, 8, 32946, 32773];
 
 /// Read a picture's header: PNG, JPEG, GIF, WebP, BMP or TIFF.
 pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
-    let format = image::guess_format(bytes).map_err(|_| Refusal::NotAPicture)?;
+    let codec_fmt = detect(bytes).ok_or(Refusal::NotAPicture)?;
+    let format = from_codec_format(codec_fmt).ok_or(Refusal::NotAPicture)?;
     let held = match format {
         ImageFormat::Png | ImageFormat::Gif | ImageFormat::WebP | ImageFormat::Bmp => 0,
         ImageFormat::Jpeg => jpeg_coefficients(bytes),
@@ -77,11 +201,20 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
     if format == ImageFormat::Png {
         let (width, height, native, alpha) = png_chunks(bytes).ok_or_else(|| Refusal::Broken("its PNG header can't be read".into()))?;
         let (width, height, peak) = sized(width, height, native, 0)?;
-        return Ok(Probe { bytes: Cow::Borrowed(bytes), dib: false, format, width, height, peak, png_alpha: Some(alpha) });
+        return Ok(Probe { bytes: Cow::Borrowed(bytes), format, width, height, peak, alpha });
     }
-    let decoder = image::ImageReader::with_format(Cursor::new(bytes), format).into_decoder().map_err(broken)?;
-    let (width, height, peak) = measure(&decoder, held)?;
-    Ok(Probe { bytes: Cow::Borrowed(bytes), dib: false, format, width, height, peak, png_alpha: None })
+    if format == ImageFormat::WebP {
+        let (width, height) = probe_size(bytes).map_err(broken)?;
+        let (width, height, peak) = sized(width, height, 4, 0)?;
+        let alpha = bytes.get(12..16) == Some(b"VP8X") && bytes.get(20).is_some_and(|b| b & 0x10 != 0);
+        return Ok(Probe { bytes: Cow::Borrowed(bytes), format, width, height, peak, alpha });
+    }
+    let info = inspect_raster(bytes).map_err(broken)?.ok_or_else(|| Refusal::Broken("its header can't be read".into()))?;
+    let native = u64::from(info.channels.max(1)) * u64::from(info.bits_per_sample.max(8) / 8);
+    let (width, height, peak) = sized(info.width, info.height, native, held)?;
+    let alpha = matches!(info.color_type, RasterColorType::GrayAlpha | RasterColorType::Rgba | RasterColorType::CmykAlpha)
+        || info.transparent_index.is_some();
+    Ok(Probe { bytes: Cow::Borrowed(bytes), format, width, height, peak, alpha })
 }
 
 /// A PNG's width, height, the bytes a pixel its decoder gives (samples under 8 bits widened to 8,
@@ -118,22 +251,75 @@ fn png_chunks(bytes: &[u8]) -> Option<(u32, u32, u64, bool)> {
     Some((width, height, channels * if depth == 16 { 2 } else { 1 }, alpha))
 }
 
+/// Prepend a 14-byte `BITMAPFILEHEADER` to a normalized DIB so `craft-image-codecs` can inspect and decode it as BMP.
+fn dib_to_bmp(dib: &[u8]) -> Vec<u8> {
+    let u16_at = |at: usize| dib.get(at..at + 2).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes);
+    let u32_at = |at: usize| dib.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+    let bi_size = u32_at(0).unwrap_or(40);
+    let offset = if bi_size == 12 {
+        let bpp = u16_at(10).unwrap_or(24);
+        let palette = if bpp <= 8 { (1u32 << bpp) * 3 } else { 0 };
+        14 + bi_size + palette
+    } else {
+        let bpp = u16_at(14).unwrap_or(24);
+        let compression = u32_at(16).unwrap_or(0);
+        let clr_used = u32_at(32).unwrap_or(0);
+        let palette_entries = if clr_used != 0 {
+            clr_used
+        } else if bpp <= 8 {
+            1u32 << bpp
+        } else {
+            0
+        };
+        let masks = if compression == 3 && bi_size >= 40 { 12 } else { 0 };
+        14u32.saturating_add(bi_size).saturating_add(masks).saturating_add(palette_entries.saturating_mul(4))
+    };
+    let file_size = u32::try_from(14 + dib.len()).unwrap_or(u32::MAX);
+    let mut bmp = Vec::with_capacity(14 + dib.len());
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&file_size.to_le_bytes());
+    bmp.extend_from_slice(&[0u8; 4]);
+    bmp.extend_from_slice(&offset.to_le_bytes());
+    bmp.extend_from_slice(dib);
+    bmp
+}
+
 /// Read a DIB's header: a BMP without its 14-byte file header, as the Windows clipboard holds
 /// one (`CF_DIB`, `CF_DIBV5`). Its layout is first made the one the decoder reads (see
 /// [`dib_layout`]).
 pub fn probe_dib(dib: Vec<u8>) -> Result<Probe<'static>, Refusal> {
     let dib = dib_layout(dib);
-    let (width, height, peak) = {
-        let decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(dib.as_slice())).map_err(broken)?;
-        measure(&decoder, 0)?
+    let bmp = dib_to_bmp(&dib);
+    let (width, height, native, alpha) = match inspect_raster(&bmp) {
+        Ok(Some(info)) => {
+            let native = u64::from(info.channels.max(1)) * u64::from(info.bits_per_sample.max(8) / 8);
+            let alpha = matches!(info.color_type, RasterColorType::GrayAlpha | RasterColorType::Rgba);
+            (info.width, info.height, native, alpha)
+        }
+        Ok(None) => return Err(Refusal::Broken("its DIB header can't be read".into())),
+        Err(CodecError::LimitExceeded(_)) => {
+            let (w, h) = dib_header_dims(&dib).ok_or_else(|| Refusal::Broken("its DIB header can't be read".into()))?;
+            (w, h, 4, false)
+        }
+        Err(e) => return Err(broken(e)),
     };
-    Ok(Probe { bytes: Cow::Owned(dib), dib: true, format: ImageFormat::Bmp, width, height, peak, png_alpha: None })
+    let (width, height, peak) = sized(width, height, native, 0)?;
+    Ok(Probe { bytes: Cow::Owned(bmp), format: ImageFormat::Bmp, width, height, peak, alpha })
 }
 
-/// A decoder's size and the peak bytes of decoding it, `held` bytes kept beside its output.
-fn measure(decoder: &impl ImageDecoder, held: u64) -> Result<(u32, u32, u64), Refusal> {
-    let (width, height) = decoder.dimensions();
-    sized(width, height, u64::from(decoder.color_type().bytes_per_pixel()), held)
+fn dib_header_dims(dib: &[u8]) -> Option<(u32, u32)> {
+    let bi_size = u32::from_le_bytes(dib.get(0..4)?.try_into().ok()?);
+    if bi_size == 12 {
+        let w = u16::from_le_bytes(dib.get(4..6)?.try_into().ok()?);
+        let h = u16::from_le_bytes(dib.get(6..8)?.try_into().ok()?);
+        Some((u32::from(w), u32::from(h)))
+    } else if bi_size >= 40 {
+        let w = i32::from_le_bytes(dib.get(4..8)?.try_into().ok()?);
+        let h = i32::from_le_bytes(dib.get(8..12)?.try_into().ok()?);
+        Some((u32::try_from(w).ok()?, h.unsigned_abs()))
+    } else {
+        None
+    }
 }
 
 /// A `width` × `height` picture of `native` bytes a pixel, with its peak (see [`peak_bytes`]).
@@ -151,16 +337,9 @@ impl Probe<'_> {
         self.peak
     }
 
-    /// Whether the picture has transparency, from its header: a PNG's from its chunk headers
-    /// (an ICC profile isn't inflated to say), another format's from its decoder.
+    /// Whether the picture has transparency, from its header.
     pub fn has_alpha(&self) -> bool {
-        if let Some(alpha) = self.png_alpha {
-            return alpha;
-        }
-        if self.dib {
-            return image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(&*self.bytes)).is_ok_and(|d| d.color_type().has_alpha());
-        }
-        image::ImageReader::with_format(Cursor::new(&*self.bytes), self.format).into_decoder().is_ok_and(|d| d.color_type().has_alpha())
+        self.alpha
     }
 
     /// Whether decoding fits `budget` bytes.
@@ -174,18 +353,13 @@ impl Probe<'_> {
         if !self.fits(budget) {
             return Err(Refusal::TooLarge { width: self.width, height: self.height });
         }
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(self.width);
-        limits.max_image_height = Some(self.height);
-        limits.max_alloc = Some(budget);
-        if self.dib {
-            let mut decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(&*self.bytes)).map_err(broken)?;
-            decoder.set_limits(limits).map_err(broken)?;
-            return DynamicImage::from_decoder(decoder).map_err(broken);
-        }
-        let mut reader = image::ImageReader::with_format(Cursor::new(&*self.bytes), self.format);
-        reader.limits(limits);
-        reader.decode().map_err(broken)
+        let codec_fmt = to_codec_format(self.format).ok_or(Refusal::NotAPicture)?;
+        let opts = DecodeOptions { limits: codec_limits(Some(self.width), Some(self.height), budget), keep_orientation: true };
+        let img = decode_as_with(codec_fmt, &self.bytes, &opts).map_err(|e| match e {
+            CodecError::LimitExceeded(_) => Refusal::TooLarge { width: self.width, height: self.height },
+            other => broken(other),
+        })?;
+        codec_to_dynamic(img)
     }
 }
 
@@ -227,30 +401,24 @@ impl From<&Refusal> for DrawFailure {
 /// is charged against `budget` bytes before anything is allocated. A picture with no pixels or a
 /// side past `max_side` is refused.
 pub fn decode_for_drawing(bytes: &[u8], budget: u64, max_side: u32) -> Result<DynamicImage, Refusal> {
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(max_side);
-    limits.max_image_height = Some(max_side);
-    let reader = || {
-        let mut r = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|_| Refusal::NotAPicture)?;
-        r.limits(limits.clone());
-        Ok::<_, Refusal>(r)
-    };
-    // Header-only size check before anything is allocated: the decoder's buffer at its own pixel
-    // size (8 bytes for 16-bit RGBA) and the RGBA conversion are charged.
-    let (hw, hh, native) = {
-        let d = reader()?.into_decoder().map_err(broken)?;
-        let (w, h) = d.dimensions();
-        (w, h, u64::from(d.color_type().bytes_per_pixel()))
-    };
-    if !crate::decode_peak_fits(hw, hh, native, budget) {
-        return Err(Refusal::TooLarge { width: hw, height: hh });
+    let p = probe(bytes)?;
+    if p.width > max_side || p.height > max_side {
+        return Err(Refusal::Broken("it has no pixels or a side past the limit".into()));
     }
-    let img = reader()?.decode().map_err(broken)?;
+    if !p.fits(budget) {
+        return Err(Refusal::TooLarge { width: p.width, height: p.height });
+    }
+    let codec_fmt = to_codec_format(p.format).ok_or(Refusal::NotAPicture)?;
+    let opts = DecodeOptions { limits: codec_limits(Some(max_side), Some(max_side), budget), keep_orientation: true };
+    let img = decode_as_with(codec_fmt, bytes, &opts).map_err(|e| match e {
+        CodecError::LimitExceeded(_) => Refusal::TooLarge { width: p.width, height: p.height },
+        other => broken(other),
+    })?;
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 || w > max_side || h > max_side {
         return Err(Refusal::Broken("it has no pixels or a side past the limit".into()));
     }
-    Ok(img)
+    codec_to_dynamic(img)
 }
 
 /// Largest page-background picture the page raster draws, in pixels (hostile files).
@@ -261,7 +429,7 @@ pub const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
 /// metafile is not) or one with no pixels or more than [`MAX_BACKGROUND_PIXELS`]. The raster and
 /// the strict check both ask this, so they can't drift.
 pub fn background_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    let (w, h) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    let (w, h) = dimensions(bytes)?;
     (w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_BACKGROUND_PIXELS).then_some((w, h))
 }
 
@@ -339,7 +507,7 @@ fn frame_coefficients(sof: &[u8]) -> Option<u64> {
 /// The coefficients of the costliest progressive frame of the size the image crate reads from
 /// `bytes`: four components, each sampled 4 × 4, in MCUs of 32 pixels a side.
 fn worst_coefficients(bytes: &[u8]) -> u64 {
-    let Ok((w, h)) = image::ImageReader::with_format(Cursor::new(bytes), ImageFormat::Jpeg).into_dimensions() else { return 0 };
+    let Some((w, h)) = dimensions(bytes) else { return 0 };
     let mcus = u64::from(w).div_ceil(32) * u64::from(h).div_ceil(32);
     mcus.saturating_mul(2 * 64 * 16 * 4)
 }
@@ -416,9 +584,10 @@ mod tests {
     use super::*;
 
     fn encode(img: impl Into<DynamicImage>, format: ImageFormat) -> Vec<u8> {
-        let mut out = Vec::new();
-        img.into().write_to(&mut Cursor::new(&mut out), format).unwrap();
-        out
+        let dyn_img = img.into();
+        let codec_img = dynamic_to_codec(&dyn_img).unwrap();
+        let codec_fmt = to_codec_format(format).unwrap();
+        codec_encode(&codec_img, codec_fmt, &EncodeOptions::default()).unwrap()
     }
 
     #[test]

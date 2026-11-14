@@ -283,7 +283,7 @@ impl ResolvedPara {
             numbering: p.numbering.filter(|n| n.num != 0),
             tabs,
             shading: p.shading,
-            borders: p.borders.filter(|b| [b.top, b.left, b.bottom, b.right, b.between, b.inside_v].iter().flatten().any(Border::is_drawn)),
+            borders: p.borders.filter(Borders::any_drawn),
             padding: p.borders.map_or([0.0; 4], |b| {
                 [b.top, b.left, b.bottom, b.right]
                     .map(|s| s.filter(|l| !l.is_drawn() && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
