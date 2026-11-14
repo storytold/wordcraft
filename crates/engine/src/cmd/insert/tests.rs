@@ -5,8 +5,7 @@ use super::*;
 #[test]
 fn a_huge_picture_width_keeps_the_size_finite() {
     let img = image::RgbaImage::from_pixel(2, 400, image::Rgba([10, 20, 30, 255]));
-    let mut png = Vec::new();
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap();
     let mut s = Session::new(wordcraft_doc::Document::new());
     let r = s.run("insert.picture", &json!({"data": base64_encode(&png), "width": 3e38})).unwrap();
     let (w, h) = (r["width"].as_f64().unwrap(), r["height"].as_f64().unwrap());
@@ -17,8 +16,8 @@ fn a_huge_picture_width_keeps_the_size_finite() {
 
 /// A 4 × 4 RGB TIFF that says its strips are JPEG (they aren't): its header still reads.
 fn jpeg_strip_tiff() -> Vec<u8> {
-    let mut t = Vec::new();
-    image::RgbImage::new(4, 4).write_to(&mut std::io::Cursor::new(&mut t), image::ImageFormat::Tiff).unwrap();
+    let mut t =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbImage::new(4, 4).clone()), image::ImageFormat::Tiff).unwrap();
     assert_eq!(&t[..4], b"II*\0");
     let ifd = u32::from_le_bytes(t[4..8].try_into().unwrap()) as usize;
     let n = usize::from(u16::from_le_bytes([t[ifd], t[ifd + 1]]));
@@ -37,8 +36,8 @@ fn tiffs_with_jpeg_strips_are_refused() {
     let e = s.run("insert.picture", &json!({"data": base64_encode(&tiff)})).unwrap_err().to_string();
     assert!(e.contains("TIFF"), "{e}");
     assert!(s.doc.media.is_empty());
-    let mut plain = Vec::new();
-    image::RgbImage::new(4, 4).write_to(&mut std::io::Cursor::new(&mut plain), image::ImageFormat::Tiff).unwrap();
+    let plain =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbImage::new(4, 4).clone()), image::ImageFormat::Tiff).unwrap();
     s.run("insert.picture", &json!({"data": base64_encode(&plain)})).unwrap();
     let e = s.run("picture.change", &json!({"data": base64_encode(&tiff)})).unwrap_err().to_string();
     assert!(e.contains("TIFF"), "{e}");
