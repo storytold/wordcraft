@@ -602,6 +602,11 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             write_stdout(|o| writeln!(o, "{r}"))
         }
         "run" => {
+            for (i, arg) in rest.iter().enumerate() {
+                if arg == "--cmd" && rest.get(i + 1).is_none_or(|value| value.starts_with("--")) {
+                    return Err("--cmd needs a value".into());
+                }
+            }
             validate_options("run", &rest, RUN_OPTIONS)?;
             let page = parse_page_arg("run", &rest)?;
             let scale = parse_scale_arg("run", &rest)?;
