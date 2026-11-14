@@ -49,6 +49,8 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/images/design.png` | WordCraft contributors | screenshot of WordCraft itself (sample document written for WordCraft, rendered by `ui_shot`) | MIT OR Apache-2.0 | Original; no Microsoft UI or assets |
 | `docs/images/dark.png` | WordCraft contributors | screenshot of WordCraft itself (sample document written for WordCraft, rendered by `ui_shot`) | MIT OR Apache-2.0 | Original; no Microsoft UI or assets |
 | `docs/images/backstage.png` | WordCraft contributors | screenshot of WordCraft itself (sample document written for WordCraft, rendered by `ui_shot`) | MIT OR Apache-2.0 | Original; no Microsoft UI or assets |
+| `docs/images/file-transitions.gif` | WordCraft contributors | Headless captures of WordCraft's original sample document and File pages, recorded at 60 Hz | MIT OR Apache-2.0 | Entry, page navigation and exit; WordCraft UI only |
+| `docs/images/ribbon-group-hover.png` | WordCraft contributors | Headless WordCraft ribbon captures before and after the hover-glow change | MIT OR Apache-2.0 | Original light/dark UI comparison; WordCraft UI only |
 | `docs/images/layout.png` | WordCraft contributors | screenshot of WordCraft itself (sample document written for WordCraft, rendered by `ui_shot`) | MIT OR Apache-2.0 | Original; no Microsoft UI or assets |
 | `docs/brand/LICENSE-brand.txt` | ArtCraft Team | ArtCraft brand kit (project owner) | ArtCraft trademark, `docs/brand/LICENSE-brand.txt` | Not open source; usable unmodified only |
 | `docs/brand/artcraft-logo-white.png` | ArtCraft Team | ArtCraft brand kit (project owner) | ArtCraft trademark, `docs/brand/LICENSE-brand.txt` | Not open source; usable unmodified only |

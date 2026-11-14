@@ -78,7 +78,23 @@ impl WordApp {
     /// Draw the File page, the empty-window chrome, or the normal document window.
     pub(super) fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
         let window = self.windows.shown();
+        let file = self.ui.backstage;
+        let first_shape = backstage::shape_count(ui.painter());
+        self.paint_window_contents(ui, ctx, t);
+        // A command can switch native windows during layout. Never cache the other window's UI.
+        if self.windows.shown() == window {
+            let animate = self.animations_on() && ui.style().animation_time > 0.0;
+            backstage::paint_transition(ui.painter(), first_shape, file, animate, crate::rtl::on());
+        }
+    }
+
+    /// Lay out only the active screen, preserving early returns when a command switches windows.
+    fn paint_window_contents(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
+        let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
+        if !self.ui.backstage {
+            backstage::reset_transition(ctx);
+        }
         if self.ui.backstage {
             backstage::show(self, ui);
         } else if !self.has_document() {
