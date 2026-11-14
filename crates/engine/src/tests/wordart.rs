@@ -200,3 +200,32 @@ fn wordart_reflection_and_outline_none_options() {
     assert_eq!(outline.color, None);
     assert_eq!(outline.width, 1.5);
 }
+
+#[test]
+fn insert_wordart_with_selected_text_styles_it_instead_of_adding_a_box() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Title here", CharProps::default()))];
+    let mut s = Session::new(d);
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 5)}));
+    run(&mut s, "insert.wordArt", json!({"style": "gradient"}));
+    assert!(s.doc.parts.is_empty(), "no text box is inserted");
+    let para = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(para.plain_text(), "Title here");
+    assert!(matches!(
+        para.props_at(0).text_effects.as_deref().and_then(|f| f.fill.as_ref()),
+        Some(wordcraft_doc::wordart::TextFill::Gradient { .. })
+    ));
+    assert!(para.props_at(7).text_effects.is_none(), "text outside the selection is untouched");
+}
+
+#[test]
+fn insert_wordart_with_selected_text_and_explicit_text_or_transform_still_adds_a_box() {
+    for args in [json!({"text": "SALE"}), json!({"transform": "textArchUp"})] {
+        let mut d = Document::new();
+        d.body = vec![para_block(Paragraph::with_text("Title here", CharProps::default()))];
+        let mut s = Session::new(d);
+        run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 5)}));
+        run(&mut s, "insert.wordArt", args);
+        assert_eq!(s.doc.parts.len(), 1, "a text box is inserted");
+    }
+}
