@@ -196,6 +196,8 @@ sync_github_name = true
 [people.dylanmtaylor]
 sync_github_name = true
 
+[people.hshamilt]
+sync_github_name = true
 [people.entropybeater]
 display_name = "entropybeater"
 
