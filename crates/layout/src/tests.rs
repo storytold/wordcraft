@@ -4707,6 +4707,77 @@ fn a_split_rows_middle_and_bottom_cells_are_lined_up_by_the_text_they_keep() {
     }
 }
 
+/// The cells of the part of a split row left on its page line up against the most text any cell
+/// keeps there, also when that cell is itself aligned to the middle or the bottom and stays
+/// whole. Measured in Word for Windows: beside a cell of four lines that stays whole (at the top,
+/// in the middle or at the bottom alike) and a top cell that keeps three lines, a centred cell of
+/// two lines starts one line down, a centred one of three half a line and a bottom cell of one
+/// line three lines down.
+#[test]
+fn a_split_rows_cells_line_up_against_an_aligned_cell_that_stays_whole() {
+    crate::test_fonts();
+    use wordcraft_doc::props::VAlign;
+    let para = |s: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(s, Default::default());
+        (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));
+        p.props.widow_control = Some(true);
+        wordcraft_doc::para_block(p)
+    };
+    let br = wordcraft_doc::para::LINE_BREAK;
+    // Cell 0 keeps three lines where four fit: its fourth and fifth are one paragraph. Cell 1
+    // has four lines, cell 2 two, cell 3 one and cell 4 three.
+    let lay_row = |push: f32, tall: Option<VAlign>| {
+        let mut d = Document::from_text("Filler");
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+            (p.props.space_before, p.props.space_after) = (Some(push), Some(0.0));
+        }
+        let mut t = Table::new(2, 5, 450.0);
+        t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+        let cells = &mut t.rows[0].cells;
+        cells[0].blocks = vec![para("A0"), para("A1"), para("A2"), para(&format!("A3{br}A4")), para("A5"), para("A6")];
+        for (cell, (lines, valign)) in
+            cells[1..].iter_mut().zip([(4, tall), (2, Some(VAlign::Center)), (1, Some(VAlign::Bottom)), (3, Some(VAlign::Center))])
+        {
+            cell.blocks = (0..lines).map(|i| para(&format!("L{i}"))).collect();
+            cell.props.valign = valign;
+        }
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        lay(&d)
+    };
+    // Each cell's first line top and the lines it has on the first page.
+    let cells = |l: &DocLayout| -> [(f32, usize); 5] {
+        let mut out = [(f32::MAX, 0); 5];
+        for it in &l.pages[0].items {
+            if let Placed::Lines { path, l0, l1, y, .. } = it
+                && path.0.len() == 4
+                && path.0[..2] == [1, 0]
+                && let Some(c) = out.get_mut(path.0[2] as usize)
+            {
+                *c = (c.0.min(*y), c.1 + l1 - l0);
+            }
+        }
+        out
+    };
+    let whole = cells(&lay_row(0.0, None));
+    let l = lay_row(0.0, None);
+    let ys: Vec<f32> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Lines { path, y, .. } = it { (path.0.len() == 4 && path.0[..3] == [1, 0, 1]).then_some(*y) } else { None })
+        .collect();
+    let (top, line) = (whole[0].0, ys[1] - ys[0]);
+    // Four lines fit above the page bottom (720), with 3 pt to spare.
+    let push = 720.0 - 3.0 - (top + 4.0 * line);
+    for tall in [None, Some(VAlign::Center), Some(VAlign::Bottom)] {
+        let c = cells(&lay_row(push, tall));
+        assert_eq!([c[0].1, c[1].1, c[2].1, c[3].1, c[4].1], [3, 4, 2, 1, 3], "{tall:?}: the lines kept");
+        let down: Vec<f32> = c.iter().map(|(y, _)| (y - c[0].0) / line).collect();
+        for (cell, lines) in [(1, 0.0), (2, 1.0), (3, 3.0), (4, 0.5)] {
+            assert!((down[cell] - lines).abs() < 0.01, "{tall:?}: cell {cell} starts {} lines down, not {lines}", down[cell]);
+        }
+    }
+}
+
 /// Word never splits a row of an exact height: one the page bottom cuts through, its text
 /// included, moves to the next page whole. An at-least row also moves when the remaining
 /// room is less than its minimum height.

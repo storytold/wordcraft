@@ -1238,6 +1238,13 @@ fn align_in_part(
             }
         }
     }
+    // A cell aligned to the middle or bottom whose text all stays is text kept as well, and the
+    // others line up against it too. Measured in Word for Windows: beside a centred cell of four
+    // lines that stays whole and a top cell that keeps three, a centred cell of two lines starts
+    // one line down, one of three half a line, and a bottom cell of one line three lines down.
+    if kept > f32::MIN {
+        kept = ends.iter().zip(realign).filter(|(_, al)| al.is_some()).filter_map(|(end, _)| *end).fold(kept, f32::max);
+    }
     let part = if kept > f32::MIN { kept + row.bottom } else { cut };
     for (((((items, al), c), end), own), lowered) in cells.iter_mut().zip(realign).zip(&row.cells).zip(ends).zip(own).zip(&mut lowered) {
         let Some(e) = *end else { continue };
