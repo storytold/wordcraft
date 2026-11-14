@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::{
     Exporter, FaceRef, Fill, FillRule, KrillaGlyph, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_id, glyph_outlines,
     left_to_right, norm, ok, paint_of, rgb, split_clusters, visual_order,
@@ -78,6 +80,11 @@ impl Exporter<'_> {
         (text.to_string(), ranges)
     }
 
+    /// Draws a positioned run of glyphs to the PDF surface.
+    ///
+    /// Resolves character ranges across multi-glyph clusters so that ToUnicode mappings
+    /// and cluster-level `/ActualText` spans preserve original text for extractors, orders RTL
+    /// glyphs visually when needed, and renders either font glyphs or vector outlines.
     pub(super) fn glyphs(
         &mut self,
         s: &mut Surface,
@@ -105,15 +112,33 @@ impl Exporter<'_> {
         // Layout's glyph → text mapping when it has one (right-to-left text, contextual forms and
         // ligatures can't be guessed back from the font's cmap), else a guess.
         let valid = known.len() == glyphs.len() && known.iter().all(|r| r.start < r.end && text.get(r.clone()).is_some());
-        let (txt, ranges) = if valid { (text.to_string(), known.to_vec()) } else { self.map_text(face, glyphs, text) };
+        let (txt, ranges) = if valid {
+            (Cow::Borrowed(text), Cow::Borrowed(known))
+        } else {
+            let (mapped_txt, mapped_ranges) = self.map_text(face, glyphs, text);
+            (Cow::Owned(mapped_txt), Cow::Owned(mapped_ranges))
+        };
+        let mut is_thai_or_lao = false;
+        let mut is_rtl = false;
+        for c in txt.chars() {
+            if c >= '\u{0590}' {
+                if matches!(c, '\u{0E00}'..='\u{0E7F}' | '\u{0E80}'..='\u{0EFF}') {
+                    is_thai_or_lao = true;
+                }
+                if wordcraft_fonts::is_rtl(c) {
+                    is_rtl = true;
+                }
+            }
+        }
         let upem = face.upem.max(1.0) as f32;
-        // Right-to-left text is written left to right as it appears (see `left_to_right`); glyphs
-        // already in that order are written as they are.
-        let (order, ranges) = if left_to_right(glyphs) {
+        let needs_reorder = is_rtl && !left_to_right(glyphs);
+        let has_thai_or_lao_clusters = is_thai_or_lao && ranges.windows(2).any(|w| w[0] == w[1]);
+        let (order, ranges) = if !needs_reorder && !has_thai_or_lao_clusters {
             ((0..glyphs.len()).collect(), ranges)
         } else {
             let parts = split_clusters(&txt, glyphs, &ranges, &self.cmap(face));
-            (visual_order(&txt, glyphs, &ranges, &parts), parts)
+            let order = if needs_reorder { visual_order(&txt, glyphs, &ranges, &parts) } else { (0..glyphs.len()).collect() };
+            (order, Cow::Owned(parts))
         };
         let placed: Vec<(u32, f32, f32, std::ops::Range<usize>)> =
             order.iter().filter_map(|&i| Some((glyphs.get(i).copied()?, ranges.get(i).cloned()?))).map(|((g, x, y), r)| (g, x, y, r)).collect();
