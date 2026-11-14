@@ -78,14 +78,17 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
 /// PDF of a Chinese document at 16 pt (#2358), as JIS X 4051 asks. A field or note number is
 /// classed by the text it shows. The room goes after the first of the two characters; returns it
 /// by cluster index.
-pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
+///
+/// `ea_lacks(at, c)`: the run at byte `at` names an installed East Asian font that has no glyph
+/// for `c`. Word adds no room beside such a character, though a substituted face draws it (#6591).
+pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool, ea_lacks: impl Fn(usize, char) -> bool) -> Vec<(usize, f32)> {
     let mut out = Vec::new();
     if !de && !dn {
         return out;
     }
     let mut shown = b.shown.iter().map(|s| (s.0, s.1.as_str())).peekable();
-    // The previous text cluster: index, its last character, its font size.
-    let mut prev: Option<(usize, char, f32)> = None;
+    // The previous text cluster: index, its last character, its font size, its start byte.
+    let mut prev: Option<(usize, char, f32, usize)> = None;
     for k in 0..b.clusters.len() {
         let Some(c) = b.clusters.get(k) else { break };
         match c.kind {
@@ -105,9 +108,13 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
             prev = None;
             continue;
         };
-        let size = b.styles.get(c.style as usize).map_or(0.0, |st| st.size);
-        if let Some((pk, pc, psize)) = prev
+        let (size, start) = (b.styles.get(c.style as usize).map_or(0.0, |st| st.size), c.start);
+        if let Some((pk, pc, psize, pstart)) = prev
             && let Some(side) = crate::kinsoku::auto_space(pc, first, de, dn)
+            && !match side {
+                crate::kinsoku::AsianSide::Left => ea_lacks(pstart, pc),
+                crate::kinsoku::AsianSide::Right => ea_lacks(start, first),
+            }
         {
             let asian = if side == crate::kinsoku::AsianSide::Left { psize } else { size };
             let gap = if asian.is_finite() { (asian / 4.0).clamp(0.0, 400.0) } else { 0.0 };
@@ -116,7 +123,7 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
                 out.push((pk, gap));
             }
         }
-        prev = Some((k, last, size));
+        prev = Some((k, last, size, start));
     }
     out
 }
