@@ -151,23 +151,36 @@ impl FontDb {
         set.sort_unstable();
         set.dedup();
         let key = (set, exclude, bold, italic);
+        let generation = self.generation();
         let n = self.read_faces().len();
         {
             let cache = self.run_fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             if cache.faces == n
+                && cache.generation == generation
                 && let Some(hit) = cache.map.get(&key)
             {
                 return hit.clone();
             }
         }
-        // Keyed by the face count the search last looked at, not the count after it: a face loaded
-        // meanwhile by another thread (one its search, or a family named by a document) must make
-        // a miss count as stale, not as the answer for the new count.
+        // Keyed by the face count and generation the search last looked at, not the state after it:
+        // a face loaded or changed meanwhile by another thread (one its search, a family named by a
+        // document, or a user font change) must not be overwritten with a stale answer.
         let (found, n) = self.search_run(&key.0, exclude, bold, italic);
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
         let mut cache = self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cache.faces != n || cache.map.len() >= RUN_FALLBACK_CACHE_MAX || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS {
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
+        if cache.faces != n
+            || cache.generation != generation
+            || cache.map.len() >= RUN_FALLBACK_CACHE_MAX
+            || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS
+        {
             cache.map.clear();
             cache.faces = n;
+            cache.generation = generation;
             cache.chars = 0;
         }
         cache.chars = cache.chars.saturating_add(key.0.len());
@@ -213,7 +226,11 @@ impl FontDb {
             (true, false) => "Bold",
             _ => "Italic",
         };
+        let before_style = self.read_faces().len();
         let styled = self.face(&base.family, style);
+        if before_style == checked {
+            checked = self.read_faces().len();
+        }
         let face = if styled.family.eq_ignore_ascii_case(&base.family) && chars.iter().all(|c| styled.covers(*c)) && styled.id != exclude {
             styled
         } else {
@@ -232,6 +249,84 @@ impl FontDb {
         let complex = chars.iter().copied().find(|c| crate::needs_layout_tables(*c));
         let found = fallback_order(&faces, exclude, rtl, complex).into_iter().find(|f| chars.iter().all(|c| f.covers(*c))).cloned();
         (found, faces.len())
+    }
+
+    /// First face covering all characters in `chars`, preferring faces matching `prefer_serif`
+    /// (so a diagram maintains a consistent fallback face across its nodes matching the
+    /// diagram's primary style, #5672). Does not alter body text fallback ordering.
+    pub fn fallback_for_diagram(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> Option<Arc<FontFace>> {
+        if chars.is_empty() {
+            return None;
+        }
+        let mut set: Vec<char> = chars.to_vec();
+        set.sort_unstable();
+        set.dedup();
+        let (found, _) = self.search_diagram(&set, exclude, prefer_serif);
+        found
+    }
+
+    /// The face covering a diagram's missing character set, and the face count chosen from.
+    /// Prefers faces matching `prefer_serif`; when the best loaded face has a mismatched serif
+    /// classification, checks system font candidates and retains the loaded face only when no
+    /// matching candidate covers the full set (#5672).
+    fn search_diagram(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> (Option<Arc<FontFace>>, usize) {
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let (mut base, mut checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+        #[cfg(not(target_arch = "wasm32"))]
+        if base.is_none() || base.as_ref().is_some_and(|f| f.is_serif() != prefer_serif) {
+            let initial = base.clone();
+            for c in chars {
+                if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c) && f.is_serif() == prefer_serif) {
+                    continue;
+                }
+                if self.system_fallback(*c) {
+                    let (cand, n) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                    checked = n;
+                    if let Some(f) = cand {
+                        let matching = f.is_serif() == prefer_serif;
+                        base = Some(f);
+                        if matching {
+                            break;
+                        }
+                    }
+                }
+            }
+            if base.as_ref().is_none_or(|f| f.is_serif() != prefer_serif) {
+                self.indexed_run_fallback(chars);
+                let (cand, n) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                checked = n;
+                if let Some(f) = cand
+                    && (f.is_serif() == prefer_serif || base.is_none())
+                {
+                    base = Some(f);
+                }
+            }
+            if base.is_none() {
+                base = initial;
+            }
+        }
+        (base, checked)
+    }
+
+    /// The first face covering every char in `chars`, preferring matching `prefer_serif`,
+    /// and the number of loaded faces it was chosen from.
+    fn loaded_diagram_covering(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> (Option<Arc<FontFace>>, usize) {
+        let faces = self.read_faces();
+        let rtl = chars.iter().any(|c| crate::is_rtl(*c) || arabic_block(*c));
+        let complex = chars.iter().copied().find(|c| crate::needs_layout_tables(*c));
+        let mut candidates: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude && chars.iter().all(|c| f.covers(*c))).collect();
+        let rank = |f: &FontFace| {
+            if rtl { RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len()) } else { 0 }
+        };
+        let shaping = |f: &FontFace| match complex {
+            Some(c) => (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)),
+            None => (false, 0),
+        };
+        let serif_mismatch = |f: &FontFace| f.is_serif() != prefer_serif;
+        candidates.sort_by_cached_key(|f| {
+            (rank(f), shaping(f), serif_mismatch(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32)
+        });
+        (candidates.first().map(|f| (*f).clone()), faces.len())
     }
 
     /// Load a system font covering `c` (preferred fallback families first, then any cataloged

@@ -8082,6 +8082,214 @@ fn chart_text_the_font_lacks_is_drawn_in_a_fallback_face() {
     assert!(xs.windows(2).all(|w| w[0] <= w[1]), "{xs:?}");
 }
 
+/// A bundled Source Sans 3 font patched so its last cmap group (U+1F916) maps `first..=last`,
+/// registered in [`wordcraft_fonts::FontDb::global`] under `family`.
+fn diagram_test_font(family: &str, first: u32, last: u32) -> (Vec<u8>, String) {
+    let mut data = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/SourceSans3-Regular.ttf")).unwrap();
+    let from = [0x0001_F916_u32.to_be_bytes(); 2].concat();
+    let to = [first.to_be_bytes(), last.to_be_bytes()].concat();
+    let mut patched = 0;
+    while let Some(at) = data.windows(from.len()).position(|w| w == from) {
+        data[at..at + to.len()].copy_from_slice(&to);
+        patched += 1;
+    }
+    assert!(patched > 0);
+    (data, family.to_string())
+}
+
+/// RAII guard to clean up test document fonts added to [`wordcraft_fonts::FontDb::global`].
+struct CleanupDocumentFonts<'a>(&'a wordcraft_fonts::FontDb, &'static [&'static str]);
+
+impl Drop for CleanupDocumentFonts<'_> {
+    fn drop(&mut self) {
+        self.0.remove_document_fonts(self.1);
+    }
+}
+
+/// SmartArt diagram CJK labels keep one consistent fallback font across nodes,
+/// matching the diagram's primary serif/sans nature, including when a label contains a symbol (#5672).
+#[test]
+fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
+    crate::test_fonts();
+    // #5672: CJK labels in a SmartArt diagram rendered in two different fallback fonts
+    // (first node serif Mincho, rest sans). The diagram must maintain a consistent fallback font
+    // matching the diagram's primary font style, even when another character needs a separate symbol
+    // fallback face. Both sans-serif and serif primaries are tested with synthetic fonts.
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    let db = wordcraft_fonts::FontDb::global();
+    const TEST_FONTS: &[&str] = &["DiagBothMincho", "DiagBothGothic", "DiagOnlySymbol"];
+    let _cleanup = CleanupDocumentFonts(db, TEST_FONTS);
+    db.add_document_fonts(vec![
+        diagram_test_font("DiagBothMincho", 0x3FF21, 0x3FF22),
+        diagram_test_font("DiagBothGothic", 0x3FF21, 0x3FF22),
+        diagram_test_font("DiagOnlySymbol", 0xF0129, 0xF0129),
+    ]);
+
+    // 1. Sans-serif diagram: prefers DiagBothGothic over DiagBothMincho.
+    let sans_items = ["\u{3FF21} \u{F0129}", "\u{3FF22}", "\u{F0129}"]
+        .iter()
+        .enumerate()
+        .map(|(i, &label)| GraphicItem::Text {
+            rect: [0.0, (i as f32) * 30.0, 100.0, 20.0],
+            text: label.into(),
+            size: 12.0,
+            color: Rgb::BLACK,
+            bold: false,
+            align: TextAlign::Center,
+            font: Some("Source Sans 3".into()),
+        })
+        .collect();
+    let sans_graphic = Graphic { kind: GraphicKind::Diagram, items: sans_items, ..Default::default() };
+    let sans_obj = InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(sans_graphic) };
+    let mut sans_doc = Document::from_text("Diagram");
+    sans_doc.insert_object(&Pos::body(0, 0), sans_obj, &Default::default()).unwrap();
+    let sans_draws = flat(display::page_display(&sans_doc, &lay(&sans_doc).pages[0], &Default::default()));
+
+    let sans_cjk_draws: Vec<_> = sans_draws
+        .iter()
+        .filter_map(|x| if let display::Draw::Glyphs { face, text, .. } = x { Some((text.as_str(), *face)) } else { None })
+        .filter(|(t, _)| t.contains('\u{3FF21}') || t.contains('\u{3FF22}'))
+        .collect();
+    assert_eq!(sans_cjk_draws.len(), 2, "both CJK labels drawn in sans diagram");
+    for (t, face) in &sans_cjk_draws {
+        assert_eq!(face.family, "DiagBothGothic", "CJK label {t:?} should use sans fallback DiagBothGothic");
+        assert!(!face.is_serif(), "fallback face must be sans");
+    }
+
+    let sans_sym_draws: Vec<_> = sans_draws
+        .iter()
+        .filter_map(|x| if let display::Draw::Glyphs { face, text, .. } = x { Some((text.as_str(), *face)) } else { None })
+        .filter(|(t, _)| t.contains('\u{F0129}'))
+        .collect();
+    assert_eq!(sans_sym_draws.len(), 2, "symbol drawn in both mixed and standalone nodes");
+    for (_, face) in &sans_sym_draws {
+        assert_eq!(face.family, "DiagOnlySymbol");
+    }
+
+    // 2. Serif diagram: prefers DiagBothMincho over DiagBothGothic.
+    let serif_items = ["\u{3FF21} \u{F0129}", "\u{3FF22}", "\u{F0129}"]
+        .iter()
+        .enumerate()
+        .map(|(i, &label)| GraphicItem::Text {
+            rect: [0.0, (i as f32) * 30.0, 100.0, 20.0],
+            text: label.into(),
+            size: 12.0,
+            color: Rgb::BLACK,
+            bold: false,
+            align: TextAlign::Center,
+            font: Some("Source Serif 4".into()),
+        })
+        .collect();
+    let serif_graphic = Graphic { kind: GraphicKind::Diagram, items: serif_items, ..Default::default() };
+    let serif_obj = InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(serif_graphic) };
+    let mut serif_doc = Document::from_text("Diagram");
+    serif_doc.insert_object(&Pos::body(0, 0), serif_obj, &Default::default()).unwrap();
+    let serif_draws = flat(display::page_display(&serif_doc, &lay(&serif_doc).pages[0], &Default::default()));
+
+    let serif_cjk_draws: Vec<_> = serif_draws
+        .iter()
+        .filter_map(|x| if let display::Draw::Glyphs { face, text, .. } = x { Some((text.as_str(), *face)) } else { None })
+        .filter(|(t, _)| t.contains('\u{3FF21}') || t.contains('\u{3FF22}'))
+        .collect();
+    assert_eq!(serif_cjk_draws.len(), 2, "both CJK labels drawn in serif diagram");
+    for (t, face) in &serif_cjk_draws {
+        assert_eq!(face.family, "DiagBothMincho", "CJK label {t:?} should use serif fallback DiagBothMincho");
+        assert!(face.is_serif(), "fallback face must be serif");
+    }
+
+    // 3. Real CJK check (reconciled with synthetic fixtures, #5672):
+    // Synthetic fixtures above provide deterministic coverage for both sans-serif and serif
+    // diagrams across all platforms and CI runners without depending on installed CJK fonts.
+    // When the host environment does have a real sans-serif CJK candidate available, also
+    // verify that real CJK labels in a SmartArt diagram resolve consistently to a sans-serif
+    // fallback face across nodes.
+    let minor = wordcraft_fonts::word::resolve(&Document::default().settings.minor_font, false, false);
+    if db.fallback_for('新', minor.face.id()).is_some_and(|f| !f.is_serif()) && db.fallback_for('样', minor.face.id()).is_some_and(|f| !f.is_serif())
+    {
+        let labels = ["新建文档", "施加样式", "导出验证"];
+        let real_items = ["新建文档 \u{F0129}", "施加样式", "导出验证", "\u{F0129}"]
+            .iter()
+            .enumerate()
+            .map(|(i, &label)| GraphicItem::Text {
+                rect: [0.0, (i as f32) * 30.0, 100.0, 20.0],
+                text: label.into(),
+                size: 12.0,
+                color: Rgb::BLACK,
+                bold: false,
+                align: TextAlign::Center,
+                font: None,
+            })
+            .collect();
+        let real_graphic = Graphic { kind: GraphicKind::Diagram, items: real_items, ..Default::default() };
+        let real_obj = InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(real_graphic) };
+        let mut real_doc = Document::from_text("Diagram");
+        real_doc.insert_object(&Pos::body(0, 0), real_obj, &Default::default()).unwrap();
+        let real_draws = flat(display::page_display(&real_doc, &lay(&real_doc).pages[0], &Default::default()));
+        let real_cjk_draws: Vec<_> = real_draws
+            .iter()
+            .filter_map(|x| if let display::Draw::Glyphs { face, text, .. } = x { Some((text.clone(), *face)) } else { None })
+            .filter(|(text, _)| labels.iter().any(|l| text.trim().starts_with(l)))
+            .collect();
+
+        assert_eq!(real_cjk_draws.len(), 3, "all three real CJK diagram labels were drawn");
+        let first_family = real_cjk_draws[0].1.family.clone();
+        assert!(!real_cjk_draws[0].1.is_serif(), "diagram fallback font should be sans-serif, was {first_family}");
+        for (text, face) in &real_cjk_draws {
+            assert_eq!(face.family, first_family, "label {text:?} used a different font family from first node");
+            assert!(!face.is_serif(), "label {text:?} rendered in serif font {}", face.family);
+        }
+    }
+}
+
+/// In a mixed-font diagram where the first label's primary font covers characters missing from
+/// later labels, later labels use the diagram fallback face, which here is that same font.
+#[test]
+fn mixed_font_diagram_uses_covering_fallback_for_later_missing_characters() {
+    crate::test_fonts();
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    let db = wordcraft_fonts::FontDb::global();
+    const TEST_FONTS: &[&str] = &["DiagPartAGothic", "DiagPartBGothic", "DiagWholeGothic"];
+    let _cleanup = CleanupDocumentFonts(db, TEST_FONTS);
+    db.add_document_fonts(vec![
+        diagram_test_font("DiagPartAGothic", 0x3FF11, 0x3FF11),
+        diagram_test_font("DiagPartBGothic", 0x3FF12, 0x3FF12),
+        diagram_test_font("DiagWholeGothic", 0x3FF11, 0x3FF12),
+    ]);
+    let items = [
+        ("\u{3FF11}", Some("DiagWholeGothic".to_string())),
+        ("\u{3FF11}", Some("Source Sans 3".to_string())),
+        ("\u{3FF12}", Some("Source Sans 3".to_string())),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (label, font))| GraphicItem::Text {
+        rect: [0.0, (i as f32) * 30.0, 100.0, 20.0],
+        text: label.into(),
+        size: 12.0,
+        color: Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font,
+    })
+    .collect();
+    let graphic = Graphic { kind: GraphicKind::Diagram, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Diagram");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+    let cjk_faces: Vec<_> = draws
+        .iter()
+        .filter_map(|x| if let display::Draw::Glyphs { face, text, .. } = x { Some((text.as_str(), *face)) } else { None })
+        .filter(|(t, _)| t.contains('\u{3FF11}') || t.contains('\u{3FF12}'))
+        .collect();
+    assert_eq!(cjk_faces.len(), 3, "all three labels drawn");
+    for (text, face) in &cjk_faces {
+        assert_eq!(face.family, "DiagWholeGothic", "label {text:?} should use the shared diagram fallback face");
+    }
+}
+
 /// The draws with figures opened up.
 fn flat(draws: Vec<display::Draw>) -> Vec<display::Draw> {
     draws.into_iter().flat_map(|x| if let display::Draw::Figure { draws, .. } = x { draws } else { vec![x] }).collect()

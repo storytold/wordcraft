@@ -740,3 +740,85 @@ fn catalog_postscript_names() {
     assert!(!has(&db.families(), "SysfontSans-Bold"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Diagram fallback matches the primary font's serif/sans classification while body-text
+/// fallback preserves loaded order (#5672), and changing user fonts invalidates run fallbacks.
+#[test]
+fn fallback_order_matches_primary_font_serif_nature() {
+    // #5672: When picking fallback faces for diagrams, sans-serif primary fonts prefer sans-serif
+    // fallback fonts, and serif primary fonts prefer serif fallback fonts. Body text fallback
+    // order remains unaffected.
+    use crate::fontdb::fallback_data::fallback_order;
+    let dir = font_dir("serif-sans-fallback");
+    std::fs::write(dir.join("TestMincho.ttf"), mapping("SourceSans3-Regular.ttf", "Test Mincho 1", 0xF_0010, 0xF_0011)).unwrap();
+    std::fs::write(dir.join("TestGothic.ttf"), mapping("SourceSans3-Regular.ttf", "Test Gothic 1", 0xF_0010, 0xF_0011)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    db.set_system_fallback(false);
+    let mincho = db.face("Test Mincho 1", "Regular");
+    let gothic = db.face("Test Gothic 1", "Regular");
+    assert!(mincho.is_serif(), "Mincho is serif");
+    assert!(!gothic.is_serif(), "Gothic is sans");
+
+    let sans_primary = db.face("Source Sans 3", "Regular");
+    let serif_primary = db.face("Source Serif 4", "Regular");
+
+    // Diagram fallback: matches serif/sans nature of primary font.
+    let diag_run = ['\u{F0010}', '\u{F0011}'];
+    let diag_sans = db.fallback_for_diagram(&diag_run, sans_primary.id(), sans_primary.is_serif()).unwrap();
+    assert_eq!(diag_sans.family, "Test Gothic 1", "sans-serif diagram prefers sans-serif fallback (Gothic)");
+    let diag_serif = db.fallback_for_diagram(&diag_run, serif_primary.id(), serif_primary.is_serif()).unwrap();
+    assert_eq!(diag_serif.family, "Test Mincho 1", "serif diagram prefers serif fallback (Mincho)");
+
+    // Body text fallback: fallback_order is not altered by the primary font's serif/sans nature.
+    let faces = db.read_faces();
+    let for_sans = fallback_order(&faces, sans_primary.id(), false, None);
+    let for_serif = fallback_order(&faces, serif_primary.id(), false, None);
+    let mincho_sans = for_sans.iter().position(|f| f.family == "Test Mincho 1").unwrap();
+    let gothic_sans = for_sans.iter().position(|f| f.family == "Test Gothic 1").unwrap();
+    let mincho_serif = for_serif.iter().position(|f| f.family == "Test Mincho 1").unwrap();
+    let gothic_serif = for_serif.iter().position(|f| f.family == "Test Gothic 1").unwrap();
+    assert_eq!(mincho_sans < gothic_sans, mincho_serif < gothic_serif, "body text fallback order does not invert between sans and serif primaries");
+    drop(faces);
+
+    // Replacing a user font with another of the same face count invalidates run_fallbacks.
+    db.install_font("UserGothic.ttf", &mapping("SourceSans3-Regular.ttf", "User1 Gothic1", 0xF_0001, 0xF_0002)).unwrap();
+    let run = ['\u{F0001}', '\u{F0002}'];
+    let first = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
+    assert_eq!(first.family, "User1 Gothic1");
+    let face_count = db.read_faces().len();
+    db.remove_user_font("User1 Gothic1").unwrap();
+    db.install_font("UserMincho.ttf", &mapping("SourceSans3-Regular.ttf", "User2 Mincho2", 0xF_0001, 0xF_0002)).unwrap();
+    assert_eq!(db.read_faces().len(), face_count);
+    let updated = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
+    assert_eq!(updated.family, "User2 Mincho2");
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn diagram_fallback_checks_system_fonts_when_loaded_face_mismatches_serif() {
+    let dir = font_dir("diag-mismatch");
+    let regular = "SourceSans3-Regular.ttf";
+    // Installed system font: Gothic (sans-serif), covers 0xF_0020 .. 0xF_0021.
+    std::fs::write(dir.join("SysGothic.ttf"), mapping(regular, "Sys Gothic 11", 0xF_0020, 0xF_0021)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    // Pre-load a serif font covering the same characters into db as a document font.
+    db.add_document_fonts(vec![(mapping(regular, "Load Mincho 1", 0xF_0020, 0xF_0021), "Load Mincho 1".to_string())]);
+    let mincho = db.face("Load Mincho 1", "Regular");
+    assert!(mincho.is_serif());
+
+    let run = ['\u{F0020}', '\u{F0021}'];
+    // 1. Sans-serif diagram: loaded face is serif (mismatched), so search_diagram checks system fonts
+    // and finds & loads "Sys Gothic 11" (sans-serif).
+    let sans = db.fallback_for_diagram(&run, 0, false).unwrap();
+    assert_eq!(sans.family, "Sys Gothic 11", "sans diagram checks system fonts to find matching sans candidate");
+    assert!(!sans.is_serif());
+
+    // 2. When no matching candidate covers the run, retain the mismatched loaded face.
+    let uncataloged_run = ['\u{F0020}'];
+    let retained = db.fallback_for_diagram(&uncataloged_run, sans.id(), false).unwrap();
+    assert_eq!(retained.family, "Load Mincho 1", "retains loaded face when no matching candidate covers the run");
+
+    db.remove_document_fonts(&["Load Mincho 1"]);
+    let _ = std::fs::remove_dir_all(dir);
+}

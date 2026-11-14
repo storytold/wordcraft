@@ -211,10 +211,12 @@ pub(super) struct FallbackCache {
 pub(super) type RunFallbackKey = (Vec<char>, u32, bool, bool);
 
 /// [`FontDb::fallback_for_run`] results: (sorted, deduplicated chars, excluded face, bold,
-/// italic) → face, valid while the loaded face count is `faces`.
+/// italic) → face, valid while the loaded face count is `faces` and [`FontDb::generation`] is
+/// `generation`.
 #[derive(Default)]
 pub(super) struct RunFallbackCache {
     pub(super) faces: usize,
+    pub(super) generation: u64,
     /// Chars held in the keys (bounds memory: hostile runs can be long).
     pub(super) chars: usize,
     pub(super) map: HashMap<RunFallbackKey, Option<Arc<FontFace>>>,

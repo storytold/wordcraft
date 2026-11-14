@@ -391,6 +391,142 @@ impl FontFace {
     pub fn is_east_asian(&self) -> bool {
         self.skrifa().is_some_and(|f| east_asian_font(&f))
     }
+    /// Is this a serif face? Checks family name conventions (e.g. Mincho, Song, Times vs Sans, Gothic, Arial),
+    /// falling back to the OS/2 family class and Panose serif style.
+    pub fn is_serif(&self) -> bool {
+        if is_explicit_sans(&self.family) {
+            return false;
+        }
+        if is_explicit_serif(&self.family) {
+            return true;
+        }
+        use skrifa::raw::TableProvider;
+        if let Some(sk) = self.skrifa()
+            && let Ok(os2) = sk.os2()
+        {
+            let class_id = (os2.s_family_class() >> 8) as u8;
+            if (1..=5).contains(&class_id) || class_id == 7 {
+                return true;
+            }
+            if class_id == 8 {
+                return false;
+            }
+            let panose = os2.panose_10();
+            if panose[0] == 2 {
+                let serif_style = panose[1];
+                if (2..=10).contains(&serif_style) {
+                    return true;
+                }
+                if (11..=15).contains(&serif_style) {
+                    return false;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Tokens identifying known sans-serif font families by naming convention (#5672).
+const SANS_TOKENS: &[&str] = &[
+    "sans",
+    "gothic",
+    "hei",
+    "yahei",
+    "simhei",
+    "zenhei",
+    "heiti",
+    "meiryo",
+    "pingfang",
+    "dotum",
+    "gulim",
+    "malgun",
+    "arial",
+    "calibri",
+    "aptos",
+    "carlito",
+    "inter",
+    "helvetica",
+    "segoe",
+    "tahoma",
+    "verdana",
+];
+
+/// Tokens identifying known serif font families by naming convention (#5672).
+const SERIF_TOKENS: &[&str] = &[
+    "serif",
+    "mincho",
+    "song",
+    "songti",
+    "simsun",
+    "nsimsun",
+    "fangsong",
+    "ming",
+    "mingti",
+    "batang",
+    "sun",
+    "times",
+    "cambria",
+    "georgia",
+    "garamond",
+    "palatino",
+    "century",
+    "bookman",
+    "baskerville",
+    "caladea",
+    "tinos",
+];
+
+/// Split a font family name into lowercased tokens along non-alphanumeric boundaries,
+/// camelCase transitions, and letter-to-digit/digit-to-letter boundaries (#5672).
+fn font_name_tokens(name: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut prev_char: Option<char> = None;
+
+    for c in name.chars() {
+        if !c.is_alphanumeric() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current).to_ascii_lowercase());
+            }
+            prev_char = None;
+            continue;
+        }
+        let is_split = if let Some(prev) = prev_char {
+            (prev.is_lowercase() && c.is_uppercase()) || (prev.is_alphabetic() && c.is_numeric()) || (prev.is_numeric() && c.is_alphabetic())
+        } else {
+            false
+        };
+
+        if is_split && !current.is_empty() {
+            tokens.push(std::mem::take(&mut current).to_ascii_lowercase());
+        }
+
+        current.push(c);
+        prev_char = Some(c);
+    }
+
+    if !current.is_empty() {
+        tokens.push(current.to_ascii_lowercase());
+    }
+
+    let flattened: String = name.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    if !flattened.is_empty() && !tokens.iter().any(|t| t == &flattened) {
+        tokens.push(flattened);
+    }
+
+    tokens
+}
+
+/// Does a family name explicitly identify a sans-serif font by whole tokens?
+fn is_explicit_sans(name: &str) -> bool {
+    let tokens = font_name_tokens(name);
+    tokens.iter().any(|t| SANS_TOKENS.contains(&t.as_str()))
+}
+
+/// Does a family name explicitly identify a serif font by whole tokens?
+fn is_explicit_serif(name: &str) -> bool {
+    let tokens = font_name_tokens(name);
+    tokens.iter().any(|t| SERIF_TOKENS.contains(&t.as_str()))
 }
 
 pub(super) static NEXT_ID: AtomicU32 = AtomicU32::new(1);
@@ -453,5 +589,30 @@ impl OutlinePen for FlipPen {
         if self.take() {
             self.path.close_path();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whole_token_serif_sans_matching() {
+        // #5672: Whole tokens match rather than bare substrings ("hei", "sun").
+        assert!(!is_explicit_sans("Heisei Mincho"), "Heisei Mincho must not match sans 'hei'");
+        assert!(is_explicit_serif("Heisei Mincho"), "Heisei Mincho is serif");
+
+        assert!(!is_explicit_serif("Sunflower"), "Sunflower must not match serif 'sun'");
+        assert!(!is_explicit_sans("Sunflower"));
+
+        assert!(is_explicit_sans("SimHei"));
+        assert!(is_explicit_sans("Microsoft YaHei"));
+        assert!(is_explicit_sans("WenQuanYi Zen Hei"));
+        assert!(is_explicit_sans("Source Sans 3"));
+
+        assert!(is_explicit_serif("SimSun"));
+        assert!(is_explicit_serif("NSimSun"));
+        assert!(is_explicit_serif("Shippori Mincho"));
+        assert!(is_explicit_serif("Source Serif 4"));
     }
 }
