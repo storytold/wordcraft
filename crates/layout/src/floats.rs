@@ -549,7 +549,12 @@ fn anchor_floats_but(
             let Some(&area) = areas.get(&oi) else { continue };
             let Some(&r) = rects.get(&oi) else { continue };
             if area.is_none_or(|(_, b)| float.y < 0.0 && b < y0 + lead - 0.5) {
-                let moved = float_rect(Some(frame), (col_x, width), top + lead, r.w, r.h, float);
+                // Only down: across it stays where it was placed (`settle_early` may have moved it).
+                let moved = Rect { y: float_rect(Some(frame), (col_x, width), top + lead, r.w, r.h, float).y, ..r };
+                // A wrap area moved onto the first line would cover text laid out without it.
+                if area.is_some_and(|(_, b)| b + (moved.y - r.y) > y0 + lead - 0.5) {
+                    continue;
+                }
                 rects.insert(oi, moved);
                 if let Some((k, _)) = area
                     && let Some(slot) = pb.excl.get_mut(k)

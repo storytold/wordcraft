@@ -15484,3 +15484,29 @@ fn negative_offset_floats_in_a_paragraph_pushed_down_by_a_wrapping_float_stay_on
     assert!((row_rect.y - (line_top - 460.75)).abs() < 0.5, "row measured from displaced line {line_top}: {row_rect:?}");
     assert!(title_rect.y > frame_rect.y && row_rect.bottom() < frame_rect.bottom(), "{placed:?}");
 }
+
+/// #6567 review: a wrapping float above its paragraph that would land on the first line when
+/// placed from it again isn't moved there: that line was laid out without it in the way.
+#[test]
+fn a_wrapping_float_isnt_moved_onto_a_first_line_laid_out_without_it() {
+    crate::test_fonts();
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut doc = Document::from_text("Words in the first line of the paragraph.");
+    let frame = Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    let square = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: -10.0, ..Default::default() };
+    doc.insert_object(&Pos::body(0, 0), rect_shape(150.0, 50.0, square), &Default::default()).unwrap();
+    doc.insert_object(&Pos::body(0, 0), rect_shape(200.0, 100.0, frame), &Default::default()).unwrap();
+    let l = lay(&doc);
+    let items = &l.pages[0].items;
+    let square = shapes(items).into_iter().find(|r| (r.h - 50.0).abs() < 0.1).unwrap();
+    let (x, y, height) = items
+        .iter()
+        .find_map(|i| match i {
+            Placed::Lines { x, y, para, story: StoryRef::Body, .. } => para.lines.first().map(|l| (*x + l.left, *y, l.height)),
+            _ => None,
+        })
+        .unwrap();
+    assert!(y > 72.0 + 99.0, "the frame pushes the first line down: {y}");
+    let overlaps = square.y < y + height && square.bottom() > y && square.x < x + 1.0 && square.right() > x;
+    assert!(!overlaps, "the float {square:?} covers the first line's text at ({x}, {y})");
+}
