@@ -501,6 +501,12 @@ impl Dialog {
         }
     }
 
+    /// Whether the dialog is about to take keyboard focus on its opening frame (even if modeless,
+    /// such as Find and Replace) before overlays draw after the canvas.
+    pub fn takes_initial_focus(&self) -> bool {
+        matches!(self, Dialog::Find { focus: true, .. })
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Dialog::RenameDocument { .. } => "renameDocument",

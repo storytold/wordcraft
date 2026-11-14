@@ -143,6 +143,10 @@ pub(crate) fn swallow_shortcut_text(swallow: &mut bool, e: &egui::Event) -> bool
             *swallow = false;
             false
         }
+        egui::Event::Ime(egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_)) => {
+            *swallow = false;
+            false
+        }
         egui::Event::Text(_) if *swallow => {
             *swallow = false;
             true
