@@ -22,9 +22,11 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::Arc;
 #[cfg(all(unix, not(target_os = "macos")))]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use wordcraft_ui_egui::{FileDialogAnswer, FileDialogRequest};
 
@@ -95,6 +97,32 @@ pub struct Launcher {
     queue: Receiver<Request>,
     ctx: egui::Context,
     cancel: CancelHandle,
+    /// Dialogs still waiting for their answer.
+    open: Arc<AtomicUsize>,
+    #[cfg(target_os = "macos")]
+    panel_menu: std::cell::RefCell<crate::panel_menu::PanelMenu>,
+}
+
+/// One dialog in [`Launcher::open`], from its request until the thread waiting for it ends, a
+/// panic included, so the panel's menu bar (macOS) can't outlive the panel.
+struct Waiting {
+    open: Arc<AtomicUsize>,
+    ctx: egui::Context,
+}
+
+impl Waiting {
+    fn new(open: &Arc<AtomicUsize>, ctx: &egui::Context) -> Self {
+        open.fetch_add(1, Ordering::SeqCst);
+        Self { open: Arc::clone(open), ctx: ctx.clone() }
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.open.fetch_sub(1, Ordering::SeqCst);
+        // The next pass also takes the panel's menu bar away (macOS).
+        self.ctx.request_repaint();
+    }
 }
 
 /// The hook for [`Services::file_dialog`](wordcraft_ui_egui::Services::file_dialog) and the
@@ -107,7 +135,17 @@ pub fn hook(ctx: &egui::Context) -> (Hook, Launcher) {
         let _ = queue_tx.send((req, answer));
         rx
     });
-    (hook, Launcher { queue, ctx: ctx.clone(), cancel: CancelHandle::default() })
+    (
+        hook,
+        Launcher {
+            queue,
+            ctx: ctx.clone(),
+            cancel: CancelHandle::default(),
+            open: Arc::default(),
+            #[cfg(target_os = "macos")]
+            panel_menu: Default::default(),
+        },
+    )
 }
 
 impl Launcher {
@@ -136,8 +174,9 @@ impl Launcher {
             let portal_id = portal_arm.as_ref().map(|armed| armed.id);
             #[cfg(all(unix, not(target_os = "macos")))]
             let cancel_handle = self.cancel.clone();
-            let ctx = self.ctx.clone();
+            let counted = Waiting::new(&self.open, &self.ctx);
             let waiting = std::thread::Builder::new().name("file dialog".into()).spawn(move || {
+                let _counted = counted;
                 // The pickers only start when first polled: without a system dialog they never do.
                 let picked = match no_system_dialog() {
                     Some(reason) => Err(reason),
@@ -199,15 +238,25 @@ impl Launcher {
                     cancel_handle.disarm(armed.id);
                 }
                 let _ = answer.send(picked);
-                ctx.request_repaint();
             });
-            // The answer's sender went with the closure, so the app sees the dialog as cancelled.
+            // The answer's sender and the count went with the closure, so the app sees the dialog
+            // as cancelled.
             if let Err(e) = waiting {
                 log::error!("couldn't wait for the file dialog: {e}");
                 #[cfg(all(unix, not(target_os = "macos")))]
                 if let Some(id) = portal_id {
                     self.cancel.disarm(id);
                 }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let open = self.open.load(Ordering::SeqCst) > 0;
+            self.panel_menu.borrow_mut().sync(open);
+            if open {
+                // The panel's menu bar follows the key window (the panel or another document's
+                // window), so look again while a panel is open.
+                self.ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
     }
@@ -379,8 +428,25 @@ fn format_name(ext: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{pick, save_exts, save_filters};
+    use super::{Waiting, pick, save_exts, save_filters};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    /// A dialog whose waiting thread panics still stops counting as open, so the panel's menu bar
+    /// goes away with it (macOS).
+    #[test]
+    fn a_dialog_thread_that_panics_is_no_longer_open() {
+        let open = Arc::new(AtomicUsize::new(0));
+        let counted = Waiting::new(&open, &egui::Context::default());
+        assert_eq!(open.load(Ordering::SeqCst), 1);
+        let thread = std::thread::spawn(move || {
+            let _counted = counted;
+            panic!("the picker failed");
+        });
+        assert!(thread.join().is_err());
+        assert_eq!(open.load(Ordering::SeqCst), 0, "the dialog no longer counts as open");
+    }
 
     /// #2999: a dialog that "cancels" at once is a portal that failed: asked again without a
     /// parent, then the built-in browser. A pick, or a cancel after a while, is the answer.
