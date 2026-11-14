@@ -11984,6 +11984,41 @@ fn cell_widths_override_grid() {
     }
 }
 
+/// Text set out of its cell to the left is cut off at the cell's edge (#6670). Measured in Word
+/// for Windows 16.0.20625 in a two-column table with cell margins of 5.4 pt: a line of
+/// underscores with a left indent of -21.3 pt starts at the cell's edge in the first cell and in
+/// the second, with borders and without, three of its underscores and part of the fourth gone;
+/// a hanging indent does the same; with an indent of -4 pt, within the margin, it is whole.
+#[test]
+fn text_set_out_of_its_cell_to_the_left_is_cut_off_at_the_cells_edge() {
+    crate::test_fonts();
+    // Whether each of the two cells is clipped, with the paragraph in cell `at` set out by `f`.
+    let clipped = |at: usize, f: &dyn Fn(&mut ParaProps)| {
+        let mut t = Table::new(1, 2, 300.0);
+        for (k, cell) in t.rows[0].cells.iter_mut().enumerate() {
+            let mut p = Paragraph::with_text("____________________ M.P.", Default::default());
+            if k == at {
+                f(&mut p.props);
+            }
+            cell.blocks = vec![wordcraft_doc::para_block(p)];
+        }
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let mut cells: Vec<(f32, bool)> =
+            l.pages[0].items.iter().filter_map(|it| if let Placed::Cell { rect, clip, .. } = it { Some((rect.x, *clip)) } else { None }).collect();
+        cells.sort_by(|a, b| a.0.total_cmp(&b.0));
+        (cells[0].1, cells[1].1)
+    };
+    let out: &dyn Fn(&mut ParaProps) = &|p| p.indent_left = Some(-21.3);
+    assert_eq!(clipped(0, out), (true, false), "set out of the first cell");
+    assert_eq!(clipped(1, out), (false, true), "set out of the second cell");
+    assert_eq!(clipped(0, &|p| (p.indent_left, p.indent_first) = (Some(0.0), Some(-21.3))), (true, false), "a first line hanging out");
+    // Within the cell's margin nothing leaves the cell, and nothing is cut.
+    assert_eq!(clipped(0, &|p| p.indent_left = Some(-4.0)), (false, false), "set out by less than the margin");
+    assert_eq!(clipped(0, &|_| {}), (false, false), "not set out at all");
+}
+
 #[test]
 fn ambiguous_widths_keep_grid() {
     crate::test_fonts();

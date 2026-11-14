@@ -858,7 +858,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 row: ri,
                 cell: ci,
                 story,
-                clip: exact && c.h > span_h + 0.01,
+                clip: (exact && c.h > span_h + 0.01) || hangs_out_left(items.get(content..).unwrap_or_default(), c.x),
             });
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             parts.push(CellPart { top, items: first..items.len(), end, align });
@@ -1503,6 +1503,21 @@ fn para_content(pl: &ParaLayout) -> (f32, f32) {
         }
     }
     (lo.max(word) + indents, hi.max(line) + indents)
+}
+
+/// Whether a paragraph among a cell's `items` starts left of the cell's edge at `x`, by a
+/// negative left or first-line indent larger than the cell's margin. Word cuts such text off at
+/// the cell's edge, with borders or without, in a first column and beside another cell alike
+/// (measured in Word for Windows: a line of underscores set 21.3 pt out of its cell starts at
+/// the cell's edge, four of them and a part of the fifth gone; one set out by less than the
+/// cell's margin is whole).
+fn hangs_out_left(items: &[Placed], x: f32) -> bool {
+    items.iter().any(|it| match it {
+        Placed::Lines { x: at, para, turn: TextDirection::Horizontal, .. } if !para.rp.bidi => {
+            at + para.rp.indent_left + para.rp.indent_first.min(0.0) < x - 0.01
+        }
+        _ => false,
+    })
 }
 
 /// Whether nothing in `t` asks for a width (its own or any cell's): its columns then follow
