@@ -7652,6 +7652,129 @@ fn a_page_anchored_floating_table_after_a_full_page_moves_to_the_next() {
     assert_eq!(page_of(&|p| p.0 == [25]), vec![1]);
 }
 
+/// #2359: a table placed relative to the paragraph (`w:tblpPr w:vertAnchor="text"`) that doesn't
+/// fit in the rest of the page starts where it stands and runs on across pages like a table in
+/// the text, as in Word, instead of moving whole to the next page and leaving page 1 half empty.
+/// The text after it follows below it, not beside it.
+#[test]
+fn a_paragraph_anchored_floating_table_that_doesnt_fit_runs_on_to_the_next_page() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let text: Vec<String> = (0..18).map(|i| format!("Paragraph {i} before the table.")).collect();
+    let mut d = Document::from_text(&(text.join("\n") + "\nAfter the table."));
+    let mut t = Table::new(30, 1, 300.0);
+    for (i, r) in t.rows.iter_mut().enumerate() {
+        r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
+    }
+    t.props.float = Some(TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 0.05, overlap: false, ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(18), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let placed = |want: &dyn Fn(&Path) -> bool| -> Vec<(usize, f32)> {
+        l.pages
+            .iter()
+            .enumerate()
+            .flat_map(|(i, p)| p.items.iter().map(move |it| (i, it)))
+            .filter_map(|(i, it)| if let Placed::Lines { story: StoryRef::Body, path, y, .. } = it { want(path).then_some((i, *y)) } else { None })
+            .collect()
+    };
+    let before = placed(&|p| p.0 == [17]);
+    assert_eq!(before.iter().map(|(pg, _)| *pg).collect::<Vec<_>>(), [0], "the text before the table is on page 1");
+    let rows = placed(&|p| p.0.first() == Some(&18) && p.0.len() > 1);
+    assert_eq!(rows.len(), 30, "every row is drawn once: {rows:?}");
+    let (first_page, first_y) = rows.first().copied().unwrap_or_default();
+    assert_eq!(first_page, 0, "the table starts on page 1, below the text before it: {rows:?}");
+    assert!(first_y > before[0].1, "first row at {first_y}, below the paragraph before it at {}", before[0].1);
+    assert_eq!(rows.last().map(|(pg, _)| *pg), Some(1), "the rows that don't fit run on to page 2: {rows:?}");
+    // The cells' own bottoms (a row's text starts above them).
+    let cells: Vec<(usize, f32)> = l
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| p.items.iter().map(move |it| (i, it)))
+        .filter_map(|(i, it)| match it {
+            Placed::Cell { story: StoryRef::Body, table, rect, .. } if *table == Path::top(18) => Some((i, rect.bottom())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cells.len(), 30, "{cells:?}");
+    assert!(cells.iter().all(|(_, b)| *b <= 792.0 - 72.0 + 0.01), "no cell past the bottom margin: {cells:?}");
+    let after = placed(&|p| p.0 == [19]);
+    let last_cell = cells.iter().copied().filter(|(pg, _)| *pg == 1).fold(0.0f32, |m, (_, b)| m.max(b));
+    assert!(
+        after.len() == 1 && after[0].0 == 1 && after[0].1 >= last_cell - 0.01,
+        "the text after the table follows below its last cell (bottom {last_cell}): {after:?}"
+    );
+}
+
+/// #2359 review: running on, a paragraph-anchored table keeps its vertical offset: it starts that
+/// far below the text before it, as it would where it fits.
+#[test]
+fn a_paragraph_anchored_table_running_on_keeps_its_vertical_offset() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let first_row_y = |offset: f32| {
+        let text: Vec<String> = (0..18).map(|i| format!("Paragraph {i} before the table.")).collect();
+        let mut d = Document::from_text(&(text.join("\n") + "\nAfter the table."));
+        let mut t = Table::new(30, 1, 300.0);
+        for (i, r) in t.rows.iter_mut().enumerate() {
+            r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
+        }
+        t.props.float = Some(TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: offset, overlap: false, ..Default::default() });
+        d.insert_block(StoryRef::Body, &Path::top(18), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        l.pages
+            .iter()
+            .enumerate()
+            .flat_map(|(i, p)| p.items.iter().map(move |it| (i, it)))
+            .find_map(|(i, it)| match it {
+                Placed::Cell { story: StoryRef::Body, table, rect, row: 0, .. } if *table == Path::top(18) => Some((i, rect.y)),
+                _ => None,
+            })
+            .unwrap_or((usize::MAX, f32::NAN))
+    };
+    let (page0, y0) = first_row_y(0.0);
+    let (page36, y36) = first_row_y(36.0);
+    assert_eq!((page0, page36), (0, 0), "both start on page 1");
+    assert!((y36 - y0 - 36.0).abs() < 1.0, "36 pt further down: {y0} then {y36}");
+}
+
+/// #2359 review: a paragraph-anchored table moved below another floating table keeps its
+/// distance from the text on the left, and running on it starts there too, not at its offset.
+#[test]
+fn a_paragraph_anchored_table_running_on_keeps_where_clearing_put_it() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let text: Vec<String> = (0..18).map(|i| format!("Paragraph {i} before the tables.")).collect();
+    let mut d = Document::from_text(&(text.join("\n") + "\nAfter the tables."));
+    let table = |rows: usize, dist_left: f32| {
+        let mut t = Table::new(rows, 1, 300.0);
+        for (i, r) in t.rows.iter_mut().enumerate() {
+            r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
+        }
+        t.props.float = Some(TableFloat {
+            h_rel: Anchor::Column,
+            v_rel: Anchor::Paragraph,
+            dist: [dist_left, 0.0, 0.0, 0.0],
+            overlap: false,
+            ..Default::default()
+        });
+        t
+    };
+    // A short one that fits, then a long one where it stands, which moves below it.
+    d.insert_block(StoryRef::Body, &Path::top(18), wordcraft_doc::Block::Table(table(2, 0.0))).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(19), wordcraft_doc::Block::Table(table(30, 18.0))).unwrap();
+    let l = lay(&d);
+    let first_cell = |of: usize| {
+        l.pages.iter().enumerate().flat_map(|(i, p)| p.items.iter().map(move |it| (i, it))).find_map(|(i, it)| match it {
+            Placed::Cell { story: StoryRef::Body, table, rect, row: 0, .. } if *table == Path::top(of) => Some((i, *rect)),
+            _ => None,
+        })
+    };
+    let (Some((0, short)), Some((0, long))) = (first_cell(18), first_cell(19)) else { panic!("both start on page 1") };
+    assert!(long.y >= short.bottom() - 0.01, "the long table is below the short one: {short:?}, {long:?}");
+    assert!((long.x - short.x - 18.0).abs() < 0.5, "18 pt from the text's left edge, as cleared: {short:?}, {long:?}");
+}
+
 /// #534: a paragraph that starts with a page break right where the page is full keeps the break
 /// on that page: no blank page between the two tables around it.
 #[test]
