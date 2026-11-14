@@ -234,7 +234,9 @@ impl Windows {
 /// Control-channel input for a window in a viewport of its own: eframe's raw-input hook
 /// ([`WordApp::raw_input_hook`]) sees only the root viewport's input, and egui runs a plugin's
 /// input hook for every viewport. On macOS it also reads Control-click as the secondary button
-/// in those windows, as the raw-input hook does in the root's.
+/// in those windows, as the raw-input hook does in the root's. It also takes the answer to a menu
+/// Paste waiting in one of those windows out of its input, as the raw-input hook does in the
+/// root's ([`crate::system_clipboard::ViewportPaste`]).
 #[derive(Default)]
 pub(crate) struct ViewportInput {
     /// The viewport the queued events go to, on its next pass.
@@ -250,6 +252,8 @@ pub(crate) struct ViewportInput {
     pub(crate) touchpad_speed: crate::scroll::ScrollSpeed,
     /// Mouse-wheel scroll speed multiplier for secondary viewports (#6146).
     pub(crate) wheel_speed: crate::scroll::ScrollSpeed,
+    /// A menu Paste waiting for egui's answer in a secondary viewport (#6635).
+    paste: Option<crate::system_clipboard::ViewportPaste>,
 }
 
 impl egui::Plugin for ViewportInput {
@@ -259,7 +263,7 @@ impl egui::Plugin for ViewportInput {
     }
 
     /// Hooks raw input for non-root viewports, applying touchpad scroll speed and secondary clicks.
-    fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+    fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         let viewport = input.viewport_id;
         if viewport == ViewportId::ROOT {
             return;
@@ -267,6 +271,9 @@ impl egui::Plugin for ViewportInput {
         self.touchpad_speed.apply_input_scroll(input, self.wheel_speed);
         if cfg!(target_os = "macos") {
             crate::control_click_as_secondary(&mut input.events, self.control_click.entry(viewport).or_default());
+        }
+        if let Some(paste) = self.paste.as_mut() {
+            paste.input_hook(ctx, viewport, &mut input.events);
         }
         if self.injected == Some(viewport) {
             self.injected = None;
@@ -785,6 +792,19 @@ impl WordApp {
             p.touchpad_speed = touchpad_speed;
             p.wheel_speed = wheel_speed;
         });
+    }
+
+    /// Read or change the menu Paste waiting in a window with a viewport of its own
+    /// ([`ViewportInput`]). `None` when the windows have no viewports of their own.
+    pub(crate) fn viewport_paste<R>(
+        &mut self,
+        ctx: &egui::Context,
+        f: impl FnOnce(&mut Option<crate::system_clipboard::ViewportPaste>) -> R,
+    ) -> Option<R> {
+        if !self.windows.input_plugin {
+            return None;
+        }
+        ctx.with_plugin(|p: &mut ViewportInput| f(&mut p.paste))
     }
 
     /// The control channel's next input, for the active window when it has a viewport of its own:

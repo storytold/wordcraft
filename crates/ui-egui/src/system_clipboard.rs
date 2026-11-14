@@ -123,6 +123,50 @@ pub(crate) struct PendingPaste {
     /// The document and window the Paste was chosen in: the text goes there or nowhere.
     document: u64,
     window: u64,
+    /// The egui viewport of that window: egui is asked there, and answers in its input.
+    viewport: egui::ViewportId,
+}
+
+/// A waiting Paste chosen in a window with a viewport of its own: that viewport's input reaches
+/// [`crate::windows::ViewportInput`], not the host's raw-input hook, so the plugin scans it
+/// ([`scan`]) and [`tick`] picks up what it found.
+pub(crate) struct ViewportPaste {
+    pub(crate) viewport: egui::ViewportId,
+    pub(crate) id: String,
+    pub(crate) wait: Wait,
+    /// What the viewport's input held, once it held something.
+    pub(crate) found: Option<Scan>,
+}
+
+impl ViewportPaste {
+    /// Scan `viewport`'s next pass's input, when the Paste waits for it and has found nothing yet.
+    pub(crate) fn input_hook(&mut self, ctx: &egui::Context, viewport: egui::ViewportId, events: &mut Vec<egui::Event>) {
+        if self.viewport != viewport || self.found.is_some() {
+            return;
+        }
+        let held = |key: &egui::Key| ctx.input_for(viewport, |i| i.keys_down.contains(key));
+        match scan(&self.id, &mut self.wait, held, events) {
+            Scan::Nothing => {}
+            found => self.found = Some(found),
+        }
+    }
+}
+
+/// The state of a waiting Paste that [`scan`] reads and updates.
+#[derive(Clone, Copy)]
+pub(crate) struct Wait {
+    /// egui has been asked (and not since told to ask again).
+    pub(crate) asked: bool,
+    /// Ctrl (Cmd) has been down since the Paste was chosen.
+    pub(crate) command_held: bool,
+}
+
+/// What one pass's input held for a waiting Paste.
+pub(crate) enum Scan {
+    Nothing,
+    /// The person moved on first: the wait ends.
+    Cancelled,
+    Read(Read),
 }
 
 /// When the host can't open the system clipboard at all (a Wayland session without a working
@@ -131,9 +175,9 @@ pub(crate) struct PendingPaste {
 /// clipboard. Ask egui for a paste the same way and run the command when its text arrives
 /// ([`deliver`]), once the menu it came from has closed ([`tick`]). Paste Special waits the same
 /// way, and its dialog then lists the text (#6635); its dialog's OK, which names the format
-/// chosen, runs at once. Only the main window waits: egui answers in the input of the window that
-/// asked, and only the main window's input passes through [`claim`] (a window opened with View ›
-/// New Window keeps the old behavior).
+/// chosen, runs at once. egui answers in the input of the window that asked: the main window's
+/// passes through [`claim`], and the input of a window with a viewport of its own (File › New,
+/// View › New Window) through [`ViewportPaste`].
 fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     // A paste that brings its own content (an agent's html, rtf or picture) has what it needs;
     // only Keep Text Only must have the clipboard's text.
@@ -141,7 +185,6 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
     if (id == "edit.pasteSpecial" && params.get("as").is_some())
         || (brings_content && id != "edit.pasteText")
         || !app.services.clipboard_unreachable.as_ref().is_some_and(|f| f())
-        || app.active_viewport() != egui::ViewportId::ROOT
     {
         return None;
     }
@@ -157,7 +200,10 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
         command_held: ctx.input(|i| i.modifiers.command),
         document: app.session.document_id(),
         window: app.windows.shown(),
+        viewport: app.active_viewport(),
     });
+    // What a window found for an earlier Paste isn't this one's answer.
+    app.viewport_paste(&ctx, |v| *v = None);
     ctx.request_repaint();
     Some(Ok(serde_json::json!({"pending": "paste"})))
 }
@@ -176,12 +222,38 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
 /// repeats yet (egui does that later in the pass), so a press of a key egui already has down
 /// counts as one. Ctrl (Cmd) going down is new input too: the Ctrl+V shortcut sends no key event,
 /// only its paste, which would otherwise be taken for the waiting Paste's answer.
+///
+/// This is the main window's input; another window's goes through [`ViewportPaste`].
 pub(crate) fn claim(app: &mut WordApp, events: &mut Vec<egui::Event>) {
     let ctx = app.ctx.clone();
     let held = |key: &egui::Key| ctx.as_ref().is_some_and(|c| c.input(|i| i.keys_down.contains(key)));
-    let Some(p) = app.pending_paste.as_mut().filter(|p| p.text.is_none() && p.image.is_none()) else {
+    let Some(p) = app.pending_paste.as_mut().filter(|p| p.text.is_none() && p.image.is_none() && p.viewport == egui::ViewportId::ROOT) else {
         return;
     };
+    let mut wait = Wait { asked: p.since.is_some(), command_held: p.command_held };
+    let found = scan(&p.id, &mut wait, held, events);
+    p.apply(wait);
+    match found {
+        Scan::Nothing => {}
+        Scan::Cancelled => app.pending_paste = None,
+        Scan::Read(Read::Text(t)) => p.text = Some(t),
+        Scan::Read(Read::Picture(image)) => p.image = Some(image),
+    }
+}
+
+impl PendingPaste {
+    /// Take what a [`scan`] changed: told to ask again, or Ctrl let go.
+    fn apply(&mut self, wait: Wait) {
+        if !wait.asked {
+            self.since = None;
+        }
+        self.command_held = wait.command_held;
+    }
+}
+
+/// Read one pass's input `events` for the waiting Paste `id` (see [`claim`]), taking out the paste
+/// event that answers it. `held` tells whether egui already has a key down.
+pub(crate) fn scan(id: &str, wait: &mut Wait, held: impl Fn(&egui::Key) -> bool, events: &mut Vec<egui::Event>) -> Scan {
     // The last event was a held key's repeat: the text after it is the repeat's own.
     let mut after_repeat = false;
     // Keys let go earlier in these events: pressed again, they are new input.
@@ -194,42 +266,39 @@ pub(crate) fn claim(app: &mut WordApp, events: &mut Vec<egui::Event>) {
                 after_repeat = true;
                 // egui-winit's Wayland bridge drops a read in flight at any key press, repeats
                 // included: ask again (next tick).
-                p.since = None;
+                wait.asked = false;
             }
             egui::Event::Text(_) if repeat => {}
-            egui::Event::ModifiersChanged(m) if m.command && !p.command_held => {
-                log::debug!("{}: a shortcut came first; the paste is cancelled", p.id);
-                app.pending_paste = None;
-                return;
+            egui::Event::ModifiersChanged(m) if m.command && !wait.command_held => {
+                log::debug!("{id}: a shortcut came first; the paste is cancelled");
+                return Scan::Cancelled;
             }
             // Ctrl held since the Paste was chosen (its own shortcut's) counts once it is let go.
-            egui::Event::ModifiersChanged(m) => p.command_held &= m.command,
-            egui::Event::Paste(_) | egui::Event::PasteImage(_) if p.since.is_some() => {
+            egui::Event::ModifiersChanged(m) => wait.command_held &= m.command,
+            egui::Event::Paste(_) | egui::Event::PasteImage(_) if wait.asked => {
                 // Left in, a picture would reach the page, whose Paste would ask egui again.
-                match events.remove(i) {
-                    egui::Event::Paste(t) => p.text = Some(t),
-                    egui::Event::PasteImage(image) => p.image = Some(image),
-                    _ => {}
-                }
-                return;
+                return match events.remove(i) {
+                    egui::Event::Paste(t) => Scan::Read(Read::Text(t)),
+                    egui::Event::PasteImage(image) => Scan::Read(Read::Picture(image)),
+                    _ => Scan::Nothing,
+                };
             }
             egui::Event::Key { pressed: true, repeat: false, .. } => {
-                log::debug!("{}: a key came first; the paste is cancelled", p.id);
-                app.pending_paste = None;
-                return;
+                log::debug!("{id}: a key came first; the paste is cancelled");
+                return Scan::Cancelled;
             }
             egui::Event::Paste(_) | egui::Event::PasteImage(_) | egui::Event::PointerButton { pressed: true, .. } | egui::Event::Text(_) => {
-                log::debug!("{}: other input came first; the paste is cancelled", p.id);
-                app.pending_paste = None;
-                return;
+                log::debug!("{id}: other input came first; the paste is cancelled");
+                return Scan::Cancelled;
             }
             _ => {}
         }
     }
+    Scan::Nothing
 }
 
 /// What egui read for the waiting Paste.
-enum Read {
+pub(crate) enum Read {
     Text(String),
     Picture(std::sync::Arc<egui::ColorImage>),
 }
@@ -239,10 +308,10 @@ enum Read {
 /// one on the same document with its own caret; a document opened) cancels it rather than
 /// pasting there.
 fn deliver(app: &mut WordApp, read: Read) -> bool {
-    let Some(PendingPaste { id, mut params, document, window, .. }) = app.pending_paste.take() else {
+    let Some(PendingPaste { id, mut params, document, window, viewport, .. }) = app.pending_paste.take() else {
         return false;
     };
-    if app.session.document_id() != document || app.windows.shown() != window || app.active_viewport() != egui::ViewportId::ROOT {
+    if app.session.document_id() != document || app.windows.shown() != window || app.active_viewport() != viewport {
         log::debug!("{id}: another document or window is active; the paste is cancelled");
         app.status(CANCELLED.to_string());
         return true;
@@ -318,6 +387,42 @@ const NO_TEXT: &str = "the clipboard has no text to paste";
 /// up), asking again after a held key's repeat, and if
 /// nothing came in time (the clipboard is empty), say so instead of waiting for ever.
 pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
+    take_found(app, ctx);
+    wait(app, ctx);
+    hand_over(app, ctx);
+}
+
+/// Take what a window with a viewport of its own found in its input for the waiting Paste
+/// ([`ViewportPaste`]).
+fn take_found(app: &mut WordApp, ctx: &egui::Context) {
+    let Some(viewport) = app.pending_paste.as_ref().map(|p| p.viewport).filter(|v| *v != egui::ViewportId::ROOT) else {
+        return;
+    };
+    let Some((wait, found)) = app.viewport_paste(ctx, |v| v.as_mut().filter(|v| v.viewport == viewport).map(|v| (v.wait, v.found.take()))).flatten()
+    else {
+        return;
+    };
+    let Some(p) = app.pending_paste.as_mut() else { return };
+    p.apply(wait);
+    match found {
+        None | Some(Scan::Nothing) => {}
+        Some(Scan::Cancelled) => app.pending_paste = None,
+        Some(Scan::Read(Read::Text(t))) => p.text = Some(t),
+        Some(Scan::Read(Read::Picture(image))) => p.image = Some(image),
+    }
+}
+
+/// Give the waiting Paste's state to its window's viewport for its next pass, or clear it when no
+/// Paste waits there.
+fn hand_over(app: &mut WordApp, ctx: &egui::Context) {
+    let waiting = app.pending_paste.as_ref().filter(|p| p.viewport != egui::ViewportId::ROOT && p.text.is_none() && p.image.is_none()).map(|p| {
+        ViewportPaste { viewport: p.viewport, id: p.id.clone(), wait: Wait { asked: p.since.is_some(), command_held: p.command_held }, found: None }
+    });
+    app.viewport_paste(ctx, |v| *v = waiting);
+}
+
+/// The waiting Paste's own steps each frame (see [`tick`]).
+fn wait(app: &mut WordApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let read = app.pending_paste.as_mut().and_then(|p| p.text.take().map(Read::Text).or_else(|| p.image.take().map(Read::Picture)));
     if let Some(read) = read {
@@ -336,7 +441,7 @@ pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
         None if p.command_held => {}
         None => {
             p.since = Some(now);
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            ctx.send_viewport_cmd_to(p.viewport, egui::ViewportCommand::RequestPaste);
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(PASTE_WAIT_SECS + 0.1));
         }
         Some(since) if now - since > PASTE_WAIT_SECS => {

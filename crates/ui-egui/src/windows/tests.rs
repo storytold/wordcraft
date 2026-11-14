@@ -587,8 +587,8 @@ fn new_window_shows_the_document_twice_each_with_its_own_caret_and_zoom() {
 /// A menu Paste waiting for its text through egui (the system clipboard out of reach, #5217)
 /// belongs to the window it was chosen in: with another window on the same document brought
 /// forward before the text comes, it is cancelled rather than pasted at that window's caret. A
-/// menu Paste in a window of its own doesn't wait at all (egui would answer in that window's
-/// input, which the main window's hook doesn't see), as before.
+/// menu Paste in a window of its own (View › New Window) waits the same way: egui is asked in that
+/// window, and its answer comes in that window's input.
 #[test]
 fn a_waiting_menu_paste_stays_with_its_window() {
     let ctx = backend();
@@ -600,9 +600,18 @@ fn a_waiting_menu_paste_stays_with_its_window() {
     frames(&ctx, &mut a, 3);
     let b = a.active_viewport();
     assert_ne!(b, ViewportId::ROOT);
-    // In the second window: no waiting, the paste fails as it did.
-    assert!(a.run("edit.paste", json!({})).is_err());
+    // In the second window: the paste waits, and egui is asked there.
+    assert_eq!(a.run("edit.paste", json!({})).unwrap(), json!({"pending": "paste"}));
+    frames(&ctx, &mut a, 3);
+    assert!(sent(b, &ViewportCommand::RequestPaste), "the second window asks egui");
+    assert!(!sent(ViewportId::ROOT, &ViewportCommand::RequestPaste));
+    EVENTS.with(|e| e.borrow_mut().entry(b).or_default().push(egui::Event::Paste(" there".into())));
+    frames(&ctx, &mut a, 2);
     assert!(a.pending_paste.is_none());
+    assert_eq!(text(&a).matches("there").count(), 1, "pasted once, in the second window: {:?}", text(&a));
+    COMMANDS.with(|c| c.borrow_mut().clear());
+    a.run("edit.undo", json!({})).unwrap();
+    assert_eq!(text(&a), "Hello");
 
     focus(ViewportId::ROOT);
     frames(&ctx, &mut a, 2);
@@ -618,6 +627,45 @@ fn a_waiting_menu_paste_stays_with_its_window() {
     assert!(a.pending_paste.is_none());
     assert_eq!(text(&a), "Hello", "not pasted at the other window's caret");
     assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(crate::system_clipboard::CANCELLED));
+}
+
+/// A menu Paste in a document opened with File › New, in a window of its own, with the system
+/// clipboard out of reach (#6635): it waits for egui's text in that window, and a key pressed
+/// there first cancels it, as in the main window.
+#[test]
+fn a_menu_paste_in_a_new_documents_window_reads_the_text_there() {
+    let ctx = backend();
+    let services = Services { clipboard_text: Some(Box::new(|| None)), clipboard_unreachable: Some(Box::new(|| true)), ..Default::default() };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    a.run("text.insert", json!({"text": "First"})).unwrap();
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 3);
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT);
+    assert_eq!(a.run("edit.paste", json!({})).unwrap(), json!({"pending": "paste"}));
+    frames(&ctx, &mut a, 3);
+    assert!(sent(child, &ViewportCommand::RequestPaste));
+    EVENTS.with(|e| e.borrow_mut().entry(child).or_default().push(egui::Event::Paste("Second".into())));
+    frames(&ctx, &mut a, 2);
+    assert!(a.pending_paste.is_none());
+    assert_eq!(text(&a), "Second");
+
+    // A key in the window before the text comes ends the wait.
+    assert_eq!(a.run("edit.paste", json!({})).unwrap(), json!({"pending": "paste"}));
+    frames(&ctx, &mut a, 3);
+    EVENTS.with(|e| {
+        e.borrow_mut().entry(child).or_default().push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        })
+    });
+    frames(&ctx, &mut a, 2);
+    assert!(a.pending_paste.is_none());
+    assert_eq!(text(&a), "Second");
 }
 
 /// Closing one of two windows on a document asks nothing, even with unsaved changes, and the
