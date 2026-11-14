@@ -551,9 +551,11 @@ fn clicking_the_font_arrow_toggles_dropdown_and_preserves_caret_on_field_click()
     h.event(egui::Event::Text("!".into()));
     h.run_steps(2);
     assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Times New !Roman"));
+    assert!(egui::Popup::is_any_open(&h.ctx), "dropdown popup stays open even with no matches");
 
     h.get(By::new().role(Role::Button).label_contains("Font options")).click();
     h.run_steps(2);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "dropdown popup closes on arrow click toggle");
     assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes on arrow click toggle");
 }
 
