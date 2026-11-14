@@ -16,7 +16,7 @@ use wordcraft_doc::props::VMerge;
 use wordcraft_doc::props::{CellProps, CharProps, ParaProps, PropChange, RowProps, TableProps};
 use wordcraft_doc::section::SectionProps;
 use wordcraft_doc::styles::Style;
-use wordcraft_doc::table::{Cell, Row, Table};
+use wordcraft_doc::table::{Cell, MAX_TABLE_DEPTH, Row, Table};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, Revision, RevisionKind, StoryRef};
 
 use crate::Session;
@@ -30,8 +30,8 @@ fn records(id: &str) -> bool {
         || id.starts_with("file."))
 }
 
-/// Tables nested deeper than this aren't compared (hostile documents).
-const MAX_DEPTH: usize = 16;
+/// Tables nested deeper than [`MAX_TABLE_DEPTH`] aren't compared (hostile documents).
+const MAX_DEPTH: usize = MAX_TABLE_DEPTH;
 
 /// A paragraph's, table's or cell's tracked formatting change, if it carries one.
 type Slot<T> = Option<Box<PropChange<T>>>;
@@ -97,6 +97,23 @@ impl Recorder<'_> {
             }
         };
         (want != *has).then_some(Replacement(want))
+    }
+
+    /// Record formatting differences between `old` and `new` into `slot_mut(new)`, returning
+    /// `true` if `slot` changed.
+    fn record_prop<T: Clone + PartialEq>(
+        &mut self,
+        old: &T,
+        new: &mut T,
+        strip: fn(&T) -> T,
+        slot: fn(&T) -> &Slot<T>,
+        slot_mut: fn(&mut T) -> &mut Slot<T>,
+    ) -> bool {
+        if let Some(Replacement(w)) = self.change(old, new, strip, slot) {
+            *slot_mut(new) = w;
+            return true;
+        }
+        false
     }
 
     /// Record the formatting changes between `b` and `a` (the same text) into `a`.
@@ -217,8 +234,9 @@ impl Recorder<'_> {
 fn strip_table(t: &TableProps) -> TableProps {
     TableProps { fmt_change: None, ..t.clone() }
 }
+/// Returns a copy of `r` with its revision change log and row insertion/deletion marks cleared.
 fn strip_row(r: &RowProps) -> RowProps {
-    RowProps { fmt_change: None, ..r.clone() }
+    RowProps { fmt_change: None, ins: None, del: None, ..r.clone() }
 }
 fn strip_cell(c: &CellProps) -> CellProps {
     CellProps { fmt_change: None, span: 0, vmerge: VMerge::None, ..c.clone() }
@@ -295,6 +313,27 @@ pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, b
 pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions: &mut Vec<Revision>, author: &str, date: &str) {
     let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
     r.para(old, new);
+}
+
+/// Compare Documents: record table-level formatting differences between `old` and `new` into `new`,
+/// returning `true` when a tracked change was updated.
+pub(crate) fn compare_table_props(old: &TableProps, new: &mut TableProps, revisions: &mut Vec<Revision>, author: &str, date: &str) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    r.record_prop(old, new, strip_table, |t| &t.fmt_change, |t| &mut t.fmt_change)
+}
+
+/// Compare Documents: record row-level formatting differences between `old` and `new` into `new`,
+/// returning `true` when a tracked change was updated.
+pub(crate) fn compare_row_props(old: &RowProps, new: &mut RowProps, revisions: &mut Vec<Revision>, author: &str, date: &str) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    r.record_prop(old, new, strip_row, |p| &p.fmt_change, |p| &mut p.fmt_change)
+}
+
+/// Compare Documents: record cell-level formatting differences between `old` and `new` into `new`,
+/// returning `true` when a tracked change was updated.
+pub(crate) fn compare_cell_props(old: &CellProps, new: &mut CellProps, revisions: &mut Vec<Revision>, author: &str, date: &str) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    r.record_prop(old, new, strip_cell, |p| &p.fmt_change, |p| &mut p.fmt_change)
 }
 
 /// The properties a change sets, as the Style Inspector lists them: `[{"prop", "value"}]` in
@@ -431,6 +470,18 @@ pub fn resolve_containers(blocks: &mut Blocks, accept: bool, depth: usize) {
             }
             Block::Table(t) => {
                 resolve_table(t, accept);
+                let drop_row = |r: &Row| (!accept && r.props.ins.is_some()) || (accept && r.props.del.is_some());
+                let doomed: Vec<usize> = t.rows.iter().enumerate().filter(|(_, r)| drop_row(r)).map(|(i, _)| i).collect();
+                for i in doomed.into_iter().rev() {
+                    t.delete_row(i);
+                }
+                for r in &mut t.rows {
+                    if accept {
+                        r.props.ins = None;
+                    } else {
+                        r.props.del = None;
+                    }
+                }
                 for r in &mut t.rows {
                     resolve_row(r, accept);
                     for c in &mut r.cells {
@@ -441,6 +492,7 @@ pub fn resolve_containers(blocks: &mut Blocks, accept: bool, depth: usize) {
             }
         }
     }
+    blocks.retain(|b| !matches!(&**b, Block::Table(t) if t.rows.is_empty()));
 }
 
 /// Accept or reject a table's own change (not its rows' or cells').
@@ -452,8 +504,9 @@ pub fn resolve_table(t: &mut Table, accept: bool) {
 
 /// Accept or reject a row's change.
 pub fn resolve_row(r: &mut Row, accept: bool) {
+    let (ins, del) = (r.props.ins, r.props.del);
     if let Some(ch) = r.props.fmt_change.take().filter(|_| !accept) {
-        r.props = RowProps { fmt_change: None, ..ch.old };
+        r.props = RowProps { fmt_change: None, ins, del, ..ch.old };
     }
 }
 
@@ -501,15 +554,11 @@ pub fn table_diff(t: &TableProps) -> Vec<Value> {
         .map(|ch| diff(&TableProps { fmt_change: None, ..ch.old.clone() }, &TableProps { fmt_change: None, ..t.clone() }))
         .unwrap_or_default()
 }
+/// Returns the formatting property differences recorded on `r`, ignoring row insertion/deletion marks.
 pub fn row_diff(r: &RowProps) -> Vec<Value> {
-    r.fmt_change
-        .as_ref()
-        .map(|ch| diff(&RowProps { fmt_change: None, ..ch.old.clone() }, &RowProps { fmt_change: None, ..r.clone() }))
-        .unwrap_or_default()
+    r.fmt_change.as_ref().map(|ch| diff(&strip_row(&ch.old), &strip_row(r))).unwrap_or_default()
 }
+/// Returns the formatting property differences recorded on `c`, ignoring structural span and vertical merge fields.
 pub fn cell_diff(c: &CellProps) -> Vec<Value> {
-    c.fmt_change
-        .as_ref()
-        .map(|ch| diff(&CellProps { fmt_change: None, ..ch.old.clone() }, &CellProps { fmt_change: None, ..c.clone() }))
-        .unwrap_or_default()
+    c.fmt_change.as_ref().map(|ch| diff(&strip_cell(&ch.old), &strip_cell(c))).unwrap_or_default()
 }

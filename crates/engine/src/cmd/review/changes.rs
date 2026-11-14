@@ -76,9 +76,9 @@ fn resolve_para(
     Ok(())
 }
 
-/// Accept or reject the changes of the table cell `path` is in: the table's, its row's and the
-/// cell's own. Returns whether there were any.
-fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, accept: bool) -> Result<bool, CmdError> {
+/// Accept or reject formatting changes on the table, row and cell containing `path`.
+/// Returns whether any table, row or cell carried a formatting change.
+fn resolve_cell_fmt(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, accept: bool) -> Result<bool, CmdError> {
     let Some((tp, r, c)) = path.cell() else { return Ok(false) };
     let has = s.doc.table(story, &tp).is_some_and(|t| {
         let row = t.rows.get(r);
@@ -100,6 +100,118 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     Ok(true)
 }
 
+/// Clear matching row-level insertion or deletion marks (`rev`) across all paragraphs and nested
+/// tables inside `blocks` when a tracked row is kept (`accept` on insert, reject on delete).
+fn clear_blocks_rev(blocks: &mut wordcraft_doc::Blocks, rev: u32, accept: bool, depth: usize) -> Result<(), CmdError> {
+    if depth > wordcraft_doc::table::MAX_TABLE_DEPTH {
+        return Ok(());
+    }
+    for b in blocks.iter_mut() {
+        let needs = match &**b {
+            wordcraft_doc::Block::Para(p) => {
+                let mark_hit = if accept { p.mark.ins == Some(rev) } else { p.mark.del == Some(rev) };
+                mark_hit || p.runs.iter().any(|r| if accept { r.props.ins == Some(rev) } else { r.props.del == Some(rev) })
+            }
+            wordcraft_doc::Block::Table(_) => true,
+        };
+        if !needs {
+            continue;
+        }
+        match std::sync::Arc::make_mut(b) {
+            wordcraft_doc::Block::Para(p) => {
+                let ranges: Vec<(usize, usize)> = p
+                    .run_ranges()
+                    .filter(|(_, c)| if accept { c.ins == Some(rev) } else { c.del == Some(rev) })
+                    .map(|(rng, _)| (rng.start, rng.end))
+                    .collect();
+                for (a, b) in ranges.into_iter().rev() {
+                    p.format(a, b, &|c| {
+                        if accept {
+                            c.ins = None;
+                        } else {
+                            c.del = None;
+                        }
+                    })?;
+                }
+                if accept && p.mark.ins == Some(rev) {
+                    p.mark.ins = None;
+                } else if !accept && p.mark.del == Some(rev) {
+                    p.mark.del = None;
+                }
+                p.touch();
+            }
+            wordcraft_doc::Block::Table(t) => {
+                for row in &mut t.rows {
+                    clear_row_rev(row, rev, accept, depth + 1)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Clear matching row-level insertion or deletion marks (`rev`) on `row` and its cells.
+fn clear_row_rev(row: &mut wordcraft_doc::table::Row, rev: u32, accept: bool, depth: usize) -> Result<(), CmdError> {
+    if depth > wordcraft_doc::table::MAX_TABLE_DEPTH {
+        return Ok(());
+    }
+    if accept && row.props.ins == Some(rev) {
+        row.props.ins = None;
+    } else if !accept && row.props.del == Some(rev) {
+        row.props.del = None;
+    }
+    for cell in &mut row.cells {
+        clear_blocks_rev(&mut cell.blocks, rev, accept, depth)?;
+    }
+    Ok(())
+}
+
+/// Accept or reject a row-level insertion or deletion marker on row `r` of table `tp`.
+///
+/// Rejecting an inserted row or accepting a deleted row deletes the row (removing the table if
+/// it becomes empty). Accepting an inserted row or rejecting a deleted row clears the row
+/// marker and matching revision marks inside its cells.
+fn resolve_row_marker(s: &mut Session, story: StoryRef, tp: &wordcraft_doc::Path, r: usize, accept: bool) -> Result<bool, CmdError> {
+    let Some((ins, del)) = s.doc.table(story, tp).and_then(|t| t.rows.get(r)).map(|row| (row.props.ins, row.props.del)) else {
+        return Ok(false);
+    };
+    if ins.is_none() && del.is_none() {
+        return Ok(false);
+    }
+    if (!accept && ins.is_some()) || (accept && del.is_some()) {
+        let t = s.doc.table_mut(story, tp)?;
+        t.delete_row(r);
+        if t.rows.is_empty() {
+            if let Ok(bl) = s.doc.container_mut(story, tp) {
+                bl.retain(|b| !matches!(&**b, wordcraft_doc::Block::Table(t) if t.rows.is_empty()));
+                if bl.is_empty() {
+                    bl.push(wordcraft_doc::para_block(Paragraph::new()));
+                }
+            }
+            s.doc.ensure_nonempty();
+        }
+        s.clamp_selection();
+        return Ok(true);
+    }
+    let Some(rev) = (if accept { ins } else { del }) else {
+        return Ok(false);
+    };
+    let t = s.doc.table_mut(story, tp)?;
+    if let Some(row) = t.rows.get_mut(r) {
+        clear_row_rev(row, rev, accept, 0)?;
+    }
+    Ok(true)
+}
+
+/// Accept or reject the changes of the table cell `path` is in: the table's, its row's
+/// formatting or insertion/deletion marker, and the cell's own. Returns whether there were any.
+fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, accept: bool) -> Result<bool, CmdError> {
+    let Some((tp, r, _)) = path.cell() else { return Ok(false) };
+    let fmt = resolve_cell_fmt(s, story, path, accept)?;
+    let row = resolve_row_marker(s, story, &tp, r, accept)?;
+    Ok(fmt || row)
+}
+
 /// Accept or reject every style-definition change when the whole body is selected. A text range
 /// that merely begins at the document start must not resolve unrelated style revisions.
 fn resolve_styles_sel(s: &mut Session, whole_body: bool, accept: bool) -> Result<bool, CmdError> {
@@ -115,19 +227,20 @@ fn resolve_styles_sel(s: &mut Session, whole_body: bool, accept: bool) -> Result
     Ok(true)
 }
 
-/// The style-definition change Next / Previous Change selected (#2697). Every style change sits
-/// at the same collapsed anchor at the start of the document, so the selection alone can't say
-/// which one it is: this does, for the Accept or Reject that follows, while the selection stays
-/// where the navigation left it.
+/// The style-definition or row-marker change Next / Previous Change selected (#2697, #5921).
+/// Collapsed changes share an anchor with the start of the document or cell, so the selection alone
+/// can't distinguish them: this tracks which one was navigated to for the Accept or Reject that
+/// follows, while the selection stays where navigation left it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StyleTarget {
     document: u64,
     sel: Selection,
-    style: String,
+    style: Option<String>,
+    row: Option<(wordcraft_doc::Path, usize)>,
     rev: u32,
 }
 
-/// The navigated style change, when the selection is still the one navigation made.
+/// The navigated style or row change, when the selection is still the one navigation made.
 fn navigated_style(s: &Session) -> Option<StyleTarget> {
     s.review_style.clone().filter(|t| t.document == s.document_id() && t.sel == s.sel)
 }
@@ -135,25 +248,47 @@ fn navigated_style(s: &Session) -> Option<StyleTarget> {
 /// Accept or reject the navigated style change alone: that revision in that style. Returns whether
 /// it was still there.
 fn resolve_style_change(s: &mut Session, t: &StyleTarget, accept: bool) -> bool {
+    let Some(style) = t.style.as_deref() else {
+        return false;
+    };
     let revs = |st: &wordcraft_doc::styles::Style| [st.para_change.as_ref().map(|c| c.rev), st.chr_change.as_ref().map(|c| c.rev)];
-    if !s.doc.styles.styles.iter().any(|st| st.id == t.style && revs(st).contains(&Some(t.rev))) {
+    if !s.doc.styles.styles.iter().any(|st| st.id == style && revs(st).contains(&Some(t.rev))) {
         return false;
     }
-    for st in std::sync::Arc::make_mut(&mut s.doc.styles).styles.iter_mut().filter(|st| st.id == t.style) {
+    for st in std::sync::Arc::make_mut(&mut s.doc.styles).styles.iter_mut().filter(|st| st.id == style) {
         fmt_revisions::resolve_style_rev(st, t.rev, accept);
     }
     true
 }
 
-/// Select change `c` and remember which style change it is, if it is one.
+/// Accept or reject the navigated row-marker change alone when that row still carries `t.rev`.
+fn resolve_navigated_row(s: &mut Session, t: &StyleTarget, accept: bool) -> Result<bool, CmdError> {
+    let Some((tp, r)) = &t.row else {
+        return Ok(false);
+    };
+    let story = s.sel.anchor.story;
+    let has_rev =
+        s.doc.table(story, tp).and_then(|tbl| tbl.rows.get(*r)).is_some_and(|row| row.props.ins == Some(t.rev) || row.props.del == Some(t.rev));
+    if !has_rev {
+        return Ok(false);
+    }
+    resolve_row_marker(s, story, tp, *r, accept)?;
+    Ok(true)
+}
+
+/// Select change `c` and remember which style or row-marker change it is, if it is one.
 fn select_change(s: &mut Session, c: &Change) {
     s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
-    s.review_style = c.style.clone().zip(c.rev).map(|(style, rev)| StyleTarget { document: s.document_id(), sel: s.sel.clone(), style, rev });
+    s.review_style = if c.style.is_some() || c.row.is_some() {
+        c.rev.map(|rev| StyleTarget { document: s.document_id(), sel: s.sel.clone(), style: c.style.clone(), row: c.row.clone(), rev })
+    } else {
+        None
+    };
 }
 
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
 /// `delete`, `format`), revision, and for a formatting change the properties it set; for a
-/// style-definition change, the style's id.
+/// style-definition change, the style's id; for a row-marker change, `(table_path, row_index)`.
 struct Change {
     a: Pos,
     b: Pos,
@@ -161,11 +296,13 @@ struct Change {
     rev: Option<u32>,
     props: Vec<Value>,
     style: Option<String>,
+    row: Option<(wordcraft_doc::Path, usize)>,
 }
 
 impl Change {
+    /// Build a formatting change at `[a, b]` for `rev`.
     fn format(a: Pos, b: Pos, rev: u32, props: Vec<Value>) -> Change {
-        Change { a, b, kind: "format", rev: Some(rev), props, style: None }
+        Change { a, b, kind: "format", rev: Some(rev), props, style: None, row: None }
     }
 }
 
@@ -183,7 +320,7 @@ fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Opti
     } else {
         a.clone()
     };
-    Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new(), style: None })
+    Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new(), style: None, row: None })
 }
 
 /// The kind of an insertion / deletion change: `insert`, `delete`, or for one end of a move
@@ -241,6 +378,73 @@ fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Res
     Ok(())
 }
 
+/// Whether a paragraph has any tracked text, formatting, mark or section revision.
+fn para_has_rev(p: &Paragraph) -> bool {
+    p.mark.ins.is_some()
+        || p.mark.del.is_some()
+        || p.mark.fmt_change.is_some()
+        || p.props.fmt_change.is_some()
+        || p.props.num_change.is_some()
+        || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some())
+        || p.runs.iter().any(|r| r.props.ins.is_some() || r.props.del.is_some() || r.props.fmt_change.is_some())
+}
+
+/// Whether `blocks` contains any paragraph revision nested deeper than `Document::para_paths`
+/// walks (`depth > 16`, up to [`wordcraft_doc::table::MAX_TABLE_DEPTH`]).
+fn has_deep_para_rev(blocks: &wordcraft_doc::Blocks, depth: usize) -> bool {
+    const WALK_LIMIT: usize = 16;
+    if depth > wordcraft_doc::table::MAX_TABLE_DEPTH {
+        return false;
+    }
+    blocks.iter().any(|b| match &**b {
+        wordcraft_doc::Block::Para(p) => depth > WALK_LIMIT && para_has_rev(p),
+        wordcraft_doc::Block::Table(t) => t.rows.iter().any(|r| r.cells.iter().any(|c| has_deep_para_rev(&c.blocks, depth + 1))),
+    })
+}
+
+/// Resolve tracked text, paragraph marks and formatting on paragraphs nested deeper than
+/// `Document::para_paths` walks (`depth > 16`, up to [`wordcraft_doc::table::MAX_TABLE_DEPTH`]).
+fn resolve_deep_paras(blocks: &mut wordcraft_doc::Blocks, accept: bool, depth: usize) -> Result<(), CmdError> {
+    const WALK_LIMIT: usize = 16;
+    if depth > wordcraft_doc::table::MAX_TABLE_DEPTH || !has_deep_para_rev(blocks, depth) {
+        return Ok(());
+    }
+    for b in blocks.iter_mut() {
+        let needs = match &**b {
+            wordcraft_doc::Block::Para(p) => depth > WALK_LIMIT && para_has_rev(p),
+            wordcraft_doc::Block::Table(t) => t.rows.iter().any(|r| r.cells.iter().any(|c| has_deep_para_rev(&c.blocks, depth + 1))),
+        };
+        if !needs {
+            continue;
+        }
+        match std::sync::Arc::make_mut(b) {
+            wordcraft_doc::Block::Para(p) => {
+                let len = p.len();
+                resolve_runs(p, 0, len, true, accept)?;
+                if p.mark.fmt_change.is_some() || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some()) {
+                    fmt_revisions::resolve_char(&mut p.mark, accept);
+                    if let Some(sec) = p.section.as_deref_mut() {
+                        fmt_revisions::resolve_section(sec, accept);
+                    }
+                }
+                p.mark.ins = None;
+                p.mark.del = None;
+                p.touch();
+            }
+            wordcraft_doc::Block::Table(t) => {
+                for r in &mut t.rows {
+                    for c in &mut r.cells {
+                        resolve_deep_paras(&mut c.blocks, accept, depth + 1)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Accept (`accept = true`) or reject (`accept = false`) every tracked change in every story,
+/// container, style and note separator of the document.
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
@@ -248,6 +452,10 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
             let len = s.doc.para(st, &path).map(|p| p.len()).unwrap_or(0);
             resolve_para(s, st, &path, (0, len), (true, true), accept)?;
         }
+    }
+    resolve_deep_paras(&mut s.doc.body, accept, 0)?;
+    for part in s.doc.parts.values_mut() {
+        resolve_deep_paras(&mut part.blocks, accept, 0)?;
     }
     // Tables, rows, cells, sections and style definitions.
     fmt_revisions::resolve_containers(&mut s.doc.body, accept, 0);
@@ -324,13 +532,55 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
     Some(start..end)
 }
 
+/// Whether any revision in `p` overlapping `(from..to)` (or its paragraph mark when `mark` is
+/// set) belongs to the enclosing row's insertion or deletion revision `(row_ins, row_del)`.
+fn para_slice_matches_row_rev(p: &Paragraph, (from, to): (usize, usize), mark: bool, (row_ins, row_del): (Option<u32>, Option<u32>)) -> bool {
+    let run_hit = p.run_ranges().any(|(rng, cp)| {
+        rng.end > from && rng.start < to && ((row_ins.is_some() && cp.ins == row_ins && cp.del.is_none()) || (row_del.is_some() && cp.del == row_del))
+    });
+    let mark_hit = mark && ((row_ins.is_some() && p.mark.ins == row_ins && p.mark.del.is_none()) || (row_del.is_some() && p.mark.del == row_del));
+    run_hit || mark_hit
+}
+
+/// Whether selection `(a, b)` spans row `r` of table `tp` across cell/row boundaries (such as
+/// Select All or a multi-cell selection from start to end of the row), rather than staying inside
+/// an individual paragraph change within the row.
+fn row_spanned_by_sel(
+    doc: &wordcraft_doc::Document,
+    story: StoryRef,
+    tp: &wordcraft_doc::Path,
+    r: usize,
+    (a, b): (&Pos, &Pos),
+    whole_body: bool,
+) -> bool {
+    if whole_body {
+        return true;
+    }
+    if a == b || a.path == b.path {
+        return false;
+    }
+    let Ok(row_idx) = u32::try_from(r) else {
+        return false;
+    };
+    let paths = doc.para_paths(story);
+    let mut row_paths = paths.iter().filter(|p| p.0.len() > tp.0.len() + 1 && p.0.starts_with(&tp.0) && p.0.get(tp.0.len()) == Some(&row_idx));
+    let Some(first) = row_paths.next() else {
+        return false;
+    };
+    let last = row_paths.next_back().unwrap_or(first);
+    let last_len = doc.para(story, last).map(|p| p.len()).unwrap_or(0);
+    a <= &Pos { story, path: first.clone(), off: 0 } && b >= &Pos { story, path: last.clone(), off: last_len }
+}
+
+/// Accept or reject the tracked change at the current selection (or advance to the next change
+/// when no tracked change is under a collapsed caret).
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
-    // The style change Next / Previous Change selected: that one alone. A caret put at the
-    // document start any other way resolves no style change.
+    // The style-definition or row-marker change Next / Previous Change selected: that one alone. A
+    // caret put at the anchor any other way resolves no style change and expands at the caret.
     let navigated = navigated_style(s);
     s.review_style = None;
     if let Some(t) = navigated
-        && resolve_style_change(s, &t, accept)
+        && (resolve_style_change(s, &t, accept) || resolve_navigated_row(s, &t, accept)?)
     {
         return if next { select_next_unresolved(s) } else { sel_result(s) };
     }
@@ -371,6 +621,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     };
     // Moves with an end in the range: their other ends go with them.
     let moves = crate::cmd::moves::names_in(s, &a, &b, caret_mark.as_ref());
+    let mut row_targets: std::collections::BTreeSet<(usize, wordcraft_doc::Path, usize)> = std::collections::BTreeSet::new();
     for path in s.doc.paths_between(&a, &b).into_iter().rev() {
         let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
         let from = if path == a.path { a.off } else { 0 };
@@ -378,10 +629,26 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         // A paragraph's mark is in the selection when the selection goes on past it.
         let mark = path != b.path || caret_mark.as_ref() == Some(&path);
         let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
+        if let Some((tp, r, _)) = path.cell()
+            && let Some(row) = s.doc.table(a.story, &tp).and_then(|t| t.rows.get(r))
+            && (row.props.ins.is_some() || row.props.del.is_some())
+            && !row_targets.contains(&(tp.0.len(), tp.clone(), r))
+        {
+            let rev_match =
+                s.doc.para(a.story, &path).is_some_and(|p| para_slice_matches_row_rev(p, (from, to), mark, (row.props.ins, row.props.del)));
+            if rev_match || row_spanned_by_sel(&s.doc, a.story, &tp, r, (&a, &b), whole_body) {
+                row_targets.insert((tp.0.len(), tp, r));
+            }
+        }
         resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
         if ranged {
-            resolve_cell(s, a.story, &path, accept)?;
+            resolve_cell_fmt(s, a.story, &path, accept)?;
         }
+    }
+    // Resolve tracked row insertions/deletions after paragraph traversal (deepest tables and
+    // highest row indices first) so deleting a row never invalidates earlier paths in the loop.
+    for (_, tp, r) in row_targets.into_iter().rev() {
+        resolve_row_marker(s, a.story, &tp, r, accept)?;
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
     resolve_styles_sel(s, whole_body, accept)?;
@@ -390,6 +657,8 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     if next { select_next_unresolved(s) } else { sel_result(s) }
 }
 
+/// Collect every tracked change in the document body in reading order (including style, table,
+/// row, cell, paragraph, run and section revisions).
 fn changes(s: &Session) -> Vec<Change> {
     let mut out: Vec<Change> = Vec::new();
     let mk = |path: &wordcraft_doc::Path, off| Pos { story: StoryRef::Body, path: path.clone(), off };
@@ -409,6 +678,23 @@ fn changes(s: &Session) -> Vec<Change> {
         {
             let row = t.rows.get(r);
             let cell = row.and_then(|x| x.cells.get(c));
+            if c == 0
+                && let Some(row) = row
+            {
+                let kind = run_kind(&s.doc, row.props.ins, row.props.del);
+                let covered = p.runs.first().is_some_and(|run| (run.props.ins, run.props.del) == (row.props.ins, row.props.del));
+                if !kind.is_empty() && !covered {
+                    out.push(Change {
+                        a: mk(&path, 0),
+                        b: mk(&path, 0),
+                        kind,
+                        rev: row.props.ins.or(row.props.del),
+                        props: Vec::new(),
+                        style: None,
+                        row: Some((tp.clone(), r)),
+                    });
+                }
+            }
             let found = [
                 (r == 0 && c == 0).then(|| t.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::table_diff(&t.props)))).flatten(),
                 (c == 0).then(|| row.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::row_diff(&x.props))))).flatten(),
@@ -424,7 +710,15 @@ fn changes(s: &Session) -> Vec<Change> {
         for (r, c) in p.run_ranges() {
             let kind = run_kind(&s.doc, c.ins, c.del);
             if !kind.is_empty() {
-                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new(), style: None });
+                out.push(Change {
+                    a: mk(&path, r.start),
+                    b: mk(&path, r.end),
+                    kind,
+                    rev: c.ins.or(c.del),
+                    props: Vec::new(),
+                    style: None,
+                    row: None,
+                });
             }
             let Some(ch) = &c.fmt_change else { continue };
             let props = fmt_revisions::char_diff(c);
@@ -573,11 +867,15 @@ pub fn has_deletions(doc: &wordcraft_doc::Document) -> bool {
     })
 }
 
+/// Navigate to the next (`dir > 0`) or previous (`dir < 0`) tracked change in reading order.
 pub(super) fn nav_change(s: &mut Session, dir: i32) -> CmdResult {
     let list = changes(s);
     let caret = s.sel.ordered();
-    // From a navigated style change, the one next to it in the list (they share their anchor).
-    let at = navigated_style(s).and_then(|t| list.iter().position(|c| c.style.as_deref() == Some(t.style.as_str()) && c.rev == Some(t.rev)));
+    // From a navigated style or row-marker change, the one next to it in the list (they can
+    // share their collapsed anchor with another change).
+    let at = navigated_style(s).and_then(|t| {
+        list.iter().position(|c| c.rev == Some(t.rev) && ((t.style.is_some() && c.style == t.style) || (t.row.is_some() && c.row == t.row)))
+    });
     let t = match at {
         Some(i) if dir > 0 && i + 1 < list.len() => list.get(i + 1),
         Some(i) if dir < 0 && i > 0 => list.get(i - 1),
