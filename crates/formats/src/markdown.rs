@@ -55,7 +55,7 @@ pub fn import_on_with_lines(text: &str, page: &SectionProps) -> (Document, Vec<u
             found = cursor + rel;
             cursor = found + 1;
         }
-        out.push(found.min(src_lines.len().saturating_sub(1)));
+        out.push(found.min(src_lines.len()));
     }
     (doc, out)
 }

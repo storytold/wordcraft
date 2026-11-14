@@ -594,14 +594,13 @@ fn a_workbook_with_several_sheets_asks_which_one() {
         format!(r#"<table:table table:name="{name}">{cells}</table:table>"#)
     };
     let content = format!(
-        r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet>{}{}</office:spreadsheet></office:body></office:document-content>"#,
+        r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet>{}{}</office:spreadsheet></office:body></office:document-content>"#,
         table("Notes", &["n"]),
         table("Guests", &["Name", "Ada", "Alan"])
     );
     let mut z = craft_zip::Writer::new();
-    for (name, body) in [("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content.as_str())] {
-        z.add(name, body.as_bytes(), craft_zip::Compression::Deflated).unwrap();
-    }
+    z.add("mimetype", b"application/vnd.oasis.opendocument.spreadsheet", craft_zip::Compression::Stored).unwrap();
+    z.add("content.xml", content.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     std::fs::write(&book, z.finish().unwrap()).unwrap();
     let (mut a, shown) = async_app();
     a.run("ui.openRecipientList", json!({})).unwrap();
