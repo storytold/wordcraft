@@ -54,6 +54,7 @@ pub mod keys;
 pub mod keytips;
 pub(crate) mod language_packs;
 mod local_time;
+pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
@@ -69,6 +70,7 @@ pub mod ribbon_fit;
 pub mod rtl;
 pub mod ruler_tabs;
 pub mod scroll;
+pub use scroll::ScrollSpeed;
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
@@ -432,6 +434,12 @@ pub struct UiState {
     /// spaces, or characters without spaces. Right-click the count in the status bar, or File ›
     /// Options › Display. Junk saved values read as words.
     pub status_count: StatusCount,
+    /// How far a mouse-wheel notch scrolls (#6146).
+    #[serde(default, alias = "scrollSpeed")]
+    pub scroll_speed: ScrollSpeed,
+    /// How far a touchpad swipe the system reports in points (Wayland, macOS) scrolls (#6146).
+    #[serde(default, alias = "touchpadScrollSpeed")]
+    pub touchpad_scroll_speed: ScrollSpeed,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -513,6 +521,8 @@ impl Default for UiState {
             dictionary: Vec::new(),
             display_server: DisplayServer::Auto,
             status_count: StatusCount::default(),
+            scroll_speed: ScrollSpeed::default(),
+            touchpad_scroll_speed: ScrollSpeed::default(),
         }
     }
 }
@@ -624,6 +634,8 @@ pub struct WordApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// Only a successfully published copy may reuse this window's private fragment.
+    pub clipboard_published: bool,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     pub canvas: canvas::CanvasState,
@@ -674,6 +686,11 @@ pub struct WordApp {
     synthetic_pending: bool,
     /// How many events of `synthetic` the pending batch contains.
     synthetic_injected: usize,
+    /// Number of raw input events whose scroll delta has already been scaled in the pending host batch.
+    pub(crate) raw_scroll_events_scaled: usize,
+    /// Exact snapshot of the raw input events scaled during the current pending batch, to avoid
+    /// compounding scroll multipliers when eframe replays unconsumed RawInput across hidden logic ticks.
+    pub(crate) last_scaled_scroll_events: Vec<egui::Event>,
     /// macOS: the primary button went down with Control, so it is being read as the secondary.
     control_click: bool,
     /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).
