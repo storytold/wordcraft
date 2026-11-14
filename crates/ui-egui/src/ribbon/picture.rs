@@ -128,43 +128,56 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
         menu_button(
             ui,
             app,
-            crate::widgets::MenuButtonOptions::new("picture", Some("Styles"), "Frames and effects", true, "picture.style"),
+            crate::widgets::MenuButtonOptions::new("picture", Some("Styles"), "Frames, shapes and effects", true, "picture.style"),
             |ui, app| {
-                let items: Vec<Item> = [
-                    ("No Style", "none"),
-                    ("Simple Frame", "simpleFrame"),
-                    ("Thick Frame", "thickFrame"),
-                    ("Rounded", "rounded"),
-                    ("Soft Edge", "softEdge"),
-                    ("Shadow", "shadow"),
-                ]
-                .into_iter()
-                .map(|(l, st)| Item::new(l, "picture.style", json!({"style": st})))
-                .collect();
+                let items: Vec<Item> = std::iter::once(("No Style", "none"))
+                    .chain(look::styles::gallery().map(|(id, label)| (label, id)))
+                    .map(|(l, st)| Item::new(l, "picture.style", json!({"style": st})))
+                    .collect();
                 gallery(ui, app, "picture_styles", &items, 6);
             },
         );
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("borders", Some("Border"), "Picture border: its color and weight", true, "picture.border"),
-            |ui, app| {
-                let theme = app.session.doc.settings.theme_colors.clone();
-                crate::colors::menu(ui, app, &theme, Target::cmd("picture.border"));
-                ui.separator();
-                mi(ui, app, "No Outline", "picture.border", json!({"color": null}));
-                ui.menu_button(tl!("Weight"), |ui| {
-                    for (l, w) in [("Thin", 2), ("Medium", 4), ("Thick", 8), ("Extra Thick", 16)] {
-                        mi(ui, app, l, "picture.border", json!({"width": w}));
-                    }
-                });
-            },
-        );
+        stack(ui, |ui| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new(
+                    "borders",
+                    Some("Picture Border"),
+                    "Picture border: its color, weight and dashes",
+                    false,
+                    "picture.border",
+                ),
+                border_menu,
+            );
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new(
+                    "pictureEffects",
+                    Some("Picture Effects"),
+                    "Shadow, reflection, glow, soft edges, bevel and 3-D rotation",
+                    false,
+                    "picture.pictureEffects",
+                ),
+                effects_menu,
+            );
+        });
     });
     alt_text_group(ui, app);
     group(ui, "Arrange", None, app, |ui, app| {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
         wrap_menu(ui, app);
+        // Icons only, their names in the tooltips, so the tab keeps its Size group at 1440 points.
+        stack(ui, |ui| {
+            for (icon, label, id) in [
+                ("bringForward", "Bring Forward", "arrange.bringForward"),
+                ("sendBackward", "Send Backward", "arrange.sendBackward"),
+                ("selectionPane", "Selection Pane", "arrange.selectionPane"),
+            ] {
+                small(ui, app, icon, None, label, crate::widgets::ButtonAction::new(id, json!({}), false));
+            }
+        });
         stack(ui, |ui| {
             rotate_menu(ui, app, Some("Rotate"));
             align_menu(ui, app, Some("Align"));
@@ -173,7 +186,8 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
     });
     // The launcher opens the Size dialog: scale, Lock aspect ratio, the original size (#2573).
     group(ui, "Size", Some("picture.size"), app, |ui, app| {
-        let (media, off, w0, h0, crop0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+        // A picture as its look shows it: its own size and crop, without the room its effects take.
+        let (media, off, w0, h0, crop0, alt0) = match wordcraft_engine::cmd::objects::look::selected_shown(&app.session) {
             Some((pos, wordcraft_doc::para::InlineObject::Image { media, w, h, alt, crop, .. })) => (media, pos.off, w, h, crop, alt),
             _ => (String::new(), 0, 0.0, 0.0, [0.0; 4], String::new()),
         };
@@ -368,22 +382,199 @@ fn color_menu(ui: &mut Ui, app: &mut WordApp) {
     slider(ui, app, "Temperature", f64::from(now.temperature), 1500.0..=11500.0, " K", "picture.color", "temperature");
 }
 
-/// Compress Pictures: the picture's pixels down to what a resolution needs at its size.
+/// Compress Pictures: its options, then the resolution to bring the pictures down to (at their
+/// size on the page). Word's defaults: only this picture, and what crops hide deleted.
 fn compress_menu(ui: &mut Ui, app: &mut WordApp) {
-    let (w, h, crop) = match wordcraft_engine::cmd::objects::selected(&app.session) {
-        Some((_, wordcraft_doc::para::InlineObject::Image { w, h, crop, .. })) => (w, h, crop),
-        _ => (0.0, 0.0, [0.0; 4]),
-    };
-    for (label, ppi) in [("High fidelity: 330 ppi", 330.0), ("Print: 220 ppi", 220.0), ("Web: 150 ppi", 150.0), ("E-mail: 96 ppi", 96.0)] {
-        mi(ui, app, label, "picture.compress", json!({"maxPixels": compression_pixels(w, h, crop, ppi)}));
+    let key = egui::Id::unique("picture_compress_options");
+    let (mut only, mut delete) = ui.data(|d| d.get_temp::<(bool, bool)>(key)).unwrap_or((true, true));
+    heading(ui, "Compression options");
+    ui.checkbox(&mut only, tl!("Apply only to this picture"));
+    ui.checkbox(&mut delete, tl!("Delete cropped areas of pictures"));
+    ui.data_mut(|d| d.insert_temp(key, (only, delete)));
+    ui.separator();
+    heading(ui, "Resolution");
+    for (label, ppi) in [
+        ("High fidelity: 330 ppi", 330.0),
+        ("Print: 220 ppi", 220.0),
+        ("Web: 150 ppi", 150.0),
+        ("E-mail: 96 ppi", 96.0),
+        ("Use default resolution", 0.0),
+    ] {
+        mi(ui, app, label, "picture.compress", json!({"ppi": ppi, "deleteCropped": delete, "all": !only}));
     }
 }
 
-/// Compression resizes the whole source bitmap, so its limit includes the cropped-away area.
-fn compression_pixels(w: f32, h: f32, crop: [f32; 4], ppi: f32) -> u32 {
-    let full = |len: f32, lo: f32, hi: f32| f64::from(len).max(0.0) / f64::from((1.0 - lo - hi).max(0.05));
-    let long = full(w, crop[0], crop[2]).max(full(h, crop[1], crop[3]));
-    (long / 72.0 * f64::from(ppi)).ceil().clamp(32.0, 20000.0) as u32
+/// Picture Border: a colour, No Outline, Weight and Dashes.
+fn border_menu(ui: &mut Ui, app: &mut WordApp) {
+    let theme = app.session.doc.settings.theme_colors.clone();
+    crate::colors::menu(ui, app, &theme, Target::cmd("picture.border"));
+    ui.separator();
+    mi(ui, app, "No Outline", "picture.border", json!({"color": null}));
+    ui.menu_button(tl!("Weight"), |ui| {
+        for w in [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0] {
+            let label = crate::i18n::fmt(tl!("{weight} pt"), &[("weight", &w.to_string())]);
+            super::common::mi_text(ui, app, &label, "picture.border", json!({"weight": w}));
+        }
+    });
+    ui.menu_button(tl!("Dashes"), |ui| {
+        let labels = ["Solid", "Round Dot", "Square Dot", "Dash", "Dash Dot", "Long Dash", "Long Dash Dot", "Long Dash Dot Dot"];
+        for (label, dash) in labels.into_iter().zip(look::fx::Dash::NAMES) {
+            mi(ui, app, label, "picture.border", json!({"dash": dash}));
+        }
+    });
+}
+
+/// Picture Effects: Preset, Shadow, Reflection, Glow, Soft Edges, Bevel and 3-D Rotation, each a
+/// gallery of the picture as the effect would leave it, then its options.
+fn effects_menu(ui: &mut Ui, app: &mut WordApp) {
+    use look::fx;
+    let cmd = "picture.pictureEffects";
+    let now = look::current(&app.session).map(|l| l.effects).unwrap_or_default();
+    let item = |label: &str, v: Value| Item::new(label, cmd, v);
+    ui.menu_button(tl!("Preset"), |ui| {
+        let items: Vec<Item> = std::iter::once(item("No Presets", json!({"preset": "none"})))
+            .chain((1..=fx::PRESETS).map(|n| {
+                let label = crate::i18n::fmt(tl!("Preset {n}"), &[("n", &n.to_string())]);
+                Item::text(label, cmd, json!({"preset": format!("preset{n}")}))
+            }))
+            .collect();
+        gallery(ui, app, "picture_fx_preset", &items, 4);
+    });
+    ui.menu_button(tl!("Shadow"), |ui| {
+        gallery(ui, app, "picture_fx_no_shadow", &[item("No Shadow", json!({"shadow": null}))], 1);
+        for (title, key, presets) in [
+            ("Outer", "picture_fx_outer", &fx::OUTER_SHADOWS[..]),
+            ("Inner", "picture_fx_inner", &fx::INNER_SHADOWS[..]),
+            ("Perspective", "picture_fx_perspective", &fx::PERSPECTIVE_SHADOWS[..]),
+        ] {
+            heading(ui, title);
+            let items: Vec<Item> = presets.iter().map(|(id, label)| item(label, json!({"shadow": id}))).collect();
+            gallery(ui, app, key, &items, 3);
+        }
+        ui.separator();
+        heading(ui, "Shadow Options");
+        let sh = now.shadow.unwrap_or_default();
+        fx_slider(ui, app, "Transparency", sh.transparency, 0.0..=100.0, "%", ("shadow", "transparency"));
+        fx_slider(ui, app, "Size", sh.size, 1.0..=200.0, "%", ("shadow", "size"));
+        fx_slider(ui, app, "Blur", sh.blur, 0.0..=f64::from(fx::MAX_LEN), " pt", ("shadow", "blur"));
+        fx_slider(ui, app, "Angle", sh.angle, 0.0..=359.0, "°", ("shadow", "angle"));
+        fx_slider(ui, app, "Distance", sh.distance, 0.0..=200.0, " pt", ("shadow", "distance"));
+        let theme = app.session.doc.settings.theme_colors.clone();
+        ui.menu_button(tl!("Shadow Color"), |ui| {
+            crate::colors::menu(ui, app, &theme, Target::at(cmd, json!({"shadow": {"color": null}}), "/shadow/color"));
+        });
+    });
+    ui.menu_button(tl!("Reflection"), |ui| {
+        let items: Vec<Item> = std::iter::once(item("No Reflection", json!({"reflection": null})))
+            .chain(fx::REFLECTIONS.iter().map(|(id, label)| item(label, json!({"reflection": id}))))
+            .collect();
+        gallery(ui, app, "picture_fx_reflection", &items, 4);
+        ui.separator();
+        heading(ui, "Reflection Options");
+        let r = now.reflection.unwrap_or_default();
+        fx_slider(ui, app, "Transparency", r.transparency, 0.0..=100.0, "%", ("reflection", "transparency"));
+        fx_slider(ui, app, "Size", r.size, 1.0..=100.0, "%", ("reflection", "size"));
+        fx_slider(ui, app, "Distance", r.distance, 0.0..=f64::from(fx::MAX_LEN), " pt", ("reflection", "distance"));
+        fx_slider(ui, app, "Blur", r.blur, 0.0..=f64::from(fx::MAX_LEN), " pt", ("reflection", "blur"));
+    });
+    ui.menu_button(tl!("Glow"), |ui| {
+        gallery(ui, app, "picture_fx_no_glow", &[item("No Glow", json!({"glow": null}))], 1);
+        heading(ui, "Glow Variations");
+        // The theme's accents (Accent 1 is the theme's fifth colour), a row for each size.
+        let theme = app.session.doc.settings.theme_colors.clone();
+        let mut items = Vec::new();
+        for size in fx::GLOW_SIZES {
+            for (i, c) in theme.iter().skip(4).take(6).enumerate() {
+                let label = crate::i18n::fmt(tl!("Glow: {size} pt, Accent {n}"), &[("size", &size.to_string()), ("n", &(i + 1).to_string())]);
+                items.push(Item::text(label, cmd, json!({"glow": {"size": size, "color": c.hex(), "transparency": 60}})));
+            }
+        }
+        gallery(ui, app, "picture_fx_glow", &items, 6);
+        ui.separator();
+        let g = now.glow.unwrap_or_default();
+        ui.menu_button(tl!("More Glow Colors"), |ui| {
+            crate::colors::menu(ui, app, &theme, Target::at(cmd, json!({"glow": {"color": null, "size": g.size}}), "/glow/color"));
+        });
+        heading(ui, "Glow Options");
+        fx_slider(ui, app, "Size", g.size, 0.0..=f64::from(fx::MAX_LEN), " pt", ("glow", "size"));
+        fx_slider(ui, app, "Transparency", g.transparency, 0.0..=100.0, "%", ("glow", "transparency"));
+    });
+    ui.menu_button(tl!("Soft Edges"), |ui| {
+        let items: Vec<Item> = std::iter::once(item("No Soft Edges", json!({"softEdge": null})))
+            .chain(fx::SOFT_EDGES.iter().map(|r| {
+                let label = crate::i18n::fmt(tl!("{size} pt"), &[("size", &r.to_string())]);
+                Item::text(label, cmd, json!({"softEdge": r}))
+            }))
+            .collect();
+        gallery(ui, app, "picture_fx_soft", &items, 4);
+        ui.separator();
+        heading(ui, "Soft Edges Options");
+        crate::widgets::row(ui, |ui| {
+            ui.label(egui::RichText::new(tl!("Size")).small());
+            let mut v = f64::from(now.soft_edge.unwrap_or(0.0));
+            let r = ui.add(egui::DragValue::new(&mut v).speed(0.25).range(0.0..=f64::from(fx::MAX_LEN)).suffix(format!(" {}", tl!("pt"))));
+            if r.changed() {
+                if r.dragged() && !r.drag_started() {
+                    app.session.join_next_undo();
+                }
+                let _ = app.run(cmd, json!({"softEdge": v}));
+            }
+        });
+    });
+    ui.menu_button(tl!("Bevel"), |ui| {
+        let items: Vec<Item> = std::iter::once(item("No Bevel", json!({"bevel": null})))
+            .chain(fx::BEVELS.iter().map(|(id, label)| item(label, json!({"bevel": id}))))
+            .collect();
+        gallery(ui, app, "picture_fx_bevel", &items, 4);
+        ui.separator();
+        heading(ui, "3-D Options");
+        let b = now.bevel.unwrap_or(fx::PicBevel { kind: fx::BevelKind::Circle, width: 6.0, height: 6.0 });
+        fx_slider(ui, app, "Width", b.width, 0.0..=f64::from(fx::MAX_LEN), " pt", ("bevel", "width"));
+        fx_slider(ui, app, "Height", b.height, 0.0..=f64::from(fx::MAX_LEN), " pt", ("bevel", "height"));
+    });
+    ui.menu_button(tl!("3-D Rotation"), |ui| {
+        gallery(ui, app, "picture_fx_no_rotation", &[item("No Rotation", json!({"rotation": null}))], 1);
+        for (title, key, presets) in
+            [("Parallel", "picture_fx_parallel", &fx::PARALLEL[..]), ("Perspective", "picture_fx_persp", &fx::PERSPECTIVES[..])]
+        {
+            heading(ui, title);
+            let items: Vec<Item> = presets.iter().map(|(id, label)| item(label, json!({"rotation": id}))).collect();
+            gallery(ui, app, key, &items, 5);
+        }
+        ui.separator();
+        heading(ui, "3-D Rotation Options");
+        let r = now.rotation.unwrap_or_default();
+        let turn = f64::from(fx::MAX_TURN);
+        fx_slider(ui, app, "X Rotation", r.x, -turn..=turn, "°", ("rotation", "x"));
+        fx_slider(ui, app, "Y Rotation", r.y, -turn..=turn, "°", ("rotation", "y"));
+        fx_slider(ui, app, "Z Rotation", r.z, 0.0..=359.0, "°", ("rotation", "z"));
+        fx_slider(ui, app, "Perspective", r.perspective, 0.0..=120.0, "°", ("rotation", "perspective"));
+    });
+}
+
+/// One part of a Picture Effect (`effect`, `part`), dragged with a live preview: one undo step
+/// for the drag. A drag on an effect the picture doesn't have yet starts it.
+fn fx_slider(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    label: &str,
+    now: f32,
+    range: std::ops::RangeInclusive<f64>,
+    suffix: &str,
+    (effect, part): (&str, &str),
+) {
+    crate::widgets::row(ui, |ui| {
+        ui.label(egui::RichText::new(tl!(label)).small());
+        let mut v = f64::from(now);
+        let unit = if suffix == " pt" { format!(" {}", tl!("pt")) } else { suffix.to_string() };
+        let r = ui.add(egui::DragValue::new(&mut v).speed(0.5).range(range).suffix(unit));
+        if r.changed() {
+            if r.dragged() && !r.drag_started() {
+                app.session.join_next_undo();
+            }
+            let _ = app.run("picture.pictureEffects", json!({effect: {part: v}}));
+        }
+    });
 }
 
 fn heading(ui: &mut Ui, text: &str) {
@@ -539,7 +730,8 @@ fn is_current(cur: &look::PictureLook, id: &str, v: &Value) -> bool {
         "picture.color" => after.color == cur.color && v.as_object().is_some_and(|o| o.keys().all(|k| color_part(cur, k))),
         "picture.effects" => after.effect == cur.effect,
         "picture.transparency" => after.transparency == cur.transparency,
-        "picture.style" => after.style == cur.style && cur.border.is_none(),
+        "picture.style" => after.style == cur.style && cur.border.is_none() && after.effects == cur.effects,
+        "picture.pictureEffects" => after.effects == cur.effects,
         _ => false,
     }
 }

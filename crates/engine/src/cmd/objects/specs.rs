@@ -1,7 +1,7 @@
 use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
 use super::look;
-use super::picture::{adjust, crop, remove_background, reset, size};
+use super::picture::{adjust, compress, crop, remove_background, reset, size};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_placeable, has_shape,
     has_shape_or_canvas, has_sizable, obj_size, objects_list, selected, with_float, with_obj,
@@ -80,12 +80,9 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null} | {"x": 0..1, "y": 0..1}  (that colour, or the colour at that point of the uncropped picture, becomes transparent everywhere on it; null: none)"#)
         .when(has_picture),
-        CommandSpec::new("picture.compress", "Compress Pictures", "Picture Format › Adjust", |s, v| {
-            let max = p::u64(v, "maxPixels").unwrap_or(1600).clamp(32, 20000) as u32;
-            adjust(s, move |img| Ok(if img.width().max(img.height()) > max { img.resize(max, max, image::imageops::FilterType::Lanczos3) } else { img }))
-        })
-        .params(r#"{"maxPixels"?: n}"#)
-        .when(has_picture),
+        CommandSpec::new("picture.compress", "Compress Pictures", "Picture Format › Adjust", compress)
+            .params(r#"{"maxPixels"?: 32..20000, "ppi"?: n (the resolution at the picture's size on the page; 0 keeps it), "deleteCropped"?: bool (what the crop hides is cut away first), "all"?: bool (every picture in the document, not only the selected one)}  (neither maxPixels nor ppi: at most 1600 pixels on the longer side; returns `compressed`, how many pictures changed)"#)
+            .when(has_picture),
         CommandSpec::new("picture.reset", "Reset Picture", "Picture Format › Adjust", reset)
             .params(r#"{"size"?: bool}  (every adjustment and the crop removed; size: Reset Picture & Size, the original size too)"#)
             .when(has_picture),
@@ -104,6 +101,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     _ => CmdError::Failed("not a supported image".into()),
                 })?;
             let key = s.doc.add_media(bytes.clone(), crate::cmd::insert::image_ext(&bytes));
+            // The look's room in the frame goes with the look: the new picture takes the width of
+            // the one it replaces.
+            look::unbake(s)?;
             with_obj(s, |o| {
                 if let InlineObject::Image { media, w, h, crop, .. } = o {
                     *media = key.clone();
@@ -123,10 +123,15 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path"?: string, "data"?: base64}"#)
         .when(has_picture),
         CommandSpec::new("picture.style", "Picture Styles", "Picture Format › Picture Styles", |s, v| look::apply(s, "picture.style", v))
-            .params(r#"{"style": "simpleFrame|thickFrame|rounded|softEdge|shadow|none"} (replaces the picture's style and border)"#)
+            .params(r#"{"style": "none|simpleFrame|thickFrame|rounded|softEdge|shadow|whiteFrameShadow|thinBlackFrame|doubleBlackFrame|thickThinBlackFrame|whiteMat|blackMat|metalFrame|metalRounded|metalOval|dropShadow|shadowAllRound|roundedReflection|softOval|bevelledOval|roundedDiagonal|clippedDiagonal|tiltedWhite|floorShadow|leaningBack|bevelled|bevelledTurnedLeft|turnedRightReflection|blackBevelReflection"} (replaces the picture's style, border and Picture Effects with the style's; drawn round what the crop shows, the frame growing by what reaches outside the picture)"#)
             .when(has_picture),
         CommandSpec::new("picture.border", "Picture Border", "Picture Format › Picture Styles", |s, v| look::apply(s, "picture.border", v))
-            .params(r#"{"color"?: "RRGGBB" | null, "width"?: px}  (replaces the picture's border, keeping its style; null: No Outline; a part left out keeps the border's own)"#)
+            .params(r#"{"color"?: "RRGGBB" | null, "weight"?: pt (0.25–100), "width"?: px (of the bitmap, 1–200), "dash"?: "solid|roundDot|squareDot|dash|dashDot|longDash|longDashDot|longDashDotDot"}  (replaces the picture's border, keeping its style; null: No Outline; a part left out keeps the border's own: black, 0.75 pt and solid for a new one; drawn round the outline, the frame growing by its width)"#)
+            .when(has_picture),
+        CommandSpec::new("picture.pictureEffects", "Picture Effects", "Picture Format › Picture Styles", |s, v| look::apply(s, "picture.pictureEffects", v))
+            .params(
+                r#"{"preset"?: "none|preset1..preset12" (replaces them all, before the others), "shadow"?: preset | {"preset"?, "inner"?: bool, "color"?: "RRGGBB", "transparency"?: %, "blur"?: pt, "distance"?: pt, "angle"?: deg, "size"?: %} | null, "reflection"?: preset | {"preset"?, "transparency"?: %, "size"?: % of the height, "distance"?: pt, "blur"?: pt} | null, "glow"?: pt | {"color"?: "RRGGBB", "size"?: pt, "transparency"?: %} | null, "softEdge"?: pt | null, "bevel"?: preset | {"preset"?, "width"?: pt, "height"?: pt} | null, "rotation"?: preset | {"preset"?, "x"?: deg (turn, -85..85), "y"?: deg (tilt, -85..85), "z"?: deg, "perspective"?: deg (field of view, 0 parallel)} | null}  (shadow presets: offsetBottomRight, offsetBottom, offsetBottomLeft, offsetRight, offsetCenter, offsetLeft, offsetTopRight, offsetTop, offsetTopLeft, insideTopLeft … insideBottomRight, perspectiveUpperLeft, perspectiveUpperRight, perspectiveBelow, perspectiveLowerLeft, perspectiveLowerRight; reflection: tightTouching, halfTouching, fullTouching, tight4pt, half4pt, full4pt, tight8pt, half8pt, full8pt; bevel: circle, relaxedInset, cross, coolSlant, angle, softRound, convex, slope, divot, riblet, hardEdge, artDeco; rotation: isometricLeftDown, isometricRightUp, isometricTopUp, isometricBottomDown, isometricOffAxis1Left/Right/Top, isometricOffAxis2Left/Right/Top, perspectiveLeft, perspectiveRight, perspectiveAbove, perspectiveBelow, perspectiveAboveLeftFacing, perspectiveAboveRightFacing, perspectiveContrastingLeftFacing, perspectiveContrastingRightFacing, perspectiveHeroicExtremeLeftFacing, perspectiveRelaxed. An object changes the parts it names of the picture's own effect, or the default; an effect left out stays; null or "none" takes it off. Drawn from the picture's outline and alpha; the frame grows by what reaches outside the picture, which keeps its size and place)"#,
+            )
             .when(has_picture),
         CommandSpec::new("arrange.rotate", "Rotate", "Layout › Arrange", |s, v| {
             // Turns and flips are the object's angle and mirroring (DrawingML `a:xfrm`): the

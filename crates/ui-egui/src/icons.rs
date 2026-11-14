@@ -352,6 +352,17 @@ fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
             pen.fill(&[(9.5, 14.5), (13.0, 10.0), (16.0, 14.5)], green);
             pen.fcircle(13.5, 7.0, 1.5, yellow);
         }
+        // Picture Effects: a picture casting a soft shadow down and to the right.
+        "pictureEffects" => {
+            // The shadow only where the picture doesn't cover it, so it reads in both themes.
+            let shade = Color32::from_rgba_unmultiplied(110, 110, 110, 120);
+            pen.frect(16.5, 5.0, 18.5, 17.0, shade);
+            pen.frect(4.0, 15.0, 18.5, 17.0, shade);
+            pen.rect(1.5, 2.5, 16.0, 14.5, c);
+            pen.fill(&[(3.0, 13.0), (7.0, 7.0), (10.5, 13.0)], a);
+            pen.fill(&[(8.5, 13.0), (11.5, 9.0), (14.5, 13.0)], green);
+            pen.fcircle(12.0, 5.5, 1.3, yellow);
+        }
         "onlinePicture" => {
             paint(pen.p, Rect::from_min_size(pen.r.min, pen.r.size() * 0.8), "picture", c, a);
             pen.circle(15.0, 15.0, 3.5, a);

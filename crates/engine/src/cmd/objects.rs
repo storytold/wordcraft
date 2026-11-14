@@ -28,7 +28,7 @@ pub(crate) use arrange::{anchor_paragraph, nearest_line};
 #[cfg(test)]
 use group::ungroup;
 pub use look::PictureLook;
-pub use picture::{OriginalSize, cropped_original_size, fit_size, original_size};
+pub use picture::{OriginalSize, compression_pixels, cropped_original_size, fit_size, original_size};
 #[cfg(test)]
 use picture::{clear_background, grown, picture_style};
 #[cfg(test)]

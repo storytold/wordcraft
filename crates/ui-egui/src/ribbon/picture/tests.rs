@@ -38,14 +38,34 @@ fn gallery_texture(app: &mut WordApp, ctx: &egui::Context, items: &[Item]) -> eg
     texture.expect("the gallery paints its picture texture")
 }
 
+/// Each Picture Effects and Picture Styles tile draws the picture as it would leave it, and the
+/// effect the picture has is the one outlined.
 #[test]
-fn compression_preserves_the_resolution_of_the_visible_crop() {
-    assert_eq!(compression_pixels(72.0, 72.0, [0.0; 4], 330.0), 330);
-    assert_eq!(compression_pixels(72.0, 72.0, [0.45; 4], 330.0), 3300, "one inch showing a tenth of the source needs 3300 source pixels");
-    assert_eq!(compression_pixels(72.0, 144.0, [0.45, 0.0, 0.45, 0.0], 330.0), 3300, "the source's longer axis can differ from the display's");
-    assert_eq!(compression_pixels(144.0, 72.0, [0.0, 0.45, 0.0, 0.45], 220.0), 2200);
-    assert_eq!(compression_pixels(1.0, 1.0, [0.0; 4], 96.0), 32);
-    assert_eq!(compression_pixels(4000.0, 4000.0, [0.95; 4], 330.0), 20000);
+fn picture_effects_and_styles_tiles_preview_and_mark_the_current_one() {
+    let mut app = app_with_picture(png([100, 140, 200, 255]));
+    let thumb = RgbaImage::from_pixel(64, 64, Rgba([100, 140, 200, 255]));
+    for v in [
+        json!({"shadow": "offsetBottom"}),
+        json!({"shadow": "insideTop"}),
+        json!({"shadow": "perspectiveBelow"}),
+        json!({"reflection": "halfTouching"}),
+        json!({"glow": {"size": 8, "color": "FF0000"}}),
+        json!({"softEdge": 5}),
+        json!({"bevel": "circle"}),
+        json!({"rotation": "perspectiveLeft"}),
+        json!({"preset": "preset3"}),
+    ] {
+        let img = look::preview(&app.session, &thumb, "picture.pictureEffects", &v).unwrap_or_else(|| panic!("{v}"));
+        assert_ne!(img, thumb, "{v} changes the tile");
+    }
+    for (id, _) in look::styles::gallery() {
+        assert!(look::preview(&app.session, &thumb, "picture.style", &json!({"style": id})).is_some(), "{id}");
+    }
+    app.run("picture.pictureEffects", json!({"shadow": "offsetBottom"})).unwrap();
+    let cur = look::current(&app.session).unwrap();
+    assert!(is_current(&cur, "picture.pictureEffects", &json!({"shadow": "offsetBottom"})));
+    assert!(!is_current(&cur, "picture.pictureEffects", &json!({"shadow": "offsetTop"})));
+    assert!(is_current(&cur, "picture.pictureEffects", &json!({"reflection": null})), "No Reflection is what it has");
 }
 
 #[test]

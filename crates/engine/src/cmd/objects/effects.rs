@@ -249,7 +249,7 @@ fn smooth_noise(x: u32, y: u32, cell: f32, seed: u32) -> f32 {
 }
 
 /// Box blur of a `w` × `h` plane, twice (close to a Gaussian), radius `r`.
-fn blur(src: &[f32], w: u32, h: u32, r: usize) -> Vec<f32> {
+pub(super) fn blur(src: &[f32], w: u32, h: u32, r: usize) -> Vec<f32> {
     let (w, h) = (w as usize, h as usize);
     let once = |src: &[f32]| {
         let rows = box_pass(src, w, h, w, 1, r);

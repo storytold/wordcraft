@@ -199,7 +199,7 @@ fn picture_border_keeps_its_parts_and_no_outline_removes_it() {
     let mut s = session(40, 40);
     s.run("picture.border", &json!({"width": 6})).unwrap();
     s.run("picture.border", &json!({"color": "FF0000"})).unwrap();
-    assert_eq!(current(&s).unwrap().border, Some((Rgb(255, 0, 0), 6)), "the width kept");
+    assert_eq!(current(&s).unwrap().border, Some(Border { color: Rgb(255, 0, 0), width: BorderWidth::Px(6), dash: Dash::Solid }), "the width kept");
     assert_eq!(bitmap(&s).dimensions(), (52, 52));
     s.run("picture.border", &json!({"color": null})).unwrap();
     assert_eq!(bitmap(&s).dimensions(), (40, 40), "No Outline");
@@ -234,4 +234,202 @@ fn previews_draw_a_command_without_running_it() {
     assert_eq!(s.undo_depth(), depth, "nothing ran");
     assert!(preview(&s, &thumb, "format.bold", &json!({})).is_none());
     assert!(preview(&s, &thumb, "picture.effects", &json!({"effect": "nope"})).is_none());
+}
+
+/// The selected picture's frame: its offsets, size and crop.
+fn frame_of(s: &Session) -> (f32, f32, f32, f32, [f32; 4]) {
+    let (_, InlineObject::Image { w, h, crop, float, .. }) = selected(s).unwrap() else { panic!("a picture") };
+    (float.x, float.y, w, h, crop)
+}
+
+fn close(a: f32, b: f32) -> bool {
+    (a - b).abs() < 0.01
+}
+
+/// Picture Effects reach outside the picture: its frame grows by their room, the picture keeping
+/// its own size and place; taking them off gives the frame back. One undo step each.
+#[test]
+fn picture_effects_grow_the_frame_and_keep_the_picture_in_place() {
+    let mut s = session(80, 60);
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 100.0, "y": 50.0})).unwrap();
+    let (x0, y0, w0, h0, _) = frame_of(&s);
+    let plain = bitmap(&s);
+    let depth = s.undo_depth();
+    s.run("picture.pictureEffects", &json!({"shadow": {"preset": "offsetBottomRight", "distance": 6, "blur": 2}})).unwrap();
+    assert_eq!(s.undo_depth(), depth + 1);
+    let (x, y, w, h, crop) = frame_of(&s);
+    let sh = shown(&s).unwrap();
+    assert!(close(sh.w, w0) && close(sh.h, h0), "the picture keeps its size: {sh:?}");
+    assert!(w > w0 + 5.0 && h > h0 + 5.0 && crop == [0.0; 4], "the frame holds the shadow: {w} x {h}");
+    assert!(close(x + sh.room[0], x0) && close(y + sh.room[1], y0), "and the picture its place");
+    assert_eq!(bitmap(&s).dimensions().0 as f32, 80.0 + (sh.room[0] + sh.room[2]) * 80.0 / w0);
+    s.run("picture.pictureEffects", &json!({"shadow": null})).unwrap();
+    let (x, y, w, h, crop) = frame_of(&s);
+    assert!(close(x, x0) && close(y, y0) && close(w, w0) && close(h, h0) && crop == [0.0; 4]);
+    assert_eq!(bitmap(&s), plain, "the picture as it was");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(frame_of(&s).2 > w0 + 5.0, "undo brings the shadow back");
+    assert!(shown(&s).is_some_and(|sh| close(sh.w, w0)), "with its look");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(frame_of(&s).2, w0);
+}
+
+/// A turned picture keeps its centre where it was as its frame grows on one side.
+#[test]
+fn a_turned_picture_keeps_its_centre_as_the_frame_grows() {
+    let mut s = session(80, 40);
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 100.0, "y": 100.0})).unwrap();
+    s.run("arrange.rotation", &json!({"degrees": 90.0})).unwrap();
+    let centre = |s: &Session| {
+        let (x, y, w, h, _) = frame_of(s);
+        let sh = shown(s).unwrap();
+        // The picture's centre from the frame's, turned 90° clockwise: (dx, dy) → (−dy, dx).
+        let (dx, dy) = ((sh.room[0] - sh.room[2]) / 2.0, (sh.room[1] - sh.room[3]) / 2.0);
+        (x + w / 2.0 - dy, y + h / 2.0 + dx)
+    };
+    let before = centre(&s);
+    s.run("picture.pictureEffects", &json!({"reflection": "fullTouching"})).unwrap();
+    let after = centre(&s);
+    assert!(close(before.0, after.0) && close(before.1, after.1), "{before:?} → {after:?}");
+}
+
+/// What a look draws round the picture goes round what the crop shows; cropping again draws it
+/// round the new crop, and without it the crop is the picture's own again.
+#[test]
+fn borders_and_effects_go_round_what_the_crop_shows() {
+    let mut s = session(100, 100);
+    s.run("picture.crop", &json!({"left": 0.2, "right": 0.2, "width": 45.0, "height": 75.0})).unwrap();
+    s.run("picture.border", &json!({"width": 4})).unwrap();
+    assert_eq!(bitmap(&s).dimensions(), (68, 108), "the visible part and its border");
+    let sh = shown(&s).unwrap();
+    assert_eq!(sh.crop, [0.2, 0.0, 0.2, 0.0]);
+    assert!(close(sh.w, 45.0) && close(sh.h, 75.0));
+    assert_eq!(frame_of(&s).4, [0.0; 4], "the bitmap holds only what shows");
+    s.run("picture.crop", &json!({"left": 0.1, "right": 0.1, "width": 60.0, "height": 75.0})).unwrap();
+    assert_eq!(bitmap(&s).dimensions(), (88, 108), "drawn again round the new crop");
+    assert_eq!(shown(&s).unwrap().crop, [0.1, 0.0, 0.1, 0.0]);
+    s.run("picture.border", &json!({"color": null})).unwrap();
+    let (_, _, w, h, crop) = frame_of(&s);
+    assert_eq!(crop, [0.1, 0.0, 0.1, 0.0]);
+    assert!(close(w, 60.0) && close(h, 75.0));
+    assert_eq!(bitmap(&s).dimensions(), (100, 100));
+}
+
+/// Size under a look is the picture's own, as Word's is; Reset Picture gives the frame back first.
+#[test]
+fn size_and_reset_under_effects_are_the_pictures_own() {
+    let mut s = session(96, 48);
+    let plain = bitmap(&s);
+    s.run("picture.pictureEffects", &json!({"glow": 6})).unwrap();
+    s.run("picture.size", &json!({"width": 144.0})).unwrap();
+    let sh = shown(&s).unwrap();
+    assert!(close(sh.w, 144.0) && close(sh.h, 72.0), "{sh:?}");
+    assert!(frame_of(&s).2 > 150.0, "the frame holds the glow too");
+    s.run("picture.reset", &json!({})).unwrap();
+    let (_, _, w, h, _) = frame_of(&s);
+    assert!(close(w, 144.0) && close(h, 72.0), "Reset Picture keeps the size: {w} x {h}");
+    assert_eq!(bitmap(&s), plain);
+    s.run("picture.pictureEffects", &json!({"softEdge": 4})).unwrap();
+    s.run("picture.reset", &json!({"size": true})).unwrap();
+    let (_, _, w, h, _) = frame_of(&s);
+    assert!(close(w, 72.0) && close(h, 36.0));
+}
+
+/// A style brings its effects, Picture Effects change them one by one, and a style picked again
+/// replaces them; every gallery style draws.
+#[test]
+fn a_style_brings_its_effects_and_picture_effects_change_them() {
+    let mut s = session(60, 40);
+    s.run("picture.style", &json!({"style": "dropShadow"})).unwrap();
+    let l = current(&s).unwrap();
+    assert!(l.effects.shadow.is_some() && l.style.as_deref() == Some("dropShadow"));
+    s.run("picture.pictureEffects", &json!({"shadow": null, "reflection": "tightTouching"})).unwrap();
+    let l = current(&s).unwrap();
+    assert!(l.effects.shadow.is_none() && l.effects.reflection.is_some() && l.style.is_some());
+    s.run("picture.style", &json!({"style": "thinBlackFrame"})).unwrap();
+    assert!(current(&s).unwrap().effects.is_empty(), "a style replaces the effects");
+    for (id, _) in styles::gallery() {
+        s.run("picture.style", &json!({"style": id})).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert!(bitmap(&s).pixels().any(|p| p.0[3] > 0), "{id}");
+    }
+    s.run("picture.style", &json!({"style": "none"})).unwrap();
+    assert_eq!(bitmap(&s).dimensions(), (60, 40));
+    assert!(close(frame_of(&s).2, 45.0));
+}
+
+/// Effects are one layer of the stack: Color after a shadow keeps it, and a shadow after Remove
+/// Background is the subject's.
+#[test]
+fn effects_keep_through_adjustments_and_follow_the_removed_background() {
+    let mut s = session(120, 120);
+    s.run("picture.removeBackground", &json!({})).unwrap();
+    s.run("picture.pictureEffects", &json!({"shadow": {"preset": "offsetBottomRight", "transparency": 0, "blur": 1}})).unwrap();
+    s.run("picture.color", &json!({"recolor": "grayscale"})).unwrap();
+    let l = current(&s).unwrap();
+    assert!(l.cutout.is_some() && l.effects.shadow.is_some(), "both kept");
+    let img = bitmap(&s);
+    let (rx, ry) = (l.room[0], l.room[1]);
+    assert_eq!(img.get_pixel(rx + 2, ry + 2).0[3], 0, "the removed backdrop casts no shadow");
+    assert!(img.get_pixel(rx + 116, ry + 116).0[3] < 30, "nor at the far corner");
+    let [r, g, b, a] = img.get_pixel(rx + 60, ry + 60).0;
+    assert!(r == g && g == b && a == 255, "the subject in gray");
+}
+
+/// Picture Border's Weight is in points and its Dashes leave gaps.
+#[test]
+fn border_weight_in_points_and_dashes() {
+    let mut s = session(80, 80);
+    s.run("picture.border", &json!({"color": "FF0000", "weight": 3})).unwrap();
+    assert_eq!(bitmap(&s).dimensions(), (88, 88), "3 pt at 80 px for 60 pt");
+    s.run("picture.border", &json!({"dash": "dash"})).unwrap();
+    assert_eq!(current(&s).unwrap().border, Some(Border { color: Rgb(255, 0, 0), width: BorderWidth::Pt(3.0), dash: Dash::Dash }));
+    let img = bitmap(&s);
+    let top: Vec<u8> = (0..88).map(|x| img.get_pixel(x, 1).0[3]).collect();
+    assert!(top.contains(&0) && top.contains(&255), "{top:?}");
+    assert!(matches!(s.run("picture.border", &json!({"dash": "wavy"})), Err(CmdError::Params(_))));
+}
+
+/// Compress Pictures: Delete cropped areas cuts away what the crop hides, a resolution is worked
+/// out at each picture's size, and All Pictures goes through the document.
+#[test]
+fn compress_deletes_cropped_areas_and_can_do_every_picture() {
+    let mut s = session(200, 100);
+    s.run("picture.crop", &json!({"left": 0.5})).unwrap();
+    let out = s.run("picture.compress", &json!({"deleteCropped": true, "ppi": 0})).unwrap();
+    assert_eq!(out["compressed"], 1);
+    assert_eq!(bitmap(&s).dimensions(), (100, 100));
+    assert_eq!(frame_of(&s).4, [0.0; 4]);
+    assert_eq!(s.run("picture.compress", &json!({"deleteCropped": true, "ppi": 0})).unwrap()["compressed"], 0, "nothing left to cut");
+    s.run("picture.reset", &json!({})).unwrap();
+    assert_eq!(bitmap(&s).dimensions(), (200, 100), "Reset Picture still finds the original");
+    // A second picture: 400 × 200 px at 300 × 150 pt. At 48 ppi it needs 200 px; the first, 150
+    // pt across, needs 100 px of its 200.
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("insert.picture", &json!({"data": base64_encode(&photo(400, 200))})).unwrap();
+    let out = s.run("picture.compress", &json!({"ppi": 48, "all": true})).unwrap();
+    assert_eq!(out["compressed"], 2);
+    assert_eq!(bitmap(&s).dimensions(), (200, 100));
+    s.run("picture.compress", &json!({"maxPixels": 32})).unwrap();
+    assert_eq!(bitmap(&s).dimensions(), (32, 16), "maxPixels as scripts have used it");
+}
+
+/// Compress Pictures resizes the whole source bitmap, so its limit counts what the crop hides.
+#[test]
+fn compression_preserves_the_resolution_of_the_visible_crop() {
+    assert_eq!(crate::cmd::objects::compression_pixels(72.0, 72.0, [0.0; 4], 330.0), 330);
+    assert_eq!(
+        crate::cmd::objects::compression_pixels(72.0, 72.0, [0.45; 4], 330.0),
+        3300,
+        "one inch showing a tenth of the source needs 3300 source pixels"
+    );
+    assert_eq!(
+        crate::cmd::objects::compression_pixels(72.0, 144.0, [0.45, 0.0, 0.45, 0.0], 330.0),
+        3300,
+        "the source's longer axis can differ from the display's"
+    );
+    assert_eq!(crate::cmd::objects::compression_pixels(144.0, 72.0, [0.0, 0.45, 0.0, 0.45], 220.0), 2200);
+    assert_eq!(crate::cmd::objects::compression_pixels(1.0, 1.0, [0.0; 4], 96.0), 32);
+    assert_eq!(crate::cmd::objects::compression_pixels(4000.0, 4000.0, [0.95; 4], 330.0), 20000);
 }

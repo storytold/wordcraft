@@ -448,6 +448,7 @@ Picture Format|Adjust|Change Picture|picture.change
 Picture Format|Adjust|Reset Picture|picture.reset
 Picture Format|Picture Styles|Picture Styles|picture.style
 Picture Format|Picture Styles|Picture Border|picture.border
+Picture Format|Picture Styles|Picture Effects|picture.pictureEffects
 Picture Format|Accessibility|Alt Text|picture.altText
 Shape Format|Accessibility|Alt Text|object.altText
 Picture Format|Size|Crop|picture.crop

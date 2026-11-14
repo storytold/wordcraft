@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-13 · **Change:** trivial (#6597: picture editing review corrections; readiness estimates unchanged); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-14 · **Change:** minor (#3344: Picture Format › Picture Effects, a 28-style Picture Styles gallery, border weights and dashes, Compress Pictures options and the Arrange buttons; readiness estimates unchanged); previously trivial (#6597: picture editing review corrections; readiness estimates unchanged); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-14: Picture Format (#3344): Picture Effects (`picture.pictureEffects`) adds Preset, Shadow (outer, inner and perspective), Reflection, Glow, Soft Edges, Bevel and 3-D Rotation, each with a preview gallery and options. Effects are drawn from the picture's outline and alpha, so a picture with its background removed casts its subject's shadow. The frame grows by what reaches outside the picture, and the picture keeps its size and place. Crop, Size, Reset Picture, crop mode and Remove Background work on the picture itself. Picture Styles has 28 styles of our own (shapes, frames and effects). Picture Border adds weights in points and dashes. Compress Pictures can delete cropped areas and apply to every picture. The Arrange group gains Bring Forward, Send Backward and Selection Pane. Effects are drawn into the saved bitmap, as the other picture adjustments are: Word shows them, but not as editable effects. Crop to Shape, Aspect Ratio, Fill and Fit (#2027) and DOCX picture outline/effect round-trips (#5516, #5564, #2645) are left to their open PRs. Synthetic tests only; no native Word comparison. Readiness estimates unchanged.
 - 2026-11-13: Picture editing review corrections (#6597, #3344): keep/remove marks survive edge refinement; artistic effects respect their pixel budget on thin pictures; Set Transparent Color preserves pending Background Removal work by refusing to start until it is finished. Removal previews refresh after discard or undo, and gallery previews follow replacement media and changed theme colors. Compress Pictures accounts for the crop when calculating source resolution. The minimum-cut tests now have an independent reference solver. Readiness estimates unchanged.
 
  fix/6146-touchpad-scroll-speed
@@ -919,6 +920,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Picture Format (#3344): Picture Effects, a 28-style Picture Styles gallery, border weights and dashes, Compress Pictures options and Arrange buttons; frame room for effects; readiness estimates unchanged. |
 | 2026-11-13 | trivial | Picture editing review corrections (#6597): mark constraints, processing bounds, exclusive color picking, preview invalidation and crop-aware compression; missing minimum-cut reference helpers added. |
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |

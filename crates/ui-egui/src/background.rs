@@ -73,7 +73,9 @@ struct Shown {
 fn shown(app: &WordApp) -> Option<Shown> {
     match crate::objects::selected(app)? {
         (pos, InlineObject::Image { media, crop, float, .. }) if wordcraft_geom::normalize_degrees(float.rot) == 0.0 => {
-            Some(Shown { pos, media: media.clone(), crop: *crop, flip: (float.flip_h, float.flip_v) })
+            // Under a look drawn round it, the crop the picture shows (its bitmap holds only that).
+            let crop = crate::objects::picture_shown(app).map_or(*crop, |(sh, _)| sh.crop);
+            Some(Shown { pos, media: media.clone(), crop, flip: (float.flip_h, float.flip_v) })
         }
         _ => None,
     }
@@ -231,7 +233,9 @@ pub fn key(app: &mut WordApp, key: egui::Key) -> bool {
 /// The picture in the mode (or being picked from), laid out: its page and frame on screen.
 fn on_screen(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, pos: &Pos) -> Option<Rect> {
     let o = layout.object(pos, app.session.page_hint)?;
-    pages.get(o.page).map(|p| frame::to_screen(*p, scale, o.rect))
+    // The picture itself, without the room its look's effects take in its frame.
+    let rect = if crate::objects::selected(app).is_some_and(|(p, _)| p == *pos) { crate::objects::picture_part(app, o.rect) } else { o.rect };
+    pages.get(o.page).map(|p| frame::to_screen(*p, scale, rect))
 }
 
 /// Where screen point `at` is on the uncropped picture (0 to 1 across and down), for a picture

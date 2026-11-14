@@ -108,6 +108,24 @@ pub fn selected(app: &WordApp) -> Option<(Pos, &InlineObject)> {
     wordcraft_engine::cmd::objects::object_selection(&app.session).filter(|(p, _)| selectable_story(app, p.story))
 }
 
+/// The selected picture under a look drawn round its edge (a style, a border, Picture Effects):
+/// as it shows (its crop, its own size and the room round it in its frame) and the bitmap under
+/// the look, which crop mode and Remove Background show and work on.
+pub fn picture_shown(app: &WordApp) -> Option<(wordcraft_engine::cmd::objects::look::Shown, String)> {
+    use wordcraft_engine::cmd::objects::look;
+    let l = look::current(&app.session).filter(|l| l.draws_round() && l.vis.0 > 0)?;
+    let sh = look::shown(&app.session)?;
+    Some((sh, l.base))
+}
+
+/// `r`, the selected picture's laid-out frame (page points), less the room its look takes round
+/// it: where the picture itself is.
+pub fn picture_part(app: &WordApp, r: wordcraft_geom::Rect) -> wordcraft_geom::Rect {
+    let (Some((sh, _)), Some((_, InlineObject::Image { float, .. }))) = (picture_shown(app), selected(app)) else { return r };
+    let [l, t, rr, b] = wordcraft_engine::cmd::objects::look::page_room(sh.room, float.flip_h, float.flip_v);
+    wordcraft_geom::Rect::new(r.x + l, r.y + t, (r.w - l - rr).max(0.1), (r.h - t - b).max(0.1))
+}
+
 /// Whether objects of `story` can be selected and dragged on the canvas: the body and
 /// headers/footers.
 fn selectable_story(app: &WordApp, story: StoryRef) -> bool {
