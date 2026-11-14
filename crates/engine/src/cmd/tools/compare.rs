@@ -146,9 +146,22 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                         (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx))),
                         _ => {
                             if let Some(x) = a {
-                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
+                                // An existing deletion is another author's: keep their revision
+                                // stamp instead of re-attributing the paragraph to this compare.
+                                out.push(Arc::new(mark_block(
+                                    x,
+                                    &|c| {
+                                        c.del.get_or_insert(del);
+                                    },
+                                    0,
+                                )));
                             }
                             if let Some(x) = b {
+                                // The revised side is a raw clone of the revised document (its
+                                // blocks are never relinked into this session's revisions), so any
+                                // stamp it carries names a revision of *that* document: overwrite
+                                // it, since a foreign index kept here would be worse than a valid
+                                // one.
                                 out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ins), 0)));
                             }
                         }
@@ -202,7 +215,16 @@ fn block_text(b: &Block, depth: usize) -> String {
     }
 }
 
-/// Returns a copy of `b` with all text runs and paragraph marks (or nested table cells) updated by `f`.
+/// A copy of the block with every run (in tables, every cell's) changed by `f`, and a paragraph's
+/// mark along with them, so a whole inserted or deleted paragraph carries the revision even when
+/// the paragraph is empty (`format` returns early for a length-0 range).
+///
+/// Known limitation: resolving a revision needs a following paragraph, so a paragraph inserted at
+/// the very end (rejected) or deleted from the very end (accepted) still leaves one empty
+/// paragraph. That is a separate follow-up, not handled here. A section-carrying inserted
+/// paragraph is not such a case: `resolve_para` removes the section break first (#5734, issue
+/// #5667), so rejecting it takes the paragraph out whole and the following paragraph keeps its
+/// own properties.
 fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
     match b {
         Block::Para(p) => {
@@ -210,6 +232,7 @@ fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
             let len = p.len();
             let _ = p.format(0, len, f);
             f(&mut p.mark);
+            p.touch();
             Block::Para(p)
         }
         Block::Table(t) => {
