@@ -6014,6 +6014,90 @@ fn body_starts_right_below_a_tall_header() {
     assert!((body - header_bottom - 14.0).abs() < 0.01, "body at {body}, header ends at {header_bottom}");
 }
 
+/// A header's text wraps around a floating object placed on the page wherever the object's
+/// anchor is. Measured in Word for Windows (16.0.20625): a header of two or three one-line
+/// paragraphs 21.25 pt down the page, a 150 x 34 pt object 26 pt down the page anchored in the
+/// last of them. With top and bottom wrapping every paragraph goes below the object, the ones
+/// before the anchor's too, and the body starts below them; with square wrapping they all start
+/// beside it. The same file with the object anchored in the first paragraph comes out the same.
+/// WordCraft moved only the anchor's paragraph and those after it.
+#[test]
+fn a_headers_text_wraps_around_a_float_anchored_in_a_later_paragraph() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    crate::test_fonts();
+    // Each header line's left edge and top, then the top of the body's first line. The object
+    // is `float`: its wrapping, what it is set down from and how far. `framed` puts the anchor's
+    // paragraph in a text frame.
+    let lines_with = |float: Option<(Wrap, Anchor, f32)>, anchor: usize, framed: bool| {
+        let mut d = Document::from_text("Body");
+        let mut paras: Vec<_> = ["One", "Two", "Three"]
+            .iter()
+            .map(|text| {
+                let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+                (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));
+                p
+            })
+            .collect();
+        if let Some((wrap, v_rel, y)) = float {
+            let float = Float { wrap, h_rel: Anchor::Page, v_rel, x: 60.0, y, dist: 0.0, ..Default::default() };
+            let p = &mut paras[anchor];
+            p.insert_object(p.text.len(), rect_shape(150.0, 34.0, float), &Default::default()).unwrap();
+        }
+        if framed {
+            paras[anchor].props.frame = Some(wordcraft_doc::props::TextFrame { w: Some(100.0), ..Default::default() });
+        }
+        let id = d.add_part(wordcraft_doc::PartKind::Header, paras.into_iter().map(wordcraft_doc::para_block).collect());
+        d.last_section.headers.default = Some(id);
+        let l = lay(&d);
+        let mut out: Vec<(f32, f32)> = l.pages[0]
+            .header
+            .iter()
+            .filter_map(|i| if let Placed::Lines { para, x, y, .. } = i { Some((x + para.x_of(0, 0).unwrap(), *y)) } else { None })
+            .collect();
+        assert_eq!(out.len(), 3, "three header lines");
+        out.extend(
+            l.pages[0].items.iter().find_map(|i| if let Placed::Lines { x, y, story: StoryRef::Body, .. } = i { Some((*x, *y)) } else { None }),
+        );
+        out
+    };
+    let lines = |wrap: Option<Wrap>, anchor: usize| lines_with(wrap.map(|wrap| (wrap, Anchor::Page, 26.0)), anchor, false);
+    let near =
+        |a: &[(f32, f32)], b: &[(f32, f32)]| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (p.0 - q.0).abs() < 0.01 && (p.1 - q.1).abs() < 0.01);
+    let plain = lines(None, 0);
+    let (left, top, pitch) = (plain[0].0, plain[0].1, plain[1].1 - plain[0].1);
+    assert!(top < 60.0 && top + pitch > 26.0, "the object stands over the first header line ({top})");
+    // Top and bottom: all three lines below the object (it ends 60 pt down), the body after them.
+    let below = lines(Some(Wrap::TopAndBottom), 2);
+    let want: Vec<(f32, f32)> = (0..3).map(|k| (left, 60.0 + k as f32 * pitch)).chain([(plain[3].0, 60.0 + 3.0 * pitch)]).collect();
+    assert!(near(&below, &want), "top and bottom, anchored in the last paragraph: {below:?}, expected {want:?}");
+    // Square: the lines it stands over start to its right (it ends 210 pt across), where they were.
+    let beside = lines(Some(Wrap::Square), 2);
+    for (k, (line, was)) in beside.iter().zip(&plain).take(3).enumerate() {
+        let over = was.1 < 60.0 && was.1 + pitch > 26.0;
+        let x = if over { 210.0 } else { left };
+        assert!((line.0 - x).abs() < 0.01 && (line.1 - was.1).abs() < 0.01, "square, line {k}: {line:?}, expected ({x}, {})", was.1);
+    }
+    // The anchor's paragraph makes no difference to an object placed on the page.
+    for wrap in [Wrap::TopAndBottom, Wrap::Square] {
+        let (first, last) = (lines(Some(wrap), 0), lines(Some(wrap), 2));
+        assert!(near(&first, &last), "{wrap:?}: anchored in the first paragraph {first:?}, in the last {last:?}");
+    }
+    // Left as they were. An object set down from the margin (here from 40 pt above it, over the
+    // first two lines) is measured and drawn from different tops: the paragraphs before its own
+    // stay, and the body starts where it does without the object.
+    let from_margin = lines_with(Some((Wrap::TopAndBottom, Anchor::Margin, -40.0)), 2, false);
+    assert!(near(&from_margin[..2], &plain[..2]), "set down from the margin: {from_margin:?}, without the object {plain:?}");
+    assert!(
+        near(&from_margin[3..], &plain[3..]),
+        "set down from the margin: the body starts at {:?}, without the object at {:?}",
+        from_margin[3],
+        plain[3]
+    );
+    // One in a text frame's paragraph is not drawn: the header is as without it.
+    let (framed, with_object) = (lines_with(None, 2, true), lines_with(Some((Wrap::TopAndBottom, Anchor::Page, 26.0)), 2, true));
+    assert!(near(&with_object, &framed), "in a text frame's paragraph: {with_object:?}, without the object {framed:?}");
+}
+
 #[test]
 fn inline_picture_keeps_room_for_its_effects() {
     crate::test_fonts();
