@@ -3705,6 +3705,113 @@ fn text_wraps_around_square_float() {
     assert!(l.pages[0].items.iter().any(|i| matches!(i, Placed::Shape { .. })));
 }
 
+/// The left edges of a paragraph's lines beside a 144 × 100 pt square-wrapped rectangle at the
+/// column's top left (9 pt from text), and of its first line below the rectangle, in
+/// compatibility `mode` with Word 2003's indent rules on or off. The paragraph is indented
+/// 216 pt; `float` adjusts the object, `para` the paragraph, and `numbered` makes it a list item.
+fn word_2003_indent_lefts(
+    mode: u32,
+    rules: bool,
+    float: &dyn Fn(&mut wordcraft_doc::para::Float),
+    numbered: bool,
+    para: &dyn Fn(&mut ParaProps),
+) -> (Vec<f32>, Option<f32>) {
+    let mut d = Document::from_text(&"Words beside the picture here. ".repeat(20));
+    d.settings.compat_mode = mode;
+    d.settings.do_not_suppress_indentation = rules;
+    let num = numbered.then(|| Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered));
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.indent_left = Some(216.0);
+        p.indent_first = Some(0.0);
+        p.numbering = num.map(|num| wordcraft_doc::props::NumRef { num, level: 0 });
+        para(p);
+    })
+    .unwrap();
+    let mut f = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 9.0,
+        ..Default::default()
+    };
+    float(&mut f);
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 144.0,
+        h: 100.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: f,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    // After the first word, so a drop cap takes the paragraph's first letter.
+    d.insert_object(&Pos::body(0, 6), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let Placed::Lines { para, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
+        panic!()
+    };
+    let beside = para.lines.iter().filter(|ln| ln.top < 100.0).map(|ln| ln.left).collect();
+    let below = para.lines.iter().find(|ln| ln.top > 120.0).map(|ln| ln.left);
+    (beside, below)
+}
+
+/// Word 2003's indent rules (`w:doNotSuppressIndentation`, a `.doc`'s `Copts.fWW11IndentRules`): an
+/// unnumbered paragraph indented past a floating object on its left starts its lines right after
+/// the object, its indent ignored (ECMA-376 Part 4 §14.8.3.12). In a Word 2003-mode `.doc` saved
+/// by Word, empty paragraphs indented 216 pt sit right after a text box ending 165 pt into the
+/// column, in the 71 pt gap before a second box where the indent would leave under 20 pt. Below
+/// the object, and in Word 2013's layout, the indent applies.
+#[test]
+fn word_2003_indent_rules_start_lines_right_after_a_float_before_the_indent() {
+    let lefts = |mode: u32, rules: bool| word_2003_indent_lefts(mode, rules, &|_| {}, false, &|_| {});
+    for mode in [11, 12, 14] {
+        let (beside, below) = lefts(mode, true);
+        assert!(
+            !beside.is_empty() && beside.iter().all(|x| (x - 153.0).abs() < 0.01),
+            "mode {mode}: lines start after the object and its 9 pt distance: {beside:?}"
+        );
+        assert_eq!(below, Some(216.0), "mode {mode}: below the object the indent applies");
+    }
+    assert_eq!(lefts(11, false).0[0], 216.0, "without the option the indent applies beside the object");
+    assert_eq!(lefts(15, true).0[0], 216.0, "Word 2013's layout keeps the indent");
+}
+
+/// Under Word 2003's indent rules a line starts after a Tight or Through-wrapped object's outline
+/// where the line meets it, not after the outline's widest point: here a right triangle, its
+/// point at the top left, 144 pt wide (and 9 pt from text) only at its foot.
+#[test]
+fn word_2003_indent_rules_follow_a_tight_objects_outline() {
+    use wordcraft_doc::para::Wrap;
+    use wordcraft_doc::wrap::WrapPolygon;
+    let poly = WrapPolygon::new(true, [(0, 0), (0, 21_600), (21_600, 21_600)]).map(Arc::new);
+    for wrap in [Wrap::Tight, Wrap::Through] {
+        let (beside, _) = word_2003_indent_lefts(11, true, &|f| (f.wrap, f.wrap_polygon) = (wrap, poly.clone()), false, &|_| {});
+        assert!(beside.len() > 2 && beside[0] < 60.0, "{wrap:?}: the first line starts near the point: {beside:?}");
+        assert!(beside.windows(2).all(|w| w[0] < w[1]) && beside.iter().all(|&x| x <= 153.0 + 0.01), "{wrap:?}: each line further out: {beside:?}");
+    }
+}
+
+/// Word 2003's indent rules leave the indent alone for a numbered paragraph (its number sits at
+/// the indent) and for one with a drop cap (the letter does), and never start a line left of the
+/// paragraph's own edge after an object out in the margin.
+#[test]
+fn word_2003_indent_rules_keep_the_indent_where_they_do_not_apply() {
+    let (numbered, _) = word_2003_indent_lefts(11, true, &|_| {}, true, &|_| {});
+    assert!(numbered.iter().all(|&x| x >= 216.0 - 0.01), "a numbered paragraph keeps its indent: {numbered:?}");
+    let (dropped, _) = word_2003_indent_lefts(11, true, &|_| {}, false, &|p| p.drop_cap = Some(3));
+    assert!(dropped.iter().all(|&x| x >= 216.0 - 0.01), "lines beside a drop cap stay right of it: {dropped:?}");
+    // An object in the left margin, its right side and distance from text 44 pt short of the column.
+    let (margin, _) = word_2003_indent_lefts(11, true, &|f| f.x = -197.0, false, &|_| {});
+    assert!(margin.iter().all(|&x| x >= -0.01), "no line starts in the margin: {margin:?}");
+    assert!((margin[0] - 0.0).abs() < 0.01, "the line starts at the paragraph's edge: {margin:?}");
+}
+
 #[test]
 fn a_lines_arrowheads_sit_at_its_ends() {
     // A line runs from its frame's top left to its bottom right (DrawingML's `line`, as it is
