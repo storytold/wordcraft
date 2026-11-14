@@ -8472,6 +8472,18 @@ fn a_cell_set_not_to_wrap_is_sized_as_one_unbreakable_piece() {
     // The same columns as for that text with no-break spaces, which nothing can wrap.
     let (nbsp, _) = columns(&|t| t.rows[0].cells[2].blocks = vec![text(&LONG.replace(' ', "\u{a0}"))]);
     assert!(same(x, nbsp), "{x:?} set not to wrap, {nbsp:?} with no-break spaces");
+    // Every cell set not to wrap (measured in Word with twelve such tables): texts that fit give
+    // the same columns as the one long text set not to wrap alone; three texts too long to fit
+    // together share the table equally and wrap.
+    let all = |t: &mut Table| t.rows[0].cells.iter_mut().for_each(|c| c.props.no_wrap = true);
+    let (every, lines) = columns(&all);
+    assert!(lines == [1, 1] && same(every, x), "{every:?} with every cell set not to wrap, {x:?} with the long one");
+    let (long, lines) = columns(&|t| {
+        all(t);
+        t.rows[0].cells.iter_mut().for_each(|c| c.blocks = vec![text(LONG)]);
+    });
+    let (first, second) = (long[1] - long[0], long[2] - long[1]);
+    assert!(lines[0] > 1 && lines[1] > 1 && (first - second).abs() < 0.1, "three long texts: columns of {first} and {second} pt, {lines:?} lines");
     // A column with a long word of its own stops at it, and the other one gives up the rest.
     let (x, lines) = columns(&|t| {
         no_wrap(t);
