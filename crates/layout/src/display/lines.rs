@@ -469,11 +469,70 @@ fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     }
 }
 
+/// Where a list number's highlight, shading and border end: the line's text start when that lies
+/// right of the number (`gx + width`), else the number's own right edge.
+fn label_box_end(ctx: &LineContext<'_, '_, '_>, gx: f32, width: f32) -> f32 {
+    let right = gx + width;
+    let text = (ctx.line.c0..ctx.line.c1)
+        .find(|&k| ctx.pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker))
+        .and_then(|k| ctx.line.cl_left(k))
+        .map(|left| ctx.x + left);
+    match text {
+        Some(t) if t.is_finite() && t > right => t,
+        _ => right,
+    }
+}
+
+/// A list number's highlight or shading and its border, from its left edge to the text; painted
+/// before the number's glyphs.
+fn label_backgrounds(ctx: &LineContext<'_, '_, '_>, gx: f32, width: f32, st: &crate::para::StyleRun, fill: Option<Rgb>, out: &mut Vec<Draw>) {
+    if fill.is_none() && st.rc.border.is_none() {
+        return;
+    }
+    let end = label_box_end(ctx, gx, width);
+    if let Some(color) = fill {
+        out.push(Draw::Fill { rect: Rect::new(gx, ctx.top, (end - gx).max(0.0), ctx.line.height), color, alpha: ctx.alpha, text_bg: true });
+    }
+    if let Some(border) = &st.rc.border {
+        char_box(border, gx, end, ctx.top, ctx.bottom, ctx.alpha, out);
+    }
+}
+
+/// A list number's underline and strikethrough, over its characters only (a label has no spaces
+/// to skip, so a words-only underline is one line), measured as [`run_decorations`] measures text.
+fn label_decorations(ctx: &LineContext<'_, '_, '_>, gx: f32, width: f32, st: &crate::para::StyleRun, fill: Option<Rgb>, out: &mut Vec<Draw>) {
+    let rc = &st.rc;
+    let struck = rc.strike || rc.double_strike;
+    if (rc.underline == Underline::None && !struck) || width.is_nan() || width <= 0.0 {
+        return;
+    }
+    let (x0, x1) = (gx, gx + width);
+    let color = ctx.ink(&rc.color, fill);
+    let thick = (st.size / 18.0).max(0.5);
+    if rc.underline != Underline::None {
+        let uy = ctx.base - st.shift + st.size * 0.12;
+        let w = if rc.underline == Underline::Thick { thick * 2.0 } else { thick };
+        let stroke = if rc.underline == Underline::Words { Stroke::Solid } else { stroke_of(rc.underline) };
+        let ucolor = rc.underline_color.unwrap_or(color);
+        out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke, alpha: ctx.alpha, text_bg: fill });
+    }
+    if struck {
+        let sy = ctx.base - st.shift - st.size * 0.28;
+        let stroke = if rc.double_strike { Stroke::Double } else { Stroke::Solid };
+        out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha: ctx.alpha, text_bg: fill });
+    }
+}
+
 fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     if ctx.li == ctx.pl.label_line()
         && let Some(label) = &ctx.pl.label
     {
         let gx = ctx.x + label.x;
+        let decor = ctx.pl.styles.get(label.style as usize);
+        let fill = decor.and_then(|st| st.rc.highlight.or(st.rc.shading));
+        if let Some(st) = decor {
+            label_backgrounds(ctx, gx, label.width, st, fill, out);
+        }
         for run in &label.runs {
             let Some(style) = ctx.pl.styles.get(run.style as usize) else { continue };
             out.push(Draw::Glyphs {
@@ -486,16 +545,19 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                     .flatten()
                     .map(|g| (g.gid, gx + g.dx, ctx.base - style.shift - g.dy))
                     .collect(),
-                color: ctx.ink(&style.rc.color, None),
+                color: ctx.ink(&style.rc.color, fill),
                 alpha: ctx.alpha,
                 synth_bold: style.synth_bold,
                 synth_italic: style.synth_italic,
                 text: run.text.clone(),
                 link: None,
                 ranges: Vec::new(),
-                text_bg: None,
+                text_bg: fill,
                 x_scale: 1.0,
             });
+        }
+        if let Some(st) = decor {
+            label_decorations(ctx, gx, label.width, st, fill, out);
         }
     }
     if let Some((style_index, glyph, advance)) = ctx.line.hyphen
