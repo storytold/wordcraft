@@ -801,7 +801,11 @@ fn call(name: &str, args: &[Expr], here: &Here) -> Result<f64, CmdError> {
         },
         // DEFINED(cell) is 1 when the cell holds a value the formula can read, 0 when it doesn't.
         "DEFINED" => match args {
-            [a] => Ok(truth(eval(a, here).is_ok())),
+            // Outside a table there are no cells that could be undefined: the error stands.
+            [a] => match eval(a, here) {
+                Err(e) if here.detached => Err(e),
+                r => Ok(truth(r.is_ok())),
+            },
             _ => Err(CmdError::Failed("DEFINED takes one argument".into())),
         },
         "SUM" => Ok(gather(args, here)?.iter().sum()),

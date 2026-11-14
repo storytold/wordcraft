@@ -4728,7 +4728,15 @@ fn update_fields_clears_dirty() {
 fn update_fields_evaluates_formulas_outside_tables() {
     let mut s = s();
     let mut p = wordcraft_doc::Paragraph::new();
-    let cases = [("= 1 + 2026", "1999"), ("=2*(3+4) \\# \"0.0\"", "stale"), ("=A1+1", "stale"), ("=SUM(ABOVE)", "stale"), ("=1/0", "stale")];
+    let cases = [
+        ("= 1 + 2026", "1999"),
+        ("=2*(3+4) \\# \"0.0\"", "stale"),
+        ("=A1+1", "stale"),
+        ("=SUM(ABOVE)", "stale"),
+        ("=1/0", "stale"),
+        ("=DEFINED(A1)", "stale"),
+        ("=DEFINED(SUM(ABOVE))", "stale"),
+    ];
     for (instr, result) in cases {
         let end = p.len();
         p.insert_object(
@@ -4757,7 +4765,7 @@ fn update_fields_evaluates_formulas_outside_tables() {
             _ => None,
         })
         .collect();
-    assert_eq!(results, ["2027", "14.0", "stale", "stale", "stale"]);
+    assert_eq!(results, ["2027", "14.0", "stale", "stale", "stale", "stale", "stale"]);
 }
 
 /// #877/#878: an imported TOC field whose begin marker carries `w:dirty` (a generator wrote a
