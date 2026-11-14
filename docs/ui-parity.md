@@ -84,6 +84,8 @@ The Language dialog reads effective character formatting, including document def
 
 The `table.sort` command requires an explicit `column` to be a non-negative JSON integer naming a column in the table, indexed from 0 (#5531). Omitting it still sorts by column 0. Invalid selectors return an error before changing rows or history; the Sort dialog and collation rules are unchanged.
 
+Mixed Latin/CJK interface labels share one baseline; rows accommodate the fallback font ascent and descent. Layout ribbon fields keep localized CJK unit suffixes above the group title. Embedded CJK faces and installed CJK/Traditional Chinese fallbacks opt into egui baseline alignment. `theme::tests::cjk_interface_text_shares_the_latin_baseline` checks the Options labels, Japanese and Korean, all three interface weights, 12.5/26 pt, and 1x/1.45x/2x, including ascent/descent containment. This covers interface text; document layout has its own renderer.
+
 ## Screen paper colors (#3398)
 
 File › Options › General › Screen paper color selects Document background (the default),
@@ -128,6 +130,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | trivial | Mixed Latin/CJK interface labels share one baseline; rows accommodate the fallback font ascent and descent. Regression checks cover Chinese, Japanese and Korean at different sizes, weights and display scales. |
 | 2026-11-12 | trivial | Clipboard: a copied picture is published as PNG (and HTML where the host writes it); WordCraft's own paste still keeps the original fragment, and a copy of only shapes carries no HTML or RTF (#6205). Native external-app paste remains untested. |
 | 2026-11-07 | trivial | Vertical scrollbar track: clicking above the elevator moves one screen up and clicking below it moves one screen down, as in Word, instead of jumping to that position in the document (#5853) |
 | 2026-11-04 | trivial | Canvas: a press the canvas handles itself (Ctrl+click on a link, switching into a header or footer, equation entry) skips the link tooltip that frame; hovering shows it again; a regression from the #4501 refactor (#4683) |

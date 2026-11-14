@@ -601,6 +601,7 @@ pub fn font_definitions_language_arabic(
     {
         let mut data = FontData::from_static(&f.bytes);
         data.index = f.index;
+        data.tweak.set_baseline_fallback(true);
         add_cjk(&mut fonts, format!("system hant {}", f.family), data);
     }
     #[cfg(target_arch = "wasm32")]
@@ -608,7 +609,10 @@ pub fn font_definitions_language_arabic(
     let cjk = wordcraft_fonts::ui_cjk_fonts_for(prefer_hans, prefer_korean);
     for f in &cjk {
         // The same static bytes the document fonts use: one copy in the binary.
-        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+        let mut data = FontData::from_static(f.bytes);
+        // Mixed Latin/CJK labels need a shared baseline and room for both fonts.
+        data.tweak.set_baseline_fallback(true);
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), data);
     }
     // Georgian has no glyphs in Inter, Source Sans or the CJK faces: the craft-fonts Geor face.
     for f in wordcraft_fonts::georgian_fonts() {
@@ -621,6 +625,7 @@ pub fn font_definitions_language_arabic(
     if system_cjk && let Some(f) = system_cjk_font(prefer_hans, prefer_korean) {
         let mut data = FontData::from_static(&f.bytes);
         data.index = f.index;
+        data.tweak.set_baseline_fallback(true);
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
     #[cfg(target_arch = "wasm32")]
@@ -1075,6 +1080,45 @@ mod tests {
             prop.iter().take(6).map(String::as_str).collect::<Vec<_>>(),
             ["Inter", "Ubuntu-Light", "egui-icons", "NotoEmoji-Regular", "emoji-icon-font", "SourceSans"]
         );
+    }
+
+    #[test]
+    fn cjk_interface_text_shares_the_latin_baseline() {
+        for (hans, korean, hant, text) in [
+            (true, false, false, "启动 WordCraft 时显示开始屏幕"),
+            (true, false, true, "用 Insert 鍵切換改寫模式"),
+            (false, false, false, "Agpq 日本語 123"),
+            (false, true, false, "Agpq 한국어 123"),
+        ] {
+            for ppp in [1.0, 1.45, 2.0] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(ppp);
+                ctx.set_fonts(super::font_definitions_language(hans, korean, hant, true));
+                ctx.run_ui(Default::default(), |_| {}).drop_without_applying_deltas();
+                for size in [12.5, 26.0] {
+                    for font in [super::regular(size), super::medium(size), super::semibold(size)] {
+                        if !ctx.fonts_mut(|f| f.has_glyphs(&font, text)) {
+                            assert!(wordcraft_fonts::ui_cjk_fonts_for(hans, korean).is_empty(), "embedded CJK fonts must cover {text:?}");
+                            eprintln!("CJK baseline check skipped: no font covers {text:?}");
+                            continue;
+                        }
+                        let galley = ctx.fonts_mut(|f| f.layout_no_wrap(text.into(), font.clone(), egui::Color32::BLACK));
+                        let row = &galley.rows[0];
+                        let baseline = row.row.glyphs.iter().find(|g| g.chr.is_ascii_alphabetic()).unwrap().pos.y;
+                        for glyph in &row.row.glyphs {
+                            if wordcraft_fonts::is_cjk(glyph.chr) {
+                                assert_eq!(glyph.pos.y, baseline, "{} in {font:?} at {ppp}x", glyph.chr);
+                                assert!(baseline + 1.0 / ppp >= glyph.font_face_ascent, "fallback ascent fits");
+                                assert!(
+                                    row.height() + 1.0 / ppp >= baseline + glyph.font_face_height - glyph.font_face_ascent,
+                                    "fallback descent fits"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// #565: the composition of an input method (Bangla through ibus) drew as boxes because only the
