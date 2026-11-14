@@ -11984,6 +11984,108 @@ fn cell_widths_override_grid() {
     }
 }
 
+/// Cell widths given as percentages of the table's, the same in every row, replace a stale grid
+/// like consistent widths in points. Measured in Word for Windows (16.0.20625) with three equal
+/// grid columns under cells of 50, 25 and 25%: the columns are 240.8, 120.3 and 120.4 pt of a
+/// 481.5 pt table, with fixed layout too, and the same under cells of 40, 20 and 20%. WordCraft
+/// kept the grid's three equal columns.
+#[test]
+fn consistent_percentage_cell_widths_override_the_grid() {
+    crate::test_fonts();
+    const EQUAL: [f32; 3] = [133.0, 133.0, 134.0];
+    // How far after the first column's text the second and third columns' start, second row, in
+    // a 400 pt table.
+    let columns = |fixed: bool, grid: [f32; 3], shares: [f32; 3], setup: &dyn Fn(&mut Table)| {
+        let mut t = Table::new(2, 3, 400.0);
+        t.props.fixed = fixed;
+        t.grid = grid.to_vec();
+        for row in &mut t.rows {
+            for (cell, share) in row.cells.iter_mut().zip(shares) {
+                cell.props.width = None;
+                cell.props.width_pct = Some(share);
+                cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
+            }
+        }
+        setup(&mut t);
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let at = |col: u32| para_at(&l, &[0, 1, col, 0]).first().map(|p| p.0).expect("the cell's text");
+        (at(1) - at(0), at(2) - at(0))
+    };
+    let near = |got: (f32, f32), want: (f32, f32)| (got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01;
+    for fixed in [false, true] {
+        for (shares, what) in [([50.0, 25.0, 25.0], "50, 25 and 25%"), ([40.0, 20.0, 20.0], "40, 20 and 20%, shares of their sum")] {
+            let got = columns(fixed, EQUAL, shares, &|_| {});
+            assert!(near(got, (200.0, 300.0)), "{what}, fixed layout {fixed}: the columns start {got:?} after the first");
+        }
+        // A grid that agrees stays what it is, to the hundredth of a point: Word wrote it from
+        // the shares, and a column 0.02 pt off moves a word of a full line to the next. It
+        // agrees while no column is further from its share than a percentage can say (a
+        // fiftieth of a percent of the table, 0.08 pt here) and a twentieth of a point.
+        let got = columns(fixed, [200.0, 100.0, 100.0], [50.0, 25.0, 25.0], &|_| {});
+        assert!(near(got, (200.0, 300.0)), "a grid that agrees, fixed layout {fixed}: {got:?}");
+        let got = columns(fixed, [194.4, 102.85, 102.75], [48.58, 25.71, 25.71], &|_| {});
+        assert!(near(got, (194.4, 297.25)), "a grid a rounding away from the shares, fixed layout {fixed}: {got:?}");
+        let got = columns(fixed, [194.5, 102.85, 102.65], [48.58, 25.71, 25.71], &|_| {});
+        assert!(near(got, (194.3, 297.15)), "a grid 0.2 pt away from the shares, fixed layout {fixed}: {got:?}");
+        // Shares of more than the table are taken in order, and the last column gets what is
+        // left (measured in Word with sixteen tables: 50, 25 and 45% give the columns of 50, 25
+        // and 25%; 60, 30 and 30% give 288.9, 144.5 and 48.1 pt of 481.5).
+        for (shares, want) in [([50.0, 25.0, 45.0], (200.0, 300.0)), ([50.0, 25.0, 25.5], (200.0, 300.0)), ([60.0, 30.0, 30.0], (240.0, 360.0))] {
+            let got = columns(fixed, EQUAL, shares, &|_| {});
+            assert!(near(got, want), "{shares:?}, fixed layout {fixed}: the columns start {got:?} after the first");
+        }
+        // Shares of no more than the table are followed however little the last column gets
+        // (in a table that fits its content the column then takes the room its text needs).
+        let got = columns(fixed, EQUAL, [50.0, 49.5, 0.5], &|_| {});
+        if fixed {
+            assert!(near(got, (200.0, 398.0)), "50, 49.5 and 0.5%, fixed layout: {got:?}");
+        } else {
+            assert!(got.0 < 199.0 && got.1 < 397.0 && (got.0 - 133.0).abs() > 30.0, "50, 49.5 and 0.5%, fitted to content: {got:?}");
+        }
+        // The column edges are on whole twentieths of a point and the columns still add up to
+        // the grid's width: thirds of 400 pt are 133.35, 133.3 and 133.35 pt.
+        let got = columns(fixed, [100.0, 100.0, 200.0], [25.0, 25.0, 25.0], &|_| {});
+        assert!(near(got, (133.35, 266.65)), "thirds of 400 pt, fixed layout {fixed}: {got:?}");
+    }
+    // The table is as wide as its grid was: 400 pt, not the 400.05 of three columns of 133.35.
+    let mut t = Table::new(1, 3, 400.0);
+    (t.props.fixed, t.grid) = (true, vec![100.0, 100.0, 200.0]);
+    for cell in &mut t.rows[0].cells {
+        (cell.props.width, cell.props.width_pct) = (None, Some(25.0));
+    }
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let cells: Vec<(f32, f32)> = lay(&d).pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Cell { rect, .. } = it { Some((rect.x, rect.x + rect.w)) } else { None })
+        .collect();
+    let (left, right) = (cells.iter().map(|c| c.0).fold(f32::MAX, f32::min), cells.iter().map(|c| c.1).fold(f32::MIN, f32::max));
+    assert!(cells.len() == 3 && (right - left - 400.0).abs() < 0.001, "the table is {} pt wide: {cells:?}", right - left);
+    // Left to the grid: rows that disagree, a row without widths, a spanning cell, a width in
+    // points among the percentages, and shares that leave the last column no room.
+    let cases: [(&str, [f32; 3], &dyn Fn(&mut Table)); 9] = [
+        ("rows that disagree", [50.0, 25.0, 25.0], &|t| t.rows[1].cells[0].props.width_pct = Some(25.0)),
+        ("a row without widths", [50.0, 25.0, 25.0], &|t| t.rows[1].cells.iter_mut().for_each(|c| c.props.width_pct = None)),
+        ("a spanning cell", [50.0, 25.0, 25.0], &|t| {
+            t.rows[0].cells.remove(1);
+            t.rows[0].cells[0].props.span = 2;
+        }),
+        ("a width in points among them", [50.0, 25.0, 25.0], &|t| t.rows[0].cells[2].props.width = Some(100.0)),
+        ("shares that leave the last column nothing", [60.0, 40.0, 40.0], &|_| {}),
+        ("a share that is no number", [f32::NAN, 25.0, 25.0], &|_| {}),
+        ("an endless share", [f32::INFINITY, 25.0, 25.0], &|_| {}),
+        ("a negative share", [-50.0, 25.0, 25.0], &|_| {}),
+        ("a share of nothing", [0.0, 25.0, 25.0], &|_| {}),
+    ];
+    for (what, shares, setup) in cases {
+        let got = columns(false, EQUAL, shares, setup);
+        assert!(near(got, (133.0, 266.0)), "{what}: the columns start {got:?} after the first, the grid says 133 and 266");
+    }
+}
+
 #[test]
 fn ambiguous_widths_keep_grid() {
     crate::test_fonts();
