@@ -323,9 +323,53 @@ fn floating_box_that_resizes_to_fit_takes_its_texts_height() {
     let fixed = rect(false, 1.0);
     assert!(fixed.h < 2.0, "a box that keeps its height: {fixed:?}");
     let grown = rect(true, 1.0);
-    assert!(grown.h > 15.0 && grown.h < 30.0, "one line and the margins: {grown:?}");
+    // The default paragraph has 8 pt after it, which is part of the box's text.
+    assert!(grown.h > 23.0 && grown.h < 38.0, "one line, the space after it and the margins: {grown:?}");
     let shrunk = rect(true, 300.0);
     assert!((shrunk.h - grown.h).abs() < 0.5, "{shrunk:?} {grown:?}");
+}
+
+/// The space after a box's last paragraph is part of its text (#6624): a box that resizes to fit
+/// is that much taller, and text set at the middle or the bottom of a box that keeps its height
+/// stands that much (half of it in the middle) higher. Measured in Word for Windows with 9 pt
+/// Arial and margins of 3.6 pt: one line with 0, 10 and 30 pt after it fits a box 17.55, 27.55
+/// and 47.55 pt tall, and at the bottom of a box 60 pt tall the line ends 46.4 pt down with 10 pt
+/// after it, where WordCraft put it 56.5 pt down.
+#[test]
+fn the_space_after_its_last_paragraph_is_part_of_a_boxs_text() {
+    // The box's frame and the top of its line, with `after` after its only paragraph.
+    let laid = |after: f32, h: f32, body: TextBody| {
+        let mut d = Document::from_text("Around");
+        let id = text_box(&mut d, 0, "Inside", 144.0, h, body);
+        if let Some(Block::Para(p)) = d.parts.get_mut(&id).and_then(|part| part.blocks.get_mut(0)).map(std::sync::Arc::make_mut) {
+            p.props.space_after = Some(after);
+            p.touch();
+        }
+        let l = lay(&d);
+        let line = lines(&l, id).first().map_or(f32::NAN, |line| line.1);
+        (frame_of(&l, id), line)
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.02;
+    let fit = TextBody { auto_fit: true, ..Default::default() };
+    let (plain, top) = laid(0.0, 1.0, fit);
+    for after in [10.0, 30.0] {
+        let (r, y) = laid(after, 1.0, fit);
+        assert!(near(r.h, plain.h + after), "{after} pt after: the box is {} pt tall, {} without", r.h, plain.h);
+        assert!(near(y - r.y, top - plain.y), "{after} pt after: the line starts {} pt down the box", y - r.y);
+    }
+    // In a box that keeps its height the text is placed with the space after it.
+    for (anchor, share) in [(VAlign::Top, 0.0), (VAlign::Center, 0.5), (VAlign::Bottom, 1.0)] {
+        let body = TextBody { anchor, ..Default::default() };
+        let (r0, y0) = laid(0.0, 60.0, body);
+        let (r, y) = laid(10.0, 60.0, body);
+        assert!(near(r.h, 60.0) && near(r0.h, 60.0), "{anchor:?}: the box keeps its height: {} and {}", r.h, r0.h);
+        assert!(
+            near((y0 - r0.y) - (y - r.y), 10.0 * share),
+            "{anchor:?}: the line starts {} pt down the box, {} without the space",
+            y - r.y,
+            y0 - r0.y
+        );
+    }
 }
 
 /// #4250: on a later page of its paragraph, a floating box that resizes to fit its text takes its
@@ -339,7 +383,7 @@ fn a_floating_box_on_a_later_page_of_its_paragraph_fits_its_text() {
     assert!(l.pages.len() >= 3, "pages {}", l.pages.len());
     let hit = l.find_object(0, |o| o.text_box == Some(id)).unwrap();
     assert!(hit.page > 0, "drawn on the page of its anchor");
-    assert!(hit.rect.h > 15.0 && hit.rect.h < 30.0, "one line and the margins: {:?}", hit.rect);
+    assert!(hit.rect.h > 23.0 && hit.rect.h < 38.0, "one line, the space after it and the margins: {:?}", hit.rect);
 }
 
 #[test]
