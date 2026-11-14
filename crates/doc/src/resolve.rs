@@ -320,7 +320,18 @@ const MAX_CHARS: f32 = 1584.0;
 impl StyleSheet {
     /// Paragraph properties after defaults and the style chain (without direct formatting).
     pub fn para_style_props(&self, style: &str) -> (ParaProps, CharProps) {
-        self.para_style_props_over(style, self.default_para.clone(), self.default_chr.clone())
+        self.para_style_props_over(style, self.para_defaults(), self.default_chr.clone())
+    }
+
+    /// The document's paragraph defaults as Word lays them out: `w:pPrDefault`, or, when the file
+    /// has none, Word's own (its Normal template's: 8 pt after) under whatever was set since.
+    pub fn para_defaults(&self) -> ParaProps {
+        if self.default_para_present {
+            return self.default_para.clone();
+        }
+        let mut d = crate::styles::app_para_defaults();
+        d.overlay(&self.default_para);
+        d
     }
 
     /// The paragraph style chain of `style` applied over `pp` / `cp`. A style the document doesn't
@@ -351,10 +362,10 @@ impl StyleSheet {
     /// that the chain doesn't set. Formats without table styles state these directly.
     pub fn table_para_patch(&self, p: &ParaProps, table: &ParaProps) -> ParaProps {
         let style = p.style.clone().unwrap_or_else(|| "Normal".into());
-        let mut with = self.default_para.clone();
+        let mut with = self.para_defaults();
         with.overlay(&ParaProps { style: None, ..table.clone() });
         let (with, _) = self.para_style_props_over(&style, with, CharProps::default());
-        let (without, _) = self.para_style_props_over(&style, self.default_para.clone(), CharProps::default());
+        let (without, _) = self.para_style_props_over(&style, self.para_defaults(), CharProps::default());
         diff_patch(&with, &without)
     }
 
@@ -390,7 +401,7 @@ impl StyleSheet {
     /// property the paragraph style chain sets, Normal included, beats the table style.
     pub fn resolve_para_in(&self, p: &ParaProps, table: Option<&ParaProps>) -> ResolvedPara {
         let style = p.style.clone().unwrap_or_else(|| "Normal".into());
-        let mut defaults = self.default_para.clone();
+        let mut defaults = self.para_defaults();
         if let Some(t) = table {
             defaults.overlay(&ParaProps { style: None, ..t.clone() });
         }

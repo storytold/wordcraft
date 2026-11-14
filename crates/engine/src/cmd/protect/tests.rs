@@ -425,6 +425,10 @@ fn the_post_check_compares_the_settings_and_the_metadata() {
     let mut after = before.clone();
     after.settings.remove_personal_info = true;
     assert!(!super::outside_unchanged(&before, &after, "someone"), "the settings aren't compared");
+    // Whether the defaults are the file's own or Word's decides how every paragraph is spaced.
+    let mut after = before.clone();
+    std::sync::Arc::make_mut(&mut after.styles).default_para_present ^= true;
+    assert!(!super::outside_unchanged(&before, &after, "someone"), "where the paragraph defaults come from isn't compared");
     assert!(super::outside_unchanged(&before, &before.clone(), "someone"), "an unchanged document isn't unchanged");
 }
 
