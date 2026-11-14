@@ -450,14 +450,21 @@ impl<'a> Flow<'a> {
     /// at the bottom of the page even when it doesn't fit (it only ends the page, and moving it
     /// would leave a blank page behind it, as in Word), and so does an empty paragraph closing a
     /// section before a new page (measured in Word: it stays on a full page instead of starting
-    /// one of its own).
+    /// one of its own). The exception, measured in Word: a paragraph of nothing but a page break
+    /// moves on and leaves a blank page.
     fn stays_at_bottom(&self, pb: &PageBuilder, l: &para::Line) -> bool {
         let p = self.p;
         let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
             && p.text
                 .get(l.start..l.stop)
-                .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));
+                .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)))
+            && (l.end != LineEnd::PageBreak || !self.ends_with(self.l0));
         only_break || (pb.next_starts_page && p.section.is_some() && p.text.is_empty())
+    }
+
+    /// Whether nothing but markers follows line `li` in the paragraph.
+    fn ends_with(&self, li: usize) -> bool {
+        self.pl.lines.get(li + 1..).is_none_or(|rest| rest.iter().all(|m| only_markers(self.p, m.start..m.stop)))
     }
 
     /// Whether the line (just taken, `fit.l1` is after it) forces a break, noted in `fit`.
