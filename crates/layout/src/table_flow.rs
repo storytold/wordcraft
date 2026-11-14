@@ -262,6 +262,11 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         let under_top_headers = ri == first && table_at_top;
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
+            // The part that goes on from the page before is at least as tall as an at-least
+            // row's height says, down to this page's bottom at most.
+            if let Some(part) = rest.as_mut() {
+                table::grow_to_floor(part, pb.bottom - pb.y);
+            }
             let cur = rest.as_ref().unwrap_or(row);
             // A fitting kept row follows the next row when that row cannot start below it.
             // Move only the prefix's start; an oversized follower cannot separate its kept rows.
