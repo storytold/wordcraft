@@ -163,18 +163,15 @@ mod tests {
         }
     }
 
-    /// #1746 review: off the shown page (the gap between pages, the seam where Hide White Space
-    /// cuts the margins) the I-beam contrasts with the canvas, not the paper. With the dark page
-    /// the two differ: white over the page, black over the light canvas.
+    /// #1746 review, #4114: off the shown page (the gap between pages, the seam where Hide White
+    /// Space cuts the margins) the pointer is the arrow, as in Word, so no I-beam is drawn there.
+    /// Over the dark page it is white.
     #[test]
-    fn the_drawn_i_beam_takes_the_canvas_colour_off_the_page() {
+    fn no_i_beam_is_drawn_off_the_page() {
         let text = vec!["A line of text to fill the pages."; 120].join("\n");
         let mut h = window_at(true, true, 1.0, 800.0, &text);
         h.state_mut().session.view.zoom = 0.5;
         h.run_steps(3);
-        let canvas = crate::theme::Tokens::get(&h.ctx).canvas;
-        let off = crate::canvas::caret_contrast(wordcraft_doc::props::Rgb(canvas.r(), canvas.g(), canvas.b()));
-        assert_eq!(off, Color32::BLACK, "the light canvas");
         // The fill is drawn last.
         let fill = |h: &mut H, at: egui::Pos2| stem_strokes(h, at).last().map(|s| s.color);
         let rects = h.state_mut().canvas.page_rects.clone();
@@ -183,7 +180,7 @@ mod tests {
         let gap = egui::pos2(x, (rects[0].max.y + rects[1].min.y) / 2.0);
         assert!(rects[0].max.y < gap.y && gap.y < rects[1].min.y, "a gap between the pages: {rects:?}");
         assert_eq!(fill(&mut h, egui::pos2(x, rects[0].center().y)), Some(Color32::WHITE), "on the dark page");
-        assert_eq!(fill(&mut h, gap), Some(off), "between the pages");
+        assert!(stem_strokes(&mut h, gap).is_empty(), "between the pages");
         // On the seam where Hide White Space cuts page 1's bottom margin and page 2's top.
         assert!(h.state_mut().run("view.hideWhiteSpace", serde_json::json!({"value": true})).is_ok());
         h.run_steps(3);
@@ -191,7 +188,7 @@ mod tests {
         let body_bottom = h.state_mut().session.layout().pages[0].body.bottom();
         let band_end = crate::canvas::page_to_screen(h.state_mut(), 0, 300.0, body_bottom).unwrap().y + crate::canvas::WHITE_SPACE_PAD * scale;
         assert_eq!(fill(&mut h, egui::pos2(x, band_end - 20.0)), Some(Color32::WHITE), "on page 1's text area");
-        assert_eq!(fill(&mut h, egui::pos2(x, band_end + crate::canvas::SEAM / 2.0)), Some(off), "on the seam over the cut margins");
+        assert!(stem_strokes(&mut h, egui::pos2(x, band_end + crate::canvas::SEAM / 2.0)).is_empty(), "on the seam over the cut margins");
     }
 
     /// Elsewhere the system's own I-beam stays.
