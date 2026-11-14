@@ -189,7 +189,6 @@ fn merge_end_to_end() {
 /// A typed list (#240) keeps its column order, and rows may be arrays in that order.
 #[test]
 fn recipients_from_a_workbook_ask_for_the_sheet_when_there_are_several() {
-    use std::io::Write;
     let cell = |t: &str| format!(r#"<table:table-cell office:value-type="string"><text:p>{t}</text:p></table:table-cell>"#);
     let row = |cells: &[&str]| format!("<table:table-row>{}</table:table-row>", cells.iter().map(|c| cell(c)).collect::<String>());
     let content = format!(
@@ -199,12 +198,11 @@ fn recipients_from_a_workbook_ask_for_the_sheet_when_there_are_several() {
         row(&["Ada", "London", "A"]),
         row(&["Alan", "Wilmslow", "B"]),
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut z = craft_zip::Writer::new();
     for (name, body) in [("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content.as_str())] {
-        z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        z.write_all(body.as_bytes()).unwrap();
+        z.add(name, body.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let data = super::super::insert::base64_encode(&z.finish().unwrap().into_inner());
+    let data = super::super::insert::base64_encode(&z.finish().unwrap());
     let mut s = Session::new(Document::new());
     // Two sheets and none chosen: the names come back and nothing loads.
     let r = s.run("mailings.recipients", &json!({"data": data})).unwrap();
@@ -593,8 +591,7 @@ fn recipients_from_an_xls_workbook() {
     let book = wordcraft_formats::sheet::xls_fixture(&[(
         "收件人",
         vec![row(&["姓名", "城市", "数量"]), row(&["张三", "北京", "12"]), row(&["李四", "上海", "2"])],
-    )])
-    .unwrap();
+    )]);
     let mut s = Session::new(Document::new());
     let r = s.run("mailings.recipients", &json!({"path": "名单.xls", "data": b64(&book)})).unwrap();
     assert_eq!(r, json!({"fields": ["姓名", "城市", "数量"], "records": 2, "sheet": "收件人"}));
