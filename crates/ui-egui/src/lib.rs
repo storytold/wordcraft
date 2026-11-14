@@ -49,6 +49,7 @@ pub mod guides;
 pub mod i18n;
 pub mod ibeam;
 pub mod icons;
+pub(crate) mod ime_spot;
 pub mod ink;
 pub mod keys;
 pub mod keytips;
