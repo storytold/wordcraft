@@ -59,11 +59,14 @@ fn collapse_noise_matches_merges_short_interior_runs_but_keeps_prefix_suffix() {
     // ('1', '.', '0') threaded through what a reader expects to be one clean replacement.
     let ops = lcs_ops(&['0', '1', '.', '0', '9'], &['1', '9', '.', '1', '0'], &mut { u64::MAX });
     assert!(ops.contains(&Op::Same), "the raw LCS does find spurious matches here, or this test proves nothing");
-    assert_eq!(collapse_noise_matches(&ops), vec![Op::Del, Op::Del, Op::Del, Op::Del, Op::Del, Op::Ins, Op::Ins, Op::Ins, Op::Ins, Op::Ins]);
+    assert_eq!(
+        collapse_noise_matches(&ops, |_| false),
+        vec![Op::Del, Op::Del, Op::Del, Op::Del, Op::Del, Op::Ins, Op::Ins, Op::Ins, Op::Ins, Op::Ins]
+    );
     // A plain single-character replacement flanked by a real common prefix and suffix has no
     // interior match to begin with (the DP's middle is pure delete/insert), so it's untouched.
     let ops = lcs_ops(&['a', 'b', 'c', 'x', 'd', 'e', 'f'], &['a', 'b', 'c', 'y', 'd', 'e', 'f'], &mut { u64::MAX });
-    assert_eq!(collapse_noise_matches(&ops), ops);
+    assert_eq!(collapse_noise_matches(&ops, |_| false), ops);
 }
 
 /// Verifies that `lcs_ops` chunks sequence alignment across multiple `MAX_LCS` windows,
@@ -603,6 +606,148 @@ fn compare_with_a_revised_file_keeps_its_text_boxes_backed() {
 }
 
 #[test]
+fn compare_keeps_a_ref_field_whose_result_changed_live() {
+    // #6268: the heading a REF field points at was renamed, so the revised document's field
+    // shows the new text. The result keeps both fields as fields (the old one deleted, the new
+    // one inserted), not their text, and the saved file still has the field codes.
+    fn with_ref(result: &str) -> Session {
+        let mut s = Session::new(Document::from_text("Title.\nSee "));
+        s.run("caret.set", &json!({"pos": Pos::body(1, "See ".len())})).unwrap();
+        s.run("insert.field", &json!({"instr": "REF h1 \\h", "result": result})).unwrap();
+        s.run("text.insert", &json!({"text": " for details."})).unwrap();
+        s
+    }
+    /// Each field in the second paragraph: its code and result, and whether it is deleted or
+    /// inserted.
+    fn fields(d: &Document) -> Vec<(String, String, bool, bool)> {
+        let p = d.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+        p.objects_with_offsets()
+            .filter_map(|(off, o)| match o {
+                InlineObject::Field { instr, result, .. } => {
+                    let c = p.props_of_char(off);
+                    Some((instr.clone(), result.clone(), c.del.is_some(), c.ins.is_some()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+    let f = |r: &str, del, ins| ("REF h1 \\h".to_string(), r.to_string(), del, ins);
+    let dir = std::env::temp_dir();
+    let rev_path = dir.join(format!("wc-compare-ref-{}.docx", std::process::id()));
+    let out_path = dir.join(format!("wc-compare-ref-out-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &with_ref("New title").doc).unwrap();
+    for (then, left, text) in
+        [("review.acceptAll", "New title", "See New title for details."), ("review.rejectAll", "Old title", "See Old title for details.")]
+    {
+        let mut s = with_ref("Old title");
+        s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+        assert_eq!(fields(&s.doc), [f("Old title", true, false), f("New title", false, true)]);
+        crate::io::save_path(&out_path, &s.doc).unwrap();
+        let saved = crate::io::open_path(&out_path).unwrap();
+        assert_eq!(fields(&saved), [f("Old title", true, false), f("New title", false, true)], "saved result");
+        s.run(then, &json!({})).unwrap();
+        assert_eq!(fields(&s.doc), [f(left, false, false)], "{then}");
+        assert_eq!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().plain_text(), text, "{then}");
+    }
+    // An unchanged field stays one field, unmarked.
+    let mut s = with_ref("New title");
+    s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    assert_eq!(fields(&s.doc), [f("New title", false, false)]);
+    let _ = std::fs::remove_file(&rev_path);
+    let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
+fn compare_character_level_keeps_an_unchanged_field_between_edits() {
+    // Edits on both sides of an unchanged field: the field is one matched token, which the
+    // character-level noise folding must not turn into a deletion and an insertion.
+    fn with_field(before: &str, after: &str) -> Session {
+        let mut s = Session::new(Document::from_text(before));
+        s.run("caret.set", &json!({"pos": Pos::body(0, before.len())})).unwrap();
+        s.run("insert.field", &json!({"instr": "REF h1 \\h", "result": "Same title"})).unwrap();
+        s.run("text.insert", &json!({"text": after})).unwrap();
+        s
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-char-field-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &with_field("b", "y").doc).unwrap();
+    let mut s = with_field("a", "x");
+    s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "level": "character"})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let marked: Vec<bool> = p
+        .objects_with_offsets()
+        .filter(|(_, o)| matches!(o, InlineObject::Field { .. }))
+        .map(|(off, _)| {
+            let c = p.props_of_char(off);
+            c.del.is_some() || c.ins.is_some()
+        })
+        .collect();
+    assert_eq!(marked, [false], "the unchanged field stays unmarked");
+    let _ = std::fs::remove_file(&rev_path);
+}
+
+#[test]
+fn compare_distinguishes_field_codes_differing_in_quoted_spaces() {
+    // `INCLUDETEXT "A  B.docx"` and `"A B.docx"` name different files; with empty results and
+    // a text edit in the paragraph the change must still show as a deleted and an inserted field.
+    fn with_include(file: &str, text: &str) -> Session {
+        let mut s = Session::new(Document::from_text(text));
+        s.run("caret.set", &json!({"pos": Pos::body(0, text.len())})).unwrap();
+        s.run("insert.field", &json!({"instr": format!("INCLUDETEXT \"{file}\""), "result": ""})).unwrap();
+        s
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-quoted-field-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &with_include("A B.docx", "New ").doc).unwrap();
+    let mut s = with_include("A  B.docx", "Old ");
+    s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let fields: Vec<(String, bool, bool)> = p
+        .objects_with_offsets()
+        .filter_map(|(off, o)| match o {
+            InlineObject::Field { instr, .. } => {
+                let c = p.props_of_char(off);
+                Some((instr.clone(), c.del.is_some(), c.ins.is_some()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields.len(), 2, "{fields:?}");
+    assert!(fields.iter().any(|(i, d, _)| i.contains("A  B") && *d), "{fields:?}");
+    assert!(fields.iter().any(|(i, _, n)| i.contains("A B") && *n), "{fields:?}");
+    let _ = std::fs::remove_file(&rev_path);
+}
+
+#[test]
+fn compare_distinguishes_field_codes_differing_after_an_escaped_quote() {
+    // In `INCLUDETEXT "A\"B  C"` the `\"` is text, so the spaces after it are still inside the
+    // quotes: `"A\"B  C"` and `"A\"B C"` name different files.
+    fn with_include(arg: &str, text: &str) -> Session {
+        let mut s = Session::new(Document::from_text(text));
+        s.run("caret.set", &json!({"pos": Pos::body(0, text.len())})).unwrap();
+        s.run("insert.field", &json!({"instr": format!("INCLUDETEXT \"{arg}\""), "result": ""})).unwrap();
+        s
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-escaped-quote-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &with_include(r#"A\"B C"#, "New ").doc).unwrap();
+    let mut s = with_include(r#"A\"B  C"#, "Old ");
+    s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let fields: Vec<(String, bool, bool)> = p
+        .objects_with_offsets()
+        .filter_map(|(off, o)| match o {
+            InlineObject::Field { instr, .. } => {
+                let c = p.props_of_char(off);
+                Some((instr.clone(), c.del.is_some(), c.ins.is_some()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields.len(), 2, "{fields:?}");
+    assert!(fields.iter().any(|(i, d, _)| i.contains("B  C") && *d), "{fields:?}");
+    assert!(fields.iter().any(|(i, _, n)| i.contains("B C") && *n), "{fields:?}");
+    let _ = std::fs::remove_file(&rev_path);
+}
+
+#[test]
 fn compare_bounds_total_diff_work() {
     // Many long, slightly different paragraphs: each pair alone fits one comparison table,
     // but the work over all pairs must stay bounded. Pairs past the budget are compared
@@ -902,4 +1047,153 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     let text = s.doc.plain_text(StoryRef::Body);
     assert!(!text.contains("Hidden"), "the hidden text is still there: {text}");
     assert!(text.contains("Visible text."), "{text}");
+}
+
+#[test]
+fn compare_keeps_a_page_reference_whose_page_changed_live() {
+    // "Details" is bookmarked in one paragraph, and the next one says "See page 3." through a
+    // PAGEREF field; the revised file shows page 4. The field stays live in the result and in
+    // the saved file, and Accept All and Reject All give back each side (#6269).
+    fn report(page: &str) -> Document {
+        let c = CharProps::default();
+        let mut target = Paragraph::new();
+        target.insert_text(0, "Details", &c).unwrap();
+        target.insert_object(7, InlineObject::BookmarkEnd { name: "Details".into() }, &c).unwrap();
+        target.insert_object(0, InlineObject::BookmarkStart { name: "Details".into() }, &c).unwrap();
+        let mut p = Paragraph::new();
+        p.insert_text(0, "See page .", &c).unwrap();
+        let field = InlineObject::Field {
+            instr: "PAGEREF Details \\h".into(),
+            result: page.into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        p.insert_object("See page ".len(), field, &c).unwrap();
+        let mut d = Document::from_text("x");
+        d.body = vec![para_block(target), para_block(p)];
+        d
+    }
+    /// The body's fields: code, result, deleted, inserted.
+    fn fields(d: &Document) -> Vec<(String, String, bool, bool)> {
+        let mut v = Vec::new();
+        for path in d.para_paths(StoryRef::Body) {
+            let p = d.para(StoryRef::Body, &path).unwrap();
+            for (off, o) in p.objects_with_offsets() {
+                if let InlineObject::Field { instr, result, .. } = o {
+                    let c = p.props_of_char(off);
+                    v.push((instr.clone(), result.clone(), c.del.is_some(), c.ins.is_some()));
+                }
+            }
+        }
+        v
+    }
+    let f = |r: &str, del, ins| ("PAGEREF Details \\h".to_string(), r.to_string(), del, ins);
+    let dir = std::env::temp_dir();
+    let revised = dir.join(format!("wc-compare-pageref-rev-{}.docx", std::process::id()));
+    let result = dir.join(format!("wc-compare-pageref-out-{}.docx", std::process::id()));
+    crate::io::save_path(&revised, &report("4")).unwrap();
+    let mut s = Session::new(report("3"));
+    s.run("review.compare", &json!({"path": revised.to_string_lossy()})).unwrap();
+    let expected = vec![f("3", true, false), f("4", false, true)];
+    assert_eq!(fields(&s.doc), expected);
+    // The saved result keeps the live fields (fldChar and instrText).
+    crate::io::save_path(&result, &s.doc).unwrap();
+    let reopened = crate::io::open_path(&result);
+    let _ = std::fs::remove_file(&revised);
+    let _ = std::fs::remove_file(&result);
+    let reopened = reopened.unwrap();
+    assert_eq!(fields(&reopened), expected);
+    for (then, left, text) in [("review.acceptAll", "4", "Details\nSee page 4."), ("review.rejectAll", "3", "Details\nSee page 3.")] {
+        let mut s = Session::new(reopened.clone());
+        s.run(then, &json!({})).unwrap();
+        assert_eq!(fields(&s.doc), vec![f(left, false, false)], "{then}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), text, "{then}");
+    }
+    // Comparing with an identical report changes nothing.
+    let mut s = Session::new(report("3"));
+    let same = dir.join(format!("wc-compare-pageref-same-{}.docx", std::process::id()));
+    crate::io::save_path(&same, &report("3")).unwrap();
+    let r = s.run("review.compare", &json!({"path": same.to_string_lossy()}));
+    let _ = std::fs::remove_file(&same);
+    assert_eq!(r.unwrap()["changes"], 0);
+    assert_eq!(fields(&s.doc), vec![f("3", false, false)]);
+}
+
+#[test]
+fn compare_keeps_a_bookmarked_merge_field_whose_result_changed() {
+    // A mail-merge letter, "Dear «FirstName», welcome.", with the field inside a bookmark;
+    // the revised file shows another merge result. The field and its bookmark stay in the
+    // result and in the saved file, and Accept All and Reject All give back each side.
+    fn letter(result: &str) -> Document {
+        let mut p = Paragraph::new();
+        let c = CharProps::default();
+        p.insert_text(0, "Dear , welcome.", &c).unwrap();
+        let at = "Dear ".len();
+        p.insert_object(at, InlineObject::BookmarkEnd { name: "Greeting".into() }, &c).unwrap();
+        let field = InlineObject::Field {
+            instr: "MERGEFIELD FirstName".into(),
+            result: result.into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        p.insert_object(at, field, &c).unwrap();
+        p.insert_object(at, InlineObject::BookmarkStart { name: "Greeting".into() }, &c).unwrap();
+        let mut d = Document::from_text("x");
+        d.body = vec![para_block(p)];
+        d
+    }
+    /// The body's fields (code, result, deleted, inserted) and bookmark marks, in order.
+    fn census(d: &Document) -> (Vec<(String, String, bool, bool)>, Vec<String>) {
+        let (mut fields, mut marks) = (Vec::new(), Vec::new());
+        for path in d.para_paths(StoryRef::Body) {
+            let p = d.para(StoryRef::Body, &path).unwrap();
+            for (off, o) in p.objects_with_offsets() {
+                match o {
+                    InlineObject::Field { instr, result, .. } => {
+                        let c = p.props_of_char(off);
+                        fields.push((instr.clone(), result.clone(), c.del.is_some(), c.ins.is_some()));
+                    }
+                    InlineObject::BookmarkStart { name } => marks.push(format!("start {name}")),
+                    InlineObject::BookmarkEnd { name } => marks.push(format!("end {name}")),
+                    _ => {}
+                }
+            }
+        }
+        (fields, marks)
+    }
+    let f = |r: &str, del, ins| ("MERGEFIELD FirstName".to_string(), r.to_string(), del, ins);
+    let marks = || vec!["start Greeting".to_string(), "end Greeting".to_string()];
+    let dir = std::env::temp_dir();
+    let revised = dir.join(format!("wc-compare-merge-rev-{}.docx", std::process::id()));
+    let result = dir.join(format!("wc-compare-merge-out-{}.docx", std::process::id()));
+    crate::io::save_path(&revised, &letter("Bob")).unwrap();
+    let mut s = Session::new(letter("Ann"));
+    s.run("review.compare", &json!({"path": revised.to_string_lossy()})).unwrap();
+    let expected = (vec![f("Ann", true, false), f("Bob", false, true)], marks());
+    assert_eq!(census(&s.doc), expected);
+    // The saved result keeps the live fields (fldChar and instrText) and the bookmark.
+    crate::io::save_path(&result, &s.doc).unwrap();
+    let reopened = crate::io::open_path(&result);
+    let _ = std::fs::remove_file(&revised);
+    let _ = std::fs::remove_file(&result);
+    let reopened = reopened.unwrap();
+    assert_eq!(census(&reopened), expected);
+    for (then, left, text) in [("review.acceptAll", "Bob", "Dear Bob, welcome."), ("review.rejectAll", "Ann", "Dear Ann, welcome.")] {
+        let mut s = Session::new(reopened.clone());
+        s.run(then, &json!({})).unwrap();
+        assert_eq!(census(&s.doc), (vec![f(left, false, false)], marks()), "{then}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), text, "{then}");
+    }
+    // Comparing with an identical letter changes nothing.
+    let mut s = Session::new(letter("Ann"));
+    let same = dir.join(format!("wc-compare-merge-same-{}.docx", std::process::id()));
+    crate::io::save_path(&same, &letter("Ann")).unwrap();
+    let r = s.run("review.compare", &json!({"path": same.to_string_lossy()}));
+    let _ = std::fs::remove_file(&same);
+    assert_eq!(r.unwrap()["changes"], 0);
+    assert_eq!(census(&s.doc), (vec![f("Ann", false, false)], marks()));
 }
