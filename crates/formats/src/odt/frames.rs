@@ -576,7 +576,9 @@ pub(super) fn turned(f: &Float) -> bool {
 
 /// How a floating picture is written: its `text:anchor-type`, its graphic style's
 /// `style:graphic-properties` attributes, and the frame's `svg:x`/`svg:y` attributes, or its
-/// `draw:transform` when it is turned (`w` × `h` its size).
+/// `draw:transform` when it is turned (`w` × `h` its size). Frames anchored to the page on both
+/// horizontal and vertical axes export with `page` anchor; mixed or paragraph-relative frames
+/// export with `paragraph` (or `char` for line-relative vertical) anchor to preserve placement.
 pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, String) {
     // A page number holds until it is placed by its paragraph: moved in WordCraft.
     let by_paragraph =

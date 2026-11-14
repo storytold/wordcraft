@@ -27,7 +27,7 @@ mod inlines;
 /// header made 2 million cells and took 3 to 5 GB to convert; past this, rows are left out.
 pub(crate) const MAX_TABLE_CELLS: usize = 1 << 18;
 
-pub use blocks::{Refs, import, import_on, parse};
+pub use blocks::{Refs, import, import_on, import_on_with_lines, parse, parse_with_lines};
 pub(crate) use export::escape;
 pub use export::export;
 #[cfg(test)]
@@ -35,6 +35,6 @@ use export::{escape_line_start, inlines_md, table_md, write_blocks};
 pub use inlines::parse_inlines;
 
 #[cfg(test)]
-use blocks::split_row;
+use blocks::{remap_original_lines, split_row};
 #[cfg(test)]
 mod tests;

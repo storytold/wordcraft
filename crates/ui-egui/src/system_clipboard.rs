@@ -11,6 +11,17 @@ use wordcraft_engine::cmd::paste::{MAX_PASTE_BYTES, MAX_PICTURE_BYTES};
 
 use crate::{WordApp, paste_picture};
 
+/// Straight RGBA8 pixels for a native image copy. Decode limits are applied before allocation.
+#[derive(Clone, Debug)]
+pub struct CopyImage {
+    /// Width in pixels.
+    pub width: usize,
+    /// Height in pixels.
+    pub height: usize,
+    /// Raw uncompressed RGBA pixel bytes (4 bytes per pixel).
+    pub rgba: Vec<u8>,
+}
+
 /// The commands that paste the clipboard.
 pub(crate) fn is_paste(id: &str) -> bool {
     matches!(id, "edit.paste" | "edit.pasteText" | "edit.pasteMerge" | "edit.pasteSpecial")
@@ -30,6 +41,11 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         return None;
     }
     let o = params.as_object_mut()?;
+    // A caller that captured ownership already (Paste Special's dialog) keeps that value.
+    if app.services.clipboard_is_own.is_some() && !o.contains_key("privateClipboard") {
+        let own = app.clipboard_published && app.services.clipboard_is_own.as_ref().is_some_and(|f| f());
+        o.insert("privateClipboard".into(), Value::Bool(own));
+    }
     if !o.contains_key("text")
         && let Some(text) = app.services.clipboard_text.as_ref().and_then(|f| f()).filter(|t| !t.is_empty())
     {
@@ -56,6 +72,11 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     if let Some(rtf) = app.services.clipboard_rtf.as_ref().and_then(|f| f()).filter(fits) {
         o.insert("rtf".into(), Value::String(rtf));
     }
+    // Native bitmap/image formats are for other programs. Our own paste keeps the original
+    // fragment (size, cropping and floating-picture properties), while its owner mark lasts.
+    if app.session.clipboard.is_some() && o.get("privateClipboard").and_then(Value::as_bool) == Some(true) {
+        o.insert("text".into(), Value::String(app.session.clipboard_text.clone()));
+    }
     if id == "edit.pasteSpecial"
         && let Some(png) = paste_picture::clipboard_png(app)
     {
@@ -71,25 +92,115 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
 /// and equations as MathML, #816; a lone equation in the MathML formats too, #1297) when the host
 /// can set them, else the text through egui. egui sets its text at the end of the frame, which
 /// would replace the rest, so only one of them runs.
-pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, rtf: &str, mathml: &str) {
+pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, rtf: &str, mathml: &str) -> bool {
     if text.is_empty() {
         // A copied picture or shape has no text, only HTML (#2276): empty the clipboard's text,
         // else Paste would find the text copied before it and paste that instead of our copy.
         if !html.is_empty() {
+            if !(html.is_empty() && rtf.is_empty()) && app.services.set_clipboard_rich.as_ref().is_some_and(|f| f(text, html, rtf, mathml)) {
+                return true;
+            }
             ctx.copy_text(String::new());
         }
-        return;
+        return false;
     }
     if !(html.is_empty() && rtf.is_empty()) && app.services.set_clipboard_rich.as_ref().is_some_and(|f| f(text, html, rtf, mathml)) {
-        return;
+        return true;
     }
     ctx.copy_text(text.to_string());
+    false
+}
+
+/// Return whether the command result `r` contains any copied payload (text, HTML, RTF, or MathML).
+fn has_copied_content(r: &Value) -> bool {
+    let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
+    !s("text").is_empty() || !s("html").is_empty() || !s("rtf").is_empty() || !s("mathml").is_empty()
 }
 
 /// Put what Copy or Cut returned on the system clipboard (see [`put`]).
-pub(crate) fn put_result(app: &WordApp, ctx: &egui::Context, r: &Value) {
+///
+/// When `r` contains no copied content (e.g. Copy on a collapsed selection),
+/// this does nothing: it avoids overwriting external clipboard contents with
+/// previously-copied fragments or modifying the published ownership state.
+pub(crate) fn put_result(app: &mut WordApp, ctx: &egui::Context, r: &Value) {
+    if !has_copied_content(r) {
+        return;
+    }
     let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
-    put(app, ctx, s("text"), s("html"), s("rtf"), s("mathml"));
+    app.clipboard_published = false;
+    if app.services.set_clipboard_image.is_some()
+        && let Some(res) = copied_image(app)
+    {
+        match res {
+            Ok(image) => {
+                let set = app.services.set_clipboard_image.as_ref().map(|f| f(&image, s("html"), s("text"))).unwrap_or(false);
+                if set {
+                    app.clipboard_published = true;
+                    return;
+                }
+            }
+            Err(e) => {
+                app.status(format!("Couldn't copy the picture: {e}"));
+            }
+        }
+    }
+    app.clipboard_published = put(app, ctx, s("text"), s("html"), s("rtf"), s("mathml"));
+}
+
+/// Extract the single copied image from the clipboard fragment, if that is all that was copied.
+fn copied_image(app: &WordApp) -> Option<Result<CopyImage, String>> {
+    use wordcraft_doc::{Block, para::InlineObject};
+    let fragment = app.session.clipboard.as_ref()?;
+    let [Block::Para(para)] = fragment.blocks.as_slice() else { return None };
+    let [InlineObject::Image { media, .. }] = para.objects.as_slice() else { return None };
+    if para.text != wordcraft_doc::para::OBJ.to_string() {
+        return None;
+    }
+    let bytes = fragment.media.get(media).or_else(|| app.session.doc.media.get(media))?;
+    Some(match wordcraft_render::metafile_size(bytes) {
+        Some((w, h, _)) => {
+            let rect = wordcraft_geom::Rect::new(0.0, 0.0, w, h);
+            let items = [wordcraft_layout::display::Draw::Image {
+                rect,
+                media: media.clone(),
+                crop: [0.0; 4],
+                alpha: 1.0,
+                alt: String::new(),
+                fx: Default::default(),
+                decorative: false,
+            }];
+            let doc = fragment.to_document();
+            let image = wordcraft_render::render_items(&doc, &items, rect, 96.0 / 72.0, &Default::default());
+            Ok(CopyImage { width: image.width as usize, height: image.height as usize, rgba: image.to_straight() })
+        }
+        None => decode_image(bytes),
+    })
+}
+
+/// Decode raster image bytes into unpremultiplied RGBA8 pixels under bounded size limits.
+fn decode_image(bytes: &[u8]) -> Result<CopyImage, String> {
+    if bytes.len() as u64 > paste_picture::MAX_FILE_BYTES {
+        return Err("the picture file is larger than 200 MB".into());
+    }
+    let reader = || image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string());
+    let (w, h) = reader()?.into_dimensions().map_err(|e| e.to_string())?;
+    let pixels = (w as usize).checked_mul(h as usize);
+    if w == 0
+        || h == 0
+        || w as usize > paste_picture::MAX_SIDE
+        || h as usize > paste_picture::MAX_SIDE
+        || pixels.is_none_or(|n| n > paste_picture::MAX_PIXELS)
+    {
+        return Err(format!("the picture is too large to copy ({w} × {h} pixels)"));
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(paste_picture::MAX_SIDE as u32);
+    limits.max_image_height = Some(paste_picture::MAX_SIDE as u32);
+    limits.max_alloc = Some((paste_picture::MAX_PIXELS as u64).saturating_mul(4));
+    let mut reader = reader()?;
+    reader.limits(limits);
+    let rgba = reader.decode().map_err(|e| e.to_string())?.into_rgba8();
+    Ok(CopyImage { width: w as usize, height: h as usize, rgba: rgba.into_raw() })
 }
 
 /// Format names worth showing: not the clipboard protocol's own bookkeeping targets.
@@ -265,7 +376,7 @@ mod tests {
         a.run("select.all", json!({})).unwrap();
         let ctx = egui::Context::default();
         let r = a.run("edit.copy", json!({})).unwrap();
-        put_result(&a, &ctx, &r);
+        put_result(&mut a, &ctx, &r);
         let got_now = got.borrow().clone();
         assert_eq!(got_now.len(), 1);
         assert!(got_now[0].0.contains("<math") && got_now[0].1.contains("y=2x_s"), "{got_now:?}");
@@ -275,7 +386,7 @@ mod tests {
         // and RTF for the programs that read that (gap-clipboard-rtf).
         a.run("select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 5}})).unwrap();
         let r = a.run("edit.copy", json!({})).unwrap();
-        put_result(&a, &ctx, &r);
+        put_result(&mut a, &ctx, &r);
         let got_now = got.borrow().clone();
         assert_eq!(got_now.len(), 2);
         assert!(got_now[1].0.contains("Speed") && !got_now[1].0.contains("<math") && got_now[1].1 == "Speed", "{got_now:?}");
@@ -284,9 +395,118 @@ mod tests {
         // The equation alone: its MathML for the platform's MathML formats too (#1297).
         a.run("select.range", json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 9}})).unwrap();
         let r = a.run("edit.copy", json!({})).unwrap();
-        put_result(&a, &ctx, &r);
+        put_result(&mut a, &ctx, &r);
         let got_now = got.borrow().clone();
         assert_eq!(got_now.len(), 3);
         assert!(got_now[2].2.starts_with("<math") && got_now[2].2.contains("<msub>") && got_now[2].1 == "y=2x_s", "{got_now:?}");
+    }
+
+    #[test]
+    fn copying_an_image_publishes_image_and_html_to_system_clipboard() {
+        let got_image = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(usize, usize, String, String)>::new()));
+        let sink = got_image.clone();
+        let services = Services {
+            set_clipboard_image: Some(Box::new(move |img, html, text| {
+                sink.borrow_mut().push((img.width, img.height, html.to_string(), text.to_string()));
+                true
+            })),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        let png = paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
+        a.run("insert.picture", json!({"data": data})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        let ctx = egui::Context::default();
+        let r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a, &ctx, &r);
+        assert!(a.clipboard_published);
+        let got = got_image.borrow().clone();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, 2);
+        assert_eq!(got[0].1, 2);
+        assert!(got[0].2.contains("<img src=\"data:image/png;base64,"));
+    }
+
+    #[test]
+    fn pasting_own_image_uses_private_clipboard_fragment() {
+        let services =
+            Services { set_clipboard_image: Some(Box::new(|_, _, _| true)), clipboard_is_own: Some(Box::new(|| true)), ..Default::default() };
+        let mut a = app(services);
+        let png = paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
+        a.run("insert.picture", json!({"data": data})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        let ctx = egui::Context::default();
+        let r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a, &ctx, &r);
+        assert!(a.clipboard_published);
+
+        a.run("document.setText", json!({"text": ""})).unwrap();
+        assert_eq!(a.session.doc.body.len(), 1);
+        assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty());
+
+        let mut params = json!({});
+        fill(&mut a, "edit.paste", &mut params);
+        assert_eq!(params.get("privateClipboard"), Some(&Value::Bool(true)));
+        a.run("edit.paste", params).unwrap();
+
+        assert!(!a.session.doc.media.is_empty());
+    }
+
+    /// Paste Special captures ownership when it opens; `fill` must keep that captured value
+    /// when the dialog submits, even if the clipboard changed meanwhile. Callers that pass no
+    /// flag still get it read from the clipboard ownership service.
+    #[test]
+    fn fill_keeps_a_callers_private_clipboard_flag() {
+        let services = Services { clipboard_is_own: Some(Box::new(|| true)), ..Default::default() };
+        let mut a = app(services);
+        a.clipboard_published = true;
+
+        let mut params = json!({"privateClipboard": false, "text": "Bold"});
+        fill(&mut a, "edit.pasteSpecial", &mut params);
+        assert_eq!(params.get("privateClipboard"), Some(&Value::Bool(false)), "the captured flag wins");
+
+        let mut params = json!({});
+        fill(&mut a, "edit.paste", &mut params);
+        assert_eq!(params.get("privateClipboard"), Some(&Value::Bool(true)), "without a flag fill reads ownership");
+    }
+
+    #[test]
+    fn empty_copy_does_not_publish_or_overwrite_clipboard_state() {
+        let got_image = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(usize, usize, String, String)>::new()));
+        let sink = got_image.clone();
+        let services = Services {
+            set_clipboard_image: Some(Box::new(move |img, html, text| {
+                sink.borrow_mut().push((img.width, img.height, html.to_string(), text.to_string()));
+                true
+            })),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        let png = paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
+        a.run("insert.picture", json!({"data": data})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        let ctx = egui::Context::default();
+        let r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a, &ctx, &r);
+        assert!(a.clipboard_published);
+        assert_eq!(got_image.borrow().len(), 1);
+
+        a.run("caret.docEnd", json!({})).unwrap();
+        assert!(a.session.sel.is_collapsed());
+
+        let empty_r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a, &ctx, &empty_r);
+
+        assert_eq!(got_image.borrow().len(), 1, "empty copy must not call set_clipboard_image");
+        assert!(a.clipboard_published, "empty copy must not change published-copy state");
+
+        let mut a2 = app(Services { set_clipboard_image: Some(Box::new(|_, _, _| true)), ..Default::default() });
+        assert!(!a2.clipboard_published);
+        let empty_r2 = a2.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a2, &ctx, &empty_r2);
+        assert!(!a2.clipboard_published, "empty copy must not change published-copy state when false");
     }
 }

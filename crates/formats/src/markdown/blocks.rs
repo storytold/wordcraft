@@ -101,12 +101,18 @@ fn link_definition(line: &str) -> Option<(String, String)> {
 /// definition. A definition anywhere else stays in the document and reads as text, which is what
 /// it did before definitions were understood at all; deleting a line that was part of a
 /// paragraph would lose it silently.
-fn take_definitions(lines: &mut Vec<String>) -> Refs {
+///
+/// Returns the parsed references and the 0-based indexes of the removed lines.
+fn take_definitions(lines: &mut Vec<String>) -> (Refs, Vec<usize>) {
     let mut refs = Refs::new();
     let mut open: Option<(char, usize)> = None;
     // The start of the document begins a block.
     let mut starts_block = true;
+    let mut removed = Vec::new();
+    let mut at = 0usize;
     lines.retain(|line| {
+        let this = at;
+        at += 1;
         let t = line.trim_start_matches([' ', '\t']);
         // Four spaces of indentation is code, not a fence (`parse_blocks`), on both sides.
         let marker = (indent(line) < 4).then(|| fence(t)).flatten();
@@ -130,26 +136,97 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
             // The first definition of a label wins, as CommonMark says, and definitions may
             // follow one another.
             refs.entry(label).or_insert(dest.into());
+            removed.push(this);
             return false;
         }
         starts_block = is_blank(line) || atx_heading(t).is_some() || thematic_break(t);
         true
     });
-    refs
+    (refs, removed)
+}
+
+/// Maps monotonically non-decreasing line indexes in lines filtered of link definitions back to
+/// their original source lines in a single linear pass.
+pub(super) fn remap_original_lines(block_lines: &mut [usize], removed: &[usize]) {
+    let mut rem_iter = removed.iter().copied().peekable();
+    let mut shift = 0;
+    for l in block_lines.iter_mut() {
+        while let Some(&r) = rem_iter.peek() {
+            if r <= *l + shift {
+                shift += 1;
+                rem_iter.next();
+            } else {
+                break;
+            }
+        }
+        *l += shift;
+    }
+}
+
+/// Context for block parsing: depth, nesting, reference definitions, cell budget, and line recording.
+struct BlockCtx<'a> {
+    depth: usize,
+    level: u8,
+    refs: &'a Refs,
+    budget: &'a std::cell::Cell<usize>,
+    lines_out: Option<&'a mut Vec<usize>>,
+}
+
+impl BlockCtx<'_> {
+    /// Records the starting line of a top-level block if line tracking is active.
+    fn record_line(&mut self, line: usize) {
+        if self.depth == 0
+            && let Some(lo) = self.lines_out.as_mut()
+        {
+            lo.push(line);
+        }
+    }
+
+    /// Records `count` blocks originating at `line` if line tracking is active.
+    fn record_lines(&mut self, line: usize, count: usize) {
+        if self.depth == 0
+            && let Some(lo) = self.lines_out.as_mut()
+        {
+            for _ in 0..count {
+                lo.push(line);
+            }
+        }
+    }
 }
 
 /// Parse Markdown text into the flow model.
 pub fn parse(text: &str) -> model::Flow {
+    parse_with_lines(text).0
+}
+
+/// [`parse`] returning the flow model and the 0-based starting line of each top-level block.
+pub fn parse_with_lines(text: &str) -> (model::Flow, Vec<usize>) {
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut lines: Vec<String> = text.split('\n').map(|l| expand_tabs(l.trim_end_matches('\r'))).collect();
-    let refs = take_definitions(&mut lines);
+    let (refs, removed) = take_definitions(&mut lines);
     let budget = std::cell::Cell::new(super::MAX_TABLE_CELLS);
-    let mut blocks = parse_blocks(&lines, 0, 0, &refs, &budget);
+    let mut block_lines = Vec::new();
+    let mut ctx = BlockCtx { depth: 0, level: 0, refs: &refs, budget: &budget, lines_out: Some(&mut block_lines) };
+    let mut blocks = parse_blocks(&lines, &mut ctx);
     // A leading "Title" from front matter isn't supported; a first-level heading stays a heading.
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
+        block_lines.push(0);
     }
-    model::Flow { blocks, meta: Default::default() }
+    remap_original_lines(&mut block_lines, &removed);
+    (model::Flow { blocks, meta: Default::default() }, block_lines)
+}
+
+/// [`import_on`] returning the document and the 0-based starting line of each top-level block.
+pub fn import_on_with_lines(text: &str, page: &wordcraft_doc::SectionProps) -> (Document, Vec<usize>) {
+    model::begin_import();
+    let (flow, mut lines) = parse_with_lines(text);
+    let doc = model::to_doc_in(&flow, page.clone());
+    if doc.body.len() > lines.len() {
+        let end_line = text.as_bytes().iter().filter(|&&b| b == b'\n').count();
+        lines.resize(doc.body.len(), end_line);
+    }
+    (doc, lines)
 }
 
 /// Leading tabs → spaces (tab stops of 4); the rest of the line is kept.
@@ -369,18 +446,22 @@ fn interrupts(l: &str) -> bool {
         || list_marker(t).is_some_and(|m| (!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or("")))
 }
 
-fn flush_para(lines: &mut Vec<String>, out: &mut Vec<FBlock>, depth: usize, refs: &Refs) {
+/// Flushes accumulated paragraph text into `out`, recording its starting line if tracked.
+fn flush_para(lines: &mut Vec<String>, start_line: &mut Option<usize>, out: &mut Vec<FBlock>, ctx: &mut BlockCtx<'_>) {
     if lines.is_empty() {
+        *start_line = None;
         return;
     }
+    let line_no = start_line.take().unwrap_or(0);
     let text = join_lines(lines);
     lines.clear();
-    let inlines = parse_inlines(&text, &Fmt::default(), depth, refs);
+    let inlines = parse_inlines(&text, &Fmt::default(), ctx.depth, ctx.refs);
     if inlines.is_empty() {
         return;
     }
     let p = Para { inlines, ..Default::default() };
     out.push(FBlock::Para(p));
+    ctx.record_line(line_no);
 }
 
 /// Paragraph lines → text with `\n` for hard breaks and spaces for soft ones.
@@ -405,32 +486,83 @@ fn join_lines(lines: &[String]) -> String {
     s
 }
 
+/// Creates a single code block paragraph for an indented code line.
 fn code_para(line: &str) -> FBlock {
     let mut p = Para::new(Kind::Code);
     p.push_text(line, &Fmt::default());
     FBlock::Para(p)
 }
 
-/// Parse block structure. `level` is the list nesting level for lists found here.
-/// `budget`: the table cells the document may still make ([`super::MAX_TABLE_CELLS`]).
-fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: &std::cell::Cell<usize>) -> Vec<FBlock> {
+/// Attempts to parse a table starting at `lines[*i]`. Returns `true` if a table was parsed.
+fn parse_table(lines: &[String], i: &mut usize, t: &str, ctx: &mut BlockCtx<'_>, out: &mut Vec<FBlock>) -> bool {
+    let Some((aligns, width)) = lines.get(*i + 1).and_then(|l| delimiter_row(l, MAX_COLS)) else { return false };
+    let (head, head_width) = split_row(t, MAX_COLS);
+    if head_width != width {
+        return false;
+    }
+    let table_start = *i;
+    let mut table = FTable::default();
+    let cell = |s: &str, header: bool, a: Option<Align>| {
+        let p = Para { align: a, inlines: parse_inlines(s, &Fmt::default(), ctx.depth, ctx.refs), ..Default::default() };
+        Cell { blocks: vec![FBlock::Para(p)], header, ..Default::default() }
+    };
+    let cols = aligns.len();
+    let fits = |rows: usize| rows < MAX_ROWS && ctx.budget.get() >= cols;
+    let mut cut = head_width > cols;
+    if fits(0) {
+        ctx.budget.set(ctx.budget.get() - cols);
+        table.rows.push(head.iter().zip(&aligns).map(|(s, a)| cell(s, true, *a)).collect());
+    } else {
+        cut = true;
+    }
+    *i += 2;
+    while let Some(l) = lines.get(*i) {
+        if is_blank(l) || !l.contains('|') || interrupts(l) {
+            break;
+        }
+        if !table.rows.is_empty() && fits(table.rows.len()) {
+            ctx.budget.set(ctx.budget.get() - cols);
+            let (mut cells, _) = split_row(l, cols);
+            cells.resize(cols, String::new());
+            table.rows.push(cells.iter().zip(&aligns).map(|(s, a)| cell(s, false, *a)).collect());
+        } else {
+            cut = true;
+        }
+        *i += 1;
+    }
+    if cut {
+        model::dropped(model::Dropped::TableCells);
+    }
+    if !table.rows.is_empty() {
+        out.push(FBlock::Table(table));
+        ctx.record_line(table_start);
+    }
+    true
+}
+
+/// Parse block structure.
+fn parse_blocks(lines: &[String], ctx: &mut BlockCtx<'_>) -> Vec<FBlock> {
     let mut out = Vec::new();
     let mut para: Vec<String> = Vec::new();
+    let mut para_start = None;
     let mut i = 0;
     while let Some(line) = lines.get(i) {
         if is_blank(line) {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut para_start, &mut out, ctx);
             i += 1;
             continue;
         }
         let ind = indent(line);
         if ind >= 4 {
             if !para.is_empty() {
+                if para_start.is_none() {
+                    para_start = Some(i);
+                }
                 para.push(line.clone());
                 i += 1;
                 continue;
             }
-            parse_indented_code(lines, &mut i, &mut out);
+            parse_indented_code(lines, &mut i, &mut out, ctx);
             continue;
         }
         let t = line.trim_start_matches([' ', '\t']);
@@ -439,44 +571,50 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: 
             let u = t.trim_end();
             if !u.is_empty() && (u.chars().all(|c| c == '=') || (u.chars().all(|c| c == '-'))) {
                 let lvl = if u.starts_with('=') { 1 } else { 2 };
+                let line_no = para_start.take().unwrap_or(i);
                 let text = join_lines(&para);
                 para.clear();
                 let mut p = Para::new(Kind::Heading(lvl));
-                p.inlines = parse_inlines(&text, &Fmt::default(), depth, refs);
+                p.inlines = parse_inlines(&text, &Fmt::default(), ctx.depth, ctx.refs);
                 out.push(FBlock::Para(p));
+                ctx.record_line(line_no);
                 i += 1;
                 continue;
             }
         }
         if let Some((n, body)) = atx_heading(t) {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut para_start, &mut out, ctx);
             let mut p = Para::new(Kind::Heading(n));
-            p.inlines = parse_inlines(body, &Fmt::default(), depth, refs);
+            p.inlines = parse_inlines(body, &Fmt::default(), ctx.depth, ctx.refs);
             out.push(FBlock::Para(p));
+            ctx.record_line(i);
             i += 1;
             continue;
         }
         if thematic_break(t) {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut para_start, &mut out, ctx);
             out.push(FBlock::Para(Para::new(Kind::Rule)));
+            ctx.record_line(i);
             i += 1;
             continue;
         }
         if let Some((fc, fl)) = fence(t) {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut para_start, &mut out, ctx);
             i += 1;
             while let Some(l) = lines.get(i) {
+                let cur = i;
                 i += 1;
                 let lt = l.trim_start_matches([' ', '\t']);
                 if indent(l) < 4 && fence(lt).is_some_and(|(c, n)| c == fc && n >= fl) && lt.trim_start_matches(fc).trim().is_empty() {
                     break;
                 }
                 out.push(code_para(strip_indent(l, ind)));
+                ctx.record_line(cur);
             }
             continue;
         }
         if t.starts_with("<!--") {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut para_start, &mut out, ctx);
             while let Some(l) = lines.get(i) {
                 i += 1;
                 if l.contains("-->") {
@@ -486,89 +624,58 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: 
             continue;
         }
         if t.starts_with('>') {
-            flush_para(&mut para, &mut out, depth, refs);
-            parse_quote(lines, &mut i, depth, level, refs, budget, &mut out);
+            flush_para(&mut para, &mut para_start, &mut out, ctx);
+            let quote_start = i;
+            let before = out.len();
+            parse_quote(lines, &mut i, ctx, &mut out);
+            ctx.record_lines(quote_start, out.len() - before);
             continue;
         }
-        if para.is_empty()
-            && t.contains('|')
-            && let Some((aligns, width)) = lines.get(i + 1).and_then(|l| delimiter_row(l, MAX_COLS))
-        {
-            let (head, head_width) = split_row(t, MAX_COLS);
-            if head_width == width {
-                let mut table = FTable::default();
-                let cell = |s: &str, header: bool, a: Option<Align>| {
-                    let p = Para { align: a, inlines: parse_inlines(s, &Fmt::default(), depth, refs), ..Default::default() };
-                    Cell { blocks: vec![FBlock::Para(p)], header, ..Default::default() }
-                };
-                // The document keeps no more columns or rows than this, nor cells past its budget,
-                // so those aren't built; their lines are still the table's.
-                let cols = aligns.len();
-                let fits = |rows: usize| rows < MAX_ROWS && budget.get() >= cols;
-                let mut cut = head_width > cols;
-                if fits(0) {
-                    budget.set(budget.get() - cols);
-                    table.rows.push(head.iter().zip(&aligns).map(|(s, a)| cell(s, true, *a)).collect());
-                } else {
-                    cut = true;
-                }
-                i += 2;
-                while let Some(l) = lines.get(i) {
-                    if is_blank(l) || !l.contains('|') || interrupts(l) {
-                        break;
-                    }
-                    if !table.rows.is_empty() && fits(table.rows.len()) {
-                        budget.set(budget.get() - cols);
-                        let (mut cells, _) = split_row(l, cols);
-                        cells.resize(cols, String::new());
-                        table.rows.push(cells.iter().zip(&aligns).map(|(s, a)| cell(s, false, *a)).collect());
-                    } else {
-                        cut = true;
-                    }
-                    i += 1;
-                }
-                if cut {
-                    model::dropped(model::Dropped::TableCells);
-                }
-                if !table.rows.is_empty() {
-                    out.push(FBlock::Table(table));
-                }
-                continue;
-            }
+        if para.is_empty() && t.contains('|') && parse_table(lines, &mut i, t, ctx, &mut out) {
+            continue;
         }
         if let Some(m) = list_marker(t)
             && (para.is_empty() || ((!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or(""))))
         {
-            flush_para(&mut para, &mut out, depth, refs);
-            i = parse_list(lines, i, depth, level, &mut out, refs, budget);
+            flush_para(&mut para, &mut para_start, &mut out, ctx);
+            i = parse_list(lines, i, ctx, &mut out);
             continue;
+        }
+        if para_start.is_none() {
+            para_start = Some(i);
         }
         para.push(line.clone());
         i += 1;
     }
-    flush_para(&mut para, &mut out, depth, refs);
+    flush_para(&mut para, &mut para_start, &mut out, ctx);
     out
 }
 
-fn parse_indented_code(lines: &[String], i: &mut usize, out: &mut Vec<FBlock>) {
-    let mut code: Vec<&str> = Vec::new();
+/// Parses indented code block starting at `lines[*i]`.
+fn parse_indented_code(lines: &[String], i: &mut usize, out: &mut Vec<FBlock>, ctx: &mut BlockCtx<'_>) {
+    let mut code: Vec<(usize, &str)> = Vec::new();
     while let Some(line) = lines.get(*i) {
+        let cur = *i;
         if is_blank(line) {
-            code.push("");
+            code.push((cur, ""));
         } else if indent(line) >= 4 {
-            code.push(strip_indent(line, 4));
+            code.push((cur, strip_indent(line, 4)));
         } else {
             break;
         }
         *i += 1;
     }
-    while code.last().is_some_and(|line| line.is_empty()) {
+    while code.last().is_some_and(|(_, line)| line.is_empty()) {
         code.pop();
     }
-    out.extend(code.into_iter().map(code_para));
+    for (line_idx, text) in code {
+        out.push(code_para(text));
+        ctx.record_line(line_idx);
+    }
 }
 
-fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &Refs, budget: &std::cell::Cell<usize>, out: &mut Vec<FBlock>) {
+/// Parses block quote starting at `lines[*i]`.
+fn parse_quote(lines: &[String], i: &mut usize, ctx: &BlockCtx<'_>, out: &mut Vec<FBlock>) {
     let mut inner = Vec::new();
     while let Some(line) = lines.get(*i) {
         let trimmed = line.trim_start_matches([' ', '\t']);
@@ -582,13 +689,14 @@ fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &
         }
         *i += 1;
     }
-    if depth >= MAX_NEST {
+    if ctx.depth >= MAX_NEST {
         let mut p = Para::new(Kind::Quote);
         p.push_text(&inner.join(" "), &Fmt::default());
         out.push(FBlock::Para(p));
         return;
     }
-    for mut block in parse_blocks(&inner, depth + 1, level, refs, budget) {
+    let mut child = BlockCtx { depth: ctx.depth + 1, level: ctx.level, refs: ctx.refs, budget: ctx.budget, lines_out: None };
+    for mut block in parse_blocks(&inner, &mut child) {
         if let FBlock::Para(p) = &mut block
             && p.kind == Kind::Normal
         {
@@ -598,6 +706,7 @@ fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &
     }
 }
 
+/// Computes columns and byte count for spaces following a list item marker.
 fn marker_space(ind: usize, marker_len: usize, after: &str) -> (usize, usize) {
     let mut cols = 0;
     let mut bytes = 0;
@@ -626,7 +735,7 @@ fn marker_space(ind: usize, marker_len: usize, after: &str) -> (usize, usize) {
 }
 
 /// Parse a list starting at `lines[i]`; returns the index after it.
-fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut Vec<FBlock>, refs: &Refs, budget: &std::cell::Cell<usize>) -> usize {
+fn parse_list(lines: &[String], mut i: usize, ctx: &mut BlockCtx<'_>, out: &mut Vec<FBlock>) -> usize {
     let Some(first) = lines.get(i).and_then(|l| list_marker(l.trim_start_matches([' ', '\t']))) else { return i + 1 };
     while let Some(line) = lines.get(i) {
         let ind = indent(line);
@@ -638,6 +747,7 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
         if m.ordered != first.ordered || m.ch != first.ch {
             break;
         }
+        let item_start = i;
         let after = t.get(m.len..).unwrap_or("");
         let (spaces, skip) = if indent(after) > 4 {
             (1, 1)
@@ -667,14 +777,17 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
         while item.len() > 1 && item.last().is_some_and(String::is_empty) {
             item.pop();
         }
-        let li = ListInfo { ordered: first.ordered, level: level.min(8), start: first.start, ..Default::default() };
-        let inner = if depth >= MAX_NEST {
+        let li = ListInfo { ordered: first.ordered, level: ctx.level.min(8), start: first.start, ..Default::default() };
+        let inner = if ctx.depth >= MAX_NEST {
             let mut p = Para::default();
             p.push_text(&item.join(" "), &Fmt::default());
             vec![FBlock::Para(p)]
         } else {
-            parse_blocks(&item, depth + 1, level.saturating_add(1).min(8), refs, budget)
+            let mut child =
+                BlockCtx { depth: ctx.depth + 1, level: ctx.level.saturating_add(1).min(8), refs: ctx.refs, budget: ctx.budget, lines_out: None };
+            parse_blocks(&item, &mut child)
         };
+        let before_count = out.len();
         let mut placed = false;
         if inner.is_empty() {
             out.push(FBlock::Para(Para { list: Some(li), ..Default::default() }));
@@ -712,6 +825,7 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
                 }
             }
         }
+        ctx.record_lines(item_start, out.len() - before_count);
         // Blank lines between items.
         while lines.get(i).is_some_and(|l| is_blank(l)) {
             let next_is_item = lines.get(i + 1).is_some_and(|l| {

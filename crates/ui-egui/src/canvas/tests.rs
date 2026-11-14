@@ -699,6 +699,7 @@ fn dragging_the_scrollbar_names_the_page_at_the_top() {
         }
         a.run("view.commentsPane", json!({"value": false})).unwrap();
         a.run("view.hideWhiteSpace", json!({"value": hide_white_space})).unwrap();
+        a.run("caret.docStart", json!({})).unwrap();
         let (rev, sel) = (a.session.rev(), a.session.sel.clone());
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -833,6 +834,269 @@ fn the_document_scroll_bars_show_with_the_pointer_away() {
         let across = bar(&h, false).expect("zoomed in, a horizontal scroll bar");
         thumb_shows(&drawn(&h, across, false), &format!("{theme}, the horizontal bar"));
     }
+}
+
+/// #5853: clicking in the vertical scrollbar track below the elevator moves one screen down,
+/// and clicking above the elevator moves one screen up, rather than jumping to that position in the document.
+#[test]
+fn clicking_vertical_scrollbar_track_advances_one_screen() {
+    use egui::accesskit::Role;
+    use egui::{Event, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    for _ in 0..11 {
+        a.run("text.insert", json!({"text": "Page text"})).unwrap();
+        a.run("layout.break", json!({"kind": "page"})).unwrap();
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(h.state_mut().session.layout().pages.len(), 12);
+    let bar = h
+        .query_all_by_role(Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the canvas's vertical scrollbar");
+
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2| {
+        h.event(Event::PointerMoved(at));
+        h.step();
+        h.event(button(at, true));
+        h.step();
+        h.event(button(at, false));
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+
+    let start_offset = h.state().canvas.scroll_offset.y;
+    assert_eq!(start_offset, 0.0, "starts at the top");
+    let viewport_height = h.state().canvas.viewport.expect("viewport").height();
+
+    // Click near the bottom of the scrollbar (well below the elevator).
+    let near_bottom = pos2(bar.center().x, bar.bottom() - 20.0);
+    click(&mut h, near_bottom);
+
+    let after_click_down = h.state().canvas.scroll_offset.y;
+    assert!((after_click_down - viewport_height).abs() < 2.0, "advances one screen down: expected ~{viewport_height}, got {after_click_down}");
+
+    // Now click near the top of the scrollbar (above the elevator).
+    let near_top = pos2(bar.center().x, bar.top() + 10.0);
+    click(&mut h, near_top);
+
+    let after_click_up = h.state().canvas.scroll_offset.y;
+    assert!(after_click_up.abs() < 2.0, "advances one screen up back to top: expected ~0.0, got {after_click_up}");
+}
+
+/// #5853: in a right-to-left interface, egui places the vertical scrollbar on the left;
+/// clicking in the scrollbar track advances one screen up/down along that left edge.
+#[test]
+fn clicking_vertical_scrollbar_track_advances_one_screen_in_rtl() {
+    use egui::accesskit::Role;
+    use egui::{Event, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    for _ in 0..11 {
+        a.run("text.insert", json!({"text": "Page text"})).unwrap();
+        a.run("layout.break", json!({"kind": "page"})).unwrap();
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            ui.style_mut().set_right_to_left(true);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(h.state_mut().session.layout().pages.len(), 12);
+    let bar = h
+        .query_all_by_role(Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the canvas's vertical scrollbar");
+
+    assert!(bar.center().x < 100.0, "scrollbar is on the left in RTL: {bar:?}");
+
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2| {
+        h.event(Event::PointerMoved(at));
+        h.step();
+        h.event(button(at, true));
+        h.step();
+        h.event(button(at, false));
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+
+    let start_offset = h.state().canvas.scroll_offset.y;
+    assert_eq!(start_offset, 0.0, "starts at the top");
+    let viewport_height = h.state().canvas.viewport.expect("viewport").height();
+
+    let near_bottom = pos2(bar.center().x, bar.bottom() - 20.0);
+    click(&mut h, near_bottom);
+
+    let after_click_down = h.state().canvas.scroll_offset.y;
+    assert!((after_click_down - viewport_height).abs() < 2.0, "advances one screen down in RTL: expected ~{viewport_height}, got {after_click_down}");
+
+    let near_top = pos2(bar.center().x, bar.top() + 10.0);
+    click(&mut h, near_top);
+
+    let after_click_up = h.state().canvas.scroll_offset.y;
+    assert!(after_click_up.abs() < 2.0, "advances one screen up back to top in RTL: expected ~0.0, got {after_click_up}");
+}
+
+/// #5853: clicking within the vertical scrollbar track under `ScrollStyle::thin()` advances one screen.
+#[test]
+fn clicking_thin_vertical_scrollbar_track_advances_one_screen() {
+    use egui::accesskit::Role;
+    use egui::{Event, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    for _ in 0..11 {
+        a.run("text.insert", json!({"text": "Page text"})).unwrap();
+        a.run("layout.break", json!({"kind": "page"})).unwrap();
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(h.state_mut().session.layout().pages.len(), 12);
+    let bar = h
+        .query_all_by_role(Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the canvas's vertical scrollbar");
+
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2| {
+        h.event(Event::PointerMoved(at));
+        h.step();
+        h.event(button(at, true));
+        h.step();
+        h.event(button(at, false));
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+
+    let start_offset = h.state().canvas.scroll_offset.y;
+    assert_eq!(start_offset, 0.0, "starts at the top");
+    let viewport_height = h.state().canvas.viewport.expect("viewport").height();
+
+    let near_bottom = pos2(bar.center().x, bar.bottom() - 20.0);
+    click(&mut h, near_bottom);
+
+    let after_click_down = h.state().canvas.scroll_offset.y;
+    assert!(
+        (after_click_down - viewport_height).abs() < 2.0,
+        "advances one screen down with thin scrollbar: expected ~{viewport_height}, got {after_click_down}"
+    );
+
+    let near_top = pos2(bar.center().x, bar.top() + 10.0);
+    click(&mut h, near_top);
+
+    let after_click_up = h.state().canvas.scroll_offset.y;
+    assert!(after_click_up.abs() < 2.0, "advances one screen up back to top with thin scrollbar: expected ~0.0, got {after_click_up}");
+}
+
+/// #5853: clicks and drags on page content just outside the vertical scrollbar track do not trigger
+/// paging and can place the caret or start a selection.
+#[test]
+fn clicking_and_dragging_outside_scrollbar_does_not_page() {
+    use egui::accesskit::Role;
+    use egui::{Event, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    for _ in 0..11 {
+        a.run("text.insert", json!({"text": "A long line of sample text that fills across the page for testing selections."})).unwrap();
+        a.run("layout.break", json!({"kind": "page"})).unwrap();
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let bar = h
+        .query_all_by_role(Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the canvas's vertical scrollbar");
+
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+
+    // Point just to the left of the scrollbar track (outside egui's scrollbar hit rect).
+    let just_outside = pos2(bar.min.x - 2.0, bar.bottom() - 20.0);
+    h.event(Event::PointerMoved(just_outside));
+    h.step();
+    h.event(button(just_outside, true));
+    h.step();
+    h.event(button(just_outside, false));
+    for _ in 0..3 {
+        h.step();
+    }
+
+    assert_eq!(h.state().canvas.scroll_offset.y, 0.0, "clicking outside the scrollbar track does not page");
+
+    // Dragging just outside the scrollbar does not page.
+    let drag_from = pos2(bar.min.x - 3.0, 300.0);
+    let drag_to = pos2(bar.min.x - 3.0, 350.0);
+    h.event(Event::PointerMoved(drag_from));
+    h.step();
+    h.event(button(drag_from, true));
+    h.step();
+    for k in 1..=4 {
+        h.event(Event::PointerMoved(drag_from + (drag_to - drag_from) * (k as f32 / 4.0)));
+        h.step();
+    }
+    h.event(button(drag_to, false));
+    for _ in 0..3 {
+        h.step();
+    }
+
+    assert_eq!(h.state().canvas.scroll_offset.y, 0.0, "dragging outside the scrollbar track does not page");
 }
 
 /// #3880: the status bar names the page being looked at. With the caret scrolled out of view, that
@@ -2885,6 +3149,40 @@ fn right_clicking_a_link_hides_the_hover_tooltip() {
     steps(&mut h, 2);
     assert!(h.state().canvas.context_menu_open, "the context menu is open");
     assert_eq!(tips(&h), 0, "the link tooltip is gone, so it can't cover the menu");
+}
+
+/// #4501 follow-up: a press the canvas handles (here Ctrl+click following a link) is done with
+/// the pointer, so the link tooltip stands down that frame; plain hovering shows it again.
+#[test]
+fn a_handled_press_skips_the_link_tooltip() {
+    use egui::{Event, Modifiers, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("See here")), Default::default());
+    a.run("select.text", json!({"text": "here"})).unwrap();
+    a.run("insert.link", json!({"url": "https://example.com/"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 5 }).unwrap();
+    let at = screen(&mut h, c.x, c.top + c.height / 2.0);
+    h.event(Event::PointerMoved(at));
+    steps(&mut h, 2);
+    let tips = |h: &egui_kittest::Harness<'_, WordApp>| h.query_all_by_label_contains("Click to follow link").count();
+    assert!(tips(&h) > 0, "hovering the link shows its target");
+    h.event(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::COMMAND });
+    h.step();
+    assert_eq!(tips(&h), 0, "the Ctrl+click was handled: no tooltip that frame");
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND });
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    steps(&mut h, 2);
+    assert!(tips(&h) > 0, "hovering again shows the tooltip");
 }
 
 /// #688: the drag auto-scroll waits in the middle, ramps in from both edges and never leaves

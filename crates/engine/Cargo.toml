@@ -51,6 +51,11 @@ chrono = { workspace = true, features = ["clock"] }
 # O_NONBLOCK, so a path swapped for a named pipe can't block `open` (#3666).
 libc = { workspace = true }
 
+# A plain fsync where a file system refuses the full flush (`sync_file`, safe_save.rs).
+# Already in Cargo.lock on Apple targets (craft-atomic), so this adds no new crate.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+
 [dev-dependencies]
 wordcraft-doc = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
