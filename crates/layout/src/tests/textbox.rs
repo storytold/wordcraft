@@ -418,3 +418,64 @@ fn a_clipped_line_in_a_turned_box_is_drawn_once_turned_and_clipped() {
         .sum();
     assert_eq!((upright_clips, turned_clips), (0, 1));
 }
+
+/// In a text box, from Word 2013's layout on, Word measures the indent of a table in a cell from
+/// the cell's edge, not from the cell's text: the nested table's edge sits the indent (never
+/// less than nothing) and half of each of the two lines, the cell's and its own, after the
+/// cell's edge (#6615). Measured in Word for Windows: with a 6.6 pt indent and 0.5 pt lines
+/// the nested table's line is 7.08 pt right of the cell's line whether the cell's margin is 0,
+/// 5.4 or 10 pt, and in the body 12.25 pt (the cell's 5.4 pt margin, the indent and half its
+/// own line).
+#[test]
+fn a_table_in_a_cell_of_a_text_box_starts_from_the_cells_edge() {
+    crate::test_fonts();
+    use std::sync::Arc;
+    use wordcraft_doc::props::{Border, Borders};
+    use wordcraft_doc::{Block, Table};
+    // How far the nested table's first cell starts after the left edge of the cell it is in.
+    let offset = |in_box: bool, indent: f32, margin: f32, line: f32, mode: u32| {
+        let text = |s: &str| para_block(Paragraph::with_text(s, Default::default()));
+        let mut inner = Table::new(1, 2, 200.0);
+        inner.props.indent = Some(indent);
+        inner.props.borders = Some(Borders::all(Border::single(0.5)));
+        let mut outer = Table::new(1, 2, 400.0);
+        outer.props.borders = Some(Borders::all(Border::single(line)));
+        outer.props.cell_margins = Some([0.0, margin, 0.0, margin]);
+        outer.rows[0].cells[1].blocks = vec![text("outer"), Arc::new(Block::Table(inner)), text("")];
+        let mut d = Document::from_text("Body");
+        d.settings.compat_mode = mode;
+        let story = if in_box {
+            let id = text_box(&mut d, 0, "", 440.0, 120.0, TextBody::default());
+            d.parts.get_mut(&id).unwrap().blocks = vec![Arc::new(Block::Table(outer)), text("")];
+            StoryRef::Part(id)
+        } else {
+            d.insert_block(StoryRef::Body, &Path::top(0), Block::Table(outer)).unwrap();
+            StoryRef::Body
+        };
+        let l = lay(&d);
+        let left = |depth: usize, index: usize| {
+            l.pages[0]
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    Placed::Cell { rect, table, cell, story: s, .. } if *s == story && table.0.len() == depth && *cell == index => Some(rect.x),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        left(4, 0) - left(1, 1)
+    };
+    let close = |got: f32, want: f32, what: &str| assert!((got - want).abs() < 0.01, "{what}: {got}, expected {want}");
+    // In a text box: the indent and half of each line after the cell's edge, whatever the cell's margin.
+    for margin in [0.0, 5.4, 10.0] {
+        close(offset(true, 6.6, margin, 0.5, 15), 6.6 + 0.25 + 0.25, &format!("a {margin} pt margin"));
+    }
+    close(offset(true, 6.6, 5.4, 3.0, 15), 6.6 + 1.5 + 0.25, "a 3 pt line on the cell");
+    close(offset(true, 6.6, 5.4, 0.0, 15), 6.6 + 0.25, "no line on the cell");
+    close(offset(true, 0.0, 5.4, 0.5, 15), 0.5, "no indent");
+    close(offset(true, -5.0, 5.4, 0.5, 15), 0.5, "a negative indent");
+    // In the body the table keeps to the cell's text.
+    close(offset(false, 6.6, 5.4, 0.5, 15), 5.4 + 6.6 + 0.25, "in the body");
+    // Before Word 2013's layout a text box is like the body.
+    close(offset(true, 6.6, 5.4, 0.5, 14), offset(false, 6.6, 5.4, 0.5, 14), "in compatibility mode 14");
+}
