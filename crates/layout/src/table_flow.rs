@@ -340,13 +340,17 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
     for attempt in 0..2 {
         let s = pb.sect;
         let h_area = float_table_h_area(pb, f, ctx.mirror);
-        // The text a table anchored to it stands in: where the next paragraph starts.
+        let x = float_table_x(pb, w, f, legacy, ctx.mirror);
+        // The text a table anchored to it stands in: where the next paragraph starts, below a
+        // wrapping object in the table's way.
         let v_area = match f.v_rel {
             Anchor::Page => (0.0, s.page_h),
             Anchor::Margin => (s.margin_top, s.text_height()),
-            _ => (pb.y, 0.0),
+            _ => {
+                let objects: Vec<WrapArea> = pb.excl.iter().filter(|(.., table)| !table).cloned().collect();
+                (below(&objects, pb.y, x, x + w, h), 0.0)
+            }
         };
-        let x = float_table_x(pb, w, f, legacy, ctx.mirror);
         let mut obstacles = if f.overlap { Vec::new() } else { header_table_areas(ctx, pb) };
         obstacles.extend_from_slice(&pb.float_tables);
         let r = clear_of_float_tables(
@@ -445,14 +449,14 @@ fn float_table_x(pb: &PageBuilder, w: f32, f: &TableFloat, legacy: f32, mirror: 
 /// Move `pb.y` below the floating objects in the way of something spanning `x0..x1` that
 /// starts there (a table in the text flow doesn't wrap around them).
 fn below_floats(ctx: &mut Ctx, pb: &mut PageBuilder, x0: f32, x1: f32) {
-    pb.y = below(&body_wraps(ctx, pb), pb.y, x0, x1);
+    pb.y = below(&body_wraps(ctx, pb), pb.y, x0, x1, 0.0);
 }
 
-/// `y`, moved below the wrap areas in `excl` in the way of something spanning `x0..x1` that
-/// starts there.
-pub(crate) fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32) -> f32 {
+/// `y`, moved below the wrap areas in `excl` in the way of something `height` tall spanning
+/// `x0..x1` that starts there.
+pub(crate) fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32, height: f32) -> f32 {
     for _ in 0..64 {
-        let in_the_way = excl.iter().filter(|(r, ..)| r.y <= y + 0.01 && r.bottom() > y && r.x < x1 && r.right() > x0);
+        let in_the_way = excl.iter().filter(|(r, ..)| (r.y <= y + 0.01 || r.y < y + height) && r.bottom() > y && r.x < x1 && r.right() > x0);
         let Some(bottom) = in_the_way.map(|(r, ..)| r.bottom()).reduce(f32::max) else { break };
         y = bottom;
     }
