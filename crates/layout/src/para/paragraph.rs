@@ -673,9 +673,13 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     if rp.snap_to_grid {
         snap_chars(&mut sh.b, &p.text, &env.grid);
     }
-    // Text on a character grid keeps to its cells.
-    let auto_space =
-        if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    // Text snapping to every cell of a character grid (`snapToChars`) keeps to its cells. On a
+    // `linesAndChars` grid Word keeps the automatic space, as on a line grid (#6584).
+    let auto_space = if rp.snap_to_grid && env.grid.snap_all && env.grid.chars.is_some() {
+        Vec::new()
+    } else {
+        auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn)
+    };
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);

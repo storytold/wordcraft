@@ -82,12 +82,15 @@ fn character_grid_places_east_asian_text_on_the_pitch() {
     let (g, p) = (first(&l), first(&plain));
     let line = &g.lines[0];
     let latin = text.find('a').unwrap();
+    let last_asian = text[..latin].char_indices().last().unwrap().0;
     for (k, c) in g.clusters.iter().enumerate() {
         let x = line.xs[k] - line.xs[0];
         if c.start < latin {
-            // Ideographs and kana sit on the pitch, one cell each.
+            // Ideographs and kana sit on the pitch, one cell each; the last one before the Latin
+            // text keeps the automatic space after it, as on a line grid (#6584).
             assert!((x - pitch * k as f32).abs() < 0.01, "cluster {k} at {x}, pitch {pitch}");
-            assert!((c.adv - pitch).abs() < 0.01);
+            let auto_space = if c.start == last_asian { size / 4.0 } else { 0.0 };
+            assert!((c.adv - pitch - auto_space).abs() < 0.01, "cluster {k} advances {}", c.adv);
         } else {
             // Latin text keeps its own advances.
             assert!((c.adv - p.clusters[k].adv).abs() < 0.01, "latin cluster {k}");
