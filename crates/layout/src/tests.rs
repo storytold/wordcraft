@@ -8822,6 +8822,56 @@ fn the_part_of_a_row_that_goes_on_opens_with_the_border_of_a_first_row() {
     }
 }
 
+/// Under the table's repeated header rows the part of a row that goes on keeps clear of its
+/// opening border all the same, and the border drawn on that edge is the one the row has in the
+/// table. A row that starts there whole keeps the edge it has in the table. Measured in Word
+/// for Windows with ten tables: under the header row of a table with a 3 pt top border and
+/// 0.5 pt lines between its rows the text that goes on starts 3 pt below the header row, and
+/// the line drawn there is 0.5 pt wide.
+#[test]
+fn under_repeated_header_rows_the_part_that_goes_on_keeps_its_opening_room() {
+    crate::test_fonts();
+    // (round the table, between the rows): the room over the text that goes on, and over the
+    // text of a row that starts under the header rows whole.
+    for ((around, between), opening) in [((3.0, 0.5), 3.0), ((0.0, 3.0), 0.0)] {
+        // A header row, a one-line row and a row of six lines with 60 pt left: the last splits.
+        let (l, pages) = at_least_rows(60.0, 3, |t| {
+            page_top_borders(t, around, between, None);
+            t.rows[0].props.header = true;
+            t.rows[2].cells[0].blocks = lines_in_cell(6, "Line");
+        });
+        assert_eq!(pages, vec![vec![0, 1, 2], vec![0, 2]], "{around} {between}");
+        let (lines, _) = page_two_top(&l);
+        let top = l.pages[1].body.y;
+        // The header row: its border, its line, and the edge under it.
+        let edge = top + around + 14.0;
+        assert!((lines[0] - (top + around)).abs() < 0.05, "{around} {between}: the header's text at {}", lines[0]);
+        assert!(
+            (lines[1] - (edge + opening)).abs() < 0.05,
+            "{around} {between}: the text that goes on at {}, the header row ends at {edge}",
+            lines[1]
+        );
+        let drawn: Vec<f32> = l.pages[1]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Rule { y0, y1, border, .. } if (y0 - edge).abs() < 0.01 && (y1 - edge).abs() < 0.01 => Some(border.width),
+                _ => None,
+            })
+            .collect();
+        assert!(!drawn.is_empty() && drawn.iter().all(|w| (w - between).abs() < 0.01), "{around} {between}: borders under the header row {drawn:?}");
+        // A row that moves under the header rows whole keeps the line between the rows over it.
+        let (l, pages) = at_least_rows(40.0, 4, |t| {
+            page_top_borders(t, around, between, None);
+            t.rows[0].props.header = true;
+        });
+        assert_eq!(pages, vec![vec![0, 1], vec![0, 2, 3]], "{around} {between}");
+        let (lines, _) = page_two_top(&l);
+        let top = l.pages[1].body.y;
+        assert!((lines[1] - (top + around + 14.0 + between)).abs() < 0.05, "{around} {between}: the row under the header at {}", lines[1]);
+    }
+}
+
 /// A row of a table inside a cell opens the part of the outer row that goes on in the same way,
 /// under the outer row's own opening border: a nested row that moves on whole, and one that goes
 /// on itself. Measured in Word for Windows with fourteen tables.
@@ -8840,6 +8890,9 @@ fn a_nested_row_opens_the_part_that_goes_on_with_the_border_of_a_first_row() {
         ((0.5, 0.5, None), 1, 0.5),
         ((0.0, 3.0, None), 1, 0.0),
         ((3.0, 0.5, None), 1, 3.0),
+        // No line between the nested rows: their text starts at their top edge in the table.
+        ((3.0, 0.0, None), 1, 3.0),
+        ((3.0, 0.0, None), 4, 3.0),
         ((0.0, 0.5, Some(3.0)), 1, 3.0),
         ((0.5, 0.5, None), 4, 0.5),
         ((0.0, 3.0, None), 4, 0.0),

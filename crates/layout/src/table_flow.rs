@@ -292,12 +292,14 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             // (#4272): moving on can give the cell room there.
             let first_part = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers;
             let moves_on = first_part && short_of_min(ri, room);
+            // Whether the header rows repeat over what goes on to the next page.
+            let headed = ri >= header_rows.len() && !header_rows.is_empty() && ctx.header_repeats.saturating_add(header_cost) <= header_cap;
             let split = match (splittable && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
-                (true, true) => table::split_row_opening(cur, nested_keep_cut(ctx.doc, cur, room), true, &ctx.row_tops),
+                (true, true) => table::split_row_opening(cur, nested_keep_cut(ctx.doc, cur, room), true, &ctx.row_tops, headed),
                 // On a fresh page, a nested row taller than the room splits rather than overflowing.
-                (true, false) => table::split_row_opening(cur, nested_keep_cut(ctx.doc, cur, room), false, &ctx.row_tops)
-                    .or_else(|| table::split_row_opening(cur, room, false, &ctx.row_tops)),
+                (true, false) => table::split_row_opening(cur, nested_keep_cut(ctx.doc, cur, room), false, &ctx.row_tops, headed)
+                    .or_else(|| table::split_row_opening(cur, room, false, &ctx.row_tops, headed)),
             };
             match split {
                 Some((a, b)) => {
