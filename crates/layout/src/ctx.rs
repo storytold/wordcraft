@@ -3,8 +3,8 @@ use super::floats::{EarlyFloats, WrapArea};
 use super::headers::HfLinks;
 use super::placed::Placed;
 use super::{
-    Anchor, Arc, Block, CharProps, Counters, DocLayout, Document, FieldCtx, Float, HashMap, HashSet, HideDeleted, InlineObject, LayoutOptions, Level,
-    ParaLayout, Paragraph, Rect, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
+    Anchor, Arc, Block, Blocks, CharProps, Counters, DocLayout, Document, FieldCtx, Float, HashMap, HashSet, HideDeleted, InlineObject,
+    LayoutOptions, Level, ParaLayout, Paragraph, Rect, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
 };
 
 /// The character style Word formats line numbers with: `w:styleId="LineNumber"` in English
@@ -54,6 +54,9 @@ pub(crate) struct Ctx<'a> {
     /// The paragraph being laid out as going on from the line of the one before, whose mark is
     /// hidden: its list number is counted but not drawn (#3986).
     pub(crate) joined: Option<Joining>,
+    /// The paragraph a paragraph with a hidden mark (given by its revision) takes its formatting
+    /// from: the one that ends its group ([`Ctx::group_end`]).
+    pub(crate) format_from: Option<(u64, Arc<Block>)>,
     /// Empty paragraphs closing a continuous section right after another section's mark, in
     /// order: each takes its line while it fits, then stays at the page's bottom (#3907).
     pub(crate) stacked_marks: Vec<usize>,
@@ -116,7 +119,11 @@ struct ParaEnvInput<'a> {
     typing_word: Option<(usize, usize)>,
     fitted: &'a [(usize, f32)],
     joined: bool,
+    format_from: Option<&'a Paragraph>,
 }
+
+/// The most paragraphs with hidden marks looked through for the one that ends their group.
+const MAX_GROUP: usize = 256;
 
 /// A header or footer (`story`) laid out for page `number` of a section (`sect`, `mirror`): its
 /// table cells' floats placed on the page rather than in their cell ([`Float::outside_cell`],
@@ -257,6 +264,7 @@ impl Ctx<'_> {
             fit_objects: false,
             fitted: &[],
             joined: false,
+            format_from: None,
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
@@ -266,6 +274,52 @@ impl Ctx<'_> {
     /// Whether `p` is laid out going on from the line of the paragraph before, sharing it (#3986).
     fn shares_line(&self, p: &Paragraph) -> bool {
         self.joined.is_some_and(|j| j.rev == p.rev && j.shares)
+    }
+
+    /// The paragraph that ends the group `blocks[i]`, a paragraph whose mark is hidden, starts or
+    /// goes on: the next paragraph whose own mark shows. From Word 2013 (compatibility mode 15)
+    /// the group is one paragraph with that one's formatting: its alignment, indents and tab
+    /// stops hold for the lines of the paragraphs before it too. Earlier modes keep each
+    /// paragraph's own. `None` there, and where nothing goes on from the paragraph.
+    ///
+    /// Measured in Word for Windows with a paragraph whose mark is hidden before one whose mark
+    /// shows, in modes 15, 14, 12 and none: a tab stop at 60 pt in the first and at 30 pt in the
+    /// second puts the first one's text after its tab 30 pt in from mode 15 and 60 pt in before
+    /// it; a left indent of 40 pt, a hanging or first-line indent and a right indent are the
+    /// second one's for both from mode 15, and the left, first-line and hanging indents each
+    /// paragraph's own before; the line the two share is aligned by the second one's alignment
+    /// from mode 15 and by the first one's before. An empty paragraph with a hidden mark between
+    /// the two changes nothing. The space before stays the first one's, and so does the font its
+    /// text has from its paragraph style. Line spacing is no part of it: in every mode a line
+    /// has the spacing of the paragraph whose text ends it.
+    ///
+    /// Lists, from mode 15: the indents are those of the second one's list level, and the first
+    /// one's number is drawn only where the second is in a list too, at the second one's
+    /// indents with its own text, formatting and what follows it (a first paragraph numbered
+    /// "1." in bold with a tab after, at 36 pt with 18 pt hanging, before one of a list at 72 pt
+    /// with 36 pt hanging: a bold "1." 36 pt in and the text 72 pt in). Before a paragraph in no
+    /// list the number is not drawn and the text starts at that one's indent; a first paragraph
+    /// in no list before one in a list starts where that one's number would stand. Either way
+    /// each paragraph counts in its list. Before mode 15 the number is the first one's, at its
+    /// own indents.
+    pub(crate) fn group_end(&self, blocks: &Blocks, i: usize, table_chr: Option<&CharProps>) -> Option<Arc<Block>> {
+        if self.doc.settings.compat_mode < 15 {
+            return None;
+        }
+        // A chain of paragraphs with hidden marks is walked once for each of them.
+        blocks.iter().skip(i + 1).take(MAX_GROUP).find_map(|b| {
+            let Block::Para(q) = &**b else { return Some(None) };
+            let rq = self.doc.styles.resolve_para(&q.props);
+            if q.section.is_some() || rq.page_break_before || rq.bidi {
+                return Some(None);
+            }
+            (!self.mark_hidden(q, table_chr)).then(|| Some(b.clone()))
+        })?
+    }
+
+    /// The paragraph `p` takes its formatting from, when it is the one [`Ctx::format_from`] names.
+    fn formatting_of(&self, p: &Paragraph) -> Option<&Paragraph> {
+        self.format_from.as_ref().filter(|f| f.0 == p.rev).and_then(|f| f.1.as_para())
     }
 
     /// Whether `p`'s paragraph mark is hidden, with hidden text not shown: Word then shows the
@@ -326,6 +380,7 @@ impl Ctx<'_> {
                 typing_word: typing,
                 fitted: &fitted,
                 joined: self.shares_line(p),
+                format_from: self.formatting_of(p),
             }),
         ));
         self.cache.paras.insert(key, pl.clone());
@@ -368,6 +423,7 @@ impl Ctx<'_> {
                 typing_word: None,
                 fitted: &[],
                 joined: self.shares_line(p),
+                format_from: self.formatting_of(p),
             }),
         ));
         self.cache.paras.insert(key, pl.clone());
@@ -405,6 +461,7 @@ impl Ctx<'_> {
                 typing_word: typing,
                 fitted: &fitted,
                 joined: self.shares_line(p),
+                format_from: self.formatting_of(p),
             }),
         ));
         self.cache.measures.insert(key, m);
@@ -491,6 +548,7 @@ impl Ctx<'_> {
             sref: if self.fields.styleref.is_some() && styleref::has_styleref(p) { self.fields.styleref_key(p) } else { 0 },
             typing: self.opts.typing_word.filter(|t| t.rev == p.rev).map(|t| (t.start, t.end)),
             joined: self.joined.filter(|j| j.rev == p.rev).map(Joining::key),
+            format_from: self.formatting_of(p).map(|q| q.rev),
         };
         (key, eq_number)
     }
@@ -511,7 +569,10 @@ impl Ctx<'_> {
     }
 
     fn para_env<'b>(&'b self, input: ParaEnvInput<'b>) -> para::ParaEnv<'b> {
-        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted, joined } = input;
+        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted, joined, format_from } = input;
+        // The first paragraph of a group shows its number only where the one that ends the group
+        // is in a list too (`Ctx::group_end`).
+        let label = label.filter(|_| format_from.is_none_or(|end| self.has_label(end)));
         para::ParaEnv {
             doc: self.doc,
             width,
@@ -531,6 +592,7 @@ impl Ctx<'_> {
             fit_objects: self.boxes.inside(),
             fitted,
             joined,
+            format_from,
         }
     }
 }
@@ -603,6 +665,7 @@ mod tests {
             pct_base: None,
             quiet_marks: Vec::new(),
             joined: None,
+            format_from: None,
             stacked_marks: Vec::new(),
             mirror: false,
             table_keys: Vec::new(),

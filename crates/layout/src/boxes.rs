@@ -234,6 +234,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // Where the last paragraph, whose mark is hidden, ended: the next one goes on from there.
     let mut joint: Option<Joint> = None;
     let outer_joined = ctx.joined;
+    let outer_format = ctx.format_from.take();
     for (i, b) in blocks.iter().enumerate() {
         last_top = y;
         let mut path = prefix.to_vec();
@@ -245,6 +246,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 let chr = table.map(|t| &t.chr);
                 let mark_hidden = ctx.mark_hidden(p, chr);
                 let shows_nothing = mark_hidden && ctx.text_hidden(p, chr);
+                // From Word 2013 its lines have the formatting of the paragraph that ends its group.
+                ctx.format_from = if mark_hidden { ctx.group_end(blocks, i, chr).map(|b| (p.rev, b)) } else { None };
                 let came = joint.take().filter(|j| j.next == i);
                 joint = came.filter(|_| shows_nothing).map(|j| Joint { next: i + 1, ..j });
                 let taken = came.filter(|_| !shows_nothing).and_then(|j| j.take_up(ctx, p, width, table));
@@ -428,6 +431,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
     ctx.joined = outer_joined;
+    ctx.format_from = outer_format;
     BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 

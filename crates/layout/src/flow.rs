@@ -36,10 +36,14 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
             && !ctx.doc.styles.resolve_para(&p.props).page_break_before
             && !ctx.doc.styles.resolve_para(&p.props).bidi
     });
+    // From Word 2013 its lines have the formatting of the paragraph that ends its group.
+    let end = if mark_hidden { ctx.group_end(&ctx.doc.body, block, None) } else { None };
+    let outer = std::mem::replace(&mut ctx.format_from, end.map(|b| (p.rev, b)));
     match goes_on {
         Some(j) => place_para_joined(ctx, pb, p, (block, body_top), j),
         None => place_para_alone(ctx, pb, p, block, body_top),
     }
+    ctx.format_from = outer;
     if mark_hidden {
         let path = Path::top(block);
         pb.joint = pb.page().and_then(|page| {
@@ -1118,6 +1122,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                         fit_objects: false,
                         fitted: &[],
                         joined: false,
+                        format_from: None,
                     };
                     Arc::new(para::layout_para(p, &env))
                 }

@@ -2136,6 +2136,153 @@ fn a_paragraph_with_a_hidden_mark_goes_on_into_the_next_one() {
     assert_eq!(hit.path, Path::top(1));
 }
 
+/// From Word 2013 (compatibility mode 15) a paragraph whose mark is hidden is one paragraph with
+/// those after it, down to the one whose mark shows, and all of it is laid out with that one's
+/// formatting: its tab stops, indents and alignment. Earlier modes keep each paragraph's own.
+/// Measured in Word for Windows in modes 15, 14, 12 and none: a tab stop at 60 pt in the first
+/// paragraph and at 30 pt in the second puts the first one's text after its tab 30 pt in from
+/// mode 15 and 60 pt in before; the second one's left indent of 40 pt moves the first one's text
+/// in from mode 15 only, and the first one's own left or first-line indent holds before mode 15
+/// only; a first paragraph that is centred stands at the left with a left-aligned second one
+/// from mode 15. An empty paragraph with a hidden mark between the two changes none of it. (A
+/// centred or right-aligned second paragraph centres or right-aligns the line the two share as
+/// one line in Word; that is not followed, see `paragraph_props`.)
+#[test]
+fn a_paragraph_with_a_hidden_mark_takes_the_formatting_of_the_one_that_ends_its_group() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    type Format<'a> = &'a dyn Fn(&mut ParaProps);
+    let tab = |pos: f32| Some(vec![TabStop { pos, align: TabAlign::Left, leader: Default::default() }]);
+    // "a", a tab and "alpha" with a hidden mark and `first` formatting, an empty paragraph with a
+    // hidden mark too when `chain`, then "bravo" with `second`: where the first line starts and
+    // where "alpha" does.
+    let laid = |mode: u32, in_cell: bool, chain: bool, first: Format, second: Format| {
+        let mut d = Document::from_text(if chain { "a\talpha\n\nbravo\ntail" } else { "a\talpha\nbravo\ntail" });
+        d.settings.compat_mode = mode;
+        let end = if chain { 2 } else { 1 };
+        for i in 0..=end {
+            let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));
+            p.mark.hidden = (i < end).then_some(true);
+        }
+        first(&mut d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props);
+        second(&mut d.para_mut(StoryRef::Body, &Path::top(end)).unwrap().props);
+        if in_cell {
+            let mut table = Table::new(1, 1, 400.0);
+            table.rows[0].cells[0].blocks = std::mem::take(&mut d.body);
+            d.body = vec![std::sync::Arc::new(Block::Table(table))];
+        }
+        let l = lay(&d);
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { para, x, .. } if para.text_len == 7 => Some((x + para.x_of(0, 0)?, x + para.x_of(0, 2)?)),
+                _ => None,
+            })
+            .expect("the first paragraph is laid out")
+    };
+    let plain: Format = &|_| {};
+    for in_cell in [false, true] {
+        for chain in [false, true] {
+            let case = format!("in a cell: {in_cell}, through an empty paragraph: {chain}");
+            // From the left edge of the text (in a cell it is not the same in both modes).
+            let at = |mode: u32, first: Format, second: Format| {
+                let left = laid(mode, in_cell, chain, plain, plain).0;
+                let (start, alpha) = laid(mode, in_cell, chain, first, second);
+                (start - left, alpha - left)
+            };
+            // Tab stops: the second paragraph's from mode 15, the first one's own before.
+            let (first, second): (Format, Format) = (&|p| p.tabs = tab(60.0), &|p| p.tabs = tab(30.0));
+            assert!((at(15, first, second).1 - 30.0).abs() < 0.01, "{case}: alpha {} pt in", at(15, first, second).1);
+            assert!((at(14, first, second).1 - 60.0).abs() < 0.01, "{case}, mode 14: alpha {} pt in", at(14, first, second).1);
+            // The second paragraph's left indent, and its alignment.
+            let indent: Format = &|p| p.indent_left = Some(40.0);
+            assert!((at(15, plain, indent).0 - 40.0).abs() < 0.01, "{case}: the line starts {} pt in", at(15, plain, indent).0);
+            assert!(at(14, plain, indent).0.abs() < 0.01, "{case}, mode 14: the line starts {} pt in", at(14, plain, indent).0);
+            // A centred first paragraph before a left-aligned one stands at the left from mode 15.
+            let centre: Format = &|p| p.align = Some(Align::Center);
+            assert!(at(15, centre, plain).0.abs() < 0.01, "{case}: the line starts {} pt in", at(15, centre, plain).0);
+            assert!(at(14, centre, plain).0 > 100.0, "{case}, mode 14: the centred line starts {} pt in", at(14, centre, plain).0);
+            // The first paragraph's own indents hold before mode 15 only.
+            for (what, own, was) in
+                [("a left indent", indent, 40.0), ("a first-line indent", &(|p: &mut ParaProps| p.indent_first = Some(20.0)) as Format, 20.0)]
+            {
+                assert!(at(15, own, plain).0.abs() < 0.01, "{case}, {what} of its own: the line starts {} pt in", at(15, own, plain).0);
+                assert!((at(14, own, plain).0 - was).abs() < 0.01, "{case}, {what} of its own, mode 14: {} pt in", at(14, own, plain).0);
+            }
+        }
+    }
+}
+
+/// From Word 2013 a group is in the list of the paragraph that ends it too (#6664): its lines
+/// have that one's list level indents, and the first paragraph's number is drawn only where that
+/// one is in a list, at that one's indents and with the first one's own text. Measured in Word
+/// for Windows with 22 pairs and triples of paragraphs in mode 15, eleven of them in mode 14 as
+/// well: "1." of a list at 36 pt with 18 pt hanging, its mark hidden, before a paragraph of a
+/// list at 72 pt with 36 pt hanging stands 36 pt in with its text 72 pt in; before a paragraph
+/// in no list it has no number and starts at the margin; a paragraph in no list before one of
+/// the first list starts 18 pt in, where that one's number would stand. Every paragraph counts
+/// in its list either way. Before mode 15 the number and the indents are the first paragraph's
+/// own.
+#[test]
+fn a_group_is_in_the_list_of_the_paragraph_that_ends_it() {
+    use wordcraft_doc::numbering::Level;
+    use wordcraft_doc::props::NumRef;
+    // "alpha" with a hidden mark, "bravo" and "tail", each in the first list (36 pt, 18 pt
+    // hanging), the second (72 pt, 36 pt hanging) or none, "tail" in the first: alpha's number
+    // with where it stands, where alpha's text starts, and the tail's number.
+    let laid = |mode: u32, first: Option<usize>, second: Option<usize>| {
+        let mut d = Document::from_text("alpha\nbravo\ntail");
+        d.settings.compat_mode = mode;
+        let numbering = Arc::make_mut(&mut d.numbering);
+        let wide = Level { text: "%1)".into(), indent: 72.0, hanging: 36.0, ..Level::default() };
+        let lists = [numbering.add_list(wordcraft_doc::ListKind::Numbered), numbering.try_add_levels(None, vec![wide]).unwrap()];
+        for (i, list) in [first, second, Some(0)].into_iter().enumerate() {
+            let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));
+            p.props.numbering = list.map(|k| NumRef { num: lists[k], level: 0 });
+            p.mark.hidden = (i == 0).then_some(true);
+        }
+        let l = lay(&d);
+        let para = |block: usize| {
+            l.pages[0]
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    Placed::Lines { path, para, x, .. } if *path == Path::top(block) => Some((para.clone(), *x)),
+                    _ => None,
+                })
+                .expect("the paragraph is laid out")
+        };
+        let (alpha, x) = para(0);
+        let number = alpha.label.as_ref().map(|label| (label.text.clone(), x + label.x));
+        (number, x + alpha.x_of(0, 0).unwrap(), para(2).0.label.as_ref().map(|label| label.text.clone()))
+    };
+    for mode in [15, 14] {
+        let (_, left, _) = laid(mode, None, None);
+        // The number as it is drawn and how far in, and how far in the text starts.
+        let at = |first: Option<usize>, second: Option<usize>| {
+            let (number, text, tail) = laid(mode, first, second);
+            (number.map(|(number, x)| (number, ((x - left) * 100.0).round() / 100.0)), ((text - left) * 100.0).round() / 100.0, tail)
+        };
+        let own = (Some(("1.".to_string(), 18.0)), 36.0);
+        // Both in a list: the first one's number, at the second one's indents from mode 15.
+        let (number, text, tail) = at(Some(0), Some(1));
+        let want = if mode == 15 { (Some(("1.".to_string(), 36.0)), 72.0) } else { own.clone() };
+        assert_eq!((number, text), want, "mode {mode}, both in a list");
+        assert_eq!(tail.as_deref(), Some("2."), "mode {mode}: the tail's number after a paragraph of its list");
+        // The second in no list: no number from mode 15, and the text at the margin.
+        let (number, text, tail) = at(Some(0), None);
+        let want = if mode == 15 { (None, 0.0) } else { own.clone() };
+        assert_eq!((number, text), want, "mode {mode}, the second paragraph in no list");
+        assert_eq!(tail.as_deref(), Some("2."), "mode {mode}: the number that is not drawn counts");
+        // The first in no list: from mode 15 it starts where the second one's number would stand.
+        let (number, text, tail) = at(None, Some(0));
+        assert_eq!((number, text), (None, if mode == 15 { 18.0 } else { 0.0 }), "mode {mode}, the first paragraph in no list");
+        assert_eq!(tail.as_deref(), Some("2."), "mode {mode}: the second paragraph counts");
+    }
+}
+
 #[test]
 fn text_going_on_from_a_larger_heading_sits_on_its_baseline() {
     // A heading with a hidden mark followed by body text (a style separator in Word, #3986): the

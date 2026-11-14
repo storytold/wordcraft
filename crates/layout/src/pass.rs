@@ -102,6 +102,7 @@ fn new_ctx<'a>(
         pct_base: None,
         quiet_marks: Vec::new(),
         joined: None,
+        format_from: None,
         stacked_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),

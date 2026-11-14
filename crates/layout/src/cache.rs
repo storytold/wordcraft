@@ -30,6 +30,9 @@ pub(crate) struct Key {
     /// A copy of the paragraph going on from the line of the one before (`ctx::Joining`): its
     /// space before and whether it shares that line ([`ParaEnv::joined`](crate::para::ParaEnv)).
     pub(crate) joined: Option<(u32, bool)>,
+    /// The revision of the paragraph it takes its formatting from: the one that ends the group
+    /// of a paragraph whose mark is hidden ([`ParaEnv::format_from`](crate::para::ParaEnv)).
+    pub(crate) format_from: Option<u64>,
 }
 
 /// Memoised paragraph layouts.
