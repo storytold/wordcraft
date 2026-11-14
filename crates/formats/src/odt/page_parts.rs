@@ -2,7 +2,7 @@
 //! reader (#863).
 use std::collections::HashSet;
 
-use wordcraft_doc::{Document, Part, PartKind};
+use wordcraft_doc::{Document, PartKind};
 
 use super::{Body, Ev, FBlock, Pages, SectionProps, Styles, events, get, model};
 
@@ -54,12 +54,31 @@ impl Slot {
 pub(super) struct Parts {
     parts: Vec<(PartKind, Vec<FBlock>)>,
     even_odd: bool,
+    /// The watermark a header holds (the first found).
+    pub(super) watermark: Option<wordcraft_doc::Watermark>,
+}
+
+impl Parts {
+    /// The blocks of every header and footer read.
+    pub(super) fn blocks_mut(&mut self) -> impl Iterator<Item = &mut Vec<FBlock>> {
+        self.parts.iter_mut().map(|(_, b)| b)
+    }
 }
 
 /// Read each visible header and footer of the master pages in `pages`, and name it on its master
 /// page's section as part id 1, 2, … in order, so the sections the body starts carry them.
 /// [`add`] puts those parts into the document.
-pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Parts {
+/// `objects`: the package's entry names and manifest media types, for embedded objects.
+/// `spaces_left` is the document's [`MAX_EXTRA_SPACES`] budget, which the body read after them
+/// goes on with.
+pub(super) fn read(
+    xml: &[u8],
+    styles: &Styles,
+    pages: &mut Pages,
+    fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
+    objects: (&[String], &std::collections::HashMap<String, String>),
+    spaces_left: &mut usize,
+) -> Parts {
     let mut found: Vec<(String, Slot, Vec<Ev>)> = Vec::new();
     let mut master: Option<String> = None;
     // The slot being read, its nesting depth and whether it is kept.
@@ -109,9 +128,13 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
     for (name, kind, evs) in found {
         let mut reader = Body::new(styles, &none, fetch);
         reader.in_text = true;
+        (reader.entries, reader.manifest) = (objects.0, Some(objects.1));
+        reader.spaces_left = *spaces_left;
         for ev in evs {
             reader.feed(ev);
         }
+        *spaces_left = reader.spaces_left;
+        out.watermark = out.watermark.take().or(reader.watermark.take());
         out.parts.push((if kind.footer() { PartKind::Footer } else { PartKind::Header }, reader.take_blocks()));
         if let Some(sec) = pages.masters.get_mut(&name) {
             kind.set(sec, out.parts.len() as u32);
@@ -145,12 +168,31 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
     out
 }
 
-/// Put the parts [`read`] found into `doc` under the ids its sections name. `doc` comes from
-/// [`model::to_doc`], which adds no parts of its own.
+/// Put the parts [`read`] found into `doc`. The sections name them 1, 2…, in the order read;
+/// `doc`'s notes, comments and text boxes already hold ids, so each part takes a free one and
+/// the sections are pointed at it.
 pub(super) fn add(doc: &mut Document, parts: Parts) {
-    for (i, (kind, blocks)) in parts.parts.into_iter().enumerate() {
+    if parts.watermark.is_some() {
+        doc.settings.watermark.clone_from(&parts.watermark);
+    }
+    let mut ids: Vec<Option<u32>> = Vec::with_capacity(parts.parts.len());
+    for (kind, blocks) in parts.parts {
         let blocks = model::part_blocks(doc, &blocks);
-        doc.parts.insert(i as u32 + 1, Part { kind, blocks, body: Default::default() });
+        ids.push(doc.try_add_part(kind, blocks).ok());
+    }
+    let new_id = |old: Option<u32>| old.and_then(|o| o.checked_sub(1)).and_then(|i| ids.get(i as usize).copied().flatten());
+    let remap = |sec: &mut SectionProps| {
+        for set in [&mut sec.headers, &mut sec.footers] {
+            (set.default, set.first, set.even) = (new_id(set.default), new_id(set.first), new_id(set.even));
+        }
+    };
+    remap(&mut doc.last_section);
+    for b in &mut doc.body {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
+            && let Some(sec) = p.section.as_deref_mut()
+        {
+            remap(sec);
+        }
     }
     doc.settings.even_odd_headers |= parts.even_odd;
 }

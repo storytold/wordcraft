@@ -349,14 +349,33 @@ pub fn current() -> Lang {
     CURRENT.get()
 }
 
+/// The contextual tab has an existing saved/control-channel identity. Keep it separate from
+/// the source text displayed to users, so saved layouts and ui.tab calls keep working.
+fn display_source(source: &str) -> &str {
+    if source == "SmartArt Design" { "Diagram Design" } else { source }
+}
+
 /// Does `lang` have a translation for this string? (English never does: it is the source.)
 pub fn has(lang: Lang, s: &str) -> bool {
+    let s = display_source(s);
     lang.i18n().get(lang.lang, "", s).is_some()
 }
 
 /// `s` in the current language ([`tr`] with [`current`]).
 pub fn t(s: &str) -> &str {
     tr(current(), s)
+}
+
+/// A count's wording in the current language: `one` and `other` are the English forms with `{n}`
+/// for the count, and the key of the catalog's `@plural` row, which gives each form the language
+/// has (Russian's 2, 5 and 21 differ).
+pub fn tn(n: u64, one: &str, other: &str) -> String {
+    #[cfg(test)]
+    if pseudo::on() {
+        return I18N.trn(craft_i18n::Lang::PSEUDO, n, one, other);
+    }
+    let lang = current();
+    lang.i18n().trn(lang.lang, n, one, other)
 }
 
 /// `s` in the current language as worded for `context` (`preview`, `template`), falling back to
@@ -367,6 +386,7 @@ pub fn tc<'a>(context: &str, s: &'a str) -> &'a str {
 
 /// [`tc`] in a given language.
 pub fn trc<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
+    let s = display_source(s);
     #[cfg(test)]
     if pseudo::on() {
         return I18N.tc(craft_i18n::Lang::PSEUDO, context, s);
@@ -378,6 +398,7 @@ pub fn trc<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
 /// or English: for a word whose plain translation means something else here (the "Open"
 /// paragraph-spacing preset is not the file verb).
 pub fn get<'a>(context: &str, s: &'a str) -> Option<&'a str> {
+    let s = display_source(s);
     #[cfg(test)]
     if pseudo::on() {
         return I18N.get(craft_i18n::Lang::PSEUDO, context, s);
@@ -407,6 +428,7 @@ pub fn lowercase(s: &str) -> String {
 
 /// `s` in `lang`; strings without a translation come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
+    let s = display_source(s);
     #[cfg(test)]
     if pseudo::on() {
         return I18N.t(craft_i18n::Lang::PSEUDO, s);

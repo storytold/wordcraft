@@ -1,4 +1,4 @@
-use super::geometry::CaptureGeometry;
+use super::geometry::{CaptureGeometry, UNSUPPORTED_SECONDARY_WINDOW_ERROR};
 use super::{CaptureSlot, Sender, Value, WordApp, json};
 
 /// A page rendered by the engine, as base64 PNG in the reply (the same shape as the headless
@@ -128,6 +128,19 @@ pub(crate) fn admit_screenshot(app: &mut WordApp, ctx: &egui::Context, path: Opt
         reject_shot(reply, token, "screenshot failed: the window geometry is not known yet");
         return;
     };
+    if geometry.viewport != egui::ViewportId::ROOT {
+        let msg = match app.root_window_info() {
+            Some((root_key, _doc_id, root_title)) if !root_title.is_empty() => format!(
+                "screenshot failed: {UNSUPPORTED_SECONDARY_WINDOW_ERROR}. Select the root window first (view.switchWindows {{\"window\": {root_key}}}) for {root_title:?}."
+            ),
+            Some((root_key, ..)) => format!(
+                "screenshot failed: {UNSUPPORTED_SECONDARY_WINDOW_ERROR}. Select the root window first (view.switchWindows {{\"window\": {root_key}}})."
+            ),
+            None => format!("screenshot failed: {UNSUPPORTED_SECONDARY_WINDOW_ERROR}."),
+        };
+        reject_shot(reply, token, msg);
+        return;
+    }
     if let Some(reason) = geometry.unavailable_reason() {
         reject_shot(reply, token, format!("screenshot failed: {reason}"));
         return;

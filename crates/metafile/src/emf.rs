@@ -68,7 +68,7 @@ fn device_px_per_mm(input: Bytes) -> Option<(f64, f64)> {
 }
 
 /// The frame from `rclFrame` (offset 24), `szlDevice` (72) and `szlMillimeters` (80) in the header.
-fn frame_from_header(input: Bytes) -> Option<Frame> {
+pub(crate) fn frame_from_header(input: Bytes) -> Option<Frame> {
     let [fl, ft, fr, fb] = rect32(input, 24)?;
     if fr <= fl || fb <= ft {
         return None;

@@ -948,6 +948,123 @@ fn place_keeps_only_finite_bounded_bitmaps_with_area() {
     assert_eq!((*index, *rect), (4, kurbo::Rect::new(20.0, 10.0, 40.0, 30.0)));
 }
 
+/// `size` against the full parse: same numbers or same error, and whether the header decided it.
+fn assert_size_matches_parse(file: &[u8], from_header: bool, what: &str) {
+    let full = parse(file).map(|p| (p.width, p.height));
+    assert_eq!(crate::size(file), full, "{what}");
+    assert_eq!(crate::size::header_size(crate::bytes::Bytes(file)).is_some(), from_header, "{what}: header path");
+    if let Some(s) = crate::size::header_size(crate::bytes::Bytes(file)) {
+        assert_eq!(Ok(s), full, "{what}: header size");
+    }
+}
+
+#[test]
+fn size_from_the_header_equals_the_full_parse() {
+    let rect = || erec(43, &cat(vec![e32(0), e32(0), e32(50), e32(25)]));
+    let emfs = [
+        ("emf with a frame", emf(&[rect()], [0, 0, 50, 25], [0, 0, 2500, 1250]), true),
+        ("emf with a large frame", emf(&[rect()], [0, 0, 50, 25], [-90_000, 0, 900_000, 1_250_000]), true),
+        ("emf with an empty frame", emf(&[rect()], [0, 0, 50, 25], [0; 4]), false),
+        ("emf with no records", emf(&[], [0, 0, 50, 25], [0, 0, 2500, 1250]), false),
+        ("emf with no frame and no bounds", emf(&[rect()], [0; 4], [0; 4]), false),
+    ];
+    for (what, file, header) in &emfs {
+        assert_size_matches_parse(file, *header, what);
+    }
+    let draw = [wrec(0x041B, &cat(vec![h16(1440), h16(2880), h16(0), h16(0)]))];
+    let wmfs = [
+        ("placeable wmf", wmf(&draw, Some([0, 0, 2880, 1440])), true),
+        (
+            "placeable wmf with a window mapping",
+            wmf(
+                &[wrec(0x0103, &h16(8)), wrec(0x020C, &cat(vec![h16(100), h16(200)])), wrec(0x020E, &cat(vec![h16(50), h16(100)])), draw[0].clone()],
+                Some([0, 0, 200, 100]),
+            ),
+            false,
+        ),
+        (
+            "placeable wmf with a zero viewport",
+            wmf(&[wrec(0x0103, &h16(8)), wrec(0x020E, &cat(vec![h16(0), h16(0)])), draw[0].clone()], Some([0, 0, 200, 100])),
+            false,
+        ),
+        ("placeable wmf with a window only", wmf(&[wrec(0x020C, &cat(vec![h16(100), h16(200)])), draw[0].clone()], Some([0, 0, 200, 100])), true),
+        ("placeable wmf with an empty box", wmf(&draw, Some([0, 0, 0, 0])), false),
+        ("placeable wmf with no records", wmf(&[], Some([0, 0, 2880, 1440])), false),
+        ("plain wmf", wmf(&draw, None), false),
+    ];
+    for (what, file, header) in &wmfs {
+        assert_size_matches_parse(file, *header, what);
+    }
+    assert_size_matches_parse(b"not a metafile at all", false, "garbage");
+    assert_size_matches_parse(&[], false, "empty");
+}
+
+#[test]
+fn size_of_a_truncated_or_mutated_file_equals_the_full_parse() {
+    let rect = erec(43, &cat(vec![e32(0), e32(0), e32(50), e32(25)]));
+    let draw = wrec(0x041B, &cat(vec![h16(1440), h16(2880), h16(0), h16(0)]));
+    let files = [emf(&[rect], [0, 0, 50, 25], [0, 0, 2500, 1250]), wmf(&[draw], Some([0, 0, 2880, 1440]))];
+    let mut seed = 0x1234_5678_9ABC_DEF0u64;
+    for file in &files {
+        for len in 0..=file.len() {
+            let cut = &file[..len];
+            assert_eq!(crate::size(cut), parse(cut).map(|p| (p.width, p.height)), "cut at {len}");
+        }
+        for _ in 0..3000 {
+            let mut m = file.clone();
+            for _ in 0..3 {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let at = (seed % m.len() as u64) as usize;
+                m[at] = (seed >> 32) as u8;
+            }
+            let full = parse(&m).map(|p| (p.width, p.height));
+            let fast = crate::size(&m);
+            assert_eq!(fast, full, "{m:?}");
+        }
+    }
+}
+
+/// Time of the full parse against the header-only size for an EMF with one 8000 x 5000, 1 bpp bitmap
+/// (5 MB, decodes to 160 MB): `cargo test -p wordcraft-metafile --release -- --ignored --nocapture size_speed`.
+#[test]
+#[ignore = "timing only"]
+fn size_speed() {
+    let (w, h) = (8000i32, 5000i32);
+    let mut payload = vec![0u8; 16];
+    payload.extend(cat(vec![
+        e32(0),
+        e32(0),
+        e32(0),
+        e32(0),
+        e32(w),
+        e32(h),
+        e32(80),
+        e32(48),
+        e32(128),
+        h32((w / 8 * h) as u32),
+        e32(0),
+        e32(0x00CC_0020),
+        e32(100),
+        e32(50),
+    ]));
+    payload.extend(info_header(w, h, 1, 0));
+    payload.extend([0, 0, 0, 0, 255, 255, 255, 0]);
+    payload.extend((0..(w / 8 * h) as usize).map(|i| (i * 31) as u8));
+    let file = emf(&[erec(81, &payload)], [0, 0, 100, 50], [0, 0, 2500, 1250]);
+    for round in 0..4 {
+        let t = std::time::Instant::now();
+        let full = parse(&file).map(|p| (p.width, p.height));
+        let full_ms = t.elapsed().as_secs_f64() * 1e3;
+        let t = std::time::Instant::now();
+        let fast = crate::size(&file);
+        let fast_ms = t.elapsed().as_secs_f64() * 1e6;
+        assert_eq!(full, fast);
+        eprintln!("round {round}: parse {full_ms:.1} ms, size {fast_ms:.1} us");
+    }
+}
+
 #[test]
 fn take_pixels_returns_only_drawable_bitmaps() {
     let mut ok = Item::Bitmap { rect: [0.0; 4], width: 2, height: 1, rgba: vec![7; 8] };

@@ -30,6 +30,30 @@ fn part(bytes: &[u8], name: &str) -> String {
 }
 
 #[test]
+fn paragraph_adjust_right_indent_inherits_from_style() {
+    let styles =
+        r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:adjustRightInd/></w:pPr></w:style>"#;
+    let body = r#"<w:p><w:pPr><w:adjustRightInd w:val="0"/></w:pPr><w:r><w:t>off</w:t></w:r></w:p>
+        <w:p><w:r><w:t>inherited</w:t></w:r></w:p>"#;
+    let mut d = wordcraft_docx::read(&docx(body, styles)).unwrap();
+    let paragraphs: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
+    assert_eq!(paragraphs[0].props.adjust_right_indent, Some(false));
+    assert!(!d.styles.resolve_para(&paragraphs[0].props).adjust_right_indent);
+    assert!(d.styles.resolve_para(&paragraphs[1].props).adjust_right_indent);
+
+    for _ in 0..2 {
+        let out = wordcraft_docx::write(&d).unwrap();
+        assert!(part(&out, "word/document.xml").contains(r#"<w:adjustRightInd w:val="0""#));
+        assert!(part(&out, "word/styles.xml").contains("<w:adjustRightInd/>"));
+        d = wordcraft_docx::read(&out).unwrap();
+        let paragraphs: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
+        assert!(!d.styles.resolve_para(&paragraphs[0].props).adjust_right_indent);
+        assert!(d.styles.resolve_para(&paragraphs[1].props).adjust_right_indent);
+        assert_eq!(paragraphs[0].props.adjust_right_indent, Some(false));
+    }
+}
+
+#[test]
 fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
     let styles = r#"
         <w:style w:type="character" w:styleId="On"><w:rPr><w:snapToGrid/><w:webHidden/></w:rPr></w:style>
@@ -71,4 +95,40 @@ fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
         assert!(document_xml.contains("visible in print"));
         doc = wordcraft_docx::read(&out).unwrap();
     }
+}
+
+#[test]
+fn style_paragraph_and_run_changes_keep_independent_authors() {
+    let styles = r#"
+        <w:style w:type="paragraph" w:styleId="Mine">
+          <w:name w:val="Mine"/>
+          <w:pPr><w:jc w:val="center"/><w:pPrChange w:id="1" w:author="Ana" w:date="2026-10-01T00:00:00Z"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr>
+          <w:rPr><w:b/><w:rPrChange w:id="2" w:author="Bo" w:date="2026-10-02T00:00:00Z"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr>
+        </w:style>
+    "#;
+    let doc = wordcraft_docx::read(&docx("<w:p/>", styles)).unwrap();
+    let st = doc.styles.get("Mine").unwrap();
+    let p = st.para_change.as_ref().expect("paragraph revision");
+    let r = st.chr_change.as_ref().expect("run revision");
+    assert_eq!(doc.revisions[p.rev as usize].author, "Ana");
+    assert_eq!(doc.revisions[r.rev as usize].author, "Bo");
+
+    let out = wordcraft_docx::write(&doc).unwrap();
+    let xml = part(&out, "word/styles.xml");
+    let p_xml = xml.split("<w:pPrChange").nth(1).unwrap_or("").split("</w:pPrChange>").next().unwrap_or("");
+    let r_xml = xml.split("<w:rPrChange").nth(1).unwrap_or("").split("</w:rPrChange>").next().unwrap_or("");
+    assert!(p_xml.contains("w:author=\"Ana\"") && r_xml.contains("w:author=\"Bo\""), "{xml}");
+}
+
+#[test]
+fn old_style_paragraph_properties_get_heading_and_list_normalization() {
+    let styles = r#"
+        <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:numPr><w:numId w:val="7"/></w:numPr></w:pPr></w:style>
+        <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:outlineLvl w:val="4"/><w:pPrChange w:id="3" w:author="Ana"><w:pPr><w:numPr><w:ilvl w:val="2"/></w:numPr></w:pPr></w:pPrChange></w:pPr></w:style>
+    "#;
+    let doc = wordcraft_docx::read(&docx("<w:p/>", styles)).unwrap();
+    let st = doc.styles.get("Heading1").unwrap();
+    let old = &st.para_change.as_ref().expect("paragraph revision").old;
+    assert_eq!((st.para.outline_level, old.outline_level), (Some(4), Some(0)));
+    assert_eq!(old.numbering.map(|n| (n.num, n.level)), Some((7, 2)), "the old list level follows the based-on style instead of leaking LEVEL_ONLY");
 }

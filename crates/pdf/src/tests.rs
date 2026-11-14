@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use wordcraft_doc::para::InlineObject;
+use wordcraft_doc::picfx::PicFx;
 use wordcraft_doc::props::NumRef;
 use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Watermark, para_block};
 
 use crate::*;
+use wordcraft_layout::LayoutOptions;
+use wordcraft_layout::display::DisplayOptions;
 
 /// Verify preset lines and connectors emit the requested PDF line-cap operator.
 #[test]
@@ -78,7 +81,7 @@ fn sample() -> Document {
     p.insert_text(n, " back to top", &CharProps { link: Some("#intro".into()), italic: Some(true), ..Default::default() }).unwrap();
     b.push(para_block(p));
     b.push(para_block(Paragraph::with_text("Details", CharProps::default()).styled("Heading2")));
-    let list = d.numbering.add_list(ListKind::Numbered);
+    let list = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     for t in ["alpha item", "beta item"] {
         let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
         q.props.numbering = Some(NumRef { num: list, level: 0 });
@@ -101,6 +104,7 @@ fn sample() -> Document {
             alt: "gradient".into(),
             float: Default::default(),
             crop: [0.1, 0.0, 0.0, 0.0],
+            fx: Default::default(),
             ole: None,
         },
         &CharProps::default(),
@@ -237,6 +241,7 @@ fn hostile_documents_export() {
             alt: String::new(),
             float: Default::default(),
             crop: [f32::NAN; 4],
+            fx: Default::default(),
             ole: None,
         },
         &CharProps::default(),
@@ -244,7 +249,16 @@ fn hostile_documents_export() {
     .unwrap();
     p.insert_object(
         0,
-        InlineObject::Image { media: "missing".into(), w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media: "missing".into(),
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -310,7 +324,7 @@ fn deleted_heading_text_stays_out_of_bookmarks_and_tags() {
 fn hidden_heading_text_stays_out_of_bookmarks_and_tags() {
     let mut d = Document::new();
     // Hidden text both directly and through a character style.
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "Secret".into(),
         name: "Secret".into(),
         kind: wordcraft_doc::StyleKind::Character,
@@ -421,7 +435,7 @@ fn table_style_hidden_heading_text_stays_out_of_bookmarks_and_tags() {
     // Hidden by the table style's header row, so only the layout's resolution (table conditional
     // formatting under the runs' own) says the text is hidden.
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "SecretHeader".into(),
         name: "Secret Header".into(),
         kind: wordcraft_doc::StyleKind::Table,
@@ -1020,7 +1034,16 @@ fn metafile_pictures_are_drawn_as_vector_paths() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: "red".into(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: "red".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1067,7 +1090,7 @@ fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
         let mut p = Paragraph::new();
         p.insert_object(
             0,
-            InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, ole: None },
+            InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, fx: Default::default(), ole: None },
             &CharProps::default(),
         )
         .unwrap();
@@ -1113,10 +1136,10 @@ fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
 #[test]
 fn progressive_jpeg_coefficients_count_toward_the_image_budget() {
     assert!(wordcraft_geom::decode_fits(7900, 7900, wordcraft_geom::MAX_DECODED_BYTES));
-    assert!(load_image(&Arc::new(progressive_jpeg_header(7900, 7900))).is_none());
+    assert!(load_image(&Arc::new(progressive_jpeg_header(7900, 7900)), PicFx::default()).is_none());
     let mut baseline = Vec::new();
     image::RgbImage::new(64, 64).write_to(&mut std::io::Cursor::new(&mut baseline), image::ImageFormat::Jpeg).unwrap();
-    assert!(load_image(&Arc::new(baseline)).is_some(), "other JPEGs still embed");
+    assert!(load_image(&Arc::new(baseline), PicFx::default()).is_some(), "other JPEGs still embed");
 }
 
 /// #1502: an inline picture's Figure carries its own alt text, not the "picture" fallback.
@@ -1127,7 +1150,16 @@ fn inline_picture_figure_keeps_its_alt_text() {
         let media = d.add_media(red_right_half_emf(), "emf");
         let mut p = Paragraph::with_text("Figure: ", CharProps::default());
         let n = p.len();
-        let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: alt.into(), float: Default::default(), crop: [0.0; 4], ole: None };
+        let obj = InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: alt.into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
         p.insert_object(n, obj, &CharProps::default()).unwrap();
         d.body = vec![para_block(p)];
         String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
@@ -1144,7 +1176,7 @@ fn tagged_picture_pdf(float: wordcraft_doc::para::Float) -> String {
     let media = d.add_media(red_right_half_emf(), "emf");
     let mut p = Paragraph::with_text("Figure: ", CharProps::default());
     let n = p.len();
-    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: "A red square".into(), float, crop: [0.0; 4], ole: None };
+    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: "A red square".into(), float, crop: [0.0; 4], fx: Default::default(), ole: None };
     p.insert_object(n, obj, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
@@ -1160,6 +1192,8 @@ fn decorative_pictures_are_artifacts_not_figures() {
     let cases = [
         ("inline", Float::default()),
         ("rotated inline", Float { rot: 30.0, ..Default::default() }),
+        // Turned with no room kept for it: drawn cut at its line (a clip), still tagged.
+        ("bare turned inline", Float { rot: 45.0, bare_turn: true, ..Default::default() }),
         ("floating", floating.clone()),
         ("rotated floating", Float { rot: 30.0, ..floating }),
     ];
@@ -1172,6 +1206,43 @@ fn decorative_pictures_are_artifacts_not_figures() {
     }
 }
 
+/// A row of exact height cuts its cell's lines (one clip around them): text and a picture in
+/// it are tagged as they are in a row that fits, the text as the paragraph's, the picture as a
+/// Figure with its alt text.
+#[test]
+fn a_clipped_cell_tags_its_text_and_picture() {
+    let raw = |exact: bool| {
+        let mut d = Document::new();
+        let media = d.add_media(red_right_half_emf(), "emf");
+        let mut p = Paragraph::with_text("Cell text ", CharProps::default());
+        let n = p.len();
+        let obj = InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: "A red square".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        };
+        p.insert_object(n, obj, &CharProps::default()).unwrap();
+        let mut t = Table::new(1, 1, 300.0);
+        t.rows[0].cells[0].blocks = vec![para_block(p)];
+        if exact {
+            t.rows[0].props.height = Some(30.0);
+            t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+        }
+        d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::with_text("Below", CharProps::default()))];
+        String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
+    };
+    let (fits, cut) = (raw(false), raw(true));
+    assert!(cut.contains("/Alt(A red square)"), "the picture in the cut cell is a Figure with its alt text");
+    // The same marked content either way: the cut cell's text is not dropped as an artifact.
+    assert_eq!(cut.matches("/MCID").count(), fits.matches("/MCID").count());
+    assert_eq!(cut.matches("/S/P").count(), fits.matches("/S/P").count());
+}
+
 /// In a rotated group, each picture is tagged on its own: the decorative one is an artifact, the
 /// other stays a Figure with its alt text.
 #[test]
@@ -1179,8 +1250,16 @@ fn rotated_group_tags_each_picture_on_its_own() {
     use wordcraft_doc::para::{AltText, Float, GroupChild};
     let mut d = Document::new();
     let media = d.add_media(red_right_half_emf(), "emf");
-    let picture =
-        |alt: &str, float: Float| InlineObject::Image { media: media.clone(), w: 70.0, h: 70.0, alt: alt.into(), float, crop: [0.0; 4], ole: None };
+    let picture = |alt: &str, float: Float| InlineObject::Image {
+        media: media.clone(),
+        w: 70.0,
+        h: 70.0,
+        alt: alt.into(),
+        float,
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     let decorative = Float { alt: AltText { decorative: true, ..Default::default() }, ..Default::default() };
     let group = InlineObject::Group {
         w: 160.0,
@@ -1238,7 +1317,16 @@ fn metafile_strokes_use_round_caps_and_joins() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1269,7 +1357,16 @@ fn metafile_fill_items_carry_no_stroke_state() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1293,7 +1390,16 @@ fn cosmetic_metafile_pens_are_thin_but_visible() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1331,7 +1437,16 @@ fn metafile_text_records_are_drawn_as_text() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1343,6 +1458,7 @@ fn metafile_text_records_are_drawn_as_text() {
 
 /// #455: a link to a bookmark after a page break inside its paragraph goes to the page the
 /// bookmark is on, not the paragraph's first page.
+/// A bookmark after a page break targets its laid-out start, independent of paragraph origin.
 #[test]
 fn bookmark_destination_is_the_page_of_its_start() {
     let mut d = Document::new();
@@ -1360,7 +1476,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         doc: &d,
         lay: &lay,
         opts: &PdfOptions::default(),
-        out_index: pages.iter().enumerate().map(|(o, p)| (*p, o)).collect(),
+        out_index: pages.iter().enumerate().map(|(o, p)| (*p, (o, Fit::of(&lay.pages[*p], None)))).collect(),
         fonts: HashMap::new(),
         font_error: None,
         outlined: &outlined,
@@ -1391,6 +1507,35 @@ fn bookmark_destination_is_the_page_of_its_start() {
 
     // Whitespace in ISO date string is parsed successfully
     assert!(parse_iso("  2024-05-06T07:08:09Z \n").is_some());
+}
+
+#[test]
+fn only_web_and_mail_links_become_uri_actions() {
+    // A script, file, data or UNC target exports as plain text, as in the other exporters (#3717).
+    let links = [
+        ("web", "https://example.com/ok"),
+        ("mail", "mailto:a@example.com"),
+        ("script", "javascript:alert(1)"),
+        ("file", "file:///etc/passwd"),
+        ("data", "data:text/html,x"),
+        ("unc", r"\\host\share"),
+    ];
+    let mut p = Paragraph::with_text("Links:", CharProps::default());
+    for (text, link) in links {
+        let n = p.len();
+        p.insert_text(n, &format!(" {text}"), &CharProps { link: Some(link.into()), ..Default::default() }).unwrap();
+    }
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap()).into_owned();
+    // `/URI (target)` per link (an action also says `/S /URI`).
+    assert_eq!(raw.matches("/URI (").count() + raw.matches("/URI(").count(), 2);
+    assert!(raw.contains("example.com/ok") && raw.contains("a@example.com"));
+    for bad in ["javascript", "passwd", "text/html", "share"] {
+        assert!(!raw.contains(bad), "{bad}");
+    }
+    let all = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    assert!(all.contains("Links: web mail script file data unc"), "{all:?}");
 }
 
 #[test]
@@ -1488,7 +1633,16 @@ fn outline_keeps_visible_objects() {
     let media = base.add_media(png(), "png");
     for object in [
         InlineObject::Field { instr: "QUOTE Visible".into(), result: "Visible".into(), locked: true, dirty: false, code: false, form: String::new() },
-        InlineObject::Image { media, w: 16.0, h: 8.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 16.0,
+            h: 8.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
     ] {
         let mut d = base.clone();
         let mut heading = Paragraph::with_text("\u{c}After break", CharProps::default()).styled("Heading1");
@@ -1586,7 +1740,7 @@ fn all_caps_and_small_caps_text_extracts_as_displayed() {
     // (as Word's PDFs do), and later text without caps keeps its own case: a capital glyph
     // first drawn for a lowercase letter must not make every later capital read as lowercase.
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "CapsPara".into(),
         name: "Caps Para".into(),
         kind: wordcraft_doc::StyleKind::Paragraph,
@@ -1623,14 +1777,14 @@ fn caps_list_labels_extract_as_displayed() {
     // #1473: a lowercase-letter list label in an All Caps paragraph is drawn with capital glyphs;
     // it reads as those capitals, and a later plain capital A still reads as "A".
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "CapsPara".into(),
         name: "Caps Para".into(),
         kind: wordcraft_doc::StyleKind::Paragraph,
         chr: CharProps { caps: Some(true), ..Default::default() },
         ..Default::default()
     });
-    let list = d.numbering.add_list(ListKind::Numbered);
+    let list = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let mut item = Paragraph::with_text("item", CharProps::default()).styled("CapsPara");
     item.props.numbering = Some(NumRef { num: list, level: 1 });
     d.body = vec![para_block(item), para_block(Paragraph::with_text("Plain Apple.", CharProps::default()))];
@@ -1979,6 +2133,160 @@ fn right_to_left_clusters_are_written_whole_left_to_right() {
     assert_eq!(visual_order(text, &glyphs, &ranges, &parts), [5, 4, 2, 3, 0, 1]);
 }
 
+/// The image XObjects in a PDF: (width, height, filters, decoded samples per pixel).
+fn pdf_images(bytes: &[u8]) -> Vec<(u32, u32, Vec<String>, Vec<Vec<u8>>)> {
+    use hayro_syntax::object::{Name, Object};
+    let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+    let mut out = Vec::new();
+    for o in pdf.objects() {
+        let Object::Stream(st) = o else { continue };
+        let d = st.dict();
+        if d.get::<Name>(b"Subtype").is_none_or(|n| n.as_str() != "Image") || d.contains_key(b"SMaskInData") {
+            continue;
+        }
+        let (w, h) = (d.get::<f32>(b"Width").unwrap_or(0.0) as u32, d.get::<f32>(b"Height").unwrap_or(0.0) as u32);
+        let filters = match d.get::<Name>(b"Filter") {
+            Some(n) => vec![n.as_str().to_string()],
+            None => d
+                .get::<hayro_syntax::object::Array>(b"Filter")
+                .map(|a| a.iter::<Name>().map(|n| n.as_str().to_string()).collect())
+                .unwrap_or_default(),
+        };
+        let data = st.decoded().map(|c| c.to_vec()).unwrap_or_default();
+        let n = (w as usize * h as usize).max(1);
+        let px = data.chunks((data.len() / n).max(1)).map(<[u8]>::to_vec).collect();
+        out.push((w, h, filters, px));
+    }
+    out
+}
+
+/// The fill opacities (`ca`) of the PDF's graphics states.
+fn pdf_fill_opacities(bytes: &[u8]) -> Vec<f32> {
+    use hayro_syntax::object::Object;
+    let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+    pdf.objects().into_iter().filter_map(|o| if let Object::Dict(d) = o { d.get::<f32>(b"ca") } else { None }).collect()
+}
+
+/// A JPEG with brightness and contrast (#1766) is embedded with its corrected pixels, read back
+/// from the PDF itself (Flate, not passed through as DCT); the same JPEG without them still is
+/// passed through; the same picture and corrections twice are embedded once; transparency alone
+/// keeps the JPEG and reaches the page as a fill opacity.
+#[test]
+fn picture_fx_is_baked_into_the_embedded_image() {
+    use wordcraft_doc::picfx::PicFx;
+    let img = image::RgbImage::from_fn(32, 32, |x, _| image::Rgb([if x < 16 { 100 } else { 0 }, 100, 255]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut jpeg = Vec::new();
+    image::RgbImage::from_pixel(32, 32, image::Rgb([100, 100, 100]))
+        .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+        .unwrap();
+    let export_with = |bytes: &[u8], ext: &str, fxs: &[PicFx]| {
+        let mut d = Document::new();
+        let media = d.add_media(bytes.to_vec(), ext);
+        let mut p = Paragraph::new();
+        for fx in fxs {
+            let pic = InlineObject::Image {
+                media: media.clone(),
+                w: 40.0,
+                h: 40.0,
+                alt: "p".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: *fx,
+                ole: None,
+            };
+            p.insert_object(0, pic, &CharProps::default()).unwrap();
+        }
+        d.body = vec![para_block(p)];
+        export(&d, &PdfOptions::default()).unwrap()
+    };
+    let lum = PicFx::new(80_000, -80_000, 0);
+    // PNG: the embedded samples are the corrected ones, Word's 100 → 244, 0 → 224, 255 → 255.
+    let pdf = export_with(&png, "png", &[lum, lum]);
+    let images = pdf_images(&pdf);
+    assert_eq!(images.len(), 1, "the same picture and corrections are embedded once");
+    let (w, h, filters, px) = &images[0];
+    assert_eq!((*w, *h), (32, 32));
+    assert_eq!(filters, &["FlateDecode".to_string()], "compressed");
+    let want = |x: usize| if x % 32 < 16 { [244u8, 244, 255] } else { [224, 244, 255] };
+    for (i, p) in px.iter().enumerate() {
+        assert_eq!(p.len(), 3, "RGB samples");
+        assert!(p.iter().zip(want(i)).all(|(a, b)| a.abs_diff(b) <= 1), "pixel {i}: {p:?}");
+    }
+    // The picture as it is and with corrections: two images.
+    assert_eq!(pdf_images(&export_with(&png, "png", &[lum, PicFx::default()])).len(), 2);
+    // JPEG: passed through without corrections, decoded and corrected with them.
+    let filters = |pdf: &[u8]| pdf_images(pdf).into_iter().map(|i| i.2).collect::<Vec<_>>();
+    assert_eq!(filters(&export_with(&jpeg, "jpeg", &[PicFx::default()])), vec![vec!["DCTDecode".to_string()]]);
+    let baked = pdf_images(&export_with(&jpeg, "jpeg", &[lum]));
+    assert_eq!(baked.len(), 1);
+    assert_eq!(baked[0].2, vec!["FlateDecode".to_string()]);
+    assert!(baked[0].3.iter().all(|p| p.iter().all(|c| c.abs_diff(244) <= 3)), "{:?}", &baked[0].3[..2]);
+    // Transparency alone: the JPEG as it is, drawn at 40% opacity (`a:alphaModFix amt=40000`).
+    let faded = export_with(&jpeg, "jpeg", &[PicFx::new(0, 0, 60_000)]);
+    assert_eq!(filters(&faded), vec![vec!["DCTDecode".to_string()]]);
+    assert!(pdf_fill_opacities(&faded).iter().any(|a| (a - 0.4).abs() < 0.01), "{:?}", pdf_fill_opacities(&faded));
+    assert!(!pdf_fill_opacities(&export_with(&jpeg, "jpeg", &[PicFx::default()])).iter().any(|a| *a < 0.99));
+    // Hostile corrections export.
+    assert_eq!(pdf_images(&export_with(&jpeg, "jpeg", &[PicFx { bright: i32::MAX, contrast: i32::MIN, transparency: -7 }])).len(), 1);
+}
+
+/// A hostile header (a few bytes claiming 20 000 × 20 000 RGBA, 1.6 GB decoded) is refused by
+/// the shared decode budget, the one the screen uses too, with corrections or without:
+/// nothing is allocated for it, nothing panics, and the export still works. Corrections never
+/// make a picture fail where it wouldn't without them.
+#[test]
+fn hostile_picture_header_is_refused_without_allocating() {
+    use wordcraft_doc::picfx::PicFx;
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for b in bytes {
+            c ^= u32::from(*b);
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+    // A PNG signature and an IHDR for 20 000 × 20 000 RGBA, and no pixel data.
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend_from_slice(&20_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&20_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&13u32.to_be_bytes());
+    png.extend_from_slice(&ihdr);
+    png.extend_from_slice(&crc32(&ihdr).to_be_bytes());
+    // An empty data chunk: the header is read up to the first one.
+    png.extend_from_slice(&0u32.to_be_bytes());
+    png.extend_from_slice(b"IDAT");
+    png.extend_from_slice(&crc32(b"IDAT").to_be_bytes());
+    assert_eq!(image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().unwrap().into_dimensions().unwrap(), (20_000, 20_000));
+    let data = Arc::new(png.clone());
+    // Refused from the header by the shared decode budget, before anything is decoded, not by
+    // the missing pixel data that follows.
+    assert!(!wordcraft_geom::picture::probe(&png).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)));
+    assert!(load_image(&data, PicFx::new(80_000, -80_000, 0)).is_none());
+    assert!(load_image(&data, PicFx::default()).is_none());
+    let mut d = Document::new();
+    let media = d.add_media(png, "png");
+    let pic = InlineObject::Image {
+        media,
+        w: 40.0,
+        h: 40.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: PicFx::new(80_000, -80_000, 0),
+        ole: None,
+    };
+    let mut p = Paragraph::new();
+    p.insert_object(0, pic, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    assert!(pdf_images(&export(&d, &PdfOptions::default()).unwrap()).is_empty());
+}
+
 /// A PNG signature, an IHDR declaring `w`×`h` 8-bit RGBA and a short IDAT (all CRCs valid, so
 /// the header parses), with no real pixel data.
 fn ihdr_only_png(w: u32, h: u32) -> Vec<u8> {
@@ -2030,7 +2338,7 @@ fn metadata_language_overrides_and_fallbacks_are_preserved() {
         ..Default::default()
     };
     for language in [Some("es-CR"), Some("ja"), Some(""), Some("日本語"), None] {
-        d.styles.default_chr.lang = language.map(str::to_owned);
+        Arc::make_mut(&mut d.styles).default_chr.lang = language.map(str::to_owned);
         let bytes = export(&d, &opts).unwrap();
         let raw = String::from_utf8_lossy(&bytes);
         let pdf = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
@@ -2172,20 +2480,20 @@ fn zero_width_connector_dashes() {
 fn image_budget_is_checked_from_the_header() {
     let data = Arc::new(png());
     // The decoded image and its RGBA conversion are charged: two buffers at peak.
-    assert!(load_image_within(&data, 1024).is_some());
-    assert!(load_image_within(&data, 1023).is_none());
+    assert!(load_image_within(&data, PicFx::default(), 1024).is_some());
+    assert!(load_image_within(&data, PicFx::default(), 1023).is_none());
     // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 conversion: 12 bytes a pixel.
     let mut wide = Vec::new();
     let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
     image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
     let wide = Arc::new(wide);
-    assert!(load_image_within(&wide, 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
-    assert!(load_image_within(&wide, 1536).is_some());
+    assert!(load_image_within(&wide, PicFx::default(), 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
+    assert!(load_image_within(&wide, PicFx::default(), 1536).is_some());
     // A header (valid CRC) claiming 30000x30000 with no pixel data reads fine, then the budget refuses it.
     let hdr = ihdr_only_png(30_000, 30_000);
     let dims = image::ImageReader::new(std::io::Cursor::new(hdr.as_slice())).with_guessed_format().unwrap().into_dimensions().unwrap();
     assert_eq!(dims, (30_000, 30_000));
-    assert!(load_image(&Arc::new(hdr)).is_none());
+    assert!(load_image(&Arc::new(hdr), PicFx::default()).is_none());
 }
 
 /// Scale to paper size (#2108): every page goes on the chosen paper, turned to the page's
@@ -2428,17 +2736,124 @@ fn borders_are_dashed_with_words_patterns() {
     assert!(raw.contains("[3 1 1 1]0 d") || raw.contains("[3 1 1 1] 0 d"), "the dash-dot border");
 }
 
+/// Exported text remains selectable; copies repeat complete padded sheet plans.
+#[test]
+fn imposed_pdf_keeps_text_sheet_geometry_and_copy_boundaries() {
+    use crate::imposition::Imposition;
+    let d = Document::from_text("PAGEONE\u{c}PAGETWO\u{c}PAGETHREE\u{c}PAGEFOUR\u{c}PAGEFIVE");
+    for (mode, expected) in [
+        (Imposition::NUp(2), vec!["PAGEONEPAGETWO", "PAGETHREEPAGEFOUR", "PAGEFIVE"]),
+        (Imposition::NUp(4), vec!["PAGEONEPAGETWOPAGETHREEPAGEFOUR", "PAGEFIVE"]),
+        (Imposition::Booklet { reverse: false }, vec!["PAGEONE", "PAGETWO", "PAGETHREE", "PAGEFOURPAGEFIVE"]),
+        (Imposition::Booklet { reverse: true }, vec!["PAGEONE", "PAGETWO", "PAGETHREE", "PAGEFIVEPAGEFOUR"]),
+    ] {
+        for collate in [true, false] {
+            let opts = PdfOptions {
+                imposition: mode,
+                sheet_copies: 2,
+                sheet_collate: collate,
+                tagged: false,
+                paper: Some((612.0, 792.0)),
+                ..Default::default()
+            };
+            let bytes = export(&d, &opts).unwrap();
+            let actual: Vec<_> = extract_text(&bytes).iter().map(|s| s.split_whitespace().collect::<String>()).collect();
+            let want: Vec<_> = if collate {
+                expected.iter().chain(expected.iter()).copied().collect()
+            } else if matches!(mode, Imposition::Booklet { .. }) {
+                expected.chunks(2).flat_map(|pair| pair.iter().chain(pair.iter())).copied().collect()
+            } else {
+                expected.iter().flat_map(|p| [*p, *p]).collect()
+            };
+            assert_eq!(actual, want, "{mode:?}, collate={collate}");
+            let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+            assert_eq!(pdf.pages().len(), want.len());
+        }
+    }
+}
+
+/// Every supported grid preserves chosen page order and stays within the sheet.
+#[test]
+fn imposed_grids_are_bounded_and_invalid_modes_fail() {
+    use crate::imposition::Imposition;
+    let doc = Document::from_text("a\u{c}b\u{c}c\u{c}d\u{c}e");
+    let lay = layout(&doc, &mut Default::default(), &Default::default());
+    for n in [2, 4, 6, 9, 16] {
+        let sheets = Imposition::NUp(n).sheets(&lay, &[4, 1, 3, 0, 2], Some((595.0, 842.0))).unwrap();
+        assert_eq!(sheets.len(), 5usize.div_ceil(n as usize));
+        assert_eq!(sheets.iter().flat_map(|s| &s.slots).map(|s| s.page).collect::<Vec<_>>(), [4, 1, 3, 0, 2]);
+        for sheet in sheets {
+            for slot in sheet.slots {
+                assert!(slot.x >= 0.0 && slot.y >= 0.0 && slot.x + slot.width <= sheet.width + 0.01 && slot.y + slot.height <= sheet.height + 0.01);
+            }
+        }
+    }
+    for n in [0, 1, 3, 255] {
+        assert!(Imposition::NUp(n).sheets(&lay, &[0], None).is_err());
+    }
+    assert!(Imposition::NUp(2).sheets(&lay, &[usize::MAX], None).is_err());
+    for paper in [(f32::NAN, 3.0), (0.0, 4.0), (1.0, f32::INFINITY), (20000.0, 2.0)] {
+        assert!(Imposition::NUp(2).sheets(&lay, &[0], Some(paper)).is_err());
+    }
+}
+
+/// A one-page booklet retains its blank back, and tags remain valid on multi-page sheet sides.
+#[test]
+fn imposed_tagged_pdf_and_blank_booklet_backs_are_valid() {
+    use crate::imposition::Imposition;
+    let doc = Document::from_text("Front cover");
+    let bytes = export(&doc, &PdfOptions { imposition: Imposition::Booklet { reverse: false }, ..Default::default() }).unwrap();
+    assert_eq!(extract_text(&bytes), ["Front cover".to_owned(), String::new()]);
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    assert_eq!(pdf.pages().len(), 2);
+    for mode in [Imposition::NUp(2), Imposition::NUp(16), Imposition::Booklet { reverse: false }] {
+        let bytes = export(&sample(), &PdfOptions { imposition: mode, ..Default::default() }).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("/StructTreeRoot"));
+        assert!(squash(&extract_text(&bytes).concat()).contains("Second page"));
+    }
+}
+
+/// Internal links and heading outlines point to physical sheet pages after imposition.
+#[test]
+fn imposed_links_and_outlines_target_physical_sheets() {
+    use crate::imposition::Imposition;
+    use hayro_syntax::object::{Array, Dict};
+    let bytes = export(&sample(), &PdfOptions { imposition: Imposition::NUp(2), ..Default::default() }).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    assert_eq!(pdf.pages().len(), 1);
+    let physical = pdf.pages()[0].raw();
+    let annotations = physical.get::<Array>(b"Annots").unwrap();
+    let mut internal = 0;
+    for annotation in annotations.iter::<Dict>() {
+        if let Some(dest) = annotation.get::<Array>(b"Dest") {
+            assert_eq!(dest.raw_iter().next().unwrap().as_obj_ref().map(Into::into), physical.obj_id());
+            internal += 1;
+        }
+    }
+    assert!(internal > 0);
+    let root = pdf.xref().get::<Dict>(pdf.xref().root_id()).unwrap();
+    let mut entry = root.get::<Dict>(b"Outlines").unwrap().get::<Dict>(b"First");
+    let mut headings = 0;
+    while let Some(e) = entry {
+        assert_eq!(e.get::<Array>(b"Dest").unwrap().raw_iter().next().unwrap().as_obj_ref().map(Into::into), physical.obj_id());
+        headings += 1;
+        entry = e.get::<Dict>(b"Next");
+    }
+    assert!(headings >= 2);
+}
+
 #[test]
 fn only_safe_link_targets_become_annotations() {
     use hayro_syntax::object::{Array, Dict, String as PdfString};
 
     let mut d = Document::new();
-    d.body = ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd"]
-        .into_iter()
-        .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
-        .collect();
+    d.body =
+        ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd", "data:text/html,hi", r"\\server\share\f.doc"]
+            .into_iter()
+            .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
+            .collect();
     let bytes = export(&d, &PdfOptions::default()).unwrap();
-    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 4, "unlinked text stays");
+    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 6, "unlinked text stays");
     let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
     let uris: Vec<String> = pdf.pages()[0]
         .raw()
@@ -2487,4 +2902,101 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+#[test]
+fn the_author_is_left_out_when_personal_information_is_removed() {
+    let mut d = Document::from_text("Private");
+    d.core.creator = "Ada Writer".into();
+    let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
+    let raw = |d: &Document| String::from_utf8_lossy(&export(d, &opts).unwrap()).to_string();
+    assert!(raw(&d).contains("Ada Writer"));
+    d.settings.remove_personal_info = true;
+    assert!(!raw(&d).contains("Ada Writer"), "the creator stays out of the PDF");
+}
+
+/// A page with text and three pictures that don't draw: garbage, a PNG cut off in its data and a
+/// metafile that is only its header. The export is the same bytes as before strict export
+/// existed (#6005): each is a grey box, and the rest of the page is untouched.
+#[test]
+fn undecodable_pictures_keep_their_grey_box_bytes() {
+    let mut whole = png();
+    let cut = whole.len() - 24;
+    whole.truncate(cut);
+    let mut d = Document::new();
+    d.core.created = "2024-01-02T03:04:05Z".into();
+    let mut p = Paragraph::new();
+    for (bytes, ext) in [(b"this is not a picture at all".to_vec(), "bin"), (whole, "png"), (vec![1, 0, 0, 0, 88, 0, 0, 0], "emf")] {
+        let media = d.add_media(bytes, ext);
+        let n = p.len();
+        let obj = InlineObject::Image {
+            media,
+            w: 60.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(n, obj, &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let a = export(&d, &opts).unwrap();
+    assert_eq!(a, export(&d, &opts).unwrap(), "the export must be deterministic for the golden hash to mean anything");
+    let text = String::from_utf8_lossy(&a);
+    assert!(text.contains("0.8157 0.8157 0.8157") || text.contains(".81"), "the grey box is drawn: {}", text.len());
+    // FNV-1a of the file, recorded from the export before the shared decode check existed.
+    let h = a.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+    assert_eq!(h, 0x1edbbffab353d744, "{h:#x}");
+}
+
+/// A page with a chart label and an equation, exported without compression. Chart and equation
+/// runs carry the text each glyph shows since strict export (#6005); this pins the PDF they
+/// produce, ToUnicode maps included, to what they were before.
+#[test]
+fn chart_and_equation_text_keep_their_pdf_bytes() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    let mut d = Document::from_text("Body text");
+    d.core.created = "2024-01-02T03:04:05Z".into();
+    let items = vec![GraphicItem::Text {
+        rect: [0.0, 100.0, 216.0, 20.0],
+        text: "Revenue 2024".into(),
+        size: 10.0,
+        color: wordcraft_doc::props::Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font: None,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), obj, &CharProps::default()).unwrap();
+    let linear = "x^2+1/2";
+    let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(linear), ..Default::default() };
+    let n = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().len();
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .insert_object(n, InlineObject::Equation { linear: linear.into(), display: false, math }, &CharProps::default())
+        .unwrap();
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let a = export(&d, &opts).unwrap();
+    assert_eq!(a, export(&d, &opts).unwrap(), "the export must be deterministic for the golden hash to mean anything");
+    // What the ToUnicode maps say each glyph shows, across all fonts: the text of the body, the
+    // chart label and the equation (a mathematical italic x is one character beyond the BMP).
+    // Recorded on the code before strict export: the maps are the same. (The whole file's hash
+    // is not pinned: it follows the fonts the host resolves, which differ between runs.)
+    let text = String::from_utf8_lossy(&a).into_owned();
+    let mut shown = std::collections::BTreeSet::new();
+    for block in text.split("beginbfchar").skip(1) {
+        for line in block.split("endbfchar").next().unwrap_or("").lines() {
+            let Some((_, to)) = line.trim().split_once("> <") else { continue };
+            let units: Vec<u16> =
+                to.trim_end_matches('>').as_bytes().chunks(4).filter_map(|c| u16::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok()).collect();
+            shown.insert(String::from_utf16_lossy(&units));
+        }
+    }
+    let expected: std::collections::BTreeSet<String> =
+        ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
+    assert_eq!(shown, expected);
 }

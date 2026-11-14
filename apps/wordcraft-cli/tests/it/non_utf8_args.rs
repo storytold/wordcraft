@@ -54,6 +54,15 @@ fn the_file_a_command_opens_may_have_any_name() {
 }
 
 #[test]
+fn an_option_before_the_input_keeps_its_native_name() {
+    let (dir, file) = folder("option-first");
+    let saved = dir.join("out.xml");
+    ok(&cli(&["convert".into(), "--format".into(), "flatopc".into(), file, saved.clone().into()]));
+    assert!(std::fs::read_to_string(saved).unwrap().contains("Bonjour"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn any_other_such_argument_is_an_error_naming_it() {
     let (dir, file) = folder("error");
     let out_name = dir.join(OsString::from_vec(b"caf\xe9.md".to_vec())).into_os_string();

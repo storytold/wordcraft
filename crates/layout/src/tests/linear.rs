@@ -482,3 +482,25 @@ fn selecting_a_header_on_the_hinted_page_does_not_walk_every_page() {
     eprintln!("hinted header: {small} steps for 20 pages, {big} for 160");
     assert!(small > 0 && big <= small + 8, "the pages aren't walked: {small} → {big}");
 }
+
+/// A paragraph of a decimal tab at 200 pt followed by `text`.
+fn after_decimal_tab(text: &str) -> Document {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let mut d = Document::from_text(&format!("\t{text}"));
+    let at = Pos::body(0, 0);
+    d.format_paragraphs(&at, &at, &|p| p.tabs = Some(vec![TabStop { pos: 200.0, align: TabAlign::Decimal, leader: Default::default() }])).unwrap();
+    d
+}
+
+/// The text after a decimal tab was looked at again from the tab for its '.' after each of its
+/// clusters, so a long run of clusters without a '.' (soft hyphens take no room, so they stay on
+/// one line) took quadratic time.
+#[test]
+fn text_after_a_decimal_tab_is_looked_at_once() {
+    let opts = LayoutOptions::default();
+    // The text after the tab still ends at the stop, where it ended before.
+    let l = lay(&after_decimal_tab("12.5"), &opts);
+    let (Some(end), Some(start)) = (l.caret(&Pos::body(0, 5)), l.caret(&Pos::body(0, 0))) else { panic!("no carets") };
+    assert!((end.x - start.x - 200.0).abs() < 1.0, "the text ends at the stop: {} from {}", end.x, start.x);
+    assert_layout_linear("decimal tab", 2000, |n| after_decimal_tab(&format!("1{}", "\u{AD}".repeat(n))), &opts);
+}

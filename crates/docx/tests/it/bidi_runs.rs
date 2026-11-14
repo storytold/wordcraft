@@ -7,6 +7,7 @@
 //! in a right-to-left paragraph.
 
 use std::io::Read;
+use std::sync::Arc;
 
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, Paragraph, para_block};
@@ -189,6 +190,6 @@ fn a_language_the_run_already_has_is_kept() {
 #[test]
 fn an_inherited_bidi_language_is_not_repeated() {
     let mut d = doc_of("سلام WordCraft دنیا", true, arial());
-    d.styles.default_chr.lang_bidi = Some("fa-IR".into());
+    Arc::make_mut(&mut d.styles).default_chr.lang_bidi = Some("fa-IR".into());
     assert_eq!(langs(&d), vec![(true, None), (false, None), (true, None)]);
 }

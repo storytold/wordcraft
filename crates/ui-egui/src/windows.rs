@@ -33,8 +33,11 @@ use craft_window::{Document, Frame, Viewports, WindowEvent, WindowId, WindowList
 use egui::{ViewportCommand, ViewportId};
 use serde_json::{Value, json};
 use wordcraft_engine::WindowView;
+use wordcraft_engine::cmd::view::OtherWindow;
 
 use crate::{WordApp, documents, window_ui::WindowUi};
+
+pub(crate) mod arrange;
 
 /// The window title for a document called `name`.
 pub(crate) fn title(name: &str, dirty: bool) -> String {
@@ -90,6 +93,8 @@ pub struct Windows {
     input_plugin: bool,
     /// The viewport driver draws the windows this frame, and titles them.
     driven: bool,
+    /// View › Window: Side by Side and Synchronous Scrolling (#322).
+    arranged: arrange::State,
 }
 
 impl Windows {
@@ -113,6 +118,7 @@ impl Windows {
             builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
             input_plugin: false,
             driven: false,
+            arranged: arrange::State::default(),
         }
     }
 
@@ -240,18 +246,25 @@ pub(crate) struct ViewportInput {
     /// pass: [`WordApp::input_from_control`].
     pub(crate) injected: Option<ViewportId>,
     control_click: HashMap<ViewportId, bool>,
+    /// Touchpad scroll speed multiplier for secondary viewports (#6146).
+    pub(crate) touchpad_speed: crate::scroll::ScrollSpeed,
+    /// Mouse-wheel scroll speed multiplier for secondary viewports (#6146).
+    pub(crate) wheel_speed: crate::scroll::ScrollSpeed,
 }
 
 impl egui::Plugin for ViewportInput {
+    /// Plugin debug name for egui's diagnostics.
     fn debug_name(&self) -> &'static str {
         "wordcraft_viewport_input"
     }
 
+    /// Hooks raw input for non-root viewports, applying touchpad scroll speed and secondary clicks.
     fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
         let viewport = input.viewport_id;
         if viewport == ViewportId::ROOT {
             return;
         }
+        self.touchpad_speed.apply_input_scroll(input, self.wheel_speed);
         if cfg!(target_os = "macos") {
             crate::control_click_as_secondary(&mut input.events, self.control_click.entry(viewport).or_default());
         }
@@ -301,10 +314,26 @@ impl WordApp {
         (viewport, crate::control::SurfaceGeometry::from_viewport(&info, screen_rect, max_texture_side, ctx))
     }
 
+    /// Returns the window key, document ID and display title of the window currently occupying
+    /// the root viewport, if one exists and native viewports are in use.
+    pub(crate) fn root_window_info(&self) -> Option<(u64, u64, String)> {
+        let viewports = self.windows.viewports.as_ref()?;
+        let root_id = viewports.root()?;
+        let root_win = self.windows.open.iter().find(|w| w.id == Some(root_id))?;
+        let doc_id = root_win.doc;
+        let title = self.session.documents().iter().find(|d| d.id == doc_id).map(documents::display_title).unwrap_or_default();
+        Some((root_win.key, doc_id, title))
+    }
+
     /// The viewport new windows start from: the host's size, icon and app id. Their title and
     /// place are the app's.
     pub fn set_window_builder(&mut self, builder: egui::ViewportBuilder) {
         self.windows.builder = builder;
+    }
+
+    /// The viewport builder that new windows start from.
+    pub fn window_builder(&self) -> &egui::ViewportBuilder {
+        &self.windows.builder
     }
 
     /// Whether a close request for the root viewport closes only the window drawn there: true
@@ -597,7 +626,38 @@ impl WordApp {
         let mut list = std::mem::take(&mut self.windows.list);
         self.windows.recent = list.recent().filter_map(|id| list.get(id).copied()).collect();
         let titles: HashMap<u64, String> = self.windows.open.iter().map(|w| (w.key, w.title.clone())).collect();
-        let base = self.windows.builder.clone();
+        let target_monitor = list
+            .recent()
+            .find_map(|id| {
+                ctx.input_for(viewports.viewport_id(id), |i| {
+                    let m = i.viewport().monitor_size?;
+                    (m.is_finite() && m.x > 0.0 && m.y > 0.0).then_some(m)
+                })
+            })
+            .or_else(|| {
+                ctx.input(|i| {
+                    let m = i.viewport().monitor_size?;
+                    (m.is_finite() && m.x > 0.0 && m.y > 0.0).then_some(m)
+                })
+            });
+        let frame = list
+            .recent()
+            .find_map(|id| {
+                ctx.input_for(viewports.viewport_id(id), |i| {
+                    let v = i.viewport();
+                    let (outer, inner) = (v.outer_rect?, v.inner_rect?);
+                    if !outer.is_finite() || !inner.is_finite() {
+                        return None;
+                    }
+                    Some((outer.size() - inner.size()).max(egui::Vec2::ZERO))
+                })
+            })
+            .filter(|f| f.is_finite())
+            .unwrap_or_else(|| egui::vec2(16.0, 39.0));
+        let base = match target_monitor {
+            Some(mon) => crate::window_geometry::fit_builder_to_monitor(self.windows.builder.clone(), mon, frame),
+            None => self.windows.builder.clone(),
+        };
         self.windows.showing = true;
         let events = viewports.show(
             ui,
@@ -622,6 +682,15 @@ impl WordApp {
         self.settle_windows();
         if let Some(&active) = self.windows.recent_keys().first() {
             self.enter_window(active);
+            self.session.windows.current = Some(active);
+            if self.session.windows.available {
+                self.session.windows.others = self
+                    .switch_windows_entries()
+                    .into_iter()
+                    .filter(|(k, ..)| *k != active)
+                    .map(|(id, title, _)| OtherWindow { id, title })
+                    .collect();
+            }
         }
     }
 
@@ -655,6 +724,7 @@ impl WordApp {
             return;
         }
         self.window_ui(ui);
+        arrange::forward_scroll(self, &ctx);
         // Drawing can close the window or bring another forward: the fields then hold another
         // window's state.
         if self.windows.shown != key {
@@ -699,16 +769,31 @@ impl WordApp {
         }
     }
 
-    /// The control channel's next input, for the active window when it has a viewport of its own:
-    /// handed to [`ViewportInput`], which gives it to that viewport's next pass.
-    pub(crate) fn send_control_input(&mut self, ctx: &egui::Context) {
-        if self.synthetic.is_empty() || self.control_input_is_roots(ctx) {
+    /// Ensures [`ViewportInput`] is registered and keeps its touchpad scroll speed in sync with
+    /// user settings for secondary viewports (#6146).
+    pub(crate) fn sync_viewport_input(&mut self, ctx: &egui::Context) {
+        if !self.windows.native {
             return;
         }
         if !self.windows.input_plugin {
             ctx.add_plugin(ViewportInput::default());
             self.windows.input_plugin = true;
         }
+        let touchpad_speed = self.ui.touchpad_scroll_speed;
+        let wheel_speed = self.ui.scroll_speed;
+        ctx.with_plugin(|p: &mut ViewportInput| {
+            p.touchpad_speed = touchpad_speed;
+            p.wheel_speed = wheel_speed;
+        });
+    }
+
+    /// The control channel's next input, for the active window when it has a viewport of its own:
+    /// handed to [`ViewportInput`], which gives it to that viewport's next pass.
+    pub(crate) fn send_control_input(&mut self, ctx: &egui::Context) {
+        if self.synthetic.is_empty() || self.control_input_is_roots(ctx) {
+            return;
+        }
+        self.sync_viewport_input(ctx);
         self.settle_windows();
         let target = self.active_viewport();
         // Input queued for a window that has closed since (or moved into the root viewport)

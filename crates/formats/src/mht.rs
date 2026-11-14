@@ -213,10 +213,32 @@ fn header<'a>(h: &'a [(String, String)], name: &str) -> Option<&'a str> {
 
 /// A `; name=value` parameter of a header value (quotes removed), name case-insensitive.
 fn param<'a>(value: &'a str, name: &str) -> Option<&'a str> {
-    value.split(';').skip(1).find_map(|p| {
-        let (k, v) = p.split_once('=')?;
-        k.trim().eq_ignore_ascii_case(name).then(|| v.trim().trim_matches('"'))
-    })
+    // Split outside quoted strings and comments (RFC 2045 §5.1, RFC 822 §3.3).
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut comment_depth = 0usize;
+    value
+        .split(|c| {
+            if escaped {
+                escaped = false;
+            } else if (quoted || comment_depth > 0) && c == '\\' {
+                escaped = true;
+            } else if !quoted && c == '(' {
+                comment_depth = comment_depth.saturating_add(1);
+            } else if comment_depth > 0 {
+                if c == ')' {
+                    comment_depth -= 1;
+                }
+            } else if c == '"' {
+                quoted = !quoted;
+            }
+            c == ';' && !quoted && comment_depth == 0
+        })
+        .skip(1)
+        .find_map(|p| {
+            let (k, v) = p.split_once('=')?;
+            k.trim().eq_ignore_ascii_case(name).then(|| v.trim().trim_matches('"'))
+        })
 }
 
 /// Gather the leaf parts of a (possibly multipart) entity.
@@ -397,6 +419,26 @@ mod tests {
                  --b\r\nContent-Location: https://example.test/logo.png\r\nContent-Transfer-Encoding: base64\r\nContent-Type: image/png\r\n\r\n{PNG_1X1}\r\n--b--\r\n"
             );
             assert_eq!(import(m.as_bytes()).media.len(), 1, "{page}");
+        }
+    }
+
+    #[test]
+    fn quoted_parameters_do_not_supply_a_false_boundary() {
+        for name in [r#"name="notes; boundary=wrong""#, r#"name="notes\"; boundary=wrong""#, r#"name="notes (10\" screen; boundary=wrong""#] {
+            let page = "Content-Type: text/html\r\n\r\n<p>Kept content</p>";
+            let message = message(page).replace("multipart/related; boundary=", &format!("multipart/related; {name}; boundary="));
+            let doc = import(message.as_bytes());
+            assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Kept content", "{name}");
+        }
+    }
+
+    #[test]
+    fn quotes_in_comments_do_not_hide_the_boundary() {
+        for comment in [r#"(10" screen)"#, r#"(outer (10" screen); boundary=wrong)"#, r#"(10\)" screen; boundary=wrong)"#] {
+            let page = "Content-Type: text/html\r\n\r\n<p>Kept content</p>";
+            let message = message(page).replace("multipart/related; boundary=", &format!("multipart/related {comment}; boundary="));
+            let doc = import(message.as_bytes());
+            assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Kept content", "{comment}");
         }
     }
 

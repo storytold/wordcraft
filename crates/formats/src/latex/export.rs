@@ -240,7 +240,22 @@ impl Writer {
                     o.push_str(&format!("\\textit{{[{}]}}", escape_text(&alt)));
                 }
                 Inline::Anchor(name) => o.push_str(&format!("\\hypertarget{{{}}}{{}}", escape_url(name))),
-                Inline::Figure(_) => {}
+                Inline::Figure(_)
+                | Inline::Chart(_)
+                | Inline::Note { .. }
+                | Inline::Comment { .. }
+                | Inline::CommentEnd(_)
+                | Inline::Shape { .. }
+                | Inline::Group { .. }
+                | Inline::FieldStart(_)
+                | Inline::FieldEnd
+                | Inline::AnchorEnd(_) => {}
+                // ASK and SET show nothing (see `model::shows_nothing`).
+                Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+                Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
+                    let s = self.span(result, fmt);
+                    push_apart(&mut o, &s);
+                }
                 // LaTeX keeps no ruby (no package): its base text, in the run's formatting.
                 Inline::Ruby { base, fmt, .. } => {
                     let s = self.span(base, fmt);

@@ -269,12 +269,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
 /// The cursor over a crop handle (or while dragging one).
 pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<egui::CursorIcon> {
     if let Some(d) = &app.canvas.crop_drag {
-        return Some(d.handle.cursor());
+        return Some(d.handle.cursor(0.0));
     }
     let (page, rect) = laid_out(app, layout)?;
     let f = screen(pages, scale, page, rect)?;
     match frame::handle_at(f, 0.0, at) {
-        Some(h) => Some(h.cursor()),
+        Some(h) => Some(h.cursor(0.0)),
         None if f.contains(at) => Some(egui::CursorIcon::Default),
         None => None,
     }
@@ -491,7 +491,16 @@ mod tests {
     fn app_with_picture(rot: f32) -> WordApp {
         let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
         let float = wordcraft_doc::para::Float { rot, ..Default::default() };
-        let pic = InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float, crop: [0.0; 4], ole: None };
+        let pic = InlineObject::Image {
+            media: "m".into(),
+            w: 200.0,
+            h: 100.0,
+            alt: String::new(),
+            float,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
         app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
         let end = Pos::body(0, OBJ.len_utf8());
         app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
@@ -544,7 +553,16 @@ mod tests {
     }
 
     fn test_picture() -> InlineObject {
-        InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None }
+        InlineObject::Image {
+            media: "m".into(),
+            w: 200.0,
+            h: 100.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        }
     }
 
     /// The whole window with `n` 200×100 pt pictures in the first paragraph, the first one

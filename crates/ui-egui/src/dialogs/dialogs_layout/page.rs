@@ -147,42 +147,44 @@ pub(super) fn size_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SizeForm) -> bool 
     // typing, the field reports each keystroke as a change). The range bounds what is typed or
     // dragged only: a value already outside it (a 1 px picture is 0.75 pt) is shown as it is, not
     // clamped, which egui would report as a change and so apply unasked.
-    let length = |ui: &mut Ui, label: &str, pt: f32| {
-        let name = ui.label(tl!(label));
+    let length = |r: &mut crate::rtl::Cells, label: &str, pt: f32| {
+        let name = r.cell(|ui| ui.label(tl!(label)));
         let was = pt / k;
         let mut v = was;
         let field =
             egui::DragValue::new(&mut v).speed(1.0 / k).range(1.0 / k..=4000.0 / k).clamp_existing_to_range(false).measure(unit).max_decimals(2);
-        let changed = ui.add(field.update_while_editing(false)).labelled_by(name.id).changed();
+        let changed = r.cell(|ui| ui.add(field.update_while_editing(false)).labelled_by(name.id).changed());
         (changed && v != was).then_some(v * k)
     };
-    let percent = |ui: &mut Ui, label: &str, was: f32| {
-        let name = ui.label(tl!(label));
+    let percent = |r: &mut crate::rtl::Cells, label: &str, was: f32| {
+        let name = r.cell(|ui| ui.label(tl!(label)));
         let mut v = was;
         let field = egui::DragValue::new(&mut v).speed(1.0).range(1.0..=10_000.0).clamp_existing_to_range(false).suffix(" %").max_decimals(1);
-        let changed = ui.add(field.update_while_editing(false)).labelled_by(name.id).changed();
+        let changed = r.cell(|ui| ui.add(field.update_while_editing(false)).labelled_by(name.id).changed());
         (changed && v != was).then_some(v)
     };
     heading(ui, "Size");
-    crate::rtl::grid(ui, egui::Grid::new("size_lengths").num_columns(4).spacing(vec2(10.0, 6.0)), |ui| {
-        if let Some(h) = length(ui, "Height:", f.height) {
-            f.set_height(h);
-        }
-        if let Some(w) = length(ui, "Width:", f.width) {
-            f.set_width(w);
-        }
-        ui.end_row();
+    crate::rtl::Table::new("size_lengths").columns(4).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            if let Some(h) = length(r, "Height:", f.height) {
+                f.set_height(h);
+            }
+            if let Some(w) = length(r, "Width:", f.width) {
+                f.set_width(w);
+            }
+        });
     });
     heading(ui, "Scale");
     let (sw, sh) = f.scale();
-    crate::rtl::grid(ui, egui::Grid::new("size_scale").num_columns(4).spacing(vec2(10.0, 6.0)), |ui| {
-        if let Some(p) = percent(ui, "Height:", sh) {
-            f.set_scale_height(p);
-        }
-        if let Some(p) = percent(ui, "Width:", sw) {
-            f.set_scale_width(p);
-        }
-        ui.end_row();
+    crate::rtl::Table::new("size_scale").columns(4).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            if let Some(p) = percent(r, "Height:", sh) {
+                f.set_scale_height(p);
+            }
+            if let Some(w) = percent(r, "Width:", sw) {
+                f.set_scale_width(w);
+            }
+        });
     });
     ui.checkbox(&mut f.lock, tl!("Lock aspect ratio"));
     ui.add_enabled_ui(f.original.is_some(), |ui| ui.checkbox(&mut f.relative, tl!("Relative to original picture size")));
