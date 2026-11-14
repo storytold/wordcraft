@@ -1,6 +1,6 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
-use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
+use super::justify::{HYPHENATION_ZONE, hyphen_glyph, leading_blank, shrink_line_spaces, space_room};
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
@@ -27,6 +27,9 @@ struct Breaker<'e> {
     /// Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
     /// spaces (`space_room`); never on lines with tabs.
     shrink_spaces: bool,
+    /// Word 2013+ (compatibility mode 15) keeps the text after a centre tab whose stop is past the
+    /// right indent within the margin; Word 2010 and before centre it on the stop wherever it is.
+    centre_within_margin: bool,
     /// Word stretches a justified line ending in a manual line break unless the document says not to.
     expand_break: bool,
     /// Hyphenation Options: the zone, and how many lines in a row may end with a hyphen.
@@ -92,6 +95,16 @@ struct Scan {
     j: usize,
     /// Tab cluster, stop, and x where the tab started.
     pending_tab: Option<(usize, TabStop, f32)>,
+    /// How far the text after a pending centre tab may reach (see [`Scan::centre_limit`]);
+    /// infinite when nothing holds it.
+    tab_limit: f32,
+    /// The centre tab last finished on this line whose text is held at that limit rather than
+    /// centred on its stop. It counts for the line while it is the line's last tab.
+    held_tab: Option<usize>,
+    /// The centre tab that took the line's right edge out to the margin, and the edge before it.
+    extended: Option<(usize, f32)>,
+    /// The advance of the hyphen the line ends with.
+    hyphen_w: f32,
     /// The text after a pending decimal tab looked at so far for its '.'.
     decimal: Option<DecimalScan>,
     /// The width of the spaces so far on this line.
@@ -190,6 +203,7 @@ impl<'e> Breaker<'e> {
             hanging_at: if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None },
             tab_origin: if settings.odf.is_some_and(|o| o.tabs_from_indent) { rp.indent_left } else { 0.0 },
             shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
+            centre_within_margin: settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
             hyph_limit: settings.consecutive_hyphen_limit as usize,
@@ -279,6 +293,10 @@ impl<'e> Breaker<'e> {
             end: LineEnd::Para,
             j: self.i,
             pending_tab: None,
+            tab_limit: f32::INFINITY,
+            held_tab: None,
+            extended: None,
+            hyphen_w: 0.0,
             decimal: None,
             space_w: 0.0,
             has_tab: false,
@@ -337,14 +355,16 @@ impl<'e> Breaker<'e> {
     /// Finish the line scanned: lay out its clusters, measure and align it, and add it.
     /// Returns how it ends.
     fn close_line(&mut self, pl: &mut ParaLayout, mut sc: Scan) -> LineEnd {
-        if sc.end == LineEnd::Para || sc.end == LineEnd::Wrap {
-            let xc = sc.x;
-            resolve_tab(pl, &mut sc.pending_tab, &mut sc.xs, sc.c0, xc, &mut sc.x);
+        if sc.pending_tab.is_some() && (sc.end == LineEnd::Para || sc.end == LineEnd::Wrap) {
+            // A hyphen the line ends with is part of the text the tab places (Word).
+            let xc = sc.x + self.end_hyphen(pl, sc.end, (sc.c0, sc.j.max(sc.c0))).map_or(0.0, |h| h.2);
+            sc.held_tab = resolve_tab(pl, &mut sc.pending_tab, &mut sc.xs, sc.c0, (xc, sc.tab_limit), &mut sc.x);
         }
         if sc.j >= self.n && sc.end != LineEnd::Wrap && !matches!(sc.end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak) {
             sc.end = LineEnd::Para;
         }
         let (c1, j, hyphen) = self.settle_clusters(pl, &mut sc);
+        sc.hyphen_w = hyphen.map_or(0.0, |h| h.2);
         let v = self.measure(pl, (sc.c0, c1));
         self.align(pl, &mut sc, c1);
         let start = pl.clusters.get(sc.c0).map(|c| c.start).unwrap_or(pl.text_len);
@@ -396,15 +416,21 @@ impl<'e> Breaker<'e> {
             sc.xs.push(if sc.xs.is_empty() { sc.line_start_x } else { last + adv });
         }
         sc.xs.truncate(c1 - c0);
-        let hyphen = (sc.end == LineEnd::Wrap && c1 > c0 && pl.hyph_after.binary_search(&((c1 - 1) as u32)).is_ok())
-            .then(|| pl.clusters.get(c1 - 1).map(|c| hyphen_glyph(pl, c.style, &mut self.hcache)))
-            .flatten();
+        let hyphen = self.end_hyphen(pl, sc.end, (c0, c1));
         let end_x = match (sc.xs.last(), c1.checked_sub(1).and_then(|k| pl.clusters.get(k))) {
             (Some(lx), Some(c)) => lx + c.adv + hyphen.map_or(0.0, |h| h.2),
             _ => sc.line_start_x,
         };
         sc.xs.push(end_x);
         (c1, j, hyphen)
+    }
+
+    /// The hyphen (style, glyph, advance) drawn after the line `c0..c1` when it wrapped at a
+    /// hyphenation point.
+    fn end_hyphen(&mut self, pl: &ParaLayout, end: LineEnd, (c0, c1): (usize, usize)) -> Option<(u32, u32, f32)> {
+        (end == LineEnd::Wrap && c1 > c0 && pl.hyph_after.binary_search(&((c1 - 1) as u32)).is_ok())
+            .then(|| pl.clusters.get(c1 - 1).map(|c| hyphen_glyph(pl, c.style, &mut self.hcache)))
+            .flatten()
     }
 
     /// The line's ascent and descent over its baseline from the clusters `c0..c1`, and the
@@ -545,11 +571,36 @@ impl<'e> Breaker<'e> {
     fn align(&mut self, pl: &mut ParaLayout, sc: &mut Scan, c1: usize) {
         let rp = &self.rp;
         let c0 = sc.c0;
-        let content_end = content_end(pl, sc, c1);
-        let slack = sc.right_edge - content_end;
+        let mut content_end = content_end(pl, sc, c1);
+        let mut slack = sc.right_edge - content_end;
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
         let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
+        // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
+        let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
+        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
+        // Text held at the line's edge after a centre tab ends there, with the hyphen it may end
+        // in, its trailing spaces hanging past it; on a line that is stretched the tab gives its
+        // room to the spaces after it instead, when there are any (Word).
+        if let Some(tj) = sc.held_tab.filter(|tj| last_tab == Some(*tj)) {
+            let room = pl.clusters.get(tj).map_or(0.0, |c| c.adv);
+            let space =
+                |k: usize| pl.clusters.get(k).is_some_and(|c| c.kind == ClKind::Space) && sc.xs.get(k - c0).is_some_and(|x| *x < content_end - 0.01);
+            let first = (align_from..c1).find(|k| pl.clusters.get(*k).is_some_and(|c| !leading_blank(c)));
+            let stretches = justify && (rp.align == Align::Distribute || first.is_some_and(|f| (f..c1).any(space)));
+            let ink_end = if sc.hyphen_w > 0.0 { sc.xs.last().copied().unwrap_or(content_end) } else { content_end };
+            let delta = if stretches { -room } else { (sc.right_edge - ink_end).max(-room) };
+            if delta.abs() > 0.001 {
+                if let Some(c) = pl.clusters.get_mut(tj) {
+                    c.adv = room + delta;
+                }
+                for v in sc.xs.iter_mut().skip(tj + 1 - c0) {
+                    *v += delta;
+                }
+                content_end += delta;
+                slack -= delta;
+            }
+        }
         let shift = match (display, rp.align) {
             (Some(MathJc::Left), _) => 0.0,
             (Some(MathJc::Right), _) => slack,
@@ -572,9 +623,6 @@ impl<'e> Breaker<'e> {
                 *label_shift = shift;
             }
         }
-        // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
-        let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
@@ -734,12 +782,7 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
     // text indented with spaces stays where the spaces put it. Zero-width markers (a bookmark,
     // hidden text), floating objects' anchors and the break a line ends with don't count as a
     // character.
-    let blank = |k: usize| {
-        pl.clusters.get(k).is_some_and(|c| {
-            matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)
-                || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
-        })
-    };
+    let blank = |k: usize| pl.clusters.get(k).is_some_and(leading_blank);
     let text_from = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);
     // Spaces inside the content.
     let spaces: Vec<usize> = (text_from..c1)
@@ -787,7 +830,9 @@ impl Scan {
         let Some(c) = pl.clusters.get(self.j).cloned() else { return true };
         match c.kind {
             ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak => {
-                resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
+                if self.pending_tab.is_some() {
+                    self.held_tab = resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, (self.x, self.tab_limit), &mut self.x);
+                }
                 self.xs.push(self.x);
                 self.end = match c.kind {
                     ClKind::LineBreak => LineEnd::LineBreak,
@@ -806,7 +851,11 @@ impl Scan {
     fn tab(&mut self, bk: &mut Breaker, pl: &mut ParaLayout) -> bool {
         let j = self.j;
         self.has_tab = true;
-        resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
+        // The tab before this one is finished here; it is the line's last again if this one
+        // goes on to the next line.
+        if self.pending_tab.is_some() {
+            self.held_tab = resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, (self.x, self.tab_limit), &mut self.x);
+        }
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
         let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at, bk.tab_origin));
@@ -838,10 +887,33 @@ impl Scan {
                 return false;
             }
         }
+        self.tab_limit = if ptab.is_none() && stop.align == TabAlign::Center { self.centre_limit(bk, j, stop.pos) } else { f32::INFINITY };
         self.place_tab(pl, stop);
         self.last_break = Some(j);
         self.j += 1;
         false
+    }
+
+    /// How far the text after a centre tab whose stop is at `pos` may reach on this line. Word
+    /// centres it on the stop only while it stays within the line: text that would pass the right
+    /// indent is held there, ending at the indent, and wraps like any other once the tab has no
+    /// room left to give. From Word 2013's layout on a stop past the right indent stands while it
+    /// is within the margin, and the line runs to the margin with it; past the margin the text
+    /// ends at the right indent. Word 2010 and before centre text on a stop at or past the right
+    /// indent wherever that takes it.
+    fn centre_limit(&mut self, bk: &Breaker, j: usize, pos: f32) -> f32 {
+        if pos < self.right_edge - 0.01 {
+            return self.right_edge;
+        }
+        if !bk.centre_within_margin {
+            return f32::INFINITY;
+        }
+        // Beside a floating object the line ends where the object begins.
+        if pos > self.right_edge + 0.01 && pos <= bk.width + 0.01 && !self.narrowed && bk.width > self.right_edge {
+            self.extended = Some((j, self.right_edge));
+            self.right_edge = bk.width;
+        }
+        self.right_edge
     }
 
     /// Give the tab at `j` its room to `stop`, or wait for the text after it (a right, centre or
@@ -856,23 +928,42 @@ impl Scan {
                 }
                 self.x += w;
             }
-            _ => self.pending_tab = Some((j, stop, self.x)),
+            _ => {
+                // Its room grows from nothing with its text (a tab moved on from the line before
+                // may still hold the width it had there).
+                if let Some(c) = pl.clusters.get_mut(j) {
+                    c.adv = 0.0;
+                }
+                self.pending_tab = Some((j, stop, self.x));
+            }
         }
         if stop.leader != TabLeader::None {
             self.leaders.push((j, stop.leader));
         }
     }
 
-    /// Whether text after a right/centre tab grows leftwards into the tab's space first.
+    /// Whether text after a right/centre tab grows leftwards into the tab's space first. Up to a
+    /// right or decimal stop it fits even past the right indent (Word: a TOC entry whose text ends
+    /// less than a digit short of the indent keeps its page number on its line when the stop is
+    /// at the margin); unshifted, the text after the tab ends at `x - room`.
     fn absorbs(&self, pl: &ParaLayout, advance: f32) -> bool {
         self.pending_tab.is_some_and(|(tj, stop, _)| {
             let room = pl.clusters.get(tj).map(|t| t.adv).unwrap_or(0.0);
             match stop.align {
-                TabAlign::Right | TabAlign::Decimal => room >= advance,
+                TabAlign::Right | TabAlign::Decimal => room >= advance || self.x - room + advance <= stop.pos + 0.01,
+                // Text kept within the line is fitted like any other, the tab's room given up (`held_room`).
+                TabAlign::Center if self.tab_limit.is_finite() => false,
                 TabAlign::Center => room >= advance / 2.0 && self.x + advance / 2.0 <= self.right_edge + 0.01,
                 _ => false,
             }
         })
+    }
+
+    /// The room a centre tab still holds for text that is kept within the line: the text may take
+    /// it, so it fits while all of it does between the tab and the line's edge.
+    fn held_room(&self, pl: &ParaLayout) -> f32 {
+        let held = self.pending_tab.filter(|_| self.tab_limit.is_finite());
+        held.and_then(|(tj, ..)| pl.clusters.get(tj)).map_or(0.0, |t| t.adv)
     }
 
     /// A text or object cluster. True when the line ends before or at it.
@@ -894,7 +985,7 @@ impl Scan {
             0.0
         };
         let fits = absorbs
-            || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
+            || self.x - self.held_room(pl) + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;
         if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
@@ -944,16 +1035,17 @@ impl Scan {
     /// Text after a decimal/centre/right tab shifts as it grows.
     fn shift_pending_tab(&mut self, pl: &mut ParaLayout) {
         let Some((tj, stop, tx)) = self.pending_tab else { return };
-        let seg_w = self.x - tx;
+        // `x` includes the room the tab has so far.
+        let old = pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
+        let seg_w = self.x - tx - old;
         let shift = match stop.align {
             TabAlign::Right => stop.pos - tx - seg_w,
-            TabAlign::Center => stop.pos - tx - seg_w / 2.0,
+            TabAlign::Center => (stop.pos - seg_w / 2.0).min(self.tab_limit - seg_w) - tx,
             // Width up to the first '.' in the segment.
             TabAlign::Decimal => stop.pos - tx - self.width_to_decimal(pl, tj, self.j).unwrap_or(seg_w),
             _ => 0.0,
         };
         let shift = shift.max(0.0);
-        let old = pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
         if (shift - old).abs() > 0.001 {
             let delta = shift - old;
             if let Some(c) = pl.clusters.get_mut(tj) {
@@ -987,7 +1079,7 @@ impl Scan {
             self.word_from = if c.kind == ClKind::Space { self.x - c.adv } else { self.x };
         } else if self.hyph_ok
             && !pl.clusters.get(j + 1).is_some_and(|n| n.kind == ClKind::Text && n.g1 <= n.g0)
-            && self.x + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + 0.01
+            && self.x - self.held_room(pl) + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + 0.01
         {
             self.last_break = Some(j);
         }
@@ -1014,6 +1106,10 @@ impl Scan {
             self.x = self.xs.last().copied().unwrap_or(self.line_start_x) + pl.clusters.get(b).map(|c| c.adv).unwrap_or(0.0);
         } else {
             self.break_long_word(bk, pl);
+        }
+        // Without the tab that took it out to the margin the line ends at its right indent again.
+        if let Some((_, edge)) = self.extended.take_if(|(tj, _)| self.j <= *tj) {
+            self.right_edge = edge;
         }
     }
 

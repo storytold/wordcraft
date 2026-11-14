@@ -1847,6 +1847,54 @@ fn leader_dots_are_spaced_and_placed_as_in_word() {
     }
 }
 
+/// A TOC entry with a right indent and its right tab at the margin, past the indent (Word's TOC
+/// styles): the page number may end past the indent, up to the stop. Like Word, the number stays
+/// on the text's line whenever it fits between the text and the stop, also when the text ends
+/// less than a digit short of the indent; when it doesn't fit there, the tab and the number go
+/// to the next line as before.
+#[test]
+fn right_tab_past_the_right_indent_takes_its_number_up_to_the_stop() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    let stop = 72.0 + 468.0;
+    let mut close = 0;
+    for indent in [28.35f32, 6.0] {
+        let edge = stop - indent;
+        for m in 20..40 {
+            for r in 2..7 {
+                let text = format!("{}{}\t104", "abc ".repeat(m), "y".repeat(r));
+                let n = text.chars().count();
+                let tab = n - 4;
+                let mut d = Document::from_text(&text);
+                d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+                    p.indent_right = Some(indent);
+                    p.tabs = Some(vec![TabStop { pos: 468.0, align: TabAlign::Right, leader: TabLeader::Dot }]);
+                })
+                .unwrap();
+                let l = lay(&d);
+                let Some(para) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None })
+                else {
+                    panic!("no lines")
+                };
+                let line_of = |k: usize| para.lines.iter().position(|l| l.c0 <= k && k < l.c1).unwrap();
+                // Where the text ends and how wide the number is (the text's last letter and the number
+                // are each on one line; the last two letters are both a "y").
+                let last = l.caret(&Pos::body(0, tab - 1)).unwrap().x;
+                let text_end = last + (last - l.caret(&Pos::body(0, tab - 2)).unwrap().x);
+                let end = l.caret(&Pos::body(0, n)).unwrap().x;
+                let number = end - l.caret(&Pos::body(0, n - 3)).unwrap().x;
+                assert!((end - stop).abs() < 0.5, "indent {indent}, {m} words + {r}: number ends at {end}");
+                assert_eq!(line_of(tab), line_of(n - 1), "indent {indent}, {m} words + {r}: the tab and its number are on different lines");
+                let same = line_of(tab) == line_of(tab - 1);
+                assert_eq!(same, text_end + number <= stop + 0.01, "indent {indent}, {m} words + {r}: text ends at {text_end}, number {number} wide");
+                if same && text_end > edge - number / 3.0 {
+                    close += 1;
+                }
+            }
+        }
+    }
+    assert!(close > 0, "no entry whose text ends within a digit of the indent");
+}
+
 /// A left tab whose only stop is past the right indent wraps; on the next line it still can't
 /// reach that stop, so it takes no room there and its text starts at the indent instead of
 /// going to a line of its own.
@@ -1866,6 +1914,189 @@ fn left_tab_past_the_right_indent_does_not_add_a_line() {
     assert_eq!(para.lines.len(), 2, "{:?}", para.lines.iter().map(|l| (l.c0, l.c1)).collect::<Vec<_>>());
     let page = l.caret(&Pos::body(0, 5)).unwrap();
     assert!((page.x - 72.0).abs() < 0.5, "the text after the tab starts at the indent: {}", page.x);
+}
+
+/// The text after a centre tab stays within its line (#6619). Word centres it on the stop while
+/// it fits there; text that would pass the right indent ends at the indent instead, and once the
+/// tab has no room left to give it wraps like any other text: a ragged line ends at the indent,
+/// the tab keeping what is left over, and a justified one gives the tab no room and stretches its
+/// spaces. From Word 2013's layout on a stop past the margin ends its text at the right indent,
+/// and a stop between the right indent and the margin stands, its line running to the margin.
+/// Measured on Word for Windows with 9 pt Arial in 481.9 pt of text and in a table cell.
+#[test]
+fn the_text_after_a_centre_tab_stays_within_its_line() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    const WIDTH: f32 = 468.0;
+    const TAB: usize = 3;
+    // Each line of "2) <tab>text": where the text after the tab or the line starts, and where its
+    // last word ends, from the left margin; and where the tab stands.
+    let lines = |stop: f32, text: &str, (justify, indent_right, mode): (bool, f32, u32)| {
+        let text = format!("2) \t{text}");
+        let mut d = Document::from_text(&text);
+        d.settings.compat_mode = mode;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(vec![TabStop { pos: stop, align: TabAlign::Center, leader: TabLeader::None }]);
+            p.indent_right = Some(indent_right);
+            p.align = justify.then_some(Align::Justify);
+        })
+        .unwrap();
+        let l = lay(&d);
+        let Some(para) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+            panic!("no lines")
+        };
+        let x = |li: usize, k: usize| para.lines.get(li).and_then(|l| l.xs.get(k - l.c0)).copied().unwrap_or(f32::NAN);
+        let spans: Vec<(f32, f32)> = (0..para.lines.len())
+            .map(|li| {
+                let (c0, c1) = (para.lines[li].c0, para.lines[li].c1);
+                let from = if li == 0 { TAB + 1 } else { c0 };
+                let trailing = text.as_bytes().get(c1 - 1) == Some(&b' ');
+                (x(li, from), x(li, if trailing { c1 - 1 } else { c1 }))
+            })
+            .collect();
+        (spans, x(0, TAB))
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    let long = "abcd ".repeat(60);
+    let (plain, justified) = ((false, 0.0, 15), (true, 0.0, 15));
+
+    // It is centred on the stop while it fits there.
+    let (l, _) = lines(200.0, "twelve", plain);
+    assert!(l.len() == 1 && near(l[0].0 + l[0].1, 400.0), "centred on the stop: {l:?}");
+    // Text that would pass the right indent ends at it.
+    let (l, tab) = lines(WIDTH - 20.0, "abcd abcd abcd abcd", plain);
+    assert!(l.len() == 1 && near(l[0].1, WIDTH) && l[0].0 > tab + 20.0, "held at the right indent: {l:?}, the tab at {tab}");
+    let (l, _) = lines(WIDTH - 60.0, "abcd abcd abcd abcd", (false, 30.0, 15));
+    assert!(l.len() == 1 && near(l[0].1, WIDTH - 30.0), "held at a right indent of 30 pt: {l:?}");
+    let (l, _) = lines(WIDTH - 60.0, "abcd abcd abcd abcd", (false, 30.0, 14));
+    assert!(l.len() == 1 && near(l[0].1, WIDTH - 30.0), "held at the right indent in Word 2010's layout: {l:?}");
+    // Text too long for the line wraps: ragged, its first line ends at the indent and the tab
+    // keeps what is left over; justified, the tab has no room and the line is stretched.
+    let (l, tab) = lines(WIDTH - 100.0, long.trim_end(), plain);
+    assert!(l.len() > 1 && near(l[0].1, WIDTH) && l[0].0 >= tab && near(l[1].0, 0.0), "a ragged line that wraps: {:?}, the tab at {tab}", &l[..2]);
+    assert!(l[1].1 < WIDTH + 0.05, "the next line is within the indent: {:?}", l[1]);
+    let (l, tab) = lines(WIDTH - 100.0, long.trim_end(), justified);
+    assert!(
+        l.len() > 1 && near(l[0].1, WIDTH) && near(l[0].0, tab) && near(l[1].0, 0.0),
+        "a justified line that wraps: {:?}, the tab at {tab}",
+        &l[..2]
+    );
+    // A stop near the left: the tab runs out of room before the text reaches the indent.
+    let (l, tab) = lines(60.0, long.trim_end(), plain);
+    assert!(l.len() > 1 && near(l[0].0, tab) && l[0].1 < WIDTH + 0.05 && near(l[1].0, 0.0), "a stop near the left: {:?}, the tab at {tab}", &l[..2]);
+
+    // From Word 2013's layout on, a stop past the margin ends its text at the right indent.
+    for stop in [WIDTH + 1.0, WIDTH + 15.0, WIDTH + 100.0] {
+        let (l, _) = lines(stop, "twelve", (false, 27.0, 15));
+        assert!(l.len() == 1 && near(l[0].1, WIDTH - 27.0), "a stop at {stop}, past the margin: {l:?}");
+        let (l, tab) = lines(stop, long.trim_end(), (true, 27.0, 15));
+        assert!(l.len() > 1 && near(l[0].1, WIDTH - 27.0) && near(l[0].0, tab), "long text after a stop at {stop}: {:?}, the tab at {tab}", &l[..2]);
+    }
+    // A stop between the right indent and the margin stands, and its line runs to the margin.
+    let between = (false, 100.0, 15);
+    let (l, _) = lines(WIDTH - 50.0, "twelve", between);
+    assert!(l.len() == 1 && near(l[0].0 + l[0].1, 2.0 * (WIDTH - 50.0)), "centred on a stop past the right indent: {l:?}");
+    let (l, _) = lines(WIDTH - 5.0, "twelve", between);
+    assert!(l.len() == 1 && near(l[0].1, WIDTH), "held at the margin: {l:?}");
+    let (l, tab) = lines(WIDTH - 50.0, long.trim_end(), (true, 100.0, 15));
+    assert!(l.len() > 1 && near(l[0].1, WIDTH) && near(l[0].0, tab), "the line of a stop past the right indent: {:?}, the tab at {tab}", &l[..2]);
+    assert!(near(l[1].1, WIDTH - 100.0), "the next line ends at the right indent: {:?}", l[1]);
+
+    // A tab after text that is held at the edge goes on to the next line. The centre tab is the
+    // line's last again: justified, the line is stretched and the tab has no room (Word: the
+    // text starts 2.56 pt after "2)", the gaps are 21 pt wide).
+    let (l, tab) = lines(WIDTH - 20.0, "abcd abcd abcd abcd\t12", justified);
+    assert!(l.len() == 2 && near(l[0].0, tab) && near(l[0].1, WIDTH), "a second tab that goes on: {l:?}, the tab at {tab}");
+}
+
+/// Two ways a line with a centre tab ends other than in the tab's text (#6619). A tab that took
+/// its line out to the margin and then goes on to the next line, with a word too wide for the
+/// line, leaves the line at its right indent: Word justifies it to 438.2 pt where the indent is
+/// at 438.6 and the margin at 538.6. And a hyphen the line ends with is centred with the text
+/// before it: Word puts "abcdefghij-" at 493.7 to 537.8 pt around a stop at 515.6.
+#[test]
+fn a_centre_tab_that_moves_on_or_ends_in_a_hyphen_keeps_its_line_in_bounds() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    const WIDTH: f32 = 468.0;
+    // The lines of a justified paragraph with one centre stop: the first cluster, the x of each
+    // cluster and of the line's end, and whether it ends with a hyphen.
+    let lines = |text: &str, stop: f32, indent_right: f32| {
+        let mut d = Document::from_text(text);
+        d.settings.compat_mode = 15;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(vec![TabStop { pos: stop, align: TabAlign::Center, leader: TabLeader::None }]);
+            p.indent_right = Some(indent_right);
+            p.align = Some(Align::Justify);
+        })
+        .unwrap();
+        let l = lay(&d);
+        let Some(para) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+            panic!("no lines")
+        };
+        para.lines.iter().map(|l| (l.c0, l.xs.clone(), l.hyphen.is_some())).collect::<Vec<_>>()
+    };
+    let end = |line: &(usize, Vec<f32>, bool)| line.1.last().copied().unwrap_or(f32::NAN);
+
+    // The word after the tab is wider than the line: the tab goes on with it, and the six words
+    // before it are stretched to the right indent, not to the margin the tab would have reached.
+    let words = "ab ab ab ab ab ab";
+    let l = lines(&format!("{words}\t{} ab", "W".repeat(90)), WIDTH - 50.0, 100.0);
+    assert_eq!(l[1].0, words.len(), "the tab starts the second line: {:?}", l.iter().map(|l| l.0).collect::<Vec<_>>());
+    assert!((end(&l[0]) - (WIDTH - 100.0)).abs() < 0.05, "the line the tab left ends at {}", end(&l[0]));
+
+    // "abcdefghij-" after a centre tab near the margin: the hyphen counts as text, so the two
+    // are centred on the stop together, or end at the margin where that would pass it.
+    let ten = "abcdefghij";
+    let probe = lines(ten, 10.0, 0.0);
+    let w = end(&probe[0]) - probe[0].1[0];
+    let stop = WIDTH - w / 2.0 - 1.0;
+    let found = (1..80).find_map(|n| {
+        let before = "ab ".repeat(n);
+        let l = lines(&format!("{before}\t{ten}\u{ad}{} ab", "k".repeat(40)), stop, 0.0);
+        let tab = before.len();
+        // The first line holds the tab and ends with the hyphen.
+        (l[0].2 && l[1].0 > tab + 1).then(|| (l[0].1[tab + 1], end(&l[0])))
+    });
+    let Some((from, to)) = found else { panic!("no line ends in the hyphen") };
+    assert!(to <= WIDTH + 0.05, "the hyphen ends at {to}, past the margin");
+    assert!(((from + to) / 2.0 - stop).abs() < 0.05 || (to - WIDTH).abs() < 0.05, "the text and its hyphen run from {from} to {to} around {stop}");
+}
+
+/// What counts as text after a centre tab is what counts when a line is stretched (#6619): the
+/// spaces before the first character don't, nor the anchor of a floating object before them. A
+/// stretched line with only such spaces after the tab has nothing to stretch, so its text ends
+/// at the edge like a ragged line's.
+#[test]
+fn an_anchor_and_leading_spaces_after_a_centre_tab_are_not_text_to_stretch() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    const WIDTH: f32 = 468.0;
+    // Where "abcd" ends in `2) <tab>    abcd<line break>tail`, justified: the manual line break
+    // ends a line that is stretched.
+    let word_end = |anchored: bool| {
+        let text = format!("2) \t    abcd{}tail", wordcraft_doc::para::LINE_BREAK);
+        let mut d = Document::from_text("x");
+        d.body[0] = wordcraft_doc::para_block(Paragraph::with_text(&text, Default::default()));
+        d.settings.compat_mode = 15;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(vec![TabStop { pos: WIDTH - 5.0, align: TabAlign::Center, leader: TabLeader::None }]);
+            p.align = Some(Align::Justify);
+        })
+        .unwrap();
+        if anchored {
+            d.insert_object(&Pos::body(0, 4), rect_shape(20.0, 20.0, page_float(400.0, 600.0)), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(para) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+            panic!("no lines")
+        };
+        let line = &para.lines[0];
+        assert_eq!(line.end, crate::para::LineEnd::LineBreak, "the first line ends at the line break");
+        // The line break is the line's last cluster: it stands where the word ends.
+        line.xs.get(line.c1 - 1 - line.c0).copied().unwrap_or(f32::NAN)
+    };
+    for anchored in [false, true] {
+        let end = word_end(anchored);
+        assert!((end - WIDTH).abs() < 0.05, "anchored {anchored}: the word ends at {end}");
+    }
 }
 
 /// A bookmark before such a tab is not text: the tab does not wrap away from it, and the

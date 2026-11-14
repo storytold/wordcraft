@@ -45,14 +45,24 @@ pub(super) fn pl_text_at(c: &Cluster) -> bool {
     c.dot
 }
 
-pub(super) fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabStop, f32)>, xs: &mut [f32], c0: usize, x: f32, xo: &mut f32) {
-    // Finish a centre/right/decimal tab: its text (possibly empty) ends at `x`.
-    let Some((tj, stop, tx)) = pending.take() else { return };
+pub(super) fn resolve_tab(
+    pl: &mut ParaLayout,
+    pending: &mut Option<(usize, TabStop, f32)>,
+    xs: &mut [f32],
+    c0: usize,
+    (x, limit): (f32, f32),
+    xo: &mut f32,
+) -> Option<usize> {
+    // Finish a centre/right/decimal tab: its text (possibly empty) ends at `x`. The text after a
+    // centre tab reaches no further than `limit`; the tab is returned when that holds the text
+    // left of where the stop would centre it.
+    let (tj, stop, tx) = pending.take()?;
     let seg = x - tx - pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
+    let held = stop.align == TabAlign::Center && limit - seg < stop.pos - seg / 2.0;
     let want = match stop.align {
         TabAlign::Right | TabAlign::Decimal => stop.pos - tx - seg,
-        TabAlign::Center => stop.pos - tx - seg / 2.0,
-        _ => return,
+        TabAlign::Center => (stop.pos - seg / 2.0).min(limit - seg) - tx,
+        _ => return None,
     }
     .max(0.0);
     let old = pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
@@ -66,4 +76,5 @@ pub(super) fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabS
         }
         *xo += delta;
     }
+    held.then_some(tj)
 }
