@@ -1,4 +1,6 @@
 use super::{Affine, Arc, Document, FontDb, HashMap, Item, Mutex, Page, Picture, Pixmap, PlacedItem, RenderContext, Seg, Shape, Weak, kurbo, peniko};
+use craft_metafile::{ClipPath, Tile};
+use std::collections::HashSet;
 
 /// Upper bound on the bytes the two decoded-media caches keep together (about 256 MB), half each;
 /// past its half a cache starts over.
@@ -161,20 +163,40 @@ fn bitmap_bytes(p: &Pixmap) -> usize {
 }
 
 /// Approximate memory held by a picture's items: path segments and text, the item itself (a bitmap
-/// item stays in the list after its pixels move out) and the pixmap slot kept for it.
-fn geometry_bytes(pic: &Picture) -> usize {
+/// item stays in the list after its pixels move out), the pixmap slot kept for it, a pattern's path
+/// and tile, and every item's clip rectangles and clip paths. Tiles and clip paths are shared between
+/// the items that use them, so each is charged once.
+pub(crate) fn geometry_bytes(pic: &Picture) -> usize {
     let slot = std::mem::size_of::<Option<Arc<Pixmap>>>();
-    pic.items
-        .iter()
-        .map(|it| {
-            slot + std::mem::size_of::<Item>()
-                + match it {
-                    Item::Path { segs, .. } => segs.len() * std::mem::size_of::<Seg>(),
-                    Item::Bitmap { .. } | Item::Pattern { .. } => 0,
-                    Item::Text(t) => t.text.len() + t.dx.len() * 4,
-                }
-        })
-        .sum()
+    let seg = std::mem::size_of::<Seg>();
+    let mut tiles: HashSet<*const Tile> = HashSet::new();
+    let mut clip_paths: HashSet<*const ClipPath> = HashSet::new();
+    let mut total = 0usize;
+    for it in &pic.items {
+        let (region, clips): (&Option<Vec<[f32; 4]>>, &[Arc<ClipPath>]) = match it {
+            Item::Path { region, clips, .. } | Item::Bitmap { region, clips, .. } | Item::Pattern { region, clips, .. } => (region, clips),
+            Item::Text(t) => (&t.region, &t.clips),
+        };
+        let own = match it {
+            Item::Path { segs, .. } => segs.len() * seg,
+            Item::Bitmap { .. } => 0,
+            Item::Pattern { segs, tile, .. } => {
+                let tile_bytes = if tiles.insert(Arc::as_ptr(tile)) { tile.rgba.len().saturating_add(std::mem::size_of::<Tile>()) } else { 0 };
+                (segs.len() * seg).saturating_add(tile_bytes)
+            }
+            Item::Text(t) => t.text.len() + t.dx.len() * 4,
+        };
+        let region_bytes = region.as_ref().map_or(0, |r| r.len() * std::mem::size_of::<[f32; 4]>());
+        let clip_bytes: usize = clips
+            .iter()
+            .map(|c| {
+                let arc = std::mem::size_of::<usize>() * 2 + std::mem::size_of::<Arc<ClipPath>>();
+                if clip_paths.insert(Arc::as_ptr(c)) { arc + std::mem::size_of::<ClipPath>() + c.segs.len() * seg } else { arc }
+            })
+            .sum();
+        total = total.saturating_add(slot + std::mem::size_of::<Item>()).saturating_add(own).saturating_add(region_bytes).saturating_add(clip_bytes);
+    }
+    total
 }
 
 /// The metafile picture for a media key. None when the bytes are not a metafile or do not parse, so

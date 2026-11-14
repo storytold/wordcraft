@@ -1647,3 +1647,38 @@ fn undecodable_pictures_keep_their_grey_box_pixels() {
     let h = img.pixels.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
     assert_eq!(h, 0x79f9f1d3602a9925, "{h:#x}");
 }
+
+/// The cache charge for a metafile's geometry covers what its items keep after their pixels move
+/// out: a pattern's path and tile, and the clip rectangles and clip paths of every kind of item.
+/// A tile or clip path shared by several items is charged once.
+#[test]
+fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
+    use craft_metafile::{ClipPath, Tile};
+    let segs = |n: usize| vec![Seg::Line(0.0, 0.0); n];
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let base = crate::media::geometry_bytes(&pic(vec![]));
+    let tile = Arc::new(Tile { width: 1000, height: 1000, rgba: vec![0; 4_000_000], cell: [1.0, 1.0], origin: [0.0, 0.0] });
+    let pattern = |tile: &Arc<Tile>| Item::Pattern { segs: segs(1000), even_odd: false, tile: tile.clone(), region: None, clips: vec![] };
+    let one = crate::media::geometry_bytes(&pic(vec![pattern(&tile)]));
+    assert!(one - base >= 4_000_000 + 1000 * std::mem::size_of::<Seg>(), "{} bytes", one - base);
+    // Two fills of the same brush keep one tile.
+    let two = crate::media::geometry_bytes(&pic(vec![pattern(&tile), pattern(&tile)]));
+    assert!(two - one < 1_000_000, "the shared tile is charged once: {} bytes more", two - one);
+    // A clip path shared by two bitmaps is charged once; a clip region is charged per item.
+    let clip = Arc::new(ClipPath { segs: segs(100_000), even_odd: false });
+    let bitmap = |clips: Vec<Arc<ClipPath>>, region: Option<Vec<[f32; 4]>>| Item::Bitmap {
+        rect: [0.0; 4],
+        transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        width: 0,
+        height: 0,
+        rgba: vec![],
+        region,
+        clips,
+    };
+    let plain = crate::media::geometry_bytes(&pic(vec![bitmap(vec![], None)]));
+    let clipped = crate::media::geometry_bytes(&pic(vec![bitmap(vec![clip.clone()], None), bitmap(vec![clip.clone()], None)]));
+    let clip_bytes = 100_000 * std::mem::size_of::<Seg>();
+    assert!(clipped - 2 * plain >= clip_bytes && clipped - 2 * plain < 2 * clip_bytes, "{} bytes", clipped - 2 * plain);
+    let region = crate::media::geometry_bytes(&pic(vec![bitmap(vec![], Some(vec![[0.0; 4]; 1000]))]));
+    assert!(region - plain >= 1000 * 16, "{} bytes", region - plain);
+}
