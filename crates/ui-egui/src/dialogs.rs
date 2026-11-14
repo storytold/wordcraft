@@ -34,7 +34,9 @@ use bookmarks::bookmark_at_caret;
 #[cfg(test)]
 use bookmarks::bookmark_names;
 pub use chrome::show;
-pub(crate) use chrome::{block_behind, buttons, cancel_key_pressed, color_menu, forget_nudge, ok_cancel_responses, release_keyboard};
+pub(crate) use chrome::{
+    block_behind, buttons, cancel_key_pressed, color_menu, drag_by_title_bar, forget_nudge, ok_cancel_responses, release_keyboard,
+};
 pub(crate) use dispatch::search_results;
 pub(crate) use find::swallow_shortcut_text;
 pub use find::{FindExtra, FindTab, GoToWhat};
@@ -866,6 +868,9 @@ impl Dialog {
             if let Some(t) = payload.get(k).and_then(Value::as_str) {
                 kept[k] = json!(t);
             }
+        }
+        if let Some(own) = payload.get("privateClipboard").and_then(Value::as_bool) {
+            kept["privateClipboard"] = json!(own);
         }
         let note = if formats.is_empty() { crate::system_clipboard::nothing_to_paste(app) } else { String::new() };
         Dialog::PasteSpecial { formats, choice: 0, payload: kept, note }

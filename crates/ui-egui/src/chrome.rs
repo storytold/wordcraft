@@ -53,6 +53,8 @@ const QAT_MENU: [&str; 10] =
 /// Match the toolbar's enabled state for keyboard activation too.
 pub(crate) fn qat_enabled(app: &WordApp, id: &str) -> bool {
     match id {
+        // The Markdown Source pane's arrows undo its typing.
+        "edit.undo" | "edit.redo" if app.session.md_source.is_some() => crate::md_source::can_undo(app, id == "edit.redo"),
         "edit.undo" => app.session.can_undo(),
         "edit.redo" => app.session.can_redo(),
         "file.save" => app.has_document(),
@@ -82,6 +84,8 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
         }
         crate::widgets::command_menu(&resp, app, id);
         if id == "edit.undo" {
+            // The list is the document's steps, not the Markdown Source pane's typing.
+            let enabled = enabled && app.session.md_source.is_none();
             undo_list_button(ui, app, enabled);
         }
     }
@@ -281,6 +285,24 @@ fn autosave_knob_x(rtl: bool, on: bool, r: Rect) -> f32 {
     crate::rtl::lead_x(rtl != on, r, 8.0)
 }
 
+/// The `ctx.data` key for the part of the title bar that drags this document window.
+fn title_drag_id(ctx: &egui::Context) -> egui::Id {
+    egui::Id::unique(("title_drag_rect", ctx.viewport_id()))
+}
+
+/// Notes `rect` as the part of the title bar that drags the window in this frame: behind a modal
+/// dialog its backdrop has the pointer there, and moves the window instead ([`title_drag_rect`]).
+pub(crate) fn note_title_drag(ctx: &egui::Context, rect: Rect) {
+    let (key, pass) = (title_drag_id(ctx), ctx.cumulative_pass_nr());
+    ctx.data_mut(|d| d.insert_temp(key, (rect, pass)));
+}
+
+/// The part of the title bar that drags the window, if it was drawn in this frame.
+pub(crate) fn title_drag_rect(ctx: &egui::Context) -> Option<Rect> {
+    let (key, pass) = (title_drag_id(ctx), ctx.cumulative_pass_nr());
+    ctx.data(|d| d.get_temp::<(Rect, u64)>(key)).filter(|(_, p)| *p == pass).map(|(r, _)| r)
+}
+
 /// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
 /// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -300,6 +322,10 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             let drag = ui.interact(full, ui.scope_id().with("title_drag"), Sense::click_and_drag());
             if drag.drag_started() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            // Elsewhere the system's own title bar above this one moves the window.
+            if mac {
+                note_title_drag(ui.ctx(), full);
             }
             if drag.double_clicked() {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
@@ -600,15 +626,7 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     );
     let pfont = TypeRung::Control.regular();
     let ptrack = TypeRung::Control.tracking();
-    paint_text(
-        ui.painter(),
-        pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y - TypeRung::Control.line_height() / 2.0),
-        crate::rtl::lead_top(rtl),
-        ph,
-        &pfont,
-        ptrack,
-        t.text_dim,
-    );
+    paint_text(ui.painter(), pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y), crate::rtl::lead_center(rtl), ph, &pfont, ptrack, t.text_dim);
     if app.ui.keytips == crate::keytips::Phase::Tabs {
         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
     }
@@ -948,7 +966,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                     });
                     if let Some((msg, at)) = &app.status_msg
-                        && crate::now_ms() - at < 6000.0
+                        && crate::now_ms() - at < crate::app::STATUS_MS
                     {
                         let font = TypeRung::Caption.regular();
                         let track = TypeRung::Caption.tracking();
