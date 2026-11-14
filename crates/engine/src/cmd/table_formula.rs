@@ -163,31 +163,55 @@ fn picture_of(switch: &str) -> Option<String> {
     (!picture.is_empty()).then_some(picture)
 }
 
-/// The text of `value` under a numeric picture, as Word's `\#` pictures read: `0` is a digit that
-/// always shows, `#` one that shows when it has a value, `,` groups thousands, `.` marks the
-/// decimals, `%` multiplies by 100, and anything else shows as it is. Sections split by `;` give the
-/// positive, negative and zero forms; with one section a negative value takes a `-` in front.
+/// The text of `value` under a numeric picture, as Word's `\#` pictures read (ECMA-376 Part 1,
+/// §17.16.4.2): `0` is a digit that always shows, `#` one that shows when it has a value, `x` (beside
+/// the number's other items, or not part of a word) one that drops the digits on its left, or in
+/// the decimals one the result is rounded at, `,` groups thousands, `.` marks the decimals, `%`
+/// multiplies by 100, text in single quotes shows without them, and anything else shows as it is. Sections split by `;` give the positive, negative
+/// and zero forms. In the first section a `-` before the number shows a minus for a negative result
+/// and a space otherwise, and a `+` a plus, a minus, or a space for zero; without either, a negative
+/// result there takes a `-` in front.
 pub fn format_picture(value: f64, picture: &str) -> String {
-    let sections: Vec<&str> = picture.split(';').collect();
-    let (section, x, minus) = if value < 0.0 && sections.len() >= 2 {
-        (sections[1], -value, false)
+    let sections = split_unquoted(picture, ';');
+    let section_at = |i: usize| sections.get(i).copied().unwrap_or_default();
+    let (section, x, first) = if value < 0.0 && sections.len() >= 2 {
+        (section_at(1), -value, false)
     } else if value == 0.0 && sections.len() >= 3 {
-        (sections[2], 0.0, false)
+        (section_at(2), 0.0, false)
     } else {
-        (sections[0], value.abs(), value < 0.0)
+        (section_at(0), value.abs(), true)
     };
-    let Some(start) = section.find(['#', '0']) else { return section.to_string() };
-    let rest = &section[start..];
-    let len = rest.find(|c: char| !matches!(c, '#' | '0' | ',' | '.')).unwrap_or(rest.len());
-    let (core, suffix) = rest.split_at(len);
-    let prefix = &section[..start];
-    let x = if prefix.contains('%') || suffix.contains('%') { x * 100.0 } else { x };
+    let items = picture_items(section);
+    const NUMBER: [char; 5] = ['#', '0', 'x', ',', '.'];
+    let unquoted = |i: usize, set: &[char]| matches!(items.get(i), Some(&(c, false)) if set.contains(&c));
+    // An `x` is a placeholder beside the number's other items or on its own (`x`, `$x`), and a
+    // letter in a word such as `Tax`.
+    let beside_number = |i: usize| unquoted(i + 1, &NUMBER) || i.checked_sub(1).is_some_and(|j| unquoted(j, &NUMBER));
+    let letter = |i: usize| matches!(items.get(i), Some(&(c, false)) if c.is_alphabetic());
+    let in_word = |i: usize| letter(i + 1) || i.checked_sub(1).is_some_and(letter);
+    let placeholder = |i: usize| unquoted(i, &['#', '0']) || (unquoted(i, &['x']) && (beside_number(i) || !in_word(i)));
+    let starts = |i: usize| placeholder(i) || (unquoted(i, &['.']) && placeholder(i + 1));
+    let Some(start) = (0..items.len()).find(|&i| starts(i)) else { return items.iter().map(|&(c, _)| c).collect() };
+    let len = items.iter().skip(start).take_while(|&&(c, quoted)| !quoted && NUMBER.contains(&c)).count();
+    let (prefix, rest) = items.split_at(start);
+    let (core, suffix) = rest.split_at(len.min(rest.len()));
+    let core: String = core.iter().map(|&(c, _)| c).collect();
+    let x = if items.iter().any(|&(c, quoted)| c == '%' && !quoted) { x * 100.0 } else { x };
     let (int_pic, frac_pic) = match core.split_once('.') {
         Some((int_pic, frac_pic)) => (int_pic, Some(frac_pic)),
-        None => (core, None),
+        None => (core.as_str(), None),
     };
-    let min_int = int_pic.matches('0').count().min(MAX_PICTURE);
-    let max_frac = frac_pic.map_or(0, |f| f.matches(['0', '#']).count()).min(15);
+    // An `x` in the whole part keeps the digits from its place on; in the decimals, the decimals
+    // end at it.
+    let int_keep = int_pic.find('x').map(|at| int_pic.get(at..).unwrap_or_default().matches(['0', '#', 'x']).count());
+    let frac_pic = frac_pic.map(|f| match f.find('x') {
+        Some(at) => f.get(..=at).unwrap_or(f),
+        None => f,
+    });
+    // The `0`s on the left of an `x` stand where digits are dropped: they don't pad.
+    let kept_int_pic = int_pic.find('x').map_or(int_pic, |at| int_pic.get(at..).unwrap_or_default());
+    let min_int = kept_int_pic.matches('0').count().min(MAX_PICTURE);
+    let max_frac = frac_pic.map_or(0, |f| f.matches(['0', '#', 'x']).count()).min(15);
     let min_frac = frac_pic.map_or(0, |f| f.matches('0').count()).min(max_frac);
     let scale = 10f64.powi(max_frac as i32);
     let rounded = (x * scale).round() / scale;
@@ -199,7 +223,12 @@ pub fn format_picture(value: f64, picture: &str) -> String {
         Some((whole, decimals)) => (whole.to_string(), decimals.to_string()),
         None => (digits.clone(), String::new()),
     };
-    let whole = if whole == "0" && min_int == 0 { String::new() } else { format!("{whole:0>min_int$}") };
+    let whole = match int_keep {
+        Some(keep) => whole.get(whole.len().saturating_sub(keep)..).unwrap_or_default().to_string(),
+        None => whole,
+    };
+    let whole = whole.trim_start_matches('0');
+    let whole = if whole.is_empty() && min_int == 0 { String::new() } else { format!("{whole:0>min_int$}") };
     let whole = if int_pic.contains(',') { group_thousands(&whole) } else { whole };
     let mut decimals = decimals;
     while decimals.len() > min_frac && decimals.ends_with('0') {
@@ -210,8 +239,63 @@ pub fn format_picture(value: f64, picture: &str) -> String {
         body.push('.');
         body.push_str(&decimals);
     }
-    let sign = if minus && rounded != 0.0 { "-" } else { "" };
-    format!("{sign}{prefix}{body}{suffix}")
+    let negative = first && value < 0.0 && rounded != 0.0;
+    let mut signed = false;
+    let mut out = String::new();
+    for &(c, quoted) in prefix {
+        out.push(match c {
+            '-' | '+' if first && !quoted => {
+                signed = true;
+                if negative {
+                    '-'
+                } else if c == '+' && rounded != 0.0 {
+                    '+'
+                } else {
+                    ' '
+                }
+            }
+            c => c,
+        });
+    }
+    if negative && !signed {
+        out.insert(0, '-');
+    }
+    out.push_str(&body);
+    out.extend(suffix.iter().map(|&(c, _)| c));
+    out
+}
+
+/// `text` split at each `sep` outside single quotes.
+fn split_unquoted(text: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut from, mut quoted) = (0, false);
+    for (at, c) in text.char_indices() {
+        if c == '\'' {
+            quoted = !quoted;
+        } else if c == sep && !quoted {
+            parts.push(text.get(from..at).unwrap_or_default());
+            from = at + c.len_utf8();
+        }
+    }
+    parts.push(text.get(from..).unwrap_or_default());
+    parts
+}
+
+/// The characters of a picture section, each with whether it is in single quotes (text), without
+/// the quotes themselves. An unclosed quote runs to the end.
+fn picture_items(section: &str) -> Vec<(char, bool)> {
+    let mut quoted = false;
+    section
+        .chars()
+        .filter_map(|c| {
+            if c == '\'' {
+                quoted = !quoted;
+                None
+            } else {
+                Some((c, quoted))
+            }
+        })
+        .collect()
 }
 
 /// `1234567` → `1,234,567`.
@@ -1010,6 +1094,48 @@ mod tests {
         assert_eq!(format_picture(0.0, "0.00;-;zero"), "zero");
         assert_eq!(format_picture(7.0, "000"), "007");
         assert_eq!(format_picture(-0.001, "0.00"), "0.00", "a rounded zero has no sign");
+    }
+
+    /// ECMA-376 Part 1 §17.16.4.2 and its examples.
+    #[test]
+    fn a_numeric_picture_reads_its_sign_items() {
+        assert_eq!(format_picture(-10.0, "-##"), "-10", "a minus item shows the minus");
+        assert_eq!(format_picture(80.0, "-##"), " 80", "and a space for a positive result");
+        assert_eq!(format_picture(0.0, "-0"), " 0", "or zero");
+        assert_eq!(format_picture(10.0, "+##"), "+10", "a plus item shows the plus");
+        assert_eq!(format_picture(-10.0, "+##"), "-10", "or the minus");
+        assert_eq!(format_picture(0.0, "+0"), " 0", "and a space for zero");
+        assert_eq!(format_picture(-0.001, "+0.00"), " 0.00", "a rounded zero is zero");
+        assert_eq!(format_picture(-5.0, "$-0"), "$-5", "the sign stands where the item is");
+        assert_eq!(format_picture(-5.0, "0;(-0)"), "(-5)", "a minus in the negative section is text");
+    }
+
+    #[test]
+    fn a_numeric_picture_shows_quoted_text_without_its_quotes() {
+        assert_eq!(format_picture(3.975, "##0.00 'is the sales tax'"), "3.98 is the sales tax");
+        assert_eq!(format_picture(12.0, "'Item 0' 0"), "Item 0 12", "digits in quotes are text");
+        assert_eq!(format_picture(0.5, "0.0 '% done'"), "0.5 % done", "a % in quotes doesn't multiply");
+        assert_eq!(format_picture(3.0, "'-+' 0"), "-+ 3", "signs in quotes are text");
+        assert_eq!(format_picture(-3.0, "0 'a;b';(0)"), "(3)", "a ; in quotes doesn't split sections");
+        assert_eq!(format_picture(4.0, "0 'open"), "4 open", "an unclosed quote runs to the end");
+        let t = table(&[&["26.5"], &[""]]);
+        let shown = evaluate_field(&t, 1, 0, "=A1*15/100 \\#\"$#,##0.00 'is the sales tax'\"");
+        assert_eq!(shown, Ok("$3.98 is the sales tax".to_string()));
+    }
+
+    #[test]
+    fn a_numeric_picture_x_drops_digits_on_its_left_and_rounds_at_its_place() {
+        assert_eq!(format_picture(222_492.0, "x##"), "492", "111053 + 111439");
+        assert_eq!(format_picture(0.125, "0.00x"), "0.125", "1/8");
+        assert_eq!(format_picture(0.75, ".x"), ".8", "3/4");
+        assert_eq!(format_picture(1_234_567.0, "x,##0"), "4,567");
+        assert_eq!(format_picture(5.0, "Tax $0.00"), "Tax $5.00", "an x in a word is text");
+        assert_eq!(format_picture(1234.0, "x"), "4", "an x on its own is a placeholder");
+        assert_eq!(format_picture(1234.0, "$x"), "$4");
+        assert_eq!(format_picture(1234.0, "000x"), "4", "zeros on the left of x don't pad what it drops");
+        assert_eq!(format_picture(5.0, "000x"), "5");
+        assert_eq!(format_picture(5.0, "x00"), "05", "zeros on the right of x still pad");
+        assert_eq!(format_picture(1234.0, "Max"), "Max", "an x ending a word is text");
     }
 
     #[test]
