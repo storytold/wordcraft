@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn shortcut_capture_exposes_its_name_and_current_value() {
         use egui::accesskit::Role;
-        use egui_kittest::kittest::{NodeT, Queryable};
+        use egui_kittest::kittest::Queryable;
         let mut h = harness("", Some("format.bold"));
         let input = h.get_by_role_and_label(Role::TextInput, "New shortcut:");
         assert_eq!(input.value().as_deref(), Some(""));
