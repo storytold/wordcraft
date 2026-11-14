@@ -436,20 +436,13 @@ fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 
 /// Paint highlights and shading before glyphs, grouping adjacent equal character borders.
 fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
+    character_fills(ctx, out);
     let mut open: Option<(Border, f32, f32)> = None;
     for k in ctx.line.c0..ctx.line.c1 {
         let (Some(cluster), Some(left), Some(right)) = (ctx.pl.clusters.get(k), ctx.line.cl_left(k), ctx.line.cl_right(k)) else { continue };
         let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
         if cluster.kind == ClKind::Marker {
             continue;
-        }
-        if let Some(color) = style.rc.highlight.or(style.rc.shading) {
-            out.push(Draw::Fill {
-                rect: Rect::new(ctx.x + left, ctx.top, (right - left).max(0.0), ctx.line.height),
-                color,
-                alpha: ctx.alpha,
-                text_bg: true,
-            });
         }
         let border = style.rc.border;
         if let Some((open_border, x0, x1)) = open.as_mut()
@@ -466,6 +459,51 @@ fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     }
     if let Some((border, x0, x1)) = open {
         char_box(&border, x0, x1, ctx.top, ctx.bottom, ctx.alpha, out);
+    }
+}
+
+/// Highlight and character shading, one fill per run of touching letters with the same colour.
+/// One fill per letter left hairline seams where anti-aliased edges met at fractional pixels.
+/// Letters join in screen order, not reading order: in mixed-direction text a run's letters are
+/// not laid out in the order they are read. Unshaded text leaves a gap, so a fill never stretches
+/// across it. Drawn before the borders, so a fill never covers a neighbouring run's border.
+fn character_fills(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
+    // Points; cluster edges that meet can differ by float rounding.
+    const TOUCH: f32 = 0.01;
+    let fill = |(color, x0, x1): (Rgb, f32, f32)| Draw::Fill {
+        rect: Rect::new(x0, ctx.top, (x1 - x0).max(0.0), ctx.line.height),
+        color,
+        alpha: ctx.alpha,
+        text_bg: true,
+    };
+    let mut spans: Vec<(Rgb, f32, f32)> = Vec::new();
+    for k in ctx.line.c0..ctx.line.c1 {
+        let (Some(cluster), Some(left), Some(right)) = (ctx.pl.clusters.get(k), ctx.line.cl_left(k), ctx.line.cl_right(k)) else { continue };
+        let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
+        // A zero-width letter paints nothing, and must not split the fill around it.
+        if cluster.kind == ClKind::Marker || right <= left {
+            continue;
+        }
+        if let Some(color) = style.rc.highlight.or(style.rc.shading) {
+            spans.push((color, ctx.x + left, ctx.x + right));
+        }
+    }
+    spans.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let mut open: Option<(Rgb, f32, f32)> = None;
+    for (color, left, right) in spans {
+        if let Some((open_color, _, x1)) = open.as_mut()
+            && *open_color == color
+            && left <= *x1 + TOUCH
+        {
+            *x1 = x1.max(right);
+            continue;
+        }
+        if let Some(run) = open.replace((color, left, right)) {
+            out.push(fill(run));
+        }
+    }
+    if let Some(run) = open {
+        out.push(fill(run));
     }
 }
 

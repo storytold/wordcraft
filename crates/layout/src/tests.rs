@@ -11499,6 +11499,100 @@ fn highlight_fill_is_marked_as_a_text_background() {
     assert!(glyphs.iter().any(|(t, bg)| t.contains("Plain") && bg.is_none()), "{glyphs:?}");
 }
 
+/// #6260: character shading and highlight are one fill per run of letters with the same colour,
+/// not one per letter: letter-sized rectangles meeting at fractional pixel edges left hairline
+/// seams between the letters. A run ends where the colour changes or text has no background.
+#[test]
+fn character_shading_is_one_fill_per_coloured_run() {
+    crate::test_fonts();
+    use wordcraft_doc::props::Highlight;
+    let blue = wordcraft_doc::Rgb(0xBB, 0xDD, 0xFF);
+    let yellow = wordcraft_doc::Rgb(255, 255, 0);
+    let shaded = wordcraft_doc::CharProps { shading: Some(blue), ..Default::default() };
+    let marked = wordcraft_doc::CharProps { highlight: Some(Highlight::Yellow), ..Default::default() };
+    let mut p = wordcraft_doc::Paragraph::with_text("Shaded", shaded.clone());
+    for (text, cp) in [("Marked", &marked), (" plain ", &Default::default()), ("Again", &shaded)] {
+        let n = p.len();
+        p.insert_text(n, text, cp).unwrap();
+    }
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let fills: Vec<(wordcraft_doc::Rgb, Rect)> = items
+        .iter()
+        .filter_map(|i| if let display::Draw::Fill { color, rect, text_bg: true, .. } = i { Some((*color, *rect)) } else { None })
+        .collect();
+    let colors: Vec<wordcraft_doc::Rgb> = fills.iter().map(|f| f.0).collect();
+    assert_eq!(colors, vec![blue, yellow, blue], "one fill per run: {fills:?}");
+    let (first, second) = (fills[0].1, fills[1].1);
+    assert!((first.x + first.w - second.x).abs() < 0.001, "the shading and the highlight meet: {fills:?}");
+    assert!(fills.iter().all(|f| f.1.w > 0.0 && f.1.y == first.y && f.1.h == first.h), "{fills:?}");
+}
+
+/// #6260: right-to-left letters are laid out leftwards, and their shading joins into one fill too.
+#[test]
+fn right_to_left_character_shading_is_one_fill() {
+    crate::test_fonts();
+    let blue = wordcraft_doc::Rgb(0xBB, 0xDD, 0xFF);
+    let shaded = wordcraft_doc::CharProps { shading: Some(blue), ..Default::default() };
+    let mut p = wordcraft_doc::Paragraph::with_text("\u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{5e9}\u{5dc}\u{5d5}\u{5dd}", shaded);
+    p.props.bidi = Some(true);
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let fills: Vec<Rect> =
+        items.iter().filter_map(|i| if let display::Draw::Fill { rect, text_bg: true, .. } = i { Some(*rect) } else { None }).collect();
+    assert_eq!(fills.len(), 1, "{fills:?}");
+    let glyphs = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| if let Placed::Lines { para, x, .. } = it { Some((para, *x)) } else { None })
+        .map(|(pl, x)| {
+            let ln = &pl.lines[0];
+            let edges = (ln.c0..ln.c1).filter_map(|k| Some((ln.cl_left(k)?, ln.cl_right(k)?)));
+            edges.fold((f32::MAX, f32::MIN), |(a, b), (l, r)| (a.min(x + l), b.max(x + r)))
+        })
+        .unwrap();
+    assert!((fills[0].x - glyphs.0).abs() < 0.001 && (fills[0].x + fills[0].w - glyphs.1).abs() < 0.001, "{fills:?} covers {glyphs:?}");
+}
+
+/// #6260 review: in mixed-direction text a shaded run's letters are not laid out in reading order.
+/// In `A\u{5d0}\u{5d1}B` the first Hebrew letter sits right of the second, so on screen `A` touches
+/// the second one; the run is still one fill. A fill still stops at unshaded text in between.
+#[test]
+fn mixed_direction_character_shading_joins_in_visual_order() {
+    crate::test_fonts();
+    let blue = wordcraft_doc::Rgb(0xBB, 0xDD, 0xFF);
+    let shaded = wordcraft_doc::CharProps { shading: Some(blue), ..Default::default() };
+    let plain = wordcraft_doc::CharProps::default();
+    let fills = |unshaded: &[usize], rtl: bool| {
+        let mut p = wordcraft_doc::Paragraph::with_text("", shaded.clone());
+        for (i, ch) in ["A", "\u{5d0}", "\u{5d1}", "B"].into_iter().enumerate() {
+            let n = p.len();
+            p.insert_text(n, ch, if unshaded.contains(&i) { &plain } else { &shaded }).unwrap();
+        }
+        p.props.bidi = Some(rtl);
+        let mut d = Document::from_text("x");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+        let fills: Vec<Rect> =
+            items.iter().filter_map(|i| if let display::Draw::Fill { rect, text_bg: true, .. } = i { Some(*rect) } else { None }).collect();
+        fills
+    };
+    for rtl in [false, true] {
+        let joined = fills(&[], rtl);
+        assert_eq!(joined.len(), 1, "rtl={rtl}: {joined:?}");
+        // Unshaded `\u{5d1}` sits between `A` and `\u{5d0}` on screen: two fills that don't meet.
+        let split = fills(&[2], rtl);
+        assert_eq!(split.len(), 2, "rtl={rtl}: {split:?}");
+        let (a, b) = if split[0].x < split[1].x { (split[0], split[1]) } else { (split[1], split[0]) };
+        assert!(a.x + a.w + 1.0 < b.x, "the fill does not cover the unshaded letter: rtl={rtl}: {split:?}");
+    }
+}
+
 /// #1252 review: an underline and strikethrough on a highlighted run carry the highlight, like
 /// its glyphs; other lines (here a paragraph border) don't.
 #[test]
