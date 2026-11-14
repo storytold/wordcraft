@@ -435,7 +435,17 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     // The caret may have moved since the count (a field end, a check box that is left before
     // the text goes in), so the count is checked again here, before the selection is deleted:
     // a refused text leaves the document and the selection as they were.
-    if breaks > MAX_INSERTED_PARAGRAPHS && !(enter && controls::refuses_paragraph(s)) {
+    //
+    // Whether the breaks are suppressed is settled here too, and the same condition decides
+    // both: the text goes in where the selection was, and only a selection wholly inside a
+    // one-line control keeps its breaks together. The suppression below uses this as well,
+    // so the limit is skipped exactly where the breaks are not made.
+    //
+    // Typed line breaks are the Enter key between the lines: in a one-line control it does
+    // nothing, so the lines run together and the control stays one paragraph (pasted text
+    // keeps its breaks, as before).
+    let no_breaks = enter && controls::suppresses_paragraph_breaks(s);
+    if breaks > MAX_INSERTED_PARAGRAPHS && !no_breaks {
         return Err(too_many_paragraphs(breaks));
     }
     // Pasted text is text: pending properties left by AutoCorrect don't give it a symbol's font (#2036).
@@ -462,10 +472,6 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     let mut at = s.sel.focus.clone();
     let mut first = true;
     let mut inserted = false;
-    // Typed line breaks are the Enter key between the lines: in a one-line control it does
-    // nothing, so the lines run together and the control stays one paragraph (pasted text keeps
-    // its breaks, as before).
-    let no_breaks = enter && controls::refuses_paragraph(s);
     for part in text.split(['\r', '\u{2029}']) {
         if !first && !no_breaks {
             at = split_para_as(s, &at, enter)?;

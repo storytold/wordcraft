@@ -353,9 +353,17 @@ pub fn refuses_paragraph(s: &Session) -> bool {
 /// control takes no paragraph break, so the text stays one paragraph there. A control that
 /// takes no typing (a check box, a drop-down) is left before the text goes in, so its
 /// breaks are honored like any other text's.
+///
+/// The whole selection has to be in that control: the text goes in where the selection
+/// was, and a selection that starts outside the control and ends inside it leaves the
+/// caret before the control's marker when it is deleted, where the breaks are honored.
 pub fn suppresses_paragraph_breaks(s: &Session) -> bool {
     let Some(r) = s.doc.control_at(&s.sel.focus) else { return false };
-    refuses_paragraph(s) && r.control.kind.takes_typing()
+    if !refuses_paragraph(s) || !r.control.kind.takes_typing() {
+        return false;
+    }
+    let (a, _) = s.sel.ordered();
+    s.doc.control_at(&a).is_some_and(|start| start.start == r.start && start.end == r.end)
 }
 
 /// Before a deletion of `a..b`: refuse deleting a control that can't be deleted, or editing

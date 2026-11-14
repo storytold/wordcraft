@@ -5425,22 +5425,62 @@ fn rich_paste_and_sample_expansion_respect_paragraph_limit() {
     }
     assert_eq!(body_texts(&expanded), vec![String::new()], "sample expansion changed the document");
 
-    // A formula already at the caret is expanded by the first Enter, so it counts too:
-    // 49 more of them and one plain line make 10,001 paragraphs.
-    let mut at_caret = s();
-    run(&mut at_caret, "text.insert", json!({"text": "=rand(200,1)", "raw": true}));
-    let text = format!("\n{}", "=rand(200,1)\n".repeat(49)) + "x\n";
-    match at_caret.run("text.insert", &json!({"text": text, "paragraphs": true, "raw": true})) {
-        Err(CmdError::Params(m)) => assert!(m.contains("would make 10001 paragraphs"), "{m}"),
-        r => panic!("the formula at the caret was not counted: {r:?}"),
-    }
-    assert_eq!(body_texts(&at_caret), vec!["=rand(200,1)"], "the expansion changed the document");
-
     // At the cap the expansion still goes in: 50 formulas make exactly 10,000 paragraphs.
     let mut at_cap = s();
     let text = "=rand(200,1)\n".repeat(50);
     run(&mut at_cap, "text.insert", json!({"text": text, "paragraphs": true, "raw": true}));
     assert_eq!(at_cap.doc.paragraph_count(), MAX_INSERTED_PARAGRAPHS + 1);
+}
+
+/// A formula already at the caret is expanded by the first Enter, so it counts too:
+/// 49 more of them and one plain line make 10,001 paragraphs.
+#[test]
+fn a_formula_at_the_caret_counts_with_the_first_enter() {
+    use crate::CmdError;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "=rand(200,1)", "raw": true}));
+    let text = format!("\n{}", "=rand(200,1)\n".repeat(49)) + "x\n";
+    match s.run("text.insert", &json!({"text": text, "paragraphs": true, "raw": true})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("would make 10001 paragraphs"), "{m}"),
+        r => panic!("the formula at the caret was not counted: {r:?}"),
+    }
+    assert_eq!(body_texts(&s), vec!["=rand(200,1)"], "the expansion changed the document");
+}
+
+/// An empty first line leaves the selection as it is, and a selection that is not collapsed
+/// is deleted with the formula rather than expanded: the first Enter makes no paragraphs
+/// beyond the break itself, so the request is under the cap and goes in.
+#[test]
+fn an_empty_first_line_over_a_selection_is_not_expanded() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "=rand(200,1)x", "raw": true}));
+    // The last character is selected.
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 12}, "focus": {"block": 0, "off": 13}}));
+    // An initial newline, 49 formulas and one plain line: 9,802 paragraphs, under the cap.
+    let text = format!("\n{}", "=rand(200,1)\n".repeat(49)) + "y\n";
+    run(&mut s, "text.insert", json!({"text": text, "paragraphs": true, "raw": true}));
+    assert_eq!(s.doc.paragraph_count(), 9_803, "the paragraphs the request made");
+}
+
+/// The one-line control exemption holds only for a selection wholly inside it: a selection
+/// that starts outside it and ends inside it leaves the caret before the control's marker,
+/// where the breaks are honored, so the limit applies there too.
+#[test]
+fn a_selection_out_of_a_one_line_control_is_still_capped() {
+    use crate::CmdError;
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Name: "}));
+    run(&mut s, "developer.plainText", json!({"title": "Name", "tag": "name"}));
+    // From before the control to inside it.
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 12}}));
+    let before = body_texts(&s);
+    let over = "x\r".repeat(MAX_INSERTED_PARAGRAPHS + 1);
+    match s.run("text.insert", &json!({"text": over, "raw": true})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{m}"),
+        r => panic!("not refused: {r:?}"),
+    }
+    assert_eq!(body_texts(&s), before, "nothing typed");
 }
 
 /// A refused text leaves the document exactly as it was: the selection it would have replaced

@@ -168,8 +168,13 @@ fn paragraphs_of_enter(s: &Session) -> usize {
 /// selection replaced by that line.
 fn paragraphs_made(s: &Session, lines: &[&str]) -> usize {
     let mut n = lines.len().saturating_sub(1);
-    // The first Enter ends the paragraph the first line is typed into.
-    if let Some(text) = lines.first().and_then(|first| first_paragraph_text(s, first))
+    // The first Enter ends the paragraph the first line is typed into. It expands a formula
+    // only when the selection is collapsed then: an empty first line leaves the selection
+    // as it is, and a selection that is not collapsed is deleted with the formula rather
+    // than expanded.
+    if let Some(first) = lines.first()
+        && (!first.is_empty() || s.sel.is_collapsed())
+        && let Some(text) = first_paragraph_text(s, first)
         && let Some((paragraphs, _, _)) = sample_formula(&text)
     {
         n += paragraphs - 1;
