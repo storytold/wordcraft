@@ -6,6 +6,11 @@ use serde_json::json;
 use crate::theme::{Tokens, medium, regular, semibold};
 use crate::{WordApp, icons};
 
+mod shell;
+mod transition;
+pub(crate) use shell::{paint as paint_transition, shape_count};
+pub(crate) use transition::reset as reset_transition;
+
 /// The side menu: page id, label and icon (#1714).
 const PAGES: [(&str, &str, &str); 11] = [
     ("home", "Home", "homeFolder"),
@@ -136,10 +141,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tl!(label)));
                 let active = app.ui.backstage_page == id;
-                if active {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
-                } else if on && resp.hovered() {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
+                let selected = ui.ctx().animate_bool_responsive(resp.id.with("selected"), active);
+                let hovered = ui.ctx().animate_bool_responsive(resp.id.with("hover"), on && resp.hovered());
+                let alpha = egui::lerp(26.0 * hovered..=46.0, selected);
+                if alpha > 0.0 {
+                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(alpha as u8));
                 }
                 let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
                 icons::paint(
@@ -186,6 +192,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(0, 30))).show(ui, |ui| {
+        let now = ui.input(|i| i.time);
+        let animate = app.animations_on() && ui.style().animation_time > 0.0;
+        let progress = transition::progress(ui.ctx(), &app.ui.backstage_page, now, animate);
+        let offset = vec2(0.0, (1.0 - progress) * 10.0);
+        let mut content = ui.new_child(egui::UiBuilder::new().id_salt("backstage_content").max_rect(ui.max_rect().translate(offset)));
+        content.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+        content.multiply_opacity(0.3 + 0.7 * progress);
+        let ui = &mut content;
         // The side padding sits inside the pages, so the scroll area reaches the window's edge.
         let pad = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 0));
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).

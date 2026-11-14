@@ -4,6 +4,57 @@ use serde_json::json;
 use super::{HOME_TEMPLATES, TEMPLATES, matching_templates};
 use crate::{Services, WordApp};
 
+/// Check the actual File page drawing, not just its timer: the heading moves and fades, the
+/// system's reduced-motion preference removes both effects.
+#[test]
+fn file_pages_fade_and_lift_unless_the_system_turns_effects_off() {
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let ask = system.clone();
+    let services = Services { animations_enabled: Some(Box::new(move || ask.get())), ..Default::default() };
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    app.ui.language = "en".into();
+    app.ui.backstage = true;
+    app.ui.backstage_page = "open".into();
+    let ctx = egui::Context::default();
+    let frame = |app: &mut WordApp, now| {
+        let title = if app.ui.backstage_page == "new" { "New" } else { "Open" };
+        let input = egui::RawInput {
+            time: Some(now),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            app.logic(&ctx);
+            app.ui(ui);
+        });
+        out.textures_delta.clear();
+        out.shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == title && t.pos.x > 200.0 => Some((t.pos.y, t.fallback_color.a())),
+            _ => None,
+        })
+    };
+    // Font installation can discard the first frame. Warm it up before measuring the entry.
+    for now in [0.0, 0.02, 0.04] {
+        frame(&mut app, now);
+    }
+    super::reset_transition(&ctx);
+    let first = frame(&mut app, 0.1).unwrap();
+    let middle = frame(&mut app, 0.19).unwrap();
+    let last = frame(&mut app, 0.4).unwrap();
+    assert!(first.0 > middle.0 && middle.0 > last.0, "the heading settles upward: {first:?}, {middle:?}, {last:?}");
+    assert!(first.1 < middle.1 && middle.1 < last.1, "the heading fades in");
+    assert_eq!(last.1, 255);
+    app.ui.backstage_page = "new".into();
+    assert_eq!(frame(&mut app, 0.41).unwrap(), first, "changing pages starts a fresh transition");
+    app.ui.backstage_page = "open".into();
+    assert_eq!(frame(&mut app, 0.42).unwrap(), first, "another selection takes effect before the last transition finishes");
+    system.set(Some(false));
+    app.ui.backstage_page = "new".into();
+    assert_eq!(frame(&mut app, 0.5).unwrap(), last, "the system's reduced-motion setting shows the new page fully settled");
+    app.ui.backstage_page = "open".into();
+    assert_eq!(frame(&mut app, 0.51).unwrap(), last, "later switches stay immediate too");
+}
+
 /// #1714: every side-menu item has its own icon, a drawn one (an unknown name would fall back
 /// to a tile with its first letter, the only icon here that draws text).
 #[test]
@@ -675,6 +726,43 @@ fn a11y_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     );
     h.run_steps(4);
     h
+}
+
+/// The outgoing screen remains visible during entry/exit but cannot run commands or expose nodes.
+#[test]
+fn opening_and_closing_file_replays_paint_without_old_buttons() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Keep this document")), Services::default());
+    app.ui.language = "en".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    h.state_mut().run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
+    h.step();
+    assert!(
+        h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "File")),
+        "the old ribbon fades over the File screen"
+    );
+    h.run_steps(20);
+    let old_close = h.get_by_label("Close").rect().center();
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    h.run_steps(3);
+    assert!(
+        h.output().shapes.iter().any(
+            |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Recover" && t.fallback_color.a() > 0 && t.fallback_color.a() < 255)
+        ),
+        "File fades over the returning editor"
+    );
+    assert!(h.query_by_label("Recover").is_none(), "the fading menu has no interactive or accessible buttons");
+    click_at(&mut h, old_close);
+    assert!(!h.state().ui.backstage);
+    assert!(h.state().dialog.is_none(), "the old Close button cannot ask to discard work");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Keep this document");
 }
 
 /// A primary click at `pos` (for chrome with no label to find it by).
