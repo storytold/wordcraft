@@ -67,6 +67,8 @@ impl<'a> Builder<'a> {
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         let mut seg_start = 0;
         let mut cur: Option<SegKey> = None;
+        // The face before is a metric twin, taken for a space: it stands in for nothing else.
+        let mut twin = false;
         let mut segs = Vec::new();
         for (i, c) in text.char_indices() {
             let rtl = use_levels && levels.get(lbase + i).is_some_and(|l| l % 2 == 1);
@@ -78,18 +80,31 @@ impl<'a> Builder<'a> {
                 _ => rc_cs.is_some() && rc.uses_complex(dc),
             };
             let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
+            let mut spaced = false;
             let face = match cur {
-                Some(k) if mark => k.face,
+                Some(k) if mark => {
+                    spaced = twin;
+                    k.face
+                }
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
-                _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
-                Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
+                _ if primary.covers(dc) || c.is_control() || c == SOFT_HYPHEN => None,
+                // A space the font lacks (an old Arial has no narrow no-break space) is as wide as
+                // in the font's metric twin, when one with it is installed. With none it stays in
+                // the font, as wide as the shaper makes a space the font has no glyph for.
+                _ if c.is_whitespace() => {
+                    let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
+                    spaced = true;
+                    space_twin(primary.get(), dc, bold, italic)
+                }
+                Some(SegKey { face: Some(face), .. }) if !twin && face.covers(dc) => Some(face),
                 _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
                 _ => {
                     let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
                     wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
                 }
             };
+            twin = spaced;
             let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
             match cur {
                 Some(previous) if previous.same(&key) => {}
@@ -550,7 +565,22 @@ impl<'a> Builder<'a> {
             ranges.extend((c.g0..c.g1).map(|_| a..b));
         }
         let g0 = first.g0;
-        let style = first.style;
+        // The cluster is drawn in one face: that of its first text. A space taken from another
+        // face (the font's metric twin, for a space the font lacks) keeps its width and draws
+        // nothing, so its glyph becomes the cluster's face's own space: the twin's glyph number
+        // would name some other glyph there, or none.
+        let space = |c: &Cluster| {
+            text.get(c.start.saturating_sub(start)..c.end.saturating_sub(start)).is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace))
+        };
+        let style = added.iter().find(|c| !space(c)).unwrap_or(first).style;
+        if let Some(face) = self.styles.get(style as usize).map(|s| s.face).filter(|f| f.covers(' ')) {
+            let blank = face.glyph_for(' ');
+            for c in added.iter().filter(|c| space(c)) {
+                if self.styles.get(c.style as usize).is_some_and(|s| s.face != face) {
+                    self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten().for_each(|g| g.gid = blank);
+                }
+            }
+        }
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
@@ -690,6 +720,22 @@ pub(super) fn overstrike(
     };
     let stroke = (s * 0.06).clamp(0.4, 4.0);
     enclosures.push((k, Enclosed { kind, x: (adv - bw) / 2.0, top: cy + bh / 2.0, w: bw, h: bh, stroke }));
+}
+
+/// A face that measures like `face` and has the space `c`, which `face` lacks
+/// ([`wordcraft_fonts::word::twin_with`]).
+fn space_twin(face: &wordcraft_fonts::FontFace, c: char, bold: bool, italic: bool) -> Option<FaceRef> {
+    #[cfg(test)]
+    if let Some(groups) = TEST_TWINS.with(std::cell::Cell::get) {
+        return wordcraft_fonts::word::twin_among(groups, wordcraft_fonts::FontDb::global(), face, c, bold, italic);
+    }
+    wordcraft_fonts::word::twin_with(face, c, bold, italic)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fonts that stand in for metric twins in a test (no bundled font is another's twin).
+    pub(crate) static TEST_TWINS: std::cell::Cell<Option<&'static [&'static [&'static str]]>> = const { std::cell::Cell::new(None) };
 }
 
 impl Builder<'_> {

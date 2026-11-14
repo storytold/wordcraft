@@ -15444,3 +15444,72 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
     }
 }
+
+/// A space the font lacks is taken from the font's metric twin for its width, and for nothing
+/// else. In a field's result, one cluster drawn in one face, it becomes that face's own space
+/// glyph (the twin's glyph number names another glyph there, or none, and the PDF then lost the
+/// page's text), and the cluster keeps the face of its text also when the space comes first. A
+/// character after the space that the font lacks too still gets its own fallback face, not the
+/// twin. Bundled fonts stand in for a font and its twin: Source Sans 3 has no em space, Inter
+/// has one.
+#[test]
+fn a_space_from_the_fonts_twin_stands_in_for_nothing_else() {
+    crate::test_fonts();
+    struct Twins;
+    impl Drop for Twins {
+        fn drop(&mut self) {
+            crate::para::TEST_TWINS.with(|t| t.set(None));
+        }
+    }
+    const GROUPS: &[&[&str]] = &[&["Source Sans 3", "Inter"]];
+    crate::para::TEST_TWINS.with(|t| t.set(Some(GROUPS)));
+    let _twins = Twins;
+    const FONT: &str = "Source Sans 3";
+    const EM: char = '\u{2003}';
+    const COIN: char = '\u{20BF}';
+    let sans = wordcraft_fonts::word::resolve(FONT, false, false).face;
+    let inter = wordcraft_fonts::word::resolve("Inter", false, false).face;
+    let other = wordcraft_fonts::FontDb::global().fallback_styled(COIN, sans.id(), false, false).map(|f| wordcraft_fonts::FaceRef::of(&f));
+    assert!(
+        !sans.covers(EM) && inter.covers(EM) && !sans.covers(COIN) && inter.covers(COIN) && other.is_some_and(|f| f != inter && f != sans),
+        "the fixture fonts: no em space and no bitcoin sign in the first, both in its stand-in twin, another fallback for the sign"
+    );
+    let font = |c: &mut wordcraft_doc::CharProps| c.font = Some(FONT.into());
+    // The paragraph "ab" with a field showing `result` between the letters: the field's cluster.
+    let field = |result: &str| {
+        let mut d = Document::from_text("ab");
+        d.format_range(&Pos::body(0, 0), &Pos::body(0, 2), &font).unwrap();
+        let mut props = wordcraft_doc::CharProps::default();
+        font(&mut props);
+        let object = InlineObject::Field {
+            instr: "MERGEFIELD Amount".into(),
+            result: result.into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(1, object, &props).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let (index, ..) = para.shown.first().expect("the field shows its result");
+        let c = &para.clusters[*index];
+        let gids: Vec<u32> = para.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.gid).collect();
+        (para.styles[c.style as usize].face, gids, c.adv)
+    };
+    let digits = [sans.glyph_for('1'), sans.glyph_for('2')];
+    let (face, gids, wide) = field("1\u{2003}2");
+    let (_, _, narrow) = field("12");
+    assert_eq!((face, gids), (sans, vec![digits[0], sans.glyph_for(' '), digits[1]]), "the space is the font's own blank glyph");
+    assert!(wide - narrow > 10.0, "and as wide as the twin's em space: {wide} with it, {narrow} without");
+    let (face, gids, _) = field("\u{2003}12");
+    assert_eq!((face, gids), (sans, vec![sans.glyph_for(' '), digits[0], digits[1]]), "a result that starts with the space");
+    // In plain text the space is the twin's, and the sign after it has its own fallback.
+    const PLAIN: &str = "a\u{2003}\u{20BF}b";
+    let mut d = Document::from_text(PLAIN);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, PLAIN.len()), &font).unwrap();
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let faces: Vec<_> = para.clusters.iter().map(|c| para.styles[c.style as usize].face).collect();
+    assert_eq!(faces.get(..4), Some(&[sans, inter, other.unwrap_or(sans), sans][..]), "{faces:?}");
+}

@@ -227,12 +227,62 @@ const METRIC_TWINS: &[&[&str]] = &[
 /// The fonts that measure like `family` ([`METRIC_TWINS`]), in the order they are tried, without
 /// `family` itself.
 fn metric_twins(family: &str) -> impl Iterator<Item = &'static str> + '_ {
+    twins_in(METRIC_TWINS, family)
+}
+
+/// [`metric_twins`] among `groups`.
+fn twins_in<'a>(groups: &'a [&'a [&'static str]], family: &'a str) -> impl Iterator<Item = &'static str> + 'a {
     let f = family.trim();
-    METRIC_TWINS
+    groups
         .iter()
         .filter(move |g| g.iter().any(|t| t.eq_ignore_ascii_case(f)))
         .flat_map(|g| g.iter().copied())
         .filter(move |t| !t.eq_ignore_ascii_case(f))
+}
+
+/// How many twin lookups [`twin_with`] remembers.
+const TWIN_CACHE_MAX: usize = 1024;
+
+/// A face that measures like `face` and has `c`, for a character `face` itself lacks: the first
+/// installed metric twin of its family ([`METRIC_TWINS`]) that has the character, bold or italic
+/// as asked. Twins share their advance widths, so the character is as wide there as in the
+/// versions of the font that do have it. The Arial and Times New Roman of 2000 (the Microsoft
+/// core fonts for the web) lack the narrow no-break space U+202F, the thin space U+2009 and the
+/// figure space U+2007; today's Arial and Times New Roman draw them 0.2, 0.2 and 0.556 or 0.5 em
+/// wide, and so do Liberation Sans and Liberation Serif.
+pub fn twin_with(face: &crate::FontFace, c: char, bold: bool, italic: bool) -> Option<FaceRef> {
+    type Memo = (u64, HashMap<(u32, char, bool, bool), Option<FaceRef>>);
+    static CACHE: OnceLock<Mutex<Memo>> = OnceLock::new();
+    let db = FontDb::global();
+    let (generation, key) = (db.generation(), (face.id(), c, bold, italic));
+    let cache = CACHE.get_or_init(Default::default);
+    {
+        let mut m = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if m.0 != generation {
+            *m = (generation, HashMap::new());
+        }
+        if let Some(hit) = m.1.get(&key) {
+            return *hit;
+        }
+    }
+    let found = twin_among(METRIC_TWINS, db, face, c, bold, italic);
+    let mut m = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if m.0 == generation {
+        if m.1.len() >= TWIN_CACHE_MAX {
+            m.1.clear();
+        }
+        m.1.insert(key, found);
+    }
+    found
+}
+
+/// [`twin_with`] among `groups` of fonts that measure alike, uncached.
+pub fn twin_among(groups: &[&[&'static str]], db: &FontDb, face: &crate::FontFace, c: char, bold: bool, italic: bool) -> Option<FaceRef> {
+    twins_in(groups, charset_base_family(&face.family))
+        .filter(|twin| db.has_family(twin))
+        .map(|twin| (twin, resolve(twin, bold, italic).face))
+        .find(|(twin, f)| f.named(twin) && f.id() != face.id() && f.covers(c))
+        .map(|(_, f)| f)
 }
 
 /// Whether `substitute` was made to measure like `family` ([`METRIC_TWINS`]), so text drawn in it
@@ -814,6 +864,31 @@ mod tests {
                 assert!(metric_compatible(family, &r.face.family), "{family} → {}", r.face.family);
             }
         }
+    }
+
+    /// A character a font lacks comes from the first installed font made to measure like it that
+    /// has the character. Bundled fonts stand in for a font and its twins here: Source Sans 3 has
+    /// no em space, Source Serif 4 has one.
+    #[test]
+    fn a_character_a_font_lacks_comes_from_its_installed_twin() {
+        let db = FontDb::global();
+        let groups: &[&[&str]] = &[&["Source Sans 3", "No Such Twin", "Source Serif 4"]];
+        let (em, ideographic) = ('\u{2003}', '\u{3000}');
+        let sans = db.face("Source Sans 3", "Regular");
+        assert!(sans.named("Source Sans 3") && !sans.covers(em), "the stand-in lacks the em space");
+        let twin = twin_among(groups, db, &sans, em, false, false).expect("the twin has the em space");
+        assert!(twin.named("Source Serif 4") && twin.covers(em) && twin.weight < 600.0 && !twin.italic, "{} {}", twin.family, twin.style);
+        // Bold and italic text takes the twin's bold and italic faces.
+        let bold = twin_among(groups, db, &db.face("Source Sans 3", "Bold"), em, true, false).expect("the bold twin");
+        assert!(bold.named("Source Serif 4") && bold.weight >= 600.0, "{} {}", bold.family, bold.style);
+        let italic = twin_among(groups, db, &db.face("Source Sans 3", "Italic"), em, false, true).expect("the italic twin");
+        assert!(italic.named("Source Serif 4") && italic.italic, "{} {}", italic.family, italic.style);
+        // No twin has the character, the twin isn't installed, or the font has no twins: none.
+        assert!(twin_among(groups, db, &sans, ideographic, false, false).is_none());
+        assert!(twin_among(&[&["Source Sans 3", "No Such Twin"]], db, &sans, em, false, false).is_none());
+        assert!(twin_among(groups, db, &db.face("Inter", "Regular"), ideographic, false, false).is_none());
+        // The real list: no bundled font is anyone's twin.
+        assert!(twin_with(&sans, em, false, false).is_none());
     }
 
     #[test]
