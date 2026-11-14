@@ -1995,6 +1995,61 @@ fn break_only_list_has_no_label() {
     }
 }
 
+/// In a table cell Word ignores page and column breaks: the text goes on in the same line. And
+/// from Word 2013's layout on a list paragraph that opens with one is shown without its label
+/// there: nothing is drawn and the line is no taller for it, but the text starts where it would
+/// after the label and the count goes on (#6610). Measured in Word for Windows 16.0.20625: an
+/// 8 pt heading numbered in 10 pt has its baseline at 83.7 pt and no number after a page or a
+/// column break, at 85.5 pt with its number without one, after a space and a break, and in
+/// compatibility mode 14; the item after it is numbered 3 either way.
+#[test]
+fn a_list_paragraph_that_opens_with_a_break_in_a_cell_shows_no_label() {
+    crate::test_fonts();
+    use wordcraft_doc::para::{COLUMN_BREAK, PAGE_BREAK};
+    // The paragraphs of a cell holding `texts` as one numbered list whose labels are three
+    // times the text's size: each one's label (its text and glyph count), where its text
+    // starts, its lines and its first line's height.
+    let cell = |texts: &[String], mode: u32| {
+        let mut d = Document::from_text("After");
+        d.settings.compat_mode = mode;
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let paras = numbered(&mut d, &texts, ParaProps::default());
+        Arc::make_mut(&mut d.numbering).abstracts[0].levels[0].chr.size = Some(36.0);
+        let mut table = Table::new(1, 1, 400.0);
+        table.rows[0].cells[0].blocks = paras.into_iter().map(wordcraft_doc::para_block).collect();
+        d.insert_block(StoryRef::Body, &Path::top(0), Block::Table(table)).unwrap();
+        let l = lay(&d);
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| {
+                let Placed::Lines { para, x, path, .. } = i else { return None };
+                let label = para.label.as_ref().map(|lb| (lb.text.clone(), lb.glyphs.len()))?;
+                (path.0.len() > 1).then(|| (label, x + para.lines[0].left, para.lines.len(), para.lines[0].height))
+            })
+            .collect::<Vec<_>>()
+    };
+    let item = |lead: &str| vec!["Alpha".to_string(), format!("{lead}Beta"), "Gamma".to_string()];
+    let plain = cell(&item(""), 15);
+    assert_eq!(plain.iter().map(|p| p.0.0.as_str()).collect::<Vec<_>>(), ["1.", "2.", "3."]);
+    for br in [PAGE_BREAK, COLUMN_BREAK] {
+        let got = cell(&item(&br.to_string()), 15);
+        let [first, second, third] = &got[..] else { panic!("three paragraphs: {got:?}") };
+        assert_eq!((second.0.0.as_str(), second.0.1), ("", 0), "{br:?}: the label is not drawn");
+        assert_eq!((first.0.0.as_str(), third.0.0.as_str()), ("1.", "3."), "{br:?}: the count goes on");
+        assert!((second.1 - plain[1].1).abs() < 0.01, "{br:?}: the text starts at {}, with its label at {}", second.1, plain[1].1);
+        assert_eq!(second.2, 1, "{br:?}: the break is ignored in a cell, the text stays on one line");
+        assert!(second.3 < first.3 - 5.0, "{br:?}: the line is no taller for the label: {} against {}", second.3, first.3);
+    }
+    // A break that is not the first thing in the paragraph hides nothing, and neither does one
+    // in the layout before Word 2013.
+    assert_eq!(cell(&item(&format!(" {PAGE_BREAK}")), 15)[1].0.0, "2.");
+    assert_eq!(cell(&item(&PAGE_BREAK.to_string()), 14)[1].0.0, "2.");
+    // A break in the middle of a cell's text doesn't break its line either.
+    let mid = cell(&["Alpha".to_string(), format!("Be{COLUMN_BREAK}ta")], 15);
+    assert_eq!((mid[1].0.0.as_str(), mid[1].2), ("2.", 1));
+}
+
 #[test]
 fn empty_list_paragraph_with_a_hidden_mark_counts_but_shows_nothing() {
     // Word (#3982): a list item whose paragraph mark is hidden, and whose text is empty or hidden
