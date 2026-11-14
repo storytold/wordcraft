@@ -59,5 +59,5 @@ rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 [dev-dependencies]
 wordcraft-doc = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
-zip = { workspace = true }
+craft-zip = { workspace = true }
 cfb = { workspace = true }

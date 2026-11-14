@@ -46,13 +46,36 @@ impl Session {
     /// A command that changes nothing is not an edit: it adds no undo step, marks no
     /// unsaved changes, forces no relayout and leaves the redo stack alone (#23).
     fn unchanged(&self, doc: &Document, sel: &Selection, column: &Option<ColumnBlock>, pending: &Option<CharProps>) -> bool {
-        doc.same_content(&self.doc) && *sel == self.sel && *column == self.column && *pending == self.pending
+        doc.same_content(&self.doc)
+            && *sel == self.sel
+            && *column == self.column
+            && *pending == self.pending
+            && !self.md_source.as_ref().is_some_and(|src| src.is_pending())
+    }
+
+    /// A navigated style change is for the Accept or Reject that follows: a command that edits
+    /// or moves the selection forgets it.
+    fn forget_review_style(&mut self, id: &str, mutates: bool) {
+        if (mutates && !matches!(id, "review.accept" | "review.reject")) || id.starts_with("caret.") || id.starts_with("select.") {
+            self.review_style = None;
+        }
     }
 
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        if self.md_source.is_some()
+            && let Some(mutates) = self.registry.get(id).map(|spec| spec.mutates)
+        {
+            crate::cmd::md_source::before_command(self, id, mutates)?;
+        }
+        self.run_command(id, params)
+    }
+
+    /// Dispatches `id` through the command registry with transactional rollback on failure,
+    /// tracking history, undo checkpoints, and IME outcomes.
+    fn run_command(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
         // The document the command starts in, and the first id a document it opens can have.
         let home = self.document_id;
         let mark = document_id_mark();
@@ -71,6 +94,7 @@ impl Session {
         let ime_text_join = self.ime_text_join.take();
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
+        self.forget_review_style(id, spec.mutates);
         let join = join
             || (equation_join && matches!(id, "equation.type" | "equation.backspace"))
             || (id == "text.insert" && ime_text_join.as_ref().is_some_and(|sel| sel == &self.sel));
@@ -160,7 +184,7 @@ impl Session {
         // Whether this command pushed an undo step (a no-op command's step is dropped below,
         // leaving its undo group without one).
         let mut pushed = false;
-        if spec.mutates {
+        if spec.mutates && spec.id != "view.markdownSourceText" {
             let label = if typing { "Typing" } else { spec.label };
             // A joined command merges into its group's step; a group whose first command
             // changed nothing has none, so the next command in it starts one (#4001).
