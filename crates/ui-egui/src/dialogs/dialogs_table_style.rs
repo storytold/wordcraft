@@ -288,6 +288,7 @@ fn edge_glyph(ui: &mut Ui, edges: &str) {
 fn align_button(ui: &mut Ui, (v, h): (VAlign, Align), on: bool, tip: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tip));
     let resp = resp.on_hover_text(tip);
     let p = ui.painter_at(r);
     let bg = if on {
@@ -660,6 +661,42 @@ mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
     use wordcraft_engine::Session;
+
+    /// Alignment choices expose their names and current selection, and can be toggled.
+    #[test]
+    fn alignment_buttons_expose_names_selection_and_clicks() {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::kittest::NodeT;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(200.0, 120.0)).build_ui_state(
+            |ui, selected: &mut Option<usize>| {
+                for (i, align, label) in
+                    [(0, (VAlign::Top, Align::Left), "Align Top Left"), (1, (VAlign::Bottom, Align::Right), "Align Bottom Right")]
+                {
+                    let on = *selected == Some(i);
+                    if align_button(ui, align, on, label).clicked() {
+                        *selected = if on { None } else { Some(i) };
+                    }
+                }
+                ui.add_enabled_ui(false, |ui| {
+                    align_button(ui, (VAlign::Center, Align::Center), false, "Align Center");
+                });
+            },
+            Some(0usize),
+        );
+        h.run_steps(2);
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Top Left").accesskit_node().toggled(), Some(Toggled::True));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Bottom Right").accesskit_node().toggled(), Some(Toggled::False));
+        assert!(h.get_by_role_and_label(Role::Button, "Align Center").accesskit_node().is_disabled());
+        h.get_by_role_and_label(Role::Button, "Align Bottom Right").click();
+        h.run_steps(2);
+        assert_eq!(*h.state(), Some(1));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Top Left").accesskit_node().toggled(), Some(Toggled::False));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Bottom Right").accesskit_node().toggled(), Some(Toggled::True));
+        h.get_by_role_and_label(Role::Button, "Align Bottom Right").click();
+        h.run_steps(2);
+        assert_eq!(*h.state(), None);
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Bottom Right").accesskit_node().toggled(), Some(Toggled::False));
+    }
 
     fn steps(h: &mut egui_kittest::Harness<'_, WordApp>) {
         for _ in 0..4 {
