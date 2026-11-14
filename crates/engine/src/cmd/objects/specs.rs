@@ -3,7 +3,7 @@ use super::group::{add_object, group, ungroup};
 use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_placeable, has_shape,
-    has_shape_or_canvas, has_sizable, obj_size, objects_list, selected, with_float, with_obj,
+    has_shape_or_canvas, has_sizable, obj_size, objects_list, selected_or_text_box, with_float, with_obj,
 };
 use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
@@ -221,7 +221,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
             let sect = crate::cmd::page::sect(s);
-            let size = selected(s).map(|(_, o)| obj_size(&o)).unwrap_or((72.0, 72.0));
+            let size = selected_or_text_box(s).map(|(_, o)| obj_size(&o)).unwrap_or((72.0, 72.0));
             with_float(s, |f| {
                 if f.wrap == Wrap::Inline {
                     f.wrap = Wrap::Square;
@@ -243,7 +243,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrange.align", "Align", "Layout › Arrange", |s, v| {
             let h = p::str(v, "value").unwrap_or("center").to_string();
             let tw = crate::cmd::page::sect(s).text_width();
-            let w = selected(s).map(|(_, o)| obj_size(&o).0).unwrap_or(72.0);
+            let w = selected_or_text_box(s).map(|(_, o)| obj_size(&o).0).unwrap_or(72.0);
             with_float(s, |f| {
                 if f.wrap == Wrap::Inline {
                     f.wrap = Wrap::Square;

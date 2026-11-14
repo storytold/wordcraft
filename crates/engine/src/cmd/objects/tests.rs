@@ -1885,3 +1885,48 @@ fn shape_outline_and_fill_on_text_box() {
     assert_eq!(super::picture::fit_size(f32::NAN, 0.0, false), (1.0, 1.0));
     assert_eq!(super::picture::fit_size(-50.0, 0.0, false), (1.0, 1.0));
 }
+
+/// Issue #5896: `arrange.align` and `arrange.position` use the active text box's own
+/// dimensions when invoked from a typing caret inside it, matching explicit object selection.
+#[test]
+fn arrange_align_and_position_on_active_text_box() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.textBox", &json!({"text": "Sized text box"})).unwrap();
+    let caret_sel = s.sel.clone();
+    let (pos, _) = text_box_target(&s).unwrap();
+    s.run("picture.size", &json!({"width": 250.0, "height": 140.0, "lockAspect": false})).unwrap();
+
+    let float_xy = |s: &Session| {
+        let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+        let (_, _, f) = o.frame().unwrap();
+        (f.x, f.y)
+    };
+
+    for value in ["center", "right"] {
+        s.run("select.objects", &json!({"index": 0})).unwrap();
+        s.run("arrange.align", &json!({"value": "left"})).unwrap();
+        s.run("arrange.align", &json!({"value": value})).unwrap();
+        let from_selected = float_xy(&s).0;
+
+        s.sel = caret_sel.clone();
+        assert!(selected(&s).is_none(), "caret inside text box for align {value}");
+        s.run("arrange.align", &json!({"value": "left"})).unwrap();
+        s.run("arrange.align", &json!({"value": value})).unwrap();
+        let from_caret = float_xy(&s).0;
+        assert_eq!(from_caret, from_selected, "align {value} matches explicit selection");
+    }
+
+    for preset in ["middleCenter", "bottomRight"] {
+        s.run("select.objects", &json!({"index": 0})).unwrap();
+        s.run("arrange.position", &json!({"preset": "topLeft"})).unwrap();
+        s.run("arrange.position", &json!({"preset": preset})).unwrap();
+        let from_selected = float_xy(&s);
+
+        s.sel = caret_sel.clone();
+        assert!(selected(&s).is_none(), "caret inside text box for position {preset}");
+        s.run("arrange.position", &json!({"preset": "topLeft"})).unwrap();
+        s.run("arrange.position", &json!({"preset": preset})).unwrap();
+        let from_caret = float_xy(&s);
+        assert_eq!(from_caret, from_selected, "position {preset} matches explicit selection");
+    }
+}
