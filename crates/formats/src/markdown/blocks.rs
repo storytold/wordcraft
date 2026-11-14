@@ -432,6 +432,103 @@ fn delimiter_row(l: &str, keep: usize) -> Option<(Vec<Option<Align>>, usize)> {
     Some((out, count))
 }
 
+/// Bytes of raw HTML one block may hand to the HTML reader. A block longer than this is left as
+/// text, which is what every HTML block did before this was read at all: nothing is lost, and a
+/// generated file of one enormous element cannot make the reader copy it.
+const MAX_HTML_BLOCK: usize = 1 << 20;
+
+/// The longest of the tag names in [`html_block_start`] (`blockquote`, `figcaption`): a longer
+/// run of letters is no tag of CommonMark's, so a hostile `<aaaa…>` is never copied to compare.
+const MAX_HTML_TAG: usize = 10;
+
+/// Does `t` (a line without its indentation) begin an HTML block by CommonMark's start condition
+/// 6 (§4.6): `<` or `</`, one of the block-level tag names below in any case, then white space,
+/// `>`, `/>` or the end of the line.
+///
+/// `pre`, `script`, `style` and `textarea` are start condition 1 and `<!--` is condition 2;
+/// those, and the conditions starting `<?`, `<!` or `<![CDATA[`, are not read as HTML blocks, so
+/// they keep the behaviour they had before HTML blocks were understood at all. A name outside the
+/// list (`a`, `br`, `span`, …) stays inline, which is what the inline reader does with it.
+fn html_block_start(t: &str) -> bool {
+    let Some(rest) = t.strip_prefix('<') else { return false };
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    // A tag name is ASCII letters and digits, so this index is on a char boundary.
+    let end = rest.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(rest.len());
+    if end == 0 || end > MAX_HTML_TAG {
+        return false;
+    }
+    let Some(name) = rest.get(..end) else { return false };
+    let after = rest.get(end..).unwrap_or("");
+    if !(after.is_empty() || after.starts_with([' ', '\t', '>']) || after.starts_with("/>")) {
+        return false;
+    }
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "address"
+            | "article"
+            | "aside"
+            | "base"
+            | "basefont"
+            | "blockquote"
+            | "body"
+            | "caption"
+            | "center"
+            | "col"
+            | "colgroup"
+            | "dd"
+            | "details"
+            | "dialog"
+            | "dir"
+            | "div"
+            | "dl"
+            | "dt"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "frame"
+            | "frameset"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "head"
+            | "header"
+            | "hr"
+            | "html"
+            | "iframe"
+            | "legend"
+            | "li"
+            | "link"
+            | "main"
+            | "menu"
+            | "menuitem"
+            | "nav"
+            | "noframes"
+            | "ol"
+            | "optgroup"
+            | "option"
+            | "p"
+            | "param"
+            | "search"
+            | "section"
+            | "summary"
+            | "table"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "title"
+            | "tr"
+            | "track"
+            | "ul"
+    )
+}
+
 /// Does this line start a block that interrupts a paragraph?
 fn interrupts(l: &str) -> bool {
     if indent(l) >= 4 {
@@ -443,6 +540,7 @@ fn interrupts(l: &str) -> bool {
         || fence(t).is_some()
         || t.starts_with('>')
         || t.starts_with("<!--")
+        || html_block_start(t)
         || list_marker(t).is_some_and(|m| (!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or("")))
 }
 
@@ -540,6 +638,36 @@ fn parse_table(lines: &[String], i: &mut usize, t: &str, ctx: &mut BlockCtx<'_>,
     true
 }
 
+/// The HTML block starting at `lines[from]`, which runs to the line before the next blank one or
+/// to the end of the input (CommonMark's end condition for start condition 6). Its raw text goes
+/// to the HTML reader this crate already has (`crate::html`, the one the same bytes go through as
+/// a `.html` file), so Markdown holds no second HTML parser, and the blocks it gives are spliced
+/// into `out`.
+///
+/// A block over [`MAX_HTML_BLOCK`] is left as one paragraph of text instead, which is what every
+/// HTML block was before this was read at all. Its lines are still consumed, so a long run of
+/// block-level tags is scanned once rather than once per line.
+///
+/// Returns the index after the block.
+fn parse_html_block(lines: &[String], from: usize, ctx: &mut BlockCtx<'_>, out: &mut Vec<FBlock>) -> usize {
+    let rest = lines.get(from..).unwrap_or_default();
+    let end = from + rest.iter().position(|l| is_blank(l)).unwrap_or(rest.len());
+    let rows = lines.get(from..end).unwrap_or_default();
+    if rows.iter().fold(0usize, |n, l| n.saturating_add(l.len()).saturating_add(1)) <= MAX_HTML_BLOCK {
+        let blocks = crate::html::parse(&rows.join("\n")).blocks;
+        ctx.record_lines(from, blocks.len());
+        out.extend(blocks);
+    } else {
+        let inlines = parse_inlines(&join_lines(rows), &Fmt::default(), ctx.depth, ctx.refs);
+        if !inlines.is_empty() {
+            out.push(FBlock::Para(Para { inlines, ..Default::default() }));
+            ctx.record_line(from);
+        }
+    }
+    // A non-blank line starts the block, so `end` is past `from`; the `max` keeps it so.
+    end.max(from + 1)
+}
+
 /// Parse block structure.
 fn parse_blocks(lines: &[String], ctx: &mut BlockCtx<'_>) -> Vec<FBlock> {
     let mut out = Vec::new();
@@ -621,6 +749,11 @@ fn parse_blocks(lines: &[String], ctx: &mut BlockCtx<'_>) -> Vec<FBlock> {
                     break;
                 }
             }
+            continue;
+        }
+        if html_block_start(t) {
+            flush_para(&mut para, &mut para_start, &mut out, ctx);
+            i = parse_html_block(lines, i, ctx, &mut out);
             continue;
         }
         if t.starts_with('>') {

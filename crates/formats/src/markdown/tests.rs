@@ -730,6 +730,38 @@ fn html_comments_are_ignored_in_blocks_and_inlines() {
     assert_eq!(texts, ["Hello world!", "After comment."]);
 }
 
+/// #6499: a block-level tag at the start of a block opens a CommonMark HTML block (§4.6 start
+/// condition 6), which runs to the next blank line and goes to this crate's HTML reader. Before,
+/// no HTML block was understood at all: the markup fell through to the paragraph branch, so the
+/// same bytes gave a table as a `.html` file and a paragraph of tags as a `.md` one.
+#[test]
+fn a_block_level_html_tag_opens_an_html_block() {
+    let html = "<table>\n  <tr><th>Step</th><th>Owner</th></tr>\n  <tr><td>Freeze</td><td>Mira</td></tr>\n</table>";
+    let flow = parse(&format!("# Checklist\n\n{html}\n\nAfter the table."));
+    let shape: Vec<String> = flow
+        .blocks
+        .iter()
+        .map(|b| match b {
+            FBlock::Para(p) => p.text(),
+            FBlock::Table(t) => format!("table {}x{}", t.rows.len(), t.rows.first().map_or(0, Vec::len)),
+        })
+        .collect();
+    assert_eq!(shape, ["Checklist", "table 2x2", "After the table."], "{:?}", flow.blocks);
+    let [_, FBlock::Table(t), _] = flow.blocks.as_slice() else { panic!("{:?}", flow.blocks) };
+    assert_eq!(t.rows[0].iter().map(|c| (c.text(), c.header)).collect::<Vec<_>>(), [("Step".into(), true), ("Owner".into(), true)]);
+    assert_eq!(t.rows[1].iter().map(|c| (c.text(), c.header)).collect::<Vec<_>>(), [("Freeze".into(), false), ("Mira".into(), false)]);
+    // The block goes to the same reader the bytes would go through as a `.html` file.
+    assert_eq!(flow.blocks.get(1), crate::html::parse(html).blocks.first(), "the md and html readers agree");
+
+    // The conditions this leaves alone: a comment still goes, `<pre>` and `<script>` are start
+    // condition 1 and stay text, and a tag that is not block-level stays inline.
+    let text = |md: &str| parse(md).blocks.iter().map(|b| if let FBlock::Para(p) = b { p.text() } else { String::new() }).collect::<Vec<_>>();
+    assert_eq!(text("<!-- gone -->\n\nkept"), ["kept"]);
+    assert_eq!(text("<pre>as text</pre>"), ["<pre>as text</pre>"]);
+    assert_eq!(text("<script>a < b</script>"), ["<script>a < b</script>"]);
+    assert_eq!(text("<span>inline</span> tail"), ["<span>inline</span> tail"]);
+}
+
 #[test]
 fn a_paragraph_of_delimiters_parses_in_linear_time() {
     // #3714: each delimiter's literal looked back for the text before it, to the start of
