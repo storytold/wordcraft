@@ -20,6 +20,8 @@ pub(crate) enum BoxContext<'a> {
         right: f32,
         /// False for a turned text frame: its x axis becomes page y after rotation.
         clamp: bool,
+        /// The width of the line at the cell's left edge (0 without one).
+        left_line: f32,
     },
 }
 
@@ -39,7 +41,15 @@ impl<'a> BoxInput<'a> {
     }
 
     pub(crate) fn cell(story: StoryRef, blocks: &'a Blocks, prefix: &'a [u32], width: f32, cell: Option<&'a para::CellText>, depth: usize) -> Self {
-        Self { story, blocks, prefix, width, context: BoxContext::Cell { text: cell, left: 0.0, right: width, clamp: false }, depth, frame: None }
+        Self {
+            story,
+            blocks,
+            prefix,
+            width,
+            context: BoxContext::Cell { text: cell, left: 0.0, right: width, clamp: false, left_line: 0.0 },
+            depth,
+            frame: None,
+        }
     }
 }
 
@@ -67,6 +77,9 @@ struct TableBlockContext<'ctx, 'state, 'doc> {
     width: f32,
     frame: Option<PageFrame<'state>>,
     in_cell: bool,
+    /// The left edge of the cell the table is in, from the cell's text, and the width of the
+    /// line there (see [`BoxContext::Cell`]).
+    cell_left: Option<(f32, f32)>,
     depth: usize,
     y: &'state mut f32,
     items: &'state mut Vec<Placed>,
@@ -135,6 +148,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
         width,
         frame,
         in_cell,
+        cell_left,
         depth,
         y,
         items,
@@ -169,7 +183,10 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
             }
             (rect.x, rect.y)
         }
-        None => (layout.x, below(exclusions, *y, layout.x, layout.x + layout.width)),
+        None => {
+            let x = nested_x_in_text_box(ctx, story, t, cell_left, layout.x);
+            (x, below(exclusions, *y, x, x + layout.width))
+        }
     };
     let mut row_y = ty;
     for row in &layout.rows {
@@ -188,6 +205,24 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     true
 }
 
+/// Where a table in a cell starts, `x` being where its own layout puts it from the cell's text.
+/// In a text box, from Word 2013's layout on, Word measures such a table's indent from the
+/// cell's edge and not from its text: the table's edge sits the indent (never less than
+/// nothing) and half of each of the two lines, the cell's and its own, after the cell's edge.
+/// Measured in Word for Windows with cell margins of 0, 5.4 and 10 pt, lines of 0, 0.5 and
+/// 3 pt and tables three deep; in the body the same tables keep to the cell's text.
+fn nested_x_in_text_box(ctx: &Ctx, story: StoryRef, t: &wordcraft_doc::Table, cell_left: Option<(f32, f32)>, x: f32) -> f32 {
+    let Some((edge, line)) = cell_left else { return x };
+    let in_text_box = matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
+    let start_aligned =
+        !t.props.bidi_visual && !matches!(t.props.align, Some(wordcraft_doc::props::Align::Center | wordcraft_doc::props::Align::Right));
+    if !in_text_box || !start_aligned || ctx.doc.settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT {
+        return x;
+    }
+    let indent = t.props.indent.filter(|i| i.is_finite()).unwrap_or(0.0);
+    edge + line / 2.0 + indent.max(0.0) + (x - indent)
+}
+
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
 /// headers, footers, notes, text boxes. Returns items relative to (0, 0) and the height. `frame`
 /// says where the box sits on its page, for floating objects positioned relative to the page or
@@ -198,9 +233,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
     let empty_cell = para::CellText::default();
-    let (in_cell, table, cell_edges) = match context {
-        BoxContext::Other => (false, None, None),
-        BoxContext::Cell { text, left, right, clamp } => (true, Some(text.unwrap_or(&empty_cell)), clamp.then_some((left, right))),
+    let (in_cell, table, cell_edges, cell_line) = match context {
+        BoxContext::Other => (false, None, None, 0.0),
+        BoxContext::Cell { text, left, right, clamp, left_line } => {
+            (true, Some(text.unwrap_or(&empty_cell)), clamp.then_some((left, right)), left_line)
+        }
     };
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =
@@ -387,6 +424,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     width,
                     frame,
                     in_cell,
+                    cell_left: cell_edges.map(|(left, _)| (left, cell_line)),
                     depth,
                     y: &mut y,
                     items: &mut items,
