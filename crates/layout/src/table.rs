@@ -1538,8 +1538,9 @@ fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth
             // (its own, else its grid's when it has preferred widths at all). One whose width
             // comes from its columns is narrowed to the cell, as far as its columns' longest
             // words, and doesn't widen the cell before that; with room to spare it is as wide as
-            // layout makes it: its cells' widths, a column narrower than its longest word as wide
-            // as the word, whatever its saved grid says and however long its text.
+            // layout makes it: the widths its columns ask for (its cells', else its grid's), a
+            // column narrower than its longest word as wide as the word, however long its text,
+            // and what it takes beside its columns (its indent and the halves of its outer lines).
             Block::Table(nt) if depth < 8 => {
                 let grid = if is_automatic(nt) { 0.0 } else { nt.grid.iter().filter(|w| w.is_finite()).map(|w| w.max(0.0)).sum() };
                 let width = nt.props.width.filter(|w| w.is_finite()).unwrap_or(grid).clamp(0.0, UNBOUNDED);
@@ -1549,14 +1550,16 @@ fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth
                     let style = table_style(ctx, nt);
                     let by_columns = nt.props.width.is_none() && nt.props.width_pct.is_none() && !nt.props.fixed && !is_automatic(nt);
                     let own = if by_columns { cell_widths(nt, grid_cols(nt).max(1)) } else { None };
-                    let weights = own.clone().unwrap_or_else(|| preferred_grid(nt, width));
+                    let weights = own.unwrap_or_else(|| preferred_grid(nt, width));
                     let cols = column_content(ctx, nt, style.as_ref(), depth + 1, &weights).unwrap_or_default();
                     let (l, h) = cols.iter().fold((0.0, 0.0), |(l, h), c| (l + c.0, h + c.1));
                     if by_columns {
                         let out = outside(ctx, nt, default_margins(nt, style.as_ref()), &table_borders(nt, style.as_ref()));
                         let word = |i: usize| cols.get(i).map_or(0.0, |c: &(f32, f32)| if c.0.is_finite() { c.0 } else { 0.0 });
-                        let wide = own.map_or(width.max(h), |own| own.iter().enumerate().map(|(i, w)| w.max(word(i))).sum::<f32>() + out);
-                        ((l + out).max(0.0), wide.max(0.0))
+                        // Cells that give percentages share the grid's total out instead.
+                        let shares = nt.rows.iter().any(|r| r.cells.iter().any(|c| c.props.width_pct.is_some()));
+                        let wide = if shares { width.max(h) } else { weights.iter().enumerate().map(|(i, w)| w.max(word(i))).sum() };
+                        ((l + out).max(0.0), (wide + out).max(0.0))
                     } else {
                         (width.max(l), width.max(h))
                     }

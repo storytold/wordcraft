@@ -8753,6 +8753,59 @@ fn a_cell_without_a_width_is_as_wide_as_the_table_in_it_asks_by_its_cells() {
     assert!((outer_cell - inner.iter().sum::<f32>() - around).abs() < 0.05, "a long word: the cell is {outer_cell} pt wide around {inner:?}");
 }
 
+/// A cell that gives no width makes room for all the table in it takes: its indent beside its
+/// columns too, and its columns whether their widths come from its cells or, where a column has
+/// no cell with a width, from its grid (#6604). Measured on Word around cells of 50, 60 and 200
+/// pt indented by 20 pt: the cell is 341.35 pt wide and the columns keep their widths. With a
+/// first cell that gives no width the other two keep 60.00 and 200.09 pt, indented or not, and a
+/// word in the first makes it 95.76 pt wide in a cell of 367.15 pt; before, the table was
+/// narrowed by its indent.
+#[test]
+fn a_cell_without_a_width_makes_room_for_the_indent_of_the_table_in_it() {
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let widths = |first: Option<f32>, word: &str, indent: Option<f32>| {
+        let mut inner = Table::new(1, 3, 310.0);
+        inner.grid = vec![50.0, 60.0, 200.0];
+        inner.props.indent = indent;
+        for ((c, w), s) in inner.rows[0].cells.iter_mut().zip([first, Some(60.0), Some(200.0)]).zip([word, "A", "A"]) {
+            c.props.width = w;
+            c.blocks = vec![text(s)];
+        }
+        let mut outer = Table::new(1, 1, 150.0);
+        outer.rows[0].cells[0].props.width = None;
+        outer.rows[0].cells[0].blocks = vec![Arc::new(Block::Table(inner)), text("")];
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+        let l = lay(&d);
+        let cells = |depth: usize| -> Vec<wordcraft_geom::Rect> {
+            l.pages[0]
+                .items
+                .iter()
+                .filter_map(|i| if let Placed::Cell { rect, table, .. } = i { (table.0.len() == depth).then_some(*rect) } else { None })
+                .collect()
+        };
+        let (outer_cells, inner_cells) = (cells(1), cells(4));
+        let ([outer_cell], [a, b, c]) = (&outer_cells[..], &inner_cells[..]) else { panic!("cells missing: {outer_cells:?} {inner_cells:?}") };
+        (outer_cell.w, a.x - outer_cell.x, [a.w, b.w, c.w])
+    };
+    // The cell's margins (5.4 pt a side) and the halves of the nested table's outer lines.
+    let around = 2.0 * 5.4 + 0.5;
+    for (what, first, word, indent) in [
+        ("cells' widths, indented", Some(50.0), "A", 20.0),
+        ("a column without a cell width", None, "A", 0.0),
+        ("a column without a cell width, indented", None, "A", 20.0),
+        ("a long word in a column without a cell width", None, "WWWWWWWWWWWW", 0.0),
+    ] {
+        let (outer_cell, start, inner) = widths(first, word, (indent > 0.0).then_some(indent));
+        assert!((inner[1] - 60.0).abs() < 0.02 && (inner[2] - 200.0).abs() < 0.02, "{what}: the nested columns are {inner:?}");
+        assert!((start - 5.4 - indent).abs() < 0.3, "{what}: the nested table starts {start} pt into the cell");
+        assert!((outer_cell - inner.iter().sum::<f32>() - indent - around).abs() < 0.05, "{what}: the cell is {outer_cell} pt wide around {inner:?}");
+        if first.is_some() {
+            assert!((inner[0] - 50.0).abs() < 0.02, "{what}: the nested columns are {inner:?}");
+        }
+    }
+}
+
 /// A nested table whose width comes from its columns is narrowed to the cell it is in and
 /// doesn't widen that cell's column (#6604). Measured on Word: cells of 100 and 200 pt in a
 /// column of 240.77 pt come out 75.74 and 153.75 pt wide, and the outer columns stay equal.
