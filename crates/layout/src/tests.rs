@@ -15444,3 +15444,69 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
     }
 }
+
+/// #6567: when a wrapping float (such as a page-tall `wrapTopAndBottom` frame) pushes its anchor
+/// paragraph's first line to the bottom of the page, sibling paragraph-relative floats with
+/// negative vertical offsets are measured from the displaced paragraph line rather than placed
+/// above the page from the pre-wrap origin.
+#[test]
+fn negative_offset_floats_in_a_paragraph_pushed_down_by_a_wrapping_float_stay_on_the_page() {
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap};
+    let mut doc = Document::from_text("");
+    doc.last_section.page_w = 595.3;
+    doc.last_section.page_h = 841.9;
+    let mut para = Paragraph::new();
+    let title = Float {
+        wrap: Wrap::InFrontOfText,
+        h_rel: Anchor::Margin,
+        h_align: Some(FloatAlign::Center),
+        v_rel: Anchor::Paragraph,
+        y: -652.55,
+        ..Default::default()
+    };
+    let row = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 36.0, y: -460.75, ..Default::default() };
+    let frame = Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: -43.11, ..Default::default() };
+    para.insert_object(para.len(), rect_shape(378.5, 105.75, title), &Default::default()).unwrap();
+    para.insert_object(para.len(), rect_shape(194.55, 38.45, row), &Default::default()).unwrap();
+    para.insert_object(para.len(), rect_shape(556.46, 802.52, frame), &Default::default()).unwrap();
+    doc.body = vec![wordcraft_doc::para_block(para)];
+
+    let l = lay(&doc);
+    assert_eq!(l.pages.len(), 1);
+    let placed = shapes(&l.pages[0].items);
+    assert_eq!(placed.len(), 3, "{placed:?}");
+    let frame_rect = placed.iter().find(|r| (r.h - 802.52).abs() < 0.1).unwrap();
+    let title_rect = placed.iter().find(|r| (r.h - 105.75).abs() < 0.1).unwrap();
+    let row_rect = placed.iter().find(|r| (r.h - 38.45).abs() < 0.1).unwrap();
+    let line_top = first_line_top(&l.pages[0].items);
+    assert!((frame_rect.y - (72.0 - 43.11)).abs() < 0.5, "frame stays at the top of the page: {frame_rect:?}");
+    assert!((title_rect.y - (line_top - 652.55)).abs() < 0.5, "title measured from displaced line {line_top}: {title_rect:?}");
+    assert!((row_rect.y - (line_top - 460.75)).abs() < 0.5, "row measured from displaced line {line_top}: {row_rect:?}");
+    assert!(title_rect.y > frame_rect.y && row_rect.bottom() < frame_rect.bottom(), "{placed:?}");
+}
+
+/// #6567 review: a wrapping float above its paragraph that would land on the first line when
+/// placed from it again isn't moved there: that line was laid out without it in the way.
+#[test]
+fn a_wrapping_float_isnt_moved_onto_a_first_line_laid_out_without_it() {
+    crate::test_fonts();
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut doc = Document::from_text("Words in the first line of the paragraph.");
+    let frame = Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    let square = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: -10.0, ..Default::default() };
+    doc.insert_object(&Pos::body(0, 0), rect_shape(150.0, 50.0, square), &Default::default()).unwrap();
+    doc.insert_object(&Pos::body(0, 0), rect_shape(200.0, 100.0, frame), &Default::default()).unwrap();
+    let l = lay(&doc);
+    let items = &l.pages[0].items;
+    let square = shapes(items).into_iter().find(|r| (r.h - 50.0).abs() < 0.1).unwrap();
+    let (x, y, height) = items
+        .iter()
+        .find_map(|i| match i {
+            Placed::Lines { x, y, para, story: StoryRef::Body, .. } => para.lines.first().map(|l| (*x + l.left, *y, l.height)),
+            _ => None,
+        })
+        .unwrap();
+    assert!(y > 72.0 + 99.0, "the frame pushes the first line down: {y}");
+    let overlaps = square.y < y + height && square.bottom() > y && square.x < x + 1.0 && square.right() > x;
+    assert!(!overlaps, "the float {square:?} covers the first line's text at ({x}, {y})");
+}
