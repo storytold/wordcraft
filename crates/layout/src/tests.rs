@@ -8428,6 +8428,88 @@ fn autofit_handles_spanning_cells_long_words_and_empty_tables() {
     assert!(x > 72.0 + 200.0, "the second 50% column starts at {x}");
 }
 
+/// A cell set not to wrap its text (`w:noWrap`: Table Properties, Cell, Options, Wrap text off)
+/// is one unbreakable piece when the columns are sized, unless its preferred width is a fixed
+/// one or the table's layout is fixed. Measured in Word for Windows (16.0.20625) with six
+/// columns given as percentages (132.1, 104.7, 68.3, 50.0, 59.2 and 67.2 pt of a 481.5 pt table)
+/// and a 165 pt text in the last one: set not to wrap, the column is 175.1 pt wide (the text and
+/// the cell's margins) and each of the other five gives up the same 21.6 pt. With that text in
+/// columns 3 and 6, columns 4 and 5 stop at their own text's width (22.8 pt) and the first two
+/// give up 75.6 pt each. With the cell's width given in points, or in a table with fixed
+/// layout, the text wraps and the columns keep their widths. WordCraft read the setting and
+/// did not use it.
+#[test]
+fn a_cell_set_not_to_wrap_is_sized_as_one_unbreakable_piece() {
+    crate::test_fonts();
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    const LONG: &str = "Alpha bravo charlie delta echo foxtrot";
+    // Three columns, each a third of a 300 pt table: where each column's text starts, and how
+    // many lines the first and the third column's text take.
+    let columns = |setup: &dyn Fn(&mut Table)| {
+        let mut t = Table::new(1, 3, 300.0);
+        for (c, s) in t.rows[0].cells.iter_mut().zip(["a", "b", LONG]) {
+            c.props.width = None;
+            c.props.width_pct = Some(100.0 / 3.0);
+            c.blocks = vec![text(s)];
+        }
+        setup(&mut t);
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let at = |col: u32| para_at(&l, &[0, 0, col, 0]).first().copied().expect("the cell's text");
+        ([at(0).0, at(1).0, at(2).0], [at(0).2, at(2).2])
+    };
+    let same = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.05);
+    let (plain, lines) = columns(&|_| {});
+    assert!(lines[1] > 1, "the fixture's text needs more than its column");
+    assert!((plain[1] - plain[0] - 100.0).abs() < 0.1 && (plain[2] - plain[1] - 100.0).abs() < 0.1, "{plain:?}");
+    // Set not to wrap: the text on one line, the other two columns giving up as much each.
+    let no_wrap = |t: &mut Table| t.rows[0].cells[2].props.no_wrap = true;
+    let (x, lines) = columns(&no_wrap);
+    assert_eq!(lines[1], 1, "the text wraps over {} lines", lines[1]);
+    let (first, second) = (x[1] - x[0], x[2] - x[1]);
+    assert!(first < 99.0 && (first - second).abs() < 0.1, "the other columns are {first} and {second} pt wide");
+    // The same columns as for that text with no-break spaces, which nothing can wrap.
+    let (nbsp, _) = columns(&|t| t.rows[0].cells[2].blocks = vec![text(&LONG.replace(' ', "\u{a0}"))]);
+    assert!(same(x, nbsp), "{x:?} set not to wrap, {nbsp:?} with no-break spaces");
+    // Every cell set not to wrap (measured in Word with twelve such tables): texts that fit give
+    // the same columns as the one long text set not to wrap alone; three texts too long to fit
+    // together share the table equally and wrap.
+    let all = |t: &mut Table| t.rows[0].cells.iter_mut().for_each(|c| c.props.no_wrap = true);
+    let (every, lines) = columns(&all);
+    assert!(lines == [1, 1] && same(every, x), "{every:?} with every cell set not to wrap, {x:?} with the long one");
+    let (long, lines) = columns(&|t| {
+        all(t);
+        t.rows[0].cells.iter_mut().for_each(|c| c.blocks = vec![text(LONG)]);
+    });
+    let (first, second) = (long[1] - long[0], long[2] - long[1]);
+    assert!(lines[0] > 1 && lines[1] > 1 && (first - second).abs() < 0.1, "three long texts: columns of {first} and {second} pt, {lines:?} lines");
+    // A column with a long word of its own stops at it, and the other one gives up the rest.
+    let (x, lines) = columns(&|t| {
+        no_wrap(t);
+        t.rows[0].cells[0].blocks = vec![text("Unbreakablewordofsomelength")];
+    });
+    assert_eq!(lines, [1, 1], "the long word and the text set not to wrap each keep one line");
+    assert!(x[1] - x[0] > x[2] - x[1] + 20.0, "the first column keeps {} pt for its word, the second {}", x[1] - x[0], x[2] - x[1]);
+    // A preferred width in points, or a table with fixed layout: the setting changes nothing.
+    let points = |t: &mut Table| {
+        t.rows[0].cells[2].props.width_pct = None;
+        t.rows[0].cells[2].props.width = Some(100.0);
+    };
+    let fixed = |t: &mut Table| t.props.fixed = true;
+    for (what, base) in [("a width in points", &points as &dyn Fn(&mut Table)), ("fixed layout", &fixed)] {
+        let (want, want_lines) = columns(base);
+        let (got, got_lines) = columns(&|t| {
+            base(t);
+            no_wrap(t);
+        });
+        assert!(
+            want_lines[1] > 1 && got_lines == want_lines && same(got, want),
+            "{what}: {got:?} in {got_lines:?} lines, {want:?} in {want_lines:?} without the setting"
+        );
+    }
+}
+
 #[test]
 fn an_inherited_footer_sizes_its_percentage_table_by_its_own_section() {
     crate::test_fonts();
