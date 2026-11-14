@@ -3,8 +3,6 @@
 //! headings, with or without a title, and it is saved back as an ODF table of contents. The ODT
 //! is original and synthetic, shaped like LibreOffice's.
 
-use std::io::Write;
-
 use serde_json::json;
 use wordcraft_engine::{Session, io};
 
@@ -26,13 +24,11 @@ fn odt(titled: bool) -> Vec<u8> {
         <text:h text:outline-level="3">Too deep</text:h><text:p>Last.</text:p>
         </office:text></office:body></office:document-content>"#
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 /// The text of the body's paragraphs in the TOC styles (without an untitled table's field
@@ -76,13 +72,11 @@ fn an_odt_index_updates_from_its_marks() {
         <text:p>Clay <text:alphabetical-index-mark text:string-value="kilns"/>is fired; <text:alphabetical-index-mark-start text:id="m"/>glazes<text:alphabetical-index-mark-end text:id="m"/> shine.</text:p>
         </office:text></office:body></office:document-content>"#
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let mut s = Session::new(io::open_bytes("index.odt", &z.finish().unwrap().into_inner()).unwrap());
+    let mut s = Session::new(io::open_bytes("index.odt", &z.finish().unwrap()).unwrap());
     s.run("references.updateIndex", &json!({})).unwrap();
     let text: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "")).collect();
     assert!(text.iter().any(|t| t.starts_with("glazes")), "{text:?}");
@@ -99,13 +93,11 @@ fn an_odt_bibliography_updates_from_its_citations_sources() {
         <text:bibliography text:name="B"><text:bibliography-source/><text:index-body><text:p>stale</text:p></text:index-body></text:bibliography>
         </office:text></office:body></office:document-content>"#
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let mut s = Session::new(io::open_bytes("bib.odt", &z.finish().unwrap().into_inner()).unwrap());
+    let mut s = Session::new(io::open_bytes("bib.odt", &z.finish().unwrap()).unwrap());
     s.run("references.updateIndex", &json!({})).unwrap();
     let text: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "")).collect();
     assert!(text.iter().any(|t| t.contains("Kilns and Fire")), "{text:?}");
