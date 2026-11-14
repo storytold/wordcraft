@@ -682,7 +682,14 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             row_insets = row_insets.max(insets);
             row_below = row_below.max(margins[2] + band_b);
             if ri + 1 < nrows {
-                row_edge = row_edge.max(band(borders.bottom));
+                // Where a page ends under this row Word closes the table with the border the row
+                // would have as its last one: the cell's own bottom border, else the table's.
+                // The row needs room for that one; the inside border under it is not drawn there
+                // (measured in Word for Windows: with 0.5 pt inside borders and a 3 pt border
+                // round the table, the last row on a page ends 3 pt above the margin; with inside
+                // borders alone it ends at the margin).
+                let closing = cb.bottom.or(row_borders.bottom).or(tb.bottom);
+                row_edge = row_edge.max(band(closing));
             }
             cells.push(CellBox {
                 items,
