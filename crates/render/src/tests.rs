@@ -1261,10 +1261,43 @@ fn shapes_have_paths() {
         ShapeKind::ArrowLeft,
         ShapeKind::ArrowUp,
         ShapeKind::ArrowDown,
+        ShapeKind::ArrowLeftRight,
+        ShapeKind::ArrowUpDown,
         ShapeKind::Line,
-    ] {
-        assert!(!shape_path(k, r, None).elements().is_empty());
+    ]
+    .into_iter()
+    .chain(ShapeKind::STARS)
+    {
+        assert!(!shape_path(k, r, None).elements().is_empty(), "{k:?}");
     }
+}
+
+/// #6391: each star preset is drawn with its own number of points, and a double-headed arrow
+/// with a head at each end. Both used to be drawn as the five-point star and the right arrow.
+#[test]
+fn star_and_double_arrow_paths_have_their_own_corners() {
+    let r = kurbo::Rect::new(0.0, 0.0, 80.0, 80.0);
+    // Corners of the drawn outline: the `move_to`, the `line_to`s, and no more.
+    let corners = |k| shape_path(k, r, None).elements().iter().filter(|e| matches!(e, kurbo::PathEl::MoveTo(_) | kurbo::PathEl::LineTo(_))).count();
+    for kind in ShapeKind::STARS {
+        let points = kind.star().map_or(0, |(n, _)| n as usize);
+        assert_eq!(corners(kind), 2 * points, "{kind:?} is drawn with {points} points");
+    }
+    assert!(corners(ShapeKind::Star8) > corners(ShapeKind::Star), "an eight-point star has more corners than a five-point one");
+    // Two heads, and a tip on each of the two sides the arrow points to.
+    for (kind, tips) in [(ShapeKind::ArrowLeftRight, [(0.0, 40.0), (80.0, 40.0)]), (ShapeKind::ArrowUpDown, [(40.0, 0.0), (40.0, 80.0)])] {
+        let path = shape_path(kind, r, None);
+        assert_eq!(corners(kind), 10, "{kind:?}");
+        for tip in tips {
+            let on = path.elements().iter().any(|e| match e {
+                kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => (p.x - tip.0).abs() < 0.01 && (p.y - tip.1).abs() < 0.01,
+                _ => false,
+            });
+            assert!(on, "{kind:?} has a tip at {tip:?}: {:?}", path.elements());
+        }
+    }
+    // The single right arrow is unchanged: one tip, seven corners.
+    assert_eq!(corners(ShapeKind::Arrow), 7);
 }
 
 #[test]

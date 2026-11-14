@@ -41,13 +41,15 @@ pub(crate) fn preset_kind(prst: &str) -> ShapeKind {
         "straightConnector1" => ShapeKind::StraightConnector,
         "bentConnector2" | "bentConnector3" | "bentConnector4" | "bentConnector5" => ShapeKind::ElbowConnector,
         "curvedConnector2" | "curvedConnector3" | "curvedConnector4" | "curvedConnector5" => ShapeKind::CurvedConnector,
-        "rightArrow" | "leftRightArrow" | "upDownArrow" | "notchedRightArrow" | "stripedRightArrow" => ShapeKind::Arrow,
+        "rightArrow" | "notchedRightArrow" | "stripedRightArrow" => ShapeKind::Arrow,
         "leftArrow" => ShapeKind::ArrowLeft,
         "upArrow" => ShapeKind::ArrowUp,
         "downArrow" => ShapeKind::ArrowDown,
-        "star4" | "star5" | "star6" | "star7" | "star8" | "star10" | "star12" | "star16" | "star24" | "star32" => ShapeKind::Star,
+        "leftRightArrow" => ShapeKind::ArrowLeftRight,
+        "upDownArrow" => ShapeKind::ArrowUpDown,
         "heart" => ShapeKind::Heart,
-        _ => ShapeKind::Rectangle,
+        // Each star preset keeps its own point count (`star4` … `star32`).
+        prst => ShapeKind::from_star_preset(prst).unwrap_or(ShapeKind::Rectangle),
     }
 }
 
@@ -471,12 +473,38 @@ mod tests {
     }
 
     /// #3919: Word's up, down and left block arrows were all read as the right-pointing arrow.
+    /// #6391: so were the two double-headed ones, and every star was read as the five-point star.
     #[test]
     fn block_arrows_keep_their_direction() {
         assert_eq!(preset_kind("rightArrow"), ShapeKind::Arrow);
         assert_eq!(preset_kind("leftArrow"), ShapeKind::ArrowLeft);
         assert_eq!(preset_kind("upArrow"), ShapeKind::ArrowUp);
         assert_eq!(preset_kind("downArrow"), ShapeKind::ArrowDown);
+        assert_eq!(preset_kind("leftRightArrow"), ShapeKind::ArrowLeftRight);
+        assert_eq!(preset_kind("upDownArrow"), ShapeKind::ArrowUpDown);
+        // The arrows with no shape of their own are still drawn as the nearest one.
+        assert_eq!(preset_kind("notchedRightArrow"), ShapeKind::Arrow);
+        assert_eq!(preset_kind("quadArrow"), ShapeKind::Rectangle);
+    }
+
+    /// #6391: `star4` … `star32` were all read as the five-point star.
+    #[test]
+    fn stars_keep_their_point_count() {
+        let points = |prst: &str| preset_kind(prst).star();
+        assert_eq!(points("star4"), Some((4, 0.25)));
+        assert_eq!(points("star5").map(|(n, _)| n), Some(5));
+        assert_eq!(points("star6").map(|(n, _)| n), Some(6));
+        assert_eq!(points("star7").map(|(n, _)| n), Some(7));
+        assert_eq!(points("star8"), Some((8, 0.75)));
+        assert_eq!(points("star10").map(|(n, _)| n), Some(10));
+        assert_eq!(points("star12").map(|(n, _)| n), Some(12));
+        assert_eq!(points("star16").map(|(n, _)| n), Some(16));
+        assert_eq!(points("star24").map(|(n, _)| n), Some(24));
+        assert_eq!(points("star32"), Some((32, 0.75)));
+        // Names that are not presets are still drawn as their box.
+        for prst in ["star", "star0", "star9", "star33", "star4 ", ""] {
+            assert_eq!(preset_kind(prst), ShapeKind::Rectangle, "{prst:?}");
+        }
     }
 
     #[test]
@@ -485,11 +513,18 @@ mod tests {
         assert_eq!(vml_preset_kind(12), Some(ShapeKind::Star));
         assert_eq!(vml_preset_kind(32), Some(ShapeKind::Line));
         assert_eq!(vml_preset_kind(202), Some(ShapeKind::TextBox));
-        // The nearest shape, as `preset_kind` gives it: left arrow, right triangle, four-point
-        // star, rounded callout, elbow connector, a bevel (its box).
+        // #6391: the legacy star and double-arrow numbers keep their shapes too.
+        assert_eq!(vml_preset_kind(187), Some(ShapeKind::Star4));
+        assert_eq!(vml_preset_kind(58), Some(ShapeKind::Star8));
+        assert_eq!(vml_preset_kind(59), Some(ShapeKind::Star16));
+        assert_eq!(vml_preset_kind(60), Some(ShapeKind::Star32));
+        assert_eq!(vml_preset_kind(92), Some(ShapeKind::Star24));
+        assert_eq!(vml_preset_kind(69), Some(ShapeKind::ArrowLeftRight));
+        assert_eq!(vml_preset_kind(70), Some(ShapeKind::ArrowUpDown));
+        // The nearest shape, as `preset_kind` gives it: left arrow, right triangle, rounded
+        // callout, elbow connector, a bevel (its box).
         assert_eq!(vml_preset_kind(66), Some(ShapeKind::ArrowLeft));
         assert_eq!(vml_preset_kind(6), Some(ShapeKind::RightTriangle));
-        assert_eq!(vml_preset_kind(187), Some(ShapeKind::Star));
         assert_eq!(vml_preset_kind(62), Some(ShapeKind::RoundedRectangle));
         assert_eq!(vml_preset_kind(34), Some(ShapeKind::ElbowConnector));
         assert_eq!(vml_preset_kind(84), Some(ShapeKind::Rectangle));

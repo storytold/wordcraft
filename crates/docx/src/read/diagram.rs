@@ -229,6 +229,10 @@ fn line_of(sp: &El, sppr: Option<&El>, theme: &[Rgb]) -> (Option<Rgb>, f32) {
 
 /// The preset's own [`ShapeKind`], for the presets that have one. `None` means a polygon.
 fn kind_of(prst: &str) -> Option<ShapeKind> {
+    // Each star preset has its own kind, point count and all (`star4` … `star32`).
+    if let Some(star) = ShapeKind::from_star_preset(prst) {
+        return Some(star);
+    }
     Some(match prst {
         "roundRect" => ShapeKind::RoundedRectangle,
         "ellipse" => ShapeKind::Ellipse,
@@ -238,7 +242,6 @@ fn kind_of(prst: &str) -> Option<ShapeKind> {
         // kind draws the other diagonal).
         "line" | "straightConnector1" => return None,
         "rightArrow" => ShapeKind::Arrow,
-        "star5" | "star4" | "star6" => ShapeKind::Star,
         "heart" => ShapeKind::Heart,
         "leftArrow" | "upArrow" | "downArrow" | "leftRightArrow" | "upDownArrow" | "chevron" | "homePlate" | "hexagon" | "pentagon" | "trapezoid"
         | "parallelogram" | "rtTriangle" | "pie" | "blockArc" => return None,
@@ -300,7 +303,16 @@ fn outline(prst: &str, w: f64, h: f64, geom: Option<&El>) -> Option<Poly> {
     let pts = match prst {
         "line" | "straightConnector1" => return Some((vec![(0.0, 0.0), (w, h)], false)),
         "pie" | "blockArc" => return Some(sector(prst == "blockArc", w, h, geom)),
-        "ellipse" | "heart" | "star5" | "star4" | "star6" => return None,
+        "ellipse" | "heart" => return None,
+        // Every star preset, scaled into the box: a star drawn here rather than by its kind is
+        // one that is turned or flipped, which only a polygon carries.
+        prst if ShapeKind::from_star_preset(prst).is_some() => {
+            let star = ShapeKind::from_star_preset(prst).and_then(wordcraft_doc::wrap::star_outline).unwrap_or_default();
+            if star.is_empty() {
+                return None;
+            }
+            star.into_iter().map(|(u, v)| (f64::from(u) * w, f64::from(v) * h)).collect()
+        }
         "roundRect" => return Some((rounded(w, h, lim(ss * a("adj", 0.16667), ss / 2.0)), true)),
         "triangle" => {
             let apex = lim(w * a("adj", 0.5), w);
@@ -601,6 +613,25 @@ mod tests {
         // A 100 pt square turned 45 degrees about its centre: the top-left corner moves to the
         // middle of the top edge's extension.
         assert!((x - 50.0).abs() < 0.01 && (y + 20.71).abs() < 0.01, "got {x} {y}");
+    }
+
+    /// #6391 review: a SmartArt star keeps its point count, and a turned one is drawn as a
+    /// polygon so the rotation reaches it (a shape kind alone carries no rotation).
+    #[test]
+    fn stars_keep_their_points_and_a_turned_one_is_a_rotated_path() {
+        for (prst, points) in [("star5", 5), ("star7", 7), ("star8", 8), ("star24", 24)] {
+            let out = items(&sp("", prst, ""), 100.0, 100.0);
+            let GraphicItem::Shape { kind, .. } = &out[0] else { panic!("shape: {out:?}") };
+            assert_eq!(kind.star().map(|(n, _)| n), Some(points), "{prst}");
+        }
+        // Turned half a circle: a path, with the star's corners, and its top point now at the
+        // bottom of the box.
+        let out = items(&sp(r#"rot="10800000""#, "star5", ""), 100.0, 100.0);
+        let GraphicItem::Path { segs, .. } = &out[0] else { panic!("path: {out:?}") };
+        assert_eq!(segs.len(), 11);
+        assert_eq!(segs.last(), Some(&PathSeg::Close));
+        let PathSeg::Move(x, y) = segs[0] else { panic!("move") };
+        assert!((x - 50.0).abs() < 0.01 && (y - 100.0).abs() < 0.01, "got {x} {y}");
     }
 
     #[test]

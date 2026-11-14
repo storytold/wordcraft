@@ -61,10 +61,12 @@ pub(super) fn kind_of(t: &str) -> ShapeKind {
         "left-arrow" | "leftArrow" => ShapeKind::ArrowLeft,
         "up-arrow" | "upArrow" => ShapeKind::ArrowUp,
         "down-arrow" | "downArrow" => ShapeKind::ArrowDown,
-        "star5" => ShapeKind::Star,
+        "left-right-arrow" | "leftRightArrow" => ShapeKind::ArrowLeftRight,
+        "up-down-arrow" | "upDownArrow" => ShapeKind::ArrowUpDown,
         "heart" => ShapeKind::Heart,
         "line" | "straightConnector1" => ShapeKind::Line,
-        _ => ShapeKind::Rectangle,
+        // The star presets keep their point count (`star4` … `star32`).
+        t => ShapeKind::from_star_preset(t).unwrap_or(ShapeKind::Rectangle),
     }
 }
 
@@ -122,8 +124,21 @@ pub(super) fn element_of(kind: ShapeKind) -> (&'static str, Option<&'static str>
         ShapeKind::ArrowLeft => custom("left-arrow"),
         ShapeKind::ArrowUp => custom("up-arrow"),
         ShapeKind::ArrowDown => custom("down-arrow"),
-        ShapeKind::Star => custom("star5"),
+        ShapeKind::ArrowLeftRight => custom("left-right-arrow"),
+        ShapeKind::ArrowUpDown => custom("up-down-arrow"),
         ShapeKind::Heart => custom("heart"),
+        // Each star goes out under its preset's own name, which `kind_of` reads back
+        // (`star4` … `star32`), instead of every one of them being written as `star5`.
+        ShapeKind::Star
+        | ShapeKind::Star4
+        | ShapeKind::Star6
+        | ShapeKind::Star7
+        | ShapeKind::Star8
+        | ShapeKind::Star10
+        | ShapeKind::Star12
+        | ShapeKind::Star16
+        | ShapeKind::Star24
+        | ShapeKind::Star32 => custom(kind.star_preset().unwrap_or("star5")),
         ShapeKind::Freeform => ("draw:path", None),
         ShapeKind::Rectangle | ShapeKind::TextBox => ("draw:rect", None),
     }

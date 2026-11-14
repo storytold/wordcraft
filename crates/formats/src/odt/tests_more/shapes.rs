@@ -119,7 +119,19 @@ fn every_wordcraft_shape_kind_is_written_and_read_back() {
         ArrowLeft,
         ArrowUp,
         ArrowDown,
+        // #6391: the double-headed arrows and the other stars have shapes of their own.
+        ArrowLeftRight,
+        ArrowUpDown,
         Star,
+        Star4,
+        Star6,
+        Star7,
+        Star8,
+        Star10,
+        Star12,
+        Star16,
+        Star24,
+        Star32,
         Heart,
     ];
     let mut p = Paragraph::new();
