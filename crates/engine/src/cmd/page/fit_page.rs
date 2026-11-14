@@ -101,7 +101,7 @@ fn min_blocks_font_size(
     hides: HideDeleted,
     show_hidden: bool,
 ) -> f32 {
-    use wordcraft_doc::styles::PartSet;
+    use wordcraft_doc::styles::{PartSet, TableBands};
 
     let mut min_sz = f32::INFINITY;
     for b in blocks {
@@ -109,16 +109,16 @@ fn min_blocks_font_size(
             min_sz = min_sz.min(min_para_font_size(doc, p, table_chr, hides, show_hidden));
         } else if let Some(tbl) = b.as_table() {
             let style = tbl.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
+            let bands = style.as_ref().map(|st| TableBands::new(&tbl.props.look, Some(&st.parts), tbl.rows.iter().map(|r| r.props.header)));
             let nrows = tbl.rows.len();
             let ncols = tbl.cols();
             for (ri, row) in tbl.rows.iter().enumerate() {
                 for (ci, cell) in row.cells.iter().enumerate() {
                     let mut cell_chr = wordcraft_doc::CharProps::default();
-                    if let Some(st) = &style {
-                        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+                    if let (Some(st), Some(bands)) = (&style, &bands) {
                         let g = tbl.grid_col(ri, ci);
                         let span = cell.span();
-                        let region = PartSet::of_cell(&tbl.props.look, sizes, (ri, nrows), (g, span, ncols));
+                        let region = PartSet::of_cell(bands, (ri, nrows), (g, span, ncols));
                         cell_chr.overlay(&st.chr);
                         for part in region.iter() {
                             let f = st.part(part);
@@ -184,18 +184,19 @@ fn blocks_have_explicit_breaks(
                 return true;
             }
         } else if let Some(tbl) = b.as_table() {
-            use wordcraft_doc::styles::PartSet;
+            use wordcraft_doc::styles::{PartSet, TableBands};
 
             let style = tbl.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
+
+            let bands = style.as_ref().map(|st| TableBands::new(&tbl.props.look, Some(&st.parts), tbl.rows.iter().map(|r| r.props.header)));
             let cell_para = style.as_ref().map(|st| &st.para);
             let nrows = tbl.rows.len();
             let ncols = tbl.cols();
             for (ri, row) in tbl.rows.iter().enumerate() {
                 for (ci, cell) in row.cells.iter().enumerate() {
                     let mut cell_chr = CharProps::default();
-                    if let Some(st) = &style {
-                        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
-                        let region = PartSet::of_cell(&tbl.props.look, sizes, (ri, nrows), (tbl.grid_col(ri, ci), cell.span(), ncols));
+                    if let (Some(st), Some(bands)) = (&style, &bands) {
+                        let region = PartSet::of_cell(bands, (ri, nrows), (tbl.grid_col(ri, ci), cell.span(), ncols));
                         cell_chr.overlay(&st.chr);
                         for part in region.iter() {
                             cell_chr.overlay(&st.part(part).chr);
@@ -339,7 +340,7 @@ fn doc_has_unreadable_body_font(doc: &Document, opts: &LayoutOptions) -> bool {
 
 /// Collects all effective font sizes in points across a slice of blocks.
 fn collect_blocks_font_sizes(doc: &Document, blocks: &[Arc<wordcraft_doc::Block>], table_chr: Option<&wordcraft_doc::CharProps>, out: &mut Vec<f32>) {
-    use wordcraft_doc::styles::PartSet;
+    use wordcraft_doc::styles::{PartSet, TableBands};
 
     for b in blocks {
         if let Some(p) = b.as_para() {
@@ -358,16 +359,16 @@ fn collect_blocks_font_sizes(doc: &Document, blocks: &[Arc<wordcraft_doc::Block>
             }
         } else if let Some(tbl) = b.as_table() {
             let style = tbl.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
+            let bands = style.as_ref().map(|st| TableBands::new(&tbl.props.look, Some(&st.parts), tbl.rows.iter().map(|r| r.props.header)));
             let nrows = tbl.rows.len();
             let ncols = tbl.cols();
             for (ri, row) in tbl.rows.iter().enumerate() {
                 for (ci, cell) in row.cells.iter().enumerate() {
                     let mut cell_chr = wordcraft_doc::CharProps::default();
-                    if let Some(st) = &style {
-                        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+                    if let (Some(st), Some(bands)) = (&style, &bands) {
                         let g = tbl.grid_col(ri, ci);
                         let span = cell.span();
-                        let region = PartSet::of_cell(&tbl.props.look, sizes, (ri, nrows), (g, span, ncols));
+                        let region = PartSet::of_cell(bands, (ri, nrows), (g, span, ncols));
                         cell_chr.overlay(&st.chr);
                         for part in region.iter() {
                             let f = st.part(part);
@@ -481,7 +482,7 @@ fn collect_blocks_font_locations(
     table_chr: Option<&wordcraft_doc::CharProps>,
     out: &mut BTreeMap<String, f32>,
 ) {
-    use wordcraft_doc::styles::PartSet;
+    use wordcraft_doc::styles::{PartSet, TableBands};
 
     for (bi, b) in blocks.iter().enumerate() {
         let block_prefix = format!("{prefix}/{bi}");
@@ -501,16 +502,16 @@ fn collect_blocks_font_locations(
             }
         } else if let Some(tbl) = b.as_table() {
             let style = tbl.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
+            let bands = style.as_ref().map(|st| TableBands::new(&tbl.props.look, Some(&st.parts), tbl.rows.iter().map(|r| r.props.header)));
             let nrows = tbl.rows.len();
             let ncols = tbl.cols();
             for (ri, row) in tbl.rows.iter().enumerate() {
                 for (ci, cell) in row.cells.iter().enumerate() {
                     let mut cell_chr = wordcraft_doc::CharProps::default();
-                    if let Some(st) = &style {
-                        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+                    if let (Some(st), Some(bands)) = (&style, &bands) {
                         let g = tbl.grid_col(ri, ci);
                         let span = cell.span();
-                        let region = PartSet::of_cell(&tbl.props.look, sizes, (ri, nrows), (g, span, ncols));
+                        let region = PartSet::of_cell(bands, (ri, nrows), (g, span, ncols));
                         cell_chr.overlay(&st.chr);
                         for part in region.iter() {
                             let f = st.part(part);
