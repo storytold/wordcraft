@@ -8460,10 +8460,10 @@ fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
     // When the host environment does have a real sans-serif CJK candidate available, also
     // verify that real CJK labels in a SmartArt diagram resolve consistently to a sans-serif
     // fallback face across nodes.
+    let labels = ["新建文档", "施加样式", "导出验证"];
+    let label_chars: Vec<char> = labels.iter().flat_map(|s| s.chars()).collect();
     let minor = wordcraft_fonts::word::resolve(&Document::default().settings.minor_font, false, false);
-    if db.fallback_for('新', minor.face.id()).is_some_and(|f| !f.is_serif()) && db.fallback_for('样', minor.face.id()).is_some_and(|f| !f.is_serif())
-    {
-        let labels = ["新建文档", "施加样式", "导出验证"];
+    if db.fallback_for_diagram(&label_chars, minor.face.id(), false).is_some_and(|f| !f.is_serif()) {
         let real_items = ["新建文档 \u{F0129}", "施加样式", "导出验证", "\u{F0129}"]
             .iter()
             .enumerate()
@@ -8495,6 +8495,8 @@ fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
             assert_eq!(face.family, first_family, "label {text:?} used a different font family from first node");
             assert!(!face.is_serif(), "label {text:?} rendered in serif font {}", face.family);
         }
+    } else {
+        eprintln!("skipped real CJK check: no sans-serif CJK font covers all diagram labels");
     }
 }
 

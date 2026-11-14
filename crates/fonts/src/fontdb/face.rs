@@ -482,13 +482,14 @@ const SERIF_TOKENS: &[&str] = &[
 ];
 
 /// Split a font family name into lowercased tokens along non-alphanumeric boundaries,
-/// camelCase transitions, and letter-to-digit/digit-to-letter boundaries (#5672).
+/// camelCase / acronym transitions, and letter-to-digit/digit-to-letter boundaries (#5672).
 fn font_name_tokens(name: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut prev_char: Option<char> = None;
+    let mut chars = name.chars().peekable();
 
-    for c in name.chars() {
+    while let Some(c) = chars.next() {
         if !c.is_alphanumeric() {
             if !current.is_empty() {
                 tokens.push(std::mem::take(&mut current).to_ascii_lowercase());
@@ -496,8 +497,12 @@ fn font_name_tokens(name: &str) -> Vec<String> {
             prev_char = None;
             continue;
         }
+        let next_lower = chars.peek().is_some_and(|n| n.is_lowercase());
         let is_split = if let Some(prev) = prev_char {
-            (prev.is_lowercase() && c.is_uppercase()) || (prev.is_alphabetic() && c.is_numeric()) || (prev.is_numeric() && c.is_alphabetic())
+            (prev.is_lowercase() && c.is_uppercase())
+                || (prev.is_uppercase() && c.is_uppercase() && next_lower)
+                || (prev.is_alphabetic() && c.is_numeric())
+                || (prev.is_numeric() && c.is_alphabetic())
         } else {
             false
         };
@@ -611,12 +616,17 @@ mod tests {
         assert!(!is_explicit_sans("Sunflower"));
 
         assert!(is_explicit_sans("SimHei"));
+        assert!(is_explicit_sans("STHeiti"));
+        assert!(is_explicit_sans("BIZ UDPGothic"));
+        assert!(is_explicit_sans("MS PGothic"));
         assert!(is_explicit_sans("Microsoft YaHei"));
         assert!(is_explicit_sans("WenQuanYi Zen Hei"));
         assert!(is_explicit_sans("Source Sans 3"));
 
         assert!(is_explicit_serif("SimSun"));
         assert!(is_explicit_serif("NSimSun"));
+        assert!(is_explicit_serif("BIZ UDPMincho"));
+        assert!(is_explicit_serif("MS PMincho"));
         assert!(is_explicit_serif("Shippori Mincho"));
         assert!(is_explicit_serif("Source Serif 4"));
     }

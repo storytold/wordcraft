@@ -279,12 +279,14 @@ impl FontDb {
                 if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c) && f.is_serif() == prefer_serif) {
                     continue;
                 }
-                if self.system_fallback(*c) {
+                if self.system_fallback_matching(*c, Some((exclude, prefer_serif))) {
                     let (cand, n) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
                     checked = n;
                     if let Some(f) = cand {
                         let matching = f.is_serif() == prefer_serif;
-                        base = Some(f);
+                        if matching || base.is_none() {
+                            base = Some(f);
+                        }
                         if matching {
                             break;
                         }
@@ -292,7 +294,7 @@ impl FontDb {
                 }
             }
             if base.as_ref().is_none_or(|f| f.is_serif() != prefer_serif) {
-                self.indexed_run_fallback(chars);
+                self.indexed_run_fallback_matching(chars, Some((exclude, prefer_serif)));
                 let (cand, n) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
                 checked = n;
                 if let Some(f) = cand
@@ -334,6 +336,14 @@ impl FontDb {
     /// Misses are remembered.
     #[cfg(not(target_arch = "wasm32"))]
     fn system_fallback(&self, c: char) -> bool {
+        self.system_fallback_matching(c, None)
+    }
+
+    /// Like [`Self::system_fallback`], optionally requiring the covering face to not be `exclude`
+    /// and to match `prefer_serif` (so a loaded mismatched face does not short-circuit the search
+    /// before a matching installed candidate is checked, #5672).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn system_fallback_matching(&self, c: char, style: Option<(u32, bool)>) -> bool {
         if c.is_control() || c.is_whitespace() {
             return false;
         }
@@ -343,7 +353,9 @@ impl FontDb {
                 return false;
             }
         }
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c));
+        let covered = |db: &FontDb| {
+            db.read_faces().iter().any(|f| f.covers(c) && style.is_none_or(|(exclude, prefer_serif)| f.id != exclude && f.is_serif() == prefer_serif))
+        };
         let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
         let rtl = crate::is_rtl(c) || arabic_block(c);
         let preferred = RTL_FALLBACKS.iter().filter(|_| rtl);
@@ -360,22 +372,17 @@ impl FontDb {
                 return true;
             }
         }
-        if self.indexed_fallback(c) {
+        if self.load_indexed_matching(&[c], false, style) {
             return true;
         }
-        let mut sys = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if sys.misses.len() >= SYS_MISSES_MAX {
-            sys.misses.clear();
+        if style.is_none() || !self.read_faces().iter().any(|f| f.covers(c)) {
+            let mut sys = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if sys.misses.len() >= SYS_MISSES_MAX {
+                sys.misses.clear();
+            }
+            sys.misses.insert(c);
         }
-        sys.misses.insert(c);
         false
-    }
-
-    /// Load the first cataloged font file (in path order) that maps `c`, reading each file not
-    /// yet indexed as the search reaches it. Returns whether a loaded face now covers `c`.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn indexed_fallback(&self, c: char) -> bool {
-        self.load_indexed(&[c], false)
     }
 
     /// Load the family of the first cataloged font file (in path order) that maps every char of a
@@ -383,10 +390,17 @@ impl FontDb {
     /// before the Regular.
     #[cfg(not(target_arch = "wasm32"))]
     fn indexed_run_fallback(&self, chars: &[char]) {
+        self.indexed_run_fallback_matching(chars, None);
+    }
+
+    /// Like [`Self::indexed_run_fallback`], optionally requiring a loaded face matching
+    /// `(exclude, prefer_serif)` to stop scanning (#5672).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn indexed_run_fallback_matching(&self, chars: &[char], style: Option<(u32, bool)>) {
         if !self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled || chars.iter().any(|c| c.is_control()) {
             return;
         }
-        self.load_indexed(chars, true);
+        self.load_indexed_matching(chars, true, style);
     }
 
     /// Load the cataloged font files (in path order) that map every char of `chars`, reading each
@@ -395,8 +409,12 @@ impl FontDb {
     /// yet). A collection's faces only together may map them: the search then goes on. Returns
     /// whether a loaded face now covers them all.
     #[cfg(not(target_arch = "wasm32"))]
-    fn load_indexed(&self, chars: &[char], whole_family: bool) -> bool {
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| chars.iter().all(|c| f.covers(*c)));
+    fn load_indexed_matching(&self, chars: &[char], whole_family: bool, style: Option<(u32, bool)>) -> bool {
+        let covered = |db: &FontDb| {
+            db.read_faces().iter().any(|f| {
+                style.is_none_or(|(exclude, prefer_serif)| f.id != exclude && f.is_serif() == prefer_serif) && chars.iter().all(|c| f.covers(*c))
+            })
+        };
         let cps: Vec<u32> = chars.iter().map(|c| u32::from(*c)).collect();
         let maps_all = |ranges: &[(u32, u32)]| cps.iter().all(|cp| ranges_hold(ranges, *cp));
         let mut index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
