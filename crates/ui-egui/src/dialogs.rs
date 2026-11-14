@@ -45,6 +45,7 @@ use find::{command_matches, goto_page};
 #[cfg(test)]
 use font::{apply_font, preview_size};
 use font::{east_asian_char, font_props};
+pub(crate) use font::{number_font_dialog, number_font_result, show_number_font};
 #[cfg(test)]
 use forms::custom_value_preview;
 pub use forms::{CellMarginsForm, CustomPropertiesForm, TableForm, table_grid_picker};
@@ -97,6 +98,10 @@ pub enum Dialog {
         /// alone stays as it is.
         #[serde(skip)]
         start: serde_json::Map<String, Value>,
+        /// Opened for a list's number by Define New Number Format › Font… (#2787): OK formats
+        /// no text and turns this to `Some(true)`; [`number_font_result`] reads the fields.
+        #[serde(skip)]
+        for_number: Option<bool>,
     },
     Paragraph {
         /// Right-to-left reading order (Direction in Word's Paragraph dialog).
@@ -443,6 +448,10 @@ pub enum Dialog {
     DefineList {
         form: Box<crate::dialogs_lists::ListForm>,
     },
+    /// Home › Paragraph › Numbering › Define New Number Format (#2787).
+    DefineNumber {
+        form: Box<crate::dialogs_lists::NumberForm>,
+    },
     /// Review › Tracking › Track Changes Options (#328).
     TrackOptions {
         form: Box<crate::dialogs_lists::TrackForm>,
@@ -550,6 +559,7 @@ impl Dialog {
             Dialog::Password { .. } => "password",
             Dialog::EncryptPassword { .. } => "encryptPassword",
             Dialog::DefineList { .. } => "defineList",
+            Dialog::DefineNumber { .. } => "defineNumber",
             Dialog::TrackOptions { .. } => "trackChangesOptions",
             Dialog::Review(d) => d.name(),
             Dialog::CustomizeKeyboard { .. } => "customizeKeyboard",
@@ -634,6 +644,7 @@ impl Dialog {
                     kern: kern.map(|k| k > 0.0),
                     kern_at: kern.filter(|k| *k > 0.0).unwrap_or(12.0) as f32,
                     start: serde_json::Map::new(),
+                    for_number: None,
                 };
                 let props = font_props(&d);
                 if let Dialog::Font { start, .. } = &mut d {
@@ -837,6 +848,7 @@ impl Dialog {
                 return Self::report(id, &app.session.run(id, &json!({})).unwrap_or_default());
             }
             "defineList" => Dialog::DefineList { form: Box::new(crate::dialogs_lists::ListForm::read(app)) },
+            "defineNumber" => Dialog::DefineNumber { form: Box::default() },
             "trackChangesOptions" => Dialog::TrackOptions { form: Box::new(crate::dialogs_lists::TrackForm::read(app)) },
             "customizeKeyboard" => Dialog::CustomizeKeyboard { form: Box::new(crate::dialogs_keyboard::KeyboardForm::read(app)) },
             "customizeRibbon" => {
