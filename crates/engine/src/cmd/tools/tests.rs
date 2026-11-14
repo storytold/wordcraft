@@ -9,6 +9,852 @@ fn compare_marks_changes() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "The dog sat.\nKeep this.\nNew line here.");
 }
 
+/// Helper creating a table with given cell texts.
+fn make_test_table(data: &[&[&str]]) -> wordcraft_doc::Table {
+    let rows = data.len();
+    let cols = data.first().map(|r| r.len()).unwrap_or(1);
+    let mut t = wordcraft_doc::Table::new(rows, cols, 200.0);
+    for (r, row) in data.iter().enumerate() {
+        for (c, &text) in row.iter().enumerate() {
+            t.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text(text, CharProps::default()))];
+        }
+    }
+    t
+}
+
+/// #5921: Editing a cell in a surviving table keeps the table intact with cell diffs.
+#[test]
+fn compare_table_cell_edit() {
+    let orig = make_test_table(&[&["A", "B"], &["C", "D"]]);
+    let mut rev = make_test_table(&[&["A", "B"], &["C", "D modified"]]);
+    let mut mod_p = Paragraph::with_text("D modified", CharProps::default());
+    mod_p.format(2, 10, &|c| c.bold = Some(true)).unwrap();
+    rev.rows[1].cells[1].blocks = vec![para_block(mod_p)];
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let path = std::env::temp_dir().join(format!("wc-compare-table-diff-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    let _ = s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let table = match &*s.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(table.rows[0].props.ins, None);
+    assert_eq!(table.rows[0].props.del, None);
+    assert_eq!(table.rows[1].props.ins, None);
+    assert_eq!(table.rows[1].props.del, None);
+    // Row 0 unchanged
+    let p00 = table.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(p00.plain_text(), "A");
+    assert!(p00.runs.iter().all(|r| r.props.ins.is_none() && r.props.del.is_none()));
+    // Row 1 Cell 0 unchanged
+    let p10 = table.rows[1].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(p10.plain_text(), "C");
+    assert!(p10.runs.iter().all(|r| r.props.ins.is_none() && r.props.del.is_none()));
+    // Row 1 Cell 1 edited
+    let p11 = table.rows[1].cells[1].blocks[0].as_para().unwrap();
+    let del_text: String = p11.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| p11.text[r].to_string()).collect();
+    let ins_text: String = p11.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(r, _)| p11.text[r].to_string()).collect();
+    assert_eq!(del_text, "D");
+    assert_eq!(ins_text, "D modified");
+
+    // Reject All: restores "D"
+    let mut s_reject = Session::new(s.doc.clone());
+    s_reject.run("review.rejectAll", &json!({})).unwrap();
+    let tbl_rej = match &*s_reject.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    let p_rej = tbl_rej.rows[1].cells[1].blocks[0].as_para().unwrap();
+    assert_eq!(p_rej.plain_text(), "D");
+
+    // Accept All: adopts "D modified" and preserves the revised bold formatting on "modified".
+    let mut s_accept = Session::new(s.doc.clone());
+    s_accept.run("review.acceptAll", &json!({})).unwrap();
+    let tbl_acc = match &*s_accept.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    let p_acc = tbl_acc.rows[1].cells[1].blocks[0].as_para().unwrap();
+    assert_eq!(p_acc.plain_text(), "D modified");
+    assert_eq!(p_acc.props_of_char(0).bold, None);
+    assert_eq!(p_acc.props_of_char(2).bold, Some(true));
+}
+
+/// #5921: `word_diff` retains revised character formatting across unchanged, inserted, and
+/// deleted runs instead of stamping the first original run's formatting on every token.
+#[test]
+fn compare_word_diff_retains_revised_char_formatting() {
+    use wordcraft_doc::props::Underline;
+
+    let mut orig_p = Paragraph::with_text("keep removed tail", CharProps::default());
+    orig_p.format(5, 12, &|c| c.underline = Some(Underline::Single)).unwrap();
+    let mut rev_p = Paragraph::with_text("keep added tail", CharProps::default());
+    rev_p.format(0, 4, &|c| c.italic = Some(true)).unwrap();
+    rev_p.format(5, 10, &|c| c.bold = Some(true)).unwrap();
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![para_block(orig_p)];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![para_block(rev_p)];
+
+    let path = std::env::temp_dir().join(format!("wc-compare-word-fmt-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    // Deleted "removed " keeps original underline formatting; inserted "added " keeps bold;
+    // unchanged "keep " keeps revised italic formatting.
+    assert_eq!(p.props_of_char(0).italic, Some(true));
+    let rem_off = p.text.find("removed").unwrap();
+    assert_eq!(p.props_of_char(rem_off).underline, Some(Underline::Single));
+    let add_off = p.text.find("added").unwrap();
+    assert_eq!(p.props_of_char(add_off).bold, Some(true));
+
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let acc = s.doc.body[0].as_para().unwrap();
+    assert_eq!(acc.plain_text(), "keep added tail");
+    assert_eq!(acc.props_of_char(0).italic, Some(true));
+    assert_eq!(acc.props_of_char(5).bold, Some(true));
+    assert_eq!(acc.props_of_char(11).bold, None);
+    assert_eq!(acc.props_of_char(11).italic, None);
+}
+
+/// #5921: Inserting a row into a surviving table marks the new row inserted.
+#[test]
+fn compare_table_row_insertion() {
+    let orig = make_test_table(&[&["A", "B"], &["C", "D"]]);
+    let rev = make_test_table(&[&["A", "B"], &["New1", "New2"], &["C", "D"]]);
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+    let path = std::env::temp_dir().join(format!("wc-compare-table-ins-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let tbl = match &*s.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl.rows.len(), 3);
+    assert_eq!(tbl.rows[0].props.ins, None);
+    assert!(tbl.rows[1].props.ins.is_some(), "inserted row must carry ins mark");
+    assert_eq!(tbl.rows[2].props.ins, None);
+
+    // Reject All: row 1 removed
+    let mut s_rej = Session::new(s.doc.clone());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let tbl_rej = match &*s_rej.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl_rej.rows.len(), 2);
+    assert_eq!(tbl_rej.rows[0].cells[0].blocks[0].as_para().unwrap().plain_text(), "A");
+    assert_eq!(tbl_rej.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "C");
+
+    // Accept All: row 1 kept, ins mark cleared
+    let mut s_acc = Session::new(s.doc.clone());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let tbl_acc = match &*s_acc.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl_acc.rows.len(), 3);
+    assert_eq!(tbl_acc.rows[1].props.ins, None);
+    assert_eq!(tbl_acc.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "New1");
+}
+
+/// #5921: Deleting a row from a surviving table marks the row deleted.
+#[test]
+fn compare_table_row_deletion() {
+    let orig = make_test_table(&[&["A", "B"], &["Old1", "Old2"], &["C", "D"]]);
+    let rev = make_test_table(&[&["A", "B"], &["C", "D"]]);
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+    let path = std::env::temp_dir().join(format!("wc-compare-table-del-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let tbl = match &*s.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl.rows.len(), 3);
+    assert_eq!(tbl.rows[0].props.del, None);
+    assert!(tbl.rows[1].props.del.is_some(), "deleted row must carry del mark");
+    assert_eq!(tbl.rows[2].props.del, None);
+
+    // Accept All: row 1 removed
+    let mut s_acc = Session::new(s.doc.clone());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let tbl_acc = match &*s_acc.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl_acc.rows.len(), 2);
+    assert_eq!(tbl_acc.rows[0].cells[0].blocks[0].as_para().unwrap().plain_text(), "A");
+    assert_eq!(tbl_acc.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "C");
+
+    // Reject All: row 1 kept, del mark cleared
+    let mut s_rej = Session::new(s.doc.clone());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let tbl_rej = match &*s_rej.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl_rej.rows.len(), 3);
+    assert_eq!(tbl_rej.rows[1].props.del, None);
+    assert_eq!(tbl_rej.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "Old1");
+}
+
+/// #5921: Reordering rows in a surviving table produces row-level changes.
+#[test]
+fn compare_table_rows_reordered() {
+    let orig = make_test_table(&[&["A"], &["B"]]);
+    let rev = make_test_table(&[&["B"], &["A"]]);
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+    let path = std::env::temp_dir().join(format!("wc-compare-table-reorder-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let tbl = match &*s.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert!(tbl.rows.iter().any(|r| r.props.ins.is_some() || r.props.del.is_some()));
+}
+
+/// #5921: Modifying a nested table inside a table cell diffs the nested table.
+#[test]
+fn compare_table_nested_table_edit() {
+    let mut orig_outer = make_test_table(&[&["Outer Header"], &["Placeholder"]]);
+    orig_outer.rows[1].cells[0].blocks = vec![Arc::new(Block::Table(make_test_table(&[&["Inner A"], &["Inner B"]])))];
+
+    let mut rev_outer = make_test_table(&[&["Outer Header"], &["Placeholder"]]);
+    rev_outer.rows[1].cells[0].blocks = vec![Arc::new(Block::Table(make_test_table(&[&["Inner A"], &["Inner B modified"]])))];
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig_outer))];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev_outer))];
+    let path = std::env::temp_dir().join(format!("wc-compare-table-nested-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let tbl = match &*s.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl.rows.len(), 2);
+    let inner_tbl = match &*tbl.rows[1].cells[0].blocks[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected inner table"),
+    };
+    assert_eq!(inner_tbl.rows.len(), 2);
+    let inner_p = inner_tbl.rows[1].cells[0].blocks[0].as_para().unwrap();
+    let inner_del: String = inner_p.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| inner_p.text[r].to_string()).collect();
+    let inner_ins: String = inner_p.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(r, _)| inner_p.text[r].to_string()).collect();
+    assert_eq!(inner_del, "B");
+    assert_eq!(inner_ins, "B modified");
+}
+
+/// #5921: Vertical merges are preserved when resolving row-level revisions.
+#[test]
+fn compare_table_vertical_merge_resolution() {
+    use wordcraft_doc::props::VMerge;
+
+    let mut t = make_test_table(&[&["A", "Top"], &["B", "Mid"], &["C", "Bot"]]);
+    t.rows[0].cells[1].props.vmerge = VMerge::Restart;
+    t.rows[1].cells[1].props.vmerge = VMerge::Continue;
+    t.rows[2].cells[1].props.vmerge = VMerge::Continue;
+    t.rows[0].props.del = Some(0);
+
+    let mut doc = Document::new();
+    doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Delete, "Alice", "2026-11-09T00:00:00Z"));
+    doc.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::new())];
+
+    let mut s_acc = Session::new(doc.clone());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let tbl_acc = match &*s_acc.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl_acc.rows.len(), 2);
+    // Row 1 moved up to row 0 and inherits VMerge::Restart
+    assert_eq!(tbl_acc.rows[0].cells[1].props.vmerge, VMerge::Restart);
+    assert_eq!(tbl_acc.rows[1].cells[1].props.vmerge, VMerge::Continue);
+
+    let mut s_rej = Session::new(doc);
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let tbl_rej = match &*s_rej.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl_rej.rows.len(), 3);
+    assert_eq!(tbl_rej.rows[0].props.del, None);
+    assert_eq!(tbl_rej.rows[0].cells[1].props.vmerge, VMerge::Restart);
+}
+
+/// #5921: Structurally incompatible tables or rows restore original structure on Reject All.
+#[test]
+fn compare_table_structural_incompatibility_restores_original() {
+    let orig = make_test_table(&[&["A", "B"], &["C", "D"]]);
+    let rev = make_test_table(&[&["A", "B", "E"], &["C", "D", "F"]]);
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let path = std::env::temp_dir().join(format!("wc-compare-table-incompat-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    // Reject All restores the original 2-column table
+    let mut s_rej = Session::new(s.doc.clone());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let tbl_rej = s_rej
+        .doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(tbl_rej.rows[0].cells.len(), 2);
+    assert_eq!(tbl_rej.grid.len(), 2);
+
+    // Accept All adopts the revised 3-column table
+    let mut s_acc = Session::new(s.doc.clone());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let tbl_acc = s_acc
+        .doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(tbl_acc.rows[0].cells.len(), 3);
+    assert_eq!(tbl_acc.grid.len(), 3);
+}
+
+/// #5921: Vertical merges in structurally incompatible fallback rows are preserved on Reject All.
+#[test]
+fn compare_table_vertical_merge_fallback_rows() {
+    use wordcraft_doc::props::VMerge;
+
+    let mut orig = make_test_table(&[&["A", "MergeTop"], &["B", "MergeBot"]]);
+    orig.rows[0].cells[1].props.vmerge = VMerge::Restart;
+    orig.rows[1].cells[1].props.vmerge = VMerge::Continue;
+
+    // Revised rows have identical 2-column grid but different vertical merge structure,
+    // forcing `table_diff` row fallback instead of whole-table replacement.
+    let rev = make_test_table(&[&["A", "New"], &["B", "NewBot"]]);
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let path = std::env::temp_dir().join(format!("wc-compare-table-vm-fallback-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let tables: Vec<&wordcraft_doc::Table> = s.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(tables.len(), 1, "identical grid must stay in one table");
+    assert_eq!(tables[0].rows.len(), 4);
+    assert_eq!(tables[0].rows.iter().filter(|r| r.props.del.is_some()).count(), 2);
+    assert_eq!(tables[0].rows.iter().filter(|r| r.props.ins.is_some()).count(), 2);
+
+    // Reject All: restores original rows and preserves their vertical merge
+    let mut s_rej = Session::new(s.doc.clone());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let tbl_rej = s_rej
+        .doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(tbl_rej.rows.len(), 2);
+    assert_eq!(tbl_rej.rows[0].cells[1].props.vmerge, VMerge::Restart);
+    assert_eq!(tbl_rej.rows[1].cells[1].props.vmerge, VMerge::Continue);
+}
+
+/// #5921: When column count is the same but grid widths change, Reject All restores original grid.
+#[test]
+fn compare_table_grid_width_change_restores_original() {
+    let mut orig = make_test_table(&[&["A", "B"]]);
+    orig.grid = vec![100.0, 100.0];
+
+    let mut rev = make_test_table(&[&["A", "B"]]);
+    rev.grid = vec![50.0, 150.0];
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let path = std::env::temp_dir().join(format!("wc-compare-table-grid-width-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    // Reject All restores the original grid widths
+    let mut s_rej = Session::new(s.doc.clone());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let tbl_rej = s_rej
+        .doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(tbl_rej.grid, vec![100.0, 100.0]);
+
+    // Accept All adopts the revised grid widths
+    let mut s_acc = Session::new(s.doc.clone());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let tbl_acc = s_acc
+        .doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(tbl_acc.grid, vec![50.0, 150.0]);
+}
+
+/// #5921: Changes at or beyond the compare nesting limit are tracked rather than silently adopted.
+#[test]
+fn compare_table_nesting_limit_tracks_changes() {
+    /// Recursively build a table nested to `depth` levels with `leaf_text` in the innermost paragraph.
+    fn nest_table(depth: usize, leaf_text: &str) -> Block {
+        if depth == 0 {
+            Block::Para(Paragraph::with_text(leaf_text, CharProps::default()))
+        } else {
+            let inner = nest_table(depth - 1, leaf_text);
+            let mut t = wordcraft_doc::Table::new(1, 1, 100.0);
+            t.rows[0].cells[0].blocks = vec![Arc::new(inner)];
+            Block::Table(t)
+        }
+    }
+
+    /// Recursively extract the plain text of the first leaf paragraph found inside `bl`.
+    fn leaf_text(bl: &[Arc<Block>]) -> String {
+        for b in bl {
+            match &**b {
+                Block::Para(p) => return p.plain_text(),
+                Block::Table(t) => {
+                    for r in &t.rows {
+                        for c in &r.cells {
+                            let text = leaf_text(&c.blocks);
+                            if !text.is_empty() {
+                                return text;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        String::new()
+    }
+
+    for depth_limit in [wordcraft_doc::table::MAX_TABLE_DEPTH, wordcraft_doc::table::MAX_TABLE_DEPTH + 1] {
+        let orig_block = nest_table(depth_limit, "Leaf A");
+        let rev_block = nest_table(depth_limit, "Leaf B");
+
+        let mut orig_doc = Document::new();
+        orig_doc.body = vec![Arc::new(orig_block)];
+        let mut rev_doc = Document::new();
+        rev_doc.body = vec![Arc::new(rev_block)];
+
+        let path = std::env::temp_dir().join(format!("wc-compare-table-depth-{depth_limit}-{}.docx", std::process::id()));
+        crate::io::save_path(&path, &rev_doc).unwrap();
+
+        let mut s = Session::new(orig_doc);
+        s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        // Reject All restores Leaf A
+        let mut s_rej = Session::new(s.doc.clone());
+        s_rej.run("review.rejectAll", &json!({})).unwrap();
+        assert_eq!(leaf_text(&s_rej.doc.body), "Leaf A", "depth_limit={depth_limit}");
+
+        // Accept All adopts Leaf B
+        let mut s_acc = Session::new(s.doc.clone());
+        s_acc.run("review.acceptAll", &json!({})).unwrap();
+        assert_eq!(leaf_text(&s_acc.doc.body), "Leaf B", "depth_limit={depth_limit}");
+    }
+}
+
+/// #5921: Structural table changes are compared even when `formatting` is disabled,
+/// including tables whose flattened text keys match.
+#[test]
+fn compare_table_structural_change_when_formatting_disabled() {
+    let orig = make_test_table(&[&["A"], &["B"]]);
+    let mut rev = make_test_table(&[&["A"]]);
+    rev.rows[0].cells[0].blocks =
+        vec![para_block(Paragraph::with_text("A", CharProps::default())), para_block(Paragraph::with_text("B", CharProps::default()))];
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let path = std::env::temp_dir().join(format!("wc-compare-table-no-fmt-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": false})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let tbl = match &*s.doc.body[0] {
+        Block::Table(t) => t,
+        _ => panic!("expected table"),
+    };
+    assert_eq!(tbl.rows.len(), 2);
+    assert_eq!(tbl.rows.iter().filter(|r| r.props.del.is_some()).count(), 1);
+
+    let mut s_rej = Session::new(s.doc.clone());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let tbl_rej = s_rej.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl_rej.rows.len(), 2);
+    assert_eq!(tbl_rej.rows[0].cells[0].blocks[0].as_para().unwrap().plain_text(), "A");
+    assert_eq!(tbl_rej.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "B");
+
+    let mut s_acc = Session::new(s.doc.clone());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let tbl_acc = s_acc.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl_acc.rows.len(), 1);
+    assert_eq!(tbl_acc.rows[0].cells[0].blocks.len(), 2);
+}
+
+/// #5921: Individual Accept/Reject and Next/Previous Change resolve tracked table rows cleanly.
+#[test]
+fn compare_table_individual_accept_and_reject_row() {
+    let orig = make_test_table(&[&["Keep1", "Keep2"], &["Del1", "Del2"], &["Tail1", "Tail2"]]);
+    let rev = make_test_table(&[&["Keep1", "Keep2"], &["Tail1", "Tail2"], &["Ins1", "Ins2"]]);
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let path = std::env::temp_dir().join(format!("wc-compare-table-ind-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut compared = Session::new(orig_doc);
+    compared.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    // Reject deleted row (kept) and Reject inserted row (removed).
+    let mut s = Session::new(compared.doc.clone());
+    s.run("review.nextChange", &json!({})).unwrap();
+    s.run("review.reject", &json!({"next": true})).unwrap();
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows.len(), 4);
+    assert_eq!(tbl.rows[1].props.del, None);
+    assert_eq!(tbl.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "Del1");
+    assert_eq!(tbl.rows[1].cells[1].blocks[0].as_para().unwrap().plain_text(), "Del2");
+    assert!(tbl.rows[1].cells.iter().all(|c| c.blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.del.is_none())));
+    // Now on inserted row: reject removes the whole row.
+    s.run("review.reject", &json!({})).unwrap();
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows.len(), 3);
+    assert_eq!(tbl.rows[0].cells[0].blocks[0].as_para().unwrap().plain_text(), "Keep1");
+    assert_eq!(tbl.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "Del1");
+    assert_eq!(tbl.rows[2].cells[0].blocks[0].as_para().unwrap().plain_text(), "Tail1");
+    assert_eq!(s.run("review.changes", &json!({})).unwrap(), json!([]));
+
+    // Accept deleted row (removed) and Accept inserted row (kept).
+    let mut s = Session::new(compared.doc);
+    s.run("review.nextChange", &json!({})).unwrap();
+    s.run("review.accept", &json!({"next": true})).unwrap();
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows.len(), 3);
+    assert_eq!(tbl.rows[2].cells[0].blocks[0].as_para().unwrap().plain_text(), "Ins1");
+    s.run("review.accept", &json!({})).unwrap();
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows.len(), 3);
+    assert_eq!(tbl.rows[2].props.ins, None);
+    assert!(tbl.rows[2].cells.iter().all(|c| c.blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.ins.is_none())));
+    assert_eq!(s.run("review.changes", &json!({})).unwrap(), json!([]));
+
+    // Row-marker-only rows (e.g. from imported DOCX `<w:trPr><w:ins/><w:del/></w:trPr>`) are reachable
+    // via Next/Previous Change and resolve cleanly on individual Accept and Reject.
+    let mut t = make_test_table(&[&["Keep"], &["MarkedDel"], &["MarkedIns"]]);
+    t.rows[1].props.del = Some(0);
+    t.rows[2].props.ins = Some(1);
+    let mut doc = Document::new();
+    doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Delete, "Alice", "2026-11-09T00:00:00Z"));
+    doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Alice", "2026-11-09T00:00:00Z"));
+    doc.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::new())];
+
+    let mut s_nav = Session::new(doc.clone());
+    s_nav.run("review.nextChange", &json!({})).unwrap();
+    assert_eq!(s_nav.sel.anchor.path, wordcraft_doc::Path(vec![0, 1, 0, 0]));
+    s_nav.run("review.nextChange", &json!({})).unwrap();
+    assert_eq!(s_nav.sel.anchor.path, wordcraft_doc::Path(vec![0, 2, 0, 0]));
+    s_nav.run("review.previousChange", &json!({})).unwrap();
+    assert_eq!(s_nav.sel.anchor.path, wordcraft_doc::Path(vec![0, 1, 0, 0]));
+    // Accept deletion -> row 1 removed; then Accept insertion -> row remains unmarked.
+    s_nav.run("review.accept", &json!({"next": true})).unwrap();
+    assert_eq!(s_nav.doc.body[0].as_table().unwrap().rows.len(), 2);
+    s_nav.run("review.accept", &json!({})).unwrap();
+    let tbl = s_nav.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows.len(), 2);
+    assert_eq!(tbl.rows[1].props.ins, None);
+    assert_eq!(tbl.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "MarkedIns");
+
+    // Reject deletion -> row kept unmarked; then Reject insertion -> row removed.
+    let mut s_rej_rows = Session::new(doc);
+    s_rej_rows.run("review.nextChange", &json!({})).unwrap();
+    s_rej_rows.run("review.reject", &json!({"next": true})).unwrap();
+    let tbl = s_rej_rows.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows.len(), 3);
+    assert_eq!(tbl.rows[1].props.del, None);
+    s_rej_rows.run("review.reject", &json!({})).unwrap();
+    let tbl = s_rej_rows.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows.len(), 2);
+    assert_eq!(tbl.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "MarkedDel");
+
+    // Rejecting the sole tracked row removes the table cleanly without breaking the document.
+    let mut sole = make_test_table(&[&[""]]);
+    sole.rows[0].props.ins = Some(0);
+    let mut sole_doc = Document::new();
+    sole_doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Alice", "2026-11-09T00:00:00Z"));
+    sole_doc.body = vec![Arc::new(Block::Table(sole)), para_block(Paragraph::new())];
+    let mut s_sole = Session::new(sole_doc);
+    s_sole.run("review.nextChange", &json!({})).unwrap();
+    s_sole.run("review.reject", &json!({})).unwrap();
+    assert!(s_sole.doc.body.iter().all(|b| b.as_table().is_none()));
+    assert!(!s_sole.doc.body.is_empty());
+}
+
+/// #5921: An independent text deletion by Bob inside Alice's inserted row must not resolve
+/// Alice's row when rejecting Bob's deletion, while a full-body selection still resolves row markers.
+#[test]
+fn compare_table_unrelated_revision_inside_tracked_row() {
+    let mut mixed_tbl = make_test_table(&[&["Alice BobDel"]]);
+    mixed_tbl.rows[0].props.ins = Some(0);
+    let mut mixed_p = Paragraph::with_text("Alice BobDel", CharProps::default());
+    mixed_p.format(0, 6, &|c| c.ins = Some(0)).unwrap();
+    mixed_p.format(6, 12, &|c| c.del = Some(1)).unwrap();
+    mixed_tbl.rows[0].cells[0].blocks = vec![para_block(mixed_p)];
+    let mut mixed_doc = Document::new();
+    mixed_doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Alice", "2026-11-09T00:00:00Z"));
+    mixed_doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Delete, "Bob", "2026-11-09T01:00:00Z"));
+    mixed_doc.body = vec![Arc::new(Block::Table(mixed_tbl)), para_block(Paragraph::new())];
+    let mut s_mixed = Session::new(mixed_doc.clone());
+    // First Next Change selects Alice's insertion; second selects Bob's deletion.
+    s_mixed.run("review.nextChange", &json!({})).unwrap();
+    s_mixed.run("review.nextChange", &json!({})).unwrap();
+    s_mixed.run("review.reject", &json!({})).unwrap();
+    let tbl = s_mixed.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows.len(), 1);
+    assert_eq!(tbl.rows[0].props.ins, Some(0), "Alice's row insertion must stay pending when rejecting Bob's text deletion");
+    let p = tbl.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(p.plain_text(), "Alice BobDel");
+    assert!(p.runs.iter().all(|r| r.props.del.is_none()), "Bob's deletion should be restored");
+
+    // Selecting across the whole document still resolves the row marker cleanly.
+    let mut s_all = Session::new(mixed_doc);
+    s_all.run("select.all", &json!({})).unwrap();
+    s_all.run("review.reject", &json!({})).unwrap();
+    assert!(s_all.doc.body.iter().all(|b| b.as_table().is_none()));
+
+    // Row insertion marker whose cell's very first run at offset 0 carries an unrelated deletion
+    // by Bob: navigation preserves the row-marker target instead of expanding to Bob's run.
+    let mut lead_tbl = make_test_table(&[&["BobDel"]]);
+    lead_tbl.rows[0].props.ins = Some(0);
+    let mut lead_p = Paragraph::with_text("BobDel", CharProps::default());
+    lead_p.format(0, 6, &|c| c.del = Some(1)).unwrap();
+    lead_tbl.rows[0].cells[0].blocks = vec![para_block(lead_p)];
+    let mut lead_doc = Document::new();
+    lead_doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Alice", "2026-11-09T00:00:00Z"));
+    lead_doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Delete, "Bob", "2026-11-09T01:00:00Z"));
+    lead_doc.body = vec![Arc::new(Block::Table(lead_tbl)), para_block(Paragraph::new())];
+
+    let mut s_lead = Session::new(lead_doc.clone());
+    let listed = s_lead.run("review.changes", &json!({})).unwrap();
+    let arr = listed.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "expected separate row insertion and run deletion changes: {listed}");
+    assert_eq!(arr[0]["kind"], "insert");
+    assert_eq!(arr[0]["start"]["off"], 0);
+    assert_eq!(arr[0]["end"]["off"], 0);
+    assert_eq!(arr[1]["kind"], "delete");
+    assert_eq!(arr[1]["start"]["off"], 0);
+    assert_eq!(arr[1]["end"]["off"], 6);
+
+    // First Next Change (wrapping from end of body) hits Alice's row marker at 0..0; Reject removes the row.
+    s_lead.sel = crate::Selection::caret(s_lead.doc.end_of(StoryRef::Body));
+    s_lead.run("review.nextChange", &json!({})).unwrap();
+    s_lead.run("review.reject", &json!({})).unwrap();
+    assert!(s_lead.doc.body.iter().all(|b| b.as_table().is_none()));
+
+    // Second Next Change advances past Alice's row marker to Bob's 0..6 deletion; Reject restores
+    // Bob's text while leaving Alice's row insertion intact.
+    let mut s_second = Session::new(lead_doc);
+    s_second.sel = crate::Selection::caret(s_second.doc.end_of(StoryRef::Body));
+    s_second.run("review.nextChange", &json!({})).unwrap();
+    s_second.run("review.nextChange", &json!({})).unwrap();
+    assert_eq!(s_second.sel.ordered().0.off, 0);
+    assert_eq!(s_second.sel.ordered().1.off, 6);
+    s_second.run("review.reject", &json!({})).unwrap();
+    let tbl = s_second.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows.len(), 1);
+    assert_eq!(tbl.rows[0].props.ins, Some(0));
+    let p = tbl.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(p.plain_text(), "BobDel");
+    assert!(p.runs.iter().all(|r| r.props.del.is_none()));
+}
+
+/// #5921: Table, row, and cell formatting changes in surviving tables are recorded as tracked
+/// formatting revisions and restored on Reject All.
+#[test]
+fn compare_table_container_formatting_revisions() {
+    let orig = make_test_table(&[&["Cell1", "Cell2"], &["Cell3", "Cell4"]]);
+    let mut rev = orig.clone();
+    rev.props.indent = Some(36.0);
+    rev.rows[0].props.height = Some(36.0);
+    rev.rows[0].props.header = true;
+    rev.rows[0].cells[0].props.shading = Some(wordcraft_doc::Rgb(0xEE, 0xEE, 0xEE));
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let pid = std::process::id();
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-table-fmt-orig-{pid}.docx"));
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-table-fmt-rev-{pid}.docx"));
+    crate::io::save_path(&orig_path, &orig_doc).unwrap();
+    crate::io::save_path(&rev_path, &rev_doc).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let res = s.run("review.compare", &json!({"original": orig_path.to_string_lossy(), "path": rev_path.to_string_lossy()})).unwrap();
+    assert!(res["changes"].as_u64().unwrap() >= 3, "expected table, row, and cell formatting changes: {res}");
+
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert!(tbl.props.fmt_change.is_some());
+    assert_eq!(tbl.props.indent, Some(36.0));
+    assert!(tbl.rows[0].props.fmt_change.is_some());
+    assert_eq!(tbl.rows[0].props.height, Some(36.0));
+    assert!(tbl.rows[0].props.header);
+    assert!(tbl.rows[0].cells[0].props.fmt_change.is_some());
+    assert_eq!(tbl.rows[0].cells[0].props.shading, Some(wordcraft_doc::Rgb(0xEE, 0xEE, 0xEE)));
+
+    // Reject All restores the original table, row, and cell formatting.
+    let mut s_rej = Session::new(s.doc.clone());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let tbl_rej = s_rej.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl_rej.props.fmt_change, None);
+    assert_eq!(tbl_rej.props.indent, None);
+    assert_eq!(tbl_rej.rows[0].props.fmt_change, None);
+    assert_eq!(tbl_rej.rows[0].props.height, None);
+    assert!(!tbl_rej.rows[0].props.header);
+    assert_eq!(tbl_rej.rows[0].cells[0].props.fmt_change, None);
+    assert_eq!(tbl_rej.rows[0].cells[0].props.shading, None);
+
+    // Accept All keeps the revised formatting and clears the revision markers.
+    let mut s_acc = Session::new(s.doc);
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let tbl_acc = s_acc.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl_acc.props.fmt_change, None);
+    assert_eq!(tbl_acc.props.indent, Some(36.0));
+    assert_eq!(tbl_acc.rows[0].props.fmt_change, None);
+    assert_eq!(tbl_acc.rows[0].props.height, Some(36.0));
+    assert!(tbl_acc.rows[0].props.header);
+    assert_eq!(tbl_acc.rows[0].cells[0].props.fmt_change, None);
+    assert_eq!(tbl_acc.rows[0].cells[0].props.shading, Some(wordcraft_doc::Rgb(0xEE, 0xEE, 0xEE)));
+
+    let mut s_no_fmt = Session::new(Document::new());
+    let res_no_fmt = s_no_fmt
+        .run("review.compare", &json!({"original": orig_path.to_string_lossy(), "path": rev_path.to_string_lossy(), "formatting": false}))
+        .unwrap();
+    let _ = std::fs::remove_file(&orig_path);
+    let _ = std::fs::remove_file(&rev_path);
+    assert_eq!(res_no_fmt["changes"].as_u64(), Some(0));
+    let tbl_no_fmt = s_no_fmt.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl_no_fmt.props.fmt_change, None);
+    assert_eq!(tbl_no_fmt.rows[0].props.fmt_change, None);
+    assert_eq!(tbl_no_fmt.rows[0].cells[0].props.fmt_change, None);
+}
+
+/// #5921: Tables whose combined row count exceeds `MAX_ROWS` fall back to whole-table replacement.
+#[test]
+fn compare_table_exceeding_max_rows_falls_back_to_whole_table() {
+    use wordcraft_doc::table::MAX_ROWS;
+
+    let mut orig = wordcraft_doc::Table::new(MAX_ROWS, 1, 200.0);
+    orig.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("First", CharProps::default()))];
+    orig.rows[MAX_ROWS - 1].cells[0].blocks = vec![para_block(Paragraph::with_text("OrigLast", CharProps::default()))];
+
+    let rev = make_test_table(&[&["First"], &["RevSecond"]]);
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let path = std::env::temp_dir().join(format!("wc-compare-table-max-rows-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let tables: Vec<&wordcraft_doc::Table> = s.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(tables.len(), 2, "must fall back to two separate tables instead of exceeding MAX_ROWS");
+    assert!(tables.iter().all(|t| t.rows.len() <= MAX_ROWS));
+    assert!(tables[0].rows.iter().all(|r| r.props.del.is_some()));
+    assert!(tables[1].rows.iter().all(|r| r.props.ins.is_some()));
+}
+
 #[test]
 fn compare_options_ignore_case_and_white_space() {
     let original = "The Cat sat.\nTwo  spaces here.";
