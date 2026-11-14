@@ -85,7 +85,7 @@ pub(super) fn clamped_scroll(before: egui::Vec2, delta: egui::Vec2, max: egui::V
 /// Paint the selection with the Format Painter's formatting, when it is armed and something is
 /// selected.
 fn apply_format_painter(app: &mut WordApp) {
-    if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
+    if app.session.painter.is_some() {
         let _ = app.run("edit.pasteFormat", json!({}));
     }
 }
