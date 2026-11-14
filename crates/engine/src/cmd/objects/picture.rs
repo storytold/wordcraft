@@ -1,5 +1,5 @@
 use super::select::{obj_size, selected, with_obj};
-use super::{CmdError, CmdResult, InlineObject, Rgb, Session, Value, Wrap, p};
+use super::{CmdError, CmdResult, InlineObject, Session, Value, Wrap, p};
 use wordcraft_doc::picfx::PicFx;
 
 /// `picture.crop`: the crop, and optionally the new display size, as one edit. With a size, a
@@ -163,19 +163,6 @@ pub(super) fn adjust(s: &mut Session, f: impl Fn(image::DynamicImage) -> Result<
     adjust_media(s, &media, |_| {}, f)
 }
 
-/// The selected picture's pre-edit media key (itself when never edited).
-pub(super) fn original_media(s: &Session) -> Result<String, CmdError> {
-    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
-    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-    Ok(s.originals.get(&media).cloned().unwrap_or(media))
-}
-
-/// Drops brightness and contrast read from the file: an edit baked them from the original.
-pub(super) fn clear_lum(fx: &mut PicFx) {
-    fx.bright = 0;
-    fx.contrast = 0;
-}
-
 /// Like [`adjust`], but decodes `base` (a media key, usually the pre-edit original) instead
 /// of the picture's current bitmap. The result still chains onto the originals map, so Reset
 /// Picture keeps working.
@@ -237,74 +224,9 @@ pub(super) fn grown(w: u32, h: u32, pad: u32) -> Option<(u32, u32)> {
     Some((w.checked_add(twice)?, h.checked_add(twice)?))
 }
 
-/// What Artistic Effects, Picture Styles and Picture Border drew on a picture's bitmap: the
-/// bitmap they started from and the effect, style and border on it, so the next one draws again
-/// from that bitmap instead of over the last result. Picking a second style replaces the first,
-/// as in Word, instead of framing the frame (#2052). Kept in [`Session::picture_looks`] under the
-/// media key of the drawn bitmap.
-#[derive(Clone, Debug, Default)]
-pub struct PictureLook {
-    /// The media key of the bitmap before any of them.
-    pub base: String,
-    pub effect: Option<String>,
-    pub style: Option<String>,
-    pub border: Option<(Rgb, u32)>,
-    /// The drawn bitmap: a media key that names other bytes later (undo then a new picture
-    /// reusing the key) is not this look's.
-    pub drawn: std::sync::Arc<Vec<u8>>,
-}
-
-/// Change the selected picture's effect, style or border and draw it again from the bitmap
-/// under them (effect, then style, then border).
-pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> CmdResult {
-    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
-    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-    let cur = s.doc.media.get(&media).cloned();
-    let mut look = s
-        .picture_looks
-        .get(&media)
-        .filter(|l| cur.as_ref().is_some_and(|c| std::sync::Arc::ptr_eq(c, &l.drawn)) && s.doc.media.contains_key(&l.base))
-        .cloned()
-        .unwrap_or_else(|| PictureLook { base: media.clone(), ..Default::default() });
-    change(&mut look);
-    if look.effect.is_none() && look.style.is_none() && look.border.is_none() {
-        // Nothing left on it: the bitmap as it was.
-        let base = look.base.clone();
-        return with_obj(s, |o| {
-            if let InlineObject::Image { media, .. } = o {
-                *media = base.clone();
-            }
-        });
-    }
-    let l = look.clone();
-    // Styles, borders and effects leave the file's brightness, contrast and transparency alone.
-    let out = adjust_media(
-        s,
-        &look.base,
-        |_| {},
-        move |img| {
-            let mut img = match &l.effect {
-                Some(e) => artistic_effect(img, e),
-                None => img,
-            };
-            if let Some(st) = &l.style {
-                img = picture_style(img, st)?;
-            }
-            if let Some((c, w)) = l.border {
-                img = frame(img, w, [c.0, c.1, c.2, 255])?;
-            }
-            Ok(img)
-        },
-    )?;
-    if let Some((_, InlineObject::Image { media, .. })) = selected(s)
-        && let Some(drawn) = s.doc.media.get(&media).cloned()
-    {
-        s.picture_looks.insert(media, PictureLook { drawn, ..look });
-    }
-    Ok(out)
-}
-
-fn artistic_effect(img: image::DynamicImage, effect: &str) -> image::DynamicImage {
+/// Artistic Effects: blur, sharpen, invert, posterize and pixelate here, the gallery's others in
+/// [`super::effects`].
+pub(super) fn artistic_effect(img: image::DynamicImage, effect: &str) -> image::DynamicImage {
     match effect {
         "blur" => img.blur(3.0),
         "sharpen" => img.unsharpen(2.0, 2),
@@ -330,23 +252,28 @@ fn artistic_effect(img: image::DynamicImage, effect: &str) -> image::DynamicImag
                 image::imageops::FilterType::Nearest,
             )
         }
-        _ => img,
+        other => super::effects::artistic(img, other),
     }
 }
 
-pub(super) fn reset(s: &mut Session, _: &Value) -> CmdResult {
+/// `picture.reset`; with `size`, Reset Picture & Size: the original size too.
+pub(super) fn reset(s: &mut Session, v: &Value) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
     let orig = s.originals.get(&media).cloned().unwrap_or(media);
     // Like Word, Reset Picture discards every correction, those read from the file (`fx`:
     // brightness, contrast, transparency, #1711, #1766) included.
-    with_obj(s, |o| {
+    let out = with_obj(s, |o| {
         if let InlineObject::Image { media, crop, fx, .. } = o {
             *media = orig.clone();
             *crop = [0.0; 4];
             *fx = PicFx::default();
         }
-    })
+    })?;
+    if p::bool(v, "size") == Some(true) {
+        return size(s, &serde_json::json!({"original": true}));
+    }
+    Ok(out)
 }
 
 pub(super) fn recolor(img: image::DynamicImage, mode: &str, sat: f32) -> image::DynamicImage {
@@ -462,7 +389,7 @@ fn push_open_runs(stack: &mut Vec<(u32, u32)>, x0: u32, x1: u32, ny: u32, open: 
     }
 }
 
-fn frame(img: image::DynamicImage, border: u32, color: [u8; 4]) -> Result<image::DynamicImage, CmdError> {
+pub(super) fn frame(img: image::DynamicImage, border: u32, color: [u8; 4]) -> Result<image::DynamicImage, CmdError> {
     let (w, h) = grown(img.width(), img.height(), border).ok_or_else(too_large)?;
     let mut out = canvas(w, h, color)?;
     image::imageops::overlay(&mut out, &img.to_rgba8(), border as i64, border as i64);
