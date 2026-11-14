@@ -380,7 +380,19 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
                     let lang = field_lang(&s.doc, p, k);
                     let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));
-                    updates.push((k, text_result(instr, crate::cmd::insert::format_date_in(&pic, lang.as_deref()))));
+                    let created = s.doc.core.created.trim();
+                    // CREATEDATE shows when the document was created (ECMA-376 §17.16.5.11). A new
+                    // document, never saved, has no creation date yet and saving stamps now. A
+                    // file opened without one, or with one that can't be read, keeps the result
+                    // it has.
+                    let text = if name != "CREATEDATE" || (created.is_empty() && s.path.is_none()) {
+                        crate::cmd::insert::format_date_in(&pic, lang.as_deref())
+                    } else if let Some((unix, offset)) = created_at(created) {
+                        crate::cmd::insert::format_date_at_in(&pic, lang.as_deref(), unix, offset)
+                    } else {
+                        continue;
+                    };
+                    updates.push((k, text_result(instr, text)));
                 }
                 "REF" | "PAGEREF" => {
                     let f = FieldCode::parse(instr);
@@ -528,6 +540,19 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
 fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: usize) -> Option<String> {
     let off = p.object_offsets().get(k).copied()?;
     doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off)).lang
+}
+
+/// A core-properties creation date as seconds since the epoch and the UTC offset to show it at:
+/// an instant (`2019-05-05T12:00:00Z`, any offset or fraction) at the local offset, or a calendar
+/// date (`2019-05-05`, which W3CDTF allows) at its own midnight, whatever the time zone. `None`
+/// for another form or a date before 1970.
+fn created_at(stamp: &str) -> Option<(u64, i64)> {
+    if let Ok(t) = chrono::DateTime::parse_from_rfc3339(stamp) {
+        let unix = u64::try_from(t.timestamp()).ok()?;
+        return Some((unix, crate::cmd::local_offset_secs(unix)));
+    }
+    let day = chrono::NaiveDate::parse_from_str(stamp, "%Y-%m-%d").ok()?;
+    Some((u64::try_from(day.and_hms_opt(0, 0, 0)?.and_utc().timestamp()).ok()?, 0))
 }
 
 /// Word's default date or time picture when a field instruction carries no `\@` picture switch.

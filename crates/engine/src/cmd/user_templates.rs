@@ -337,6 +337,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// A document made from a template is created now, not when the template was: it has no
+    /// creation date until it is saved, so CREATEDATE in it shows today.
+    #[test]
+    fn new_from_template_has_no_creation_date_of_its_own_yet() {
+        let d = scratch("created");
+        let path = d.join("Dated.dotx");
+        let mut t = Session::new(wordcraft_doc::Document::new());
+        t.run("document.setText", &json!({"text": "Dated"})).unwrap();
+        t.doc.core.created = "2019-05-05T12:00:00Z".into();
+        crate::io::save_path(&path, &t.doc).unwrap();
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("file.newFromTemplate", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(s.doc.core.created, "");
+        s.run("insert.field", &json!({"instr": r#"CREATEDATE \@ "yyyy""#, "result": "2019"})).unwrap();
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).contains(&crate::cmd::insert::format_date("yyyy")));
+        // The template itself keeps its date.
+        let mut again = Session::new(wordcraft_doc::Document::new());
+        again.run("file.open", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(again.doc.core.created, "2019-05-05T12:00:00Z");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// #3433: a template the platform hands the app takes an untouched blank document's place
     /// (`replaceBlank`), as a file `file.open` opens does; otherwise, and without the flag, the
     /// new document opens beside the others, as File › New's does. Either way the template on

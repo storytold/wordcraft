@@ -328,6 +328,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | 2026-11-04 | trivial | Output counts a locked SEQ and not one in a tracked deletion, as Word does; readiness estimates unchanged |
 | 2026-11-01 | trivial | SEQ fields in text boxes are numbered where their boxes are anchored, in output and after F9, and a REF finds a bookmark in a text box |
 | 2026-11-01 | trivial | SEQ, STYLEREF and REF fields show fresh results in output; readiness estimates unchanged |
+| 2026-11-11 | trivial | Update Field shows CREATEDATE as the document's creation date (`dcterms:created`, in local time), not today's; a creation date it can't read leaves the result as it was (#6331); readiness estimates unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery walks paragraph objects once (#3614); readiness estimates unchanged |
 | 2026-11-03 | trivial | A decimal tab scans the text after it once, not once per cluster. Separate from the #3412 word-measurement fix |
 | 2026-10-30 | trivial | Layout work bounds for hostile documents (#3867): header-row repeats budgeted per layout and counting canvas members; picture-outline decode budget charged for cached outlines too, so cold and warm layouts wrap alike; linked-box chains keep exact widths up to a work cap, not 16 widths; `gridAfter` bounded |
