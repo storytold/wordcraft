@@ -223,6 +223,11 @@ pub struct ShapeExtra {
     /// line, and is drawn across [`HorizontalRule::pct`] of it or at the shape's own width.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hr: Option<HorizontalRule>,
+    /// An ActiveX control read from a file (`w:object` holding a `w:control`): the shape is its
+    /// placeholder, and saving writes the control back with its parts. See
+    /// [`crate::graphic::Embedded`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ole: Option<std::sync::Arc<crate::graphic::Embedded>>,
 }
 
 /// How a horizontal rule sits on its line (VML `o:hrpct`, `o:hralign`), as Word draws one:
