@@ -313,11 +313,23 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
     let bar = app.mac_titlebar;
     let left = if mac { bar.content_left as i8 } else { 8 };
     let control_h = if mac { 22.0 } else { 26.0 };
+    // Over the frosted strip the bar fades from solid at the top to see-through at its foot.
+    let glass = app.ribbon_glass();
     egui::Panel::top("title_bar")
         .exact_size(if mac { bar.height } else { 38.0 })
-        .frame(egui::Frame::NONE.fill(t.title_bar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
+        .frame(egui::Frame::NONE.fill(if glass { egui::Color32::TRANSPARENT } else { t.title_bar }).inner_margin(egui::Margin {
+            left,
+            right: 10,
+            top: 0,
+            bottom: 0,
+        }))
         .show(ui, |ui| {
             let full = ui.max_rect();
+            if glass {
+                let screen = ui.ctx().content_rect();
+                let band = Rect::from_min_max(pos2(screen.min.x, full.min.y), pos2(screen.max.x, full.max.y));
+                crate::ribbon_blur::fade_down(ui.painter(), band, t.title_bar);
+            }
             // Drag the window by the title bar (integrated title bar on macOS).
             let drag = ui.interact(full, ui.scope_id().with("title_drag"), Sense::click_and_drag());
             if drag.drag_started() {
@@ -616,7 +628,16 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     let (r, resp) = ui.allocate_exact_size(vec2(SEARCH_BOX_W, control_h), Sense::click());
     let ph = tl!("Search commands and help");
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, ph));
-    ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    if app.ribbon_glass() {
+        // A pane of frosted glass: a faint light (or dark) wash and a hairline rim.
+        let (wash, rim) = if t.dark { (255, 255) } else { (0, 0) };
+        let a = if resp.hovered() { 34 } else { 18 };
+        let fill = egui::Color32::from_rgba_unmultiplied(wash, wash, wash, a);
+        let edge = egui::Color32::from_rgba_unmultiplied(rim, rim, rim, 48);
+        ui.painter().rect(r, 6.0, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    } else {
+        ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    }
     icons::paint(
         ui.painter(),
         Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 16.0), r.center().y), vec2(16.0, 16.0)),

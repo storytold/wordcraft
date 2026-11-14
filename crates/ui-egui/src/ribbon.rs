@@ -79,6 +79,8 @@ pub use tabs::{
     in_table_public, plan_strip, resolve_tab,
 };
 #[cfg(test)]
+use tabs::{UNDERLINE_SLIDE_SECS, next_tab_change, next_underline, underline_at};
+#[cfg(test)]
 use underline::{UNDERLINE_STYLES, underline_menu};
 use view::{outlining, view};
 
@@ -155,7 +157,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // Tab strip.
     egui::Panel::top("tabs")
         .exact_size(30.0)
-        .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
+        .frame(
+            egui::Frame::NONE
+                .fill(if app.ribbon_glass() { crate::ribbon_blur::glass(t.tab_strip) } else { t.tab_strip })
+                .inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }),
+        )
         .show(ui, |ui| {
             crate::rtl::root(ui, |ui| {
                 ui.horizontal_centered(|ui| {
@@ -386,7 +392,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     egui::Panel::top("ribbon")
         .exact_size(CONTENT_H + LABEL_H + 10.0)
         .frame(
-            egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
+            egui::Frame::NONE
+                .fill(if app.ribbon_glass() { crate::ribbon_blur::glass(t.ribbon) } else { t.ribbon })
+                .inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 })
+                .stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
             // Bring newly selected ribbon content in from the side of its tab.

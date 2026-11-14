@@ -1189,7 +1189,9 @@ mod tests {
         // Equation gallery templates are UnicodeMath input (`lim┬(n→∞)`, `≜`) that the math
         // renderer draws with document fonts, not interface text.
         // The ➢ bullet is a value for `para.bullets`; its menu tile draws the shape instead.
+        // The Japanese full stop in tests.rs is filename-stem test data, not interface text.
         let exempt = |c: char, file: &str| match file {
+            "tests.rs" => c == '。',
             "equation_tab.rs" => matches!(c, '≜' | '┬'),
             _ if file == "ribbon.rs" || file.starts_with("ribbon/") => c == '➢',
             _ => false,
