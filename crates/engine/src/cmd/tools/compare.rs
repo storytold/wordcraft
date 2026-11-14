@@ -345,13 +345,25 @@ enum Kind {
     Fold,
 }
 
-pub(super) fn collapse_noise_matches(ops: &[Op]) -> Vec<Op> {
+/// A match whose revised-side token index satisfies `keep` is never folded (an unchanged field is
+/// one whole token, however short its match).
+pub(super) fn collapse_noise_matches(ops: &[Op], keep: impl Fn(usize) -> bool) -> Vec<Op> {
+    // The revised-side token index each op sits at.
+    let mut at = Vec::with_capacity(ops.len());
+    let mut j = 0usize;
+    for op in ops {
+        at.push(j);
+        if *op != Op::Del {
+            j += 1;
+        }
+    }
     let mut runs: Vec<(Op, usize, Kind)> = Vec::new();
     let mut k = 0;
     while k < ops.len() {
         let op = ops[k];
         let len = ops[k..].iter().take_while(|o| **o == op).count();
-        let kind = if op == Op::Same && k != 0 && k + len != ops.len() && len <= NOISE_MATCH_LEN { Kind::Fold } else { Kind::Keep };
+        let kept = (k..k + len).any(|x| at.get(x).is_some_and(|j| keep(*j)));
+        let kind = if op == Op::Same && k != 0 && k + len != ops.len() && len <= NOISE_MATCH_LEN && !kept { Kind::Fold } else { Kind::Keep };
         runs.push((op, len, kind));
         k += len;
     }
@@ -406,6 +418,29 @@ enum Key {
     Obj(Box<InlineObject>, Vec<String>),
     /// A field: its code (spacing collapsed) and its result as the options say.
     Field(String, String),
+}
+
+/// A field code with its spacing collapsed, except inside double quotes, where a file name or
+/// text argument can hold meaningful spaces.
+fn collapse_outside_quotes(instr: &str) -> String {
+    let mut out = String::with_capacity(instr.len());
+    let (mut quoted, mut pending) = (false, false);
+    for c in instr.chars() {
+        if quoted {
+            quoted = c != '"';
+            out.push(c);
+        } else if c.is_whitespace() {
+            pending = !out.is_empty();
+        } else {
+            if pending {
+                out.push(' ');
+                pending = false;
+            }
+            quoted = c == '"';
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn obj_key(doc: &Document, o: &InlineObject) -> Key {
@@ -507,16 +542,15 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     let key = |t: &Tok<'_>| match t {
         Tok::Text(t) => Key::Text(ctx.opts.key(t)),
         // A field whose code or result changed is the old field deleted and the new one inserted.
-        Tok::Obj(InlineObject::Field { instr, result, .. }) => {
-            Key::Field(instr.split_whitespace().collect::<Vec<_>>().join(" "), ctx.opts.key(result))
-        }
+        Tok::Obj(InlineObject::Field { instr, result, .. }) => Key::Field(collapse_outside_quotes(instr), ctx.opts.key(result)),
         Tok::Obj(o) => obj_key(doc, o),
     };
     let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), ctx.budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
     // but a matched single character very often does (digits, punctuation), so only there does
     // a short interior match need folding back into its surrounding edit.
-    let ops = if chars { collapse_noise_matches(&ops) } else { ops };
+    // An unchanged field is never noise, so it is not folded into the edits around it.
+    let ops = if chars { collapse_noise_matches(&ops, |j| matches!(tb.get(j), Some(Tok::Obj(InlineObject::Field { .. })))) } else { ops };
     let mut p = Paragraph::new();
     p.props = b.props.clone();
     let base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();

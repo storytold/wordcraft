@@ -59,11 +59,14 @@ fn collapse_noise_matches_merges_short_interior_runs_but_keeps_prefix_suffix() {
     // ('1', '.', '0') threaded through what a reader expects to be one clean replacement.
     let ops = lcs_ops(&['0', '1', '.', '0', '9'], &['1', '9', '.', '1', '0'], &mut { u64::MAX });
     assert!(ops.contains(&Op::Same), "the raw LCS does find spurious matches here, or this test proves nothing");
-    assert_eq!(collapse_noise_matches(&ops), vec![Op::Del, Op::Del, Op::Del, Op::Del, Op::Del, Op::Ins, Op::Ins, Op::Ins, Op::Ins, Op::Ins]);
+    assert_eq!(
+        collapse_noise_matches(&ops, |_| false),
+        vec![Op::Del, Op::Del, Op::Del, Op::Del, Op::Del, Op::Ins, Op::Ins, Op::Ins, Op::Ins, Op::Ins]
+    );
     // A plain single-character replacement flanked by a real common prefix and suffix has no
     // interior match to begin with (the DP's middle is pure delete/insert), so it's untouched.
     let ops = lcs_ops(&['a', 'b', 'c', 'x', 'd', 'e', 'f'], &['a', 'b', 'c', 'y', 'd', 'e', 'f'], &mut { u64::MAX });
-    assert_eq!(collapse_noise_matches(&ops), ops);
+    assert_eq!(collapse_noise_matches(&ops, |_| false), ops);
 }
 
 /// Verifies that `lcs_ops` chunks sequence alignment across multiple `MAX_LCS` windows,
@@ -652,6 +655,65 @@ fn compare_keeps_a_ref_field_whose_result_changed_live() {
     assert_eq!(fields(&s.doc), [f("New title", false, false)]);
     let _ = std::fs::remove_file(&rev_path);
     let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
+fn compare_character_level_keeps_an_unchanged_field_between_edits() {
+    // Edits on both sides of an unchanged field: the field is one matched token, which the
+    // character-level noise folding must not turn into a deletion and an insertion.
+    fn with_field(before: &str, after: &str) -> Session {
+        let mut s = Session::new(Document::from_text(before));
+        s.run("caret.set", &json!({"pos": Pos::body(0, before.len())})).unwrap();
+        s.run("insert.field", &json!({"instr": "REF h1 \\h", "result": "Same title"})).unwrap();
+        s.run("text.insert", &json!({"text": after})).unwrap();
+        s
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-char-field-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &with_field("b", "y").doc).unwrap();
+    let mut s = with_field("a", "x");
+    s.run("review.compare", &json!({"path": rev_path.to_string_lossy(), "level": "character"})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let marked: Vec<bool> = p
+        .objects_with_offsets()
+        .filter(|(_, o)| matches!(o, InlineObject::Field { .. }))
+        .map(|(off, _)| {
+            let c = p.props_of_char(off);
+            c.del.is_some() || c.ins.is_some()
+        })
+        .collect();
+    assert_eq!(marked, [false], "the unchanged field stays unmarked");
+    let _ = std::fs::remove_file(&rev_path);
+}
+
+#[test]
+fn compare_distinguishes_field_codes_differing_in_quoted_spaces() {
+    // `INCLUDETEXT "A  B.docx"` and `"A B.docx"` name different files; with empty results and
+    // a text edit in the paragraph the change must still show as a deleted and an inserted field.
+    fn with_include(file: &str, text: &str) -> Session {
+        let mut s = Session::new(Document::from_text(text));
+        s.run("caret.set", &json!({"pos": Pos::body(0, text.len())})).unwrap();
+        s.run("insert.field", &json!({"instr": format!("INCLUDETEXT \"{file}\""), "result": ""})).unwrap();
+        s
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-quoted-field-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &with_include("A B.docx", "New ").doc).unwrap();
+    let mut s = with_include("A  B.docx", "Old ");
+    s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let fields: Vec<(String, bool, bool)> = p
+        .objects_with_offsets()
+        .filter_map(|(off, o)| match o {
+            InlineObject::Field { instr, .. } => {
+                let c = p.props_of_char(off);
+                Some((instr.clone(), c.del.is_some(), c.ins.is_some()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields.len(), 2, "{fields:?}");
+    assert!(fields.iter().any(|(i, d, _)| i.contains("A  B") && *d), "{fields:?}");
+    assert!(fields.iter().any(|(i, _, n)| i.contains("A B") && *n), "{fields:?}");
+    let _ = std::fs::remove_file(&rev_path);
 }
 
 #[test]
