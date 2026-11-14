@@ -320,6 +320,11 @@ fn carried(rect: Rect, spin: Spin, centre: Point) -> Rect {
     Rect::new(rect.x + nx - cx, rect.y + ny - cy, rect.w, rect.h)
 }
 
+/// The text rectangle of shape `o` drawn in `r` ([`crate::ctx::shape_text_insets_in`]).
+fn text_inset_in(o: &InlineObject, r: Rect) -> [f32; 4] {
+    crate::ctx::shape_text_insets_in(o, r.w, r.h)
+}
+
 fn group_members(o: &InlineObject, rect: Rect) -> Vec<(Rect, &InlineObject)> {
     // Hidden members aren't placed (nor their text boxes laid out).
     o.group_rects(rect.x, rect.y, rect.w, rect.h)
@@ -782,22 +787,23 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             // text itself stays upright), unless the box budget says no (a box inside itself,
             // too deep, too many).
             let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-            let boxes: Vec<(u32, Rect)> = match obj {
+            // Each with its shape's text rectangle at the size it is drawn.
+            let boxes: Vec<(u32, Rect, [f32; 4])> = match obj {
                 InlineObject::Group { .. } => group_members(obj, rect)
                     .into_iter()
                     .filter_map(|(r, c)| {
                         c.text_box()
                             .filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox))
-                            .map(|id| (id, carried(r, float.spin(), centre)))
+                            .map(|id| (id, carried(r, float.spin(), centre), text_inset_in(c, r)))
                     })
                     .collect(),
-                _ => text_box.map(|id| (id, rect)).into_iter().collect(),
+                _ => text_box.map(|id| (id, rect, text_inset_in(obj, rect))).into_iter().collect(),
             };
             // A group's text boxes are where a click edits their text (#6027): kept on the
             // group's area, relative to it so they move with it.
             let group_boxes = match obj {
                 InlineObject::Group { .. } => {
-                    boxes.iter().map(|&(id, r)| (Rect::new(r.x - rect.x, r.y - rect.y, r.w, r.h), textbox::shown_story(ctx, id))).collect()
+                    boxes.iter().map(|&(id, r, _)| (Rect::new(r.x - rect.x, r.y - rect.y, r.w, r.h), textbox::shown_story(ctx, id))).collect()
                 }
                 _ => Vec::new(),
             };
@@ -812,8 +818,8 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 origin: Point::new(at.col.0, late_here.map_or(at.para_y, |l| l.top)),
                 group_boxes,
             });
-            for (id, rect) in boxes {
-                let items = textbox::box_items(ctx, id, rect, depth);
+            for (id, rect, inset) in boxes {
+                let items = textbox::box_items(ctx, id, rect, inset, depth);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
             }

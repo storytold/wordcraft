@@ -66,7 +66,18 @@ fn object_value(source: craft_wordmodel::para::InlineObject) -> Result<wordcraft
             children: children.into_iter().map(group_child_value).collect::<Result<_, _>>()?,
             canvas: canvas.map(convert).transpose()?,
         }),
-        other => convert(other),
+        other => {
+            let mut object: Target = convert(other)?;
+            // A line that is off has no width: the app model's width is the room an outline
+            // takes from the shape's text, and Word gives a .doc shape's line none while it is
+            // off (measured in Word for Windows with a .doc it saved itself: text in a box whose
+            // 3 pt line is off starts where it does in a box without a line, in a box whose 3 pt
+            // line is on 1.5 pt further in).
+            if let Target::Shape { stroke: None, stroke_width, .. } = &mut object {
+                *stroke_width = 0.0;
+            }
+            Ok(object)
+        }
     }
 }
 
@@ -226,5 +237,56 @@ mod tests {
         assert_eq!(document.settings.compat_mode, 11);
         assert!(Arc::ptr_eq(document.media.get("image1.png").expect("moved media"), &image));
         assert!(document.fit_state.is_none());
+    }
+
+    /// A .doc shape whose line is off comes over with no outline width, whatever weight the file
+    /// keeps for it; a line that is on keeps its own. In a group too.
+    #[test]
+    fn a_line_that_is_off_has_no_width() {
+        use craft_wordmodel::para::{GroupChild, InlineObject as Source, ShapeKind};
+        let shape = |stroke: Option<craft_wordmodel::props::Rgb>, stroke_width: f32| Source::Shape {
+            kind: ShapeKind::TextBox,
+            w: 100.0,
+            h: 50.0,
+            fill: None,
+            stroke,
+            stroke_width,
+            float: Default::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let black = Some(craft_wordmodel::props::Rgb(0, 0, 0));
+        let mut para = craft_wordmodel::para::Paragraph::with_text("x", Default::default());
+        para.objects = vec![
+            shape(None, 3.0),
+            shape(black, 3.0),
+            shape(None, 0.75),
+            Source::Group {
+                w: 100.0,
+                h: 50.0,
+                float: Default::default(),
+                ch_w: 100.0,
+                ch_h: 50.0,
+                children: vec![GroupChild { x: 0.0, y: 0.0, obj: shape(None, 3.0) }, GroupChild { x: 50.0, y: 0.0, obj: shape(black, 0.75) }],
+                canvas: None,
+            },
+        ];
+        let mut source = craft_wordmodel::Document::new();
+        source.body = vec![Arc::new(craft_wordmodel::Block::Para(para))];
+        let document = from_shared_model(source).expect("model conversion");
+        fn outlines(objects: &[&wordcraft_doc::para::InlineObject], out: &mut Vec<(bool, f32)>) {
+            for object in objects {
+                match object {
+                    wordcraft_doc::para::InlineObject::Shape { stroke, stroke_width, .. } => out.push((stroke.is_some(), *stroke_width)),
+                    wordcraft_doc::para::InlineObject::Group { children, .. } => outlines(&children.iter().map(|c| &c.obj).collect::<Vec<_>>(), out),
+                    other => panic!("expected a shape, got {other:?}"),
+                }
+            }
+        }
+        let mut got = Vec::new();
+        outlines(&document.body[0].as_para().expect("paragraph").objects.iter().collect::<Vec<_>>(), &mut got);
+        assert_eq!(got, [(false, 0.0), (true, 3.0), (false, 0.0), (false, 0.0), (true, 0.75)]);
     }
 }
