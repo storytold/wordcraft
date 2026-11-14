@@ -99,15 +99,24 @@ pub fn write_wordml2003(doc: &wordcraft_doc::Document) -> Result<Vec<u8>, DocxEr
 
 /// Draw a chart.
 pub fn chart_items(spec: &wordcraft_doc::chart::ChartSpec, theme: &[wordcraft_doc::Rgb], w: f32, h: f32) -> Vec<wordcraft_doc::graphic::GraphicItem> {
-    let shared_spec: craft_wordmodel::chart::ChartSpec = model_bridge::convert_ref(spec).expect("chart spec convert");
-    let shared_theme: Vec<craft_wordmodel::props::Rgb> = model_bridge::convert_ref(theme).expect("theme convert");
+    // The conversion goes through JSON, which a non-finite number in the spec makes fail (the
+    // reason `sanitize_para_props` exists below), so a chart that cannot be converted draws
+    // nothing instead of taking the process down with it.
+    let Ok(shared_spec) = model_bridge::convert_ref::<_, craft_wordmodel::chart::ChartSpec>(spec) else {
+        return Vec::new();
+    };
+    let Ok(shared_theme) = model_bridge::convert_ref::<_, Vec<craft_wordmodel::props::Rgb>>(theme) else {
+        return Vec::new();
+    };
     let shared_items = craft_docx::chart_items(&shared_spec, &shared_theme, w, h);
-    model_bridge::convert(shared_items).expect("chart items convert")
+    model_bridge::convert(shared_items).unwrap_or_default()
 }
 
 /// Write a chart part.
 pub fn chart_xml(spec: &wordcraft_doc::chart::ChartSpec) -> Vec<u8> {
-    let shared_spec: craft_wordmodel::chart::ChartSpec = model_bridge::convert_ref(spec).expect("chart spec convert");
+    let Ok(shared_spec) = model_bridge::convert_ref::<_, craft_wordmodel::chart::ChartSpec>(spec) else {
+        return Vec::new();
+    };
     craft_docx::chart_xml(&shared_spec).into_bytes()
 }
 
@@ -118,10 +127,14 @@ pub fn smart_art_items(
     w: f32,
     h: f32,
 ) -> Vec<wordcraft_doc::graphic::GraphicItem> {
-    let shared_spec: craft_wordmodel::smart_art::SmartArtSpec = model_bridge::convert_ref(spec).expect("smart art spec convert");
-    let shared_theme: Vec<craft_wordmodel::props::Rgb> = model_bridge::convert_ref(theme).expect("theme convert");
+    let Ok(shared_spec) = model_bridge::convert_ref::<_, craft_wordmodel::smart_art::SmartArtSpec>(spec) else {
+        return Vec::new();
+    };
+    let Ok(shared_theme) = model_bridge::convert_ref::<_, Vec<craft_wordmodel::props::Rgb>>(theme) else {
+        return Vec::new();
+    };
     let shared_items = craft_docx::smart_art_items(&shared_spec, &shared_theme, w, h);
-    model_bridge::convert(shared_items).expect("smart art items convert")
+    model_bridge::convert(shared_items).unwrap_or_default()
 }
 
 /// Read bibliography sources from a `b:Sources` file.

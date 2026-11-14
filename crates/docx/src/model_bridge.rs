@@ -147,13 +147,11 @@ fn missing_pictures_from_shared(source: craft_wordmodel::MissingPictures) -> Res
 pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcraft_doc::Document, DocxError> {
     let mut fit_state = None;
     let fit_key = source.passthrough.keys().find(|k| k.eq_ignore_ascii_case(crate::fit::PART)).cloned();
-    if let Some(key) = fit_key {
-        if let Some(xml_bytes) = source.passthrough.get(&key) {
-            if let Some(state) = crate::fit::read_from_bytes(xml_bytes) {
-                fit_state = Some(state);
-                source.passthrough.remove(&key);
-            }
-        }
+    if let Some(key) = fit_key
+        && let Some(state) = source.passthrough.get(&key).and_then(|xml_bytes| crate::fit::read_from_bytes(xml_bytes))
+    {
+        fit_state = Some(state);
+        source.passthrough.remove(&key);
     }
 
     let craft_wordmodel::Document {
@@ -226,44 +224,44 @@ fn sanitize_para_props(mut props: wordcraft_doc::ParaProps) -> wordcraft_doc::Pa
             wordcraft_doc::props::LineSpacing::AtLeast(v) => *v = finite(*v),
         }
     }
-    if let Some(v) = &mut props.indent_left {
-        if !v.is_finite() {
-            *v = 0.0;
-        }
+    if let Some(v) = &mut props.indent_left
+        && !v.is_finite()
+    {
+        *v = 0.0;
     }
-    if let Some(v) = &mut props.indent_right {
-        if !v.is_finite() {
-            *v = 0.0;
-        }
+    if let Some(v) = &mut props.indent_right
+        && !v.is_finite()
+    {
+        *v = 0.0;
     }
-    if let Some(v) = &mut props.indent_first {
-        if !v.is_finite() {
-            *v = 0.0;
-        }
+    if let Some(v) = &mut props.indent_first
+        && !v.is_finite()
+    {
+        *v = 0.0;
     }
-    if let Some(v) = &mut props.space_before {
-        if !v.is_finite() {
-            *v = 0.0;
-        }
+    if let Some(v) = &mut props.space_before
+        && !v.is_finite()
+    {
+        *v = 0.0;
     }
-    if let Some(v) = &mut props.space_after {
-        if !v.is_finite() {
-            *v = 0.0;
-        }
+    if let Some(v) = &mut props.space_after
+        && !v.is_finite()
+    {
+        *v = 0.0;
     }
     props
 }
 
 fn sanitize_char_props(mut props: wordcraft_doc::CharProps) -> wordcraft_doc::CharProps {
-    if let Some(v) = &mut props.size {
-        if !v.is_finite() {
-            *v = 0.0;
-        }
+    if let Some(v) = &mut props.size
+        && !v.is_finite()
+    {
+        *v = 0.0;
     }
-    if let Some(v) = &mut props.spacing {
-        if !v.is_finite() {
-            *v = 0.0;
-        }
+    if let Some(v) = &mut props.spacing
+        && !v.is_finite()
+    {
+        *v = 0.0;
     }
     props
 }
