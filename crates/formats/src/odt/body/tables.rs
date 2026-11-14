@@ -1,6 +1,13 @@
 //! Tables being read (ODF 1.3 §9.1): rows, cells and their shared edges.
 
 use super::{Borders, Cell, FTable};
+use crate::odt::xml::{Attrs, get};
+
+/// An ODF repeat count (`table:number-rows-repeated` / `table:number-columns-repeated`, ODF 1.3
+/// §19.678): 1 when absent or unreadable, never zero, at most `max`.
+pub(in crate::odt) fn repeat_count(a: &Attrs, key: &str, max: usize) -> usize {
+    get(a, key).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(1).max(1).min(max as u64) as usize
+}
 
 /// Give each edge two cells share the line either cell draws: LibreOffice gives a shared edge to
 /// one of them only (the left cell's right side is `none`, the right cell's left side draws it),
@@ -77,6 +84,8 @@ pub(in crate::odt) struct TableB {
     pub(in crate::odt) shares: Vec<f32>,
     /// The table's width, points: what the shares divide.
     pub(in crate::odt) room: Option<f32>,
+    /// The open row's `table:number-rows-repeated` (bounded).
+    pub(in crate::odt) row_repeat: usize,
     /// It is in a cell, a frame or a column narrower than the page, whose width isn't known here.
     pub(in crate::odt) contained: bool,
     /// Its alignment and width, and each row's height so far (see [`crate::model::TableExtra`]).

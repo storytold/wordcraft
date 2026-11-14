@@ -21,7 +21,7 @@ mod tracked;
 use drawing::{OpenGroup, read_formula};
 use indexes::{OpenIndex, is_index};
 use notes::{OpenField, OpenNote, balance_comments};
-use tables::TableB;
+use tables::{TableB, repeat_count};
 use tracked::{DelState, Region, change_mark};
 
 /// Most bibliography sources read.
@@ -101,6 +101,8 @@ pub(super) struct Body<'a> {
     cell_tops: Vec<usize>,
     /// Each open cell's formula, as a Word formula field code (§19.646 `table:formula`).
     formulas: Vec<Option<String>>,
+    /// The open cells' `table:number-columns-repeated`, in step with `cells`.
+    cell_repeat: Vec<usize>,
     pub(super) in_text: bool,
     skip: usize,
     depth: usize,
@@ -253,6 +255,7 @@ impl<'a> Body<'a> {
             cells: Vec::new(),
             cell_tops: Vec::new(),
             formulas: Vec::new(),
+            cell_repeat: Vec::new(),
             in_text: false,
             skip: 0,
             depth: 0,
@@ -1336,16 +1339,22 @@ impl Body<'_> {
                 }
                 self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, borders, margins, direction, picture, ..Default::default() });
                 self.formulas.push(get(a, "table:formula").and_then(super::cell_formula::word_of));
+                self.cell_repeat.push(repeat_count(a, "table:number-columns-repeated", wordcraft_doc::table::MAX_COLS));
                 self.containers.push(Vec::new());
                 self.cell_tops.push(self.containers.len());
                 self.lists_saved.push((std::mem::take(&mut self.lists), std::mem::take(&mut self.item_used), self.list_id));
             }
             "covered-table-cell" => {
                 if let Some(t) = self.tables.last_mut() {
-                    if t.hcover > 0 {
-                        t.hcover -= 1;
-                    } else if t.row.len() < 63 {
+                    let mut n = repeat_count(a, "table:number-columns-repeated", wordcraft_doc::table::MAX_COLS);
+                    let owed = t.hcover.min(n);
+                    t.hcover -= owed;
+                    n -= owed;
+                    let occupied = t.row.iter().fold(0usize, |cols, c| cols.saturating_add(c.colspan.max(1) as usize));
+                    n = n.min(wordcraft_doc::table::MAX_COLS.saturating_sub(occupied));
+                    while n > 0 {
                         t.row.push(Cell { covered: true, ..Default::default() });
+                        n -= 1;
                     }
                 }
                 // What a covered cell holds isn't shown (§9.1.5): skipped (it went before the table).
@@ -1416,6 +1425,7 @@ impl Body<'_> {
             rows: Vec::new(),
             row: Vec::new(),
             hcover: 0,
+            row_repeat: 1,
             widths: Vec::new(),
             shares: Vec::new(),
             room,
@@ -1436,6 +1446,7 @@ impl Body<'_> {
             t.row_background = background;
             t.row.clear();
             t.hcover = 0;
+            t.row_repeat = repeat_count(a, "table:number-rows-repeated", wordcraft_doc::table::MAX_ROWS);
             if t.extra.heights.len() < wordcraft_doc::table::MAX_ROWS {
                 t.extra.heights.truncate(t.rows.len());
                 t.extra.heights.push(height);
@@ -1874,19 +1885,29 @@ impl Body<'_> {
                 }
                 (self.lists, self.item_used, self.list_id) = self.lists_saved.pop().unwrap_or_default();
                 let mut cell = self.cells.pop().unwrap_or_default();
+                let repeat = self.cell_repeat.pop().unwrap_or(1);
                 cell.blocks = blocks;
-                if let Some(t) = self.tables.last_mut()
-                    && t.row.len() < 63
-                {
-                    t.row.push(cell);
+                if let Some(t) = self.tables.last_mut() {
+                    let span = cell.colspan.max(1) as usize;
+                    let occupied = t.row.iter().fold(0usize, |n, c| n.saturating_add(c.colspan.max(1) as usize));
+                    let copies = repeat.min(wordcraft_doc::table::MAX_COLS.saturating_sub(occupied) / span);
+                    // Every retained copy of a spanning cell is owed its own covered columns.
+                    t.hcover = span.saturating_sub(1).saturating_mul(copies);
+                    for _ in 0..copies {
+                        t.row.push(cell.clone());
+                    }
                 }
             }
             "table-row" => {
                 if let Some(t) = self.tables.last_mut() {
                     let r = std::mem::take(&mut t.row);
-                    if !r.is_empty() && t.rows.len() < wordcraft_doc::table::MAX_ROWS {
-                        t.rows.push(r);
+                    if !r.is_empty() {
+                        let room = wordcraft_doc::table::MAX_ROWS.saturating_sub(t.rows.len());
+                        for _ in 0..t.row_repeat.min(room) {
+                            t.rows.push(r.clone());
+                        }
                     }
+                    t.row_repeat = 1;
                 }
             }
             "table-header-rows" => {

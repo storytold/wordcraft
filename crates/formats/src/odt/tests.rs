@@ -1290,6 +1290,64 @@ fn meta_creation_date_timezones_and_fallbacks() {
 }
 
 #[test]
+fn table_repeats_expand_rows_and_cells() {
+    // #1342: `table:number-rows-repeated` and `table:number-columns-repeated` are counted, so
+    // repeated populated rows and cells survive and repeated blanks keep later cells in place.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><table:table>
+            <table:table-column table:number-columns-repeated="4"/>
+            <table:table-row table:number-rows-repeated="2"><table:table-cell table:number-columns-repeated="2"><text:p>R</text:p></table:table-cell><table:table-cell><text:p>End</text:p></table:table-cell></table:table-row>
+            <table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:covered-table-cell table:number-columns-repeated="2"/><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row>
+            <table:table-row><table:table-cell table:number-columns-spanned="2" table:number-columns-repeated="2"><text:p>S</text:p></table:table-cell><table:covered-table-cell/><table:covered-table-cell/></table:table-row>
+            </table:table></office:text></office:body></office:document-content>"#
+    );
+    let f = parse(&package(&content, None)).unwrap();
+    let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+    let texts = |r: &[model::Cell]| r.iter().map(Cell::text).collect::<Vec<_>>();
+    // The row repeated twice, its first cell twice.
+    assert_eq!(t.rows.len(), 4);
+    assert_eq!(texts(&t.rows[0]), ["R", "R", "End"]);
+    assert_eq!(texts(&t.rows[1]), ["R", "R", "End"]);
+    // A covered cell repeated twice keeps B in the fourth column.
+    let cells: Vec<(String, bool)> = t.rows[2].iter().map(|c| (c.text(), c.covered)).collect();
+    assert_eq!(cells, [("A".to_string(), false), (String::new(), true), (String::new(), true), ("B".to_string(), false)]);
+    // A spanning cell repeated twice, its covered columns owed twice.
+    let cells: Vec<(String, u32)> = t.rows[3].iter().map(|c| (c.text(), c.colspan)).collect();
+    assert_eq!(cells, [("S".to_string(), 2), ("S".to_string(), 2)]);
+}
+
+#[test]
+fn table_repeats_stop_at_the_caps() {
+    // Hostile repeat counts are clamped to the document table's own limits.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><table:table>
+            <table:table-row><table:table-cell table:number-columns-repeated="4000000000"><text:p>x</text:p></table:table-cell></table:table-row>
+            <table:table-row table:number-rows-repeated="4000000000"><table:table-cell><text:p>y</text:p></table:table-cell></table:table-row>
+            </table:table></office:text></office:body></office:document-content>"#
+    );
+    let f = parse(&package(&content, None)).unwrap();
+    let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+    assert_eq!(t.rows.first().map(Vec::len), Some(wordcraft_doc::table::MAX_COLS));
+    assert_eq!(t.rows.len(), wordcraft_doc::table::MAX_ROWS);
+}
+
+#[test]
+fn repeated_spanning_cells_respect_the_column_cap() {
+    let max_cols = wordcraft_doc::table::MAX_COLS;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><table:table><table:table-row><table:table-cell table:number-columns-spanned="2" table:number-columns-repeated="{max_cols}"><text:p>x</text:p></table:table-cell><table:covered-table-cell table:number-columns-repeated="{max_cols}"/></table:table-row></table:table></office:text></office:body></office:document-content>"#
+    );
+    let f = parse(&package(&content, None)).unwrap();
+    let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+    let row = &t.rows[0];
+    let occupied: usize = row.iter().map(|c| c.colspan as usize).sum();
+    assert!(occupied <= max_cols, "{occupied} occupied columns exceed {max_cols}");
+    assert_eq!(row.len(), max_cols / 2 + 1);
+    assert_eq!(occupied, max_cols);
+    assert!(row.last().is_some_and(|c| c.covered));
+}
+
+#[test]
 fn a_later_default_style_without_a_font_keeps_the_default_font() {
     // #4501 follow-up: styles read twice (styles.xml, then content.xml) must not wipe the font.
     let mut styles = styles::Styles::default();

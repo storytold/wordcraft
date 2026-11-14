@@ -106,6 +106,7 @@ impl Body<'_> {
         }
         self.tables.truncate(d.tables);
         self.cells.truncate(d.cells);
+        self.cell_repeat.truncate(d.cells);
         self.formulas.truncate(d.cells);
         self.cell_tops.truncate(d.cells);
         self.lists_saved.truncate(d.lists_saved);
