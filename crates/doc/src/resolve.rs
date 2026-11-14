@@ -634,4 +634,22 @@ mod tests {
         assert_eq!(back.padding, [0.0; 4]);
         assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
     }
+
+    /// Measured in Word: Thai text in a run that says it is not complex script (`w:cs w:val="0"`)
+    /// is drawn in the run's other font and size, while a run that says nothing still draws Thai,
+    /// Lao and Indic characters with the complex-script formatting, and a complex-script or
+    /// right-to-left run draws every character with it.
+    #[test]
+    fn a_run_that_is_not_complex_script_draws_thai_in_its_own_formatting() {
+        let s = StyleSheet::builtin();
+        let rc = |c: CharProps| s.resolve_char(None, &c);
+        let plain = rc(CharProps::default());
+        assert!(plain.uses_complex('ท') && plain.uses_complex('क') && !plain.uses_complex('a'));
+        let off = rc(CharProps { cs: Some(false), ..Default::default() });
+        assert!(!off.uses_complex('ท') && !off.uses_complex('ລ') && !off.uses_complex('क') && !off.uses_complex('a'));
+        let on = rc(CharProps { cs: Some(true), ..Default::default() });
+        assert!(on.uses_complex('ท') && on.uses_complex('a'));
+        let rtl = rc(CharProps { cs: Some(false), rtl: Some(true), ..Default::default() });
+        assert!(rtl.uses_complex('ท') && rtl.uses_complex('a'), "a right-to-left run stays complex script");
+    }
 }

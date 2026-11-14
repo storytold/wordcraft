@@ -79,12 +79,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 Some("the Spike is empty")
             }
         }),
-        CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste).key("Mod+V / Shift+Insert").params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
+        CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste)
+            .key("Mod+V / Shift+Insert")
+            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "privateClipboard"?: bool}"#),
         CommandSpec::new("edit.pasteText", "Paste: Keep Text Only", "Home › Clipboard › Paste", paste_text)
             .params(r#"{"text"?: string}"#)
             .key("Mod+Shift+Alt+V"),
         CommandSpec::new("edit.pasteMerge", "Paste: Merge Formatting", "Home › Clipboard › Paste", paste_merge)
-            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
+            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "privateClipboard"?: bool}"#),
         CommandSpec::new("edit.clipboardPane", "Clipboard Pane", "Home › Clipboard", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!s.view.clipboard_pane);
             s.view.clipboard_pane = on;
@@ -204,7 +206,10 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
 pub(crate) fn copy_result(s: &mut Session) -> Value {
     (s.clipboard_html, s.clipboard_rtf) = match &s.clipboard {
         Some(f) => {
-            let d = f.to_document();
+            let mut d = f.to_document();
+            if d.media.is_empty() {
+                d.media = s.doc.media.clone();
+            }
             (wordcraft_formats::html::export_fragment(&d), wordcraft_formats::rtf::export(&d))
         }
         None => (String::new(), String::new()),
@@ -362,9 +367,10 @@ impl ClipHistory {
     }
 
     pub(crate) fn push(&mut self, f: &Fragment, text: &str) {
-        // Text plus per-paragraph overhead; pictures are references into the document.
+        // Text plus per-paragraph overhead, plus the picture bytes the fragment keeps alive.
         let paras = text.matches('\n').count().saturating_add(f.blocks.len()).saturating_add(f.parts.len()).saturating_add(1);
-        let bytes = text.len().saturating_mul(2).saturating_add(paras.saturating_mul(256));
+        let media = f.media.values().map(|m| m.len()).fold(0, usize::saturating_add);
+        let bytes = text.len().saturating_mul(2).saturating_add(paras.saturating_mul(256)).saturating_add(media);
         if bytes > CLIP_ITEM_BYTES || f.blocks.is_empty() {
             return;
         }
