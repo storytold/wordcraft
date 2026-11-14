@@ -9,17 +9,30 @@ pub(super) const HYPHENATION_ZONE: f32 = wordcraft_doc::DEFAULT_HYPHENATION_ZONE
 /// 2013+, compatibility mode 15).
 const MAX_SPACE_SHRINK: f32 = 0.25;
 
-/// How far a word (with the space before it) may overrun a justified line and still be fitted
-/// onto it by shrinking the line's spaces, as a share of its own width.
-const MAX_WORD_OVERRUN: f32 = 0.355;
-
-/// How far a justified line's text may run past its right edge, its spaces (`spaces` wide in
-/// all) shrinking to make room, when the word now ending the line is `word` wide with the space
-/// before it. Measured in Word for Mac (compatibility mode 15, synthetic justified paragraphs):
-/// at most a quarter of the spaces' width, and at most 0.355 of the word's own (0.351 to 0.360
-/// across words of 2.7 to 80 pt and spaces of 3.3 and 6.7 pt).
-pub(super) fn space_room(spaces: f32, word: f32) -> f32 {
-    (spaces * MAX_SPACE_SHRINK).min(word.max(0.0) * MAX_WORD_OVERRUN)
+/// How far a justified line's text may run past its right edge, its spaces shrinking to make
+/// room: `spaces` is their width in all, `word` that of the word now ending the line with the
+/// space before it, and `before` that of this space (none after a hyphen).
+///
+/// Word weighs squeezing the line for the word against stretching it without: the word stays
+/// while the spaces give up, as a share of their width, no more than half of what the spaces
+/// left without it would have to gain, and never more than a quarter. For an overrun `c` that is
+/// `c / spaces <= (word - c) / (spaces - before) / 2`, so on a line of n equal spaces the word
+/// may overrun by n / (3n - 2) of its width.
+///
+/// Measured in Word for Windows (#6655: compatibility mode 15, 3108 justified paragraphs in
+/// Arial and Times New Roman of 9 and 12 pt, words of 6 to 36 pt with their space on lines of 7
+/// to 33 spaces, the overrun moved in steps of 0.05 to 0.3 pt): the largest overrun Word keeps
+/// is 0.368 of the word with 7 spaces, 0.351 with 13, 0.345 with 19 and 0.340 with 32. The rule
+/// decides 3100 of the paragraphs as Word does and the other 8 lie within 0.006 pt of it. One
+/// share for every line, the 0.355 measured on lines of 12 spaces in Word for Mac, is right for
+/// 10 or 11 spaces and decides 105 of them otherwise, up to 0.43 pt off. The quarter is that
+/// measurement's, and holds where a long word meets few spaces.
+pub(super) fn space_room(spaces: f32, word: f32, before: f32) -> f32 {
+    if spaces.is_nan() || spaces <= 0.0 {
+        return 0.0;
+    }
+    let rest = (spaces - before).max(0.0);
+    (spaces * MAX_SPACE_SHRINK).min(word.max(0.0) * spaces / (2.0 * rest + spaces))
 }
 
 /// Take `-slack` (an overflow) out of the line's inner spaces, in proportion to their widths and
