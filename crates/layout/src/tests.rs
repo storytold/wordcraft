@@ -4707,6 +4707,76 @@ fn a_split_rows_middle_and_bottom_cells_are_lined_up_by_the_text_they_keep() {
     }
 }
 
+/// A middle or bottom cell whose text goes on is lowered by what it keeps on the page, and a row
+/// of a table that it keeps is part of that down to the row's bottom border, not only to its
+/// text: lowered by the text alone, the row's area would cross the page's bottom and be cut there
+/// though it stays. Measured in Word for Windows: a bottom-aligned cell that keeps a nested row
+/// with 30 pt of cell margin under its line, while the paragraph of three lines after it goes on,
+/// has that row's bottom border where the text kept beside it ends, 15 pt down with 62 pt of room
+/// and 24.2 pt down with 66, and a centred one half as far.
+#[test]
+fn a_cell_that_goes_on_is_lowered_by_the_nested_row_it_keeps_too() {
+    crate::test_fonts();
+    use wordcraft_doc::props::VAlign;
+    let para = |s: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(s, Default::default());
+        (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));
+        p.props.widow_control = Some(true);
+        wordcraft_doc::para_block(p)
+    };
+    let br = wordcraft_doc::para::LINE_BREAK;
+    // Cell 0 has eight lines. Cell 1, aligned to the bottom, holds a one-line row of a nested
+    // table with 30 pt of cell margin under its line, then a paragraph of three lines.
+    let lay_row = |push: f32| {
+        let mut d = Document::from_text("Filler");
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+            (p.props.space_before, p.props.space_after) = (Some(push), Some(0.0));
+        }
+        let mut inner = Table::new(1, 1, 150.0);
+        inner.props.cell_margins = Some([0.0, 5.4, 30.0, 5.4]);
+        inner.rows[0].props.cant_split = true;
+        inner.rows[0].cells[0].blocks = vec![para("N")];
+        let mut t = Table::new(2, 2, 400.0);
+        t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+        let cells = &mut t.rows[0].cells;
+        cells[0].blocks = (0..8).map(|i| para(&format!("A{i}"))).collect();
+        cells[1].blocks = vec![std::sync::Arc::new(Block::Table(inner)), para(&format!("B0{br}B1{br}B2")), para("B3")];
+        cells[1].props.valign = Some(VAlign::Bottom);
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        lay(&d)
+    };
+    // The nested row's area on page `pg`, and the lines of cell `c` there (the tops of the first two).
+    let nested = |l: &DocLayout, pg: usize| {
+        l.pages[pg].items.iter().find_map(|it| if let Placed::Cell { rect, table, .. } = it { (table.0.len() > 1).then_some(*rect) } else { None })
+    };
+    let lines = |l: &DocLayout, pg: usize, c: u32| -> Vec<f32> {
+        let mut ys: Vec<f32> = l.pages[pg]
+            .items
+            .iter()
+            .filter_map(
+                |it| if let Placed::Lines { path, y, .. } = it { (path.0.len() == 4 && path.0[..3] == [1, 0, c]).then_some(*y) } else { None },
+            )
+            .collect();
+        ys.sort_by(f32::total_cmp);
+        ys
+    };
+    let free = lay_row(0.0);
+    let (ys, area) = (lines(&free, 0, 0), nested(&free, 0).expect("the nested row is on the page"));
+    let (top, line) = (ys[0], ys[1] - ys[0]);
+    // The nested row and two of the paragraph's three lines fit above the page bottom (720),
+    // with 3 pt to spare: the paragraph goes on whole, and the cell keeps the nested row alone.
+    let l = lay_row(720.0 - 3.0 - (top + area.h + 2.0 * line));
+    assert!(lines(&l, 0, 1).is_empty() && lines(&l, 1, 1).len() == 2, "the cell's paragraphs go on");
+    let kept = lines(&l, 0, 0);
+    assert!(kept.len() >= 4 && kept.len() < 8, "the cell beside it keeps some of its lines: {kept:?}");
+    let on = nested(&l, 0).expect("the nested row stays");
+    assert!(nested(&l, 1).is_none(), "none of it goes on: {:?}", nested(&l, 1));
+    assert!((on.h - area.h).abs() < 0.01, "it stays whole: {on:?}, of {area:?}");
+    // Lowered so that it ends with the last line kept beside it.
+    let beside = kept.last().map_or(0.0, |y| y + line);
+    assert!((on.bottom() - beside).abs() < 1.0, "the nested row ends at {}, the text beside it at {beside}", on.bottom());
+}
+
 /// The cells of the part of a split row left on its page line up against the most text any cell
 /// keeps there, also when that cell is itself aligned to the middle or the bottom and stays
 /// whole. Measured in Word for Windows: beside a cell of four lines that stays whole (at the top,

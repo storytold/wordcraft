@@ -1213,7 +1213,7 @@ fn align_in_part(
     }
     let limit = cut - row.bottom.clamp(0.0, cut);
     let mut kept = f32::MIN;
-    // Where the text each of those cells keeps on the page ends.
+    // Where what each of those cells keeps on the page ends.
     let mut own = vec![f32::MIN; cells.len()];
     for ((((items, splits), _), end), own) in
         cells.iter().zip(splits).zip(realign).zip(ends.iter()).zip(&mut own).filter(|(((_, al), _), _)| al.is_none())
@@ -1230,6 +1230,9 @@ fn align_in_part(
                 (None, Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Graphic { rect, .. } | Placed::Clip { rect, .. }) => {
                     Some(rect.bottom())
                 }
+                // A row of a table in the cell that stays: down to its bottom border, which is
+                // below its text. The cell's own area runs to the row's bottom, past the limit.
+                (None, Placed::Cell { rect, .. }) => Some(rect.bottom()),
                 _ => None,
             };
             if let Some(b) = bottom.filter(|&b| b <= limit + 0.01) {
