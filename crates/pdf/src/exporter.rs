@@ -16,6 +16,16 @@ mod draw;
 mod nav;
 mod text;
 
+pub(crate) struct LinkRect {
+    pub(crate) x0: f32,
+    pub(crate) y0: f32,
+    pub(crate) x1: f32,
+    pub(crate) y1: f32,
+    pub(crate) target: String,
+    /// `(para_idx, child_idx)` in `Exporter::tags` for this link's `Tag::Link` group.
+    pub(crate) tag: Option<(usize, usize)>,
+}
+
 pub(crate) struct Exporter<'a> {
     pub(crate) doc: &'a Document,
     pub(crate) lay: &'a DocLayout,
@@ -35,8 +45,10 @@ pub(crate) struct Exporter<'a> {
     pub(crate) vectors: HashMap<String, Option<Arc<Vector>>>,
     pub(crate) tags: Vec<TagEntry>,
     pub(crate) tag_index: HashMap<(StoryRef, DocPath), usize>,
-    /// Link rectangles on the current page: (x0, y0, x1, y1, target).
-    pub(crate) links: Vec<(f32, f32, f32, f32, String)>,
+    /// Link rectangles on the current page.
+    pub(crate) links: Vec<LinkRect>,
+    /// Index in `links` touched by the most recent `Draw::Glyphs` item, if any.
+    pub(crate) last_link: Option<usize>,
     /// Bookmark positions by name (the first of a name wins), gathered once: looking each internal
     /// link up by walking the whole document made a long document with a linked table of contents
     /// take seconds to export.
@@ -186,10 +198,48 @@ impl Exporter<'_> {
         }
     }
 
+    /// Attach a paragraph's marked-content `id` to its `Tag::Link` group when `draw` recorded a
+    /// link rectangle, or directly to the paragraph entry otherwise.
+    fn attach_para_link(&mut self, idx: usize, id: Identifier) {
+        if let Some(li) = self.last_link.take()
+            && let Some(link) = self.links.get_mut(li)
+        {
+            if let Some((p_idx, c_idx)) = link.tag
+                && let Some(Node::Group(g)) = self.tags.get_mut(p_idx).and_then(|e| e.children.get_mut(c_idx))
+            {
+                g.push(Node::Leaf(id));
+                return;
+            }
+            if let Some(e) = self.tags.get_mut(idx) {
+                let c_idx = e.children.len();
+                e.children.push(Node::Group(TagGroup::with_children(Tag::Link, vec![Node::Leaf(id)])));
+                link.tag = Some((idx, c_idx));
+                return;
+            }
+        }
+        if let Some(e) = self.tags.get_mut(idx) {
+            e.children.push(Node::Leaf(id));
+        }
+    }
+
+    /// Insert a link annotation's `OBJR` identifier as the first child of its `Tag::Link` group.
+    pub(crate) fn attach_link_annotation(&mut self, para_idx: usize, child_idx: usize, annot_id: Identifier) {
+        if let Some(Node::Group(g)) = self.tags.get_mut(para_idx).and_then(|e| e.children.get_mut(child_idx)) {
+            g.children.insert(0, Node::Leaf(annot_id));
+        }
+    }
+
     /// One draw of a paragraph's line, tagged for what it is: text as the paragraph's content
     /// (structure entry `idx`), pictures and figures on their own, anything else an artifact.
     fn line_item(&mut self, s: &mut Surface, d: &Draw, idx: usize) {
         match d {
+            Draw::Glyphs { link: Some(_), .. } if self.opts.tagged && self.opts.links => {
+                self.last_link = None;
+                let id = s.start_tagged(ContentTag::Span(SpanTag::empty()));
+                self.draw(s, d);
+                s.end_tagged();
+                self.attach_para_link(idx, id);
+            }
             Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
             // A picture marked decorative: an artifact screen readers skip.
             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
