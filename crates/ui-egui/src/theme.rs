@@ -505,6 +505,29 @@ pub fn install_fonts_language_arabic(
     ctx.set_fonts(fonts);
 }
 
+/// The font family window `window`'s input method composition is drawn in: the document's face
+/// at the caret, then the interface fonts for what it lacks. The fonts are the app's, one set for
+/// every window, so each window has a family of its own, bound to its own document's face.
+pub fn composition_family(window: u64) -> FontFamily {
+    FontFamily::Name(format!("composition {window}").into())
+}
+
+/// Bind window `window`'s [`composition_family`] to `face` followed by the interface fonts, so a
+/// composition looks like the text around it, as in Word. A face larger than the composition
+/// borrows (see [`faces_for_preedit`]) is left out: the interface fonts draw the composition then.
+pub fn set_composition_face(fonts: &mut FontDefinitions, window: u64, face: Option<wordcraft_fonts::FaceRef>) {
+    let mut family = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    if let Some(f) = face.filter(|f| f.data().len() <= 16 << 20) {
+        let f = f.get();
+        let name = format!("composition {} {} {}", f.family, f.style, f.id());
+        let mut data = FontData::from_static(f.data());
+        data.index = f.index();
+        fonts.font_data.insert(name.clone(), Arc::new(data));
+        family.insert(0, name);
+    }
+    fonts.families.insert(composition_family(window), family);
+}
+
 /// Add `faces` after every other font of the interface families.
 pub fn add_fallback_faces(fonts: &mut FontDefinitions, faces: &[Arc<wordcraft_fonts::FontFace>]) {
     for f in faces {
