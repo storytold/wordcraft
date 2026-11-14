@@ -256,13 +256,15 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 .get(ri)
                 .is_some_and(|r| r.props.cant_split || (r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
         let mut rest: Option<table::RowLayout> = None;
+        // The row as it opens a page the table doesn't start on, once it has moved on whole.
+        let mut opened: Option<table::RowLayout> = None;
         // On a new page holding only the repeated header rows.
         let mut fresh = false;
         // Nothing but this table's header rows above it on a page it started at the top of.
         let under_top_headers = ri == first && table_at_top;
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
-            let cur = rest.as_ref().unwrap_or(row);
+            let cur = rest.as_ref().or(opened.as_ref()).unwrap_or(row);
             // A fitting kept row follows the next row when that row cannot start below it.
             // Move only the prefix's start; an oversized follower cannot separate its kept rows.
             let defer_kept = pb.y + cur.height <= pb.bottom + 0.01
@@ -292,9 +294,10 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             let moves_on = first_part && short_of_min(ri, room);
             let split = match (splittable && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
-                (true, true) => split_keeping_nested(ctx.doc, cur, room),
+                (true, true) => table::split_row_opening(cur, nested_keep_cut(ctx.doc, cur, room), true, &ctx.row_tops),
                 // On a fresh page, a nested row taller than the room splits rather than overflowing.
-                (true, false) => table::split_row(cur, nested_keep_cut(ctx.doc, cur, room)).or_else(|| table::split_row(cur, room)),
+                (true, false) => table::split_row_opening(cur, nested_keep_cut(ctx.doc, cur, room), false, &ctx.row_tops)
+                    .or_else(|| table::split_row_opening(cur, room, false, &ctx.row_tops)),
             };
             match split {
                 Some((a, b)) => {
@@ -309,15 +312,22 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             }
             pb.advance(block, body_top);
             // Repeat header rows, up to the layout's cap.
+            let mut under_headers = false;
             if ri >= header_rows.len() && ctx.header_repeats.saturating_add(header_cost) <= header_cap {
                 ctx.header_repeats = ctx.header_repeats.saturating_add(header_cost);
                 for h in header_rows.iter().filter_map(|hr| tl.rows.get(*hr)) {
                     place(pb, h);
+                    under_headers = true;
                 }
+            }
+            // A row that starts the new page whole opens with the border of a first row, as in
+            // Word, not with the one it shares with the row left behind.
+            if rest.is_none() && ri > 0 && !under_headers {
+                opened = table::at_page_top(row);
             }
             fresh = true;
         }
-        let last = rest.as_ref().unwrap_or(row);
+        let last = rest.as_ref().or(opened.as_ref()).unwrap_or(row);
         place(pb, last);
         table_notes(ctx, pb, &last.items);
     }
