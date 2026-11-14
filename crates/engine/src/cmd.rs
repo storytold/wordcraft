@@ -347,6 +347,29 @@ pub(crate) struct InsertEffect {
     pub state_changed: bool,
 }
 
+/// The most paragraphs one call may put into the document, whichever way the text arrives:
+/// typed, pasted, replaced in, or set as the whole body. Each paragraph costs about a kilobyte
+/// of document (its properties and marks), so a text of nothing but line breaks grows the
+/// document far faster than the request that carried it: 500 000 breaks became 721 MB of
+/// document, and the layout that followed took 17 seconds.
+///
+/// The typed-paragraph path (`text.insert` with `paragraphs: true`) is held to the same number,
+/// so one call cannot make more paragraphs whichever way its text arrives. Real documents stay
+/// well below it: a long chapter is a few thousand paragraphs.
+pub const MAX_INSERTED_PARAGRAPHS: usize = 10_000;
+
+/// Refuse a text that would make more than [`MAX_INSERTED_PARAGRAPHS`] paragraphs, before any of
+/// it is typed or pasted, so a refused text leaves the document as it was. `paragraphs` is how
+/// many paragraphs the text would add to the document.
+pub(super) fn check_inserted_paragraphs(paragraphs: usize) -> Result<(), CmdError> {
+    if paragraphs > MAX_INSERTED_PARAGRAPHS {
+        return Err(CmdError::Params(format!(
+            "the text would make {paragraphs} paragraphs; a call may make at most {MAX_INSERTED_PARAGRAPHS} paragraphs"
+        )));
+    }
+    Ok(())
+}
+
 /// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     insert_text(s, text, true, None).map(|_| ())
@@ -420,6 +443,12 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     // nothing, so the lines run together and the control stays one paragraph (pasted text keeps
     // its breaks, as before).
     let no_breaks = enter && controls::refuses_paragraph(s);
+    // The text is counted before any of it is typed, so a text over the limit is refused with
+    // the document untouched. Each piece of it is a paragraph of about a kilobyte of document,
+    // so a megabyte of line breaks is a gigabyte of document.
+    if !no_breaks {
+        check_inserted_paragraphs(text.split(['\r', '\u{2029}']).count())?;
+    }
     for part in text.split(['\r', '\u{2029}']) {
         if !first && !no_breaks {
             at = split_para_as(s, &at, enter)?;

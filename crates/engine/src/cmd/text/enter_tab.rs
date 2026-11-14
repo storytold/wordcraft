@@ -69,7 +69,10 @@ pub(super) fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
 /// Most lines `text.insert` with `paragraphs` types in one call, for every caller (control
 /// channel, CLI, MCP): each line is an Enter, with its AutoFormat and AutoCorrect, so the work
 /// grows with the line count. More is refused before anything is typed (#3692).
-pub const MAX_TYPED_PARAGRAPHS: usize = 10_000;
+///
+/// The same limit as any other text insertion ([`crate::cmd::MAX_INSERTED_PARAGRAPHS`]): one call
+/// may not make more paragraphs however its text arrives.
+pub const MAX_TYPED_PARAGRAPHS: usize = crate::cmd::MAX_INSERTED_PARAGRAPHS;
 
 /// `text.insert` with `paragraphs`: each line typed as it is (`raw`), and between lines the
 /// paragraph break Enter makes ([`enter`]: its AutoFormat and AutoCorrect), all in one command, so

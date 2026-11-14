@@ -197,6 +197,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("document.layout", "Layout Summary", "Agents", layout_summary).pure(),
         CommandSpec::new("document.setText", "Replace Document Text", "Agents", |s, v| {
             let text = p::req_str(v, "text")?;
+            // The text becomes the body, a paragraph per line: refused before the body is built,
+            // so the document keeps what it had.
+            super::check_inserted_paragraphs(text.split('\n').count())?;
             let d = Document::from_text(text);
             s.doc.body = d.body;
             // The body is new even though the document id stays: a live IME composition (or an

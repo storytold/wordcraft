@@ -5336,6 +5336,67 @@ fn typed_paragraphs_are_capped_for_every_caller() {
     assert!(!body_texts(&s).iter().any(|p| p.contains('y')));
 }
 
+/// A text of nothing but line breaks makes a paragraph each, and a paragraph costs about a
+/// kilobyte of document, so a megabyte of breaks grew the document into a gigabyte and the
+/// layout that followed took seconds. Every route that turns text into paragraphs is held to
+/// the same cap, and a refused text leaves the document as it was.
+#[test]
+fn a_text_may_not_make_unbounded_paragraphs() {
+    use crate::CmdError;
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let over = MAX_INSERTED_PARAGRAPHS + 1;
+    // Every route into the document: typed, pasted, replaced in, and a body replaced wholesale.
+    for (id, params) in [
+        ("text.insert", json!({"text": "x\r".repeat(over), "raw": true})),
+        ("document.setText", json!({"text": "x\n".repeat(over)})),
+        ("edit.pasteText", json!({"text": "x\r".repeat(over)})),
+        ("edit.paste", json!({"text": "x\r".repeat(over)})),
+        ("edit.pasteMerge", json!({"text": "x\n".repeat(over)})),
+    ] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "keep"}));
+        let (before, depth) = (body_texts(&s), s.undo_depth());
+        match s.run(id, &params) {
+            Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{id}: {m}"),
+            r => panic!("{id}: not refused: {r:?}"),
+        }
+        assert_eq!(body_texts(&s), before, "{id}: nothing inserted");
+        assert_eq!(s.undo_depth(), depth, "{id}: no undo step");
+    }
+    // Replace All: the replacement is repeated for every match, so its paragraph marks add up.
+    let mut r = s();
+    run(&mut r, "text.insert", json!({"text": "x".repeat(20)}));
+    let before = body_texts(&r);
+    match r.run("edit.replaceAll", &json!({"text": "x", "with": "^p".repeat(over)})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{m}"),
+        r => panic!("edit.replaceAll: not refused: {r:?}"),
+    }
+    assert_eq!(body_texts(&r), before, "edit.replaceAll: nothing replaced");
+    // At the cap the text still goes in, every break a paragraph of its own.
+    let mut s = s();
+    let at_cap = vec!["y"; MAX_INSERTED_PARAGRAPHS].join("\r");
+    run(&mut s, "text.insert", json!({"text": at_cap, "raw": true}));
+    assert_eq!(body_texts(&s).len(), MAX_INSERTED_PARAGRAPHS);
+}
+
+/// A refused text leaves the document exactly as it was: the selection it would have replaced
+/// is still there, so refusing costs the user nothing and undoes to nothing.
+#[test]
+fn a_refused_text_leaves_the_selection_alone() {
+    use crate::CmdError;
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "keep this"}));
+    run(&mut s, "select.text", json!({"text": "keep"}));
+    let before = body_texts(&s);
+    let over = "x\r".repeat(MAX_INSERTED_PARAGRAPHS + 1);
+    match s.run("text.insert", &json!({"text": over, "raw": true})) {
+        Err(CmdError::Params(_)) => {}
+        r => panic!("not refused: {r:?}"),
+    }
+    assert_eq!(body_texts(&s), before, "the selection was deleted anyway");
+}
+
 fn hostile_junk() -> [serde_json::Value; 10] {
     [
         json!(null),

@@ -310,7 +310,12 @@ fn clipboard_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
 pub fn paste_fragment(s: &mut Session, v: &Value) -> Result<Fragment, CmdError> {
     Ok(match paste_content(s, v)? {
         Pasted::Fragment(f) => f,
-        Pasted::Text(t) => Fragment::from_text(&t),
+        Pasted::Text(t) => {
+            // The text becomes a paragraph per line: refused before the fragment is built, so the
+            // document keeps what it had.
+            super::check_inserted_paragraphs(t.split('\n').count())?;
+            Fragment::from_text(&t)
+        }
     })
 }
 
