@@ -11,6 +11,7 @@ mod cell_floats;
 mod complex;
 mod float_top;
 mod grid;
+mod kept_table;
 mod ligature;
 pub(crate) mod linear;
 mod missing_glyphs;
