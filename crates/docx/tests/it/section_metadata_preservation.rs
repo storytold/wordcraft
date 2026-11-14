@@ -1,25 +1,21 @@
 //! Section printer, note and chapter-number metadata survives DOCX and native JSON saves.
 
-use std::io::{Read, Write};
-
 fn docx(body: &str) -> Vec<u8> {
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let doc = format!(
         r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="w15"><w:body>{body}</w:body></w:document>"#
     );
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in [("_rels/.rels", root.as_bytes()), ("word/document.xml", doc.as_bytes())] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn document_xml(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 #[test]
