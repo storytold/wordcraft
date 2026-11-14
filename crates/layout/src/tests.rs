@@ -6548,54 +6548,6 @@ fn justified_line_with_multiple_tabs_shrinks_only_spaces_after_last_tab() {
     }
 }
 
-/// #5847: shrink_line_spaces is a no-op when there are no spaces after the line's last tab,
-/// guarding against division by zero, negative room, or shifting pre-tab clusters.
-#[test]
-fn shrink_line_spaces_with_no_spaces_after_last_tab_is_noop() {
-    use wordcraft_doc::props::{TabAlign, TabStop};
-    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
-    let lead = "n n n n";
-    let word = "WordWithoutSpaces";
-    let text = format!("{lead}\t{word}");
-    let mut d = Document::new();
-    d.settings.compat_mode = 15;
-    let mut p = wordcraft_doc::Paragraph::with_text(&text, chr);
-    p.props = ParaProps {
-        align: Some(Align::Justify),
-        tabs: Some(vec![TabStop { pos: 150.0, align: TabAlign::Left, leader: Default::default() }]),
-        ..Default::default()
-    };
-    d.body = vec![wordcraft_doc::para_block(p)];
-    let l = lay(&d);
-    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
-    let c0 = pl.lines[0].c0;
-    let c1 = pl.lines[0].c1;
-    let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == para::ClKind::Tab)).unwrap();
-    let from = last_tab + 1;
-
-    // Verify there are no spaces after the tab
-    let spaces_after = (from..c1).filter(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == para::ClKind::Space)).count();
-    assert_eq!(spaces_after, 0);
-
-    // Initial xs positions for line 0
-    let orig_xs: Vec<f32> = (c0..=c1).map(|k| pl.x_of(0, k).unwrap_or(0.0)).collect();
-    let content_end = *orig_xs.last().unwrap();
-
-    // Call shrink_line_spaces with negative slack (overflow)
-    let mut xs = orig_xs.clone();
-    crate::para::justify::shrink_line_spaces(pl, &mut xs, (c0, from), c1, content_end, -20.0);
-    assert_eq!(xs, orig_xs, "negative slack with 0 post-tab spaces must not shift any cluster");
-
-    // Call with zero slack, positive slack, and non-finite slack
-    let mut xs = orig_xs.clone();
-    crate::para::justify::shrink_line_spaces(pl, &mut xs, (c0, from), c1, content_end, 0.0);
-    assert_eq!(xs, orig_xs);
-
-    let mut xs = orig_xs.clone();
-    crate::para::justify::shrink_line_spaces(pl, &mut xs, (c0, from), c1, content_end, f32::NEG_INFINITY);
-    assert_eq!(xs, orig_xs);
-}
-
 /// #5847: a tabbed line with no spaces after its last tab has zero shrink room.
 /// Space shrinking is a no-op, guarding against division by zero, negative room,
 /// or shifting pre-tab clusters when there are no spaces to shrink after the tab.

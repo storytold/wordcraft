@@ -20,7 +20,7 @@ mod bidi;
 mod builder;
 mod chars;
 mod grid;
-pub(crate) mod justify;
+mod justify;
 mod lines;
 mod model;
 mod paragraph;
@@ -475,5 +475,60 @@ mod tests {
             assert_eq!(lookup_family(&d, family), family);
         }
         assert_eq!(lookup_family(&d, "No Such Roman Font"), MISSING_ROMAN_FONT);
+    }
+
+    /// #5847: shrink_line_spaces is a no-op when there are no spaces after the line's last tab,
+    /// guarding against division by zero, negative room, or shifting pre-tab clusters.
+    #[test]
+    fn shrink_line_spaces_with_no_spaces_after_last_tab_is_noop() {
+        crate::test_fonts();
+        let chr = CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let fields = FieldCtx::default();
+        let env = ParaEnv {
+            doc: &d,
+            fields: &fields,
+            width: 468.0,
+            label: None,
+            show_hidden: false,
+            hide_deleted: Default::default(),
+            table: None,
+            proofing: None,
+            typing_word: None,
+            field_codes: false,
+            grid: Grid::default(),
+            exclusions: &[],
+            eq_number: 0,
+            numeral: Default::default(),
+            read_line_spacing: None,
+            fit_objects: false,
+            fitted: &[],
+        };
+        let mut p = Paragraph::with_text("n n n n\tWordWithoutSpaces", chr);
+        p.props = ParaProps {
+            align: Some(Align::Justify),
+            tabs: Some(vec![TabStop { pos: 150.0, align: TabAlign::Left, leader: Default::default() }]),
+            ..Default::default()
+        };
+        let mut pl = layout_para(&p, &env);
+        let mark_style = pl.clusters[0].style;
+        break_lines(&mut pl, &env, mark_style, None);
+        let c0 = pl.lines[0].c0;
+        let c1 = pl.lines[0].c1;
+        let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab)).unwrap();
+        let from = last_tab + 1;
+
+        let spaces_after = (from..c1).filter(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space)).count();
+        assert_eq!(spaces_after, 0);
+
+        let orig_xs = pl.lines[0].xs.clone();
+        let content_end = *orig_xs.last().unwrap();
+
+        for slack in [-20.0, 0.0, f32::NEG_INFINITY] {
+            let mut xs = orig_xs.clone();
+            justify::shrink_line_spaces(&pl, &mut xs, (c0, from), c1, content_end, slack);
+            assert_eq!(xs, orig_xs, "slack {slack} with 0 post-tab spaces must not shift any cluster");
+        }
     }
 }
