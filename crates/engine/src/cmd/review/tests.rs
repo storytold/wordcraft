@@ -1120,4 +1120,32 @@ mod spelling_navigation_tests {
             assert_eq!(s.doc.plain_text(StoryRef::Body), "A sentense sentense.");
         }
     }
+
+    /// #6510: Word's spelling pane offers Change All on a suggestion (observed for Word for
+    /// Windows, recorded in `docs/spelling-review.md`), while WordCraft only had Change. One run
+    /// replaces every flagged occurrence of the word in the caret's story, in one undo step.
+    /// Whole words only, case included: `brwnish` and `Brwn` are their own misspellings with
+    /// their own suggestions (`Brawn`, `Brown`…), so `brwn` → `brown` leaves them alone.
+    #[test]
+    fn change_all_replaces_every_occurrence_of_the_word_at_the_caret_in_one_undo_step() {
+        let text = "The brwn fox.\nA brwn dog, a brwnish cat and Brwn.";
+        let mut s = Session::new(Document::from_text(text));
+        // As in Word, Change All is offered only on a flagged word.
+        assert!(matches!(s.run("review.changeAll", &json!({"text": "brown"})), Err(crate::CmdError::Disabled(_))));
+        assert_eq!(s.run("review.spelling", &json!({})).unwrap()["text"], "brwn");
+        let done = s.run("review.changeAll", &json!({"text": "brown"})).unwrap();
+        assert_eq!(done["word"], "brwn");
+        assert_eq!(done["changed"], 2);
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "The brown fox.\nA brown dog, a brwnish cat and Brwn.");
+        assert_eq!(s.sel.focus.path, s.doc.para_paths(StoryRef::Body)[0], "the caret stays at the first occurrence, so the pass skips nothing");
+        assert_eq!(s.sel.focus.off, 9);
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), text, "one undo step restores every occurrence");
+
+        // Without a replacement there is nothing to change to, and junk never panics.
+        s.run("review.spelling", &json!({})).unwrap();
+        assert!(s.run("review.changeAll", &json!({})).is_err());
+        assert!(s.run("review.changeAll", &json!({"text": 7})).is_err());
+        assert_eq!(s.doc.plain_text(StoryRef::Body), text);
+    }
 }

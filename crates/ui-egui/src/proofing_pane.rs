@@ -78,7 +78,7 @@ impl SpellingForm {
             return;
         }
         if let Some(command) = command {
-            let params = if command == "review.applySuggestion" { json!({"text": self.replacement}) } else { json!({}) };
+            let params = if matches!(command, "review.applySuggestion" | "review.changeAll") { json!({"text": self.replacement}) } else { json!({}) };
             if let Err(e) = app.run(command, params) {
                 self.message = e;
                 return;
@@ -156,6 +156,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
     let suggestions: Vec<String> =
         form.issue.get("suggestions").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
     let mut change = None;
+    let mut change_all = None;
     if suggestions.is_empty() {
         ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
     } else {
@@ -190,6 +191,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
                                     form.manual = true;
                                     ui.close();
                                 }
+                                // Word's suggestion menu carries Change All beside it (#6510,
+                                // `docs/spelling-review.md`); it is applied after the list is drawn.
+                                if spelling && ui.button(tl!("Change All")).clicked() {
+                                    change_all = Some(suggestion.clone());
+                                    ui.close();
+                                }
                                 if spelling && ui.button(tl!("Add to AutoCorrect")).clicked() {
                                     let word = form.issue.get("text").and_then(Value::as_str).unwrap_or("");
                                     let params = json!({"add": {"from": word, "to": suggestion}});
@@ -218,6 +225,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
     if let Some(replacement) = change {
         form.replacement = replacement;
         form.act(app, Some("review.applySuggestion"));
+        return;
+    }
+    if let Some(replacement) = change_all {
+        form.replacement = replacement;
+        form.act(app, Some("review.changeAll"));
         return;
     }
     ui.add_space(6.0);
@@ -292,6 +304,23 @@ mod tests {
         assert!(h.state().spelling_review.is_none());
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "The quick brwn fox.");
+    }
+
+    /// #6510: Change All sits in a suggestion's menu, where Word has it, and corrects every
+    /// occurrence at once (so the pass then finds nothing left) in a single undo step.
+    #[test]
+    fn spelling_review_dialog_changes_all_occurrences_from_a_suggestion_menu() {
+        let text = "The brwn fox and the brwn dog.";
+        let mut h = harness(text);
+        let replacement = form(h.state()).issue["suggestions"][0].as_str().unwrap().to_string();
+        h.get_all_by_label("⌄").next().expect("a suggestion's menu").click();
+        h.run_steps(3);
+        h.get_by_label("Change All").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), format!("The {replacement} fox and the {replacement} dog."));
+        assert!(form(h.state()).done(), "both occurrences are corrected, so the pass is finished");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), text);
     }
 
     #[test]
