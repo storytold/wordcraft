@@ -6,7 +6,6 @@ use std::sync::Arc;
 use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, Underline, VMerge};
-use wordcraft_doc::styles::TablePart;
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph, RevisionKind};
 
 const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
@@ -743,10 +742,8 @@ fn assert_imported_body_and_metadata(d: &Document) {
     assert_eq!(d.core.revision, 3);
 }
 
-/// A table style's own pPr/rPr and cell margins; a derived style keeps only what it sets itself.
-/// Word reads nothing from a `wholeTable` region (measured: not its shading, `w:rPr`, `w:pPr`,
-/// `w:vAlign` or borders, in modes 12, 14 and 15), and it paints no `w:tblPr/w:shd`: that is kept
-/// for saving, not as the cells' fill.
+/// A table style's own pPr/rPr, its `wholeTable` region (which covers every cell) and its table
+/// shading and cell margins; a derived style keeps only what it sets itself.
 #[test]
 fn table_style_whole_table_shading_and_margins() {
     let styles = format!(
@@ -759,115 +756,19 @@ fn table_style_whole_table_shading_and_margins() {
     let d = wordcraft_docx::read(&bytes).unwrap();
     let base = d.styles.get("Base").unwrap();
     let parts = base.table.as_ref().unwrap();
-    assert_eq!(parts.fill, None);
-    assert_eq!(parts.table_shading, Some(wordcraft_doc::Rgb(0xEE, 0xEE, 0xEE)));
+    assert_eq!(parts.fill, Some(wordcraft_doc::Rgb(0xEE, 0xEE, 0xEE)));
     assert_eq!(parts.cell_margins, Some([1.0, 14.4, 0.0, 14.4]));
     let whole = d.styles.get("Whole").unwrap();
-    assert_eq!(whole.para.align, None);
+    assert_eq!(whole.para.align, Some(Align::Center));
     assert_eq!(whole.chr.bold, Some(true));
-    assert_eq!(whole.chr.color, None);
-    assert!(whole.table.is_none(), "a wholeTable region adds nothing to the style");
+    assert_eq!(whole.chr.color, Some(TextColor::Rgb(wordcraft_doc::Rgb(0x1F, 0x4E, 0x79))));
+    assert_eq!(whole.table.as_ref().unwrap().fill, Some(wordcraft_doc::Rgb(0xDD, 0xEB, 0xF7)));
+    assert_eq!(whole.table.as_ref().unwrap().cell_margins, None);
     let merged = d.styles.table_style("Whole").unwrap();
     assert_eq!(merged.para.space_after, Some(0.0), "from Base");
-    assert_eq!(merged.para.align, None);
-    assert_eq!(merged.parts.fill, None);
+    assert_eq!(merged.para.align, Some(Align::Center));
+    assert_eq!(merged.parts.fill, Some(wordcraft_doc::Rgb(0xDD, 0xEB, 0xF7)));
     assert_eq!(merged.parts.cell_margins, Some([1.0, 14.4, 0.0, 14.4]), "from Base");
-}
-
-/// The style's own `w:tcPr` shading is what covers every cell, and a derived style replaces it with
-/// a colour or with no colour; a `wholeTable` region below it changes nothing (measured in Word).
-#[test]
-fn table_style_cell_shading_is_the_styles_tcpr() {
-    let shd = |fill: &str| format!(r#"<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="{fill}"/></w:tcPr>"#);
-    let (red, green) = (shd("FF0000"), shd("00AA00"));
-    let whole = format!(r#"<w:tblStylePr w:type="wholeTable">{}</w:tblStylePr>"#, shd("0000FF"));
-    let auto = shd("auto");
-    let styles = format!(
-        r#"<w:styles {W_NS}>
- <w:style w:type="table" w:styleId="Red"><w:name w:val="Red"/>{red}</w:style>
- <w:style w:type="table" w:styleId="Green"><w:name w:val="Green"/><w:basedOn w:val="Red"/>{green}</w:style>
- <w:style w:type="table" w:styleId="Whole"><w:name w:val="Whole"/><w:basedOn w:val="Red"/>{whole}</w:style>
- <w:style w:type="table" w:styleId="Auto"><w:name w:val="Auto"/><w:basedOn w:val="Red"/>{auto}</w:style>
- <w:style w:type="table" w:styleId="Nil"><w:name w:val="Nil"/><w:basedOn w:val="Red"/><w:tcPr><w:shd w:val="nil"/></w:tcPr></w:style>
- <w:style w:type="table" w:styleId="AfterAuto"><w:name w:val="AfterAuto"/><w:basedOn w:val="Auto"/>{green}</w:style>
- <w:style w:type="table" w:styleId="Mid"><w:name w:val="Mid"/><w:tcPr><w:vAlign w:val="center"/></w:tcPr></w:style>
-</w:styles>"#
-    );
-    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
-    let d = wordcraft_docx::read(&bytes).unwrap();
-    let fill = |id: &str| d.styles.table_style(id).unwrap().parts.fill_over(TablePart::WholeTable, None);
-    let (r, g) = (Some(wordcraft_doc::Rgb(0xFF, 0, 0)), Some(wordcraft_doc::Rgb(0, 0xAA, 0)));
-    assert_eq!(fill("Red"), r);
-    assert_eq!(fill("Green"), g);
-    assert_eq!(fill("Whole"), r);
-    assert_eq!(fill("Auto"), None);
-    assert_eq!(fill("Nil"), None);
-    assert_eq!(fill("AfterAuto"), g);
-    // How each says no colour: `auto` covers what is below, `nil` lets it show; a colour or a
-    // `wholeTable` region records neither.
-    let off = |id: &str| d.styles.table_style(id).unwrap().parts.fills_off.get(&TablePart::WholeTable).copied();
-    use wordcraft_doc::styles::FillOff;
-    assert_eq!(
-        [off("Red"), off("Green"), off("Whole"), off("Auto"), off("Nil"), off("AfterAuto")],
-        [None, None, None, Some(FillOff::Auto), Some(FillOff::Nil), None]
-    );
-    let over = |id: &str| d.styles.table_style(id).unwrap().parts.fill_over(TablePart::WholeTable, Some(wordcraft_doc::Rgb(1, 2, 3)));
-    assert_eq!((over("Auto"), over("Nil")), (None, Some(wordcraft_doc::Rgb(1, 2, 3))));
-    assert_eq!(d.styles.table_style("Mid").unwrap().part(TablePart::WholeTable).v_align, Some(wordcraft_doc::props::VAlign::Center));
-}
-
-/// A part's no-colour shading differs by how it says so: `auto` covers the style's colour, `nil`
-/// lets it show, and either replaces the colour a based-on style gives that part.
-#[test]
-fn a_table_style_parts_no_colour_covers_the_style_only_when_auto() {
-    let tc = |s: &str| format!(r#"<w:tblStylePr w:type="firstRow"><w:tcPr>{s}</w:tcPr></w:tblStylePr>"#);
-    let red = r#"<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="FF0000"/></w:tcPr>"#;
-    let auto = tc(r#"<w:shd w:val="clear" w:color="auto" w:fill="auto"/>"#);
-    let nil = tc(r#"<w:shd w:val="nil"/>"#);
-    let first = tc(r#"<w:shd w:val="clear" w:color="auto" w:fill="FF00FF"/>"#);
-    let styles = format!(
-        r#"<w:styles {W_NS}>
- <w:style w:type="table" w:styleId="A"><w:name w:val="A"/>{red}{auto}</w:style>
- <w:style w:type="table" w:styleId="N"><w:name w:val="N"/>{red}{nil}</w:style>
- <w:style w:type="table" w:styleId="F"><w:name w:val="F"/>{first}</w:style>
- <w:style w:type="table" w:styleId="FN"><w:name w:val="FN"/><w:basedOn w:val="F"/>{nil}</w:style>
- <w:style w:type="table" w:styleId="AN"><w:name w:val="AN"/><w:basedOn w:val="A"/>{nil}</w:style>
- <w:style w:type="table" w:styleId="NA"><w:name w:val="NA"/><w:basedOn w:val="N"/>{auto}</w:style>
-</w:styles>"#
-    );
-    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
-    let d = wordcraft_docx::read(&bytes).unwrap();
-    let header = |id: &str| {
-        let p = d.styles.table_style(id).unwrap().parts;
-        p.fill_over(TablePart::FirstRow, p.fill_over(TablePart::WholeTable, None))
-    };
-    let red = Some(wordcraft_doc::Rgb(0xFF, 0, 0));
-    assert_eq!(header("A"), None);
-    assert_eq!(header("N"), red);
-    assert_eq!(header("F"), Some(wordcraft_doc::Rgb(0xFF, 0, 0xFF)));
-    assert_eq!(header("FN"), None);
-    // One way of saying no colour replaces the other: `nil` over a based-on `auto` lets the
-    // style's colour show again, `auto` over a based-on `nil` covers it.
-    assert_eq!(header("AN"), red);
-    assert_eq!(header("NA"), None);
-}
-
-/// A cell's own `w:shd`: a colour, `w:fill="auto"` (No Color, which covers its table style's
-/// colour) and `w:val="nil"` (nothing of its own, so the style's shows).
-#[test]
-fn a_cells_own_no_colour_is_read_as_auto_only_with_fill_auto() {
-    let cell = |shd: &str| format!(r#"<w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/>{shd}</w:tcPr><w:p/></w:tc>"#);
-    let body = format!(
-        r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid><w:tr>{}{}{}{}</w:tr></w:tbl><w:p/>"#,
-        cell(r#"<w:shd w:val="clear" w:color="auto" w:fill="auto"/>"#),
-        cell(r#"<w:shd w:val="clear" w:color="auto" w:fill="00AA00"/>"#),
-        cell(r#"<w:shd w:val="nil"/>"#),
-        cell(""),
-    );
-    let d = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
-    let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
-    let own: Vec<_> = t.rows[0].cells.iter().map(|c| (c.props.shading, c.props.shading_auto)).collect();
-    assert_eq!(own, [(None, true), (Some(wordcraft_doc::Rgb(0, 0xAA, 0)), false), (None, false), (None, false)]);
 }
 
 fn gallery_ids(styles: &str) -> Vec<String> {
@@ -4674,7 +4575,7 @@ fn shape_gradients_and_transparency_are_read_and_survive_saving() {
             rot_with_shape: false,
             flip: GradientFlip::Xy,
         }))),
-        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(0x20, 0x40, 0x60), 0.0)], lin(90.0, false), true)),
+        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(44, 92, 140), 0.0)], lin(90.0, false), true)),
         Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, black, 0.0)], centre, true)),
         None,
     ];

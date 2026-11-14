@@ -67,11 +67,16 @@ fn too_large_to_paste(width: u32, height: u32) -> ClipboardPicture {
     ClipboardPicture::Unreadable(format!("the clipboard picture is too large to paste ({width} × {height} pixels)"))
 }
 
+/// Whether the renderer can decode `bytes` within its budget (a 16-bit picture takes more than its pixel count says).
+fn probe_fits(bytes: &[u8]) -> bool {
+    wordcraft_geom::picture::probe(bytes).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES))
+}
+
 /// An encoded picture the host read from the clipboard (the Windows "PNG" format), refused from
 /// its header when a paste can't take its size, before anything decodes it (#3623).
 pub fn encoded_picture(bytes: Vec<u8>) -> ClipboardPicture {
     match wordcraft_geom::picture::probe(&bytes).map(|p| (p.width, p.height)) {
-        Ok((w, h)) if pastes(w, h) => ClipboardPicture::Encoded(bytes),
+        Ok((w, h)) if pastes(w, h) && probe_fits(&bytes) => ClipboardPicture::Encoded(bytes),
         Ok((w, h)) => too_large_to_paste(w, h),
         Err(e) => ClipboardPicture::Unreadable(e.to_string()),
     }
@@ -258,6 +263,22 @@ mod tests {
         image::GrayImage::new(20_000, 1).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
         assert!(matches!(encoded_picture(wide), ClipboardPicture::Unreadable(e) if e.contains("too large")));
         assert!(matches!(encoded_picture(b"not a picture".to_vec()), ClipboardPicture::Unreadable(_)));
+        // 8000 × 6000 passes the pixel limits, but 16-bit RGBA needs 12 bytes a pixel to decode.
+        let mut big = Vec::new();
+        image::DynamicImage::ImageRgba16(image::ImageBuffer::new(1, 1))
+            .write_to(&mut std::io::Cursor::new(&mut big), image::ImageFormat::Png)
+            .unwrap();
+        big[16..20].copy_from_slice(&8000u32.to_be_bytes());
+        big[20..24].copy_from_slice(&6000u32.to_be_bytes());
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in &big[12..29] {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 { 0xEDB8_8320 ^ (crc >> 1) } else { crc >> 1 };
+            }
+        }
+        big[29..33].copy_from_slice(&(!crc).to_be_bytes());
+        assert!(matches!(encoded_picture(big), ClipboardPicture::Unreadable(e) if e.contains("too large")));
         // BGRA in memory: a half-transparent red pixel and an opaque blue one.
         let ClipboardPicture::Pixels { width, height, rgba } = dib_picture(dib(2, 1, &[[0, 0, 255, 128], [255, 0, 0, 255]])) else {
             panic!("pixels")
