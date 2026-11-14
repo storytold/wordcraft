@@ -206,6 +206,11 @@ pub(crate) struct Alphas {
     /// picture's bytes are freed while it's kept. Kept any longer, it would need to hold on to
     /// the bytes, as [`crate::LayoutCache`]'s outlines do.
     seen: HashMap<(usize, usize), Option<Arc<Alpha>>>,
+    /// Pictures whose cost was charged for a lasting outline found in [`crate::LayoutCache`]
+    /// ([`Alphas::charge`]) without decoding them in this layout.
+    charged: HashSet<(usize, usize)>,
+    /// Pixels each picture took of the budget (also when it then failed to decode), by bytes.
+    costs: HashMap<(usize, usize), u64>,
     /// Pictures refused for the budget (bytes' address and length), not looked at again.
     refused: HashSet<(usize, usize)>,
     /// Pixels decoded so far.
@@ -223,9 +228,16 @@ impl Alphas {
             Some(alpha) => alpha.clone(),
             None if self.refused.contains(&key) => return Err(OverBudget),
             None => {
-                let alpha = decode_alpha(bytes, &mut self.decoded).inspect_err(|_| {
+                // A picture already charged for (its outline was cached) isn't charged twice.
+                let mut free = 0u64;
+                let paid = self.charged.contains(&key);
+                let before = self.decoded;
+                let alpha = decode_alpha(bytes, if paid { &mut free } else { &mut self.decoded }).inspect_err(|_| {
                     self.refused.insert(key);
                 })?;
+                if !paid {
+                    self.costs.insert(key, self.decoded.saturating_sub(before));
+                }
                 let alpha = alpha.map(Arc::new);
                 self.seen.insert(key, alpha.clone());
                 alpha
@@ -233,22 +245,54 @@ impl Alphas {
         };
         Ok(alpha.and_then(|a| alpha_in_crop(&a, crop)))
     }
+
+    /// The pixels picture `bytes` took of the budget when it was decoded in this layout (0:
+    /// not decoded, or none to look at; a picture that failed to decode still cost its pixels).
+    pub(crate) fn cost(&self, bytes: &[u8]) -> u64 {
+        self.costs.get(&(bytes.as_ptr() as usize, bytes.len())).copied().unwrap_or(0)
+    }
+
+    /// Charges the budget for picture `bytes`, whose outline was found kept from an earlier
+    /// layout (`cost`: the pixels it took then), as decoding it now would: pictures get an outline
+    /// by their place in the document, not by what the cache holds. [`OverBudget`] when it
+    /// wouldn't have fitted: its rectangle is its outline in this layout.
+    pub(crate) fn charge(&mut self, bytes: &[u8], cost: u64) -> Result<(), OverBudget> {
+        let key = (bytes.as_ptr() as usize, bytes.len());
+        if self.seen.contains_key(&key) || self.charged.contains(&key) {
+            return Ok(());
+        }
+        if self.refused.contains(&key) {
+            return Err(OverBudget);
+        }
+        if cost == 0 {
+            return Ok(());
+        }
+        match self.decoded.checked_add(cost).filter(|t| *t <= MAX_DECODED_PIXELS) {
+            Some(total) => {
+                self.decoded = total;
+                self.charged.insert(key);
+                self.costs.insert(key, cost);
+                Ok(())
+            }
+            None => {
+                self.refused.insert(key);
+                Err(OverBudget)
+            }
+        }
+    }
 }
 
 /// The transparency of picture `bytes`, charging its pixels to `decoded`. `None` for pictures
 /// without transparency or that don't decode; [`OverBudget`] for one that would take `decoded`
 /// past [`MAX_DECODED_PIXELS`]. Pictures whose header says they're opaque cost nothing.
 fn decode_alpha(bytes: &[u8], decoded: &mut u64) -> Result<Option<Alpha>, OverBudget> {
-    use image::ImageDecoder;
     let Ok(pic) = wordcraft_geom::picture::probe(bytes) else { return Ok(None) };
     // Formats that can't be transparent aren't decoded.
     if pic.format == image::ImageFormat::Jpeg || pic.width > MAX_PICTURE_SIDE || pic.height > MAX_PICTURE_SIDE {
         return Ok(None);
     }
     // Only the header is read here (a PNG's `tRNS` counts as transparency).
-    let has_alpha =
-        image::ImageReader::with_format(std::io::Cursor::new(bytes), pic.format).into_decoder().ok().is_some_and(|d| d.color_type().has_alpha());
-    if !has_alpha {
+    if !pic.has_alpha() {
         return Ok(None);
     }
     let pixels = u64::from(pic.width) * u64::from(pic.height);
@@ -305,6 +349,7 @@ mod tests {
 
     #[test]
     fn occupied_follows_the_outline() {
+        crate::test_fonts();
         let c = diamond(false);
         let s = c.occupied(0.0, 10.0);
         assert_eq!(s.len(), 1);
@@ -319,6 +364,7 @@ mod tests {
 
     #[test]
     fn through_keeps_interior_gaps() {
+        crate::test_fonts();
         // A U: two prongs joined at the bottom.
         let u = [(0.0, 0.0), (20.0, 0.0), (20.0, 80.0), (80.0, 80.0), (80.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
         let (_, tight) = Contour::new(&u, 0.0, 0.0, 0.0, false).unwrap();
@@ -330,6 +376,7 @@ mod tests {
 
     #[test]
     fn pictures_wrap_around_their_opaque_pixels() {
+        crate::test_fonts();
         let png = |img: image::DynamicImage| {
             let mut buf = Vec::new();
             img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
@@ -385,6 +432,7 @@ mod tests {
 
     #[test]
     fn hostile_points_are_dropped() {
+        crate::test_fonts();
         assert!(Contour::new(&[(f32::NAN, 0.0), (1.0, 1.0), (f32::INFINITY, 2.0)], 0.0, 0.0, 0.0, false).is_none());
         let c = diamond(true);
         assert!(c.occupied(f32::NAN, 1.0).is_empty());

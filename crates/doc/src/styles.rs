@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::props::{
-    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor, Underline,
-    VAlign,
+    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, PropChange, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor,
+    Underline, VAlign,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -46,6 +46,13 @@ pub struct Style {
     /// (`w:locked`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub locked: bool,
+    /// A tracked change of the style's paragraph properties (`w:pPrChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub para_change: Option<Box<PropChange<ParaProps>>>,
+    /// A tracked change of the style's run properties (`w:rPrChange`). Kept separate because a
+    /// foreign DOCX can attribute the two property changes to different revisions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chr_change: Option<Box<PropChange<CharProps>>>,
     /// The default style of its kind (`w:default`), whatever its id: localized documents call
     /// the default character, table and list styles something other than the English ids.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -230,6 +237,40 @@ impl PartSet {
     pub fn iter(self) -> impl Iterator<Item = TablePart> {
         TablePart::ALL.into_iter().filter(move |p| self.contains(*p))
     }
+}
+
+/// A cell's borders from the table style's parts it is in, later parts winning. Row parts give
+/// their left/right edges at the table's sides and `inside_v` between cells; column parts their
+/// top/bottom edges at the table's top and bottom and `between` between rows; corner cells their
+/// four edges.
+pub fn part_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize), (first_g, last_g): (bool, bool)) -> Borders {
+    let mut out = Borders::default();
+    for (part, b) in parts {
+        let b = *b;
+        let mapped = if part.is_row() {
+            Borders {
+                top: b.top,
+                bottom: b.bottom,
+                left: if first_g { b.left } else { b.inside_v },
+                right: if last_g { b.right } else { b.inside_v },
+                between: None,
+                inside_v: None,
+            }
+        } else if part.is_column() {
+            Borders {
+                top: if ri == 0 { b.top } else { b.between },
+                bottom: if ri + 1 >= nrows { b.bottom } else { b.between },
+                left: b.left,
+                right: b.right,
+                between: None,
+                inside_v: None,
+            }
+        } else {
+            Borders { between: None, inside_v: None, ..b }
+        };
+        out.overlay(&mapped);
+    }
+    out
 }
 
 /// What one table style part gives its cells.
@@ -932,6 +973,31 @@ fn table_styles() -> Vec<Style> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resolve::ResolvedPara;
+
+    #[test]
+    fn adjust_right_indent_inherits_and_can_be_overridden() {
+        let resolved = StyleSheet::empty().resolve_para(&ParaProps::default());
+        assert!(resolved.adjust_right_indent);
+
+        let mut older_json = serde_json::to_value(&resolved).unwrap();
+        older_json.as_object_mut().unwrap().remove("adjustRightIndent");
+        assert!(serde_json::from_value::<ResolvedPara>(older_json).unwrap().adjust_right_indent);
+
+        let mut s = StyleSheet::empty();
+        s.styles.push(Style {
+            id: "Normal".into(),
+            name: "Normal".into(),
+            para: ParaProps { adjust_right_indent: Some(true), ..Default::default() },
+            ..Default::default()
+        });
+        assert!(s.resolve_para(&ParaProps::default()).adjust_right_indent);
+        assert!(!s.resolve_para(&ParaProps { adjust_right_indent: Some(false), ..Default::default() }).adjust_right_indent);
+
+        let json = serde_json::to_value(ParaProps { adjust_right_indent: Some(false), ..Default::default() }).unwrap();
+        assert_eq!(json["adjustRightIndent"], false);
+        assert_eq!(serde_json::from_value::<ParaProps>(json).unwrap().adjust_right_indent, Some(false));
+    }
 
     #[test]
     fn builtins_present() {

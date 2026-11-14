@@ -9,29 +9,19 @@ description = "WordCraft DOCX (OOXML WordprocessingML) reader and writer"
 workspace = true
 
 [dependencies]
+craft-docx = { workspace = true }
+craft-wordmodel = { workspace = true }
 wordcraft-doc = { workspace = true }
-wordcraft-geom = { workspace = true }
 quick-xml = { workspace = true }
-zip = { workspace = true }
-thiserror = { workspace = true }
-log = { workspace = true }
-chrono = { workspace = true }
-unicode-bidi = { workspace = true }
-cfb = { workspace = true }
-aes = { workspace = true }
-sha1 = { workspace = true }
-sha2 = { workspace = true }
-hmac = { workspace = true }
-base64 = { workspace = true }
-getrandom = { workspace = true }
-zeroize = { workspace = true }
-
-# The browser's `crypto.getRandomValues` for the salts and keys of encrypted saves.
-[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-getrandom = { workspace = true, features = ["wasm_js"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 wordcraft-doc = { workspace = true, features = ["test-support"] }
+wordcraft-geom = { workspace = true }
+base64 = { workspace = true }
+cfb = { workspace = true }
+log = { workspace = true }
 proptest = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }

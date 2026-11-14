@@ -1,4 +1,5 @@
 use super::*;
+use wordcraft_doc::picfx::PicFx;
 
 fn png(w: u32, h: u32) -> Vec<u8> {
     let img = image::RgbaImage::from_fn(w, h, |x, y| {
@@ -11,6 +12,106 @@ fn png(w: u32, h: u32) -> Vec<u8> {
 /// The laid-out area of the only picture or shape (not a text box).
 fn object_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
     s.layout().find_object(0, |o| o.text_box.is_none()).unwrap()
+}
+
+/// #4250: a shape dragged into the middle of a page that only continues a long paragraph
+/// stays there, as in Word: anchored at the line beside it, it's drawn on that page, not
+/// thrown back to the page the paragraph starts on. One undo step puts it back.
+#[test]
+fn a_shape_dropped_on_a_page_a_paragraph_continues_onto_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    assert!(s.layout().pages.len() > 2);
+    let before = (object_area(&mut s), s.undo_depth());
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!(o.page, 1, "on the page it was dropped on: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 275.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+    s.run("edit.undo", &json!({})).unwrap();
+    let back = object_area(&mut s);
+    assert_eq!((back.page, back.rect), (before.0.page, before.0.rect));
+}
+
+/// #4250: and dragged back onto the page the paragraph starts on, it stays there: its anchor
+/// goes back to the paragraph's start rather than staying on the later page's line.
+#[test]
+fn a_shape_dragged_back_to_the_page_its_paragraph_starts_on_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275, "width": 100, "height": 50})).unwrap();
+    let before = (object_area(&mut s), s.undo_depth());
+    assert!(before.0.page == 1 && before.0.off > 0, "anchored on page 2's line: {:?}", before.0);
+    s.run("arrange.bounds", &json!({"page": 0, "x": 120, "y": 300})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!((o.page, o.off), (0, 0), "on the page it was dropped on, anchored at the paragraph's start: {o:?}");
+    assert!((o.rect.x - 120.0).abs() < 0.5 && (o.rect.y - 300.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+}
+
+/// #4262: dropped beside the first line after a page break inside a paragraph, a shape stays
+/// on the page it was dropped on, anchored in that line.
+#[test]
+fn a_shape_dropped_just_after_a_page_break_in_a_paragraph_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let text = "The quick brown fox jumps over the lazy dog. ";
+    s.run("text.insert", &json!({"text": text.repeat(20)})).unwrap();
+    s.run("insert.pageBreak", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": text.repeat(40)})).unwrap();
+    assert_eq!(s.doc.body.len(), 1, "one paragraph");
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 80})).unwrap();
+    let o = object_area(&mut s);
+    let after_break = text.len() * 20 + wordcraft_doc::para::PAGE_BREAK.len_utf8();
+    assert_eq!((o.page, o.off), (1, after_break), "on the page it was dropped on, anchored right after the break: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 80.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+}
+
+/// Leaf #107: wrapping can leave the anchor alone to the left and put the text on the right
+/// of the same physical row. A drop after the break must still stay on the destination page.
+#[test]
+fn a_picture_with_wrap_spacing_dropped_after_a_leading_break_stays_there() {
+    for gap in [0.0, 6.0, 12.0] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Source\nDestination"));
+        s.run("caret.set", &json!({"pos": Pos::body(1, 0)})).unwrap();
+        s.run("layout.break", &json!({"kind": "page"})).unwrap();
+        s.run("caret.set", &json!({"pos": Pos::body(0, 0)})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 120})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+        super::select::with_float(&mut s, |f| {
+            f.dist = gap;
+            f.dist_top = gap;
+            f.dist_bottom = gap;
+        })
+        .unwrap();
+        let before = serde_json::to_value(&s.doc.body).unwrap();
+        let depth = s.undo_depth();
+        s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 110})).unwrap();
+        let hit = object_area(&mut s);
+        assert_eq!(hit.page, 1, "gap={gap}: {hit:?}");
+        assert!((hit.rect.x - 100.0).abs() < 0.5 && (hit.rect.y - 110.0).abs() < 0.5, "gap={gap}: {:?}", hit.rect);
+        assert_eq!(s.undo_depth(), depth + 1);
+        let after = serde_json::to_value(&s.doc.body).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc.body).unwrap(), before);
+        s.run("edit.redo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc.body).unwrap(), after);
+        let mut copy = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        let saved = object_area(&mut copy);
+        assert_eq!(saved.page, 1, "DOCX gap={gap}: {saved:?}");
+        assert!((saved.rect.x - hit.rect.x).abs() < 0.5 && (saved.rect.y - hit.rect.y).abs() < 0.5, "saved at the drop position");
+    }
 }
 
 /// What a click and a handle or body drag do in the editor (#142, #82): hit-test the object,
@@ -454,6 +555,108 @@ fn transparency_is_absolute_from_the_original() {
     assert_eq!(rgba(&s), orig, "reset still finds the original");
 }
 
+/// A picture opened with brightness, contrast and transparency from its file (`fx`, #1711,
+/// #1766): Transparency and Corrections are absolute and replace the file's values instead of
+/// stacking on them; Color leaves the file's brightness and contrast alone except Washout
+/// (itself stored as brightness and contrast); Reset Picture discards every correction, the
+/// file's included, as in Word.
+#[test]
+fn picture_edits_replace_the_file_corrections() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    let imported = PicFx::new(80_000, -80_000, 50_000);
+    let set_fx = |s: &mut Session, v: PicFx| {
+        with_obj(s, |o| {
+            if let InlineObject::Image { fx, .. } = o {
+                *fx = v;
+            }
+        })
+        .unwrap()
+    };
+    set_fx(&mut s, imported);
+    let state = |s: &Session| {
+        let (_, o) = selected(s).unwrap();
+        let InlineObject::Image { media, fx, .. } = o else { panic!("a picture") };
+        let bytes = s.doc.media.get(&media).cloned().unwrap();
+        (media, fx, image::load_from_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>())
+    };
+    let (orig_media, _, orig) = state(&s);
+    // Transparency 50%: 50% (not 75%), the file's transparency dropped, its lum kept.
+    s.run("picture.transparency", &json!({"percent": 50})).unwrap();
+    let (_, fx, px) = state(&s);
+    assert_eq!(fx, PicFx::new(80_000, -80_000, 0));
+    assert!(px.iter().all(|p| p[3] == 127));
+    // 0%: opaque, no `a:alphaModFix` left to write.
+    s.run("picture.transparency", &json!({"percent": 0})).unwrap();
+    let (_, fx, px) = state(&s);
+    assert_eq!((fx.transparency, px), (0, orig.clone()));
+    // Color other than Washout keeps the file's lum; Washout replaces it.
+    s.run("picture.color", &json!({"mode": "grayscale"})).unwrap();
+    assert_eq!(state(&s).1, PicFx::new(80_000, -80_000, 0));
+    s.run("picture.color", &json!({"mode": "saturation", "saturation": 100})).unwrap();
+    assert_eq!(state(&s).1, PicFx::new(80_000, -80_000, 0));
+    s.run("picture.color", &json!({"mode": "washout"})).unwrap();
+    assert_eq!(state(&s).1, PicFx::default());
+    // Corrections bake from the original and replace the file's lum.
+    set_fx(&mut s, imported);
+    s.run("picture.corrections", &json!({"brightness": 0})).unwrap();
+    let (_, fx, px) = state(&s);
+    assert_eq!((fx, px), (PicFx::new(0, 0, 50_000), orig.clone()));
+    // Reset: the imported bitmap, no corrections at all.
+    set_fx(&mut s, imported);
+    s.run("picture.reset", &json!({})).unwrap();
+    let (media, fx, px) = state(&s);
+    assert_eq!((media, fx, px), (orig_media, PicFx::default(), orig));
+}
+
+/// Two pictures showing the same media, one with Washout from its file and one without:
+/// edits on both bake to the same bytes, and resetting the plain one leaves it without
+/// corrections (it used to be able to pick up the other's).
+#[test]
+fn reset_never_borrows_another_pictures_corrections() {
+    let mut d = wordcraft_doc::Document::new();
+    let media = d.add_media(png(20, 10), "png");
+    let washout = PicFx::new(70_000, -70_000, 0);
+    let mut p = wordcraft_doc::Paragraph::new();
+    for fx in [PicFx::default(), washout] {
+        let pic = InlineObject::Image {
+            media: media.clone(),
+            w: 40.0,
+            h: 20.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx,
+            ole: None,
+        };
+        p.insert_object(0, pic, &Default::default()).unwrap();
+    }
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let mut s = Session::new(d);
+    let pick = |s: &mut Session, at: usize| {
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": at}, "focus": {"block": 0, "off": at + 3}})).unwrap();
+    };
+    let fx_at = |s: &mut Session, at: usize| {
+        pick(s, at);
+        match selected(s).unwrap().1 {
+            InlineObject::Image { fx, media, .. } => (fx, media),
+            o => panic!("{o:?}"),
+        }
+    };
+    assert_eq!(fx_at(&mut s, 0).0, washout, "A");
+    assert_eq!(fx_at(&mut s, 3).0, PicFx::default(), "B");
+    for at in [0, 3] {
+        pick(&mut s, at);
+        s.run("picture.transparency", &json!({"percent": 30})).unwrap();
+    }
+    assert_eq!(fx_at(&mut s, 0).1, fx_at(&mut s, 3).1, "the same baked bytes");
+    pick(&mut s, 3);
+    s.run("picture.reset", &json!({})).unwrap();
+    assert_eq!(fx_at(&mut s, 3), (PicFx::default(), media.clone()));
+    assert_eq!(fx_at(&mut s, 0).0, washout, "A keeps its own until reset");
+}
+
 /// #2052: a picture style picked after another replaces it (Thick Frame then Simple Frame is
 /// only the simple frame), a border replaces the border and keeps the style, an artistic
 /// effect replaces the effect, and transparency 50% then 10% is 10%, as in Word.
@@ -868,6 +1071,66 @@ fn picture_size_past_the_limit_keeps_the_proportions() {
     }
 }
 
+/// A side the call leaves as it was keeps its size, even outside 1–4000 pt: a straight line's 0
+/// stays 0 when only its length is typed. Sides set in proportion (the original, or a size whose
+/// sides both have a length) fit the limits together; any other side the call sets, on its own.
+#[test]
+fn picture_size_keeps_the_side_it_leaves() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "straightConnector", "width": 100.0, "height": 0.0})).unwrap();
+    let size = |s: &Session| obj_size(&selected(s).unwrap().1);
+    // A side a scale sets on its own: 0 has no length to scale.
+    let scaled = |x: f32, k: f32| if x == 0.0 { 0.0 } else { (x * k).clamp(1.0, 4000.0) };
+    // Sizes with both sides follow each other: they fit 1–4000 pt by the one factor nearest 1, worked out by hand
+    // for the calls `width` locked, `height` locked, `scale` 50 and `scale` 200 with a width (in that order).
+    let states = [
+        ((100.0, 0.0), None),
+        ((0.0, 100.0), None),
+        ((5000.0, 0.0), None),
+        ((0.0, 5000.0), None),
+        ((100.0, 0.5), Some([(200.0, 1.0), (4000.0, 20.0), (200.0, 1.0), (200.0, 1.0)])),
+        ((5000.0, 50.0), Some([(200.0, 2.0), (4000.0, 40.0), (2500.0, 25.0), (200.0, 2.0)])),
+        ((100.0, 50.0), Some([(200.0, 100.0), (400.0, 200.0), (50.0, 25.0), (200.0, 100.0)])),
+    ];
+    for ((w0, h0), together) in states {
+        let follow = |i: usize, alone: (f32, f32)| together.map_or(alone, |t: [(f32, f32); 4]| t[i]);
+        let cases = [
+            (json!({"width": 200.0, "lockAspect": false}), (200.0, h0)),
+            (json!({"height": 200.0, "lockAspect": false}), (w0, 200.0)),
+            (json!({"width": 200.0}), follow(0, (200.0, h0))),
+            (json!({"height": 200.0}), follow(1, (w0, 200.0))),
+            (json!({"scale": 50}), follow(2, (scaled(w0, 0.5), scaled(h0, 0.5)))),
+            (json!({"scale": 200, "width": 200.0}), follow(3, (200.0, scaled(h0, 2.0)))),
+            (json!({"scale": 100}), (w0, h0)),
+            (json!({}), (w0, h0)),
+            // The Size dialog: both sides sent, the height as it was.
+            (json!({"width": 200.0, "height": h0, "lockAspect": false}), (200.0, h0)),
+            (json!({"width": 200.0, "height": 300.0}), (200.0, 300.0)),
+        ];
+        for (v, (ew, eh)) in cases {
+            with_obj(&mut s, |o| o.set_size(w0, h0)).unwrap();
+            s.run("picture.size", &v).unwrap();
+            let (w, h) = size(&s);
+            assert!((w - ew).abs() < 1e-3 && (h - eh).abs() < 1e-3, "{w0}×{h0} {v}: {w}×{h}, not {ew}×{eh}");
+        }
+    }
+    // Both sides of a picture's original size fit together, whatever size it had, even when the
+    // height comes out as it was: 4050×1012.5 pt is 4000×1000, not 4000×1012.5.
+    let data = super::super::insert::base64_encode(&png(400, 100));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    for (w0, h0) in [(3000.0, 1012.5), (4050.0, 0.0), (100.0, 100.0)] {
+        with_obj(&mut s, |o| o.set_size(w0, h0)).unwrap();
+        s.run("picture.size", &json!({"original": true, "scale": 1350})).unwrap();
+        let (w, h) = size(&s);
+        assert!((w - 4000.0).abs() < 0.01 && (h - 1000.0).abs() < 0.01, "{w0}×{h0}: {w}×{h}");
+    }
+    // A height the original sets is set, though it is the one the picture had: 300×75 pt at
+    // 5400 % is 16200×4050, so with a width of 200 the height fits to 4000.
+    with_obj(&mut s, |o| o.set_size(100.0, 4050.0)).unwrap();
+    s.run("picture.size", &json!({"original": true, "scale": 5400, "width": 200.0, "lockAspect": false})).unwrap();
+    assert_eq!(size(&s), (200.0, 4000.0));
+}
+
 /// A crop handle drop: `picture.crop` with the new size is one edit, one undo step.
 #[test]
 fn picture_crop_with_size_is_one_undo_step() {
@@ -991,6 +1254,167 @@ fn header_pictures_can_be_resized_and_dragged() {
     s.run("edit.undo", &json!({})).unwrap();
     let u = s.layout().object(&selected(&s).unwrap().0, 0).expect("laid out");
     assert!((u.rect.x - 200.0).abs() < 1.0 && (u.rect.y - 60.0).abs() < 1.0, "{:?}", u.rect);
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (wordcraft_doc::para::Anchor::Page, wordcraft_doc::para::Anchor::Page));
+    assert_eq!((float.x, float.y), (200.0, 60.0));
+}
+
+/// #5812: arrange.bounds on a header picture (or after moveWithText false) keeps page anchoring
+/// and exports a page-anchored frame in .odt with coordinates relative to the page.
+#[test]
+fn arrange_bounds_on_header_picture_writes_page_anchored_odt_frame() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.editHeader", &json!({})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 0.0, "y": 0.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (0.0, 0.0));
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+    let mut styles = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("styles.xml").unwrap(), &mut styles).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "frame should be page-anchored: {styles}");
+    assert!(styles.contains(r#"svg:x="0pt""#) && styles.contains(r#"svg:y="0pt""#), "offsets should be 0pt: {styles}");
+    assert!(!styles.contains(r#"text:anchor-type="paragraph""#), "frame should not be paragraph-anchored: {styles}");
+
+    // Also test after arrange.moveWithText false
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 10.0, "y": 20.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (10.0, 20.0));
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+    let mut styles = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("styles.xml").unwrap(), &mut styles).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "{styles}");
+    assert!(styles.contains(r#"svg:x="10pt""#) && styles.contains(r#"svg:y="20pt""#), "{styles}");
+}
+
+/// A body picture set to stay on the page (`moveWithText` off) is still placed by its paragraph
+/// once moved: the move is the placement, and the file keeps no page number to put it back
+/// (#5705). Header and footer pictures stay page-anchored (see above).
+#[test]
+fn a_moved_body_picture_is_placed_by_its_paragraph_even_when_fixed_to_the_page() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First line of paragraph.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    // Default body float moves with text
+    let (_pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Column));
+
+    // Turn off moveWithText: fixed on the page until it is moved.
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    let (_, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Page));
+
+    s.run("arrange.bounds", &json!({"page": 0, "x": 50.0, "y": 80.0})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Paragraph));
+    assert_eq!(float.page, 0);
+    let hit = s.layout().object(&pos, 0).expect("laid out");
+    assert!((hit.rect.x - 50.0).abs() < 1.0 && (hit.rect.y - 80.0).abs() < 1.0, "dropped: {:?}", hit.rect);
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut content).unwrap();
+    assert!(content.contains(r#"text:anchor-type="paragraph""#), "body picture should export with paragraph anchor: {content}");
+    assert!(!content.contains("anchor-page-number"), "{content}");
+}
+
+/// Changing `moveWithText` on an object with `h_align` set preserves its horizontal
+/// anchor relation and layout position without displacement.
+#[test]
+fn move_with_text_preserves_horizontal_position_when_h_align_set() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First body paragraph with some text.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    // Set horizontal alignment to End (right)
+    let (pos, _) = selected(&s).unwrap();
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.h_align = Some(FloatAlign::End);
+        f.h_rel = Anchor::Margin;
+    })
+    .unwrap();
+    s.touch();
+
+    let hit_before = s.layout().object(&pos, 0).unwrap();
+    let x_before = hit_before.rect.x;
+
+    // Toggle moveWithText false
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.v_rel, Anchor::Page);
+    assert_eq!(float.h_align, Some(FloatAlign::End));
+    assert_eq!(float.h_rel, Anchor::Margin);
+    s.touch();
+    let hit_after = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after.rect.x, x_before);
+
+    // Toggle moveWithText true
+    s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.v_rel, Anchor::Paragraph);
+    assert_eq!(float.h_align, Some(FloatAlign::End));
+    assert_eq!(float.h_rel, Anchor::Margin);
+    s.touch();
+    let hit_after2 = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after2.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after2.rect.x, x_before);
+}
+
+/// Toggling `moveWithText` preserves horizontal anchor relations (`Margin`, `RightMargin`,
+/// `Character`, `Column`, `Page`) and offset when the object has no horizontal alignment.
+#[test]
+fn move_with_text_preserves_horizontal_anchor_relations_without_alignment() {
+    use wordcraft_doc::para::Anchor;
+    for rel in [Anchor::Margin, Anchor::RightMargin, Anchor::Character, Anchor::Column, Anchor::Page] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "A line of body text.\n"})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+        let (pos, _) = selected(&s).unwrap();
+        super::select::edit_float(&mut s, &pos, |f| {
+            f.h_align = None;
+            f.h_rel = rel;
+            f.x = 35.0;
+        })
+        .unwrap();
+        s.touch();
+
+        // Toggle moveWithText false
+        s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Page, "expected Page v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText false");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText false");
+
+        // Toggle moveWithText true
+        s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Paragraph, "expected Paragraph v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText true");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText true");
+    }
 }
 
 /// Shape Format › Text (#369): direction and alignment on the box the caret is in, then
