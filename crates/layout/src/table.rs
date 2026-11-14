@@ -1553,7 +1553,7 @@ fn apply_cell_shares(t: &Table, grid: &mut [f32]) -> bool {
         widths.push(right - left);
         left = right;
     }
-    if widths.last().is_none_or(|w| *w < MIN_LAST_SHARE) {
+    if sum > 100.0 && widths.last().is_none_or(|w| *w < MIN_LAST_SHARE) {
         return false;
     }
     let near = total / 5000.0 + 0.051;

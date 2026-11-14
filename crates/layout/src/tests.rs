@@ -12036,6 +12036,14 @@ fn consistent_percentage_cell_widths_override_the_grid() {
             let got = columns(fixed, EQUAL, shares, &|_| {});
             assert!(near(got, want), "{shares:?}, fixed layout {fixed}: the columns start {got:?} after the first");
         }
+        // Shares of no more than the table are followed however little the last column gets
+        // (in a table that fits its content the column then takes the room its text needs).
+        let got = columns(fixed, EQUAL, [50.0, 49.5, 0.5], &|_| {});
+        if fixed {
+            assert!(near(got, (200.0, 398.0)), "50, 49.5 and 0.5%, fixed layout: {got:?}");
+        } else {
+            assert!(got.0 < 199.0 && got.1 < 397.0 && (got.0 - 133.0).abs() > 30.0, "50, 49.5 and 0.5%, fitted to content: {got:?}");
+        }
         // The column edges are on whole twentieths of a point and the columns still add up to
         // the grid's width: thirds of 400 pt are 133.35, 133.3 and 133.35 pt.
         let got = columns(fixed, [100.0, 100.0, 200.0], [25.0, 25.0, 25.0], &|_| {});
