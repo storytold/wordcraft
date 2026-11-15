@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-14 · **Change:** trivial (restored the MATH construction-reuse constraints in the progress log; readiness unchanged); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -17,7 +17,6 @@
 
 > **Page Setup update:** 2026-11-07 · Page Setup number boxes keep long input inside the field, including accepted margin values after focus leaves (#5650); accepted ranges and readiness estimates are unchanged.
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
-> **Legacy form update:** 2026-10-22 · trivial: numeric XML references decode in field names and labels; readiness estimates unchanged.
 
 WordCraft aims for complete parity with Microsoft Word, then goes further on speed, openness and
 agent control. This page is the summary; the assessment is
@@ -331,7 +330,6 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-22: Recovery covers every open document. Each dirty document keeps its own copy, written on the same ten-second cadence whether it is shown or not; closing a document without saving deletes its copy, as saving does, and a clean exit deletes the copies of every document saved or closed since its last copy. File › Recover lists only copies no open document keeps, and Restore opens a copy as another document (or in place of an untouched blank one), so it never replaces work. After a crash with several unsaved documents, the next start lists all of them.
 - 2026-10-22: The desktop window works with several open documents (one window per document comes next). View › Window › Switch Windows lists them and shows the one chosen, back where it was left; New, Open and the mailings open beside unsaved work instead of asking about it; File › Close shows the next document; quitting asks about every document with unsaved changes, one at a time, and Cancel keeps the app open.
 - 2026-10-22: Several open documents in one session (engine part of one window per document). File › New opens a new document beside the open ones; File › Open opens beside them too, replaces a blank document nobody has used, and shows a file that is already open instead of opening it twice. Each document keeps its own text, selection, undo history, find state, view and recovery copy. View › Window › Switch Windows (`view.switchWindows`) lists the open documents and switches between them; `file.closeDocument` closes one where no window asks about unsaved changes (agents, headless sessions). Envelopes, Labels, Finish & Merge and New from Template open their result as a new document and leave the main document open as it was. Document ids are unique in the process. The desktop app still shows one document per window; the windows come next.
-- 2026-10-22: Legacy form names and selected drop-down labels decode numeric XML references, including saved whitespace, without decoding escaped reference text twice.
 - 2026-10-25: Interface catalogs are still the shared storytold/craft-i18n ones embedded from `craft-i18n.rev` (`9205108c…`): 27 WordCraft languages with English fallback for missing strings, and the equation “Delete Around Caret in Equation” translation preserved. Native-speaker review remains human.
 - 2026-10-25: Input methods (egui 0.37): character- and byte-counted surrounding deletions, a fresh composition after body/equation replacement, rejection of queued stale replacements before mutation, transactional equation deletes and one undo group, with tracked and placeholder length mapping. Synthetic regressions document these paths; managed CI passed, and native IME acceptance (#155–#164) plus browser IME behavior remain open.
 - 2026-10-25: Justified and distributed lines keep the width of the spaces before their first character, as Word does: Thai official letters indent paragraphs with a run of spaces, and their first line no longer moves right by the line's slack (86 pt in a measured case). A distributed line's text reaches the margin even when the line ends with the space it wrapped at.
@@ -342,7 +340,6 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 - 2026-10-24: Parity catalog: Read Mode's View menu has its own rows. Column Width (`view.readColumnWidth`) and Page Color (`view.readPageColor`) count as live; Layout (`view.readLayout`) is listed as missing. Catalog 504/520 (96.9%).
 - 2026-10-24: Find and Replace: with Regular expressions on, Replace with expands capture groups instead of inserting them as typed. `(\w+), (\w+)` replaced with `$2 $1` or `\2 \1` swaps the words, and `(?<y>\d{4})-` with `${y}/` names a group; `$0` is the whole match, `$$` a dollar sign, `\t` a tab and `\n` a paragraph mark that splits the paragraph, as `^p` does. Missing or out-of-range groups expand to nothing, and the `^` codes still work (#4177).
-- 2026-10-24: A click just outside a floating table, within 2pt of a cell whose text is turned (Text Direction, or a section whose text runs down or up the page), goes to the text beside or after the table, as it already did by upright cell text, instead of putting the caret in that cell (#4181).
 - 2026-10-23: DOCX: a document whose default font size is unset keeps its size when saved and reopened. The size was left out of the file, and the reader read the missing size as 10 pt while the document resolved it as 11 pt; the file now says 11 pt (`DEFAULT_FONT_SIZE`). Files from other programs without a size are read as before.
 - 2026-10-23: Insert › Table: hovering the grid shows the table on the page where it would go, as Word's Live Preview does, and the preview follows the pointer from square to square. It is laid out on a copy of the document, so nothing changes, and Undo has nothing new, until a square is clicked (#3931).
 - 2026-10-24: Exact line spacing fixes the floating-table contact boundary independently of paragraph-mark metrics (#3977). Both row selection and word skipping use it; original regressions cover oversized and undersized marks, contact and one-twip offsets in modes 11/12/14/15. Shape behavior is unchanged.
@@ -386,7 +383,6 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-20: Restrict Editing: read only and comments-only protection grey out every edit in the ribbon when no exception lets the author edit, and tracked-changes protection greys out Accept and Reject, instead of buttons that look live and refuse when clicked.
 - 2026-10-20: Restrict Editing: with Filling in forms enforced, the Developer tab's content-control buttons and Properties grey out in the ribbon, their tooltips saying why, as in Word; before, they looked live and only refused when clicked.
 - 2026-10-20: The page tip shown while dragging the vertical scrollbar stays on one line; it broke into two or three lines ("Page 10 of" / "40") as the page number grew during the drag (#3341).
-- 2026-10-20: Layout: text in Apple's Times and Courier takes Times New Roman's and Courier New's single-line spacing, as in Word for Mac; in a corpus of 180 real manuscripts, the five set in Times no longer gain a page.
 - 2026-10-19: Restrict Editing: with Filling in forms enforced, inserting content controls, their Properties and Remove Content Control are refused, as in Word (it greys them out), so a form's fields stay as they are and only their content is filled in.
 - 2026-10-19: Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey.
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
@@ -397,8 +393,6 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-11-06 | Accept All and Reject All no longer restyle the paragraph after an empty one carrying a section break (#5667): a Compare that added a section, then Reject All, left `Body` in the removed paragraph's Normal style and indents. The empty paragraph now goes whole and its section joins the following one, as deleting the break does. |
 | 2026-11-07 | Deleting a preceding empty paragraph keeps the following paragraph's style, outline and mark formatting rather than promoting body text to a heading (Leaf #152). Non-empty merges and section absorption retain their existing rules; synthetic model, command, DOCX and Undo/Redo coverage. |
 | 2026-11-04 | Pictures keep the brightness, contrast and transparency their file gives them (#1711, #1766): a "Washout" picture watermark (VML `gain`/`blacklevel`) and a washed-out letterhead picture behind the text (`a:lum`) are drawn faded on screen and in PDF instead of at full colour, with the pixel curve measured on Word's own PDF export; `a:alphaModFix` transparency too. Saved back as DrawingML (and as VML `gain`/`blacklevel` in Word 2003 XML, without the transparency). Picture Format › Corrections, Transparency and Color › Washout replace the file's values (other Color modes leave them alone), and Reset Picture discards them all, as in Word; the PDF embeds the corrected pixels once per picture |
-|---|---|
-| 2026-10-17 | Copies keep their formatting in programs that read RTF rather than HTML: Copy and Cut put RTF beside the text and HTML on the system clipboard on Windows, macOS and Wayland (an X11 copy stays text and HTML, since arboard owns the selection there; a copy of only pictures or shapes carries no HTML or RTF, so pasting it back keeps every detail), and Paste reads another program's RTF on macOS and X11 too, not only on Windows and Wayland |
 | 2026-11-03 | **Arabic interface (#1195):** `ar` selectable (and every `ar-*` system locale); craft-i18n catalog; mirrored ribbon, panes, File page, dialogs and menus; Arabic UI font fallback; document direction stays independent. No kashida or Arabic proofing yet; Hebrew UI still open. |
 | 2026-11-01 | **English spelling reads SCOWL 2026 (CP2, #40, #520, #1281, #1045):** en-US, en-GB (also en-AU, en-NZ, en-IE, en-IN…) and en-CA each check against their own SCOWL `rel-2026.02.25` Hunspell dictionary from craft-i18n, embedded and read by craft-proof's affix engine (which now understands `COMPOUNDRULE`, so ordinals like `21st` are words). Suggestions come from the dialect's own dictionary; our American/British policy (`en-variants.txt`) still decides the other dialect's spellings, because Word accepts more than SCOWL's one spelling per dialect (`organize` and `organise` in en-GB). Rare words the 1990s Moby list accepted (`aposiopesis`) are now flagged. The Moby list stays for hyphenation and as a fallback. The build carries 1.5 MB more Language data. |
 | 2026-11-01 | Proofing moved to the shared libraries, with nothing users see changing: the code is `craft-proof` in storytold/craft-libs (with its history) and the spelling and hyphenation data (the Moby list, our English patterns and word lists, the German, Polish, Portuguese and Italian patterns, `ru-extra`) is craft-i18n's `language-data/`, embedded from `CRAFT_I18N_DIR` at the commit in `craft-i18n.rev`. Before/after `wordcraft-cli` runs on a proofing document give the same issues, suggestions and hyphenated PDF (CP1). |
@@ -415,8 +409,6 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-29 | A NUL in a document title no longer reaches the native window title, which panicked on X11 (#3634): displayed titles and suggested file names drop NUL characters and fall back to the untitled name when empty; the stored title is unchanged |
 | 2026-10-28 | The Traditional Chinese interface draws hanzi to the Taiwan standard: on the desktop an installed Traditional Chinese font (PingFang TC on macOS, Microsoft JhengHei on Windows, Noto Sans CJK TC on Linux) comes before the embedded Noto Sans CJK SC, which drew 說, 這, 為, 戶 in mainland shapes; without one, and on the web, nothing changes. |
 | 2026-10-17 | macOS launch arguments (`-psn_*`, `-NS*`, `-Apple*`) are no longer opened as files, and a file that fails to open names the file and the real cause on the status bar and in the log (#1103). The reported "corrupt" error could not be reproduced. |
-| 2026-10-19 | Linux: File › Options › Advanced › Linux display server picks Automatic (the default: XWayland where there's an X server, for file drag-and-drop), Wayland or X11 (XWayland), so people who don't start WordCraft from a terminal can switch without an environment variable (#2184). It's kept in `ui.json` and applies at the next launch; `WORDCRAFT_WAYLAND` still overrides it, and `WORDCRAFT_WAYLAND=0` now asks for X11. A choice that isn't available falls back to the other instead of failing to start, and the log's `display:` line says which ran and why. Hidden on Windows, macOS and the web; `ui.displayServer` for agents. |
-| 2026-10-19 | The status bar's count is selectable (#2797): words (default), characters (with spaces) or characters (no spaces), from a right-click menu on the count itself or File › Options › Display › Status bar (`ui.statusCount`), kept in `ui.json` between runs; a selection shows "selected of total" in the chosen unit, counted exactly as the Word Count dialog counts them, whose numbers and meaning are unchanged. |
 | 2026-10-14 | Insert › Date & Time and DATE, TIME and other date fields show the computer's local date, time and weekday, daylight saving included, as Word does (#1707); they showed UTC, so a user in New Zealand at noon on 31 October got 30 October 23:00. Timestamps saved in files (revisions, comments, document properties) stay UTC. Backstage's greeting follows the local hour too |
 | 2026-10-23 | File > Print: N-up physical sheets and left/right-bound booklets, shared preview/PDF geometry and padded copies (#641); printer jobs keep upstream’s link-annotation fix. |
 | 2026-10-17 | Password-protected Word files from Word 2007 (Standard encryption: AES-128/192/256, SHA-1) open with their password, also when named `.doc` or `.dot`; a wrong or missing password is reported as for newer files. Word 97-2003 files with an AES header, which the public spec doesn't define, are refused with a clear message (gap 9) |
@@ -890,9 +882,14 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 Quoted field escapes are interpreted like Word, and body `PAGE` fields use their active section number format in paragraphs and tables. Synthetic regressions cover fields and section layout.
 
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
+
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
 ## Revision history
+
+> 2026-11-14 · Progress log: Recent documents (#2716) now use a metadata table with Open, Show in folder, Remove from Recent and Clear Recent; legacy preferences, RTL layout and copy-save behavior are preserved. Translation catalog entries remain outstanding; readiness unchanged.
+
+> 2026-11-14 · Restored the MATH construction-reuse constraints (#3630) alongside the Recent documents progress note; readiness unchanged.
 
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >
@@ -917,6 +914,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | trivial | Recent documents (#2716): metadata table, Open, Show in folder, Remove from Recent and Clear Recent; older preference compatibility, RTL layout and copy-save behavior preserved. Translation catalog entries remain outstanding. |
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
@@ -986,7 +984,6 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: Options › Language and Proofing redesign (CP4.3) |
 | 2026-11-03 | minor | Home › Paragraph Tools (#5043): nine selection- or document-scoped conversion and cleanup commands; one undo step per command, with tracked deletions preserved; readiness estimates unchanged |
 | 2026-10-30 | trivial | Progress log: layout resource caps — repeated table headers are bounded by item counts, the wrap cache by decoded pixels and linked text box layout by its lines and items; PDF export, hit testing, tracked changes, clipped tables and long endnote selections cost linear time (#3867, #3866) |
-| 2026-10-17 | trivial | Progress log: RTF on the system clipboard |
 | 2026-11-03 | trivial | Progress log: craft-proof pin, French elision suggestions and Valencian (CP4.3) |
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Shape Format › Size in the interface unit (#4196) |
@@ -1021,7 +1018,6 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-29 | trivial | Progress log: documents with links print (#4734) |
 | 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |
 | 2026-10-30 | trivial | Synchronize the existing Proofing pane and navigation/selection/undo regressions with main `3b7f7ed`; new-SHA validation pending, readiness unchanged |
-| 2026-10-31 | trivial | Progress log: Linux Read Aloud through Speech Dispatcher (#4576) |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
@@ -1038,8 +1034,6 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-29 | trivial | Progress log: window fallback geometry and equation symbol tooltips |
 | 2026-10-29 | trivial | Progress log: window titles omit NUL characters (#3634) |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
-| 2026-10-19 | trivial | Progress log: Linux display server setting (#2184) |
-| 2026-10-19 | trivial | Progress log: the status bar's count can be words, characters or characters without spaces (#2797) |
 | 2026-10-27 | trivial | Progress log: Return on File › Print prints, as Word's default Print button does |
 | 2026-10-27 | trivial | PR #4609: Numeric cross-references (#4533): preserve the numbered clause through field updates; adapted from @Alyosha-dot-shop's issue patch, with extra relative-context and cache guards. Synthetic checks only; readiness estimates unchanged. |
 | 2026-10-26 | minor | Word-observed Proofing task pane uses shared review commands; clicking a suggestion corrects and advances; context, suggestion cards and ignore/dictionary links follow the Windows reference; inspected previews prompted a full-width context and scrollable three-card list; exact selected spelling takes priority over overlapping grammar, with command/pane regressions and integration workflow paths; readiness estimates unchanged |
@@ -1051,7 +1045,6 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
 | 2026-10-22 | trivial | Progress log: several open documents in the desktop window |
 | 2026-10-22 | trivial | Progress log: several open documents in one session |
-| 2026-10-22 | trivial | Decode numeric XML references once in legacy form names and drop-down labels |
 | 2026-10-25 | trivial | Progress log: egui 0.37 migration records the `craft-i18n.rev` catalog pin (9205108…; 27 languages) and the input-method handling; managed CI passed; native acceptance and native-speaker review remain open |
 | 2026-10-25 | trivial | Progress log: justified and distributed lines keep the width of the spaces before their first character |
 | 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
@@ -1068,7 +1061,6 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-24 | trivial | Progress log: AutoFormat As You Type turns `*bold*` and `_italic_` marks into formatting |
 | 2026-10-24 | trivial | Progress log: the parity catalog counts Read Mode's View menu (Column Width, Page Color, Layout) |
 | 2026-10-24 | trivial | Progress log: regex Replace expands capture groups (#4177) |
-| 2026-10-24 | trivial | Progress log: a click just outside a floating table by turned cell text goes to the text after it (#4181) |
 | 2026-10-23 | trivial | Progress log: interface translations from storytold/craft-i18n through the `craft-i18n` crate |
 | 2026-10-23 | trivial | Progress log: comment times in local time (#2322, #2337) |
 | 2026-10-22 | trivial | Progress log: mail merge record navigation and record ranges for Finish & Merge and Print Documents (#3028) |
@@ -1434,7 +1426,6 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-29 | trivial | Progress log: corporate authors in bibliographies (#4848) |
 | 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
 | 2026-11-01 | trivial | Progress log: a list inside a Markdown block quote stays quoted |
-| 2026-10-29 | trivial | Progress log: citation source and bibliography-number lookups (#4888) |
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |

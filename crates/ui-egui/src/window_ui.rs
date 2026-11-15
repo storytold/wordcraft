@@ -323,6 +323,7 @@ impl WordApp {
             alt_chord_used,
             alt_key_down,
             alt_modifier_seen,
+            recent_metadata: _,
         } = ui;
         swap_fields!(w:
             canvas,

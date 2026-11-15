@@ -380,6 +380,7 @@ fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::C
         make_default_app: default_apps::hook(),
         // Personal templates live in `Templates` in the settings folder (#2852), made on first save.
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
+        show_in_folder: Some(Box::new(show_in_folder)),
         animations_enabled: Some(animations::hook(ctx)),
         clipboard_text: Some(Box::new(clipboard::text)),
         clipboard_html: Some(Box::new(clipboard::html)),
@@ -391,6 +392,39 @@ fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::C
         save_prefs: Some(Box::new(try_save_prefs)),
         ..Default::default()
     }
+}
+
+/// Ask the platform's file manager to reveal a document without reading its contents.
+fn show_in_folder(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.args(["-R", &path.to_string_lossy()]);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("explorer.exe");
+        use std::os::windows::process::CommandExt;
+        command.raw_arg(format!("/select,\"{}\"", path.display()));
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let folder = path.parent().filter(|folder| !folder.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(folder);
+        command
+    };
+    // Start and reap the file manager on a worker: even launch/mount resolution can block.
+    std::thread::Builder::new()
+        .name("recent-folder".into())
+        .spawn(move || match command.status() {
+            Ok(status) => log::debug!("show in folder exited: {status}"),
+            Err(error) => log::warn!("couldn't show the file in its folder: {error}"),
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// Window, Dock and taskbar icon.

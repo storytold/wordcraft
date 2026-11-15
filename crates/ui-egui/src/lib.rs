@@ -86,7 +86,7 @@ mod windows;
 pub mod wordart_menus;
 pub mod zotero;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
@@ -138,6 +138,32 @@ struct AwaitingSave {
     document: u64,
     /// Its revision once the save started: a later edit isn't in that save.
     rev: u64,
+}
+
+/// A document in File's Recent list. `last_opened` and `modified` are ISO-8601 UTC timestamps;
+/// empty values are legacy or unavailable metadata and are never looked up while the list draws.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecentDocument {
+    pub path: String,
+    pub last_opened: String,
+    pub modified: String,
+}
+
+/// Keep `recent` compatible with older WordCraft builds, which expect an array of paths.
+impl Serialize for RecentDocument {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.path)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentMetadata {
+    pub last_opened: String,
+    pub modified: String,
 }
 
 /// File › Options › Advanced › Linux display server (#2184, `ui.displayServer`): how the desktop
@@ -293,7 +319,10 @@ pub struct UiState {
     /// Toolbar takes it away; Show Quick Access Toolbar (the ribbon's right-click menu, Customize
     /// Ribbon › Quick Access Toolbar) brings it back. Kept between runs.
     pub quick_access_toolbar: bool,
-    pub recent: Vec<String>,
+    #[serde(deserialize_with = "lenient_recent_documents")]
+    pub recent: Vec<RecentDocument>,
+    /// Timestamps for `recent`, stored separately so older builds keep reading the path list.
+    pub recent_metadata: std::collections::BTreeMap<String, RecentMetadata>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
     /// Saved choices in Insert > Date & Time: format picture.
@@ -469,6 +498,7 @@ impl Default for UiState {
             ribbon_collapsed: false,
             quick_access_toolbar: true,
             recent: Vec::new(),
+            recent_metadata: Default::default(),
             recent_symbols: Vec::new(),
             date_time_format: String::new(),
             date_time_language: String::new(),
@@ -537,7 +567,14 @@ impl UiState {
             return None;
         }
         migrate_units(&mut v);
-        Some(options::lenient(&v))
+        let mut ui: UiState = options::lenient(&v);
+        for entry in &mut ui.recent {
+            if let Some(metadata) = ui.recent_metadata.get(&entry.path) {
+                entry.last_opened = metadata.last_opened.clone();
+                entry.modified = metadata.modified.clone();
+            }
+        }
+        Some(ui)
     }
 
     /// How many recent documents to list.
@@ -599,6 +636,25 @@ fn lenient_float_rect<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<[
 fn lenient_recent_fonts<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     let v = Value::deserialize(d)?;
     Ok(v.as_array().map(|a| recent_fonts_from(a.iter().filter_map(Value::as_str))).unwrap_or_default())
+}
+
+/// Load legacy path strings and timestamped Recent entries, dropping malformed values individually.
+fn lenient_recent_documents<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<RecentDocument>, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry.as_str().map(|path| RecentDocument { path: path.to_string(), last_opened: String::new(), modified: String::new() }).or_else(|| {
+                let object = entry.as_object()?;
+                Some(RecentDocument {
+                    path: object.get("path")?.as_str()?.to_string(),
+                    last_opened: object.get("lastOpened").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    modified: object.get("modified").and_then(Value::as_str).unwrap_or_default().to_string(),
+                })
+            })
+        })
+        .collect())
 }
 
 /// The family a command applies: `format.font {"name"}` (the font box, the mini toolbar, command

@@ -3,6 +3,7 @@ use super::{
     file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
     table_pen, theme, widgets, zotero,
 };
+use crate::{RecentDocument, RecentMetadata};
 
 impl WordApp {
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
@@ -202,6 +203,9 @@ impl WordApp {
                 self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved });
                 return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
             }
+            if marked_saved && self.services.host_save.is_some() {
+                self.refresh_recent_after_file(id);
+            }
             return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
         }
         let document = self.session.document_id();
@@ -272,20 +276,40 @@ impl WordApp {
             && id == "file.rename"
             && let Some(old) = old_path.filter(|old| self.session.path.as_ref() != Some(old))
         {
-            if self.autosave_path.as_ref() == Some(&old) {
-                self.autosave_path = self.session.path.clone();
-            }
-            let old = old.to_string_lossy();
-            self.ui.recent.retain(|r| *r != old);
+            self.update_recent_rename(&old);
         }
         if let Ok(v) = &r {
             self.keep_web_font(id, &params, v);
         }
-        self.after_command(id);
+        self.after_command(id, &params, &r);
         if let Err(e) = &r {
             self.status(e.clone());
         }
         r
+    }
+
+    fn update_recent_rename(&mut self, old_path: &std::path::Path) {
+        if self.autosave_path.as_deref() == Some(old_path) {
+            self.autosave_path = self.session.path.clone();
+        }
+        let old = old_path.to_string_lossy();
+        let Some(new) = self.session.path.as_ref().map(|path| path.to_string_lossy().to_string()) else {
+            self.ui.recent.retain(|entry| entry.path != old);
+            self.ui.recent_metadata.remove(old.as_ref());
+            return;
+        };
+        let metadata = self.ui.recent_metadata.remove(old.as_ref());
+        self.ui.recent.retain(|entry| entry.path != new || entry.path == old);
+        if let Some(entry) = self.ui.recent.iter_mut().find(|entry| entry.path == old) {
+            // Renaming does not constitute a new open: retain the existing record and its
+            // timestamps while changing only the persisted path.
+            entry.path = new;
+            if let Some(metadata) = metadata {
+                self.ui.recent_metadata.insert(entry.path.clone(), metadata);
+            }
+        } else {
+            self.ui.recent.retain(|entry| entry.path != old);
+        }
     }
 
     /// Web: store a font added from bytes, or forget the removed ones ([`Services::store_font`]).
@@ -361,7 +385,58 @@ impl WordApp {
         r
     }
 
-    fn after_command(&mut self, id: &str) {
+    /// Update only Recent after a confirmed write/open; browser saves share this path without
+    /// running unrelated command post-processing.
+    pub(super) fn refresh_recent_after_file(&mut self, id: &str) {
+        if let Some(path) = self.session.path.as_ref() {
+            let saved_path = path.to_string_lossy().into_owned();
+            self.refresh_recent_saved_path(&saved_path);
+            if id == "file.open"
+                && let Some(entry) = self.ui.recent.first_mut()
+            {
+                entry.last_opened = wordcraft_engine::cmd::now_iso();
+                self.ui
+                    .recent_metadata
+                    .insert(entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() });
+            }
+        }
+    }
+
+    /// Record a confirmed save by its destination, independent of which document is active now.
+    pub(super) fn refresh_recent_saved_path(&mut self, path: &str) {
+        self.refresh_recent_saved_path_with_metadata(path, true);
+    }
+
+    fn refresh_recent_saved_path_without_disk_metadata(&mut self, path: &str) {
+        self.refresh_recent_saved_path_with_metadata(path, false);
+        if let Some(entry) = self.ui.recent.first_mut() {
+            entry.last_opened = wordcraft_engine::cmd::now_iso();
+            self.ui
+                .recent_metadata
+                .insert(entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() });
+        }
+    }
+
+    fn refresh_recent_saved_path_with_metadata(&mut self, path: &str, read_disk_metadata: bool) {
+        let path = std::path::Path::new(path);
+        let p = path.to_string_lossy().to_string();
+        let modified = if read_disk_metadata { recent_modified_date(path) } else { String::new() };
+        let opened = self.ui.recent.iter().find(|r| r.path == p).map(|r| r.last_opened.clone()).unwrap_or_default();
+        self.ui.recent.retain(|r| r.path != p);
+        self.ui
+            .recent
+            .insert(0, RecentDocument { path: p, last_opened: if opened.is_empty() { wordcraft_engine::cmd::now_iso() } else { opened }, modified });
+        if let Some(entry) = self.ui.recent.first() {
+            self.ui
+                .recent_metadata
+                .insert(entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() });
+        }
+        self.ui.recent.truncate(MAX_RECENT);
+        self.ui.recent_metadata.retain(|path, _| self.ui.recent.iter().any(|entry| &entry.path == path));
+    }
+
+    fn after_command(&mut self, id: &str, params: &Value, result: &Result<Value, String>) {
+        let succeeded = result.is_ok();
         options::sync(self);
         self.canvas.caret_visible_since = now_ms();
         if id == "view.outline" {
@@ -408,15 +483,29 @@ impl WordApp {
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
         }
-        // The open document goes to the front of the recent list after every command. The recent
-        // commands (`ui.recentRemove`, `ui.recentClear`) return from `ui_command` before this
-        // runs, so taking a document off the list is never undone by the re-add (#2716).
-        if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
-            && self.ui.recent.first() != Some(&p)
-        {
-            self.ui.recent.retain(|r| *r != p);
-            self.ui.recent.insert(0, p);
-            self.ui.recent.truncate(MAX_RECENT);
+        // Recent metadata is collected only after an explicit, successful file operation. In
+        // particular, drawing File's Recent page must never probe a persisted path: it may point
+        // to a network provider that blocks or prompts for credentials.
+        let completed_file_operation = match id {
+            // A successful command with no path only opened the file picker.
+            "file.open" => result.as_ref().ok().and_then(|value| value.get("path")).and_then(Value::as_str).is_some(),
+            // A copy export does not write the current document. Browser saves refresh
+            // Recent separately, only after the host confirms completion.
+            "file.save" | "file.saveAs" => result.as_ref().ok().is_some_and(|value| {
+                value.get("pendingSave").is_none()
+                    && value.get("saved").and_then(Value::as_bool) == Some(true)
+                    && value.get("path").and_then(Value::as_str).is_some_and(|path| self.session.path.as_deref() == Some(std::path::Path::new(path)))
+            }),
+            _ => succeeded,
+        };
+        if completed_file_operation && matches!(id, "file.open" | "file.save" | "file.saveAs" | "file.rename") {
+            if id == "file.open" && params.get("data").and_then(Value::as_str).is_some() {
+                if let Some(path) = result.as_ref().ok().and_then(|value| value.get("path")).and_then(Value::as_str) {
+                    self.refresh_recent_saved_path_without_disk_metadata(path);
+                }
+            } else {
+                self.refresh_recent_after_file(id);
+            }
         }
         if !self.session.status.is_empty() {
             // Engine messages are English; the catalog translates the ones it knows.
@@ -586,6 +675,52 @@ impl WordApp {
                 self.canvas.context_menu_from_keys = true;
                 self.canvas.want_focus = true;
                 json!({"pending": "contextMenu"})
+            }
+            "ui.recentClear" => {
+                let removed = self.ui.recent.len();
+                self.ui.recent.clear();
+                self.ui.recent_metadata.clear();
+                let saved = self.save_prefs_now();
+                if !matches!(saved, Some(Err(_))) {
+                    self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
+                }
+                let mut result = json!({"cleared": true, "removed": removed, "recent": self.ui.recent});
+                add_saved(&mut result, saved);
+                result
+            }
+            "ui.recentRemove" => {
+                let Some(path) = s("path") else {
+                    return Some(Err("`path` must name a document on the recent list".into()));
+                };
+                let before = self.ui.recent.len();
+                self.ui.recent.retain(|entry| entry.path != path);
+                if self.ui.recent.len() == before {
+                    return Some(Err(format!("`{path}` is not on the recent list")));
+                }
+                self.ui.recent_metadata.remove(path);
+                let saved = self.save_prefs_now();
+                if !matches!(saved, Some(Err(_))) {
+                    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
+                    self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
+                }
+                let mut result = json!({"removed": true, "recent": self.ui.recent});
+                add_saved(&mut result, saved);
+                result
+            }
+            "ui.recentShowInFolder" => {
+                let Some(path) = s("path") else {
+                    return Some(Err("`path` is required".into()));
+                };
+                if !self.ui.recent.iter().any(|entry| entry.path == path) {
+                    return Some(Err("the file is not in Recent".into()));
+                }
+                let Some(show_in_folder) = self.services.show_in_folder.as_ref() else {
+                    return Some(Err("showing files in a folder is unavailable here".into()));
+                };
+                if let Err(error) = show_in_folder(std::path::Path::new(path)) {
+                    return Some(Err(error));
+                }
+                json!({"shown": true})
             }
             "ui.paneDock" => return Some(panes::dock_command(self, p)),
             "ui.collapseRibbon" => {
@@ -836,38 +971,6 @@ impl WordApp {
                 }
                 json!({"startScreen": self.ui.start_screen})
             }
-            "ui.recentRemove" => {
-                // Backstage ▸ Home/Open ▸ Recent: take one document off the list (Word's context
-                // menu Remove). The path must be an entry that is on the list (#2716).
-                let Some(path) = p.get("path").and_then(Value::as_str) else {
-                    return Some(Err("`path` must name a document on the recent list".into()));
-                };
-                let before = self.ui.recent.len();
-                self.ui.recent.retain(|r| r != path);
-                if self.ui.recent.len() == before {
-                    return Some(Err(format!("`{path}` is not on the recent list")));
-                }
-                let saved = self.save_prefs_now();
-                if !matches!(saved, Some(Err(_))) {
-                    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
-                    self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
-                }
-                let mut r = json!({"removed": 1, "recent": self.ui.recent});
-                add_saved(&mut r, saved);
-                r
-            }
-            "ui.recentClear" => {
-                // Clear the whole list, as Word's registry clear does for recent documents (#2716).
-                let removed = self.ui.recent.len();
-                self.ui.recent.clear();
-                let saved = self.save_prefs_now();
-                if !matches!(saved, Some(Err(_))) {
-                    self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
-                }
-                let mut r = json!({"removed": removed, "recent": self.ui.recent});
-                add_saved(&mut r, saved);
-                r
-            }
             "ui.displayServer" => {
                 // File › Options › Advanced › Linux display server (#2184): `value` `auto`,
                 // `wayland` or `x11`; no value reads it. The desktop app reads it at the next launch.
@@ -979,6 +1082,28 @@ impl WordApp {
         let error = tl!("No document is open. Create a document or open one first.").to_string();
         self.status(error.clone());
         Some(error)
+    }
+}
+
+/// Read a file's modification timestamp as part of an explicit file operation. This is kept out
+/// of the Recent renderer so network-backed history entries cannot block passive UI drawing.
+fn recent_modified_date(path: &std::path::Path) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(secs) = std::fs::metadata(path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+        else {
+            return String::new();
+        };
+        wordcraft_engine::cmd::iso_from_unix_secs(secs)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        String::new()
     }
 }
 
@@ -1154,6 +1279,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.startScreen"
             | "ui.recentRemove"
             | "ui.recentClear"
+            | "ui.recentShowInFolder"
             | "ui.displayServer"
             | "ui.statusCount"
             | "ui.scrollSpeed"
