@@ -88,8 +88,7 @@ fn png_data() -> String {
     let img = image::RgbaImage::from_fn(20, 10, |x, y| {
         if x > 2 && x < 17 && y > 2 && y < 7 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
     });
-    let mut b = Vec::new();
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+    let b = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap();
     wordcraft_engine::cmd::insert::base64_encode(&b)
 }
 
@@ -977,8 +976,7 @@ fn shape_size_fields_use_the_interface_unit() {
     // A size typed at the range's bound applies although the field shows that bound: a 1×1 px
     // picture (0.75 pt, below the fields' 1 pt) typed to 1 pt.
     let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]));
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap();
     let mut h = harness("points", Some(&wordcraft_engine::cmd::insert::base64_encode(&png)), None);
     assert_eq!(size(h.state()), Some((0.75, 0.75)));
     h.get_by_role_and_label(Role::SpinButton, "W:").click();
@@ -1004,8 +1002,7 @@ fn shape_size_fields_use_the_interface_unit() {
 fn picture_format_leaves_a_tiny_picture_alone() {
     let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]));
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap();
     a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png)})).unwrap();
     a.run("ui.tab", json!({"tab": "Picture Format"})).unwrap();
     let size = |a: &crate::WordApp| wordcraft_engine::cmd::objects::selected(&a.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h)));
