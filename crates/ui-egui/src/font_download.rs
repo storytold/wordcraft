@@ -21,13 +21,11 @@ const REMEMBERED: usize = 256;
 /// Most fonts the box lists: a hostile file can name thousands.
 const LISTED: usize = 12;
 
-/// The height the box takes around its cards: the title bar, the headline, the steps and the
-/// row with Close. The cards get what the window has left over, within the two limits below.
-const ROOM_AROUND_CARDS: f32 = 380.0;
-/// The least room the cards get: one card and the top of the next, however short the window.
-const CARDS_MIN: f32 = 96.0;
-/// The most room the cards get before they scroll.
-const CARDS_MAX: f32 = 320.0;
+/// The height the box takes around what scrolls: the title bar, the row with Close and the
+/// window's margins.
+const ROOM_AROUND_SCROLL: f32 = 190.0;
+/// The least height what scrolls gets, however short the window.
+const SCROLL_MIN: f32 = 80.0;
 
 /// One missing font the box lists.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -195,25 +193,26 @@ pub(crate) fn body(app: &mut WordApp, ui: &mut egui::Ui, fonts: &[Row], dont_sho
         return close_row(ui);
     }
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
-        let (r, _) = ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
-        crate::icons::paint(ui.painter(), r, "fontMissing", t.icon, t.accent);
-        ui.add_space(4.0);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
-            let headline =
-                crate::i18n::tn(fonts.len() as u64, "{n} font in this document isn't installed", "{n} fonts in this document aren't installed");
-            ui.label(egui::RichText::new(headline).font(semibold(15.0)));
-            let note = tl!("It is shown in other fonts, so it may not look as it was written. You can download them free of charge.");
-            ui.label(egui::RichText::new(note).color(t.text_dim));
-        });
-    });
-    ui.add_space(12.0);
     let mut open_url = None;
-    // The cards scroll in a short window, so the steps, the opt-out and Close below them stay
-    // in reach however many downloads there are.
-    let cards = (ui.ctx().content_rect().height() - ROOM_AROUND_CARDS).clamp(CARDS_MIN, CARDS_MAX);
-    egui::ScrollArea::vertical().id_salt("font_downloads").max_height(cards).show(ui, |ui| {
+    let mut add = false;
+    // Everything above the row with Close scrolls when the window is too short for it, so
+    // that row is on screen and the rest in reach however many downloads there are.
+    let room = (ui.ctx().content_rect().height() - ROOM_AROUND_SCROLL).max(SCROLL_MIN);
+    egui::ScrollArea::vertical().id_salt("font_downloads").max_height(room).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
+            crate::icons::paint(ui.painter(), r, "fontMissing", t.icon, t.accent);
+            ui.add_space(4.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                let headline =
+                    crate::i18n::tn(fonts.len() as u64, "{n} font in this document isn't installed", "{n} fonts in this document aren't installed");
+                ui.label(egui::RichText::new(headline).font(semibold(15.0)));
+                let note = tl!("It is shown in other fonts, so it may not look as it was written. You can download them free of charge.");
+                ui.label(egui::RichText::new(note).color(t.text_dim));
+            });
+        });
+        ui.add_space(12.0);
         for g in groups(fonts) {
             egui::Frame::NONE
                 .fill(t.panel)
@@ -255,33 +254,32 @@ pub(crate) fn body(app: &mut WordApp, ui: &mut egui::Ui, fonts: &[Row], dont_sho
                 });
             ui.add_space(6.0);
         }
+        if open_url.is_some() {
+            // The publisher's page, in the browser: WordCraft downloads nothing itself.
+            app.canvas.open_url = open_url;
+        }
+        // Whose part the licence is: WordCraft only points at the publisher's page.
+        let terms = tl!("Fonts come with licence terms. Read the publisher's terms on the download page: following them is up to you.");
+        ui.label(egui::RichText::new(terms).small().color(t.text_dim));
+        ui.add_space(12.0);
+        ui.label(egui::RichText::new(tl!("Then add it to WordCraft")).font(semibold(14.0)));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            step_badge(ui, 1, &t);
+            ui.label(tl!("Download the font. If it comes as a .zip file, unpack it."));
+        });
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            step_badge(ui, 2, &t);
+            ui.label(tl!("Pick the font files:"));
+            add = ui.button(tl!("Add Font…")).clicked();
+        });
+        let system = system_install_steps();
+        if !system.is_empty() {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(system).small().color(t.text_dim));
+        }
     });
-    if open_url.is_some() {
-        // The publisher's page, in the browser: WordCraft downloads nothing itself.
-        app.canvas.open_url = open_url;
-    }
-    // Whose part the licence is: WordCraft only points at the publisher's page.
-    let terms = tl!("Fonts come with licence terms. Read the publisher's terms on the download page: following them is up to you.");
-    ui.label(egui::RichText::new(terms).small().color(t.text_dim));
-    ui.add_space(12.0);
-    ui.label(egui::RichText::new(tl!("Then add it to WordCraft")).font(semibold(14.0)));
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        step_badge(ui, 1, &t);
-        ui.label(tl!("Download the font. If it comes as a .zip file, unpack it."));
-    });
-    ui.add_space(2.0);
-    let mut add = false;
-    ui.horizontal(|ui| {
-        step_badge(ui, 2, &t);
-        ui.label(tl!("Pick the font files:"));
-        add = ui.button(tl!("Add Font…")).clicked();
-    });
-    let system = system_install_steps();
-    if !system.is_empty() {
-        ui.add_space(6.0);
-        ui.label(egui::RichText::new(system).small().color(t.text_dim));
-    }
     ui.add_space(12.0);
     ui.separator();
     ui.add_space(8.0);
