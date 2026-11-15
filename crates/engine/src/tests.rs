@@ -10556,9 +10556,9 @@ fn outline_show_level_filters_paragraphs() {
 fn outline_collapse_hides_descendants_and_expand_restores() {
     let mut s = outline_doc();
     s.sel = crate::Selection::caret(Pos::body(0, 0));
-    // The deepest open level closes first, then the heading itself.
+    // Body text closes first (#6200, as in Word), then the heading itself.
     run(&mut s, "outline.collapse", json!({}));
-    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 4, 5]);
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 5]);
     run(&mut s, "outline.collapse", json!({}));
     assert_eq!(outline_shown(&mut s), vec![0, 4, 5]);
     assert_eq!(laid_out_blocks(&mut s), vec![0, 4, 5]);
@@ -10574,10 +10574,11 @@ fn outline_collapse_hides_descendants_and_expand_restores() {
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(text(&s), "One\na\nTwo\nb\nThree\nc");
     assert_eq!(outline_shown(&mut s), vec![0, 4, 5]);
-    // Expand opens one level at a time; double-clicking the symbol (toggle) opens it all.
+    // Expand opens one level at a time, body text last; double-clicking the symbol (toggle)
+    // opens it all.
     s.sel = crate::Selection::caret(Pos::body(0, 0));
     run(&mut s, "outline.expand", json!({}));
-    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 4, 5]);
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 5]);
     run(&mut s, "outline.expand", json!({}));
     assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5]);
     run(&mut s, "outline.toggle", json!({"block": 0}));
@@ -10587,6 +10588,135 @@ fn outline_collapse_hides_descendants_and_expand_restores() {
     // Clicking a symbol selects the heading with what is under it.
     run(&mut s, "outline.selectSubtree", json!({"block": 0}));
     assert_eq!(s.selected_text(), "One\na\nTwo\nb");
+}
+
+/// A document of five headings with body text under each: A(1) B(2) C(3) B2(2) D(1), blocks
+/// 0-9 as heading, body, heading, body...
+fn outline_levels_doc() -> Session {
+    let mut s = s();
+    run(
+        &mut s,
+        "document.setText",
+        json!({"text": "A
+a
+B
+b
+C
+c
+B2
+b2
+D
+d"}),
+    );
+    for (i, style) in [(0, "Heading1"), (2, "Heading2"), (4, "Heading3"), (6, "Heading2"), (8, "Heading1")] {
+        s.sel = crate::Selection::caret(Pos::body(i, 0));
+        run(&mut s, "para.style", json!({"style": style}));
+    }
+    run(&mut s, "view.outline", json!({}));
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    s
+}
+
+/// #6200: Expand shows the headings under a heading level by level and its body text only at the
+/// end, as Word's does; Collapse goes back the same way.
+#[test]
+fn outline_expand_shows_headings_level_by_level_then_text() {
+    let mut s = outline_levels_doc();
+    run(&mut s, "outline.showLevel", json!({"level": 1}));
+    assert_eq!(outline_shown(&mut s), vec![0, 8]);
+    run(&mut s, "outline.expand", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 6, 8], "the next level, no body text");
+    run(&mut s, "outline.expand", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 8], "the level after it, still no body text");
+    run(&mut s, "outline.expand", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5, 6, 7, 8], "body text last; D is still collapsed");
+    run(&mut s, "outline.expand", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5, 6, 7, 8], "nothing left to expand");
+    // A heading with only body text under it opens straight to its text.
+    s.sel = crate::Selection::caret(Pos::body(8, 0));
+    run(&mut s, "outline.expand", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    // Collapse reverses it: body text first, then the deepest level, then the heading.
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "outline.collapse", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 8, 9]);
+    run(&mut s, "outline.collapse", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 6, 8, 9]);
+    run(&mut s, "outline.collapse", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 8, 9]);
+    // Double-clicking the symbol still opens everything under the heading, text included.
+    run(&mut s, "outline.toggle", json!({"block": 0}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    let st = run(&mut s, "outline.state", json!({}));
+    assert_eq!(st["textHidden"], json!([]));
+}
+
+/// #6200: a collapsed heading with sub-headings opens to them only, from the heading itself; Show
+/// All Levels brings all text back.
+#[test]
+fn outline_expand_collapsed_heading_hides_text_until_the_last_step() {
+    let mut s = outline_levels_doc();
+    run(&mut s, "outline.toggle", json!({"block": 0}));
+    assert_eq!(outline_shown(&mut s), vec![0, 8, 9]);
+    run(&mut s, "outline.expand", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 6, 8, 9]);
+    // Expanding B (the second heading shown) goes one level on under it only.
+    s.sel = crate::Selection::caret(Pos::body(2, 0));
+    run(&mut s, "outline.expand", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 8, 9]);
+    run(&mut s, "outline.showAll", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+}
+
+/// #6200: the headings whose text is hidden are found again after an edit moves them.
+#[test]
+fn outline_hidden_text_stays_hidden_after_an_edit_above_it() {
+    let mut s = outline_levels_doc();
+    run(&mut s, "outline.collapse", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 8, 9]);
+    s.sel = crate::Selection::caret(Pos::body(1, 0));
+    run(&mut s, "text.newParagraph", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 3, 5, 7, 9, 10]);
+}
+
+/// #6200: Expand after Show Level 2: the collapsed heading without sub-headings opens to its text
+/// together with its siblings' headings; the others keep their text hidden.
+#[test]
+fn outline_expand_after_show_level_two_opens_leaf_text() {
+    let mut s = outline_levels_doc();
+    run(&mut s, "outline.showLevel", json!({"level": 2}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 6, 8]);
+    run(&mut s, "outline.expand", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 7, 8]);
+}
+
+/// #6200: Show Level and Show All Levels reset the hidden text; toggling an open heading whose text
+/// is hidden collapses it and a second toggle opens everything under it.
+#[test]
+fn outline_show_level_clears_hidden_text_and_toggle_opens_it() {
+    let mut s = outline_levels_doc();
+    run(&mut s, "outline.collapse", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 8, 9]);
+    run(&mut s, "outline.showLevel", json!({"level": 9}));
+    assert_eq!(run(&mut s, "outline.state", json!({}))["textHidden"], json!([]));
+    run(&mut s, "outline.showAll", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    run(&mut s, "outline.collapse", json!({}));
+    assert_eq!(run(&mut s, "outline.state", json!({}))["textHidden"], json!([0, 2, 4, 6]));
+    run(&mut s, "outline.toggle", json!({"block": 0}));
+    assert_eq!(outline_shown(&mut s), vec![0, 8, 9]);
+    run(&mut s, "outline.toggle", json!({"block": 0}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+}
+
+/// #6200: a heading whose text is hidden and which is edited in place keeps its text hidden.
+#[test]
+fn outline_hidden_text_survives_editing_the_heading() {
+    let mut s = outline_levels_doc();
+    run(&mut s, "outline.collapse", json!({}));
+    s.sel = crate::Selection::caret(Pos::body(6, 2));
+    run(&mut s, "text.insert", json!({"text": "x"}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 8, 9]);
 }
 
 /// #3621: with thousands of collapsed headings, an Enter above them (which shifts every index)

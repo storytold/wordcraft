@@ -22,6 +22,10 @@ pub struct OutlineState {
     /// Collapsed headings: body block index and a hash of the heading's text, so they are found
     /// again after edits move them (see [`after_command`]).
     pub collapsed: Vec<(usize, u64)>,
+    /// Headings whose own body text is hidden while their sub-headings show (found again after
+    /// edits like `collapsed`). Expand reveals headings level by level and body text last, as
+    /// Word does.
+    pub text_hidden: Vec<(usize, u64)>,
     /// Show Level: 1–9, or 0 for all levels.
     pub show_level: u8,
     /// Show First Line Only (body text).
@@ -35,6 +39,7 @@ impl OutlineState {
     pub fn view(&self) -> OutlineView {
         OutlineView {
             collapsed: self.collapsed.iter().map(|(i, _)| *i).collect(),
+            text_hidden: self.text_hidden.iter().map(|(i, _)| *i).collect(),
             show_level: self.show_level,
             first_line_only: self.first_line_only,
             plain: self.hide_formatting,
@@ -180,6 +185,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "levels": levels,
                 "shown": shown,
                 "collapsed": s.view.outline.view().collapsed,
+                "textHidden": s.view.outline.view().text_hidden,
                 "showLevel": s.view.outline.show_level,
                 "firstLineOnly": s.view.outline.first_line_only,
                 "showFormatting": !s.view.outline.hide_formatting,
@@ -228,15 +234,45 @@ fn text_hash(doc: &Document, i: usize) -> Option<u64> {
     Some(h.finish())
 }
 
-fn set_collapsed(s: &mut Session, set: &BTreeSet<usize>) {
+fn set_collapsed(s: &mut Session, set: &BTreeSet<usize>, text: &BTreeSet<usize>) {
     s.view.outline.collapsed = set.iter().filter_map(|i| text_hash(&s.doc, *i).map(|h| (*i, h))).collect();
+    s.view.outline.text_hidden = text.iter().filter_map(|i| text_hash(&s.doc, *i).map(|h| (*i, h))).collect();
+}
+
+/// The headings in `from..to` that have body text right after them.
+fn headings_with_text(levels: &[u8], from: usize, to: usize) -> impl Iterator<Item = usize> + '_ {
+    let to = to.min(levels.len());
+    (from..to).filter(move |i| levels.get(*i).is_some_and(|l| *l < BODY) && levels.get(i.saturating_add(1)) == Some(&BODY))
+}
+
+/// Whether heading `i` has a heading (not only body text) under it.
+fn has_sub_headings(levels: &[u8], i: usize) -> bool {
+    let end = ol::subtree_end(levels, i);
+    levels.get(i.saturating_add(1)..end).is_some_and(|under| under.iter().any(|l| *l < BODY))
+}
+
+/// The headings directly under heading `h`, which a collapsed `h` shows when it opens: the
+/// headings in its subtree that no shallower heading in it precedes.
+fn child_headings(levels: &[u8], h: usize, end: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut shallowest = u8::MAX;
+    for j in h.saturating_add(1)..end {
+        let Some(&l) = levels.get(j) else { break };
+        if l < BODY && l <= shallowest {
+            shallowest = l;
+            out.push(j);
+        }
+    }
+    out
 }
 
 /// Show Level turned into collapsed headings, so single headings can then be expanded or
 /// collapsed: the headings at the shown level with something under them are collapsed and every
-/// level is shown.
-fn settle_show_level(s: &mut Session) -> BTreeSet<usize> {
+/// level is shown. Show Level hid all body text, which stays hidden until its heading is
+/// expanded that far. Returns the collapsed headings and the headings whose text is hidden.
+fn settle_show_level(s: &mut Session) -> (BTreeSet<usize>, BTreeSet<usize>) {
     let mut set = s.view.outline.view().collapsed;
+    let mut text = s.view.outline.view().text_hidden;
     let n = s.view.outline.show_level;
     if (1..=9).contains(&n) {
         let levels = ol::levels(&s.doc);
@@ -250,45 +286,72 @@ fn settle_show_level(s: &mut Session) -> BTreeSet<usize> {
                 }
             }
         }
+        text.extend(headings_with_text(&levels, 0, levels.len()));
         s.view.outline.show_level = 0;
     }
-    set
+    (set, text)
 }
 
-/// Expand: a collapsed heading opens (what was collapsed under it stays so); an open one shows
-/// the shallowest collapsed level under it. `all`: the heading and everything under it opens.
+/// Opens the collapsed heading `h` one step, as Word's Expand does: with headings under it, only
+/// the next level shows (those of them with headings under them stay collapsed) and body text
+/// stays hidden; with only body text under it, that text shows.
+fn open_heading(levels: &[u8], set: &mut BTreeSet<usize>, text: &mut BTreeSet<usize>, h: usize) {
+    set.remove(&h);
+    let end = ol::subtree_end(levels, h);
+    if !has_sub_headings(levels, h) {
+        text.remove(&h);
+        return;
+    }
+    for c in child_headings(levels, h, end) {
+        if has_sub_headings(levels, c) {
+            set.insert(c);
+        }
+    }
+    text.extend(headings_with_text(levels, h, end));
+}
+
+/// Expand, one step as in Word: a collapsed heading shows the headings directly under it; an
+/// open one shows the shallowest collapsed level under it; once every heading under it shows, the
+/// body text shows. `all`: the heading and everything under it, text included, opens.
 fn expand(s: &mut Session, v: &Value, all: bool) -> CmdResult {
     let targets = targets(s, v);
-    let mut set = settle_show_level(s);
+    let (mut set, mut text) = settle_show_level(s);
     let levels = ol::levels(&s.doc);
     for h in targets {
         let end = ol::subtree_end(&levels, h);
         if all {
             set.retain(|i| *i < h || *i >= end);
+            text.retain(|i| *i < h || *i >= end);
             continue;
         }
-        if set.remove(&h) {
+        if set.contains(&h) {
+            open_heading(&levels, &mut set, &mut text, h);
             continue;
         }
-        let hidden = ol::hidden(&levels, &OutlineView { collapsed: set.clone(), ..Default::default() });
+        let view = OutlineView { collapsed: set.clone(), text_hidden: text.clone(), ..Default::default() };
+        let hidden = ol::hidden(&levels, &view);
         let open: Vec<usize> = (h + 1..end).filter(|j| set.contains(j) && !hidden.get(*j).copied().unwrap_or(true)).collect();
         if let Some(top) = open.iter().filter_map(|j| levels.get(*j)).min().copied() {
             for j in open {
                 if levels.get(j) == Some(&top) {
-                    set.remove(&j);
+                    open_heading(&levels, &mut set, &mut text, j);
                 }
             }
+        } else {
+            // Every heading under it shows: now its body text does.
+            text.retain(|i| *i < h || *i >= end);
         }
     }
-    set_collapsed(s, &set);
+    set_collapsed(s, &set, &text);
     sel_result(s)
 }
 
-/// Collapse: the deepest open level under a heading closes first; a heading with nothing open
-/// under it closes itself. `all`: the heading closes at once.
+/// Collapse, the reverse of Expand: body text hides first, then the deepest open level under a
+/// heading closes; a heading with nothing open under it closes itself. `all`: the heading closes
+/// at once.
 fn collapse(s: &mut Session, v: &Value, all: bool) -> CmdResult {
     let targets = targets(s, v);
-    let mut set = settle_show_level(s);
+    let (mut set, mut text) = settle_show_level(s);
     let levels = ol::levels(&s.doc);
     for h in targets {
         if !ol::has_children(&levels, h) || set.contains(&h) {
@@ -298,14 +361,17 @@ fn collapse(s: &mut Session, v: &Value, all: bool) -> CmdResult {
             set.insert(h);
             continue;
         }
-        let hidden = ol::hidden(&levels, &OutlineView { collapsed: set.clone(), ..Default::default() });
-        let open: Vec<usize> = (h + 1..ol::subtree_end(&levels, h))
-            .filter(|j| {
-                levels.get(*j).is_some_and(|l| *l < BODY)
-                    && ol::has_children(&levels, *j)
-                    && !set.contains(j)
-                    && !hidden.get(*j).copied().unwrap_or(true)
-            })
+        let end = ol::subtree_end(&levels, h);
+        let view = OutlineView { collapsed: set.clone(), text_hidden: text.clone(), ..Default::default() };
+        let hidden = ol::hidden(&levels, &view);
+        let shown = |j: usize| !hidden.get(j).copied().unwrap_or(true);
+        // Body text under headings that have sub-headings closes first.
+        if has_sub_headings(&levels, h) && headings_with_text(&levels, h, end).any(|j| !text.contains(&j) && shown(j)) {
+            text.extend(headings_with_text(&levels, h, end));
+            continue;
+        }
+        let open: Vec<usize> = (h + 1..end)
+            .filter(|j| levels.get(*j).is_some_and(|l| *l < BODY) && has_sub_headings(&levels, *j) && !set.contains(j) && shown(*j))
             .collect();
         match open.iter().filter_map(|j| levels.get(*j)).max().copied() {
             Some(deepest) => {
@@ -320,13 +386,14 @@ fn collapse(s: &mut Session, v: &Value, all: bool) -> CmdResult {
             }
         }
     }
-    set_collapsed(s, &set);
+    set_collapsed(s, &set, &text);
     sel_result(s)
 }
 
 fn show_level(s: &mut Session, level: u8) -> CmdResult {
     s.view.outline.show_level = level;
     s.view.outline.collapsed.clear();
+    s.view.outline.text_hidden.clear();
     Ok(json!({"showLevel": level}))
 }
 
@@ -460,12 +527,11 @@ pub(crate) fn move_shown(s: &mut Session, up: bool) -> Option<CmdResult> {
     Some(sel_result(s))
 }
 
-/// Keeps collapsed headings collapsed after an edit: each one moves to the nearest heading with the
-/// same text that is still free.
+/// Keeps collapsed headings collapsed (and hidden body text hidden) after an edit.
 fn remap_collapsed_headings(s: &mut Session) {
     let hashes: Vec<Option<u64>> = (0..s.doc.body.len()).map(|i| text_hash(&s.doc, i)).collect();
     let levels = ol::levels(&s.doc);
-    // The headings not yet taken, by text hash.
+    // The headings by text hash.
     let mut by_hash: HashMap<u64, BTreeSet<usize>> = HashMap::new();
     for (j, h) in hashes.iter().enumerate() {
         if let Some(h) = h
@@ -474,9 +540,17 @@ fn remap_collapsed_headings(s: &mut Session) {
             by_hash.entry(*h).or_default().insert(j);
         }
     }
+    let collapsed = std::mem::take(&mut s.view.outline.collapsed);
+    let text_hidden = std::mem::take(&mut s.view.outline.text_hidden);
+    s.view.outline.collapsed = remap_list(collapsed, &hashes, &levels, by_hash.clone());
+    s.view.outline.text_hidden = remap_list(text_hidden, &hashes, &levels, by_hash);
+}
+
+/// Each heading in `list` moves to the nearest heading with the same text that is still free.
+fn remap_list(list: Vec<(usize, u64)>, hashes: &[Option<u64>], levels: &[u8], mut by_hash: HashMap<u64, BTreeSet<usize>>) -> Vec<(usize, u64)> {
     let mut used = BTreeSet::new();
     let mut out = Vec::new();
-    for (i, h) in std::mem::take(&mut s.view.outline.collapsed) {
+    for (i, h) in list {
         let free = |j: usize, used: &BTreeSet<usize>| levels.get(j).is_some_and(|l| *l < BODY) && !used.contains(&j);
         let same = |j: usize| hashes.get(j).copied().flatten() == Some(h);
         let found = if free(i, &used) && same(i) {
@@ -502,7 +576,7 @@ fn remap_collapsed_headings(s: &mut Session) {
         }
     }
     out.sort_unstable();
-    s.view.outline.collapsed = out;
+    out
 }
 
 /// After every command: collapsed headings are found again where edits moved them (by their
@@ -511,7 +585,7 @@ fn remap_collapsed_headings(s: &mut Session) {
 /// the nearest place it does, in the direction it was going.
 /// `changed` says whether the document changed (its revision moved); if not, nothing moved.
 pub(crate) fn after_command(s: &mut Session, before: &Selection, changed: bool) {
-    if changed && !s.view.outline.collapsed.is_empty() {
+    if changed && !(s.view.outline.collapsed.is_empty() && s.view.outline.text_hidden.is_empty()) {
         remap_collapsed_headings(s);
     }
     if s.view.mode != ViewMode::Outline || !s.sel.is_collapsed() || s.sel.focus.story != StoryRef::Body {
