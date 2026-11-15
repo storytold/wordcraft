@@ -26,7 +26,7 @@ use clear::{cell_prefix, guard_delete, text_spans};
 use convert::{formula, from_text, quick_table, sort_table, to_text};
 pub use convert::{text_table_cells, text_table_lines};
 use layout::{autofit, borders, fix_caret, properties, set_column_widths};
-pub(crate) use layout::{sync_cell_widths, text_direction, touch_cells};
+pub(crate) use layout::{sync_cell_widths, text_direction, touch_cells, touch_cells_in};
 pub(crate) use select::{extend_selection, grow_select_all, select_cell_first, select_range};
 use select::{select_cells, select_column};
 pub use structure::split_targets;
@@ -97,7 +97,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null}"#)),
         t(CommandSpec::new("table.borders", "Borders", "Table Design › Borders", borders)
-            .params(r#"{"kind": "all|outside|inside|none|top|bottom|left|right", "width"?: pt, "color"?: "RRGGBB"}"#)),
+            .params(r#"{"kind": "all|outside|inside|none|top|bottom|left|right", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "width"?: pt, "color"?: "RRGGBB" | "auto" | null} (style, width and colour default to the border pen, table.borderStyles; a colour that isn't RRGGBB is an error)"#)),
         t(CommandSpec::new("table.cellAlign", "Alignment", "Table Layout › Alignment", |s, v| {
             let (h, va) = match p::str(v, "value").unwrap_or("topLeft") {
                 "topLeft" => (Align::Left, VAlign::Top),

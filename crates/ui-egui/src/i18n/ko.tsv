@@ -1,0 +1,2672 @@
+# Korean (ko) interface catalog. Same format and clean-room rules as zh-hans.tsv.
+
+	(no style)	(스타일 없음)
+	(no suggestions)	(제안 없음)
+	1.5 Line Spacing	1.5줄 간격
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Rust로 처음부터 새로 만든 무료 오픈 소스 워드 프로세서입니다.\nArtCraft 팀의 Crafting Apps 제품군에 속합니다.
+	About	정보
+	About WordCraft	WordCraft 정보
+	Accept	수락
+	Accept All Changes	모든 변경 내용 수락
+	Accept This Change	이 변경 내용 수락
+	Accessibility	접근성
+	Add	추가
+	Add a comment	댓글 추가
+	Add a Table	표 추가
+	Add Object to Selection	선택 영역에 개체 추가
+	Add Space Before Paragraph	단락 앞에 간격 추가
+	Add space between Asian and Latin text	아시아 문자와 라틴 문자 사이에 간격 추가
+	Add space between Asian text and numbers	아시아 문자와 숫자 사이에 간격 추가
+	Add tab stop at:	탭 위치 추가:
+	Add Text	텍스트 추가
+	Add to Dictionary	사전에 추가
+	Add to Style Gallery	스타일 갤러리에 추가
+	Address Block	주소 블록
+	Address:	주소:
+	Address\nBlock	주소\n블록
+	Adjust	조정
+	Advanced	고급
+	Advanced Find	고급 찾기
+	Advanced Find…	고급 찾기…
+	After:	뒤쪽:
+	Agents	에이전트
+	Align	맞춤
+	Align Left	왼쪽 맞춤
+	Align Right	오른쪽 맞춤
+	Aligned at:	맞춤 위치:
+	Alignment	맞춤
+	All Borders	모든 테두리
+	All Caps	모두 대문자
+	All caps	모두 대문자
+	All Markup	모든 변경 내용
+	Allow hanging punctuation	문장 부호 내어쓰기 허용
+	Allow Latin text to wrap in the middle of a word	라틴 문자가 단어 중간에서 줄 바꿈되도록 허용
+	Alt Text	대체 텍스트
+	Apply Asian line-breaking rules (kinsoku)	아시아 문자 줄 바꿈 규칙(금칙 처리) 적용
+	Apply Character Style	문자 스타일 적용
+	Apply Style	스타일 적용
+	Arrange	정렬
+	Arrange\nAll	모두\n정렬
+	Arrow	화살표
+	Artistic Effects	예술 효과
+	As you type	입력할 때
+	Asian text font:	아시아 문자 글꼴:
+	Asian Typography	아시아 문자 조판
+	Author	작성자
+	AutoCorrect Options	자동 고침 옵션
+	AutoFit	자동 맞춤
+	AutoFit Contents	내용에 맞게 자동 맞춤
+	AutoFit Window	창에 맞게 자동 맞춤
+	AutoSave writes your changes to the file a moment after you stop typing.	입력을 멈추면 잠시 후 자동 저장이 변경 내용을 파일에 기록합니다.
+	Automatic	자동
+	Automatic ({language})	자동({language})
+	Automatic follows your system's language. Menus and commands change; your documents don't.	자동은 시스템 언어를 따릅니다. 메뉴와 명령의 언어만 바뀌며 문서 내용은 바뀌지 않습니다.
+	Automatic Table 1 (3 levels)	자동 목차 1(3수준)
+	Automatic Table 2 (2 levels)	자동 목차 2(2수준)
+	AutoSave	자동 저장
+	AutoSave saves every change to the file (needs a saved document)	자동 저장은 모든 변경 내용을 파일에 저장합니다(문서를 먼저 저장해야 함).
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	브라우저에서는 자동 저장을 사용할 수 없습니다. 파일에 직접 쓸 수 없으므로 저장하면 사본이 다운로드됩니다.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	자동 저장은 .docx, .odt, .rtf 파일만 지원합니다. {name}에서는 모든 서식을 유지할 수 없습니다. 자동 저장을 사용하려면 .docx로 저장하세요.
+	Balloons	말풍선
+	Bullet	글머리 기호
+	By author	작성자별
+	Centimeters	센티미터
+	Changed lines:	변경된 줄:
+	Check spelling as you type	입력할 때 맞춤법 검사
+	Click level to modify:	수정할 수준을 클릭하세요:
+	Click to switch back to inserting	클릭하여 삽입 모드로 전환
+	Color only	색만
+	Continue from previous section	이전 구역에서 계속
+	Custom dictionary	사용자 사전
+	Define New Multilevel List	새 다단계 목록 정의
+	Define New Multilevel List…	새 다단계 목록 정의…
+	Deletions:	삭제:
+	Enter formatting for number:	번호 서식 입력:
+	Follow number with:	번호 뒤에 입력할 항목:
+	Formatting	서식
+	Formatting marks	서식 기호
+	Hidden text	숨겨진 텍스트
+	Ignore web and file addresses	웹 주소와 파일 주소 무시
+	Ignore words in capitals	대문자로 된 단어 무시
+	Ignore words with numbers	숫자가 포함된 단어 무시
+	Inches	인치
+	Formatting exceptions	서식 예외
+	Include level number from:	다음 수준 번호 포함:
+	Initials:	이니셜:
+	Ink	잉크
+	Insertions and Deletions	삽입 및 삭제
+	Insertions:	삽입:
+	Interface	인터페이스
+	Interface language	인터페이스 언어
+	Inside:	안쪽:
+	Latin text font:	라틴 문자 글꼴:
+	Left border	왼쪽 테두리
+	Legal style numbering	법률 형식 번호 매기기
+	Link level to style:	수준을 스타일에 연결:
+	List Definition	목록 정의
+	Mark grammar errors as you type	입력할 때 문법 오류 표시
+	Measurement units:	측정 단위:
+	Millimeters	밀리미터
+	New comments and tracked changes are recorded under this name and these initials.	새 댓글과 변경 내용 추적은 이 이름과 이니셜로 기록됩니다.
+	New word	새 단어
+	No words yet. Add to Dictionary on a misspelled word puts it here.	아직 단어가 없습니다. 맞춤법이 틀린 단어에서 사전에 추가를 선택하면 여기에 표시됩니다.
+	Mirror indents	좌우 대칭 들여쓰기
+	Nothing	없음
+	Number alignment:	번호 맞춤:
+	Number format	번호 서식
+	Number style for this level:	이 수준의 번호 스타일:
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	이전 메뉴 키: Alt, {keys}. 계속 입력하거나 Esc 키를 눌러 취소하세요.
+	Outside border	바깥쪽 테두리
+	Overtype	겹쳐쓰기
+	Overtype (typing replaces the characters after the caret)	겹쳐쓰기(입력한 문자가 커서 뒤의 문자를 대체함)
+	Page Number Format	페이지 번호 서식
+	Page display	페이지 표시
+	Page numbering	페이지 번호 매기기
+	Paragraph marks	단락 기호
+	Personalize	개인 설정
+	Picas	파이카
+	Points	포인트
+	Print the page color	페이지 배경색 인쇄
+	Printing	인쇄
+	Proofing language	교정 언어
+	Recent documents to show:	표시할 최근 문서 수:
+	Remove	제거
+	Outside:	바깥쪽:
+	Restart list after:	다음 항목 뒤에서 목록 다시 시작:
+	Right border	오른쪽 테두리
+	Save documents	문서 저장
+	Save the document to turn on AutoSave	자동 저장을 사용하려면 문서를 저장하세요.
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	자동 저장을 사용하려면 문서를 저장하세요(열기만 한 파일은 저장할 때까지 다시 기록되지 않습니다).
+	AutoText	상용구
+	Backspace	백스페이스
+	Banded Columns	줄무늬 열
+	Banded Rows	줄무늬 행
+	Base text:	기준 텍스트:
+	Before:	앞쪽:
+	Bibliography	참고 문헌
+	Binary assets added	추가된 바이너리 에셋
+	Binary assets removed	삭제된 바이너리 에셋
+	Blank	빈 문서
+	Blank (Three Columns)	빈 문서(3단)
+	Blank document	빈 문서
+	Blank Page	빈 페이지
+	Block\nAuthors	작성자\n차단
+	Bold	굵게
+	Bookmark	책갈피
+	Bookmark name:	책갈피 이름:
+	Border Painter	테두리 그리기
+	Border\nPainter	테두리\n그리기
+	Borders	테두리
+	Search	검색
+	Show the mini toolbar when text is selected	텍스트를 선택할 때 미니 도구 모음 표시
+	Spaces	공백
+	Spelling	맞춤법
+	Spelling and grammar are checked in {language}.	맞춤법 및 문법 검사 언어: {language}
+	The text at the insertion point is marked Do not check spelling or grammar.	삽입 위치의 텍스트 설정: 맞춤법 및 문법 검사 안 함
+	{language}: WordCraft doesn't check spelling or grammar in this language yet.	{language}: WordCraft는 아직 이 언어의 맞춤법 및 문법을 검사하지 않습니다.
+	Tab characters	탭 문자
+	Tab stop position:	탭 위치:
+	Default tab stops:	기본 탭 위치:
+	Tab stops to be cleared:	지울 탭 위치:
+	All	모두
+	Decimal	소수점
+	Bar	세로줄
+	Leader	채움선
+	Set	설정
+	Page Border	페이지 테두리
+	Apply to:	적용 대상:
+	These marks show even when Show/Hide ¶ is off.	이 기호는 표시/숨기기 ¶가 꺼져 있어도 표시됩니다.
+	Title Bar	제목 표시줄
+	Typing replaces selected text	입력한 텍스트로 선택한 텍스트 바꾸기
+	Update fields before printing	인쇄하기 전에 필드 업데이트
+	Use the Insert key to switch overtype on and off	Insert 키를 눌러 겹쳐쓰기 켜기/끄기
+	Whole document	문서 전체
+	This section	이 구역
+	Selected text	선택한 텍스트
+	Fill	채우기
+	Setting:	설정:
+	3-D	3차원
+	Custom	사용자 지정
+	Style:	스타일:
+	Dot dash	파선
+	Triple	삼중선
+	Between	사이
+	Borders and Shading	테두리 및 음영
+	Tabs…	탭…
+	Borders and Shading…	테두리 및 음영…
+	Bottom Border	아래쪽 테두리
+	Bottom Margin	아래쪽 여백
+	Bottom of Page	페이지 아래쪽
+	Bottom:	아래쪽:
+	Box	상자
+	Breaks	나누기
+	Bring Forward	앞으로 가져오기
+	Bullet Library	글머리 기호 라이브러리
+	Bullets	글머리 기호
+	Calendar	달력
+	Cancel	취소
+	Capitalize Each Word	각 단어의 첫 글자를 대문자로
+	Captions	캡션
+	Cell Margins	셀 여백
+	Cell Size	셀 크기
+	Cell\nMargins	셀\n여백
+	Center	가운데 맞춤
+	Change	변경
+	Change Case	대/소문자 바꾸기
+	Change List Level	목록 수준 변경
+	Change Picture	그림 변경
+	Change Shape	도형 변경
+	Changes	변경 내용
+	Character Position	문자 위치
+	Character Scale	문자 비율
+	Character Shading	문자 음영
+	Character Spacing	문자 간격
+	Characters	문자
+	Characters (no spaces)	문자 수(공백 제외)
+	Characters (with spaces)	문자 수(공백 포함)
+	Chart	차트
+	Check Accessibility	접근성 검사
+	Check Compatibility	호환성 검사
+	Check for Errors	오류 검사
+	Check Spelling as You Type	입력할 때 맞춤법 검사
+	Check\nAccessibility	접근성\n검사
+	Citation Style	인용 스타일
+	Citations & Bibliography	인용 및 참고 문헌
+	Clear	지우기
+	Clear All	모두 지우기
+	Clear All Formatting	모든 서식 지우기
+	Clear Character Formatting	문자 서식 지우기
+	Clear Character Style	문자 스타일 지우기
+	Clear Formatting Level	서식 수준 지우기
+	Clear Paragraph Formatting	단락 서식 지우기
+	Click a border between two cells to merge them. Esc stops.	두 셀 사이의 테두리를 클릭하면 셀이 병합됩니다. Esc 키를 누르면 중지됩니다.
+	Clipboard	클립보드
+	Clipboard Pane	클립보드 창
+	Clipboard Items	클립보드 항목
+	Paste Clipboard Item	클립보드 항목 붙여넣기
+	Paste All	모두 붙여넣기
+	Delete Clipboard Item	클립보드 항목 삭제
+	Click an item to paste it.	항목을 클릭하여 붙여넣으세요.
+	Nothing collected yet. Items you copy or cut appear here.	아직 수집된 항목이 없습니다. 복사하거나 잘라낸 항목이 여기에 표시됩니다.
+	(picture or object)	(그림 또는 개체)
+	Close	닫기
+	Close Header and Footer	머리글/바닥글 닫기
+	Collapse Selection	선택 영역 축소
+	Color	색
+	Color:	색:
+	Colors	색
+	Column	열
+	Column Break	단 나누기
+	Columns	열
+	Combine	결합
+	Commands	명령
+	Comment	댓글
+	Comments	댓글
+	Comments Pane	댓글 창
+	Community\nDiscord	커뮤니티\nDiscord
+	Compact	간결하게
+	Compare	비교
+	Compress Pictures	그림 압축
+	Compress punctuation at the start of a line	줄 시작 부분의 문장 부호 압축
+	Continuous	연속
+	Convert	변환
+	Convert Text to Table	텍스트를 표로 변환
+	Convert Text to Table…	텍스트를 표로 변환…
+	Convert to Text	텍스트로 변환
+	Copy	복사
+	Copy Formatting	서식 복사
+	Corrections	수정 사항
+	Couldn't make WordCraft the default: {error}	WordCraft를 기본 앱으로 설정하지 못했습니다: {error}
+	Count words in text boxes and notes	텍스트 상자와 메모의 단어 수 포함
+	Cover Page	표지
+	Create	만들기
+	Create a Style	스타일 만들기
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	문서의 대화형 개요를 만드세요.\n\n현재 위치를 파악하거나 내용을 빠르게 이동할 수 있습니다.\n\n시작하려면 홈 탭으로 이동해 문서의 제목에 제목 스타일을 적용하세요.
+	Create New Style	새 스타일 만들기
+	Crop	자르기
+	Cross-reference	상호 참조
+	Current Position	현재 위치
+	Current style: {style}	현재 스타일: {style}
+	Custom Margins…	사용자 지정 여백…
+	Custom Watermark	사용자 지정 워터마크
+	Custom Watermark…	사용자 지정 워터마크…
+	Customize Quick Access Toolbar	빠른 실행 도구 모음 사용자 지정
+	Cut	잘라내기
+	Dark Mode	어두운 모드
+	Dashed	파선
+	Data	데이터
+	Date & Time	날짜 및 시간
+	Decrease Font Size	글꼴 크기 줄이기
+	Decrease Indent	들여쓰기 줄이기
+	Default	기본값
+	Define New Bullet	새 글머리 기호 정의
+	Define New Number Format	새 번호 서식 정의
+	Delete	삭제
+	Delete Cells	셀 삭제
+	Delete Columns	열 삭제
+	Delete Comment	댓글 삭제
+	Delete Next Word	다음 단어 삭제
+	Delete Previous Word	이전 단어 삭제
+	Delete Rows	행 삭제
+	Delete Style	스타일 삭제
+	Delete Table	표 삭제
+	Design	디자인
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	사각형을 끌어 표를 그리거나 셀을 가로지르는 선을 그어 셀을 나누세요. Esc 키를 누르면 중지됩니다.
+	Draw Table	표 그리기
+	Edit Comment	댓글 편집
+	In Default apps, choose WordCraft for the document types you want it to open.	기본 앱에서 WordCraft로 열 문서 형식을 선택하세요.
+	Left Margin	왼쪽 여백
+	Indents and Spacing	들여쓰기 및 간격
+	Line breaking	줄 바꿈
+	Make WordCraft the default for Word documents…	Word 문서의 기본 앱으로 WordCraft 설정…
+	More templates →	템플릿 더 보기 →
+	No templates match your search.	검색과 일치하는 템플릿이 없습니다.
+	Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.	이제부터 .docx, .doc, .rtf, .odt 파일과 Word 템플릿을 WordCraft에서 엽니다.
+	Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.	설정 › 기본 앱을 열어 .docx 및 다른 문서 형식의 기본 앱으로 WordCraft를 선택합니다.
+	Reopen	다시 열기
+	Right Margin	오른쪽 여백
+	Distribute letters	문자 균등 분할
+	Distribute spacing	간격 균등 분할
+	Offset (pt):	간격(pt):
+	Phonetic Guide	윗주
+	Right (vertical)	오른쪽(세로)
+	Ruby text:	윗주 텍스트:
+	Search for templates	템플릿 검색
+	To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All.	Word 문서를 기본적으로 WordCraft에서 열려면 Finder에서 문서를 선택하고 파일 › 정보 가져오기를 선택한 다음, 다음으로 열기에서 WordCraft를 고르고 모두 변경을 클릭하세요.
+	WordCraft is now the default app for Word documents.	이제 WordCraft가 Word 문서의 기본 앱입니다.
+	development build	개발 빌드
+	Diagonal	대각선
+	Diamond	마름모
+	Dictate	받아쓰기
+	Different First Page	첫 페이지 다르게 지정
+	Different Odd & Even Pages	홀수 페이지와 짝수 페이지 다르게 지정
+	Direct formatting	직접 서식
+	Discord	Discord
+	Discord community	Discord 커뮤니티
+	Display	표시
+	Display for Review	검토용 표시
+	Distribute Columns	열 균등 분할
+	Distribute Rows	행 균등 분할
+	Distributed	균등 분할
+	Do Not Show in TOC	목차에 표시 안 함
+	Document End	문서 끝
+	Document Formatting	문서 서식
+	Document Property	문서 속성
+	Document Start	문서 시작
+	Document Text	문서 텍스트
+	Document Title	문서 제목
+	Documents you open will show up here.	열어 본 문서가 여기에 표시됩니다.
+	Dot-dash	일점쇄선
+	Dotted	점선
+	Double	이중선
+	Double Spacing	두 줄 간격
+	Double Strikethrough	이중 취소선
+	Double Underline	이중 밑줄
+	Down	아래로
+	Draft	초안
+	Draw	그리기
+	Drawing Tools	그리기 도구
+	Drawing\nCanvas	그리기\n캔버스
+	Drop Cap	문단 첫 글자 장식
+	Drops all formatting and pastes plain text.	모든 서식을 제거하고 일반 텍스트로 붙여넣습니다.
+	Edit Footer	바닥글 편집
+	Edit Header	머리글 편집
+	Edit Recipient List	받는 사람 목록 편집
+	Edit\nRecipient List	받는 사람\n목록 편집
+	Edited	편집됨
+	Editing	편집
+	Editing endnote	미주 편집
+	Editing footnote	각주 편집
+	Editing header/footer	머리글/바닥글 편집
+	Editing — edit the document directly	편집 — 문서를 직접 편집합니다
+	Editor	편집기
+	Effects	효과
+	Emboss	양각
+	Encrypt with Password	암호로 암호화
+	English (United States)	영어(미국)
+	Engrave	음각
+	Enter page number:	페이지 번호 입력:
+	Envelopes	봉투
+	Equation	수식
+	Eraser	지우개
+	Even Page	짝수 페이지
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	모든 명령은 스크립트와 AI 에이전트에서 사용할 수 있습니다. MCP 서버를 실행하려면 `wordcraft-cli mcp`를 실행하거나, JSON 제어 채널을 사용하려면 앱을 `--control <port>`로 시작하세요.
+	Export	내보내기
+	Export a copy to share (PDF, Word document)	공유할 사본 내보내기(PDF, Word 문서)
+	Export Page as PNG	페이지를 PNG로 내보내기
+	Export PDF	PDF 내보내기
+	Exported {path}	{path} 내보냄
+	Extend Selection	선택 영역 확장
+	Extend Selection by Units	단위별로 선택 영역 확장
+	Field	필드
+	File	파일
+	Find	찾기
+	Find and Replace	찾기 및 바꾸기
+	Find Next	다음 찾기
+	Find Previous	이전 찾기
+	Find Recipient	받는 사람 찾기
+	Find what:	찾을 내용:
+	Finish	마침
+	Finish & Merge	완료 및 병합
+	Finish &\nMerge	완료 및\n병합
+	First Column	첫 번째 열
+	First commit	첫 번째 커밋
+	First line:	첫 줄:
+	Fixed Column Width	고정 열 너비
+	Focus	집중
+	Full Screen View	전체 화면 보기
+	Show the ribbon	리본 표시
+	Font	글꼴
+	Font Color	글꼴 색
+	Font color:	글꼴 색:
+	Font Dialog	글꼴 대화 상자
+	Font Size	글꼴 크기
+	Font:	글꼴:
+	Fonts	글꼴
+	Footer	바닥글
+	Footnote and Endnote	각주 및 미주
+	Footnotes	각주
+	Format	서식
+	Format Page Numbers	페이지 번호 서식
+	Format Page Numbers…	페이지 번호 서식…
+	Format Painter	서식 복사
+	Formatted Text	서식 있는 텍스트
+	Formatting at Selection	선택 영역의 서식
+	Formula	수식
+	General	일반
+	Go To	이동
+	Go to	이동
+	Go To (⌘⌥G)	이동(⌘⌥G)
+	Go To…	이동…
+	Grab bag	모음
+	Greeting Line	인사말
+	Greeting\nLine	인사말\n줄
+	Gridlines	눈금선
+	Group	그룹
+	Grow Font 1 Point	글꼴 크기 1포인트 키우기
+	Hanging Indent	내어쓰기
+	Header	머리글
+	Header & Footer	머리글 및 바닥글
+	Header Row	머리글 행
+	Header/Footer Position	머리글/바닥글 위치
+	Heading 1	제목 1
+	Heading 2	제목 2
+	Heading 3	제목 3
+	Headings	제목
+	Heart	하트
+	Help	도움말
+	Hidden	숨김
+	Highlight Merge Fields	병합 필드 강조 표시
+	Highlight\nMerge Fields	병합 필드\n강조 표시
+	Highlighter	형광펜
+	Home	홈
+	Horizontal	가로
+	Horizontal Line	가로줄
+	HTML Format	HTML 형식
+	Hyphenation	하이픈 넣기
+	Icons	아이콘
+	Ignore All	모두 무시
+	Illustrations	일러스트레이션
+	Immersive	몰입형
+	Immersive Reader	몰입형 리더
+	Immersive\nReader	몰입형\n리더
+	Increase Font Size	글꼴 크기 키우기
+	Increase Indent	들여쓰기 늘리기
+	Indent	들여쓰기
+	Indentation	들여쓰기
+	Indents	들여쓰기
+	Index	색인
+	Info	정보
+	Ink to\nMath	잉크를\n수식으로
+	Ink to\nShape	잉크를\n도형으로
+	Ink\nReplay	잉크\n재생
+	Insert	삽입
+	Insert Above	위에 삽입
+	Insert Below	아래에 삽입
+	Insert Caption	캡션 삽입
+	Insert Caption…	캡션 삽입…
+	Insert Citation	인용 삽입
+	Insert Endnote	미주 삽입
+	Insert Footnote	각주 삽입
+	Insert Hyperlink	하이퍼링크 삽입
+	Insert Index	색인 삽입
+	Insert Left	왼쪽에 삽입
+	Insert Merge Field	병합 필드 삽입
+	Insert Merge\nField	병합 필드\n삽입
+	Insert Right	오른쪽에 삽입
+	Insert Shapes	도형 삽입
+	Insert Table	표 삽입
+	Insert Table of Authorities	판례 인용 목차 삽입
+	Insert Table of Figures	그림 목차 삽입
+	Insert Table…	표 삽입…
+	Insert\nAbove	위에\n삽입
+	Insert\nCaption	캡션\n삽입
+	Insert\nCitation	인용\n삽입
+	Insert\nFootnote	각주\n삽입
+	Inside Borders	안쪽 테두리
+	Inspect Document	문서 검사
+	Inspect Styles at Selection	선택 영역의 스타일 검사
+	Interface language:	인터페이스 언어:
+	Italic	기울임꼴
+	Join the ArtCraft community on Discord	Discord에서 ArtCraft 커뮤니티에 참여하세요
+	Join us on Discord: discord.gg/artcraft	Discord에서 함께하세요: discord.gg/artcraft
+	Justify	양쪽 맞춤
+	Keep Lines Together	현재 단락의 모든 줄을 한 페이지에 유지
+	Keep lines together	현재 단락의 모든 줄을 한 페이지에 유지
+	Keep Text Only	텍스트만 유지
+	Keep with Next	다음 단락과 함께 유지
+	Keep with next	다음 단락과 함께 유지
+	Keeps the fonts and formatting of the copied text.	복사한 텍스트의 글꼴과 서식을 유지합니다.
+	Labels	레이블
+	Landscape	가로
+	Language	언어
+	Lasso	올가미
+	Last Column	마지막 열
+	Last commit	최근 커밋
+	Layout	레이아웃
+	Layout Summary	레이아웃 요약
+	Left	왼쪽
+	Left Border	왼쪽 테두리
+	Left:	왼쪽:
+	Letter	레터
+	Line	줄
+	Line and Page Breaks	줄 및 페이지 나누기
+	Line and Paragraph Spacing	줄 및 단락 간격
+	Line Break	줄 바꿈
+	Line delta	줄 간격 변경량
+	Line End	줄 끝
+	Line Numbers	줄 번호
+	Line Spacing	줄 간격
+	Line Spacing Options…	줄 간격 옵션…
+	Line spacing:	줄 간격:
+	Line Start	줄 시작
+	Lines	줄
+	Lines added	추가된 줄
+	Lines deleted	삭제된 줄
+	Link	링크
+	Link to Previous	이전 머리글/바닥글과 연결
+	Links	링크
+	Location: {path}	위치: {path}
+	lowercase	소문자
+	Macros	매크로
+	Mailings	편지
+	Manage Sources	출처 관리
+	Many pages	여러 페이지
+	Margins	여백
+	Mark Citation	인용 표시
+	Mark Entry	항목 표시
+	Mark\nCitation	인용\n표시
+	Mark\nEntry	항목\n표시
+	Markdown (*.md)	Markdown (*.md)
+	Match case	대/소문자 구분
+	Match Fields	필드 일치
+	Matrix	행렬
+	Merge	병합
+	Merge Cells	셀 병합
+	Merge Formatting	서식 병합
+	Merged PRs	병합된 PR
+	Mirrored	좌우 대칭
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.
+	Moderate	보통
+	Modify Style	스타일 수정
+	Modify…	수정…
+	Move or Resize	이동 또는 크기 조정
+	Multilevel List	다단계 목록
+	Multilevel List Library	다단계 목록 라이브러리
+	Article I.	제 I 조
+	Chapter 1	제 1 장
+	Section 1.01	제 1.01 절
+	Multiple Pages	여러 페이지
+	Name (A–Z)	이름순(A–Z)
+	Name:	이름:
+	Narrow  {size} all	좁게(모든 여백 {size})
+	Navigation	탐색
+	Navigation Pane	탐색 창
+	New	새로 만들기
+	New Comment	새 댓글
+	New from Template	템플릿에서 새로 만들기
+	New Paragraph	새 단락
+	New Style…	새 스타일…
+	New Window	새 창
+	New\nComment	새\n댓글
+	New\nWindow	새\n창
+	Next	다음
+	Next Change	다음 변경 내용
+	Next Comment	다음 댓글
+	Next Footnote	다음 각주
+	Next Page	다음 페이지
+	Next Record	다음 레코드
+	Next Section	다음 구역
+	No Border	테두리 없음
+	No Color	색 없음
+	No contributor data was built into this copy.	이 빌드에는 기여자 정보가 포함되지 않았습니다.
+	No Markup	변경 내용 표시 안 함
+	No model credits were built into this copy.	이 빌드에는 모델 크레딧이 포함되지 않았습니다.
+	No Paragraph Space	단락 간격 없음
+	Nonbreaking Hyphen	줄 바꿈하지 않는 하이픈
+	Nonbreaking Space	줄 바꿈하지 않는 공백
+	None	없음
+	Normal  {size} all	보통(모든 여백 {size})
+	Normal Style	표준 스타일
+	Not available right now	현재 사용할 수 없음
+	Not saved	저장되지 않음
+	Not saved yet	아직 저장되지 않음
+	Nudge	미세 이동
+	Number of columns:	열 수:
+	Number of rows:	행 수:
+	Numbering	번호 매기기
+	Object	개체
+	Odd Page	홀수 페이지
+	Office 2003 Default	Office 2003 기본값
+	OK	확인
+	One	하나
+	One Page	한 페이지
+	Open	열기
+	OpenDocument Text (*.odt)	OpenDocument Text (*.odt)
+	Optional Hyphen	임의 하이픈
+	Copyright Sign	저작권 기호
+	Ellipsis	줄임표
+	Em Dash	긴 대시
+	Insert Date Field	날짜 필드 삽입
+	Insert Page Field	페이지 필드 삽입
+	Insert Time Field	시간 필드 삽입
+	Registered Sign	등록 기호
+	Reset Character Formatting	문자 서식 초기화
+	Reset Paragraph Formatting	단락 서식 초기화
+	Trademark Sign	상표 기호
+	Options	옵션
+	Orientation	방향
+	Outline	개요
+	Outline Level	개요 수준
+	Outside Borders	바깥쪽 테두리
+	Oval	타원
+	Page	페이지
+	Page Background	페이지 배경
+	Page Borders	페이지 테두리
+	Page Break	페이지 나누기
+	Page Break Before	앞에서 페이지 나누기
+	Page break before	앞에서 페이지 나누기
+	Page Breaks	페이지 나누기
+	Page Color	페이지 색
+	Page Down	Page Down
+	Page image (*.png)	페이지 이미지 (*.png)
+	Page Movement	페이지 이동
+	Page Number	페이지 번호
+	Page Setup	페이지 설정
+	Page Up	Page Up
+	Page Width	페이지 너비
+	Page width	페이지 너비
+	Page X of Y	전체 X/Y페이지
+	Page {page}	{page}페이지
+	Page {page} of {pages}	전체 {pages}페이지 중 {page}페이지
+	Page\nBorders	페이지\n테두리
+	Page\nColor	페이지\n색
+	Page\nNumber	페이지\n번호
+	Pages	페이지
+	Paragraph	단락
+	Paragraph Details	단락 세부 정보
+	Paragraph Down	단락 아래로
+	Paragraph Settings	단락 설정
+	Paragraph Spacing	단락 간격
+	Paragraph Up	단락 위로
+	Paragraphs	단락
+	Paste	붙여넣기
+	Paste (⌘V)	붙여넣기(⌘V)
+	Paste as:	다음 형식으로 붙여넣기:
+	Paste Formatting	서식 붙여넣기
+	Paste Special	선택하여 붙여넣기
+	Paste Special…	선택하여 붙여넣기…
+	Paste: Keep Text Only	붙여넣기: 텍스트만 유지
+	Paste: Merge Formatting	붙여넣기: 서식 병합
+	PDF document (*.pdf)	PDF 문서 (*.pdf)
+	Pen	펜
+	Pencil	연필
+	Picture Border	그림 테두리
+	Picture Format	그림 서식
+	Picture Styles	그림 스타일
+	Pictures	그림
+	Plain text (*.txt)	일반 텍스트 (*.txt)
+	Portrait	세로
+	Position	위치
+	Preview Results	결과 미리 보기
+	Preview\nResults	결과\n미리 보기
+	Previous	이전
+	Previous Change	이전 변경 내용
+	Previous Comment	이전 댓글
+	Previous Record	이전 레코드
+	Previous Section	이전 구역
+	Print	인쇄
+	Print Layout	인쇄 레이아웃
+	Print\nLayout	인쇄\n레이아웃
+	Proofing	교정
+	Proofing Issues	교정 문제
+	Properties	속성
+	Protect	보호
+	Protect Document	문서 보호
+	Quick Access Toolbar	빠른 실행 도구 모음
+	Quick Parts	빠른 문서 요소
+	Quick Tables	빠른 표
+	Read Aloud	소리 내어 읽기
+	Read Mode	읽기 모드
+	Read\nAloud	소리 내어\n읽기
+	Read\nMode	읽기\n모드
+	Reads the clipboard's rich text and keeps its formatting.	클립보드의 서식 있는 텍스트를 읽어 서식을 유지합니다.
+	Reads the clipboard's web content and keeps its formatting.	클립보드의 웹 콘텐츠를 읽어 서식을 유지합니다.
+	Picture	그림
+	Pastes the clipboard's picture.	클립보드의 그림을 붙여넣습니다.
+	Reading Highlight	읽기 강조 표시
+	Recent	최근 항목
+	Record Macro	매크로 기록
+	Recover Unsaved Documents	저장하지 않은 문서 복구
+	Rectangle	직사각형
+	Redo	다시 실행
+	Reduce Hanging Indent	내어쓰기 줄이기
+	References	참조
+	Reject	거부
+	Reject All Changes	모든 변경 내용 거부
+	Reject Change	변경 내용 거부
+	Relaxed	여유 있게
+	Remove Background	배경 제거
+	Remove Footer	바닥글 제거
+	Remove Header	머리글 제거
+	Remove Hyperlink	하이퍼링크 제거
+	Remove Space After Paragraph	단락 뒤 간격 제거
+	Remove Table of Contents	목차 제거
+	Remove Watermark	워터마크 제거
+	Repeat	반복
+	Repeat Header Rows	머리글 행 반복
+	Replace	바꾸기
+	Replace All	모두 바꾸기
+	Replace Document Text	문서 텍스트 바꾸기
+	Replace with:	바꿀 내용:
+	Replay	다시 재생
+	Reply	답글
+	Report	보고서
+	Research	리서치
+	Researcher	리서치 도구
+	Reset Picture	그림 재설정
+	Reset to Normal	표준으로 재설정
+	Resolve	해결
+	Resolved	해결됨
+	Restart at 1	1부터 다시 시작
+	Restart Each Page	각 페이지에서 다시 시작
+	Restart Each Section	각 구역에서 다시 시작
+	Restrict Editing	편집 제한
+	Restrict\nEditing	편집\n제한
+	Result	결과
+	Results	결과
+	Reverse the order	순서 반전
+	Review	검토
+	Reviewing	검토 중
+	Reviewing Pane	검토 창
+	Reviewing — edits become suggestions	검토 중 — 편집 내용이 제안으로 바뀝니다
+	Rich Text Format (*.rtf)	서식 있는 텍스트 형식 (*.rtf)
+	Rich Text Format (RTF)	서식 있는 텍스트 형식 (RTF)
+	Right	오른쪽
+	Right Border	오른쪽 테두리
+	Right-to-Left Text Direction	오른쪽에서 왼쪽 텍스트 방향
+	Left-to-Right Text Direction	왼쪽에서 오른쪽 텍스트 방향
+	Right:	오른쪽:
+	Rotate	회전
+	Rounded Rectangle	둥근 사각형
+	Rows & Columns	행 및 열
+	Ruler	눈금자
+	Rules	규칙
+	Résumé	이력서
+	Save	저장
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	다른 형식으로 사본을 저장합니다. 인쇄하려면 PDF로 저장한 뒤 원하는 뷰어에서 인쇄할 수 있습니다.
+	Save As	다른 이름으로 저장
+	Save as Template	템플릿으로 저장
+	Saved	저장됨
+	Search Commands	명령 검색
+	Search commands and help	명령 및 도움말 검색
+	Search document	문서 검색
+	Section Breaks	구역 나누기
+	Section Properties	구역 속성
+	Sections	구역
+	Select	선택
+	Select All	모두 선택
+	Select Cell	셀 선택
+	Select Line	줄 선택
+	Select Objects	개체 선택
+	Select Paragraph	단락 선택
+	Select Range	범위 선택
+	Select Recipients	받는 사람 선택
+	Select Row	행 선택
+	Select Sentence	문장 선택
+	Select Table	표 선택
+	Select Text	텍스트 선택
+	Select Text with Similar Formatting	서식이 비슷한 텍스트 선택
+	Select Word	단어 선택
+	Select\nRecipients	받는 사람\n선택
+	Selection	선택 영역
+	Selection Pane	선택 창
+	Send Backward	뒤로 보내기
+	Sentence case.	문장식 대소문자.
+	Set as Default	기본값으로 설정
+	Set Caret	커서 설정
+	Set Character Formatting	문자 서식 설정
+	Set Numbering Value	번호 값 설정
+	Set Paragraph Formatting	단락 서식 설정
+	Shading	음영
+	Shadow	그림자
+	Shape Fill	도형 채우기
+	Shape Format	도형 서식
+	Shape Outline	도형 윤곽선
+	Shape Styles	도형 스타일
+	Shapes	도형
+	Share	공유
+	Shift+Tab	Shift+Tab
+	Show	표시
+	Show all formatting marks	모든 서식 기호 표시
+	Show all revisions inline	모든 수정 내용을 본문에 표시
+	Show Comments	메모 표시
+	Show Markup	변경 내용 표시
+	Show Notes	메모 표시
+	Show only comments and formatting in balloons	말풍선에 메모와 서식만 표시
+	Show revisions in balloons	말풍선에 변경 내용 표시
+	Show rulers	눈금자 표시
+	Animation	애니메이션
+	Animate the caret (it glides and fades)	커서 애니메이션 (부드럽게 이동하고 희미해짐)
+	On: the caret glides to its new place when you type or use the arrow keys, and its blink fades. Off: it jumps and blinks on and off.	사용: 입력하거나 방향키를 누르면 커서가 새 위치로 부드럽게 이동하고 깜박임이 서서히 사라집니다. 사용 안 함: 커서가 바로 이동하고 깜박임이 켜졌다 꺼집니다.
+	Show the community button in the title bar	제목 표시줄에 커뮤니티 단추 표시
+	Show/Hide ¶	¶ 표시/숨기기
+	Show\nComments	메모\n표시
+	Shrink Font 1 Point	글꼴 크기 1포인트 줄이기
+	Side to Side	페이지 나란히
+	Side\nto Side	페이지\n나란히
+	Signature Line	서명란
+	Single	한 줄
+	Single Spacing	한 줄 간격
+	Size	크기
+	Size (pt):	크기 (pt):
+	Size:	크기:
+	Small Caps	작은 대문자
+	Small caps	작은 대문자
+	SmartArt	SmartArt
+	Sort	정렬
+	Source code: github.com/storytold/wordcraft	소스 코드: github.com/storytold/wordcraft
+	Space	공백
+	Space before/after:	앞/뒤 간격:
+	Spacing	간격
+	Spacing (pt):	간격 (pt):
+	Kerning for fonts:	글꼴 커닝:
+	Points and above	pt 이상
+	Speech	음성
+	Spelling & Grammar	맞춤법 및 문법
+	Spelling &\nGrammar	맞춤법 및\n문법
+	Spelling Suggestions	맞춤법 제안
+	Split	나누기
+	Split Cells	셀 나누기
+	Split Table	표 나누기
+	Spreadsheet Table	스프레드시트 표
+	Standard Colors	표준 색
+	Star	별
+	Start at:	시작 번호:
+	Start Mail Merge	편지 병합 시작
+	Start Mail\nMerge	편지 병합\n시작
+	Statistics	통계
+	Status Bar	상태 표시줄
+	Strikethrough	취소선
+	Studio cover	스튜디오 표지
+	Studio handbook (sample)	스튜디오 핸드북 (샘플)
+	Style	스타일
+	Style based on:	기준 스타일:
+	Style Inspector	스타일 검사기
+	Style Set	스타일 모음
+	Style: {style}	스타일: {style}
+	Styles	스타일
+	Styles Pane	스타일 창
+	Subscript	아래 첨자
+	Superscript	위 첨자
+	Switch Modes	모드 전환
+	Switch\nModes	모드\n전환
+	Symbol	기호
+	Symbols	기호
+	Synonyms	유의어
+	Tab	탭
+	Tab character	탭 문자
+	Table	표
+	Table Column Width	표 열 너비
+	Table Design	표 디자인
+	Table Layout	표 레이아웃
+	Table of Authorities	인용 목차
+	Table of Contents	목차
+	Table of\nContents	목차
+	Table Properties	표 속성
+	Table Properties…	표 속성…
+	Table Row Height	표 행 높이
+	Table Style Options	표 스타일 옵션
+	Table Styles	표 스타일
+	Tables	표
+	Tabs	탭
+	Tabular List	표 형식 목록
+	Text	텍스트
+	Text Box	텍스트 상자
+	Text Direction	텍스트 방향
+	Text Effects	텍스트 효과
+	Text Effects and Typography	텍스트 효과 및 타이포그래피
+	Text from File	파일에서 텍스트 가져오기
+	Text Highlight Color	텍스트 강조 색
+	Text indent at:	텍스트 들여쓰기 위치:
+	Text to display:	표시할 텍스트:
+	Text Wrapping	텍스트 배치
+	Text:	텍스트:
+	Text\nBox	텍스트\n상자
+	Text\nDirection	텍스트\n방향
+	The clipboard is empty.	클립보드가 비어 있습니다.
+	The new style takes the formatting of the current paragraph.	새 스타일은 현재 단락의 서식을 사용합니다.
+	Theme Colors	테마 색
+	Theme Fonts	테마 글꼴
+	Theme List	테마 목록
+	Themes	테마
+	Thesaurus	유의어 사전
+	Thick	굵게
+	Three	세 개
+	Tight	좁게
+	Top Border	위쪽 테두리
+	Top Margin	위쪽 여백
+	Top of Page	페이지 위쪽
+	Top:	위쪽:
+	Total Row	요약 행
+	Track Changes	변경 내용 추적
+	Track Changes Options	변경 내용 추적 옵션
+	Track Changes: On	변경 내용 추적: 켬
+	Track formatting	서식 추적
+	Tracking	추적
+	Translate	번역
+	Transparency	투명도
+	Triangle	삼각형
+	Two	2단
+	Type a command, e.g. "insert table"	명령 입력 (예: "insert table")
+	Type Text	텍스트 입력
+	Underline	밑줄
+	Underline Words Only	단어에만 밑줄
+	Undo	실행 취소
+	Undo {action}	{action} 실행 취소
+	Undo Actions	작업 실행 취소
+	Undo History	실행 취소 기록
+	Undo 1 Action	작업 1개 실행 취소
+	Undo {n} Actions	작업 {n}개 실행 취소
+	Ungroup	그룹 해제
+	Unformatted Text	서식 없는 텍스트
+	Up	위쪽
+	Update Field	필드 업데이트
+	Update Index	색인 업데이트
+	Update Style to Match Selection	선택 영역에 맞게 스타일 업데이트
+	Update Table	표 업데이트
+	Update Table of Figures	그림 목차 업데이트
+	Update to Match	선택 영역에 맞게 업데이트
+	Update to Match Selection	선택 영역에 맞게 업데이트
+	UPPERCASE	대문자
+	User Name	사용자 이름
+	User name:	사용자 이름:
+	Version History	버전 기록
+	Version {version} ({build})	버전 {version} ({build})
+	Vertical	세로
+	Vertical Alignment	세로 맞춤
+	View	보기
+	View Gridlines	눈금선 표시
+	View State	보기 상태
+	Views	보기
+	Voice	음성
+	Watermark	워터마크
+	Wave	물결
+	Web Layout	웹 레이아웃
+	Web page (*.html)	웹 페이지 (*.html)
+	Web\nLayout	웹\n레이아웃
+	Whole page	전체 페이지
+	Whole words	단어 단위
+	Wide	넓게
+	Widow/Orphan Control	고아 줄 및 과부 줄 제어
+	Widow/Orphan control	고아 줄 및 과부 줄 제어
+	Window	창
+	Word Count	단어 수
+	Word document (*.docx)	Word 문서 (*.docx)
+	Word XML Document (*.xml)	Word XML 문서 (*.xml)
+	Word Left	이전 단어로 이동
+	Word Right	다음 단어로 이동
+	WordArt	WordArt
+	WordCraft	WordCraft
+	Words	단어
+	Words only	단어만
+	Wrap Text	텍스트 줄 바꿈
+	Wrap\nText	텍스트 줄\n바꿈
+	Write & Insert Fields	필드 작성 및 삽입
+	Write a reply	답글 작성
+	Zoom	확대/축소
+	Zoom In	확대
+	Zoom Out	축소
+	{group} settings	{group} 설정
+	{key}+Click to follow link	{key}+클릭하여 링크 열기
+	Browse…	찾아보기…
+	{words} words	단어 {words}개
+	{selected} of {words} words	전체 {words}개 중 {selected}개 선택
+	Apply Styles	스타일 적용
+	Dark page (white text on black)	어두운 페이지(검은 배경에 흰색 텍스트)
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	보기 › 모드 전환처럼 문서의 색상을 반전해 표시합니다. 저장, 인쇄 및 PDF에는 영향을 주지 않습니다.
+	Only web (http, https) and email (mailto) links can be followed	웹(http, https) 및 이메일(mailto) 링크만 열 수 있습니다.
+	Scroll ribbon left	리본을 왼쪽으로 스크롤
+	Scroll ribbon right	리본을 오른쪽으로 스크롤
+	Character Border	문자 테두리
+	Direction:	방향:
+	Right-to-left	오른쪽에서 왼쪽
+	Left-to-right	왼쪽에서 오른쪽
+	Zotero	Zotero
+	Citations	인용
+	Document	문서
+	Add/Edit\nCitation	인용\n추가/편집
+	Add\nNote	메모\n추가
+	Add/Edit\nBibliography	참고 문헌\n추가/편집
+	Refresh	새로 고침
+	Document\nPreferences	문서\n설정
+	Unlink\nCitations	인용\n연결 해제
+	Waiting for Zotero…	Zotero 응답 대기 중…
+	Zotero: done	Zotero: 완료
+	Zotero: cancelled	Zotero: 취소됨
+	Yes	예
+	No	아니요
+	Move Past Citation	인용 뒤로 이동
+	Move Past\nCitation	인용\n뒤로 이동
+	Next Sentence	다음 문장
+	Previous Sentence	이전 문장
+	Next sentence	다음 문장
+	Previous sentence	이전 문장
+	Play/Pause	재생/일시 정지
+	Read Aloud Status	소리 내어 읽기 상태
+	Reading Speed	읽기 속도
+	Skip Citations and Bibliography	인용 및 참고 문헌 건너뛰기
+	Skip citations & bibliography	인용 및 참고 문헌 건너뛰기
+	Stop Reading	읽기 중지
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Zotero, Mendeley 또는 EndNote의 인용 및 참고 문헌을 읽지 않음
+	Play	재생
+	Pause	일시 정지
+	Stop	중지
+	Sentence	문장
+	Paused	일시 정지됨
+	Finished	완료됨
+	Stopped	중지됨
+	Speed	속도
+	Normal speed	보통 속도
+	AutoSave documents you have saved in WordCraft	WordCraft에서 저장한 문서 자동 저장
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	자동 저장 실패: {error}. 자동 저장을 다시 사용하려면 문서를 저장하세요.
+	Couldn't download {name}: {error}	{name}을(를) 다운로드하지 못했습니다: {error}
+	Do you want to save changes to {name}?	{name}의 변경 내용을 저장하시겠습니까?
+	Don't Save	저장 안 함
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	이 형식은 모든 내용을 보존하지 못하므로 문서는 계속 열려 있습니다. 계속하려면 Word 문서 (.docx)로 저장하세요.
+	Your changes will be lost if you don't save them.	저장하지 않으면 변경 내용이 사라집니다.
+	Change Structure	구조 변경
+	Change to Display	표시 형식으로 변경
+	Change to Inline	인라인 형식으로 변경
+	Conversions	변환
+	Delete Back in Equation	수식에서 앞 문자 삭제
+	Delete in Equation	수식에서 삭제
+	Edit Equation	수식 편집
+	Enter in Equation	수식에서 Enter 입력
+	Equation Gallery	수식 갤러리
+	Equation Info	수식 정보
+	Equation Number	수식 번호
+	Input Format	입력 형식
+	Insert Structure	구조 삽입
+	Insert Symbol	기호 삽입
+	Justification	맞춤
+	Leave Equation	수식 종료
+	Move in Equation	수식 내에서 이동
+	Normal Text	일반 텍스트
+	Set Equation	수식 설정
+	Structure Actions	구조 작업
+	Structures	구조
+	Tools	도구
+	Type in Equation	수식 입력
+	Inline	인라인
+	Number	번호
+	Close Equation	수식 닫기
+	Insert New Equation	새 수식 삽입
+	Built-In	기본 제공
+	Professional	전문가용
+	Linear	선형
+	Fraction	분수
+	Script	스크립트
+	Radical	근호
+	Integral	적분
+	Large\nOperator	큰\n연산자
+	Bracket	괄호
+	Function	함수
+	Accent	악센트
+	Limit and\nLog	극한 및\n로그
+	Operator	연산자
+	Equation Options	수식 옵션
+	All symbol sets	모든 기호 집합
+	Send the document straight to the system print dialog, or save a copy in another format below.	문서를 시스템 인쇄 대화 상자로 바로 보내거나, 아래에서 다른 형식으로 사본을 저장하세요.
+	Or save a copy in another format:	또는 다른 형식으로 사본 저장:
+	Opening print dialog…	인쇄 대화 상자 여는 중…
+	Print failed: {error}	인쇄 실패: {error}
+	Finding printers…	프린터 검색 중…
+	No printers found. Configure a system printer or export a PDF.	프린터를 찾을 수 없습니다. 시스템 프린터를 설정하거나 PDF로 내보내세요.
+	Printer discovery failed.	프린터 검색에 실패했습니다.
+	Submitting print job…	인쇄 작업 전송 중…
+	Print job submitted.	인쇄 작업을 전송했습니다.
+	Print job submitted: {receipt}	인쇄 작업을 전송했습니다: {receipt}
+	Print job submitted: spooled {count} sheet(s)	인쇄 작업을 보냈습니다: {count}장을 스풀했습니다
+	Print failed: the printing worker stopped.	인쇄 실패: 인쇄 작업자가 중지되었습니다.
+	Couldn't open {path}: {error}	{path}을(를) 열 수 없습니다: {error}
+	Column Selection	열 선택
+	New Table Style	새 표 스타일
+	Modify Table Style	표 스타일 수정
+	New Table Style…	새 표 스타일…
+	Modify Table Style…	표 스타일 수정…
+	Apply formatting to:	서식 적용 대상:
+	Whole Table	전체 표
+	Fill color:	채우기 색:
+	{count} items highlighted	{count}개 항목 강조 표시됨
+	{n} pt	{n} pt
+	Not {name}	{name} 아님
+	Level {n}	수준 {n}
+	Body Text	본문
+	{n} lines	{n}줄
+	At least {n}	최소 {n}
+	Exactly {n}	정확히 {n}
+	Centered	가운데 맞춤
+	Character spacing	문자 간격
+	Don't add space between paragraphs of the same style	같은 스타일의 단락 사이에 간격을 추가하지 않음
+	Don't hyphenate	하이픈 넣지 않음
+	Double strikethrough	이중 취소선
+	Drop cap	문단 첫 글자 장식
+	First line	첫 줄
+	Font color	글꼴 색
+	Highlight	강조 표시
+	Justified	양쪽 맞춤
+	Left indent	왼쪽 들여쓰기
+	Line spacing	줄 간격
+	Outline level	개요 수준
+	Raised/lowered	올림/내림
+	Right indent	오른쪽 들여쓰기
+	Scale	배율
+	Space after	단락 뒤 간격
+	Space before	단락 앞 간격
+	Suppress line numbers	줄 번호 숨기기
+	Underline color	밑줄 색
+	Letters	편지
+	E-mail Messages	전자 메일 메시지
+	Directory	디렉터리
+	Normal Word Document	일반 Word 문서
+	If…Then…Else…	조건문 (If…Then…Else…)…
+	If…Then…Else	조건문 (If…Then…Else)
+	Merge Record #	병합 레코드 번호
+	Skip Record If…	조건에 따라 레코드 건너뛰기…
+	Skip Record If	조건에 따라 레코드 건너뛰기
+	Equals:	같음:
+	Then insert:	다음 삽입:
+	Otherwise insert:	그렇지 않으면 삽입:
+	Courtesy Title	호칭
+	First Name	이름
+	Last Name	성
+	Company	회사
+	Address	주소
+	City	도시
+	State	주/도
+	Postal Code	우편번호
+	Country	국가/지역
+	(not matched)	(일치하는 항목 없음)
+	Leave a recipient out of the merge when a field has this value.	필드 값이 이 값인 경우 병합에서 받는 사람을 제외합니다.
+	Insert one text or another, depending on a field's value.	필드 값에 따라 둘 중 하나의 텍스트를 삽입합니다.
+	Select recipients first to match their fields.	필드를 일치시키려면 먼저 받는 사람을 선택하세요.
+	The recipient-list field that fills each part of an address block and greeting line.	주소 블록과 인사말의 각 부분에 값을 채우는 받는 사람 목록 필드입니다.
+	No errors found: every merge field is in the recipient list.	오류가 없습니다. 모든 병합 필드가 받는 사람 목록에 있습니다.
+	These merge fields aren't in the recipient list:	다음 병합 필드는 받는 사람 목록에 없습니다:
+	Add at least one field.	필드를 하나 이상 추가하세요.
+	Add Field	필드 추가
+	Every field needs a name.	모든 필드에 이름이 있어야 합니다.
+	Field name	필드 이름
+	Field names must be different.	필드 이름은 서로 달라야 합니다.
+	Fields:	필드:
+	Field:	필드:
+	Find:	찾기:
+	New Entry	새 항목
+	Recipient List	받는 사람 목록
+	Recipients: {count}	받는 사람: {count}
+	Remove field	필드 제거
+	Remove recipient	받는 사람 제거
+	Select recipients first to choose from their fields.	필드를 선택하려면 먼저 받는 사람을 선택하세요.
+	Type a New List…	새 목록 입력…
+	Type at least one recipient.	받는 사람을 하나 이상 입력하세요.
+	Type the recipients, or load them from a file.	받는 사람을 입력하거나 파일에서 불러오세요.
+	Use an Existing List…	기존 목록 사용…
+	Choose the sheet that holds the recipients.	받는 사람이 있는 시트를 선택하세요.
+	First row of data contains column headers	데이터의 첫 번째 행에 열 머리글이 포함됨
+	Interface theme:	인터페이스 테마:
+	Interface\nTheme	인터페이스\n테마
+	Interface Theme	인터페이스 테마
+	Light	밝게
+	Dark	어둡게
+	Use system setting	시스템 설정 사용
+	A file dialog is already open.	파일 대화 상자가 이미 열려 있습니다.
+	Height:	높이:
+	Width:	너비:
+	Row	행
+	Cell	셀
+	Preferred width:	기본 너비:
+	Alignment:	맞춤:
+	Indent from left:	왼쪽에서 들여쓰기:
+	Specify height:	높이 지정:
+	Exactly	정확히
+	At least	최소
+	Allow row to break across pages	행이 여러 페이지에 걸쳐 나뉘도록 허용
+	Repeat as header row on each page	각 페이지에서 머리글 행으로 반복
+	Vertical alignment:	세로 맞춤:
+	Top	위쪽
+	Bottom	아래쪽
+	Alt text	대체 텍스트
+	Alt:	대체 텍스트:
+	W:	너비:
+	H:	높이:
+	Reset	재설정
+	Reset Crop	자르기 재설정
+	Insert a new equation (Alt+=)	새 수식 삽입 (Alt+=)
+	Leave the equation (Esc)	수식 종료 (Esc)
+	Preview	미리 보기
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Draw Ink	잉크 그리기
+	Erase Ink	잉크 지우기
+	Hide Ink	잉크 숨기기
+	Hide\nInk	잉크\n숨기기
+	Pens	펜
+	Thickness	두께
+	(All)	(모두)
+	(none)	(없음)
+	(normal text)	(일반 텍스트)
+	1/4 Em Space	1/4 전각 공백
+	A mail merge field	메일 병합 필드
+	A numbered sequence (figures, tables…)	그림, 표 등에 붙이는 번호 매기기 시퀀스
+	A table of contents	목차
+	Categories:	범주:
+	Character	문자
+	Character code:	문자 코드:
+	Col #:	열 번호:
+	Copyright	저작권
+	Date and Time	날짜 및 시간
+	Date formats:	날짜 형식:
+	Description:	설명:
+	Document Information	문서 정보
+	Double Closing Quote	닫는 큰따옴표
+	Double Opening Quote	여는 큰따옴표
+	En Dash	엔 대시
+	Em Space	전각 공백
+	En Space	반각 공백
+	Equal column width	열 너비 같게
+	Field Codes	필드 코드
+	Field code:	필드 코드:
+	Field codes:	필드 코드:
+	Field name:	필드 이름:
+	Field names:	필드 이름:
+	Field properties	필드 속성
+	Field…	필드…
+	Format:	서식:
+	Hide Codes	코드 숨기기
+	Index and Tables	색인 및 목차
+	Line between	사이 구분선
+	Links and References	링크 및 참조
+	Mail Merge	메일 병합
+	More Columns…	열 더 보기…
+	More Symbols…	기호 더 보기…
+	No-Width Non Break	폭 없는 줄 바꿈 방지 문자
+	No-Width Optional Break	폭 없는 선택적 줄 바꿈 문자
+	Paragraph Mark	단락 기호
+	Pick a field from the list	목록에서 필드 선택
+	Preserve formatting during updates	업데이트 중 서식 유지
+	Presets	사전 설정
+	Recently used symbols:	최근 사용한 기호:
+	Registered	등록 상표
+	Section Mark	절 기호
+	Sequence name:	시퀀스 이름:
+	Shortcut key:	바로 가기 키:
+	Single Closing Quote	닫는 작은따옴표
+	Single Opening Quote	여는 작은따옴표
+	Spacing:	간격:
+	Special Characters	특수 문자
+	Subset:	하위 집합:
+	The time right now	현재 시각
+	When this document was first created	이 문서를 처음 만든 날짜
+	When this document was most recently printed	이 문서를 가장 최근에 인쇄한 날짜
+	When this document was most recently saved	이 문서를 가장 최근에 저장한 날짜
+	The document has no bookmarks yet.	문서에 책갈피가 아직 없습니다.
+	Who the document properties name as author	문서 속성에 작성자로 지정된 사람
+	Name of the file this document is saved as	문서가 저장된 파일 이름
+	Title from the document properties	문서 속성에 지정된 제목
+	How many pages the whole document has	문서 전체 페이지 수
+	How many pages this section has	이 구역의 페이지 수
+	Number of the page the field sits on	필드가 있는 페이지 번호
+	Number of the section the field sits in	필드가 있는 구역 번호
+	How many words the document holds	문서의 단어 수
+	Page on which a bookmarked passage falls	책갈피가 지정된 구절이 있는 페이지
+	Copy of the text a bookmark marks	책갈피가 지정한 텍스트 사본
+	This field has no options.	이 필드에는 옵션이 없습니다.
+	This font has no characters to show.	이 글꼴에는 표시할 문자가 없습니다.
+	This point forward	현재 위치부터
+	The date it is today	오늘 날짜
+	Trademark	상표
+	Type the field's name and its switches, for example PAGE \\* roman.	필드 이름과 스위치를 입력하세요. 예: PAGE \\* roman.
+	Width and spacing	너비 및 간격
+	from Unicode (hex)	Unicode (16진수)에서
+	Shape Effects	도형 효과
+	Glow	광채
+	Soft Edges	부드러운 가장자리
+	No Shadow	그림자 없음
+	No Glow	광채 없음
+	No Soft Edges	부드러운 가장자리 없음
+	Glow Colors	광채 색
+	Weight	굵기
+	Shadow, glow and soft edges	그림자, 광채 및 부드러운 가장자리
+	Offset: Bottom Right	오프셋: 오른쪽 아래
+	Offset: Bottom	오프셋: 아래쪽
+	Offset: Bottom Left	오프셋: 왼쪽 아래
+	Offset: Right	오프셋: 오른쪽
+	Offset: Center	오프셋: 가운데
+	Offset: Left	오프셋: 왼쪽
+	Offset: Top Right	오프셋: 오른쪽 위
+	Offset: Top	오프셋: 위쪽
+	Offset: Top Left	오프셋: 왼쪽 위
+	Manage Styles	스타일 관리
+	Show or Hide Style	스타일 표시 또는 숨기기
+	Manage Styles…	스타일 관리…
+	Sort order:	정렬 순서:
+	As Recommended	권장 순서
+	Alphabetical	가나다순
+	Font: {font}	글꼴: {font}
+	{size} pt	{size} pt
+	Color: {color}	색: {color}
+	Space before: {pt} pt	단락 앞 간격: {pt} pt
+	Space after: {pt} pt	단락 뒤 간격: {pt} pt
+	Based on: {style}	기준: {style}
+	Paragraph style	단락 스타일
+	Character style	문자 스타일
+	Linked style (paragraph and character)	연결된 스타일 (단락 및 문자)
+	Table style	표 스타일
+	Built-in style	기본 제공 스타일
+	Show in the Styles gallery	스타일 갤러리에 표시
+	Hide from style lists	스타일 목록에서 숨기기
+	Built-in styles can't be deleted.	기본 제공 스타일은 삭제할 수 없습니다.
+	Delete Table Style	표 스타일 삭제
+	Password	암호
+	Password:	암호:
+	Confirm password:	암호 확인:
+	Encrypt with Password…	암호로 암호화…
+	Change Password…	암호 변경…
+	Remove Password	암호 제거
+	A password is required to open this document.	문서를 열려면 암호가 필요합니다.
+	Anyone can open this document. Encrypt it with a password to keep it private.	누구나 이 문서를 열 수 있습니다. 비공개로 유지하려면 암호로 암호화하세요.
+	Anyone who opens the document will need this password.	문서를 여는 사람은 누구나 이 암호가 필요합니다.
+	{name} is protected with a password.	{name} 문서는 암호로 보호됩니다.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	암호가 올바르지 않습니다. 암호는 대/소문자를 구분하므로 확인한 후 다시 시도하세요.
+	The document will be saved with a password. Save it to protect it.	문서는 암호를 설정하여 저장됩니다. 문서를 보호하려면 저장하세요.
+	The password is removed. Save the document to keep the change.	암호가 제거되었습니다. 변경 내용을 유지하려면 문서를 저장하세요.
+	The passwords don't match.	암호가 일치하지 않습니다.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	암호를 안전한 곳에 보관하세요. 암호가 없으면 WordCraft를 포함해 누구도 문서를 열 수 없습니다. 암호를 제거하려면 두 입력란을 모두 비워 두세요.
+	Align Top Left	위쪽 왼쪽 맞춤
+	Align Top Center	위쪽 가운데 맞춤
+	Align Top Right	위쪽 오른쪽 맞춤
+	Align Center Left	가운데 왼쪽 맞춤
+	Align Center	가운데 맞춤
+	Align Center Right	가운데 오른쪽 맞춤
+	Align Bottom Left	아래쪽 왼쪽 맞춤
+	Align Bottom Center	아래쪽 가운데 맞춤
+	Align Bottom Right	아래쪽 오른쪽 맞춤
+	{contributors} contributors · {commits} commits	기여자 {contributors}명 · 커밋 {commits}개
+	{cols}×{rows} Table	{cols}×{rows} 표
+	AaBbYyZz	AaBbYyZz
+	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
+	Document1	문서1
+	Username	사용자 이름
+	Display name	표시 이름
+	Real name	실명
+	Name	이름
+	PRs	PR
+	Commits	커밋
+	First	첫 번째
+	Last	마지막
+	Model	모델
+	Version	버전
+	% of all commits	전체 커밋 중 %
+	Lines +/−	줄 +/−
+	Craft	Craft
+	Studio	Studio
+	Atelier	Atelier
+	Darkroom	Darkroom
+	Gallery	Gallery
+	Sketchbook	Sketchbook
+	Change Picture…	그림 변경…
+	Font…	글꼴…
+	Paragraph…	단락…
+	Link…	링크…
+	Size and Crop…	크기 및 자르기…
+	Insert Columns to the Left	왼쪽에 열 삽입
+	Insert Columns to the Right	오른쪽에 열 삽입
+	Insert Rows Above	위에 행 삽입
+	Insert Rows Below	아래에 행 삽입
+	Mon	월
+	Tue	화
+	Wed	수
+	Sum	합계
+	North	북쪽
+	South	남쪽
+	West	서쪽
+	Total	합계
+	Draw\nTable	표\n그리기
+	Rotation	회전
+	Rotation:	회전:
+	Rotate Right 90°	오른쪽으로 90° 회전
+	Rotate Left 90°	왼쪽으로 90° 회전
+	Flip Vertical	세로로 뒤집기
+	Flip Horizontal	가로로 뒤집기
+	Move Paragraph Up	단락 위로 이동
+	Move Paragraph Down	단락 아래로 이동
+	Promote	수준 올리기
+	Demote	수준 내리기
+	Go Back	뒤로 이동
+	Toggle Unicode Character	유니코드 문자 전환
+	Toggle Field Codes	필드 코드 전환
+	Edit Field Code	필드 코드 편집
+	Unlink Fields	필드 연결 해제
+	Lock Fields	필드 잠금
+	Unlock Fields	필드 잠금 해제
+	Next Field	다음 필드
+	Previous Field	이전 필드
+	Selected Fields	선택한 필드
+	Edit Field…	필드 편집…
+	Formatted	서식 지정됨
+	Deleted	삭제됨
+	Interface size:	인터페이스 크기:
+	Resize Table by Dragging	드래그하여 표 크기 조정
+	Print Markup	변경 내용 표시 인쇄
+	Comments beside each page and tracked changes in PDFs, prints and images; a comment list at the end of web pages, Markdown and text.	PDF, 인쇄물, 이미지에서는 각 페이지 옆에 주석과 변경 내용 추적을 표시하고, 웹 페이지, Markdown, 텍스트에서는 끝에 주석 목록을 표시합니다.
+	1. Formatting restrictions	1. 서식 제한
+	2. Editing restrictions	2. 편집 제한
+	3. Start enforcement	3. 보호 시작
+	<< Less	<< 간단히
+	Another file	다른 파일
+	Apply as you type	입력할 때 적용
+	AutoCorrect	자동 고침
+	AutoFormat As You Type	입력할 때 자동 서식
+	Automatic bulleted lists	자동 글머리 기호 목록
+	Automatic numbered lists	자동 번호 매기기 목록
+	Border lines	테두리 선
+	Capitalize first letter of sentences	문장 첫 글자를 대문자로 바꾸기
+	Capitalize first letter of table cells	표 셀의 첫 글자를 대문자로 바꾸기
+	Correct TWo INitial CApitals	연속된 두 대문자를 바로잡기
+	Correct accidental usage of cAPS LOCK key	Caps Lock 키를 실수로 사용한 경우 바로잡기
+	Capitalize names of days	요일 이름을 대문자로 시작하기
+	Case changes	대소문자 변경
+	Character level	문자 수준
+	Checked styles are allowed:	선택한 스타일 허용:
+	Combine Documents	문서 결합
+	Compare Documents	문서 비교
+	Compared: {changes} changes	비교 결과: 변경 내용 {changes}개
+	Comparing with another file needs the desktop app.	다른 파일과 비교하려면 데스크톱 앱이 필요합니다.
+	Comparison settings	비교 설정
+	Don't capitalize after:	다음 뒤에는 대문자로 바꾸지 않음:
+	Editing in this document is restricted.	이 문서에서는 편집이 제한되어 있습니다.
+	Every change is recorded as a tracked change.	모든 편집 내용이 변경 내용 추적으로 기록됩니다.
+	Everyone	모든 사용자
+	Exceptions (optional)	예외(선택 사항)
+	Exceptions…	예외…
+	Fields	필드
+	Filling in forms	양식 작성
+	Find Next Editable Region	다음 편집 가능 영역 찾기
+	Footnotes and endnotes	각주 및 미주
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	서식, 대소문자 변경, 공백 및 표를 비교합니다. 다른 설정은 나중에 지원됩니다.
+	Fractions (1/2) as fraction characters (½)	분수(1/2)를 분수 문자(½)로 바꾸기
+	Headers and footers	머리글 및 바닥글
+	Hyphens (--) as dashes (—)	하이픈(--)을 대시(—)로 바꾸기
+	In equations, typing a name after a backslash replaces it with its symbol.	수식에서 역슬래시 뒤에 이름을 입력하면 해당 기호로 바뀝니다.
+	Internet addresses as links	인터넷 주소를 링크로 바꾸기
+	Label changes with:	변경 내용 작성자 표시:
+	Limit formatting to a selection of styles	서식을 선택한 스타일로 제한
+	Math AutoCorrect	수학 자동 고침
+	More >>	더 보기 >>
+	Moves	이동
+	New document	새 문서
+	No changes (read only)	변경 내용 없음(읽기 전용)
+	Only allow this kind of editing:	다음 유형의 편집만 허용:
+	Only comments can be added, except in regions marked editable.	편집 가능으로 표시된 영역을 제외하고 주석만 추가할 수 있습니다.
+	Only form fields can be filled in.	양식 필드만 채울 수 있습니다.
+	Only the allowed styles can be applied.	허용된 스타일만 적용할 수 있습니다.
+	Ordinals (1st) as superscript	서수(1st)를 위 첨자로 바꾸기
+	Original document	원본 문서
+	This password type isn't supported.	이 암호 유형은 지원되지 않습니다.
+	Replace as you type	입력할 때 바꾸기
+	Replace text as you type	입력할 때 텍스트 바꾸기
+	Replace:	바꾸기:
+	Revised document	수정된 문서
+	Select text, then tick who can still edit it.	텍스트를 선택한 다음 계속 편집할 사용자를 선택하세요.
+	Settings…	설정…
+	Show changes at:	변경 내용 표시 위치:
+	Show changes in:	변경 내용 표시 대상:
+	Smart quotes instead of straight quotes	곧은 따옴표 대신 스마트 따옴표 사용
+	Start Enforcing Protection	보호 적용 시작
+	Stop Protection	보호 중지
+	Text boxes	텍스트 상자
+	The document is read only, except for regions marked editable.	문서는 읽기 전용이며 편집 가능으로 표시된 영역만 편집할 수 있습니다.
+	The password is optional; without it anyone can stop the protection.	암호는 선택 사항입니다. 암호가 없으면 누구나 보호를 중지할 수 있습니다.
+	This document	이 문서
+	Tracked changes	변경 내용 추적
+	Type the password to stop the protection.	보호를 중지하려면 암호를 입력하세요.
+	White space	공백
+	With:	다음으로:
+	Word level	단어 수준
+	In Line with Text	텍스트 줄 안
+	Square	정사각형
+	Through	텍스트 통과
+	Top and Bottom	위쪽 및 아래쪽
+	Behind Text	텍스트 뒤
+	In Front of Text	텍스트 앞
+	Wrap Text Sides	텍스트 배치 측면
+	Both Sides	양쪽
+	Left Only	왼쪽만
+	Right Only	오른쪽만
+	Largest Only	공간이 넓은 쪽만
+	Customize Keyboard	키보드 사용자 지정
+	Choose a command	명령 선택
+	Choose a shortcut	바로 가기 키 선택
+	All Commands	모든 명령
+	Commands:	명령:
+	Keys for this command:	이 명령의 키:
+	New shortcut:	새 바로 가기 키:
+	Now used by {command}	현재 {command}에 할당됨
+	Not used by any command	어떤 명령에서도 사용되지 않음
+	Remove every custom shortcut and restore the built-in keys?	모든 사용자 지정 바로 가기 키를 제거하고 기본 키로 복원하시겠습니까?
+	Assign	할당
+	Reset All…	모두 초기화…
+	Press a key combination	키 조합을 누르세요
+	Customize	사용자 지정
+	Keyboard shortcuts:	바로 가기 키:
+	Customize…	사용자 지정…
+	Customize Ribbon	리본 사용자 지정
+	Add to Quick Access Toolbar	빠른 실행 도구 모음에 추가
+	Remove from Quick Access Toolbar	빠른 실행 도구 모음에서 제거
+	Hide Quick Access Toolbar	빠른 실행 도구 모음 숨기기
+	Show Quick Access Toolbar	빠른 실행 도구 모음 표시
+	Customize the Ribbon…	리본 사용자 지정…
+	Customize Quick Access Toolbar…	빠른 실행 도구 모음 사용자 지정…
+	More Commands…	명령 더 보기…
+	Ribbon	리본
+	(Custom)	(사용자 지정)
+	Remove every custom tab and group and show all tabs again?	모든 사용자 지정 탭과 그룹을 제거하고 모든 탭을 다시 표시하시겠습니까?
+	Put the default commands back on the Quick Access Toolbar?	빠른 실행 도구 모음에 기본 명령을 복원하시겠습니까?
+	Reset…	초기화…
+	Add >>	추가 >>
+	<< Remove	<< 제거
+	Pick a custom group (New Group makes one)	사용자 지정 그룹을 선택하세요(새 그룹을 만들려면 ‘새 그룹’을 선택)
+	Ribbon tabs	리본 탭
+	New Tab	새 탭
+	New Group	새 그룹
+	Rename…	이름 바꾸기…
+	Ribbon and Quick Access Toolbar:	리본 및 빠른 실행 도구 모음:
+	Add Font…	글꼴 추가…
+	Added Fonts	추가된 글꼴
+	Remove Added Font	추가된 글꼴 제거
+	Recent Colors	최근 색
+	More Colors…	색 더 보기…
+	Standard	표준
+	Current	현재
+	Colors:	색:
+	Color model:	색 모델:
+	Red:	빨강:
+	Green:	초록:
+	Blue:	파랑:
+	Hue:	색조:
+	Sat:	채도:
+	Lum:	명도:
+	Hex:	16진수:
+	Accessibility Pane	접근성 창
+	Alt Text Pane	대체 텍스트 창
+	Alt\nText	대체\n텍스트
+	View Alt Text…	대체 텍스트 보기…
+	Mark as decorative	장식용으로 표시
+	Title:	제목:
+	Errors ({n})	오류({n})
+	Warnings ({n})	경고({n})
+	Tips ({n})	팁({n})
+	No accessibility issues found.	접근성 문제가 없습니다.
+	Describe what this object shows, for people who can't see it.	볼 수 없는 사용자를 위해 이 개체가 무엇을 나타내는지 설명하세요.
+	Decorative objects only add visual interest: screen readers skip them.	장식용 개체는 시각적 효과만 더하며, 화면 읽기 프로그램에서 건너뜁니다.
+	Describe what this table shows, for people who can't see it.	볼 수 없는 사용자를 위해 이 표가 무엇을 나타내는지 설명하세요.
+	Select a picture, shape, chart or table to describe it.	설명할 그림, 도형, 차트 또는 표를 선택하세요.
+	Document Grid	문서 눈금
+	No grid	눈금 없음
+	Lines only	선만
+	Lines and characters	선 및 문자
+	Text snaps to characters	텍스트를 문자에 맞춤
+	Characters per line:	줄당 문자 수:
+	Lines per page:	페이지당 줄 수:
+	Moved from	이동한 위치(시작)
+	Moved to	이동한 위치(끝)
+	Developer	개발 도구
+	Controls	컨트롤
+	Rich Text Content Control	서식 있는 텍스트 콘텐츠 컨트롤
+	Plain Text Content Control	일반 텍스트 콘텐츠 컨트롤
+	Picture Content Control	그림 콘텐츠 컨트롤
+	Building Block Gallery Content Control	문서 블록 갤러리 콘텐츠 컨트롤
+	Check Box Content Control	확인란 콘텐츠 컨트롤
+	Combo Box Content Control	콤보 상자 콘텐츠 컨트롤
+	Drop-Down List Content Control	드롭다운 목록 콘텐츠 컨트롤
+	Date Picker Content Control	날짜 선택 콘텐츠 컨트롤
+	Repeating Section Content Control	반복 구역 콘텐츠 컨트롤
+	Design Mode	디자인 모드
+	Content Control at Selection	선택 영역의 콘텐츠 컨트롤
+	Toggle Check Box	확인란 전환
+	Choose List Item	목록 항목 선택
+	Set Date	날짜 설정
+	Remove Content Control	콘텐츠 컨트롤 제거
+	Content Control Properties	콘텐츠 컨트롤 속성
+	Title	제목
+	Tag	태그
+	Placeholder text	미리 입력된 텍스트
+	Can't be deleted	삭제할 수 없음
+	Contents can't be edited	내용을 편집할 수 없음
+	Remove the control once edited	편집 후 컨트롤 제거
+	Allow line breaks	줄 바꿈 허용
+	Date format	날짜 형식
+	Checked symbol	선택된 기호
+	Unchecked symbol	선택되지 않은 기호
+	List entries	목록 항목
+	Display text	표시 텍스트
+	Value	값
+	Today	오늘
+	Put the caret in a content control first.	먼저 콘텐츠 컨트롤 안에 커서를 놓으세요.
+	Right-to-Left Table	오른쪽에서 왼쪽 표
+	Right-to-Left Section	오른쪽에서 왼쪽 구역
+	Table direction:	표 방향:
+	Section direction:	구역 방향:
+	Drawing Canvas	그리기 캔버스
+	New Drawing Canvas	새 그리기 캔버스
+	Fit	맞춤
+	Expand	확장
+	Scale Drawing	그리기 크기 조정
+	Canvas Member	캔버스 구성원
+	Arrows	화살표
+	Communication	통신
+	Office	사무실
+	People	사람
+	Nature	자연
+	Weather	날씨
+	Technology	기술
+	Transport	교통
+	Icon Color	아이콘 색
+	Search icons	아이콘 검색
+	No icons match your search.	검색 조건에 맞는 아이콘이 없습니다.
+	Recolor a one-color picture, such as an icon	아이콘처럼 단색 그림의 색상 변경
+	Enclose Characters	문자 둘러싸기
+	Shrink text	텍스트 축소
+	Enlarge symbol	기호 확대
+	Enclosure	둘러싸기
+	Circle	원
+	Numerals:	숫자:
+	Numerals	숫자
+	Arabic	아라비아 숫자
+	Hindi	힌디어 숫자
+	Context	상황에 맞게
+	System	시스템
+	Templates	서식 파일
+	Templates and Add-ins	서식 파일 및 추가 기능
+	Attach Template	서식 파일 연결
+	Detach Template	서식 파일 연결 해제
+	Automatically Update Document Styles	문서 스타일 자동 업데이트
+	Update Styles from Template	서식 파일의 스타일 업데이트
+	Organizer	구성 도우미
+	Copy Styles	스타일 복사
+	Rename Style	스타일 이름 바꾸기
+	Document template:	문서 서식 파일:
+	Attach…	첨부…
+	Automatically update document styles	문서 스타일 자동 업데이트
+	Organizer…	관리자…
+	Change Chart Type	차트 종류 변경
+	Chart Design	차트 디자인
+	Type	종류
+	Edit Data	데이터 편집
+	Chart Title	차트 제목
+	Chart Layouts	차트 레이아웃
+	Add Chart Element	차트 요소 추가
+	Legend	범례
+	Data Labels	데이터 레이블
+	Above Chart	차트 위
+	Insert Chart	차트 삽입
+	Clustered Column	묶은 세로 막대형
+	Stacked Column	누적 세로 막대형
+	Clustered Bar	묶은 가로 막대형
+	Stacked Bar	누적 가로 막대형
+	Area	영역형
+	Pie	원형
+	Doughnut	도넛형
+	Scatter	분산형
+	“{text}” ({row}, {series}) isn't a number.	“{text}”({row}, {series})은(는) 숫자가 아닙니다.
+	Category {n}	범주 {n}
+	Series {n}	계열 {n}
+	Type the categories down the side and a column of values per series.	범주를 왼쪽에 세로로 입력하고, 계열마다 값 열을 입력하세요.
+	Categories	범주
+	Series name	계열 이름
+	Remove series	계열 제거
+	Remove row	행 제거
+	Add Row	행 추가
+	Add Series	계열 추가
+	Edit\nData	데이터\n편집
+	Change\nChart Type	차트 종류\n변경
+	Align Text	텍스트 맞춤
+	Create Link	연결 만들기
+	Break Link	연결 끊기
+	Rotate all text 90°	텍스트를 90° 회전
+	Rotate all text 270°	텍스트를 270° 회전
+	Stacked	세로로 쌓기
+	Middle	가운데
+	Click the empty text box the text should continue in (Esc cancels)	텍스트를 이어 쓸 빈 텍스트 상자를 클릭하세요(Esc를 누르면 취소).
+	Not linked: click a text box	연결되지 않음: 텍스트 상자를 클릭하세요
+	Show KeyTips (Alt or F10)	KeyTips 표시(Alt 또는 F10)
+	Location	위치
+	Endnotes	미주
+	Below text	텍스트 아래
+	End of section	구역 끝
+	End of document	문서 끝
+	Footnotes to endnotes	각주를 미주로 변환
+	Endnotes to footnotes	미주를 각주로 변환
+	Swap footnotes and endnotes	각주와 미주 바꾸기
+	Custom mark:	사용자 지정 표시:
+	Continuous numbering	연속 번호 매기기
+	Apply	적용
+	Convert Notes	각주/미주 변환
+	Reading	읽기
+	Reading Column Width	읽기 열 너비
+	Reading Line Spacing	읽기 줄 간격
+	Reading Text Size	읽기 텍스트 크기
+	English (United Kingdom)	영어(영국)
+	English (Australia)	영어(오스트레일리아)
+	English (Canada)	영어(캐나다)
+	English (India)	영어(인도)
+	English (Ireland)	영어(아일랜드)
+	English (New Zealand)	영어(뉴질랜드)
+	English (South Africa)	영어(남아프리카 공화국)
+	Polish	폴란드어
+	Do Not Check Spelling or Grammar	맞춤법 또는 문법 검사 안 함
+	Documents	문서
+	Word document	Word 문서
+	All files	모든 파일
+	Recipient lists	받는 사람 목록
+	The system file dialog isn't available, so WordCraft shows its own. To get the system dialog, install a file chooser portal (such as xdg-desktop-portal-gtk) or zenity.	시스템 파일 대화상자를 사용할 수 없어 WordCraft의 파일 대화상자를 표시합니다. 시스템 대화상자를 사용하려면 xdg-desktop-portal-gtk 또는 zenity 같은 파일 선택 포털을 설치하세요.
+	Up one level	한 단계 위로
+	Home folder	홈 폴더
+	{name} wasn't found.	{name}을(를) 찾을 수 없습니다.
+	{name} already exists. Choose Save again to replace it.	{name}이(가) 이미 있습니다. 바꾸려면 저장을 다시 선택하세요.
+	This folder can't be read: {error}	이 폴더를 읽을 수 없습니다: {error}
+	Showing the first {count} items.	처음 {count}개 항목 표시 중
+	File name:	파일 이름:
+	Browse in WordCraft…	WordCraft에서 찾아보기…
+	Open a file with WordCraft's own browser when the system file dialog doesn't appear.	시스템 파일 대화상자가 나타나지 않을 때 WordCraft의 파일 브라우저로 파일을 엽니다.
+	Hide White Space	공백 숨기기
+	All pages	모든 페이지
+	Current page	현재 페이지
+	Selected pages	선택한 페이지
+	Custom range	사용자 지정 범위
+	All pages in the range	범위의 모든 페이지
+	Odd pages only	홀수 페이지에만
+	Even pages only	짝수 페이지에만
+	Printer	프린터
+	Select a printer	프린터 선택
+	Refresh printers	프린터 목록 새로 고침
+	Copies	매수
+	Collate copies	한 부씩 인쇄
+	Two-sided printing	양면 인쇄
+	Printer default	프린터 기본값
+	One-sided	단면 인쇄
+	Two-sided: long edge	양면 인쇄(긴 쪽 넘김)
+	Two-sided: short edge	양면 인쇄(짧은 쪽 넘김)
+	Grayscale	회색조
+	Pages like 1-3, 5	페이지 범위(예: 1-3, 5)
+	{count} of {total} pages will print	페이지 {count}/{total}개를 인쇄합니다
+	Save these pages as PDF…	이 페이지를 PDF로 저장…
+	The printer, two-sided printing and pages per sheet are chosen in that dialog.	프린터, 양면 인쇄 및 용지당 페이지 수는 해당 대화 상자에서 선택합니다.
+	Previous Page	이전 페이지
+	Print to PDF	PDF로 인쇄
+	Add Shape	도형 추가
+	Change Colors	색 변경
+	Change Layout	레이아웃 변경
+	Create Graphic	그래픽 만들기
+	Edit Items	항목 편집
+	Layouts	레이아웃
+	Reset Graphic	그래픽 초기화
+	SmartArt Design	SmartArt 디자인
+	SmartArt Styles	SmartArt 스타일
+	Text Pane	텍스트 창
+	List	목록
+	Process	프로세스
+	Cycle	주기
+	Hierarchy	계층 구조
+	Relationship	관계
+	Pyramid	피라미드
+	Basic List	기본 목록
+	Basic Process	기본 프로세스
+	Basic Cycle	기본 주기
+	Basic Pyramid	기본 피라미드
+	Basic Radial	기본 방사형
+	Basic Matrix	기본 행렬
+	Basic Venn	기본 벤 다이어그램
+	Shows items of equal weight as blocks in rows.	동일한 비중의 항목을 행 단위 블록으로 표시합니다.
+	Shows steps in order, left to right, with arrows between them.	단계를 왼쪽에서 오른쪽 순서로 표시하고 단계 사이에 화살표를 둡니다.
+	Shows steps that repeat, around a circle.	반복되는 단계를 원형으로 표시합니다.
+	Shows a tree: each item below the item it belongs to.	항목 아래에 해당 항목의 하위 항목을 배치해 트리 구조로 표시합니다.
+	Shows parts that build on each other, largest at the bottom.	아래쪽에 가장 큰 항목을 두고, 서로 쌓이는 구성 요소를 표시합니다.
+	Shows items around a central idea: the first item is the centre.	중심 아이디어 주위에 항목을 표시합니다. 첫 번째 항목은 가운데에 배치됩니다.
+	Shows parts of a whole as quadrants.	전체의 구성 요소를 사분면으로 표시합니다.
+	Shows overlapping ideas as overlapping circles.	서로 겹치는 원으로 관련 아이디어를 표시합니다.
+	Accent {n}	강조 {n}
+	Colorful	다채로운 색
+	Insert SmartArt	SmartArt 삽입
+	One line per item. Enter adds an item.	항목마다 한 줄을 입력하세요. Enter 키를 누르면 항목이 추가됩니다.
+	Add\nShape	도형\n추가
+	Change\nColors	색\n변경
+	Reset\nGraphic	그래픽\n초기화
+	Promote to Heading 1	제목 1로 수준 올리기
+	Demote to Body Text	본문 텍스트로 수준 내리기
+	Move Up	위로 이동
+	Move Down	아래로 이동
+	Collapse	축소
+	Expand or Collapse Heading	제목 확장 또는 축소
+	Select Heading and Content	제목 및 내용 선택
+	Show Level	수준 표시
+	Show Level 1	수준 1 표시
+	Show Level 2	수준 2 표시
+	Show Level 3	수준 3 표시
+	Show Level 4	수준 4 표시
+	Show Level 5	수준 5 표시
+	Show Level 6	수준 6 표시
+	Show Level 7	수준 7 표시
+	Show Level 8	수준 8 표시
+	Show Level 9	수준 9 표시
+	Show All Levels	모든 수준 표시
+	All Levels	모든 수준
+	Show First Line Only	첫 줄만 표시
+	Show Text Formatting	텍스트 서식 표시
+	Close Outline View	개요 보기 닫기
+	Outline State	개요 상태
+	Outlining	개요
+	Outline Tools	개요 도구
+	Close Outline\nView	개요 보기\n닫기
+	A, B, C, …	A, B, C, …
+	Above the item	항목 위
+	Accessed on	접속 날짜
+	Add New Source…	새 원본 추가…
+	Add the chapter number	장 번호 추가
+	Atmosphere	분위기
+	Below the item	항목 아래
+	Book	도서
+	Book title	도서 제목
+	Caption	캡션
+	Caption Numbering	캡션 번호 매기기
+	Caption text	캡션 텍스트
+	Caption:	캡션:
+	Chapter in a book	도서의 장
+	Chapters begin at:	장 시작 번호:
+	Collect entries from:	항목 수집 위치:
+	Columns:	열:
+	Conference	학술대회
+	Conference paper	학술대회 논문
+	Container Title	수록 자료 제목
+	Create Source	원본 만들기
+	Cross-reference:	상호 참조:
+	Custom Table of Contents…	사용자 지정 목차…
+	DOI	DOI
+	Day	일
+	Delete Label	레이블 삭제
+	Edit Source	원본 편집
+	Edition	판
+	Edit…	편집…
+	Entry marked.	색인 항목을 표시했습니다.
+	Example: {sample}	예: {sample}
+	Figure	그림
+	Film	영화
+	Heading styles (levels 1–{n})	제목 스타일(수준 1–{n})
+	Heading {n}	제목 {n}
+	I, II, III, …	I, II, III, …
+	Include page numbers	페이지 번호 포함
+	Indented	들여쓰기
+	Institution	기관
+	Ionosphere	전리층
+	Issue	호
+	Journal	학술지
+	Label:	레이블:
+	Last, First; Last, First	성, 이름; 성, 이름
+	Leave the label out of the caption	캡션에서 레이블 제외
+	Letter headings	문자별 제목
+	Levels:	수준:
+	Link entries to their headings	항목을 제목에 연결
+	Made from the author and year when empty	비어 있으면 저자와 연도로 생성
+	Magazine or newspaper article	잡지 또는 신문 기사
+	Main entry:	주 항목:
+	Mark	표시
+	Mark All	모두 표시
+	Mark Entry…	색인 항목 표시…
+	Mark Index Entry	색인 항목 표시
+	Mesosphere	중간권
+	Month	월
+	New Label	새 레이블
+	New Label…	새 레이블…
+	New…	새로 만들기…
+	No sources yet.	아직 원본이 없습니다.
+	Numbering…	번호 매기기…
+	Options…	옵션…
+	Other	기타
+	Other styles and their TOC level:	기타 스타일 및 목차 수준:
+	Outline levels	개요 수준
+	Page number style	페이지 번호 스타일
+	Page numbers at the right margin	페이지 번호를 오른쪽 여백에 표시
+	Page title	페이지 제목
+	Pages of bookmark:	책갈피 페이지:
+	Periodical	정기간행물
+	Position:	위치:
+	Publisher	출판사
+	Run-in	한 줄 내 배치
+	See	참조
+	Separator:	구분 기호:
+	Show every bibliography field	모든 참고 문헌 필드 표시
+	Site name	사이트 이름
+	Source Manager	원본 관리자
+	Source type:	원본 유형:
+	Sources in this document:	이 문서의 원본:
+	Styles:	스타일:
+	Subentry:	하위 항목:
+	TC entry fields	TC 항목 필드
+	Tab leader:	탭 채움선:
+	Table of Contents Options	목차 옵션
+	Table of Contents Styles	목차 스타일
+	This page	이 페이지
+	Type:	유형:
+	URL	URL
+	Volume	권
+	Website	웹 사이트
+	Year	연도
+	a, b, c, …	a, b, c, …
+	i, ii, iii, …	i, ii, iii, …
+	{n} entries marked.	항목 {n}개를 표시했습니다.
+	Lasso Select	올가미 선택
+	Move Selected Ink	선택한 잉크 이동
+	Delete Selected Ink	선택한 잉크 삭제
+	Recolor Selected Ink	선택한 잉크 색 변경
+	Add Pen	펜 추가
+	Remove Pen	펜 제거
+	Ink to Shape	잉크를 도형으로 변환
+	Convert to Shapes	도형으로 변환
+	Ink Replay	잉크 재생
+	Add\nPen	펜\n추가
+	Rewind	되감기
+	Forward	앞으로
+	Stroke {n} of {total}	획 {n}/{total}
+	Use wildcards	와일드카드 사용
+	Special	특수
+	Match prefix	접두사 일치
+	Match suffix	접미사 일치
+	Ignore punctuation characters	문장 부호 무시
+	Ignore white-space characters	공백 문자 무시
+	Regular expressions	정규식
+	Search Options	검색 옵션
+	Tab Character	탭 문자
+	Any Character	임의의 문자
+	Any Digit	임의의 숫자
+	Any Letter	임의의 알파벳 문자
+	Caret Character	캐럿 문자
+	Section Character	구역 문자
+	Paragraph Character	단락 문자
+	Graphic	그래픽
+	Manual Line Break	수동 줄 바꿈
+	Manual Page Break	수동 페이지 나누기
+	Section Break	구역 나누기
+	White Space	공백
+	Clipboard Contents	클립보드 내용
+	Find What Text	찾을 텍스트
+	Find What Expression	찾을 식
+	Character in Range	범위 내 문자
+	Beginning of Word	단어 시작
+	End of Word	단어 끝
+	Expression	식
+	Not	아님
+	Num Occurrences	발생 횟수
+	Previous 1 or More	이전 항목 1개 이상
+	0 or More Characters	문자 0개 이상
+	Move with Text	텍스트와 함께 이동
+	Fix Position on Page	페이지에서 위치 고정
+	WordArt Styles	WordArt 스타일
+	Text Fill	텍스트 채우기
+	Text Outline	텍스트 윤곽선
+	Transform	변형
+	No Fill	채우기 없음
+	No Outline	윤곽선 없음
+	Reflection	반사
+	No Reflection	반사 없음
+	No Transform	변형 없음
+	Connect Shapes	도형 연결
+	Straight Connector	직선 연결선
+	Straight Arrow Connector	직선 화살표 연결선
+	Elbow Connector	꺾은선 연결선
+	Elbow Arrow Connector	꺾은선 화살표 연결선
+	Curved Connector	곡선 연결선
+	Curved Arrow Connector	곡선 화살표 연결선
+	Arch Up	위쪽 아치
+	Arch Down	아래쪽 아치
+	Slant Up	위쪽 기울임
+	Slant Down	아래쪽 기울임
+	Inflate	볼록하게
+	Deflate	오목하게
+	Chevron Up	위쪽 갈매기형
+	Chevron Down	아래쪽 갈매기형
+	Triangle Up	위쪽 삼각형
+	Triangle Down	아래쪽 삼각형
+	Solid Accent	강조 단색
+	Light with Outline	윤곽선 있는 밝은색
+	Hollow	속이 빈 모양
+	Accent Gradient	강조 그라데이션
+	Dark with Shadow	그림자가 있는 어두운색
+	Soft Glow	부드러운 광채
+	Accent with Reflection	반사가 있는 강조
+	Warm Gradient with Outline	윤곽선 있는 따뜻한 그라데이션
+	Add line numbering	줄 번호 추가
+	Add to Document	문서에 추가
+	Address labels	주소 레이블
+	Auto	자동
+	Automatically hyphenate document	문서에 자동 하이픈 넣기
+	Chinese (Simplified)	중국어(간체)
+	Chinese (Traditional)	중국어(번체)
+	Column:	열:
+	Count by:	증가 단위:
+	Czech	체코어
+	Indonesian	인도네시아어
+	Danish	덴마크어
+	Delivery address:	배달 주소:
+	Detect language automatically	언어 자동 감지
+	Do not check spelling or grammar	맞춤법 및 문법 검사 안 함
+	Dutch	네덜란드어
+	Envelope size:	봉투 크기:
+	Estonian	에스토니아어
+	Finnish	핀란드어
+	French (France)	프랑스어(프랑스)
+	From text:	텍스트에서:
+	Full page of the same label	같은 레이블 전체 페이지
+	German (Germany)	독일어(독일)
+	Greek	그리스어
+	Hebrew	히브리어
+	Hyphenate at:	하이픈 넣는 위치:
+	Hyphenate words in CAPS	대문자 단어에 하이픈 넣기
+	Hyphenation Options…	하이픈 넣기 옵션…
+	Hyphenation zone:	하이픈 넣기 영역:
+	Italian	이탈리아어
+	Japanese	일본어
+	Korean	한국어
+	Limit consecutive hyphens to:	연속 하이픈 수 제한:
+	Line Numbering Options…	줄 번호 매기기 옵션…
+	Manual Hyphenation	수동 하이픈 넣기
+	Manual hyphenation is complete.	수동 하이픈 넣기가 완료되었습니다.
+	Manual…	수동…
+	Mark selected text as:	선택한 텍스트를 다음으로 표시:
+	New Document	새 문서
+	No limit	제한 없음
+	Norwegian (Bokmål)	노르웨이어(보크몰)
+	Numbering:	번호 매기기:
+	Omit	생략
+	One label per recipient	받는 사람마다 레이블 하나
+	Portuguese (Brazil)	포르투갈어(브라질)
+	Portuguese (Portugal)	포르투갈어(포르투갈)
+	Return address labels	반송 주소 레이블
+	Return address:	반송 주소:
+	Row:	행:
+	Russian	러시아어
+	Serbian (Cyrillic)	세르비아어(키릴 문자)
+	Serbian (Latin)	세르비아어(라틴 문자)
+	Set As Default	기본값으로 설정
+	Shipping labels	배송 레이블
+	Single label	레이블 하나
+	Spanish (Mexico)	스페인어(멕시코)
+	Spanish (Spain)	스페인어(스페인)
+	Swedish	스웨덴어
+	Turkish	터키어
+	Ukrainian	우크라이나어
+	{language} is now the document's default language.	{language}을(를) 문서의 기본 언어로 설정했습니다.
+	Visual effects	시각 효과
+	Animation effects:	애니메이션 효과:
+	On	켜기
+	Off	끄기
+	Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once.	부드럽게 스크롤하고 확대/축소하며 메뉴와 단추가 서서히 나타납니다. 끄면 모든 변경 사항이 즉시 표시됩니다.
+	Your system has animation effects turned on.	시스템에서 애니메이션 효과가 켜져 있습니다.
+	Your system has animation effects turned off.	시스템에서 애니메이션 효과가 꺼져 있습니다.
+	Your system doesn't report an animation setting, so animation effects stay on.	시스템에서 애니메이션 설정을 확인할 수 없어 애니메이션 효과를 켜 둡니다.
+	Select Column	열 선택
+	Select Table Cells by Clicking	클릭하여 표 셀 선택
+	Insert Row or Column by Clicking	클릭하여 행 또는 열 삽입
+	Move Table by Dragging	드래그하여 표 이동
+	AutoFit Column by Double-Clicking	두 번 클릭하여 열 자동 맞춤
+	Region:	지역:
+	Automatic ({region})	자동({region})
+	Start-up	시작 화면
+	Show the Start screen when WordCraft starts	WordCraft 시작 시 시작 화면 표시
+	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	켜기: WordCraft를 실행하면 파일 › 홈에 빈 문서, 서식 파일 및 최근 문서가 표시됩니다. 끄기: 빈 문서가 열립니다.
+	Wildcards (regex)	와일드카드 (정규식)
+	➕ New comment	➕ 새 메모
+	📂  Browse…	📂  찾아보기…
+	Track\nChanges	변경 내용\n추적
+	Track\nChanges ✓	변경 내용\n추적 ✓
+	Possible spelling mistake	맞춤법 오류 가능성
+	Extra space	불필요한 공백
+	Capitalize the first word of a sentence	문장의 첫 단어를 대문자로 시작하세요
+	Remove the space before the punctuation	문장 부호 앞의 공백을 제거하세요
+	Use "an" before a vowel sound	모음 소리 앞에는 "an"을 사용하세요
+	Use "a" before a consonant sound	자음 소리 앞에는 "a"를 사용하세요
+	The spelling and grammar check is complete.	맞춤법 및 문법 검사가 완료되었습니다.
+	Book Title	책 제목
+	Category	범주
+	Contributors	기여자
+	Emphasis	강조
+	Endnote Reference	미주 참조
+	Endnote Text	미주 텍스트
+	Footnote Reference	각주 참조
+	Footnote Text	각주 텍스트
+	Hyperlink	하이퍼링크
+	Intense Emphasis	강한 강조
+	Intense Quote	강한 인용
+	Intense Reference	강한 참조
+	Keywords	키워드
+	No Spacing	간격 없음
+	Quote	인용
+	Strong	굵게 강조
+	Subject	주제
+	Subtitle	부제
+	Subtle Emphasis	은은한 강조
+	Subtle Reference	은은한 참조
+	TOC Heading	목차 제목
+	TOC {n}	목차 {n}
+	List Paragraph	목록 단락
+	Models	모델
+	AaBbCcDd	AaBbCcDd
+	Annotation Reference	메모 참조
+	Annotation Subject	메모 주제
+	Annotation Text	메모 텍스트
+	Body text in a short paragraph to show spacing.	간격을 보여 주기 위한 짧은 단락의 본문 텍스트입니다.
+	Default Paragraph Font	기본 단락 글꼴
+	Envelope Address	봉투 주소
+	Envelope Return	봉투 회신 주소
+	Index Heading	색인 제목
+	Index {n}	색인 {n}
+	Line Number	줄 번호
+	Normal	기본
+	Normal Indent	기본 들여쓰기
+	Normal Table	기본 표
+	Table Grid	표 눈금
+	Table of Figures	그림 목차
+	TOA Heading	법률 출처 목차 제목
+	Good evening	좋은 저녁입니다
+	Good morning	좋은 아침입니다
+	Good afternoon	좋은 오후입니다
+	tOGGLE cASE	대/소문자 전환
+	ASAP	신속 처리
+	CONFIDENTIAL	기밀
+	DO NOT COPY	복사 금지
+	DRAFT	초안
+	SAMPLE	견본
+	URGENT	긴급
+	Plain Table 1	일반 표 1
+	Grid Table 1 Light	눈금 표 1 밝게
+	Convert between built-up and linear form	전문 형식과 선형 형식 간 전환
+	Justification of a display equation	별도 행 수식의 맞춤
+	Number the equation; the number sits at the right margin (or type # then the number)	수식에 번호를 매깁니다. 번호는 오른쪽 여백에 놓입니다 (또는 #를 입력한 다음 번호를 입력하세요)
+	Show the equation in the line of text	수식을 텍스트 줄 안에 표시
+	Show the equation on a line of its own	수식을 별도 줄에 표시
+	Type equations in LaTeX	LaTeX로 수식 입력
+	Type equations in the linear format (UnicodeMath)	선형 형식(UnicodeMath)으로 수식 입력
+	Type normal (non-math) text in the equation	수식 안에 일반(비수식) 텍스트 입력
+	Sides of a right triangle	직각삼각형의 변
+	Circle area from its radius	반지름으로 구하는 원의 넓이
+	Roots of ax²+bx+c	ax²+bx+c의 근
+	Binomial expansion of (x+a)ⁿ	(x+a)ⁿ의 이항 전개
+	Power series of (1+x)ⁿ	(1+x)ⁿ의 멱급수
+	Euler's identity	오일러 항등식
+	Derivative as a limit	극한으로 나타낸 도함수
+	Exponential series	지수 급수
+	Integral of e^(−x²)	e^(−x²)의 적분
+	Sine and cosine series of f(x)	f(x)의 사인·코사인 급수
+	Sum or difference of sines	사인의 합 또는 차
+	Sum of cosines	코사인의 합
+	Normal probability density	정규 확률 밀도
+	Bayes' rule	베이즈 정리
+	Accents	악센트
+	Basic Math	기본 수학
+	Boxed Formulas	상자 수식
+	Cases and Stacks	경우 및 쌓기
+	Common Accent Objects	자주 쓰는 악센트 개체
+	Common Brackets	자주 쓰는 괄호
+	Common Fractions	자주 쓰는 분수
+	Common Functions	자주 쓰는 함수
+	Common Large Operators	자주 쓰는 대형 연산자
+	Common Operator Structures	자주 쓰는 연산자 구조
+	Common Operators	자주 쓰는 연산자
+	Common Radicals	자주 쓰는 근호
+	Common Subscripts and Superscripts	자주 쓰는 아래·위 첨자
+	Contour Integrals	윤곽 적분
+	Differentials	미분
+	Dots	점
+	Empty Matrices	빈 행렬
+	Functions	함수
+	Geometry	기하학
+	Greek Letters	그리스 문자
+	Hyperbolic Functions	쌍곡 함수
+	Identity Matrices	단위 행렬
+	Integrals	적분
+	Inverse Functions	역함수
+	Inverse Hyperbolic Functions	역쌍곡 함수
+	Letter-Like Symbols	문자형 기호
+	Matrices with Brackets	괄호 행렬
+	Negated Relations	부정 관계
+	Operator Structures	연산자 구조
+	Operators	연산자
+	Other Large Operators	기타 대형 연산자
+	Overbars and Underbars	윗줄과 밑줄
+	Products and Coproducts	곱과 쌍대곱
+	Radicals	근호
+	Scripts	첨자
+	Single Brackets	단일 괄호
+	Sparse Matrices	희소 행렬
+	Subscripts and Superscripts	아래·위 첨자
+	Summations	합
+	Trigonometric Functions	삼각 함수
+	Unions and Intersections	합집합과 교집합
+	2×2 Determinant	2×2 행렬식
+	2×2 Identity Matrix	2×2 단위 행렬
+	2×2 Identity Matrix (sparse)	2×2 단위 행렬 (희소)
+	3×3 Identity Matrix	3×3 단위 행렬
+	3×3 Identity Matrix (sparse)	3×3 단위 행렬 (희소)
+	2×2 Matrix in Brackets	대괄호 2×2 행렬
+	2×2 Matrix in Double Bars	이중 세로선 2×2 행렬
+	2×2 Matrix in Parentheses	소괄호 2×2 행렬
+	n×n Identity Matrix	n×n 단위 행렬
+	n×n Matrix	n×n 행렬
+	A xor B	A xor B
+	Absolute value cases	절댓값 경우 나누기
+	Acute	아큐트(´)
+	Grave	그레이브(`)
+	Breve	브레베
+	Check	카론(ˇ)
+	Hat	모자(^)
+	Tilde	물결표(~)
+	Dot	점
+	Double Dot	이중 점
+	Triple Dot	삼중 점
+	Double Bar	이중 막대
+	Overbar	윗줄
+	Underbar	밑줄
+	Overbrace	위 중괄호
+	Underbrace	아래 중괄호
+	Angle Brackets	꺾쇠 괄호
+	Angle Brackets with Separator	구분 기호 있는 꺾쇠 괄호
+	Angle Brackets with Two Separators	구분 기호 두 개 있는 꺾쇠 괄호
+	Baseline Dots	기준선 점
+	Binomial Coefficient	이항 계수
+	Binomial Coefficient (angle)	이항 계수 (꺾쇠)
+	Binomial Coefficient with Angle Brackets	꺾쇠 괄호 이항 계수
+	Boxed Formula	상자 수식
+	Boxed Formula (example)	상자 수식 (예)
+	Braces	중괄호
+	Braces with Separator	구분 기호 있는 중괄호
+	Brackets	대괄호
+	Brackets with Separators	구분 기호 있는 대괄호
+	Cases (Three Conditions)	경우 (조건 3개)
+	Cases (Two Conditions)	경우 (조건 2개)
+	Ceiling	올림(천장 함수)
+	Floor	내림(바닥 함수)
+	Change in y over change in x	x의 변화량에 대한 y의 변화량
+	Circled Dot	원 안의 점
+	Circled Plus	원 안의 더하기
+	Circled Times	원 안의 곱하기
+	Colon Equal	콜론 등호
+	Cosine 2x	코사인 2x
+	Cube Root	세제곱근
+	Delta Equal To	델타 등호
+	Delta over arrow	화살표 위 델타
+	Diagonal Dots	대각선 점
+	Differential	미분
+	Differential theta	미분 세타
+	Differential x	미분 x
+	Differential y	미분 y
+	Double Left Arrow with Text Above	위에 텍스트가 있는 왼쪽 이중 화살표
+	Double Left Arrow with Text Below	아래에 텍스트가 있는 왼쪽 이중 화살표
+	Double Left Right Arrow with Text Above	위에 텍스트가 있는 좌우 이중 화살표
+	Double Left Right Arrow with Text Below	아래에 텍스트가 있는 좌우 이중 화살표
+	Double Right Arrow with Text Above	위에 텍스트가 있는 오른쪽 이중 화살표
+	Double Right Arrow with Text Below	아래에 텍스트가 있는 오른쪽 이중 화살표
+	Double Square Brackets	이중 대괄호
+	Double Vertical Bars	이중 세로선
+	Double summation	이중 합
+	Equal Equal	이중 등호
+	Equal by Definition	정의에 의한 등호
+	Exponential	지수 함수
+	Grouping Character Above	위 묶음 문자
+	Grouping Character Below	아래 묶음 문자
+	Hypotenuse	빗변
+	Left Arrow with Text Above	위에 텍스트가 있는 왼쪽 화살표
+	Left Arrow with Text Below	아래에 텍스트가 있는 왼쪽 화살표
+	Right Arrow with Text Above	위에 텍스트가 있는 오른쪽 화살표
+	Right Arrow with Text Below	아래에 텍스트가 있는 오른쪽 화살표
+	Left Bracket Twice	왼쪽 대괄호 두 번
+	Right Bracket Twice	오른쪽 대괄호 두 번
+	Left Right Arrow Above	위 좌우 화살표
+	Left Right Arrow with Text Above	위에 텍스트가 있는 좌우 화살표
+	Left Right Arrow with Text Below	아래에 텍스트가 있는 좌우 화살표
+	Left Subscript-Superscript	왼쪽 아래·위 첨자
+	Leftwards Arrow Above	위 왼쪽 화살표
+	Leftwards Harpoon Above	위 왼쪽 작살 화살표
+	Rightwards Arrow Above	위 오른쪽 화살표
+	Rightwards Harpoon Above	위 오른쪽 작살 화살표
+	Limit	극한
+	Limit Example	극한 예
+	Linear Fraction	선형 분수
+	Logarithm	로그
+	Logarithm with Base	밑이 있는 로그
+	Natural Logarithm	자연로그
+	Maximum	최댓값
+	Maximum Example	최댓값 예
+	Minimum	최솟값
+	Measured By	측정 기준
+	Midline Dots	가운데 점
+	Minus Equal	빼기 등호
+	Plus Equal	더하기 등호
+	One half	2분의 1
+	Outward Brackets	바깥쪽 대괄호
+	Parentheses	소괄호
+	Parentheses with Separator	구분 기호 있는 소괄호
+	Partial Differential	편미분
+	Pi Over 2	2분의 파이
+	Product of A	A의 곱
+	Quadratic Root	이차 근호
+	Square Root	제곱근
+	Radical with Degree	차수가 있는 근호
+	Square Root with Degree	차수가 있는 제곱근
+	Sine theta	사인 세타
+	Single Left Angle	왼쪽 꺾쇠 하나
+	Single Left Bar	왼쪽 세로선 하나
+	Single Left Brace	왼쪽 중괄호 하나
+	Single Left Bracket	왼쪽 대괄호 하나
+	Single Left Parenthesis	왼쪽 소괄호 하나
+	Single Right Brace	오른쪽 중괄호 하나
+	Single Right Bracket	오른쪽 대괄호 하나
+	Single Right Parenthesis	오른쪽 소괄호 하나
+	Skewed Fraction	비스듬한 분수
+	Small change	작은 변화량
+	Square Union	정사각 합집합
+	Stack Object	쌓기 개체
+	Stack Object (Three)	쌓기 개체 (3개)
+	Stacked Fraction	쌓은 분수
+	Stacked, no bar	쌓기, 분수선 없음
+	Subscript-Superscript	아래·위 첨자
+	Summation from 0 to n	0부터 n까지의 합
+	Summation over binomials	이항 계수에 대한 합
+	Tangent formula	탄젠트 공식
+	Text over Colon Equal	콜론 등호 위 텍스트
+	Text over Equal	등호 위 텍스트
+	Union of intersections	교집합들의 합집합
+	Union with Plus	플러스 합집합
+	Up Diagonal Dots	오른쪽 위 대각선 점
+	Vector A	벡터 A
+	Vector AB	벡터 AB
+	Vertical Bars	세로선
+	Vertical Dots	세로 점
+	Yields	결과
+	x bar	x 윗줄
+	All - Linear	모두 - 선형
+	All - Professional	모두 - 전문
+	Current - Linear	현재 - 선형
+	Current - Professional	현재 - 전문
+	Centered as Group	그룹으로 가운데 맞춤
+	✓ None	✓ 없음
+	Typing	입력
+	Grid Table 4 – Blue	눈금 표 4 – 파랑
+	List Table 3 – Blue	목록 표 3 – 파랑
+	Grid Table 4 – Green	눈금 표 4 – 녹색
+	List Table 3 – Green	목록 표 3 – 녹색
+	Grid Table 4 – Orange	눈금 표 4 – 주황
+	List Table 3 – Orange	목록 표 3 – 주황
+	Grid Table 4 – Purple	눈금 표 4 – 보라
+	List Table 3 – Purple	목록 표 3 – 보라
+	Level 1	수준 1
+	Change to Level 1	수준 1로 변경
+	Level 2	수준 2
+	Change to Level 2	수준 2로 변경
+	Level 3	수준 3
+	Change to Level 3	수준 3으로 변경
+	Level 4	수준 4
+	Change to Level 4	수준 4로 변경
+	Level 5	수준 5
+	Change to Level 5	수준 5로 변경
+	Level 6	수준 6
+	Change to Level 6	수준 6으로 변경
+	Level 7	수준 7
+	Change to Level 7	수준 7로 변경
+	Level 8	수준 8
+	Change to Level 8	수준 8로 변경
+	Level 9	수준 9
+	Change to Level 9	수준 9로 변경
+	1×2 Empty Matrix	빈 행렬 1×2
+	1×3 Empty Matrix	빈 행렬 1×3
+	2×1 Empty Matrix	빈 행렬 2×1
+	2×2 Empty Matrix	빈 행렬 2×2
+	2×3 Empty Matrix	빈 행렬 2×3
+	3×1 Empty Matrix	빈 행렬 3×1
+	3×2 Empty Matrix	빈 행렬 3×2
+	3×3 Empty Matrix	빈 행렬 3×3
+	Cosecant Function	코시컨트 함수
+	Hyperbolic Cosecant Function	쌍곡 코시컨트 함수
+	Inverse Cosecant Function	역 코시컨트 함수
+	Inverse Hyperbolic Cosecant Function	역쌍곡 코시컨트 함수
+	Cosine Function	코사인 함수
+	Hyperbolic Cosine Function	쌍곡 코사인 함수
+	Inverse Cosine Function	역 코사인 함수
+	Inverse Hyperbolic Cosine Function	역쌍곡 코사인 함수
+	Cotangent Function	코탄젠트 함수
+	Hyperbolic Cotangent Function	쌍곡 코탄젠트 함수
+	Inverse Cotangent Function	역 코탄젠트 함수
+	Inverse Hyperbolic Cotangent Function	역쌍곡 코탄젠트 함수
+	Secant Function	시컨트 함수
+	Hyperbolic Secant Function	쌍곡 시컨트 함수
+	Inverse Secant Function	역 시컨트 함수
+	Inverse Hyperbolic Secant Function	역쌍곡 시컨트 함수
+	Sine Function	사인 함수
+	Hyperbolic Sine Function	쌍곡 사인 함수
+	Inverse Sine Function	역 사인 함수
+	Inverse Hyperbolic Sine Function	역쌍곡 사인 함수
+	Tangent Function	탄젠트 함수
+	Hyperbolic Tangent Function	쌍곡 탄젠트 함수
+	Inverse Tangent Function	역 탄젠트 함수
+	Inverse Hyperbolic Tangent Function	역쌍곡 탄젠트 함수
+	Integral with Limits	적분 (한계 포함)
+	Integral with Stacked Limits	적분 (위아래 한계 포함)
+	Contour Integral	윤곽 적분
+	Contour Integral with Limits	윤곽 적분 (한계 포함)
+	Contour Integral with Stacked Limits	윤곽 적분 (위아래 한계 포함)
+	Double Integral	이중 적분
+	Double Integral with Limits	이중 적분 (한계 포함)
+	Double Integral with Stacked Limits	이중 적분 (위아래 한계 포함)
+	Triple Integral	삼중 적분
+	Triple Integral with Limits	삼중 적분 (한계 포함)
+	Triple Integral with Stacked Limits	삼중 적분 (위아래 한계 포함)
+	Surface Integral	면적분
+	Surface Integral with Limits	면적분 (한계 포함)
+	Surface Integral with Stacked Limits	면적분 (위아래 한계 포함)
+	Volume Integral	체적분
+	Volume Integral with Limits	체적분 (한계 포함)
+	Volume Integral with Stacked Limits	체적분 (위아래 한계 포함)
+	Coproduct	쌍대곱
+	Coproduct with Limits	쌍대곱 (한계 포함)
+	Coproduct with Lower Limit	쌍대곱 (아래 한계 포함)
+	Coproduct with Subscript-Superscript Limits	쌍대곱 (아래·위 첨자 한계 포함)
+	Product	곱
+	Product with Limits	곱 (한계 포함)
+	Product with Lower Limit	곱 (아래 한계 포함)
+	Product with Subscript-Superscript Limits	곱 (아래·위 첨자 한계 포함)
+	Intersection	교집합
+	Intersection with Limits	교집합 (한계 포함)
+	Intersection with Lower Limit	교집합 (아래 한계 포함)
+	Intersection with Subscript-Superscript Limits	교집합 (아래·위 첨자 한계 포함)
+	Union	합집합
+	Union with Limits	합집합 (한계 포함)
+	Union with Lower Limit	합집합 (아래 한계 포함)
+	Union with Subscript-Superscript Limits	합집합 (아래·위 첨자 한계 포함)
+	Summation	합
+	Summation with Limits	합 (한계 포함)
+	Summation with Lower Limit	합 (아래 한계 포함)
+	Summation with Subscript-Superscript Limits	합 (아래·위 첨자 한계 포함)
+	Summation with Subscript Limit	합 (아래 첨자 한계 포함)
+	Logical AND	논리곱
+	Logical AND with Limits	논리곱 (한계 포함)
+	Logical OR	논리합
+	Logical OR with Limits	논리합 (한계 포함)
+preview	Title	제목
+# Added while landing (#1216): labels and dialogs that landed after this catalog
+	Copy to	다른 위치에 복사
+	Delete Bookmark	책갈피 삭제
+	Filter Recipients	받는 사람 필터
+	Full Screen	전체 화면
+	Load System Installed Fonts…	시스템에 설치된 글꼴 불러오기…
+	Privacy Options	개인 정보 옵션
+	Privacy Settings	개인 정보 설정
+	Rename Document	문서 이름 바꾸기
+	Sort Recipients	받는 사람 정렬
+	Type Character Code	문자 코드 입력
+	All system fonts are already available.	모든 시스템 글꼴을 이미 사용할 수 있습니다.
+	Local font access is not supported by your browser.	이 브라우저는 로컬 글꼴 액세스를 지원하지 않습니다.
+	Local font access was denied.	로컬 글꼴 액세스가 거부되었습니다.
+	Loaded {count} system fonts.	시스템 글꼴 {count}개를 불러왔습니다.
+	Column {n}	열 {n}
+	Header row	머리글 행 있음
+	No header row	머리글 행 없음
+	My list has	목록 첫 행
+	Formula:	수식:
+	Paste function:	함수 붙여넣기:
+# Reading Mode column widths (#1040)
+	Narrow	좁게
+	Medium	보통
+# Table style parts in the Modify Table Style dialog (#714, added while landing #887)
+	Odd Banded Rows	홀수 줄무늬 행
+	Even Banded Rows	짝수 줄무늬 행
+	Odd Banded Columns	홀수 줄무늬 열
+	Even Banded Columns	짝수 줄무늬 열
+	Top Left Cell	왼쪽 위 셀
+	Top Right Cell	오른쪽 위 셀
+	Bottom Left Cell	왼쪽 아래 셀
+	Bottom Right Cell	오른쪽 아래 셀
+	Inside Horizontal Border	안쪽 가로 테두리
+	Inside Vertical Border	안쪽 세로 테두리
+# Mail merge: recipient list search (#1576)
+	Find in list:	목록에서 찾기:
+	Any field	모든 필드
+	Matches: {count}	일치: {count}개
+	Show only records that will be merged	병합할 레코드만 표시
+	Dot-dot-dash	이점쇄선
+	More Underlines…	밑줄 더 보기…
+	Underline Color	밑줄 색
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	나누기 전에 셀 병합
+	Table size	표 크기
+	AutoFit behavior	자동 맞춤
+	Initial column width:	초기 열 너비:
+	AutoFit to contents	내용에 맞게 자동 맞춤
+	AutoFit to window	창에 맞게 자동 맞춤
+	Separate text at	텍스트 구분 기호
+	Commas	쉼표
+	Other:	기타:
+	The number must be between 1 and {max}.	숫자는 1에서 {max} 사이여야 합니다.
+	The measurement must be between {min} and {max}.	측정값은 {min}에서 {max} 사이여야 합니다.
+	Recently Used Fonts	최근 사용한 글꼴
+	All Fonts	모든 글꼴
+	Spike	스파이크
+	Insert Spike	스파이크 삽입
+# Add Font status (#1789)
+	Added 1 font	글꼴 1개를 추가했습니다
+	Added {n} fonts	글꼴 {n}개를 추가했습니다
+	{added}; {count} couldn't be read: {names}	{added}; 읽을 수 없는 파일 {count}개: {names}
+	{names} and {n} more	{names} 외 {n}개
+	{added}; {n} skipped (limit {max})	{added}; {n}개 건너뜀 (한도 {max})
+
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	본문 안
+	In margin	여백에
+	Drop Cap Options…	문단 첫 글자 장식 옵션…
+	Lines to drop:	장식할 줄 수:
+	Distance from text:	본문과의 간격:
+	Distance from text	본문과의 간격
+
+# Picture Format › Size: the Size dialog, sizes typed in any unit (#2573)
+	Lock aspect ratio	가로 세로 비율 고정
+	Relative to original picture size	원래 그림 크기 기준
+	Original size	원래 크기
+	{width} × {height} pixels	{width} × {height} 픽셀
+	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	5 cm 또는 300 px처럼 원하는 단위로 크기를 입력하세요. 다른 쪽도 함께 바뀌어 그림의 비율이 유지됩니다.
+
+	Import…	가져오기…
+
+# Personal templates (#2852)
+	Personal	개인
+	Personal Templates	개인 서식 파일
+	Templates you save in your templates folder show up here.	서식 파일 폴더에 저장한 서식 파일이 여기에 표시됩니다.
+	Save as Word Template…	Word 서식 파일로 저장…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	.dotx 서식 파일을 서식 파일 폴더에 저장합니다. 파일 › 새로 만들기의 개인 아래에 표시됩니다.
+	File locations	파일 위치
+	User templates:	사용자 서식 파일:
+	Not set	설정 안 됨
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	파일 › 새로 만들기의 개인 아래에 이 폴더의 .dotx 및 .dotm 서식 파일이 표시됩니다. Word 서식 파일로 저장은 여기에서 시작합니다.
+	Format Shape Pane	도형 서식 창
+	Format Shape	도형 서식
+	Format Shape…	도형 서식…
+	No fill	채우기 없음
+	Solid fill	단색 채우기
+	Gradient fill	그라데이션 채우기
+	Preset gradients	미리 설정된 그라데이션
+	Radial	방사형
+	Rectangular	사각형
+	Path	경로
+	Direction	방향
+	Angle	각도
+	Gradient stops	그라데이션 중지점
+	Add gradient stop	그라데이션 중지점 추가
+	Remove gradient stop	그라데이션 중지점 제거
+	Rotate with shape	도형과 함께 회전
+	Gradient	그라데이션
+	No Gradient	그라데이션 없음
+	Light Variations	밝은 그라데이션
+	Dark Variations	어두운 그라데이션
+	More Gradients…	기타 그라데이션…
+	Select a shape, text box or drawing canvas to format its fill.	채우기 서식을 지정할 도형, 텍스트 상자 또는 그리기 캔버스를 선택하세요.
+	Linear Right	선형 오른쪽
+	Linear Diagonal - Top Left to Bottom Right	선형 대각선 - 왼쪽 위에서 오른쪽 아래
+	Linear Down	선형 아래쪽
+	Linear Diagonal - Top Right to Bottom Left	선형 대각선 - 오른쪽 위에서 왼쪽 아래
+	Linear Left	선형 왼쪽
+	Linear Diagonal - Bottom Right to Top Left	선형 대각선 - 오른쪽 아래에서 왼쪽 위
+	Linear Up	선형 위쪽
+	Linear Diagonal - Bottom Left to Top Right	선형 대각선 - 왼쪽 아래에서 오른쪽 위
+	From Top Left Corner	왼쪽 위 모서리에서
+	From Top Right Corner	오른쪽 위 모서리에서
+	From Bottom Left Corner	왼쪽 아래 모서리에서
+	From Bottom Right Corner	오른쪽 아래 모서리에서
+	From Center	가운데에서
+	Soft	부드럽게
+	Lit from Top	위에서 조명
+	Deep	진하게
+	Lit from Bottom	아래에서 조명
+	Center Glow	가운데 광선
+	More tabs	탭 더 보기
+# #3013: Insert Table of Figures
+	Include label and number	레이블 및 번호 포함
+	First Record	첫 레코드
+	Last Record	마지막 레코드
+	Go to Record	레코드로 이동
+	Edit Individual Documents…	개별 문서 편집…
+	Print Documents…	문서 인쇄…
+	Print Documents	문서 인쇄
+	Current record	현재 레코드
+	From:	시작:
+	To:	끝:
+	Enter a number.	숫자를 입력하세요.
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	그리기 캔버스는 그룹 해제할 수 없습니다
+	a drawing canvas can't go inside a text box	그리기 캔버스는 텍스트 상자 안에 넣을 수 없습니다
+	charts and diagrams can't be moved or resized yet	차트와 다이어그램은 아직 이동하거나 크기를 조정할 수 없습니다
+	no equation at the caret	커서 위치에 수식이 없습니다
+	not editing an equation	수식을 편집하고 있지 않습니다
+	nothing is selected	선택한 항목이 없습니다
+	only in Outline view	개요 보기에서만 사용할 수 있습니다
+	select a SmartArt graphic first	먼저 SmartArt 그래픽을 선택하세요
+	select a chart first	먼저 차트를 선택하세요
+	select a connector first	먼저 연결선을 선택하세요
+	select a drawing canvas first	먼저 그리기 캔버스를 선택하세요
+	select a floating picture or shape first	먼저 떠 있는 그림이나 도형을 선택하세요
+	select a group first	먼저 그룹을 선택하세요
+	select a picture first	먼저 그림을 선택하세요
+	select a picture or shape first	먼저 그림이나 도형을 선택하세요
+	select a shape first	먼저 도형을 선택하세요
+	select a text box first	먼저 텍스트 상자를 선택하세요
+	select a text box linked to another first	먼저 다른 상자에 연결된 텍스트 상자를 선택하세요
+	select recipients first	먼저 받는 사람을 선택하세요
+	select two or more pictures or shapes first (Shift+click)	먼저 그림이나 도형을 두 개 이상 선택하세요 (Shift+클릭)
+	text boxes can't go inside a text box	텍스트 상자는 텍스트 상자 안에 넣을 수 없습니다
+	the Clipboard pane is empty	클립보드 창이 비어 있습니다
+	the cursor isn't in a table	커서가 표 안에 있지 않습니다
+	there is nothing to undo	실행 취소할 작업이 없습니다
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	이 SmartArt는 다른 프로그램에서 만들어졌습니다: WordCraft에서 표시할 수는 있지만 편집할 수는 없습니다
+	this chart was made in another program: WordCraft shows it but can't edit it	이 차트는 다른 프로그램에서 만들어졌습니다: WordCraft에서 표시할 수는 있지만 편집할 수는 없습니다
+	this text box is already linked: break the link first	이 텍스트 상자는 이미 연결되어 있습니다: 먼저 연결을 끊으세요
+	Use the browser's full screen (F11)	브라우저의 전체 화면을 사용하세요 (F11)
+	leave the equation first	먼저 수식에서 나가세요
+	the Spike is empty	스파이크가 비어 있습니다
+# More reasons a ribbon control is off (#2678)
+	a group holding Word ink can't be ungrouped yet	Word 잉크가 들어 있는 그룹은 아직 그룹 해제할 수 없습니다
+	drop caps can't go in a table	표 안에는 첫 글자 장식을 넣을 수 없습니다
+	the document is protected	문서가 보호되어 있습니다
+	the paragraph is empty	단락이 비어 있습니다
+	the paragraph starts with a space	단락이 공백으로 시작합니다
+	Open a document first	먼저 문서를 여세요
+	Border Styles	테두리 스타일
+	Border\nStyles	테두리\n스타일
+	Click a table border to paint it with the chosen border style. Esc stops.	표의 테두리를 클릭하면 선택한 테두리 스타일로 칠합니다. Esc 키를 누르면 중지합니다.

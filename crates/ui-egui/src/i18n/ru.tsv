@@ -1,0 +1,2819 @@
+# Russian (ru) interface catalog. Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   context    usually empty. `preview` words sample text inside rendered previews (the Design
+#              tab's style-set tiles), which must fit a small tile; it falls back to the plain entry.
+#   source     the English text exactly as in the code (tl!(...), ribbon labels, command labels)
+#   escapes    \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns, and a
+#              trailing "…" in one needs one in the other.
+#   Lines starting with # and blank lines are ignored. A missing entry shows in English.
+#
+# Clean room: every entry was written from the plain meaning of the English label in ordinary
+# computing vocabulary. No Microsoft Word (or other product) localisation, string table or
+# translated UI was consulted or copied; add entries the same way.
+# Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
+# Counts use count-neutral wording (`Слов: 21`), so no plural forms are needed.
+
+	(no suggestions)	(нет вариантов)
+	1.5 Line Spacing	Полуторный интервал
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Бесплатный текстовый процессор с открытым исходным кодом, написанный с нуля на Rust.\nВходит в Crafting Apps от команды ArtCraft.
+	AaBbCcDd	АаБбВвГг
+	About	О программе
+	About WordCraft	О WordCraft
+	Accept	Принять
+	Accept All Changes	Принять все изменения
+	Accept This Change	Принять это изменение
+	Accessibility	Доступность
+	Add	Добавить
+	Add a comment	Добавить комментарий
+	Add a Table	Добавить таблицу
+	Add Space Before Paragraph	Добавить интервал перед абзацем
+	Add Text	Добавить текст
+	Add to Dictionary	Добавить в словарь
+	Add to Style Gallery	Добавить в коллекцию стилей
+	Address Block	Блок адреса
+	Address:	Адрес:
+	Address\nBlock	Блок\nадреса
+	Adjust	Настройка
+	Advanced	Дополнительно
+	After:	После:
+	Agents	Агенты
+	Align	Выровнять
+	Align Left	По левому краю
+	Align Right	По правому краю
+	Alignment	Выравнивание
+	All Borders	Все границы
+	All Caps	Все прописные
+	All caps	Все прописные
+	All Markup	Все исправления
+	Alt Text	Замещающий текст
+	Annotation Reference	Знак примечания
+	Annotation Subject	Тема примечания
+	Annotation Text	Текст примечания
+	Apply Character Style	Применить стиль знаков
+	Apply Style	Применить стиль
+	Arrange	Упорядочить
+	Arrange\nAll	Упорядочить\nвсе
+	Arrow	Стрелка
+	Artistic Effects	Художественные эффекты
+	Author	Автор
+	AutoCorrect Options	Параметры автозамены
+	AutoFit	Автоподбор
+	AutoFit Contents	Автоподбор по содержимому
+	AutoFit Window	Автоподбор по ширине окна
+	Automatic	Автоматически
+	Automatic ({language})	Автоматически ({language})
+	Automatic follows your system's language. Menus and commands change; your documents don't.	«Автоматически» — язык системы. Меняются меню и команды, документы остаются прежними.
+	Automatic Table 1 (3 levels)	Автоматическое оглавление 1 (3 уровня)
+	Automatic Table 2 (2 levels)	Автоматическое оглавление 2 (2 уровня)
+	AutoSave	Автосохранение
+	AutoSave saves every change to the file (needs a saved document)	Автосохранение записывает каждое изменение в файл (документ должен быть уже сохранён)
+	AutoText	Автотекст
+	Backspace	Backspace
+	Banded Columns	Чередующиеся столбцы
+	Banded Rows	Чередующиеся строки
+	Before:	Перед:
+	Bibliography	Список литературы
+	Binary assets added	Добавлены двоичные ресурсы
+	Binary assets removed	Удалены двоичные ресурсы
+	Blank	Пустой
+	Blank (Three Columns)	Пустой (три столбца)
+	Blank document	Новый документ
+	Blank Page	Пустая страница
+	Block\nAuthors	Блокировать\nавторов
+	Body text in a short paragraph to show spacing.	Основной текст в коротком абзаце, чтобы показать интервалы.
+	Bold	Полужирный
+	Book Title	Название книги
+	Bookmark	Закладка
+	Bookmark name:	Имя закладки:
+	Continue from previous section	Продолжить из предыдущего раздела
+	Delete Bookmark	Удалить закладку
+	Hidden bookmarks	Скрытые закладки
+	Page Number Format	Формат номеров страниц
+	Page numbering	Нумерация страниц
+	Sort by:	Сортировать по:
+	Border Painter	Кисть границ
+	Border\nPainter	Кисть\nграниц
+	Borders	Границы
+	Bottom Border	Нижняя граница
+	Bottom of Page	Внизу страницы
+	Bottom:	Снизу:
+	Box	Рамка
+	Breaks	Разрывы
+	Bring Forward	Переместить вперёд
+	Bullet Library	Библиотека маркеров
+	Bullets	Маркеры
+	Calendar	Календарь
+	Cancel	Отмена
+	Capitalize Each Word	Каждое Слово С Прописной
+	Caption	Подпись
+	Captions	Подписи
+	Category	Категория
+	Cell Margins	Поля ячеек
+	Cell Size	Размер ячейки
+	Cell\nMargins	Поля\nячеек
+	Center	По центру
+	Change	Изменить
+	Change Case	Регистр
+	Change List Level	Изменить уровень списка
+	Change Picture	Заменить рисунок
+	Change Shape	Изменить фигуру
+	Changes	Изменения
+	Character Position	Смещение знаков
+	Character Scale	Масштаб знаков
+	Character Shading	Заливка знаков
+	Character Spacing	Межзнаковый интервал
+	Characters (no spaces)	Знаков (без пробелов)
+	Characters (with spaces)	Знаков (с пробелами)
+	Chart	Диаграмма
+	Check Accessibility	Проверить доступность
+	Check Compatibility	Проверить совместимость
+	Check for Errors	Проверить на ошибки
+	Check Spelling as You Type	Проверять орфографию при вводе
+	Check\nAccessibility	Проверить\nдоступность
+	Citation Style	Стиль ссылок
+	Citations & Bibliography	Ссылки и список литературы
+	Clear	Очистить
+	Clear All Formatting	Очистить всё форматирование
+	Clipboard	Буфер обмена
+	Close	Закрыть
+	Close Header and Footer	Закрыть колонтитулы
+	Collapse Selection	Свернуть выделение
+	Color	Цвет
+	Color:	Цвет:
+	Colors	Цвета
+	Column	Столбец
+	Column Break	Разрыв колонки
+	Columns	Колонки
+	Combine	Объединить
+	Commands	Команды
+	Comment	Комментарий
+	Comments	Комментарии
+	Comments Pane	Область комментариев
+	Community\nDiscord	Сообщество\nDiscord
+	Compact	Компактный
+	Compare	Сравнить
+	Compress Pictures	Сжать рисунки
+	Continuous	Непрерывный
+	Convert	Преобразовать
+	Convert Text to Table	Преобразовать текст в таблицу
+	Convert Text to Table…	Преобразовать текст в таблицу…
+	Convert to Text	Преобразовать в текст
+	Copy	Копировать
+	Copy Formatting	Копировать форматирование
+	Corrections	Коррекция
+	Cover Page	Титульная страница
+	Create	Создать
+	Create a Style	Создать стиль
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	Создайте интерактивную структуру документа.\n\nС ней легко понять, где вы находитесь, и быстро переставлять части текста.\n\nЧтобы начать, откройте вкладку «Главная» и примените к заголовкам документа стили заголовков.
+	Create New Style	Создать новый стиль
+	Crop	Обрезать
+	Cross-reference	Перекрёстная ссылка
+	Current Position	Текущая позиция
+	Current style: {style}	Текущий стиль: {style}
+	Custom Margins…	Настраиваемые поля…
+	Custom Watermark	Настраиваемая подложка
+	Custom Watermark…	Настраиваемая подложка…
+	Customize Quick Access Toolbar	Настроить панель быстрого доступа
+	Cut	Вырезать
+	Dark Mode	Тёмный режим
+	Dashed	Штриховой
+	Data	Данные
+	Date & Time	Дата и время
+	Decrease Font Size	Уменьшить размер шрифта
+	Decrease Indent	Уменьшить отступ
+	Default	По умолчанию
+	Default Paragraph Font	Шрифт абзаца по умолчанию
+	Define New Bullet	Определить новый маркер
+	Define New Number Format	Определить новый формат номера
+	Delete	Удалить
+	Delete Cells	Удалить ячейки
+	Delete Columns	Удалить столбцы
+	Delete Comment	Удалить комментарий
+	Delete Next Word	Удалить следующее слово
+	Delete Previous Word	Удалить предыдущее слово
+	Delete Rows	Удалить строки
+	Delete Style	Удалить стиль
+	Delete Table	Удалить таблицу
+	Design	Дизайн
+	In the margin	На полях
+	Only for the selected text	Только для выделенного текста
+	No document is open. Create a document or open one first.	Нет открытого документа. Сначала создайте или откройте документ.
+	Search	Поиск
+	Title Bar	Строка заголовка
+	development build	сборка для разработки
+	Diagonal	Диагональ
+	Diamond	Ромб
+	Dictate	Диктовка
+	Different First Page	Особая первая страница
+	Different Odd & Even Pages	Разные для чётных и нечётных страниц
+	Discord	Discord
+	Discord community	Сообщество в Discord
+	Display	Отображение
+	Display for Review	Отображение исправлений
+	Distribute Columns	Выровнять ширину столбцов
+	Distribute Rows	Выровнять высоту строк
+	Distributed	Распределённое
+	Do Not Show in TOC	Не показывать в оглавлении
+	Document End	Конец документа
+	Document Formatting	Форматирование документа
+	Document Property	Свойство документа
+	Document Start	Начало документа
+	Document Text	Текст документа
+	Document Title	Название документа
+	Documents you open will show up here.	Здесь появятся документы, которые вы открываете.
+	Dot-dash	Штрихпунктирный
+	Dotted	Точечный
+	Double	Двойной
+	Double Spacing	Двойной интервал
+	Double Strikethrough	Двойное зачёркивание
+	Double Underline	Двойное подчёркивание
+	Down	Вниз
+	Draft	Черновик
+	Draw	Рисование
+	Drawing Tools	Инструменты рисования
+	Drawing\nCanvas	Полотно\nдля рисования
+	Drop Cap	Буквица
+	Edit Footer	Изменить нижний колонтитул
+	Edit Header	Изменить верхний колонтитул
+	Edit Recipient List	Изменить список получателей
+	Edit\nRecipient List	Изменить список\nполучателей
+	Edited	Изменено
+	Editing	Редактирование
+	Editing endnote	Редактирование концевой сноски
+	Editing footnote	Редактирование сноски
+	Editing header/footer	Редактирование колонтитула
+	Editing — edit the document directly	Редактирование — правка документа напрямую
+	Editor	Редактор
+	Effects	Эффекты
+	Emboss	Приподнятый
+	Emphasis	Выделение
+	Encrypt with Password	Зашифровать паролем
+	Endnote Reference	Знак концевой сноски
+	Endnote Text	Текст концевой сноски
+	English (United States)	Английский (США)
+	Engrave	Утопленный
+	Enter page number:	Введите номер страницы:
+	Envelope Address	Адрес на конверте
+	Envelope Return	Обратный адрес
+	Envelopes	Конверты
+	Equation	Уравнение
+	Eraser	Ластик
+	Even Page	Чётная страница
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	Любая команда доступна скриптам и ИИ-агентам: запустите `wordcraft-cli mcp`, чтобы получить MCP-сервер, или запустите приложение с `--control <port>`, чтобы открыть управляющий канал JSON.
+	Export	Экспорт
+	Export a copy to share (PDF, Word document)	Экспортировать копию, чтобы поделиться (PDF, документ Word)
+	Export Page as PNG	Экспортировать страницу в PNG
+	Export PDF	Экспорт в PDF
+	Exported {path}	Экспортировано: {path}
+	Extend Selection	Расширить выделение
+	Extend Selection by Units	Расширить выделение по единицам
+	Field	Поле
+	File	Файл
+	Find	Найти
+	Find and Replace	Найти и заменить
+	Find Next	Найти далее
+	Find Previous	Найти предыдущее
+	Find Recipient	Найти получателя
+	Find what:	Найти:
+	Finish	Завершение
+	Finish & Merge	Завершить и объединить
+	Finish &\nMerge	Завершить\nи объединить
+	First Column	Первый столбец
+	First commit	Первый коммит
+	First line:	Первая строка:
+	Fixed Column Width	Фиксированная ширина столбцов
+	Focus	Фокус
+	Full Screen View	Полноэкранный режим
+	Show the ribbon	Показать ленту
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Старые клавиши меню: Alt, {keys}. Продолжайте ввод или нажмите Esc для отмены.
+	Font	Шрифт
+	Font Color	Цвет шрифта
+	Font color:	Цвет шрифта:
+	Font Dialog	Окно «Шрифт»
+	Font Size	Размер шрифта
+	Font:	Шрифт:
+	Fonts	Шрифты
+	Footer	Нижний колонтитул
+	Footnote and Endnote	Обычные и концевые сноски
+	Footnote Reference	Знак сноски
+	Footnote Text	Текст сноски
+	Footnotes	Сноски
+	Format	Формат
+	Format Page Numbers	Формат номеров страниц
+	Format Page Numbers…	Формат номеров страниц…
+	Format Painter	Формат по образцу
+	Formatting at Selection	Форматирование выделенного фрагмента
+	Formula	Формула
+	General	Общие
+	Go To	Перейти
+	Go to	Перейти
+	Go To (⌘⌥G)	Перейти (⌘⌥G)
+	Grab bag	Разное
+	Greeting Line	Строка приветствия
+	Greeting\nLine	Строка\nприветствия
+	Gridlines	Сетка
+	Group	Группировать
+	Grow Font 1 Point	Увеличить шрифт на 1 пт
+	Hanging Indent	Выступ
+	Header	Верхний колонтитул
+	Header & Footer	Колонтитулы
+	Header Row	Строка заголовка
+	Header/Footer Position	Положение колонтитулов
+	Heading 1	Заголовок 1
+	Heading 2	Заголовок 2
+	Heading 3	Заголовок 3
+	Heading {n}	Заголовок {n}
+	Headings	Заголовки
+	Heart	Сердце
+	Help	Справка
+	Hidden	Скрытый
+	Highlight Merge Fields	Выделить поля слияния
+	Highlight\nMerge Fields	Выделить\nполя слияния
+	Highlighter	Маркер
+	Home	Главная
+	Horizontal	Горизонтально
+	Horizontal Line	Горизонтальная линия
+	Hyperlink	Гиперссылка
+	Hyphenation	Расстановка переносов
+	Icons	Значки
+	Ignore All	Пропустить все
+	Illustrations	Иллюстрации
+	Immersive	Иммерсивный режим
+	Immersive Reader	Иммерсивное чтение
+	Immersive\nReader	Иммерсивное\nчтение
+	Increase Font Size	Увеличить размер шрифта
+	Increase Indent	Увеличить отступ
+	Indent	Отступ
+	Indentation	Отступы
+	Indents	Отступы
+	Index	Предметный указатель
+	Index Heading	Заголовок указателя
+	Index {n}	Указатель {n}
+	Info	Сведения
+	Ink to\nMath	Рукопись\nв формулу
+	Ink to\nShape	Рукопись\nв фигуру
+	Ink\nReplay	Воспроизвести\nрукопись
+	Insert	Вставка
+	Insert Above	Вставить сверху
+	Insert Below	Вставить снизу
+	Insert Caption	Вставить подпись
+	Insert Caption…	Вставить подпись…
+	Insert Citation	Вставить ссылку на источник
+	Insert Endnote	Вставить концевую сноску
+	Insert Footnote	Вставить сноску
+	Insert Hyperlink	Вставить гиперссылку
+	Insert Index	Вставить указатель
+	Insert Left	Вставить слева
+	Insert Merge Field	Вставить поле слияния
+	Insert Merge\nField	Вставить поле\nслияния
+	Insert Right	Вставить справа
+	Insert Shapes	Вставка фигур
+	Insert Table	Вставить таблицу
+	Insert Table of Authorities	Вставить таблицу ссылок
+	Insert Table of Figures	Вставить список иллюстраций
+	Insert Table…	Вставить таблицу…
+	Insert\nAbove	Вставить\nсверху
+	Insert\nCaption	Вставить\nподпись
+	Insert\nCitation	Вставить\nссылку
+	Insert\nFootnote	Вставить\nсноску
+	Inside Borders	Внутренние границы
+	Inspect Document	Проверить документ
+	Intense Emphasis	Сильное выделение
+	Intense Quote	Выделенная цитата
+	Intense Reference	Сильная ссылка
+	Interface language:	Язык интерфейса:
+	Italic	Курсив
+	Join the ArtCraft community on Discord	Присоединяйтесь к сообществу ArtCraft в Discord
+	Join us on Discord: discord.gg/artcraft	Присоединяйтесь к нам в Discord: discord.gg/artcraft
+	Justify	По ширине
+	Keep Lines Together	Не разрывать абзац
+	Keep lines together	Не разрывать абзац
+	Keep Text Only	Вставить без форматирования
+	Keep with Next	Не отрывать от следующего
+	Keep with next	Не отрывать от следующего
+	Keywords	Ключевые слова
+	Labels	Наклейки
+	Landscape	Альбомная
+	Language	Язык
+	{language} (no dictionary)	{language} (нет словаря)
+	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	Орфографический словарь для языка «{language}» не установлен, поэтому текст не проверяется. WordCraft ищет словарь Hunspell {name} в папке WORDCRAFT_DICTIONARIES и в обычных системных расположениях.
+	Lasso	Лассо
+	Last Column	Последний столбец
+	Last commit	Последний коммит
+	Layout	Макет
+	Layout Summary	Сводка по макету
+	Left	Слева
+	Left Border	Левая граница
+	Left:	Слева:
+	Letter	Письмо
+	Line	Линия
+	Line and Page Breaks	Разрывы строк и страниц
+	Line and Paragraph Spacing	Интервал между строками и абзацами
+	Line Break	Разрыв строки
+	Line delta	Изменение числа строк
+	Line End	Конец строки
+	Line Number	Номер строки
+	Line Numbers	Номера строк
+	Line Spacing	Межстрочный интервал
+	Line Spacing Options…	Параметры межстрочного интервала…
+	Line spacing:	Межстрочный интервал:
+	Line Start	Начало строки
+	Lines	Строки
+	Lines added	Добавлено строк
+	Lines deleted	Удалено строк
+	Link	Ссылка
+	Link to Previous	Как в предыдущем
+	Links	Ссылки
+	List Paragraph	Абзац списка
+	Location: {path}	Расположение: {path}
+	lowercase	все строчные
+	Macros	Макросы
+	Mailings	Рассылки
+	Manage Sources	Управление источниками
+	Many pages	Много страниц
+	Margins	Поля
+	Mark Citation	Пометить ссылку
+	Mark Entry	Пометить элемент
+	Mark\nCitation	Пометить\nссылку
+	Mark\nEntry	Пометить\nэлемент
+	Markdown (*.md)	Markdown (*.md)
+	Match case	С учётом регистра
+	Match Fields	Сопоставить поля
+	Matrix	Матрица
+	Merge	Объединить
+	Merge Cells	Объединить ячейки
+	Merge Formatting	Объединить форматирование
+	Merged PRs	Принятые PR
+	Mirrored	Зеркальные
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team и участники проекта WordCraft.
+	Moderate	Средние
+	Modify Style	Изменить стиль
+	Modify…	Изменить…
+	Multilevel List	Многоуровневый список
+	Multilevel List Library	Библиотека многоуровневых списков
+	Article I.	Статья I.
+	Chapter 1	Глава 1
+	Section 1.01	Раздел 1.01
+	Multiple Pages	Несколько страниц
+	Name (A–Z)	Имя (А–Я)
+	Name:	Имя:
+	Narrow  {size} all	Узкие  {size} со всех сторон
+	Navigation	Навигация
+	Navigation Pane	Область навигации
+	New	Создать
+	New Comment	Новый комментарий
+	New from Template	Создать из шаблона
+	New Paragraph	Новый абзац
+	New Style…	Новый стиль…
+	New Window	Новое окно
+	New\nComment	Новый\nкомментарий
+	New\nWindow	Новое\nокно
+	Next	Далее
+	Next Change	Следующее изменение
+	Next Comment	Следующий комментарий
+	Next Footnote	Следующая сноска
+	Next Page	Следующая страница
+	Next Record	Следующая запись
+	Next Section	Следующий раздел
+	No Border	Без границы
+	No Color	Без цвета
+	No contributor data was built into this copy.	В эту сборку не включены данные об участниках.
+	No Markup	Без исправлений
+	No model credits were built into this copy.	В эту сборку не включены сведения о моделях.
+	No Paragraph Space	Без интервала между абзацами
+	No Spacing	Без интервала
+	Nonbreaking Hyphen	Неразрывный дефис
+	Nonbreaking Space	Неразрывный пробел
+	None	Нет
+	Normal	Обычный
+	Normal  {size} all	Обычные  {size} со всех сторон
+	Normal Indent	Обычный отступ
+	Normal Style	Обычный стиль
+	Normal Table	Обычная таблица
+	Not available right now	Сейчас недоступно
+	Not saved	Не сохранено
+	Not saved yet	Ещё не сохранено
+	Number of columns:	Число столбцов:
+	Number of rows:	Число строк:
+	Numbering	Нумерация
+	Object	Объект
+	Odd Page	Нечётная страница
+	Office 2003 Default	Стандартный Office 2003
+	OK	ОК
+	One	Одна
+	One Page	Одна страница
+	Open	Открыть
+	OpenDocument Text (*.odt)	Текст OpenDocument (*.odt)
+	Optional Hyphen	Мягкий перенос
+	Options	Параметры
+	Orientation	Ориентация
+	Outline	Структура
+	Outline Level	Уровень структуры
+	Outside Borders	Внешние границы
+	Oval	Овал
+	Page	Страница
+	Page Background	Фон страницы
+	Page Borders	Границы страниц
+	Page Break	Разрыв страницы
+	Page Break Before	С новой страницы
+	Page break before	С новой страницы
+	Page Breaks	Разрывы страниц
+	Page Color	Цвет страницы
+	Page Down	Страница вниз
+	Page image (*.png)	Изображение страницы (*.png)
+	Page Movement	Перелистывание страниц
+	Page Number	Номер страницы
+	Page Setup	Параметры страницы
+	Page Up	Страница вверх
+	Page Width	По ширине страницы
+	Page width	По ширине страницы
+	Page X of Y	Страница X из Y
+	Page {page}	Страница {page}
+	Page {page} of {pages}	Страница {page} из {pages}
+	Page\nBorders	Границы\nстраниц
+	Page\nColor	Цвет\nстраницы
+	Page\nNumber	Номер\nстраницы
+	Pages	Страницы
+	Paragraph	Абзац
+	Paragraph Details	Сведения об абзаце
+	Paragraph Down	На абзац вниз
+	Paragraph Settings	Параметры абзаца
+	Paragraph Spacing	Интервал между абзацами
+	Paragraph Up	На абзац вверх
+	Paragraphs	Абзацы
+	Paste	Вставить
+	Paste (⌘V)	Вставить (⌘V)
+	Paste Formatting	Вставить форматирование
+	Paste: Keep Text Only	Вставить без форматирования
+	Paste: Merge Formatting	Вставить: объединить форматирование
+	PDF document (*.pdf)	Документ PDF (*.pdf)
+	Pen	Ручка
+	Pencil	Карандаш
+	Picture Border	Граница рисунка
+	Picture Format	Формат рисунка
+	Picture Styles	Стили рисунков
+	Pictures	Рисунки
+	Plain text (*.txt)	Обычный текст (*.txt)
+	Portrait	Книжная
+	Position	Положение
+	Preview Results	Просмотр результатов
+	Preview\nResults	Просмотр\nрезультатов
+	Previous	Назад
+	Previous Change	Предыдущее изменение
+	Previous Comment	Предыдущий комментарий
+	Previous Record	Предыдущая запись
+	Previous Section	Предыдущий раздел
+	Print	Печать
+	Print Layout	Разметка страницы
+	Print\nLayout	Разметка\nстраницы
+	Proofing	Правописание
+	Proofing Issues	Замечания по правописанию
+	Properties	Свойства
+	Protect	Защита
+	Protect Document	Защитить документ
+	Quick Access Toolbar	Панель быстрого доступа
+	Quick Parts	Готовые блоки
+	Quick Tables	Готовые таблицы
+	Quote	Цитата
+	Read Aloud	Прочитать вслух
+	Read Mode	Режим чтения
+	Read\nAloud	Прочитать\nвслух
+	Read\nMode	Режим\nчтения
+	Recent	Последние
+	Record Macro	Записать макрос
+	Recover Unsaved Documents	Восстановить несохранённые документы
+	Rectangle	Прямоугольник
+	Redo	Вернуть
+	Reduce Hanging Indent	Уменьшить выступ
+	References	Ссылки
+	Reject	Отклонить
+	Reject All Changes	Отклонить все изменения
+	Reject Change	Отклонить изменение
+	Relaxed	Свободный
+	Remove Background	Удалить фон
+	Remove Footer	Удалить нижний колонтитул
+	Remove Header	Удалить верхний колонтитул
+	Remove Hyperlink	Удалить гиперссылку
+	Remove Space After Paragraph	Удалить интервал после абзаца
+	Remove Table of Contents	Удалить оглавление
+	Remove Watermark	Удалить подложку
+	Repeat	Повторить
+	Repeat Header Rows	Повторять строки заголовка
+	Replace	Заменить
+	Replace All	Заменить все
+	Replace Document Text	Заменить текст документа
+	Replace with:	Заменить на:
+	Replay	Воспроизвести
+	Reply	Ответить
+	Report	Отчёт
+	Research	Исследование
+	Researcher	Исследователь
+	Reset Picture	Сбросить рисунок
+	Resolve	Отметить решённым
+	Resolved	Решён
+	Restart at 1	Начать с 1
+	Restart Each Page	На каждой странице заново
+	Restart Each Section	В каждом разделе заново
+	Restrict Editing	Ограничить редактирование
+	Restrict\nEditing	Ограничить\nредактирование
+	Results	Результаты
+	Reverse the order	В обратном порядке
+	Review	Рецензирование
+	Reviewing	Рецензирование
+	Reviewing Pane	Область рецензирования
+	Reviewing — edits become suggestions	Рецензирование — правки становятся предложениями
+	Rich Text Format (*.rtf)	Документ RTF (*.rtf)
+	Right	Справа
+	Right Border	Правая граница
+	Right-to-Left Text Direction	Направление текста справа налево
+	Right:	Справа:
+	Rotate	Повернуть
+	Rounded Rectangle	Скруглённый прямоугольник
+	Rows & Columns	Строки и столбцы
+	Ruler	Линейка
+	Rules	Правила
+	Résumé	Резюме
+	Save	Сохранить
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	Сохраните копию в другом формате. Печать идёт через PDF, который можно распечатать из любой программы просмотра.
+	Save As	Сохранить как
+	Save as Template	Сохранить как шаблон
+	Saved	Сохранено
+	Search Commands	Поиск команд
+	Search commands and help	Поиск команд и справки
+	Search document	Поиск в документе
+	Section Breaks	Разрывы разделов
+	Section Properties	Свойства раздела
+	Sections	Разделы
+	Select	Выделить
+	Select All	Выделить всё
+	Select Cell	Выделить ячейку
+	Select Line	Выделить строку текста
+	Select Objects	Выбор объектов
+	Select Paragraph	Выделить абзац
+	Select Range	Выделить диапазон
+	Select Recipients	Выбрать получателей
+	Select Row	Выделить строку таблицы
+	Select Sentence	Выделить предложение
+	Select Table	Выделить таблицу
+	Select Text	Выделить текст
+	Select Text with Similar Formatting	Выделить текст с похожим форматированием
+	Select Word	Выделить слово
+	Select\nRecipients	Выбрать\nполучателей
+	Selection	Выделение
+	Selection Pane	Область выделения
+	Send Backward	Переместить назад
+	Sentence case.	Как в предложениях.
+	Set as Default	Использовать по умолчанию
+	Set Caret	Установить курсор
+	Set Character Formatting	Задать формат знаков
+	Set Numbering Value	Задать значение нумерации
+	Set Paragraph Formatting	Задать формат абзаца
+	Shading	Заливка
+	Shadow	Тень
+	Shape Fill	Заливка фигуры
+	Shape Format	Формат фигуры
+	Shape Outline	Контур фигуры
+	Shape Styles	Стили фигур
+	Shapes	Фигуры
+	Share	Поделиться
+	Shift+Tab	Shift+Tab
+	Show	Показать
+	Show all formatting marks	Показывать все знаки форматирования
+	Show Comments	Показать комментарии
+	Show Markup	Показать исправления
+	Show Notes	Показать сноски
+	Show rulers	Показывать линейки
+	Animate the caret (it glides and fades)	Анимировать курсор (плавно перемещается и угасает)
+	Animation	Анимация
+	On: the caret glides to its new place when you type or use the arrow keys, and its blink fades. Off: it jumps and blinks on and off.	Вкл.: при вводе текста и нажатии клавиш со стрелками курсор плавно перемещается на новое место, а его мигание плавно угасает. Выкл.: курсор перескакивает и резко мигает.
+	Show the community button in the title bar	Показывать кнопку сообщества в заголовке окна
+	Show/Hide ¶	Показать/скрыть ¶
+	Show\nComments	Показать\nкомментарии
+	Shrink Font 1 Point	Уменьшить шрифт на 1 пт
+	Side to Side	Рядом
+	Side\nto Side	Рядом
+	Signature Line	Строка подписи
+	Single	Одинарный
+	Single Spacing	Одинарный интервал
+	Size	Размер
+	Size:	Размер:
+	Small Caps	Малые прописные
+	Small caps	Малые прописные
+	SmartArt	SmartArt
+	Sort	Сортировка
+	Source code: github.com/storytold/wordcraft	Исходный код: github.com/storytold/wordcraft
+	Space before/after:	Интервал перед/после:
+	Spacing	Интервал
+	Spacing (pt):	Интервал (пт):
+	Kerning for fonts:	Кернинг шрифтов:
+	Points and above	пт и более
+	Speech	Речь
+	Spelling & Grammar	Орфография и грамматика
+	Spelling &\nGrammar	Орфография\nи грамматика
+	Spelling Suggestions	Варианты написания
+	Possible spelling mistake	Возможная орфографическая ошибка
+	Split	Разделить
+	Split Cells	Разделить ячейки
+	Split Table	Разделить таблицу
+	Spreadsheet Table	Электронная таблица
+	Standard Colors	Стандартные цвета
+	Star	Звезда
+	Start Mail Merge	Начать слияние
+	Start Mail\nMerge	Начать\nслияние
+	Statistics	Статистика
+	Status Bar	Строка состояния
+	Strikethrough	Зачёркнутый
+	Strong	Строгий
+	Studio cover	Обложка Studio
+	Studio handbook (sample)	Справочник Studio (пример)
+	Style	Стиль
+	Style based on:	Основан на стиле:
+	Style Set	Набор стилей
+	Style: {style}	Стиль: {style}
+	Styles	Стили
+	Styles Pane	Область стилей
+	Subject	Тема
+	Subscript	Подстрочный
+	Subtitle	Подзаголовок
+	Subtle Emphasis	Слабое выделение
+	Subtle Reference	Слабая ссылка
+	Superscript	Надстрочный
+	Switch Modes	Сменить режим
+	Switch\nModes	Сменить\nрежим
+	Symbol	Символ
+	Symbols	Символы
+	Synonyms	Синонимы
+	Tab	Tab
+	Table	Таблица
+	Table Column Width	Ширина столбца таблицы
+	Table Design	Дизайн таблицы
+	Table Grid	Сетка таблицы
+	Table Layout	Макет таблицы
+	Table of Authorities	Таблица ссылок
+	Table of Contents	Оглавление
+	Table of Figures	Список иллюстраций
+	Table of\nContents	Оглавление
+	Table Properties	Свойства таблицы
+	Table Properties…	Свойства таблицы…
+	Table Row Height	Высота строки таблицы
+	Table Style Options	Параметры стилей таблиц
+	Table Styles	Стили таблиц
+	Tables	Таблицы
+	Tabs	Табуляция
+	Tabular List	Табличный список
+	Text	Текст
+	Text Box	Текстовое поле
+	Text Direction	Направление текста
+	Text Effects	Текстовые эффекты
+	Text Effects and Typography	Текстовые эффекты и типографика
+	Text from File	Текст из файла
+	Text Highlight Color	Цвет выделения текста
+	Text to display:	Отображаемый текст:
+	Text Wrapping	Обтекание текстом
+	Text:	Текст:
+	Text\nBox	Текстовое\nполе
+	Text\nDirection	Направление\nтекста
+	The new style takes the formatting of the current paragraph.	Новый стиль получит форматирование текущего абзаца.
+	Theme Colors	Цвета темы
+	Theme Fonts	Шрифты темы
+	Theme List	Список тем
+	Themes	Темы
+	Thesaurus	Тезаурус
+	Thick	Толстый
+	Three	Три
+	Tight	Плотный
+	Title	Заголовок
+# The style is «Заголовок»; the Design tab's tiles are too narrow for it, so they show a sample word.
+preview	Title	Пример
+	TOA Heading	Заголовок таблицы ссылок
+	TOC Heading	Заголовок оглавления
+	TOC {n}	Оглавление {n}
+	Top Border	Верхняя граница
+	Top of Page	Вверху страницы
+	Top:	Сверху:
+	Total Row	Строка итогов
+	Track Changes	Отслеживать изменения
+	Track Changes: On	Отслеживание изменений: вкл.
+	Tracking	Отслеживание
+	Translate	Перевести
+	Transparency	Прозрачность
+	Triangle	Треугольник
+	Two	Две
+	Type a command, e.g. "insert table"	Введите команду, например «вставить таблицу»
+	Type Text	Ввести текст
+	Underline	Подчёркнутый
+	Underline Words Only	Подчёркивать только слова
+	Undo	Отменить
+	Undo {action}	Отменить: {action}
+	Undo Actions	Отменить действия
+	Undo History	Журнал отмены
+	Undo 1 Action	Отменить действие
+	Undo {n} Actions	Отменить действий: {n}
+	Up	Вверх
+	Update Field	Обновить поле
+	Update Index	Обновить указатель
+	Update Style to Match Selection	Обновить стиль по выделенному фрагменту
+	Update Table	Обновить таблицу
+	Update Table of Figures	Обновить список иллюстраций
+	Update to Match	Обновить по образцу
+	Update to Match Selection	Обновить по выделенному фрагменту
+	UPPERCASE	ВСЕ ПРОПИСНЫЕ
+	User Name	Имя пользователя
+	User name:	Имя пользователя:
+	Version History	Журнал версий
+	Version {version} ({build})	Версия {version} ({build})
+	Vertical	Вертикально
+	Vertical Alignment	Вертикальное выравнивание
+	View	Вид
+	View Gridlines	Показать сетку
+	View State	Состояние вида
+	Views	Режимы просмотра
+	Voice	Голос
+	Watermark	Подложка
+	Wave	Волнистый
+	Web Layout	Веб-документ
+	Web page (*.html)	Веб-страница (*.html)
+	Web\nLayout	Веб-\nдокумент
+	Whole page	Страница целиком
+	Whole words	Слово целиком
+	Wide	Широкие
+	Widow/Orphan Control	Запрет висячих строк
+	Widow/Orphan control	Запрет висячих строк
+	Window	Окно
+	Word Count	Число слов
+	Word document (*.docx)	Документ Word (*.docx)
+	Word Left	На слово влево
+	Word Right	На слово вправо
+	WordArt	WordArt
+	WordCraft	WordCraft
+	Words	Слова
+	Words only	Только слова
+	Wrap Text	Обтекание текстом
+	Wrap\nText	Обтекание\nтекстом
+	Write & Insert Fields	Составление документа и вставка полей
+	Zoom	Масштаб
+	Zoom In	Увеличить
+	Zoom Out	Уменьшить
+	{group} settings	Параметры: {group}
+	{key}+Click to follow link	{key}+щелчок — перейти по ссылке
+	{selected} of {words} words	Слов: {selected} из {words}
+	{words} words	Слов: {words}
+	Dark page (white text on black)	Тёмная страница (белый текст на чёрном)
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Показывать документы с инвертированными цветами, как «Вид › Сменить режим». Сохранение, печать и PDF не меняются.
+	Only web (http, https) and email (mailto) links can be followed	Переходить можно только по веб-ссылкам (http, https) и ссылкам на электронную почту (mailto)
+
+	Apply Styles	Применить стили
+	AutoSave documents you have saved in WordCraft	Автосохранение документов, уже сохранённых в WordCraft
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Ошибка автосохранения: {error}. Сохраните документ, чтобы снова включить автосохранение.
+	Bottom Margin	Нижнее поле
+	Edit Comment	Изменить комментарий
+	Left Margin	Левое поле
+	More templates →	Другие шаблоны →
+	No templates match your search.	Нет шаблонов, подходящих под запрос.
+	Reopen	Открыть снова
+	Right Margin	Правое поле
+	Search for templates	Поиск шаблонов
+	Character Border	Граница знаков
+	Count words in text boxes and notes	Учитывать текстовые поля и сноски
+	Couldn't download {name}: {error}	Не удалось загрузить {name}: {error}
+	Do you want to save changes to {name}?	Сохранить изменения в {name}?
+	Don't Save	Не сохранять
+	Move or Resize	Переместить или изменить размер
+	Nudge	Сдвинуть
+	Left-to-Right Text Direction	Направление текста слева направо
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Этот формат сохраняет не всё, поэтому документ остаётся открытым. Чтобы продолжить, сохраните его как документ Word (.docx).
+	Top Margin	Верхнее поле
+	Write a reply	Написать ответ
+	Direction:	Направление:
+	Right-to-left	Справа налево
+	Left-to-right	Слева направо
+	Zotero	Zotero
+	Citations	Ссылки на источники
+	Document	Документ
+	Add/Edit\nCitation	Добавить/изменить\nссылку
+	Add\nNote	Добавить\nзаметку
+	Add/Edit\nBibliography	Добавить/изменить\nсписок литературы
+	Refresh	Обновить
+	Document\nPreferences	Параметры\nдокумента
+	Unlink\nCitations	Отвязать\nссылки
+	Waiting for Zotero…	Ожидание Zotero…
+	Zotero: done	Zotero: готово
+	Zotero: cancelled	Zotero: отменено
+	Yes	Да
+	No	Нет
+	Move Past Citation	Перейти к концу ссылки
+	Move Past\nCitation	Перейти к концу\nссылки
+	Next Sentence	Следующее предложение
+	Previous Sentence	Предыдущее предложение
+	Next sentence	Следующее предложение
+	Previous sentence	Предыдущее предложение
+	Play/Pause	Воспроизведение/пауза
+	Read Aloud Status	Состояние чтения вслух
+	Reading Speed	Скорость чтения
+	Skip Citations and Bibliography	Пропускать ссылки и список литературы
+	Skip citations & bibliography	Пропускать ссылки и список литературы
+	Stop Reading	Остановить чтение
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Не читать ссылки и списки литературы Zotero, Mendeley и EndNote
+	Play	Воспроизвести
+	Pause	Пауза
+	Stop	Стоп
+	Sentence	Предложение
+	Paused	Приостановлено
+	Finished	Завершено
+	Stopped	Остановлено
+	Speed	Скорость
+	Normal speed	Обычная скорость
+	Your changes will be lost if you don't save them.	Если не сохранить изменения, они будут потеряны.
+	Scroll ribbon left	Прокрутить ленту влево
+	Scroll ribbon right	Прокрутить ленту вправо
+	Change Structure	Изменить структуру
+	Change to Display	Показать на отдельной строке
+	Change to Inline	Показать в строке
+	Conversions	Преобразования
+	Delete Back in Equation	Удалить назад в уравнении
+	Delete in Equation	Удалить в уравнении
+	Edit Equation	Изменить уравнение
+	Enter in Equation	Новая строка в уравнении
+	Equation Gallery	Коллекция уравнений
+	Equation Info	Сведения об уравнении
+	Equation Number	Номер уравнения
+	Input Format	Формат ввода
+	Insert Structure	Вставить структуру
+	Insert Symbol	Вставить символ
+	Justification	Выравнивание
+	Leave Equation	Выйти из уравнения
+	Move in Equation	Перемещение в уравнении
+	Normal Text	Обычный текст
+	Set Equation	Задать уравнение
+	Structure Actions	Действия со структурой
+	Structures	Структуры
+	Tools	Инструменты
+	Type in Equation	Ввод в уравнение
+	Inline	В строке
+	Number	Номер
+	Close Equation	Закрыть уравнение
+	Insert New Equation	Вставить новое уравнение
+	Built-In	Встроенные
+	Professional	Профессиональный
+	Linear	Линейный
+	Fraction	Дробь
+	Script	Индекс
+	Radical	Радикал
+	Integral	Интеграл
+	Large\nOperator	Крупный\nоператор
+	Bracket	Скобка
+	Function	Функция
+	Accent	Диакритические\nзнаки
+	Limit and\nLog	Предел\nи логарифм
+	Operator	Оператор
+	Equation Options	Параметры уравнений
+	All symbol sets	Все наборы символов
+	Send the document straight to the system print dialog, or save a copy in another format below.	Отправьте документ прямо в системное окно печати или сохраните копию в другом формате ниже.
+	Or save a copy in another format:	Или сохраните копию в другом формате:
+	Opening print dialog…	Открытие окна печати…
+	Print failed: {error}	Ошибка печати: {error}
+	Couldn't open {path}: {error}	Не удалось открыть {path}: {error}
+	Column Selection	Выделить столбец
+	Style Inspector	Инспектор стилей
+	Inspect Styles at Selection	Стили выделенного фрагмента
+	Clear Formatting Level	Очистить уровень форматирования
+	Characters	Знаки
+	Direct formatting	Прямое форматирование
+	Reset to Normal	Вернуть «Обычный»
+	Clear Paragraph Formatting	Очистить форматирование абзаца
+	Clear Character Style	Очистить стиль знаков
+	Clear Character Formatting	Очистить форматирование знаков
+	Clear All	Очистить всё
+	Paste Special	Специальная вставка
+	Paste Special…	Специальная вставка…
+	Paste as:	Вставить как:
+	The clipboard is empty.	Буфер обмена пуст.
+	Formatted Text	Форматированный текст
+	Rich Text Format (RTF)	Текст в формате RTF
+	HTML Format	Формат HTML
+	Unformatted Text	Неформатированный текст
+	Result	Результат
+	Keeps the fonts and formatting of the copied text.	Сохраняет шрифты и форматирование скопированного текста.
+	Reads the clipboard's rich text and keeps its formatting.	Берёт RTF-текст из буфера обмена и сохраняет его форматирование.
+	Reads the clipboard's web content and keeps its formatting.	Берёт веб-содержимое из буфера обмена и сохраняет его форматирование.
+	Picture	Рисунок
+	Pastes the clipboard's picture.	Вставляет рисунок из буфера обмена.
+	Drops all formatting and pastes plain text.	Убирает всё форматирование и вставляет обычный текст.
+	Advanced Find	Расширенный поиск
+	Advanced Find…	Расширенный поиск…
+	Go To…	Перейти…
+	Reading Highlight	Выделить совпадения
+	New Table Style	Новый стиль таблицы
+	Modify Table Style	Изменить стиль таблицы
+	New Table Style…	Новый стиль таблицы…
+	Modify Table Style…	Изменить стиль таблицы…
+	Apply formatting to:	Применить форматирование к:
+	Whole Table	Вся таблица
+	Fill color:	Цвет заливки:
+	{count} items highlighted	Выделено совпадений: {count}
+	{n} pt	{n} пт
+	Not {name}	Не {name}
+	Level {n}	Уровень {n}
+	Body Text	Основной текст
+	{n} lines	Множитель {n}
+	At least {n}	Минимум {n}
+	Exactly {n}	Точно {n}
+	Centered	По центру
+	Character spacing	Межзнаковый интервал
+	Don't add space between paragraphs of the same style	Не добавлять интервал между абзацами одного стиля
+	Don't hyphenate	Без переносов
+	Double strikethrough	Двойное зачёркивание
+	Drop cap	Буквица
+	First line	Первая строка
+	Font color	Цвет шрифта
+	Highlight	Выделение цветом
+	Justified	По ширине
+	Left indent	Отступ слева
+	Line spacing	Межстрочный интервал
+	Outline level	Уровень структуры
+	Raised/lowered	Смещение вверх/вниз
+	Right indent	Отступ справа
+	Scale	Масштаб
+	Space after	Интервал после
+	Space before	Интервал перед
+	Suppress line numbers	Без нумерации строк
+	Underline color	Цвет подчёркивания
+	Letters	Письма
+	E-mail Messages	Сообщения электронной почты
+	Directory	Каталог
+	Normal Word Document	Обычный документ Word
+	If…Then…Else…	Если…То…Иначе…
+	If…Then…Else	Если…То…Иначе
+	Merge Record #	Номер записи слияния
+	Skip Record If…	Пропустить запись, если…
+	Skip Record If	Пропустить запись, если
+	Equals:	Равно:
+	Then insert:	Тогда вставить:
+	Otherwise insert:	Иначе вставить:
+	Courtesy Title	Обращение
+	First Name	Имя
+	Last Name	Фамилия
+	Company	Организация
+	Address	Адрес
+	City	Город
+	State	Регион
+	Postal Code	Почтовый индекс
+	Country	Страна
+	(not matched)	(не сопоставлено)
+	Leave a recipient out of the merge when a field has this value.	Не включать получателя в слияние, если поле имеет это значение.
+	Insert one text or another, depending on a field's value.	Вставить один или другой текст в зависимости от значения поля.
+	Select recipients first to match their fields.	Сначала выберите получателей, чтобы сопоставить их поля.
+	The recipient-list field that fills each part of an address block and greeting line.	Поле списка получателей, которое заполняет каждую часть блока адреса и строки приветствия.
+	No errors found: every merge field is in the recipient list.	Ошибок не найдено: все поля слияния есть в списке получателей.
+	These merge fields aren't in the recipient list:	Этих полей слияния нет в списке получателей:
+	Add at least one field.	Добавьте хотя бы одно поле.
+	Add Field	Добавить поле
+	Every field needs a name.	У каждого поля должно быть имя.
+	Field name	Имя поля
+	Field names must be different.	Имена полей не должны повторяться.
+	Fields:	Поля:
+	Field:	Поле:
+	Find:	Найти:
+	New Entry	Новая запись
+	Recipient List	Список получателей
+	Recipients: {count}	Получателей: {count}
+	Remove field	Удалить поле
+	Remove recipient	Удалить получателя
+	Select recipients first to choose from their fields.	Сначала выберите получателей, чтобы выбирать из их полей.
+	Type a New List…	Ввести новый список…
+	Type at least one recipient.	Введите хотя бы одного получателя.
+	Type the recipients, or load them from a file.	Введите получателей или загрузите их из файла.
+	Use an Existing List…	Использовать существующий список…
+	Interface theme:	Тема интерфейса:
+	Interface\nTheme	Тема\nинтерфейса
+	Interface Theme	Тема интерфейса
+	Light	Светлая
+	Dark	Тёмная
+	Use system setting	Как в системе
+	A file dialog is already open.	Окно выбора файла уже открыто.
+	Height:	Высота:
+	Width:	Ширина:
+	Row	Строка
+	Cell	Ячейка
+	Preferred width:	Желаемая ширина:
+	Alignment:	Выравнивание:
+	Indent from left:	Отступ слева:
+	Specify height:	Высота:
+	Exactly	Точно
+	At least	Минимум
+	Allow row to break across pages	Разрешить перенос строки на следующую страницу
+	Repeat as header row on each page	Повторять как заголовок на каждой странице
+	Vertical alignment:	Вертикальное выравнивание:
+	Top	Сверху
+	Bottom	Снизу
+	Alt text	Замещающий текст
+	Alt:	Замещающий текст:
+	W:	Ш:
+	H:	В:
+	Reset	Сбросить
+	Reset Crop	Сбросить обрезку
+	Insert a new equation (Alt+=)	Вставить новое уравнение (Alt+=)
+	Leave the equation (Esc)	Выйти из уравнения (Esc)
+	Preview	Предварительный просмотр
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Browse…	Обзор…
+
+# Equation gallery, themes, watermarks, paper sizes, table styles and other strings the
+# interface audit (`i18n/audit.rs`) found without a Russian entry.
+	AaBbYyZz	АаБбЮюЯя
+	Align Top Left	По верхнему левому краю
+	Align Top Center	По верхнему краю, по центру
+	Align Top Right	По верхнему правому краю
+	Align Center Left	По центру, по левому краю
+	Align Center	По центру
+	Align Center Right	По центру, по правому краю
+	Align Bottom Left	По нижнему левому краю
+	Align Bottom Center	По нижнему краю, по центру
+	Align Bottom Right	По нижнему правому краю
+	Commits	Коммиты
+	{contributors} contributors · {commits} commits	Участников: {contributors} · коммитов: {commits}
+	Display name	Отображаемое имя
+	Real name	Настоящее имя
+	Username	Имя пользователя
+	Document1	Документ1
+	Font…	Шрифт…
+	Paragraph…	Абзац…
+	Link…	Ссылка…
+	Lines +/−	Строки +/−
+	Model	Модель
+	Version	Версия
+	% of all commits	% всех коммитов
+	pt	пт
+	cm	см
+	mm	мм
+	pi	пик
+	Save the document to turn on AutoSave	Сохраните документ, чтобы включить автосохранение
+	Contributors	Участники
+	Models	Модели
+	Good evening	Добрый вечер
+	Good morning	Доброе утро
+	Good afternoon	Добрый день
+	Track\nChanges	Отслеживать\nизменения
+	Track\nChanges ✓	Отслеживать\nизменения ✓
+	tOGGLE cASE	иЗМЕНИТЬ рЕГИСТР
+	Change to Level 1	Перейти на уровень 1
+	Change to Level 2	Перейти на уровень 2
+	Change to Level 3	Перейти на уровень 3
+	Change to Level 4	Перейти на уровень 4
+	Change to Level 5	Перейти на уровень 5
+	Level 1	Уровень 1
+	Level 2	Уровень 2
+	Level 3	Уровень 3
+	ASAP	КАК МОЖНО СКОРЕЕ
+	CONFIDENTIAL	КОНФИДЕНЦИАЛЬНО
+	DO NOT COPY	НЕ КОПИРОВАТЬ
+	DRAFT	ЧЕРНОВИК
+	SAMPLE	ОБРАЗЕЦ
+	URGENT	СРОЧНО!
+	Atelier	Ателье
+	Craft	Ремесло
+	Darkroom	Фотолаборатория
+	Gallery	Галерея
+	Sketchbook	Скетчбук
+	Studio	Студия
+	Plain Table 1	Простая таблица 1
+	Grid Table 1 Light	Таблица-сетка 1, светлая
+	Grid Table 4 – Blue	Таблица-сетка 4 — синяя
+	Grid Table 4 – Green	Таблица-сетка 4 — зелёная
+	Grid Table 4 – Orange	Таблица-сетка 4 — оранжевая
+	Grid Table 4 – Purple	Таблица-сетка 4 — фиолетовая
+	List Table 3 – Blue	Таблица-список 3 — синяя
+	List Table 3 – Green	Таблица-список 3 — зелёная
+	List Table 3 – Orange	Таблица-список 3 — оранжевая
+	List Table 3 – Purple	Таблица-список 3 — фиолетовая
+	Convert between built-up and linear form	Переключить между профессиональным и линейным видом
+	Justification of a display equation	Выравнивание отдельного уравнения
+	Number the equation; the number sits at the right margin (or type # then the number)	Пронумеровать уравнение; номер стоит у правого поля (или введите # и номер)
+	Show the equation in the line of text	Показать уравнение в строке текста
+	Show the equation on a line of its own	Показать уравнение на отдельной строке
+	Type equations in LaTeX	Вводить уравнения в LaTeX
+	Type equations in the linear format (UnicodeMath)	Вводить уравнения в линейном формате (UnicodeMath)
+	Type normal (non-math) text in the equation	Вводить в уравнении обычный (не математический) текст
+	Sides of a right triangle	Стороны прямоугольного треугольника
+	Circle area from its radius	Площадь круга по радиусу
+	Roots of ax²+bx+c	Корни ax²+bx+c
+	Binomial expansion of (x+a)ⁿ	Бином Ньютона для (x+a)ⁿ
+	Power series of (1+x)ⁿ	Степенной ряд (1+x)ⁿ
+	Euler's identity	Тождество Эйлера
+	Derivative as a limit	Производная как предел
+	Exponential series	Ряд для экспоненты
+	Integral of e^(−x²)	Интеграл от e^(−x²)
+	Sine and cosine series of f(x)	Ряд Фурье для f(x)
+	Sum or difference of sines	Сумма или разность синусов
+	Sum of cosines	Сумма косинусов
+	Normal probability density	Плотность нормального распределения
+	Bayes' rule	Формула Байеса
+	Accents	Диакритические знаки
+	Arrows	Стрелки
+	Basic Math	Основные математические
+	Boxed Formulas	Формулы в рамке
+	Cases and Stacks	Системы и столбцы
+	Common Accent Objects	Часто используемые объекты с диакритикой
+	Common Brackets	Часто используемые скобки
+	Common Fractions	Часто используемые дроби
+	Common Functions	Часто используемые функции
+	Common Large Operators	Часто используемые крупные операторы
+	Common Operator Structures	Часто используемые структуры операторов
+	Common Operators	Часто используемые операторы
+	Common Radicals	Часто используемые радикалы
+	Common Subscripts and Superscripts	Часто используемые индексы
+	Contour Integrals	Контурные интегралы
+	Differentials	Дифференциалы
+	Dots	Многоточия
+	Empty Matrices	Пустые матрицы
+	Functions	Функции
+	Geometry	Геометрия
+	Greek Letters	Греческие буквы
+	Hyperbolic Functions	Гиперболические функции
+	Identity Matrices	Единичные матрицы
+	Integrals	Интегралы
+	Inverse Functions	Обратные функции
+	Inverse Hyperbolic Functions	Обратные гиперболические функции
+	Letter-Like Symbols	Буквоподобные символы
+	Matrices with Brackets	Матрицы со скобками
+	Negated Relations	Отрицания отношений
+	Operator Structures	Структуры операторов
+	Operators	Операторы
+	Other Large Operators	Другие крупные операторы
+	Overbars and Underbars	Черта сверху и снизу
+	Products and Coproducts	Произведения и копроизведения
+	Radicals	Радикалы
+	Scripts	Индексы
+	Single Brackets	Одиночные скобки
+	Sparse Matrices	Разреженные матрицы
+	Subscripts and Superscripts	Нижние и верхние индексы
+	Summations	Суммы
+	Trigonometric Functions	Тригонометрические функции
+	Unions and Intersections	Объединения и пересечения
+	1×2 Empty Matrix	Пустая матрица 1×2
+	1×3 Empty Matrix	Пустая матрица 1×3
+	2×1 Empty Matrix	Пустая матрица 2×1
+	2×2 Empty Matrix	Пустая матрица 2×2
+	2×3 Empty Matrix	Пустая матрица 2×3
+	3×1 Empty Matrix	Пустая матрица 3×1
+	3×2 Empty Matrix	Пустая матрица 3×2
+	3×3 Empty Matrix	Пустая матрица 3×3
+	2×2 Determinant	Определитель 2×2
+	2×2 Identity Matrix	Единичная матрица 2×2
+	2×2 Identity Matrix (sparse)	Единичная матрица 2×2 (разреженная)
+	3×3 Identity Matrix	Единичная матрица 3×3
+	3×3 Identity Matrix (sparse)	Единичная матрица 3×3 (разреженная)
+	2×2 Matrix in Brackets	Матрица 2×2 в квадратных скобках
+	2×2 Matrix in Double Bars	Матрица 2×2 в двойных вертикальных чертах
+	2×2 Matrix in Parentheses	Матрица 2×2 в круглых скобках
+	n×n Identity Matrix	Единичная матрица n×n
+	n×n Matrix	Матрица n×n
+	A xor B	A исключающее ИЛИ B
+	Absolute value cases	Уравнение со случаями
+	Acute	Ударение
+	Angle Brackets	Угловые скобки
+	Angle Brackets with Separator	Угловые скобки с разделителем
+	Angle Brackets with Two Separators	Угловые скобки с двумя разделителями
+	Bar	Черта
+	Baseline Dots	Многоточие по базовой линии
+	Binomial Coefficient	Биномиальный коэффициент
+	Binomial Coefficient (angle)	Биномиальный коэффициент (угловые скобки)
+	Binomial Coefficient with Angle Brackets	Биномиальный коэффициент в угловых скобках
+	Boxed Formula	Формула в рамке
+	Boxed Formula (example)	Формула в рамке (пример)
+	Braces	Фигурные скобки
+	Braces with Separator	Фигурные скобки с разделителем
+	Brackets	Квадратные скобки
+	Brackets with Separators	Скобки с разделителями
+	Breve	Бреве
+	Cases (Three Conditions)	Система (три условия)
+	Cases (Two Conditions)	Система (два условия)
+	Ceiling	Округление вверх
+	Change in y over change in x	Приращение y к приращению x
+	Check	Галка
+	Circled Dot	Точка в круге
+	Circled Plus	Плюс в круге
+	Circled Times	Умножение в круге
+	Colon Equal	Двоеточие-равно
+	Contour Integral	Контурный интеграл
+	Contour Integral with Limits	Контурный интеграл с пределами
+	Contour Integral with Stacked Limits	Контурный интеграл с пределами сверху и снизу
+	Coproduct	Копроизведение
+	Coproduct with Limits	Копроизведение с пределами
+	Coproduct with Lower Limit	Копроизведение с нижним пределом
+	Coproduct with Subscript-Superscript Limits	Копроизведение с пределами в индексах
+	Cosecant Function	Косеканс
+	Cosine 2x	Косинус 2x
+	Cosine Function	Косинус
+	Cotangent Function	Котангенс
+	Cube Root	Кубический корень
+	Delta Equal To	Дельта равна
+	Delta over arrow	Дельта над стрелкой
+	Diagonal Dots	Диагональное многоточие
+	Differential	Дифференциал
+	Differential theta	Дифференциал тета
+	Differential x	Дифференциал x
+	Differential y	Дифференциал y
+	Dot	Точка
+	Double Bar	Двойная черта
+	Double Dot	Две точки
+	Double Integral	Двойной интеграл
+	Double Integral with Limits	Двойной интеграл с пределами
+	Double Integral with Stacked Limits	Двойной интеграл с пределами сверху и снизу
+	Double Left Arrow with Text Above	Двойная стрелка влево с текстом сверху
+	Double Left Arrow with Text Below	Двойная стрелка влево с текстом снизу
+	Double Left Right Arrow with Text Above	Двойная двусторонняя стрелка с текстом сверху
+	Double Left Right Arrow with Text Below	Двойная двусторонняя стрелка с текстом снизу
+	Double Right Arrow with Text Above	Двойная стрелка вправо с текстом сверху
+	Double Right Arrow with Text Below	Двойная стрелка вправо с текстом снизу
+	Double Square Brackets	Двойные квадратные скобки
+	Double Vertical Bars	Двойные вертикальные черты
+	Double summation	Двойная сумма
+	Equal Equal	Равно-равно
+	Equal by Definition	Равно по определению
+	Exponential	Экспонента
+	Floor	Округление вниз
+	Grave	Обратное ударение
+	Grouping Character Above	Группирующий знак сверху
+	Grouping Character Below	Группирующий знак снизу
+	Hat	Крышка
+	Hyperbolic Cosecant Function	Гиперболический косеканс
+	Hyperbolic Cosine Function	Гиперболический косинус
+	Hyperbolic Cotangent Function	Гиперболический котангенс
+	Hyperbolic Secant Function	Гиперболический секанс
+	Hyperbolic Sine Function	Гиперболический синус
+	Hyperbolic Tangent Function	Гиперболический тангенс
+	Hypotenuse	Гипотенуза
+	Integral with Limits	Интеграл с пределами
+	Integral with Stacked Limits	Интеграл с пределами сверху и снизу
+	Intersection	Пересечение
+	Intersection with Limits	Пересечение с пределами
+	Intersection with Lower Limit	Пересечение с нижним пределом
+	Intersection with Subscript-Superscript Limits	Пересечение с пределами в индексах
+	Inverse Cosecant Function	Арккосеканс
+	Inverse Cosine Function	Арккосинус
+	Inverse Cotangent Function	Арккотангенс
+	Inverse Hyperbolic Cosecant Function	Обратный гиперболический косеканс
+	Inverse Hyperbolic Cosine Function	Обратный гиперболический косинус
+	Inverse Hyperbolic Cotangent Function	Обратный гиперболический котангенс
+	Inverse Hyperbolic Secant Function	Обратный гиперболический секанс
+	Inverse Hyperbolic Sine Function	Обратный гиперболический синус
+	Inverse Hyperbolic Tangent Function	Обратный гиперболический тангенс
+	Inverse Secant Function	Арксеканс
+	Inverse Sine Function	Арксинус
+	Inverse Tangent Function	Арктангенс
+	Left Arrow with Text Above	Стрелка влево с текстом сверху
+	Left Arrow with Text Below	Стрелка влево с текстом снизу
+	Left Bracket Twice	Две левые квадратные скобки
+	Left Right Arrow Above	Двусторонняя стрелка сверху
+	Left Right Arrow with Text Above	Двусторонняя стрелка с текстом сверху
+	Left Right Arrow with Text Below	Двусторонняя стрелка с текстом снизу
+	Left Subscript-Superscript	Левые нижний и верхний индексы
+	Leftwards Arrow Above	Стрелка влево сверху
+	Leftwards Harpoon Above	Гарпун влево сверху
+	Limit	Предел
+	Limit Example	Пример предела
+	Linear Fraction	Линейная дробь
+	Logarithm	Логарифм
+	Logarithm with Base	Логарифм по основанию
+	Logical AND	Логическое И
+	Logical AND with Limits	Логическое И с пределами
+	Logical OR	Логическое ИЛИ
+	Logical OR with Limits	Логическое ИЛИ с пределами
+	Maximum	Максимум
+	Maximum Example	Пример максимума
+	Measured By	Единица измерения
+	Midline Dots	Многоточие по средней линии
+	Minimum	Минимум
+	Minus Equal	Минус-равно
+	Natural Logarithm	Натуральный логарифм
+	One half	Одна вторая
+	Outward Brackets	Внешние квадратные скобки
+	Overbar	Черта сверху
+	Overbrace	Фигурная скобка сверху
+	Parentheses	Круглые скобки
+	Parentheses with Separator	Круглые скобки с разделителем
+	Partial Differential	Частный дифференциал
+	Pi Over 2	Пи на 2
+	Plus Equal	Плюс-равно
+	Product	Произведение
+	Product of A	Произведение A
+	Product with Limits	Произведение с пределами
+	Product with Lower Limit	Произведение с нижним пределом
+	Product with Subscript-Superscript Limits	Произведение с пределами в индексах
+	Quadratic Root	Корень квадратного уравнения
+	Radical with Degree	Радикал со степенью
+	Right Arrow with Text Above	Стрелка вправо с текстом сверху
+	Right Arrow with Text Below	Стрелка вправо с текстом снизу
+	Right Bracket Twice	Две правые квадратные скобки
+	Rightwards Arrow Above	Стрелка вправо сверху
+	Rightwards Harpoon Above	Гарпун вправо сверху
+	Secant Function	Секанс
+	Sine Function	Синус
+	Sine theta	Синус тета
+	Single Left Angle	Одиночная левая угловая скобка
+	Single Left Bar	Одиночная левая черта
+	Single Left Brace	Одиночная левая фигурная скобка
+	Single Left Bracket	Одиночная левая квадратная скобка
+	Single Left Parenthesis	Одиночная левая круглая скобка
+	Single Right Brace	Одиночная правая фигурная скобка
+	Single Right Bracket	Одиночная правая квадратная скобка
+	Single Right Parenthesis	Одиночная правая круглая скобка
+	Skewed Fraction	Наклонная дробь
+	Small change	Малое приращение
+	Square	Квадрат
+	Square Root	Квадратный корень
+	Square Root with Degree	Квадратный корень со степенью
+	Square Union	Квадратное объединение
+	Stack Object	Стопка
+	Stack Object (Three)	Стопка (три элемента)
+	Stacked Fraction	Вертикальная дробь
+	Stacked, no bar	Друг над другом, без черты
+	Subscript-Superscript	Нижний и верхний индексы
+	Summation	Сумма
+	Summation from 0 to n	Сумма от 0 до n
+	Summation over binomials	Сумма биномиальных коэффициентов
+	Summation with Limits	Сумма с пределами
+	Summation with Lower Limit	Сумма с нижним пределом
+	Summation with Subscript Limit	Сумма с пределом в индексе
+	Summation with Subscript-Superscript Limits	Сумма с пределами в индексах
+	Surface Integral	Поверхностный интеграл
+	Surface Integral with Limits	Поверхностный интеграл с пределами
+	Surface Integral with Stacked Limits	Поверхностный интеграл с пределами сверху и снизу
+	Tangent Function	Тангенс
+	Tangent formula	Формула тангенса
+	Text over Colon Equal	Текст над двоеточием-равно
+	Text over Equal	Текст над знаком равенства
+	Tilde	Тильда
+	Triple Dot	Три точки
+	Triple Integral	Тройной интеграл
+	Triple Integral with Limits	Тройной интеграл с пределами
+	Triple Integral with Stacked Limits	Тройной интеграл с пределами сверху и снизу
+	Underbar	Черта снизу
+	Underbrace	Фигурная скобка снизу
+	Union	Объединение
+	Union of intersections	Объединение пересечений
+	Union with Limits	Объединение с пределами
+	Union with Lower Limit	Объединение с нижним пределом
+	Union with Plus	Объединение с плюсом
+	Union with Subscript-Superscript Limits	Объединение с пределами в индексах
+	Up Diagonal Dots	Диагональное многоточие вверх
+	Vector A	Вектор A
+	Vector AB	Вектор AB
+	Vertical Bars	Вертикальные черты
+	Vertical Dots	Вертикальное многоточие
+	Volume Integral	Объёмный интеграл
+	Volume Integral with Limits	Объёмный интеграл с пределами
+	Volume Integral with Stacked Limits	Объёмный интеграл с пределами сверху и снизу
+	Yields	Выход
+	x bar	x с чертой
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	В браузере автосохранение недоступно: оно не может записывать ваши файлы. «Сохранить» скачивает копию.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Автосохранение работает только с файлами .docx, .odt и .rtf; {name} не сохраняет всё форматирование. Сохраните файл как .docx, чтобы включить автосохранение.
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Сохраните документ, чтобы включить автосохранение (открытый файл не перезаписывается, пока вы его не сохраните)
+
+# Labels added on main and in this stack after the first Russian catalog (#300 integration)
+	Add Object to Selection	Добавить объект к выделению
+	Add space between Asian and Latin text	Добавлять пробел между азиатским и латинским текстом
+	Add space between Asian text and numbers	Добавлять пробел между азиатским текстом и числами
+	Allow hanging punctuation	Разрешить висячую пунктуацию
+	Allow Latin text to wrap in the middle of a word	Разрешить перенос латинского текста посреди слова
+	Apply Asian line-breaking rules (kinsoku)	Применять азиатские правила переноса строк (кинсоку)
+	Asian Typography	Азиатская типографика
+	Click a border between two cells to merge them. Esc stops.	Щёлкните границу между двумя ячейками, чтобы объединить их. Esc — завершить.
+	Compress punctuation at the start of a line	Сжимать пунктуацию в начале строки
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Нарисуйте прямоугольник, чтобы создать таблицу, или линию поперёк ячеек, чтобы разделить их. Esc — завершить.
+	Draw Table	Нарисовать таблицу
+	Indents and Spacing	Отступы и интервалы
+	Line breaking	Перенос строк
+	Clipboard Pane	Область буфера обмена
+	Clipboard Items	Элементы буфера обмена
+	Paste Clipboard Item	Вставить элемент буфера обмена
+	Paste All	Вставить всё
+	Delete Clipboard Item	Удалить элемент буфера обмена
+	Click an item to paste it.	Щёлкните элемент, чтобы вставить его.
+	Nothing collected yet. Items you copy or cut appear here.	Пока пусто. Здесь появятся элементы, которые вы копируете или вырезаете.
+	(picture or object)	(рисунок или объект)
+	Ungroup	Разгруппировать
+	Draw Ink	Рисовать от руки
+	Erase Ink	Стереть рукописный ввод
+	Hide Ink	Скрыть рукописный ввод
+	Hide\nInk	Скрыть
+	Pens	Перья
+	Ink	Рукописный ввод
+	Thickness	Толщина
+	Shape Effects	Эффекты фигуры
+	Glow	Свечение
+	Soft Edges	Сглаживание
+	No Shadow	Без тени
+	No Glow	Без свечения
+	No Soft Edges	Без сглаживания
+	Glow Colors	Цвета свечения
+	Weight	Толщина
+	Shadow, glow and soft edges	Тень, свечение и сглаживание
+	Offset: Bottom Right	Смещение: вниз вправо
+	Offset: Bottom	Смещение: вниз
+	Offset: Bottom Left	Смещение: вниз влево
+	Offset: Right	Смещение: вправо
+	Offset: Center	Смещение: по центру
+	Offset: Left	Смещение: влево
+	Offset: Top Right	Смещение: вверх вправо
+	Offset: Top	Смещение: вверх
+	Offset: Top Left	Смещение: вверх влево
+	Manage Styles	Управление стилями
+	Show or Hide Style	Показать или скрыть стиль
+	Manage Styles…	Управление стилями…
+	Sort order:	Порядок сортировки:
+	As Recommended	По рекомендации
+	Alphabetical	По алфавиту
+	Font: {font}	Шрифт: {font}
+	{size} pt	{size} пт
+	Color: {color}	Цвет: {color}
+	Space before: {pt} pt	Интервал перед: {pt} пт
+	Space after: {pt} pt	Интервал после: {pt} пт
+	Based on: {style}	Основан на: {style}
+	Paragraph style	Стиль абзаца
+	Character style	Стиль знаков
+	Linked style (paragraph and character)	Связанный стиль (абзаца и знаков)
+	Table style	Стиль таблицы
+	Built-in style	Встроенный стиль
+	Show in the Styles gallery	Показывать в коллекции стилей
+	Hide from style lists	Скрывать в списках стилей
+	Built-in styles can't be deleted.	Встроенные стили нельзя удалить.
+	Delete Table Style	Удалить стиль таблицы
+	Password	Пароль
+	Password:	Пароль:
+	Confirm password:	Подтвердите пароль:
+	Encrypt with Password…	Зашифровать паролем…
+	Change Password…	Изменить пароль…
+	Remove Password	Убрать пароль
+	A password is required to open this document.	Для открытия этого документа нужен пароль.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Этот документ может открыть любой. Зашифруйте его паролем, чтобы защитить.
+	Anyone who opens the document will need this password.	Для открытия документа понадобится этот пароль.
+	{name} is protected with a password.	{name} защищён паролем.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Неверный пароль. Проверьте его (регистр букв важен) и попробуйте снова.
+	The document will be saved with a password. Save it to protect it.	Документ будет сохранён с паролем. Сохраните его, чтобы защитить.
+	The password is removed. Save the document to keep the change.	Пароль убран. Сохраните документ, чтобы изменение осталось.
+	The passwords don't match.	Пароли не совпадают.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Храните пароль в надёжном месте: без него никто, включая WordCraft, не сможет открыть документ. Оставьте оба поля пустыми, чтобы убрать пароль.
+	{cols}×{rows} Table	Таблица {cols}×{rows}
+	Name	Имя
+	PRs	PR
+	First	Первый
+	Last	Последний
+	Change Picture…	Заменить рисунок…
+	Size and Crop…	Размер и обрезка…
+	Insert Columns to the Left	Вставить столбцы слева
+	Insert Columns to the Right	Вставить столбцы справа
+	Insert Rows Above	Вставить строки сверху
+	Insert Rows Below	Вставить строки снизу
+	Mon	Пн
+	Tue	Вт
+	Wed	Ср
+	Sum	Итог
+	North	Север
+	South	Юг
+	West	Запад
+	Total	Всего
+
+# Table Layout › Draw (#308)
+	Draw\nTable	Нарисовать\nтаблицу
+
+# Define New Multilevel List and Track Changes Options (#342)
+	(no style)	(нет стиля)
+	Add tab stop at:	Добавить позицию табуляции:
+	Aligned at:	Выравнивание на:
+	Balloons	Выноски
+	Bullet	Маркер
+	By author	По автору
+	Changed lines:	Изменённые строки:
+	Click level to modify:	Выберите уровень для изменения:
+	Color only	Только цвет
+	Define New Multilevel List	Определение нового многоуровневого списка
+	Define New Multilevel List…	Определить новый многоуровневый список…
+	Deletions:	Удаления:
+	Enter formatting for number:	Формат номера:
+	Follow number with:	Символ после номера:
+	Formatting	Форматирование
+	Include level number from:	Включить номер уровня:
+	Insertions and Deletions	Вставки и удаления
+	Insertions:	Вставки:
+	Left border	Левая граница
+	Legal style numbering	Нумерация в юридическом стиле
+	Link level to style:	Связать уровень со стилем:
+	List Definition	Определение списка
+	Nothing	Ничего
+	Number alignment:	Выравнивание номера:
+	Number format	Формат номера
+	Number style for this level:	Вид нумерации для этого уровня:
+	Outside border	Внешняя граница
+	Restart list after:	Начать список заново после:
+	Right border	Правая граница
+	Show all revisions inline	Показывать все изменения в тексте
+	Show only comments and formatting in balloons	Показывать в выносках только комментарии и форматирование
+	Show revisions in balloons	Показывать изменения в выносках
+	Space	Пробел
+	Start at:	Начать с:
+	Tab character	Знак табуляции
+	Text indent at:	Отступ текста:
+	Track Changes Options	Параметры отслеживания изменений
+	Track formatting	Отслеживать форматирование
+
+# Rotation and flips (#332)
+	Flip Horizontal	Отразить слева направо
+	Flip Vertical	Отразить сверху вниз
+	Rotate Left 90°	Повернуть влево на 90°
+	Rotate Right 90°	Повернуть вправо на 90°
+	Rotation	Поворот
+	Rotation:	Поворот:
+
+# Tabs, Borders and Shading (#327); Columns, Symbol and Field (#335)
+	Tab stop position:	Позиция табуляции:
+	Default tab stops:	Табуляция по умолчанию:
+	Tab stops to be cleared:	Удаляемые позиции табуляции:
+	All	Все
+	Decimal	По разделителю
+	Leader	Заполнитель
+	Set	Установить
+	Page Border	Граница страницы
+	Apply to:	Применить к:
+	Whole document	Ко всему документу
+	This section	К этому разделу
+	Selected text	К выделенному тексту
+	Fill	Заливка
+	Setting:	Тип:
+	3-D	Объёмная
+	Custom	Другая
+	Style:	Тип линии:
+	Dot dash	Штрихпунктир
+	Triple	Тройная
+	Between	Между абзацами
+	Borders and Shading	Границы и заливка
+	Tabs…	Табуляция…
+	Borders and Shading…	Границы и заливка…
+	(All)	(Все)
+	(none)	(нет)
+	(normal text)	(обычный текст)
+	1/4 Em Space	Узкий пробел
+	A mail merge field	Поле слияния
+	A numbered sequence (figures, tables…)	Нумерованная последовательность (рисунки, таблицы…)
+	A table of contents	Оглавление
+	Categories:	Категории:
+	Character	Знак
+	Character code:	Код знака:
+	Col #:	Колонка №:
+	Copyright	Знак авторского права
+	Date and Time	Дата и время
+	Date formats:	Форматы даты:
+	Description:	Описание:
+	Document Information	Сведения о документе
+	Double Closing Quote	Закрывающая двойная кавычка
+	Double Opening Quote	Открывающая двойная кавычка
+	Ellipsis	Многоточие
+	Em Dash	Длинное тире
+	En Dash	Короткое тире
+	Em Space	Длинный пробел
+	En Space	Короткий пробел
+	Equal column width	Колонки одинаковой ширины
+	Field Codes	Коды полей
+	Field code:	Код поля:
+	Field codes:	Коды полей:
+	Field name:	Имя поля:
+	Field names:	Имена полей:
+	Field properties	Свойства поля
+	Field…	Поле…
+	Format:	Формат:
+	Hide Codes	Скрыть коды
+	Index and Tables	Указатели и таблицы
+	Line between	Разделитель
+	Links and References	Ссылки
+	Mail Merge	Слияние
+	More Columns…	Другие колонки…
+	More Symbols…	Другие символы…
+	No-Width Non Break	Неразрывный знак нулевой ширины
+	No-Width Optional Break	Необязательный разрыв нулевой ширины
+	Paragraph Mark	Знак абзаца
+	Pick a field from the list	Выберите поле в списке
+	Preserve formatting during updates	Сохранять формат при обновлении
+	Presets	Образцы
+	Recently used symbols:	Недавно использованные символы:
+	Registered	Зарегистрированный товарный знак
+	Section Mark	Знак параграфа
+	Sequence name:	Имя последовательности:
+	Shortcut key:	Сочетание клавиш:
+	Single Closing Quote	Закрывающая одинарная кавычка
+	Single Opening Quote	Открывающая одинарная кавычка
+	Spacing:	Промежуток:
+	Special Characters	Специальные знаки
+	Subset:	Набор:
+	The time right now	Текущее время
+	When this document was first created	Когда документ был создан
+	When this document was most recently printed	Когда документ последний раз печатался
+	When this document was most recently saved	Когда документ последний раз сохранялся
+	The document has no bookmarks yet.	В документе пока нет закладок.
+	Who the document properties name as author	Автор, указанный в свойствах документа
+	Name of the file this document is saved as	Имя файла, под которым сохранён документ
+	Title from the document properties	Название из свойств документа
+	How many pages the whole document has	Сколько страниц во всём документе
+	How many pages this section has	Сколько страниц в этом разделе
+	Number of the page the field sits on	Номер страницы, на которой стоит поле
+	Number of the section the field sits in	Номер раздела, в котором стоит поле
+	How many words the document holds	Сколько слов в документе
+	Page on which a bookmarked passage falls	Страница, на которой находится закладка
+	Copy of the text a bookmark marks	Копия текста закладки
+	This field has no options.	У этого поля нет параметров.
+	This font has no characters to show.	В этом шрифте нет знаков для показа.
+	This point forward	До конца документа
+	The date it is today	Сегодняшняя дата
+	Trademark	Товарный знак
+	Type the field's name and its switches, for example PAGE \\* roman.	Введите имя поля и его ключи, например PAGE \\* roman.
+	Width and spacing	Ширина и промежуток
+	from Unicode (hex)	Юникод (шестн.)
+
+# Equation › Convert and Justification, and the hyphenation menu's checked None.
+	All - Linear	Все — линейный вид
+	All - Professional	Все — профессиональный вид
+	Current - Linear	Текущее — линейный вид
+	Current - Professional	Текущее — профессиональный вид
+	Centered as Group	По центру как группа
+	✓ None	✓ Нет
+	Formatted	Отформатировано
+	Deleted	Удалено
+	Interface size:	Размер интерфейса:
+	Auto ({percent}%)	Авто ({percent}%)
+	Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate.	Увеличивает или уменьшает ленту, меню и диалоговые окна. «Авто» следует системному масштабированию экрана; 100% — один пиксель экрана на точку. Масштаб документа настраивается отдельно.
+	Copyright Sign	Знак авторского права
+	Demote	Понизить уровень
+	Edit Field Code	Изменить код поля
+	Edit Field…	Изменить поле…
+	Go Back	Вернуться
+	Insert Date Field	Вставить поле даты
+	Insert Page Field	Вставить поле номера страницы
+	Insert Time Field	Вставить поле времени
+	Lock Fields	Заблокировать поля
+	Move Paragraph Down	Переместить абзац вниз
+	Move Paragraph Up	Переместить абзац вверх
+	Next Field	Следующее поле
+	Previous Field	Предыдущее поле
+	Promote	Повысить уровень
+	Registered Sign	Знак зарегистрированного товарного знака
+	Reset Character Formatting	Сбросить форматирование символов
+	Reset Paragraph Formatting	Сбросить форматирование абзаца
+	Selected Fields	Выделенные поля
+	Toggle Field Codes	Коды/значения полей
+	Toggle Unicode Character	Преобразовать знак Юникода
+	Type Character Code	Ввести код символа
+	Trademark Sign	Знак товарного знака
+	Unlink Fields	Разорвать связь с полями
+	Unlock Fields	Разблокировать поля
+	Customize Keyboard	Настройка клавиатуры
+	Choose a command	Выберите команду
+	Choose a shortcut	Выберите сочетание клавиш
+	All Commands	Все команды
+	Commands:	Команды:
+	Keys for this command:	Клавиши для этой команды:
+	New shortcut:	Новое сочетание клавиш:
+	Now used by {command}	Сейчас используется: {command}
+	Not used by any command	Не используется ни одной командой
+	Remove every custom shortcut and restore the built-in keys?	Удалить все пользовательские сочетания клавиш и восстановить встроенные?
+	Assign	Назначить
+	Remove	Удалить
+	Reset All…	Сбросить все…
+	Press a key combination	Нажмите сочетание клавиш
+	Customize	Настроить
+	Keyboard shortcuts:	Сочетания клавиш:
+	Customize…	Настроить…
+	Customize Ribbon	Настройка ленты
+	Add to Quick Access Toolbar	Добавить на панель быстрого доступа
+	Remove from Quick Access Toolbar	Удалить с панели быстрого доступа
+	Hide Quick Access Toolbar	Скрыть панель быстрого доступа
+	Show Quick Access Toolbar	Показать панель быстрого доступа
+	Customize the Ribbon…	Настроить ленту…
+	Customize Quick Access Toolbar…	Настроить панель быстрого доступа…
+	More Commands…	Другие команды…
+	Ribbon	Лента
+	(Custom)	(Настраиваемая)
+	Remove every custom tab and group and show all tabs again?	Удалить все настраиваемые вкладки и группы и снова показать все вкладки?
+	Put the default commands back on the Quick Access Toolbar?	Вернуть команды по умолчанию на панель быстрого доступа?
+	Reset…	Сбросить…
+	Add >>	Добавить >>
+	<< Remove	<< Удалить
+	Pick a custom group (New Group makes one)	Выберите настраиваемую группу (её создаёт «Создать группу»)
+	Ribbon tabs	Вкладки ленты
+	New Tab	Создать вкладку
+	New Group	Создать группу
+	Rename…	Переименовать…
+	Ribbon and Quick Access Toolbar:	Лента и панель быстрого доступа:
+	Enclose Characters	Обрамление символов
+	Shrink text	Уменьшить текст
+	Enlarge symbol	Увеличить символ
+	Enclosure	Обрамление
+	Circle	Круг
+	Base text:	Основной текст:
+	Distribute letters	Распределить буквы
+	Distribute spacing	Распределить интервал
+	Offset (pt):	Смещение (пт):
+	Phonetic Guide	Фонетическое руководство
+	Right (vertical)	Справа (вертикально)
+	Ruby text:	Текст фуригана:
+	Size (pt):	Размер (пт):
+	In Line with Text	В тексте
+	Through	Сквозное
+	Top and Bottom	Сверху и снизу
+	Behind Text	За текстом
+	In Front of Text	Перед текстом
+	Wrap Text Sides	Стороны обтекания
+	Both Sides	С обеих сторон
+	Left Only	Только слева
+	Right Only	Только справа
+	Largest Only	Только по большей стороне
+	Resize Table by Dragging	Изменение размера таблицы перетаскиванием
+	Add Font…	Добавить шрифт…
+	Added Fonts	Добавленные шрифты
+	Remove Added Font	Удалить добавленный шрифт
+	Load System Installed Fonts…	Загрузить установленные системные шрифты…
+	All system fonts are already available.	Все системные шрифты уже доступны.
+	Local font access is not supported by your browser.	Ваш браузер не поддерживает доступ к локальным шрифтам.
+	Local font access was denied.	Доступ к локальным шрифтам отклонен.
+	Loaded {count} system fonts.	Загружено системных шрифтов: {count}.
+	Print Markup	Печатать исправления и примечания
+	Comments beside each page and tracked changes in PDFs, prints and images; a comment list at the end of web pages, Markdown and text.	Примечания рядом с каждой страницей и отслеживаемые изменения в PDF, при печати и в изображениях; список примечаний в конце веб-страниц, Markdown и текста.
+	Recent Colors	Последние цвета
+	More Colors…	Другие цвета…
+	Standard	Обычные
+	Current	Текущий
+	Colors:	Цвета:
+	Color model:	Цветовая модель:
+	Red:	Красный:
+	Green:	Зеленый:
+	Blue:	Синий:
+	Hue:	Оттенок:
+	Sat:	Насыщенность:
+	Lum:	Яркость:
+	Hex:	Hex:
+	Accessibility Pane	Область специальных возможностей
+	Alt Text Pane	Область замещающего текста
+	Alt\nText	Замещающий\nтекст
+	View Alt Text…	Показать замещающий текст…
+	Mark as decorative	Пометить как декоративный
+	Title:	Заголовок:
+	Errors ({n})	Ошибки ({n})
+	Warnings ({n})	Предупреждения ({n})
+	Tips ({n})	Советы ({n})
+	No accessibility issues found.	Проблем со специальными возможностями не найдено.
+	Describe what this object shows, for people who can't see it.	Опишите, что показывает этот объект, для людей, которые его не видят.
+	Decorative objects only add visual interest: screen readers skip them.	Декоративные объекты лишь украшают документ: программы чтения с экрана их пропускают.
+	Describe what this table shows, for people who can't see it.	Опишите, что показывает эта таблица, для людей, которые её не видят.
+	Select a picture, shape, chart or table to describe it.	Выберите рисунок, фигуру, диаграмму или таблицу, чтобы описать её.
+	Document Grid	Сетка документа
+	No grid	Без сетки
+	Lines only	Только строки
+	Lines and characters	Строки и символы
+	Text snaps to characters	Текст привязывается к символам
+	Characters per line:	Символов в строке:
+	Lines per page:	Строк на странице:
+	Moved from	Перемещено из
+	Moved to	Перемещено в
+	Developer	Разработчик
+	Controls	Элементы управления
+	Rich Text Content Control	Элемент управления содержимым: форматированный текст
+	Plain Text Content Control	Элемент управления содержимым: обычный текст
+	Picture Content Control	Элемент управления содержимым: рисунок
+	Building Block Gallery Content Control	Элемент управления содержимым: коллекция стандартных блоков
+	Check Box Content Control	Элемент управления содержимым: флажок
+	Combo Box Content Control	Элемент управления содержимым: поле со списком
+	Drop-Down List Content Control	Элемент управления содержимым: раскрывающийся список
+	Date Picker Content Control	Элемент управления содержимым: выбор даты
+	Repeating Section Content Control	Элемент управления содержимым: повторяющийся раздел
+	Design Mode	Режим конструктора
+	Content Control at Selection	Элемент управления содержимым в выделении
+	Toggle Check Box	Переключить флажок
+	Choose List Item	Выбрать элемент списка
+	Set Date	Задать дату
+	Remove Content Control	Удалить элемент управления содержимым
+	Content Control Properties	Свойства элемента управления содержимым
+	Tag	Тег
+	Placeholder text	Текст-заполнитель
+	Can't be deleted	Нельзя удалять
+	Contents can't be edited	Содержимое нельзя изменять
+	Remove the control once edited	Удалить элемент управления после редактирования
+	Allow line breaks	Разрешить разрывы строк
+	Date format	Формат даты
+	Checked symbol	Символ установленного флажка
+	Unchecked symbol	Символ снятого флажка
+	List entries	Элементы списка
+	Display text	Отображаемый текст
+	Value	Значение
+	Today	Сегодня
+	Put the caret in a content control first.	Сначала поместите курсор в элемент управления содержимым.
+	Right-to-Left Table	Таблица справа налево
+	Right-to-Left Section	Раздел справа налево
+	Table direction:	Направление таблицы:
+	Section direction:	Направление раздела:
+	A, B, C, …	A, B, C, …
+	Above the item	Над объектом
+	Accessed on	Дата обращения
+	Add New Source…	Добавить новый источник…
+	Add the chapter number	Добавить номер главы
+	Atmosphere	Атмосфера
+	Below the item	Под объектом
+	Book	Книга
+	Book title	Название книги
+	Caption Numbering	Нумерация названий
+	Caption text	Текст названия
+	Caption:	Название:
+	Chapter in a book	Глава книги
+	Chapters begin at:	Главы начинаются с:
+	Collect entries from:	Собирать записи из:
+	Columns:	Столбцы:
+	Conference	Конференция
+	Conference paper	Доклад на конференции
+	Container Title	Название контейнера
+	Create Source	Создать источник
+	Cross-reference:	Перекрёстная ссылка:
+	Custom Table of Contents…	Настраиваемое оглавление…
+	DOI	DOI
+	Day	День
+	Delete Label	Удалить подпись
+	Edit Source	Изменить источник
+	Edition	Издание
+	Edit…	Изменить…
+	Entry marked.	Запись помечена.
+	Example: {sample}	Пример: {sample}
+	Figure	Рисунок
+	Film	Фильм
+	Heading styles (levels 1–{n})	Стили заголовков (уровни 1–{n})
+	I, II, III, …	I, II, III, …
+	Include page numbers	Включить номера страниц
+	Indented	Со ступенчатым отступом
+	Institution	Учреждение
+	Ionosphere	Ионосфера
+	Issue	Выпуск
+	Journal	Журнал
+	Label:	Подпись:
+	Last, First; Last, First	Фамилия, Имя; Фамилия, Имя
+	Leave the label out of the caption	Не включать подпись в название
+	Letter headings	Заголовки с буквами
+	Levels:	Уровни:
+	Link entries to their headings	Связать записи с заголовками
+	Made from the author and year when empty	Если пусто, составляется из автора и года
+	Magazine or newspaper article	Статья в журнале или газете
+	Main entry:	Основная запись:
+	Mark	Пометить
+	Mark All	Пометить все
+	Mark Entry…	Пометить запись…
+	Mark Index Entry	Пометка элемента указателя
+	Mesosphere	Мезосфера
+	Month	Месяц
+	New Label	Новая подпись
+	New Label…	Новая подпись…
+	New…	Создать…
+	No sources yet.	Источников пока нет.
+	Numbering…	Нумерация…
+	Options…	Параметры…
+	Other	Другое
+	Other styles and their TOC level:	Другие стили и их уровень в оглавлении:
+	Outline levels	Уровни структуры
+	Page number style	Стиль номеров страниц
+	Page numbers at the right margin	Номера страниц по правому краю
+	Page title	Название страницы
+	Pages of bookmark:	Страницы закладки:
+	Periodical	Периодическое издание
+	Position:	Положение:
+	Publisher	Издатель
+	Run-in	В подбор
+	See	См.
+	Separator:	Разделитель:
+	Show every bibliography field	Показать все поля библиографии
+	Site name	Название сайта
+	Source Manager	Диспетчер источников
+	Source type:	Тип источника:
+	Sources in this document:	Источники в этом документе:
+	Styles:	Стили:
+	Subentry:	Подзапись:
+	TC entry fields	Поля записей TC
+	Tab leader:	Заполнитель табуляции:
+	Table of Contents Options	Параметры оглавления
+	Table of Contents Styles	Стили оглавления
+	This page	Эта страница
+	Type:	Тип:
+	URL	URL
+	Volume	Том
+	Website	Веб-сайт
+	Year	Год
+	a, b, c, …	a, b, c, …
+	i, ii, iii, …	i, ii, iii, …
+	{n} entries marked.	Помечено записей: {n}.
+	Lasso Select	Лассо
+	Move Selected Ink	Переместить выделенные штрихи
+	Delete Selected Ink	Удалить выделенные штрихи
+	Recolor Selected Ink	Перекрасить выделенные штрихи
+	Add Pen	Добавить перо
+	Remove Pen	Удалить перо
+	Ink to Shape	Рукописный ввод в фигуры
+	Convert to Shapes	Преобразовать в фигуры
+	Ink Replay	Воспроизведение рукописного ввода
+	Add\nPen	Добавить\nперо
+	Rewind	Назад
+	Forward	Вперёд
+	Stroke {n} of {total}	Штрих {n} из {total}
+	Drawing Canvas	Полотно для рисования
+	New Drawing Canvas	Новое полотно для рисования
+	Fit	По размеру
+	Expand	Расширить
+	Scale Drawing	Масштабировать рисунок
+	Canvas Member	Элемент полотна
+	Choose the sheet that holds the recipients.	Выберите лист с получателями.
+	First row of data contains column headers	Первая строка данных содержит заголовки столбцов
+	Communication	Связь
+	Office	Офис
+	People	Люди
+	Nature	Природа
+	Weather	Погода
+	Technology	Технологии
+	Transport	Транспорт
+	Icon Color	Цвет значка
+	Search icons	Поиск значков
+	No icons match your search.	Нет значков, соответствующих поиску.
+	Recolor a one-color picture, such as an icon	Перекрасить одноцветный рисунок, например значок
+	Numerals:	Цифры:
+	Numerals	Цифры
+	Arabic	Арабские
+	Hindi	Хинди
+	Context	Контекст
+	System	Системные
+	Couldn't make WordCraft the default: {error}	Не удалось сделать WordCraft приложением по умолчанию: {error}
+	In Default apps, choose WordCraft for the document types you want it to open.	В разделе «Приложения по умолчанию» выберите WordCraft для нужных типов документов.
+	Make WordCraft the default for Word documents…	Сделать WordCraft приложением по умолчанию для документов Word…
+	Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.	Отныне файлы .docx, .doc, .rtf и .odt и шаблоны Word будут открываться в WordCraft.
+	Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.	Открывает «Параметры» › «Приложения по умолчанию», где можно выбрать WordCraft для .docx и других типов документов.
+	To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All.	Чтобы открывать документы Word в WordCraft по умолчанию: выберите документ в Finder, выберите «Файл» › «Свойства», укажите WordCraft в разделе «Открывать в программе» и нажмите «Изменить все».
+	WordCraft is now the default app for Word documents.	WordCraft теперь приложение по умолчанию для документов Word.
+	Templates	Шаблоны
+	Templates and Add-ins	Шаблоны и надстройки
+	Attach Template	Присоединить шаблон
+	Detach Template	Отсоединить шаблон
+	Automatically Update Document Styles	Автоматически обновлять стили документа
+	Update Styles from Template	Обновить стили из шаблона
+	Organizer	Организатор
+	Copy Styles	Копировать стили
+	Rename Style	Переименовать стиль
+	Document template:	Шаблон документа:
+	Attach…	Присоединить…
+	Automatically update document styles	Автоматически обновлять стили документа
+	Organizer…	Организатор…
+	1. Formatting restrictions	1. Ограничения форматирования
+	2. Editing restrictions	2. Ограничения редактирования
+	3. Start enforcement	3. Включение защиты
+	<< Less	<< Меньше
+	Another file	Другой файл
+	Apply as you type	Применять при вводе
+	AutoCorrect	Автозамена
+	AutoFormat As You Type	Автоформат при вводе
+	Automatic bulleted lists	Автоматические маркированные списки
+	Automatic numbered lists	Автоматические нумерованные списки
+	Border lines	Линии границ
+	Capitalize first letter of sentences	Делать первые буквы предложений прописными
+	Capitalize first letter of table cells	Делать первые буквы ячеек таблиц прописными
+	Correct TWo INitial CApitals	Исправлять ДВе ПРописные буквы в начале слова
+	Correct accidental usage of cAPS LOCK key	Устранять последствия случайного нажатия cAPS LOCK
+	Capitalize names of days	Названия дней с прописной буквы
+	Case changes	Изменения регистра
+	Character level	На уровне символов
+	Checked styles are allowed:	Разрешённые стили (отмечены):
+	Combine Documents	Объединение документов
+	Compare Documents	Сравнение документов
+	Compared: {changes} changes	Сравнение завершено: изменений — {changes}
+	Comparing with another file needs the desktop app.	Для сравнения с другим файлом нужно настольное приложение.
+	Comparison settings	Параметры сравнения
+	Don't capitalize after:	Не делать прописной после:
+	Editing in this document is restricted.	Редактирование этого документа ограничено.
+	Every change is recorded as a tracked change.	Каждое изменение записывается как исправление.
+	Everyone	Все
+	Exceptions (optional)	Исключения (необязательно)
+	Exceptions…	Исключения…
+	Fields	Поля
+	Filling in forms	Заполнение форм
+	Find Next Editable Region	Найти следующую область для редактирования
+	Footnotes and endnotes	Сноски и концевые сноски
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	Сравниваются форматирование, регистр, пробелы и таблицы; остальные параметры сохраняются на будущее.
+	Fractions (1/2) as fraction characters (½)	Дроби (1/2) как символы дробей (½)
+	Headers and footers	Колонтитулы
+	Hyphens (--) as dashes (—)	Дефисы (--) как тире (—)
+	In equations, typing a name after a backslash replaces it with its symbol.	В формулах имя после обратной косой черты заменяется символом.
+	Internet addresses as links	Адреса в Интернете как ссылки
+	Label changes with:	Подписывать изменения:
+	Limit formatting to a selection of styles	Ограничить форматирование выбранными стилями
+	Math AutoCorrect	Автозамена математическими символами
+	More >>	Больше >>
+	Moves	Перемещения
+	Moved from:	Перемещено из:
+	Moved to:	Перемещено в:
+	New document	Новый документ
+	No changes (read only)	Без изменений (только чтение)
+	Only allow this kind of editing:	Разрешить только такой способ редактирования:
+	Only comments can be added, except in regions marked editable.	Можно только добавлять примечания, кроме областей, помеченных как редактируемые.
+	Only form fields can be filled in.	Можно заполнять только поля форм.
+	Only the allowed styles can be applied.	Можно применять только разрешённые стили.
+	Ordinals (1st) as superscript	Порядковые числительные (1st) как надстрочные
+	Original document	Исходный документ
+	This password type isn't supported.	Этот тип пароля не поддерживается.
+	Replace as you type	Заменять при вводе
+	Replace text as you type	Заменять текст при вводе
+	Replace:	Заменить:
+	Revised document	Изменённый документ
+	Select text, then tick who can still edit it.	Выделите текст и отметьте, кто может его редактировать.
+	Settings…	Параметры…
+	Show changes at:	Показывать изменения:
+	Show changes in:	Показывать изменения в:
+	Smart quotes instead of straight quotes	«Умные» кавычки вместо прямых
+	Start Enforcing Protection	Включить защиту
+	Stop Protection	Отключить защиту
+	Text boxes	Надписи
+	The document is read only, except for regions marked editable.	Документ доступен только для чтения, кроме областей, помеченных как редактируемые.
+	The password is optional; without it anyone can stop the protection.	Пароль необязателен; без него любой может отключить защиту.
+	This document	Этот документ
+	Tracked changes	Исправления
+	Type the password to stop the protection.	Введите пароль, чтобы отключить защиту.
+	White space	Пробелы
+	With:	На:
+	Word level	На уровне слов
+	Change Chart Type	Изменить тип диаграммы
+	Chart Design	Конструктор диаграмм
+	Type	Тип
+	Edit Data	Изменить данные
+	Chart Title	Название диаграммы
+	Chart Layouts	Макеты диаграмм
+	Add Chart Element	Добавить элемент диаграммы
+	Legend	Легенда
+	Data Labels	Подписи данных
+	Above Chart	Над диаграммой
+	Insert Chart	Вставка диаграммы
+	Clustered Column	Гистограмма с группировкой
+	Stacked Column	Гистограмма с накоплением
+	Clustered Bar	Линейчатая с группировкой
+	Stacked Bar	Линейчатая с накоплением
+	Area	С областями
+	Pie	Круговая
+	Doughnut	Кольцевая
+	Scatter	Точечная
+	“{text}” ({row}, {series}) isn't a number.	«{text}» ({row}, {series}) — не число.
+	Category {n}	Категория {n}
+	Series {n}	Ряд {n}
+	Type the categories down the side and a column of values per series.	Введите категории по вертикали и столбец значений для каждого ряда.
+	Categories	Категории
+	Series name	Имя ряда
+	Remove series	Удалить ряд
+	Remove row	Удалить строку
+	Add Row	Добавить строку
+	Add Series	Добавить ряд
+	Edit\nData	Изменить\nданные
+	Change\nChart Type	Изменить\nтип диаграммы
+	Align Text	Выравнивание текста
+	Create Link	Создать связь
+	Break Link	Разорвать связь
+	Rotate all text 90°	Повернуть весь текст на 90°
+	Rotate all text 270°	Повернуть весь текст на 270°
+	Stacked	Столбиком
+	Middle	По центру
+	Click the empty text box the text should continue in (Esc cancels)	Щёлкните пустую надпись, в которой должен продолжиться текст (Esc — отмена)
+	Not linked: click a text box	Не связано: щёлкните надпись
+	Show KeyTips (Alt or F10)	Показывать подсказки клавиш (Alt или F10)
+	Location	Расположение
+	Endnotes	Концевые сноски
+	Below text	Под текстом
+	End of section	Конец раздела
+	End of document	Конец документа
+	Footnotes to endnotes	Сноски в концевые сноски
+	Endnotes to footnotes	Концевые сноски в сноски
+	Swap footnotes and endnotes	Поменять сноски и концевые сноски
+	Custom mark:	Особый знак:
+	Continuous numbering	Сквозная нумерация
+	Apply	Применить
+	Convert Notes	Преобразовать сноски
+	Reading	Чтение
+	Reading Column Width	Ширина столбца в режиме чтения
+	Reading Line Spacing	Межстрочный интервал в режиме чтения
+	Reading Text Size	Размер текста в режиме чтения
+	Do Not Check Spelling or Grammar	Не проверять орфографию и грамматику
+	English (United Kingdom)	Английский (Великобритания)
+	English (Australia)	Английский (Австралия)
+	English (Canada)	Английский (Канада)
+	English (India)	Английский (Индия)
+	English (Ireland)	Английский (Ирландия)
+	English (New Zealand)	Английский (Новая Зеландия)
+	English (South Africa)	Английский (Южная Африка)
+	Polish	Польский
+
+# Built-in file browser (#576).
+	Documents	Документы
+	Word document	Документ Word
+	All files	Все файлы
+	Recipient lists	Списки получателей
+	The system file dialog isn't available, so WordCraft shows its own. To get the system dialog, install a file chooser portal (such as xdg-desktop-portal-gtk) or zenity.	Системное диалоговое окно выбора файлов недоступно, поэтому WordCraft показывает собственное. Чтобы пользоваться системным, установите портал выбора файлов (например, xdg-desktop-portal-gtk) или zenity.
+	Up one level	На уровень вверх
+	Home folder	Домашняя папка
+	{name} wasn't found.	{name} не найден.
+	{name} already exists. Choose Save again to replace it.	{name} уже существует. Чтобы заменить его, снова выберите «Сохранить».
+	This folder can't be read: {error}	Не удаётся прочитать папку: {error}
+	Showing the first {count} items.	Показаны первые элементы: {count}.
+	No items to show.	Нет элементов для показа.
+	File name:	Имя файла:
+	Browse in WordCraft…	Обзор в WordCraft…
+	Open a file with WordCraft's own browser when the system file dialog doesn't appear.	Открыть файл во встроенном обозревателе WordCraft, если системное диалоговое окно выбора файлов не появляется.
+	Hide White Space	Скрыть пустое место между страницами
+	All pages	Все страницы
+	Current page	Текущая страница
+	Selected pages	Выбранные страницы
+	Custom range	Свой диапазон
+	All pages in the range	Все страницы диапазона
+	Odd pages only	Только нечётные страницы
+	Even pages only	Только чётные страницы
+	Copies	Копии
+	Collate copies	Разобрать по копиям
+	Pages like 1-3, 5	Страницы, например 1-3, 5
+	{count} of {total} pages will print	Будет напечатано страниц: {count} из {total}
+	Save these pages as PDF…	Сохранить эти страницы как PDF…
+	The printer, two-sided printing and pages per sheet are chosen in that dialog.	Принтер, двусторонняя печать и число страниц на листе выбираются в этом диалоге.
+	Previous Page	Предыдущая страница
+	Print to PDF	Печать в PDF
+# Word XML Document (#548).
+	Word XML Document (*.xml)	Документ Word XML (*.xml)
+	Word 2003 XML Document (*.xml)	Документ Word 2003 XML (*.xml)
+# Find and Replace special characters and wildcards (#543).
+	Use wildcards	Подстановочные знаки
+	Special	Специальный
+	Match prefix	Начало слова
+	Match suffix	Конец слова
+	Ignore punctuation characters	Не учитывать знаки препинания
+	Ignore white-space characters	Не учитывать пробелы
+	Regular expressions	Регулярные выражения
+	Search Options	Параметры поиска
+	Tab Character	Знак табуляции
+	Any Character	Любой знак
+	Any Digit	Любая цифра
+	Any Letter	Любая буква
+	Caret Character	Знак вставки (^)
+	Section Character	Знак раздела
+	Paragraph Character	Знак абзаца
+	Graphic	Графический объект
+	Manual Line Break	Разрыв строки
+	Manual Page Break	Разрыв страницы
+	Section Break	Разрыв раздела
+	White Space	Пробельный знак
+	Clipboard Contents	Содержимое буфера обмена
+	Find What Text	Текст для поиска
+	Find What Expression	Найденное выражение
+	Character in Range	Знак из диапазона
+	Beginning of Word	Начало слова
+	End of Word	Конец слова
+	Expression	Выражение
+	Not	Не
+	Num Occurrences	Число вхождений
+	Previous 1 or More	Предыдущий знак 1 или более раз
+	0 or More Characters	0 или более знаков
+# Insert SmartArt (#497).
+	Add Shape	Добавить фигуру
+	Change Colors	Изменить цвета
+	Change Layout	Изменить макет
+	Create Graphic	Создать графический элемент
+	Edit Items	Изменить элементы
+	Layouts	Макеты
+	Reset Graphic	Сбросить графический элемент
+	SmartArt Design	Конструктор SmartArt
+	SmartArt Styles	Стили SmartArt
+	Text Pane	Область текста
+	List	Список
+	Process	Процесс
+	Cycle	Цикл
+	Hierarchy	Иерархия
+	Relationship	Связь
+	Pyramid	Пирамида
+	Basic List	Простой список
+	Basic Process	Простой процесс
+	Basic Cycle	Простой цикл
+	Basic Pyramid	Простая пирамида
+	Basic Radial	Простая радиальная схема
+	Basic Matrix	Простая матрица
+	Basic Venn	Простая диаграмма Венна
+	Shows items of equal weight as blocks in rows.	Показывает равнозначные элементы блоками в строках.
+	Shows steps in order, left to right, with arrows between them.	Показывает шаги по порядку слева направо со стрелками между ними.
+	Shows steps that repeat, around a circle.	Показывает повторяющиеся шаги по кругу.
+	Shows a tree: each item below the item it belongs to.	Показывает дерево: каждый элемент находится под тем, к которому относится.
+	Shows parts that build on each other, largest at the bottom.	Показывает части, опирающиеся друг на друга; самая крупная внизу.
+	Shows items around a central idea: the first item is the centre.	Показывает элементы вокруг центральной идеи: первый элемент в центре.
+	Shows parts of a whole as quadrants.	Показывает части целого в виде четвертей.
+	Shows overlapping ideas as overlapping circles.	Показывает пересекающиеся идеи в виде пересекающихся кругов.
+	Accent {n}	Акцент {n}
+	Colorful	Разноцветный
+	Insert SmartArt	Вставка SmartArt
+	One line per item. Enter adds an item.	Одна строка на элемент. Enter добавляет элемент.
+	Add\nShape	Добавить\nфигуру
+	Change\nColors	Изменить\nцвета
+	Reset\nGraphic	Сбросить\nграфику
+# Outline view (#493).
+	Promote to Heading 1	Повысить до заголовка 1
+	Demote to Body Text	Понизить до обычного текста
+	Move Up	Переместить вверх
+	Move Down	Переместить вниз
+	Collapse	Свернуть
+	Expand or Collapse Heading	Развернуть или свернуть заголовок
+	Select Heading and Content	Выделить заголовок и содержимое
+	Show Level	Показать уровень
+	Show Level 1	Показать уровень 1
+	Show Level 2	Показать уровень 2
+	Show Level 3	Показать уровень 3
+	Show Level 4	Показать уровень 4
+	Show Level 5	Показать уровень 5
+	Show Level 6	Показать уровень 6
+	Show Level 7	Показать уровень 7
+	Show Level 8	Показать уровень 8
+	Show Level 9	Показать уровень 9
+	Show All Levels	Показать все уровни
+	All Levels	Все уровни
+	Show First Line Only	Показывать только первую строку
+	Show Text Formatting	Показывать форматирование текста
+	Close Outline View	Закрыть режим структуры
+	Outline State	Состояние структуры
+	Outlining	Структура
+	Outline Tools	Работа со структурой
+	Close Outline\nView	Закрыть режим\nструктуры
+# Wrap Text context menu (#513).
+	Move with Text	Перемещать вместе с текстом
+	Fix Position on Page	Зафиксировать положение на странице
+# Paragraph dialog options (#512).
+	Formatting exceptions	Исключения форматирования
+	Inside:	Внутри:
+	Mirror indents	Зеркальные отступы
+	Outside:	Снаружи:
+# WordArt and connectors (#416).
+	WordArt Styles	Стили WordArt
+	Text Fill	Заливка текста
+	Text Outline	Контур текста
+	Transform	Трансформация
+	No Fill	Нет заливки
+	No Outline	Нет контура
+	Reflection	Отражение
+	No Reflection	Без отражения
+	No Transform	Без трансформации
+	Connect Shapes	Соединить фигуры
+	Straight Connector	Прямая соединительная линия
+	Straight Arrow Connector	Прямая соединительная линия со стрелкой
+	Elbow Connector	Уголковая соединительная линия
+	Elbow Arrow Connector	Уголковая линия со стрелкой
+	Curved Connector	Кривая соединительная линия
+	Curved Arrow Connector	Кривая линия со стрелкой
+	Arch Up	Арка вверх
+	Arch Down	Арка вниз
+	Slant Up	Наклон вверх
+	Slant Down	Наклон вниз
+	Inflate	Раздувание
+	Deflate	Сжатие
+	Chevron Up	Шеврон вверх
+	Chevron Down	Шеврон вниз
+	Triangle Up	Треугольник вверх
+	Triangle Down	Треугольник вниз
+	Solid Accent	Сплошной акцент
+	Light with Outline	Светлый с контуром
+	Hollow	Полый
+	Accent Gradient	Градиент акцента
+	Dark with Shadow	Тёмный с тенью
+	Soft Glow	Мягкое свечение
+	Accent with Reflection	Акцент с отражением
+	Warm Gradient with Outline	Тёплый градиент с контуром
+	Add line numbering	Добавить нумерацию строк
+	Add to Document	Добавить в документ
+	Address labels	Адресные наклейки
+	Auto	Авто
+	Automatically hyphenate document	Автоматически расставлять переносы в документе
+	Chinese (Simplified)	Китайский (упрощённый)
+	Chinese (Traditional)	Китайский (традиционный)
+	Column:	Столбец:
+	Count by:	Шаг:
+	Czech	Чешский
+	Danish	Датский
+	Delivery address:	Адрес получателя:
+	Detect language automatically	Определять язык автоматически
+	Do not check spelling or grammar	Не проверять орфографию и грамматику
+	Dutch	Нидерландский
+	Envelope size:	Размер конверта:
+	Estonian	Эстонский
+	Finnish	Финский
+	French (France)	Французский (Франция)
+	From text:	От текста:
+	Full page of the same label	Целая страница одинаковых наклеек
+	German (Germany)	Немецкий (Германия)
+	Greek	Греческий
+	Hebrew	Иврит
+	Hyphenate at:	Переносить по:
+	Hyphenate words in CAPS	Переносить слова из ПРОПИСНЫХ букв
+	Hyphenation Options…	Параметры расстановки переносов…
+	Hyphenation zone:	Зона переноса слов:
+	Italian	Итальянский
+	Croatian	Хорватский
+	Indonesian	Индонезийский
+	Japanese	Японский
+	Korean	Корейский
+	Limit consecutive hyphens to:	Максимум последовательных переносов:
+	Line Numbering Options…	Параметры нумерации строк…
+	Manual Hyphenation	Расстановка переносов вручную
+	Manual hyphenation is complete.	Расстановка переносов вручную завершена.
+	Manual…	Вручную…
+	Mark selected text as:	Пометить выделенный текст как:
+	New Document	Новый документ
+	No limit	Без ограничения
+	Norwegian (Bokmål)	Норвежский (букмол)
+	Numbering:	Нумерация:
+	Omit	Пропустить
+	One label per recipient	Одна наклейка на получателя
+	Portuguese (Brazil)	Португальский (Бразилия)
+	Portuguese (Portugal)	Португальский (Португалия)
+	Return address labels	Наклейки с обратным адресом
+	Return address:	Обратный адрес:
+	Row:	Строка:
+	Russian	Русский
+	Serbian (Cyrillic)	Сербский (кириллица)
+	Serbian (Latin)	Сербский (латиница)
+	Set As Default	Использовать по умолчанию
+	Shipping labels	Транспортные наклейки
+	Single label	Одна наклейка
+	Spanish (Mexico)	Испанский (Мексика)
+	Spanish (Spain)	Испанский (Испания)
+	Swedish	Шведский
+	Turkish	Турецкий
+	Ukrainian	Украинский
+	{language} is now the document's default language.	{language} теперь язык документа по умолчанию.
+# File > Options panes (#485).
+	As you type	По мере ввода
+	AutoSave writes your changes to the file a moment after you stop typing.	Автосохранение записывает изменения в файл вскоре после того, как вы перестанете печатать.
+	Centimeters	Сантиметры
+	Check spelling as you type	Проверять орфографию при вводе
+	Click to switch back to inserting	Нажмите, чтобы вернуться к вставке
+	Custom dictionary	Пользовательский словарь
+	Formatting marks	Знаки форматирования
+	Hidden text	Скрытый текст
+	Ignore web and file addresses	Пропускать веб-адреса и пути к файлам
+	Ignore words in capitals	Пропускать слова из прописных букв
+	Ignore words with numbers	Пропускать слова с цифрами
+	Inches	Дюймы
+	Initials:	Инициалы:
+	Interface	Интерфейс
+	Interface language	Язык интерфейса
+	Mark grammar errors as you type	Отмечать грамматические ошибки при вводе
+	Measurement units:	Единицы измерения:
+	Millimeters	Миллиметры
+	New comments and tracked changes are recorded under this name and these initials.	Новые примечания и исправления записываются под этим именем и инициалами.
+	New word	Новое слово
+	No words yet. Add to Dictionary on a misspelled word puts it here.	Слов пока нет. Команда «Добавить в словарь» для слова с ошибкой помещает его сюда.
+	Overtype	Замена
+	Overtype (typing replaces the characters after the caret)	Замена (вводимый текст заменяет символы после курсора)
+	Show alignment guides when moving pictures and shapes	Показывать направляющие выравнивания при перемещении рисунков и фигур
+	Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely.	Перемещаемые объекты притягиваются к краям и центру страницы, к полям и к другим объектам. Удерживайте Alt, чтобы перемещать свободно.
+	Page display	Отображение страницы
+	Paragraph marks	Знаки абзаца
+	Personalize	Персонализация
+	Picas	Пики
+	Points	Пункты
+	Print the page color	Печатать цвет страницы
+	Printing	Печать
+	Proofing language	Язык проверки правописания
+	Recent documents to show:	Число недавних документов:
+	Save documents	Сохранение документов
+	Show the mini toolbar when text is selected	Показывать мини-панель при выделении текста
+	Spaces	Пробелы
+	Spelling	Орфография
+	Spelling and grammar are checked in {language}.	Язык проверки орфографии и грамматики: {language}.
+	The text at the insertion point is marked Do not check spelling or grammar.	Текст в точке вставки помечен: Не проверять орфографию и грамматику.
+	{language}: WordCraft doesn't check spelling or grammar in this language yet.	{language}: WordCraft пока не проверяет орфографию и грамматику на этом языке.
+	Tab characters	Знаки табуляции
+	These marks show even when Show/Hide ¶ is off.	Эти знаки видны, даже когда «Показать все знаки» выключено.
+	Typing replaces selected text	Ввод заменяет выделенный текст
+	Update fields before printing	Обновлять поля перед печатью
+	Use the Insert key to switch overtype on and off	Клавиша Insert включает и выключает режим замены
+# Asian and Latin text fonts (#505).
+	Asian text font:	Шрифт азиатского текста:
+	Latin text font:	Шрифт латинского текста:
+	Visual effects	Визуальные эффекты
+	Animation effects:	Эффекты анимации:
+	On	Включено
+	Off	Выключено
+	Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once.	Плавная прокрутка и масштабирование, а также плавное появление меню и кнопок. Если выбрано «Выключено», все изменения отображаются сразу.
+	Your system has animation effects turned on.	В системе эффекты анимации включены.
+	Your system has animation effects turned off.	В системе эффекты анимации выключены.
+	Your system doesn't report an animation setting, so animation effects stay on.	Система не сообщает о настройке анимации, поэтому эффекты анимации остаются включёнными.
+	Select Column	Выделить столбец таблицы
+	Select Table Cells by Clicking	Выделить ячейки таблицы щелчком
+	Insert Row or Column by Clicking	Вставить строку или столбец щелчком
+	Move Table by Dragging	Переместить таблицу перетаскиванием
+	AutoFit Column by Double-Clicking	Автоподбор ширины столбца двойным щелчком
+	Region:	Регион:
+	Automatic ({region})	Автоматически ({region})
+	Odd Banded Rows	Нечётные чередующиеся строки
+	Even Banded Rows	Чётные чередующиеся строки
+	Odd Banded Columns	Нечётные чередующиеся столбцы
+	Even Banded Columns	Чётные чередующиеся столбцы
+	Top Left Cell	Левая верхняя ячейка
+	Top Right Cell	Правая верхняя ячейка
+	Bottom Left Cell	Левая нижняя ячейка
+	Bottom Right Cell	Правая нижняя ячейка
+	Inside Horizontal Border	Внутренняя горизонтальная граница
+	Inside Vertical Border	Внутренняя вертикальная граница
+	Text of the nearest paragraph with a given style (running headers)	Текст ближайшего абзаца с заданным стилем (живые колонтитулы)
+	Style name:	Имя стиля:
+# Mail merge: filter and sort recipients (#778)
+	Filter Recipients	Фильтр получателей
+	Sort Recipients	Сортировка получателей
+	Filter and Sort	Фильтр и сортировка
+	And	И
+	Or	Или
+	Comparison	Сравнение
+	Compare to	Значение
+	Add Condition	Добавить условие
+	Remove condition	Удалить условие
+	Sort by	Сортировать по
+	Then by	Затем по
+	Ascending	По возрастанию
+	Descending	По убыванию
+	Equal to	Равно
+	Not equal to	Не равно
+	Less than	Меньше
+	Greater than	Больше
+	Less than or equal	Меньше или равно
+	Greater than or equal	Больше или равно
+	Is blank	Пусто
+	Is not blank	Не пусто
+	Contains	Содержит
+	Does not contain	Не содержит
+	{count} of {total} recipients will be merged.	Получателей для слияния: {count} из {total}.
+	Find in list:	Найти в списке:
+	Any field	Любое поле
+	Matches: {count}	Совпадений: {count}
+	Show only records that will be merged	Показывать только записи для слияния
+	Take the last match on the page	Брать последнее совпадение на странице
+	Show its list number	Показывать его номер в списке
+	Show its number relative to this field	Показывать его номер относительно этого поля
+	Show its number with all higher levels	Показывать его номер со всеми верхними уровнями
+	Number only, without the label's words	Только номер, без слов метки
+	Add whether it is above or below	Добавлять, выше он или ниже
+	Start-up	Запуск
+	Show the Start screen when WordCraft starts	Показывать начальный экран при запуске WordCraft
+	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	Вкл.: WordCraft открывается на странице Файл › Главная с пустым документом, шаблонами и недавними документами. Выкл.: открывается пустой документ.
+	Typing	Ввод
+	Level 4	Уровень 4
+	Level 5	Уровень 5
+	Level 6	Уровень 6
+	Level 7	Уровень 7
+	Level 8	Уровень 8
+	Level 9	Уровень 9
+	Copy to	Копировать в
+
+# Document naming and account controls.
+	Rename Document	Переименовать документ
+	Document name	Имя документа
+	Rename	Переименовать
+	Account	Учётная запись
+	Privacy Options	Параметры конфиденциальности
+	Trust Center	Центр управления безопасностью
+	Privacy for this document	Конфиденциальность этого документа
+	Remove my name from comments, changes and file properties when saving	Удалять моё имя из примечаний, изменений и свойств файла при сохранении
+	Leave out the date and time of comments and tracked changes when saving	Не сохранять дату и время примечаний и отслеживаемых изменений
+	The document you are editing keeps the names and dates; only the saved file leaves them out.	Редактируемый документ сохраняет имена и даты; их не будет только в сохранённом файле.
+	Privacy Settings	Текущие параметры конфиденциальности
+	Waiting for the save to finish…	Ожидание завершения сохранения…
+	Saving {name} was cancelled, so it is still open and nothing was lost.	Сохранение {name} отменено. Документ по-прежнему открыт, ничего не потеряно.
+	Paper	Бумага
+	Paper size:	Размер бумаги:
+	Custom size	Другой размер
+	More Paper Sizes…	Другие размеры бумаги…
+	The margins don't fit on a page this size; make the margins smaller first.	Поля не помещаются на странице такого размера; сначала уменьшите поля.
+	Full Screen	Во весь экран
+	Full\nScreen	Во весь\nэкран
+	Use the browser's full screen (F11)	Используйте полноэкранный режим браузера (F11)
+
+# #1128: size labels (Mailings, Layout › Size), status-bar messages, Reading Mode and Go To
+	{name}   {height} × {width} in	{name}   {height} × {width} дюйма
+	{name}   {height} × {width} mm	{name}   {height} × {width} мм
+	{width} × {height} mm	{width} × {height} мм
+	{kind}, {columns} × {rows}, {size} ({paper})	{kind}, {columns} × {rows}, {size} ({paper})
+	Researcher needs an online service; WordCraft keeps your documents offline.	Исследователю нужен онлайн-сервис, а WordCraft работает с документами без подключения к интернету.
+	These settings will be used for new documents.	Эти параметры будут использоваться для новых документов.
+	can't split at the first row	нельзя разделить таблицу по первой строке
+	select two or more cells to merge	выделите две или более ячеек для объединения
+	there is no ink to replay	нет рукописного ввода для воспроизведения
+	there's no citation after the caret	после курсора нет ссылки на источник
+	this item is already at the top level	этот элемент уже на верхнем уровне
+	Envelope #10	Конверт №10
+	Envelope DL	Конверт DL
+	Reading Mode	Режим чтения
+	Column width	Ширина столбца
+	Text size	Размер текста
+	Edit Document	Редактировать документ
+	Go to what:	Перейти к:
+	Type +2 or -1 to move from the page you are on.	Введите +2 или -1, чтобы перейти на столько страниц от текущей.
+	Suggested	Предлагаемые
+	Set Proofing Language…	Выбрать язык проверки правописания…
+	Language Preferences…	Языковые параметры…
+	Printer	Принтер
+	Select a printer	Выберите принтер
+	Refresh printers	Обновить принтеры
+	Two-sided printing	Двусторонняя печать
+	Printer default	По умолчанию принтера
+	One-sided	Односторонняя
+	Two-sided: long edge	Двусторонняя: длинный край
+	Two-sided: short edge	Двусторонняя: короткий край
+	Grayscale	Оттенки серого
+	Finding printers…	Поиск принтеров…
+	No printers found. Configure a system printer or export a PDF.	Принтеры не найдены. Настройте системный принтер или экспортируйте PDF.
+	Printer discovery failed.	Не удалось найти принтеры.
+	Submitting print job…	Отправка задания на печать…
+	Print job submitted.	Задание на печать отправлено.
+	Print job submitted: {receipt}	Задание на печать отправлено: {receipt}
+	Print job submitted: spooled {count} sheet(s)	Задание печати отправлено: в очередь передано листов: {count}
+	Print failed: the printing worker stopped.	Печать не удалась: процесс печати остановлен.
+	Print settings	Параметры печати
+	Submit print job	Отправить задание на печать
+
+# Cross-reference dialog (#1003)
+	For which item:	Для какого элемента:
+	Heading	Заголовок
+	Heading text	Текст заголовка
+	Insert reference to:	Вставить ссылку на:
+	Reference type:	Тип ссылки:
+
+# Dictionaries folder (#1063)
+	Dictionaries	Словари
+	Dictionaries folder:	Папка словарей:
+	Not set: the system's usual places	Не задана: стандартные расположения в системе
+	Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.	Файлы Hunspell .aff и .dic из этой папки (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) используются раньше системных.
+	{language}: {file}	{language}: {file}
+	{language}: no dictionary found	{language}: словарь не найден
+
+# Backstage › Recover (#586)
+	Recover	Восстановить
+
+# Page Setup › Mirror margins (#1239)
+	Mirror margins	Зеркальные поля
+
+# Insert Hyperlink › Place in This Document (#1370)
+	Existing File or Web Page	Файл или веб-страница
+	Link to:	Связать с:
+	Place in This Document	Место в документе
+	Border Styles	Стили границ
+	Border\nStyles	Стили\nграниц
+	Click a table border to paint it with the chosen border style. Esc stops.	Щёлкните границу таблицы, чтобы нарисовать её выбранным стилем границы. Esc — завершить.
+# Table Layout › Sort dialog (#1205)
+	Column {n}	Столбец {n}
+	Header row	Строка заголовка
+	No header row	Без строки заголовка
+	My list has	Мой список содержит
+# Table Layout › Formula dialog (#1210)
+	Formula:	Формула:
+	Paste function:	Вставить функцию:
+# Reading Mode column widths (#1040)
+	Narrow	Узкая
+	Medium	Средняя
+	Dot-dot-dash	Штрихпунктирный с двумя точками
+	More Underlines…	Другие подчёркивания…
+	Underline Color	Цвет подчёркивания
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Объединить ячейки перед разбиением
+	Table size	Размер таблицы
+	AutoFit behavior	Автоподбор ширины столбцов
+	Initial column width:	Исходная ширина столбцов:
+	AutoFit to contents	Автоподбор по содержимому
+	AutoFit to window	Автоподбор по ширине окна
+	Separate text at	Разделитель
+	Commas	Запятые
+	Other:	Другой:
+	The number must be between 1 and {max}.	Число должно быть от 1 до {max}.
+	The measurement must be between {min} and {max}.	Размер должен быть от {min} до {max}.
+	Recently Used Fonts	Недавно использованные шрифты
+	All Fonts	Все шрифты
+	Spike	Копилка
+	Insert Spike	Вставить из копилки
+# Add Font status (#1789)
+	Added 1 font	Добавлен 1 шрифт
+	Added {n} fonts	Добавлено шрифтов: {n}
+	{added}; {count} couldn't be read: {names}	{added}; не удалось прочитать ({count}): {names}
+	{names} and {n} more	{names} и ещё {n}
+	{added}; {n} skipped (limit {max})	{added}; пропущено: {n} (лимит {max})
+	nothing is selected	ничего не выделено
+	select a picture or shape first	сначала выделите рисунок или фигуру
+	select recipients first	сначала выберите получателей
+	select two or more pictures or shapes first (Shift+click)	выделите два или больше рисунков или фигур (Shift+щелчок)
+	text boxes can't go inside a text box	надпись нельзя поместить внутрь надписи
+	the cursor isn't in a table	курсор не в таблице
+	{name} options	{name}: параметры
+
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	В тексте
+	In margin	На поле
+	Drop Cap Options…	Параметры буквицы…
+	Lines to drop:	Высота в строках:
+	Distance from text:	Расстояние от текста:
+	Distance from text	Расстояние от текста
+
+# Drop Cap disabled reasons (#2601)
+	the paragraph is empty	абзац пуст
+	the paragraph starts with a space	абзац начинается с пробела
+
+# Picture Format › Size: the Size dialog, sizes typed in any unit (#2573)
+	Lock aspect ratio	Сохранять пропорции
+	Relative to original picture size	Относительно исходного размера рисунка
+	Original size	Исходный размер
+	{width} × {height} pixels	{width} × {height} пикс.
+	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Введите размер в любых единицах, например 5 cm или 300 px. Другая сторона изменится вместе с ней, и рисунок сохранит пропорции.
+
+	Import…	Импорт…
+
+# Personal templates (#2852)
+	Personal	Личные
+	Personal Templates	Личные шаблоны
+	Templates you save in your templates folder show up here.	Здесь появляются шаблоны, сохранённые в папку шаблонов.
+	Save as Word Template…	Сохранить как шаблон Word…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Сохраняет шаблон .dotx в папку шаблонов. Он появится в разделе Файл › Создать, в группе «Личные».
+	File locations	Расположение файлов
+	User templates:	Шаблоны пользователя:
+	Not set	Не задано
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Файл › Создать показывает отсюда шаблоны .dotx и .dotm в группе «Личные»; «Сохранить как шаблон Word» начинает здесь.
+	Format Shape Pane	Область «Формат фигуры»
+	Format Shape	Формат фигуры
+	Format Shape…	Формат фигуры…
+	No fill	Нет заливки
+	Solid fill	Сплошная заливка
+	Gradient fill	Градиентная заливка
+	Preset gradients	Готовые градиенты
+	Radial	Радиальный
+	Rectangular	Прямоугольный
+	Path	Контур
+	Direction	Направление
+	Angle	Угол
+	Gradient stops	Точки градиента
+	Add gradient stop	Добавить точку градиента
+	Remove gradient stop	Удалить точку градиента
+	Rotate with shape	Вращать вместе с фигурой
+	Gradient	Градиент
+	No Gradient	Без градиента
+	Light Variations	Светлые варианты
+	Dark Variations	Тёмные варианты
+	More Gradients…	Другие градиенты…
+	Select a shape, text box or drawing canvas to format its fill.	Выберите фигуру, надпись или полотно, чтобы настроить заливку.
+	Linear Right	Линейный вправо
+	Linear Diagonal - Top Left to Bottom Right	Линейный по диагонали — слева сверху → справа снизу
+	Linear Down	Линейный вниз
+	Linear Diagonal - Top Right to Bottom Left	Линейный по диагонали — справа сверху → слева снизу
+	Linear Left	Линейный влево
+	Linear Diagonal - Bottom Right to Top Left	Линейный по диагонали — справа снизу → слева сверху
+	Linear Up	Линейный вверх
+	Linear Diagonal - Bottom Left to Top Right	Линейный по диагонали — слева снизу → справа сверху
+	From Top Left Corner	Из угла слева сверху
+	From Top Right Corner	Из угла справа сверху
+	From Bottom Left Corner	Из угла слева снизу
+	From Bottom Right Corner	Из угла справа снизу
+	From Center	Из центра
+	Soft	Мягкий
+	Lit from Top	Освещение сверху
+	Deep	Глубокий
+	Lit from Bottom	Освещение снизу
+	Center Glow	Свечение из центра
+	More tabs	Другие вкладки
+# #3013: Insert Table of Figures
+	Include label and number	Включить подпись и номер
+	First Record	Первая запись
+	Last Record	Последняя запись
+	Go to Record	Перейти к записи
+	Edit Individual Documents…	Изменить отдельные документы…
+	Print Documents…	Печать документов…
+	Print Documents	Печать документов
+	Current record	Текущая запись
+	From:	С:
+	To:	По:
+	Enter a number.	Введите число.
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	полотно для рисования нельзя разгруппировать
+	a drawing canvas can't go inside a text box	полотно для рисования нельзя поместить в текстовое поле
+	charts and diagrams can't be moved or resized yet	диаграммы и схемы пока нельзя перемещать или менять их размер
+	no equation at the caret	у курсора нет уравнения
+	not editing an equation	уравнение не редактируется
+	only in Outline view	только в режиме структуры
+	select a SmartArt graphic first	сначала выделите рисунок SmartArt
+	select a chart first	сначала выделите диаграмму
+	select a connector first	сначала выделите соединительную линию
+	select a drawing canvas first	сначала выделите полотно для рисования
+	select a floating picture or shape first	сначала выделите плавающий рисунок или фигуру
+	select a group first	сначала выделите группу
+	select a picture first	сначала выделите рисунок
+	select a shape first	сначала выделите фигуру
+	select a text box first	сначала выделите текстовое поле
+	select a text box linked to another first	сначала выделите текстовое поле, связанное с другим
+	the Clipboard pane is empty	область «Буфер обмена» пуста
+	there is nothing to undo	нечего отменять
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	этот SmartArt создан в другой программе: WordCraft показывает его, но не может изменить
+	this chart was made in another program: WordCraft shows it but can't edit it	эта диаграмма создана в другой программе: WordCraft показывает её, но не может изменить
+	this text box is already linked: break the link first	это текстовое поле уже связано: сначала разорвите связь
+	leave the equation first	сначала выйдите из уравнения
+	the Spike is empty	копилка пуста
+# More reasons a ribbon control is off (#2678)
+	a group holding Word ink can't be ungrouped yet	группу с рукописным вводом Word пока нельзя разгруппировать
+	drop caps can't go in a table	буквицу нельзя поместить в таблицу
+	the document is protected	документ защищён
+	Open a document first	Сначала откройте документ
