@@ -8993,13 +8993,21 @@ fn convert_to_text_takes_each_separator() {
     let obj = wordcraft_doc::para::OBJ.to_string();
     for bad in [
         json!({"separator": "other"}),
+        json!({"separator": "other", "char": ""}),
         json!({"separator": "other", "char": "\n"}),
+        json!({"separator": "other", "char": "\r"}),
         json!({"separator": "other", "char": obj}),
         json!({"separator": "pipe"}),
     ] {
         let mut s = typed_table(2, &["a", "b", "c", "d"]);
         let depth = s.undo_depth();
-        assert!(s.run("table.toText", &bad).is_err(), "{bad}");
+        let err = s.run("table.toText", &bad).unwrap_err();
+        if bad["separator"] == "other" {
+            assert!(
+                matches!(err, crate::CmdError::Params(ref message) if message == "`char` with `other` must start with a character other than CR, LF or U+FFFC (the object marker)"),
+                "{bad}: {err}"
+            );
+        }
         assert!(s.doc.body.iter().any(|b| b.as_table().is_some()), "{bad}: the table stays");
         assert_eq!(s.undo_depth(), depth);
     }
@@ -9357,8 +9365,18 @@ fn convert_text_to_table_dialog_options() {
     let mut s1 = s();
     run(&mut s1, "document.setText", json!({"text": "a-b"}));
     run(&mut s1, "select.all", json!({}));
-    assert!(s1.run("table.fromText", &json!({"separator": "other"})).is_err(), "no character");
-    assert!(s1.run("table.fromText", &json!({"separator": "other", "char": ""})).is_err());
+    for bad in [
+        json!({"separator": "other"}),
+        json!({"separator": "other", "char": ""}),
+        json!({"separator": "other", "char": "\n"}),
+        json!({"separator": "other", "char": "\r"}),
+    ] {
+        let err = s1.run("table.fromText", &bad).unwrap_err();
+        assert!(
+            matches!(err, crate::CmdError::Params(ref message) if message == "`char` with `other` must start with a character other than CR or LF"),
+            "{bad}: {err}"
+        );
+    }
     assert!(s1.run("table.fromText", &json!({"separator": "nonsense"})).is_err());
     assert!(s1.run("table.fromText", &json!({"autofit": "nonsense"})).is_err());
     assert_eq!(body_texts(&s1), ["a-b"]);
