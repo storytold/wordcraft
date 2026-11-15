@@ -257,7 +257,7 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens, preview_on_hover: b
     };
 
     row(ui, app, &|ui, app| {
-        let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+        let font = st.get("fontShown").and_then(Value::as_str).unwrap_or("").to_string();
         let warning = app.font_box_warning(&font);
         let font = app.previews.font_shown(&font);
         let fams = app.previews.families();

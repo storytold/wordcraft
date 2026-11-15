@@ -149,6 +149,6 @@ impl Exclusion {
 
 /// Text Word sets in the East Asian font: CJK ideographs, kana, bopomofo, CJK punctuation and
 /// fullwidth forms, and Hangul.
-pub(super) fn east_asian(c: char) -> bool {
+pub fn east_asian(c: char) -> bool {
     crate::kinsoku::is_east_asian(c) || matches!(u32::from(c), 0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF)
 }
