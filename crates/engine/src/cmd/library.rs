@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("library.addFolder", "Add Library Folder", "Insert › Library", add_folder)
             .params(
-                "{path} → {path, added, folders}: browse a folder of pictures (PNG, JPEG, GIF, WebP, BMP, TIFF) in the Library, kept with the preferences; at most 32 folders",
+                "{path} → {path, added, folders}: browse a folder of pictures (PNG, JPEG, GIF, WebP, BMP, TIFF, WMF, EMF) in the Library, kept with the preferences; at most 32 folders",
             )
             .when(native)
             .pure(),
@@ -46,17 +46,19 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("library.search", "Search Library", "Insert › Library", search)
             .params(
-                "{query: at most 256 characters, limit?: 1..=500 (default 100), folder?, file?} → [{file, picture, title, hidden, match: title|text|file}]: pictures whose file name or format (PNG, JPEG…) holds `query`, any case; with `file`, only that Library file (the pane searches a few files a frame)",
+                "{query: at most 256 characters, limit?: 1..=500 (default 100), folder?, file?} → [{file, picture, title, hidden, match: title|text|file}]: pictures whose file name or format (PNG, JPEG… WMF, EMF) holds `query`, any case; with `file`, only that Library file (the pane searches a few files a frame)",
             )
             .when(native)
             .pure(),
         CommandSpec::new("library.thumbnail", "Library Thumbnail", "Insert › Library", thumbnail)
-            .params("{file, picture: 0, width?: px 32..=512 (default 160)} → {png: base64, width, height}: a Library picture drawn small")
+            .params(
+                "{file, picture: 0, width?: px 32..=512 (default 160)} → {png: base64, width, height}: a Library picture drawn small (a metafile drawn as vectors, the full width)",
+            )
             .when(native)
             .pure(),
         CommandSpec::new("library.insert", "Insert from Library", "Insert › Library", insert)
             .params(
-                "{file, picture?: 0, width?: pt, alt?: string} → {media, width, height, file}: put a Library picture at the selection as Insert › Pictures does (natural size at 96 ppi, fitted to the text column; one undo step)",
+                "{file, picture?: 0, width?: pt, alt?: string} → {media, width, height, file}: put a Library picture at the selection as Insert › Pictures does (natural size at 96 ppi, a metafile's own frame; fitted to the text column; one undo step)",
             )
             .when(native),
     ]

@@ -27,6 +27,8 @@ wordcraft-pdf = { workspace = true }
 wordcraft-formats = { workspace = true }
 # Insert ▸ Library (#2868): the Library core the Craft apps share (folders, bounds, caches, search).
 craft-library = { workspace = true }
+# Its Pictures tab tells a damaged Windows metafile from a file that is no picture at all.
+craft-metafile = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

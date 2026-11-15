@@ -7402,6 +7402,7 @@ dependencies = [
  "craft-font-catalog",
  "craft-font-store",
  "craft-library",
+ "craft-metafile",
  "craft-proof",
  "craft-zip",
  "encoding_rs",

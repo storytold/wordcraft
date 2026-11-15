@@ -567,3 +567,235 @@ fn hostile_library_params_are_errors_not_panics() {
     ss.run("library.removeFolder", &json!({"path": s(&dir)})).unwrap();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// One WMF record (MS-WMF 2.3): its size in 16-bit words, its function, its parameters.
+fn wmf_rec(func: u16, params: &[u16]) -> Vec<u8> {
+    let mut v = ((3 + params.len()) as u32).to_le_bytes().to_vec();
+    v.extend(func.to_le_bytes());
+    v.extend(params.iter().flat_map(|p| p.to_le_bytes()));
+    v
+}
+
+/// A placeable WMF (MS-WMF 2.3.2.3) whose bounds are `right` × `bottom` at `inch` units an inch:
+/// `records`, then the end record.
+fn wmf(right: u16, bottom: u16, inch: u16, records: &[Vec<u8>]) -> Vec<u8> {
+    let mut f = 0x9AC6_CDD7u32.to_le_bytes().to_vec();
+    // Handle, bounds (left, top, right, bottom), units an inch, reserved, checksum.
+    for v in [0, 0, 0, right, bottom, inch, 0, 0, 0] {
+        f.extend(v.to_le_bytes());
+    }
+    let body = [records.concat(), wmf_rec(0, &[])].concat();
+    let words = (18 + body.len()) / 2;
+    // Memory metafile, 9-word header, version 3, size in words, objects, largest record, members.
+    for v in [1u16, 9, 0x300, words as u16, (words >> 16) as u16, 1, 7, 0, 0] {
+        f.extend(v.to_le_bytes());
+    }
+    f.extend(body);
+    f
+}
+
+/// A solid brush of RGB (0, 160, 0), selected, and a rectangle given as bottom, right, top, left.
+fn green_rect(rect: [u16; 4]) -> [Vec<u8>; 3] {
+    [wmf_rec(0x02FC, &[0, 0xA000, 0x0000, 0]), wmf_rec(0x012D, &[0]), wmf_rec(0x041B, &rect)]
+}
+
+/// A WMF two inches by one, green over its left half.
+fn green_left_wmf() -> Vec<u8> {
+    wmf(2880, 1440, 1440, &green_rect([1440, 1440, 0, 0]))
+}
+
+/// One EMF record (MS-EMF 2.3): its type, its size in bytes, its payload.
+fn emf_rec(typ: u32, payload: &[i32]) -> Vec<u8> {
+    let mut v = typ.to_le_bytes().to_vec();
+    v.extend(((8 + 4 * payload.len()) as u32).to_le_bytes());
+    v.extend(payload.iter().flat_map(|p| p.to_le_bytes()));
+    v
+}
+
+/// An EMF (MS-EMF 2.3.4.2) framed by `frame` (hundredths of a millimetre) on a device of 4 units a
+/// millimetre: `records`, then the end record.
+fn emf(frame: [i32; 4], records: &[Vec<u8>]) -> Vec<u8> {
+    let body = [records.concat(), emf_rec(14, &[0, 0, 0])].concat();
+    let mut h = Vec::new();
+    // Type, header size, bounds (device units), frame.
+    for v in [1, 88, 0, 0, frame[2] / 25, frame[3] / 25, frame[0], frame[1], frame[2], frame[3]] {
+        h.extend(i32::to_le_bytes(v));
+    }
+    // " EMF", version, file size, records, handles and reserved, description, palette.
+    let size = (88 + body.len()) as i32;
+    let records = records.len() as i32 + 2;
+    for v in [0x464D_4520, 0x0001_0000, size, records, 2, 0, 0, 0] {
+        h.extend(i32::to_le_bytes(v));
+    }
+    // The device: 1,000 units over 250 mm each way.
+    for v in [1000, 1000, 250, 250] {
+        h.extend(i32::to_le_bytes(v));
+    }
+    [h, body].concat()
+}
+
+/// An EMF 50 mm by 25 mm (200 × 100 device units), blue (RGB 20, 100, 200) over its top half.
+fn blue_top_emf() -> Vec<u8> {
+    let brush = emf_rec(39, &[1, 0, 0x00C8_6414, 0]);
+    emf([0, 0, 5000, 2500], &[brush, emf_rec(37, &[1]), emf_rec(43, &[0, 0, 200, 50])])
+}
+
+/// The picture objects in the document's first paragraph: (media key, width, height, alt).
+fn pictures(ss: &Session) -> Vec<(String, f32, f32, String)> {
+    let Some(para) = ss.doc.body.first().and_then(|b| b.as_para()) else { return vec![] };
+    para.objects
+        .iter()
+        .filter_map(|o| match o {
+            wordcraft_doc::para::InlineObject::Image { media, w, h, alt, .. } => Some((media.clone(), *w, *h, alt.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// #2868: Windows Metafiles and Enhanced Metafiles (built here from the public specs) are listed,
+/// drawn as thumbnails as pages draw them, and inserted as Insert › Pictures inserts them.
+#[test]
+fn metafiles_are_listed_thumbnailed_and_inserted() {
+    let dir = folder("metafiles");
+    let (wmf, emf) = (green_left_wmf(), blue_top_emf());
+    std::fs::write(dir.join("Chart.wmf"), &wmf).unwrap();
+    std::fs::write(dir.join("diagram.EMF"), &emf).unwrap();
+    let mut ss = session_with(&dir);
+    let at = |name: &str| s(&dir.join(name));
+    let files = list(&mut ss, json!({}));
+    assert_eq!(names(&files), ["Chart.wmf", "diagram.EMF"]);
+    for f in &files {
+        assert!(f.get("error").is_none(), "{f}");
+        assert_eq!(f["pictureCount"], json!(1), "{f}");
+    }
+    let f = ss.run("library.folders", &json!({})).unwrap();
+    assert_eq!(f[0]["files"], json!(2), "{f}");
+    for (query, title) in [("WMF", "Chart.wmf"), ("emf", "diagram.EMF")] {
+        let hits = ss.run("library.search", &json!({"query": query})).unwrap();
+        assert_eq!(hits.as_array().map(Vec::len), Some(1), "{query}: {hits}");
+        assert_eq!(hits[0]["title"], json!(title));
+    }
+
+    // Thumbnails: the requested width, the picture's shape, its own colours, nothing behind it.
+    let t = ss.run("library.thumbnail", &json!({"file": at("Chart.wmf"), "picture": 0})).unwrap();
+    assert_eq!((t["width"].clone(), t["height"].clone()), (json!(160), json!(80)), "{t}");
+    let img = decode_png(t["png"].as_str().unwrap());
+    assert_eq!(img.dimensions(), (160, 80));
+    assert_eq!(img.get_pixel(40, 40).0, [0, 160, 0, 255], "green on the left");
+    assert_eq!(img.get_pixel(120, 40).0[3], 0, "nothing on the right");
+    // A vector picture is drawn the full width asked for, even past its own size: it stays sharp.
+    let t = ss.run("library.thumbnail", &json!({"file": at("diagram.EMF"), "picture": 0, "width": 512})).unwrap();
+    assert_eq!((t["width"].clone(), t["height"].clone()), (json!(512), json!(256)), "{t}");
+    let img = decode_png(t["png"].as_str().unwrap());
+    assert_eq!(img.get_pixel(256, 64).0, [20, 100, 200, 255], "blue on top");
+    assert_eq!(img.get_pixel(256, 192).0[3], 0, "nothing below");
+    let small = ss.run("library.thumbnail", &json!({"file": at("diagram.EMF"), "picture": 0, "width": 32})).unwrap();
+    assert_eq!((small["width"].clone(), small["height"].clone()), (json!(32), json!(16)), "{small}");
+
+    // Inserted as Insert › Pictures inserts the same file: its own frame, its own bytes.
+    let mut direct = Session::new(wordcraft_doc::Document::new());
+    ss.run("text.insert", &json!({"text": "Figure "})).unwrap();
+    for (name, bytes, ext, alt) in [("Chart.wmf", &wmf, "wmf", "Sales"), ("diagram.EMF", &emf, "emf", "Flow")] {
+        let depth = ss.undo_depth();
+        let r = ss.run("library.insert", &json!({"file": at(name), "alt": alt})).unwrap();
+        let d = direct.run("insert.picture", &json!({"path": at(name)})).unwrap();
+        assert_eq!((r["width"].clone(), r["height"].clone()), (d["width"].clone(), d["height"].clone()), "{name}: {r} {d}");
+        assert!(r["media"].as_str().is_some_and(|m| m.ends_with(&format!(".{ext}"))), "{name}: {r}");
+        assert!(r["file"].as_str().is_some_and(|f| f.ends_with(name)), "{r}");
+        assert_eq!(ss.undo_depth(), depth + 1, "{name}: one undo step");
+        assert_eq!(ss.undo_labels().first().map(String::as_str), Some("Insert from Library"));
+        assert_eq!(ss.doc.media.get(r["media"].as_str().unwrap()).map(|m| m.to_vec()).as_ref(), Some(bytes), "{name}: the file's own bytes");
+    }
+    let placed = pictures(&ss);
+    assert_eq!(placed.len(), 2, "{placed:?}");
+    assert_eq!((placed[0].1, placed[0].2), (144.0, 72.0), "a placeable WMF's frame: two inches by one");
+    assert!((placed[1].1 - 141.73).abs() < 0.01 && (placed[1].2 - 70.87).abs() < 0.01, "an EMF's frame: 50 mm by 25 mm, {placed:?}");
+    assert_eq!((placed[0].3.as_str(), placed[1].3.as_str()), ("Sales", "Flow"));
+    assert!(ss.undo());
+    assert_eq!(pictures(&ss).len(), 1, "undo takes the last one out");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Damaged metafiles, and one with no size at all, are listed with why and draw and insert
+/// nothing; hostile frame sizes are drawn and inserted within the bounds pictures have. Nothing
+/// panics.
+#[test]
+fn damaged_and_hostile_metafiles_are_listed_with_their_error() {
+    let dir = folder("bad-metafiles");
+    let (good, emf_good) = (green_left_wmf(), blue_top_emf());
+    let noise: Vec<u8> = (0..512u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8).collect();
+    let mut long_record = good[..40].to_vec();
+    long_record.extend([0xFF, 0xFF, 0xFF, 0xFF, 0xFC, 0x02]);
+    let mut long_header = emf_good.clone();
+    long_header[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    let rect = || [emf_rec(39, &[1, 0, 0x00C8_6414, 0]), emf_rec(37, &[1]), emf_rec(43, &[0, 0, 200, 50])];
+    // (name, bytes, can it be drawn?)
+    let files: [(&str, Vec<u8>, bool); 12] = [
+        ("header-alone.emf", emf_good[..88].to_vec(), false),
+        ("cut-in-header.wmf", good[..30].to_vec(), false),
+        ("cut-in-record.wmf", good[..44].to_vec(), false),
+        ("record-past-the-end.wmf", long_record, false),
+        ("header-past-the-end.emf", long_header, false),
+        ("noise.emf", noise.clone(), false),
+        // No frame, no bounds and nothing drawn (SETBKMODE alone): no picture at all.
+        ("no-size.emf", emf([0, 0, 0, 0], &[emf_rec(18, &[1])]), false),
+        // A frame with no height: what the file draws stands in for it.
+        ("flat-frame.emf", emf([0, 0, 5000, 0], &rect()), true),
+        ("vast.emf", emf([0, 0, i32::MAX, i32::MAX], &rect()), true),
+        ("widest.emf", emf([i32::MIN, i32::MIN, i32::MAX, i32::MAX], &rect()), true),
+        ("tall.wmf", wmf(1, 32767, 1, &green_rect([32767, 1, 0, 0])), true),
+        ("good.wmf", good.clone(), true),
+    ];
+    for (name, bytes, _) in &files {
+        std::fs::write(dir.join(name), bytes).unwrap();
+    }
+    let mut ss = session_with(&dir);
+    let listed = list(&mut ss, json!({}));
+    assert_eq!(listed.len(), files.len(), "every file is listed: {listed:?}");
+    for f in &listed {
+        let name = Path::new(f["file"].as_str().unwrap()).file_name().unwrap().to_string_lossy().into_owned();
+        let (_, _, ok) = files.iter().find(|(n, ..)| *n == name).unwrap();
+        assert_eq!(f.get("error").is_none(), *ok, "{f}");
+        if !ok {
+            let e = f["error"].as_str().unwrap();
+            let why =
+                if name == "noise.emf" { "not a supported picture (PNG, JPEG, GIF, WebP, BMP, TIFF, WMF or EMF)" } else { "the metafile is damaged" };
+            assert!(e.starts_with(why), "{name}: {e}");
+            assert_eq!(f["pictures"], json!([]), "{f}");
+        }
+    }
+    let max_width = ss.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap();
+    for (name, bytes, ok) in &files {
+        let path = s(&dir.join(name));
+        for width in [32, 160, 512] {
+            let r = ss.run("library.thumbnail", &json!({"file": path, "picture": 0, "width": width}));
+            match r {
+                Ok(t) if *ok => {
+                    let (w, h) = (t["width"].as_u64().unwrap(), t["height"].as_u64().unwrap());
+                    assert!((1..=width).contains(&w) && (1..=u64::from(MAX_THUMB_HEIGHT)).contains(&h), "{name} at {width}: {t}");
+                    assert_eq!(decode_png(t["png"].as_str().unwrap()).dimensions(), (w as u32, h as u32), "{name}");
+                }
+                r => assert!(!ok && matches!(r, Err(CmdError::Failed(_))), "{name} at {width}: {r:?}"),
+            }
+        }
+        let before = inserted(&ss).len();
+        let r = ss.run("library.insert", &json!({"file": path}));
+        match r {
+            Ok(r) if *ok => {
+                let (w, h) = (r["width"].as_f64().unwrap(), r["height"].as_f64().unwrap());
+                assert!(w > 0.0 && w <= f64::from(max_width) + 0.01 && h > 0.0 && h <= 1584.0, "{name}: {r}");
+                assert_eq!(inserted(&ss).len(), before + 1, "{name}");
+                assert!(inserted(&ss).contains(bytes), "{name}");
+            }
+            r => {
+                assert!(!ok && r.is_err(), "{name}: {r:?}");
+                assert_eq!(inserted(&ss).len(), before, "{name}: nothing went in");
+            }
+        }
+    }
+    // Searching and listing without reading still work beside them.
+    assert_eq!(list(&mut ss, json!({"pictures": false})).len(), files.len());
+    let hits = ss.run("library.search", &json!({"query": "wmf"})).unwrap();
+    assert_eq!(hits.as_array().map(Vec::len), Some(2), "the two readable WMFs: {hits}");
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -1250,6 +1250,92 @@ fn unreadable_metafile_keeps_the_grey_box() {
     assert_eq!(img.pixel((rect.x + rect.w / 2.0) as u32, (rect.y + rect.h / 2.0) as u32), [0xD0, 0xD0, 0xD0, 255]);
 }
 
+/// One WMF record (MS-WMF 2.3): its size in 16-bit words, its function, its parameters.
+fn wmf_rec(func: u16, params: &[u16]) -> Vec<u8> {
+    let mut v = ((3 + params.len()) as u32).to_le_bytes().to_vec();
+    v.extend(func.to_le_bytes());
+    v.extend(params.iter().flat_map(|p| p.to_le_bytes()));
+    v
+}
+
+/// A placeable WMF two inches by one (1,440 units an inch) with a blue rectangle over its left
+/// half: CREATEBRUSHINDIRECT, SELECTOBJECT, RECTANGLE, EOF.
+fn blue_left_half_wmf() -> Vec<u8> {
+    let mut f = 0x9AC6_CDD7u32.to_le_bytes().to_vec();
+    // Handle, bounds (left, top, right, bottom), units an inch, reserved, checksum.
+    for v in [0u16, 0, 0, 2880, 1440, 1440, 0, 0, 0] {
+        f.extend(v.to_le_bytes());
+    }
+    // A solid brush of COLORREF 0x00FF0000 (blue), the rectangle as bottom, right, top, left.
+    let records = [wmf_rec(0x02FC, &[0, 0x0000, 0x00FF, 0]), wmf_rec(0x012D, &[0]), wmf_rec(0x041B, &[1440, 1440, 0, 0]), wmf_rec(0, &[])].concat();
+    let words = (18 + records.len()) / 2;
+    // Memory metafile, 9-word header, version 3, size in words, objects, largest record, members.
+    for v in [1u16, 9, 0x300, words as u16, (words >> 16) as u16, 1, 7, 0, 0] {
+        f.extend(v.to_le_bytes());
+    }
+    f.extend(records);
+    f
+}
+
+/// #2868: a WMF and an EMF drawn alone, for a list of pictures: stretched over the raster as a page
+/// stretches them over their frame, and transparent where they draw nothing.
+#[test]
+fn a_metafile_is_drawn_alone_into_a_raster() {
+    let emf = render_metafile(&red_right_half_emf(), 40, 40).expect("the EMF is drawn");
+    assert_eq!((emf.width, emf.height, emf.pixels.len()), (40, 40, 40 * 40 * 4));
+    assert_eq!(emf.pixel(30, 20), [255, 0, 0, 255], "red on the right");
+    assert_eq!(emf.pixel(10, 20), [0; 4], "nothing on the left: no paper behind it");
+    let wide = render_metafile(&red_right_half_emf(), 80, 10).expect("another shape");
+    assert_eq!((wide.pixel(70, 5), wide.pixel(10, 5)), ([255, 0, 0, 255], [0; 4]), "stretched over the raster");
+    let wmf = render_metafile(&blue_left_half_wmf(), 120, 60).expect("the WMF is drawn");
+    assert_eq!((wmf.width, wmf.height), (120, 60));
+    assert_eq!(wmf.pixel(30, 30), [0, 0, 255, 255], "blue on the left");
+    assert_eq!(wmf.pixel(90, 30), [0; 4], "nothing on the right");
+    assert!(!wmf.to_png().is_empty(), "it encodes as any raster does");
+    assert_eq!(metafile_size(&blue_left_half_wmf()), Some((144.0, 72.0, "wmf")), "the same picture as pages see");
+}
+
+#[test]
+fn render_metafile_draws_nothing_it_cannot_read() {
+    let png = wordcraft_geom::picture::encode_png(&image::DynamicImage::new_rgba8(4, 4)).unwrap();
+    let noise: Vec<u8> = (0..512u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8).collect();
+    // An EMF header and then noise; a WMF header whose first record runs past the end.
+    let emf_noise = [&red_right_half_emf()[..88], &noise[..]].concat();
+    let mut wmf_long = blue_left_half_wmf()[..40].to_vec();
+    wmf_long.extend([0xFF, 0xFF, 0xFF, 0xFF, 0xFC, 0x02]);
+    let cases = [
+        ("empty", vec![]),
+        ("text", b"not a metafile".to_vec()),
+        ("png", png),
+        ("noise", noise.clone()),
+        ("an EMF header alone", red_right_half_emf()[..88].to_vec()),
+        ("an EMF header and noise", emf_noise),
+        ("a WMF cut inside its header", blue_left_half_wmf()[..30].to_vec()),
+        ("a WMF record longer than the file", wmf_long),
+    ];
+    for (what, bytes) in cases {
+        let r = render_metafile(&bytes, 40, 40);
+        assert!(r.is_none(), "{what}: drawn {:?}", r.map(|r| (r.width, r.height)));
+    }
+}
+
+#[test]
+fn render_metafile_sizes_are_bounded() {
+    let emf = red_right_half_emf();
+    let one = render_metafile(&emf, 0, 0).expect("drawn");
+    assert_eq!((one.width, one.height, one.pixels.len()), (1, 1, 4), "at least a pixel");
+    // Over the cap it is drawn smaller, keeping its shape.
+    let small = render_metafile_within(&emf, 400, 200, 800).expect("drawn");
+    assert_eq!((small.width, small.height), (40, 20));
+    assert_eq!((small.pixel(30, 10), small.pixel(10, 10)), ([255, 0, 0, 255], [0; 4]));
+    for (w, h) in [(u32::MAX, u32::MAX), (u32::MAX, 1), (1, u32::MAX)] {
+        let r = render_metafile(&emf, w, h).expect("drawn");
+        assert!(r.width <= MAX_SIDE && r.height <= MAX_SIDE, "{w}×{h}: {}×{}", r.width, r.height);
+        assert!(u64::from(r.width) * u64::from(r.height) <= MAX_METAFILE_PIXELS, "{w}×{h}: {}×{}", r.width, r.height);
+        assert_eq!(r.pixels.len() as u64, u64::from(r.width) * u64::from(r.height) * 4);
+    }
+}
+
 #[test]
 fn shapes_have_paths() {
     let r = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0);
