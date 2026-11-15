@@ -70,6 +70,8 @@ pub struct DocState {
     pub(super) layout: LayoutSlots,
     pub(super) typing: Option<TypedWord>,
     pub(super) originals: std::collections::HashMap<String, String>,
+    pub(super) md_source: Option<crate::cmd::md_source::MdSource>,
+    pub(super) md_file: crate::cmd::md_source::FileText,
     pub(super) picture_looks: std::collections::HashMap<String, crate::cmd::objects::PictureLook>,
     pub(super) versions: Vec<(String, String, Document)>,
     pub(super) autosave: bool,
@@ -124,6 +126,8 @@ impl DocState {
             layout: Default::default(),
             typing: None,
             originals: Default::default(),
+            md_source: None,
+            md_file: Default::default(),
             picture_looks: Default::default(),
             versions: Vec::new(),
             autosave: true,
@@ -187,6 +191,7 @@ fn title(path: Option<&FsPath>, file_name: Option<&str>, doc: &Document, untitle
 impl Session {
     /// Swap the active document's state with `d`'s: `d` then holds the document that was active.
     fn swap_doc(&mut self, d: &mut DocState) {
+        crate::cmd::md_source::apply(self);
         use std::mem::swap;
         // Every field is listed, so a new one doesn't build until someone decides whether each
         // open document has its own (then it goes in `DocState` and is swapped below) or the
@@ -224,6 +229,8 @@ impl Session {
             layout: _,
             typing: _,
             originals: _,
+            md_source: _,
+            md_file: _,
             picture_looks: _,
             versions: _,
             autosave: _,
@@ -240,6 +247,8 @@ impl Session {
             edit_marks: _,
             go_back_step: _,
             // Shared by every open document.
+            // Names the document it belongs to, so it never applies to another one.
+            review_style: _,
             user_dict_path: _,
             clipboard: _,
             clipboard_text: _,
@@ -318,6 +327,8 @@ impl Session {
             layout,
             typing,
             originals,
+            md_source,
+            md_file,
             picture_looks,
             versions,
             autosave,
@@ -365,6 +376,8 @@ impl Session {
         swap(&mut self.layout, layout);
         swap(&mut self.typing, typing);
         swap(&mut self.originals, originals);
+        swap(&mut self.md_source, md_source);
+        swap(&mut self.md_file, md_file);
         swap(&mut self.picture_looks, picture_looks);
         swap(&mut self.versions, versions);
         swap(&mut self.autosave, autosave);
@@ -389,6 +402,7 @@ impl Session {
         if id == self.document_id {
             return Ok(());
         }
+        crate::cmd::md_source::apply(self);
         let at = self.others.iter().position(|d| d.document_id == id).ok_or_else(|| unknown(id))?;
         let mut d = self.others.swap_remove(at);
         self.swap_doc(&mut d);
@@ -469,7 +483,10 @@ impl Session {
         self.add(doc, 0)
     }
 
+    /// Adds `doc` to the session and makes it active, parking the previously active document
+    /// and applying any pending Markdown Source text first.
     fn add(&mut self, mut doc: Document, untitled: u32) -> u64 {
+        crate::cmd::md_source::apply(self);
         doc.ensure_nonempty();
         let mut view = self.view.clone();
         view.outline.collapsed.clear();
