@@ -41,15 +41,6 @@ pub(crate) fn paint(painter: &Painter, first: usize, file: bool, animate: bool, 
     let rect = ctx.content_rect();
     let scale = ctx.pixels_per_point();
     let now = ctx.input(|i| i.time);
-    let mut live = Vec::new();
-    let mut index = 0;
-    let mut budget = MAX_SHAPES;
-    painter.for_each_shape(|s| {
-        if index >= first && fits_budget(&s.shape, &mut budget, 0) {
-            live.push(s.clone());
-        }
-        index += 1;
-    });
     let previous = ctx.data(|d| d.get_temp::<Screen>(id));
     // Text meshes depend on pixel density; old geometry also does not fit a resized window.
     let previous = previous.filter(|s| s.rect == rect && s.scale == scale);
@@ -63,30 +54,43 @@ pub(crate) fn paint(painter: &Painter, first: usize, file: bool, animate: bool, 
         }
     }
     let t = ((now - screen.start) / DURATION).clamp(0.0, 1.0) as f32;
-    if t < 1.0 {
-        if let Some(leaving) = &screen.leaving {
-            let eased = 1.0 - (1.0 - t).powi(3);
-            let distance = if file { 8.0 } else { 24.0 };
-            let offset = vec2(if rtl { distance } else { -distance } * eased, 0.0);
-            for s in leaving.iter() {
-                if !fits_budget(&s.shape, &mut budget, 0) || !replayable(ctx, &s.shape, 0) {
-                    continue;
-                }
-                let mut faded = s.clone();
-                faded.shape.translate(offset);
-                faded.clip_rect = faded.clip_rect.translate(offset).intersect(rect);
-                egui::epaint::shape_transform::adjust_colors(&mut faded.shape, move |c| {
-                    if *c != egui::Color32::PLACEHOLDER {
-                        *c = c.gamma_multiply(1.0 - eased);
-                    }
-                });
-                painter.with_clip_rect(faded.clip_rect).add(faded.shape.clone());
-                live.push(faded);
-            }
-            ctx.request_repaint();
-        }
-    } else {
+    if t >= 1.0 {
         screen.leaving = None;
+    }
+    // Reserve the outgoing composition first: dense live paint must not erase the screen
+    // at t == 0. Both portions of the cached frame still share one recursive shape cap.
+    let mut budget = MAX_SHAPES;
+    let leaving: Vec<_> = screen
+        .leaving
+        .iter()
+        .flat_map(|shapes| shapes.iter())
+        .filter(|s| replayable(ctx, &s.shape, 0) && fits_budget(&s.shape, &mut budget, 0))
+        .collect();
+    let mut live = Vec::new();
+    let mut index = 0;
+    painter.for_each_shape(|s| {
+        if index >= first && fits_budget(&s.shape, &mut budget, 0) {
+            live.push(s.clone());
+        }
+        index += 1;
+    });
+    if screen.leaving.is_some() {
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let distance = if file { 8.0 } else { 24.0 };
+        let offset = vec2(if rtl { distance } else { -distance } * eased, 0.0);
+        for s in leaving {
+            let mut faded = s.clone();
+            faded.shape.translate(offset);
+            faded.clip_rect = faded.clip_rect.translate(offset).intersect(rect);
+            egui::epaint::shape_transform::adjust_colors(&mut faded.shape, move |c| {
+                if *c != egui::Color32::PLACEHOLDER {
+                    *c = c.gamma_multiply(1.0 - eased);
+                }
+            });
+            painter.with_clip_rect(faded.clip_rect).add(faded.shape.clone());
+            live.push(faded);
+        }
+        ctx.request_repaint();
     }
     // Keep the composed frame so reversing the transition starts from what was actually visible.
     screen.presented = Arc::new(live);
@@ -143,6 +147,34 @@ mod tests {
         assert!(fits_budget(&nested, &mut exact, 0));
         assert_eq!(exact, 0);
         assert!(!fits_budget(&nested, &mut 4, 0));
+    }
+
+    /// Dense incoming paint must not evict any outgoing shapes, even on rapid reversal.
+    #[test]
+    fn dense_live_capture_reserves_the_outgoing_screen_within_the_shared_budget() {
+        let ctx = egui::Context::default();
+        for (file, now, count) in [(false, 0.0, 3000), (true, 1.0, MAX_SHAPES), (false, 1.0, MAX_SHAPES)] {
+            let mut output = ctx.run_ui(RawInput { time: Some(now), ..Default::default() }, |ui| {
+                let first = shape_count(ui.painter());
+                for _ in 0..count {
+                    ui.painter().rect_filled(ui.max_rect(), 0.0, if file { FILE } else { EDITOR });
+                }
+                paint(ui.painter(), first, file, true, false);
+            });
+            if now > 0.0 {
+                let outgoing = &output.shapes[count..];
+                let expected = if file { 3000 } else { MAX_SHAPES };
+                assert_eq!(outgoing.len(), expected, "the entire outgoing composition is replayed");
+                assert!(outgoing.iter().all(|s| matches!(&s.shape, Shape::Rect(r) if r.fill.a() == 255)), "the outgoing screen starts fully opaque");
+            }
+            let screen = ctx.data(|d| d.get_temp::<Screen>(id(&ctx))).unwrap();
+            let mut remaining = MAX_SHAPES;
+            assert!(
+                screen.presented.iter().all(|s| fits_budget(&s.shape, &mut remaining, 0)),
+                "live and outgoing paint share one recursive shape cap"
+            );
+            output.textures_delta.clear();
+        }
     }
 
     const EDITOR: Color32 = Color32::from_rgb(200, 40, 40);

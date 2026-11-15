@@ -1128,6 +1128,9 @@ fn active_tab_single_click_toggles_and_other_tab_opens_ribbon() {
     assert!(!h.state().ui.ribbon_collapsed);
     assert_eq!(h.state().ui.tab, "Insert");
     // Command/keytip navigation remains idempotent and opens a collapsed ribbon.
+    h.state_mut().ui.ribbon_collapsed = true;
+    h.state_mut().run("ui.tab", json!({"tab": "Insert"})).unwrap();
+    assert!(!h.state().ui.ribbon_collapsed);
     h.state_mut().run("ui.tab", json!({"tab": "Insert"})).unwrap();
     assert!(!h.state().ui.ribbon_collapsed);
 }
