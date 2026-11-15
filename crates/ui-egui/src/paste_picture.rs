@@ -212,13 +212,14 @@ fn read_picture_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
 /// Paste text naming copied picture files: insert the pictures when the clipboard holds those
 /// files. False leaves the text to the usual paste. When the host can't open the system clipboard
 /// ([`crate::Services::clipboard_unreachable`]), it can't list the copied files either, so the
-/// files named in the text are inserted.
+/// files named in the text are inserted; text that names no regular file here stays text.
 pub(crate) fn paste_named_files(app: &mut WordApp, text: &str) -> bool {
     if !names_picture_files(text) {
         return false;
     }
     if app.services.clipboard_unreachable.as_ref().is_some_and(|f| f()) {
-        return insert(app, ClipboardPicture::Files(named_files(text))).is_some();
+        let files: Vec<PathBuf> = named_files(text).into_iter().filter(|p| p.is_file()).collect();
+        return !files.is_empty() && insert(app, ClipboardPicture::Files(files)).is_some();
     }
     paste(app).is_some()
 }
@@ -449,6 +450,9 @@ mod tests {
         let pasted = paste_named_files(&mut a, &format!("file://{name}\n"));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(pasted);
+        assert_eq!(pictures(&mut a), 1);
+        // The file is gone now: the text names no file here, and pastes as text.
+        assert!(!paste_named_files(&mut a, &format!("file://{name}\n")), "a missing file's path stays text");
         assert_eq!(pictures(&mut a), 1);
         assert_eq!(percent_decoded("a%20b%2Fc%zz%+1%4"), b"a b/c%zz%+1%4");
         #[cfg(unix)]

@@ -1101,7 +1101,8 @@ mod tests {
 
     /// A copied picture file reaches egui's paste as its path, and the host, which can't open the
     /// clipboard, reads no picture: the waiting Paste inserts the file the path names, as Ctrl+V
-    /// does, and never types the path into the document. A path to a missing file pastes nothing.
+    /// does, and never types the path into the document. A path to a missing file names no copied
+    /// file, and pastes as text.
     #[test]
     fn a_waiting_paste_of_copied_picture_files_inserts_the_pictures() {
         let dir = std::env::temp_dir().join(format!("wc-waiting-paste-files-{}", std::process::id()));
@@ -1120,7 +1121,8 @@ mod tests {
             }
             frame(&mut a, &ctx, 0.1, vec![paste(&path)]);
             assert!(a.pending_paste.is_none());
-            assert!(!a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains(".png"), "the path isn't pasted as text");
+            let typed = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains(".png");
+            assert_eq!(typed, !inserted, "the path is pasted as text only when it names no file: {path}");
             assert_eq!(!a.session.doc.media.is_empty(), inserted, "{path}");
         }
         let _ = std::fs::remove_dir_all(&dir);
