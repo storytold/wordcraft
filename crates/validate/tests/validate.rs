@@ -5657,7 +5657,13 @@ fn coderabbit_paths_conflict_deep_alternate_content_and_branch_zero() {
         format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="{W_NS}" xmlns:w14="{W14_NS}" mc:Ignorable="w14" xmlns:mc="{MC_NS}">
-  <w:body><w:p w14:paraId="00000001"/><w:p w14:paraId="00000001"/></w:body>
+  <w:body>
+    <mc:AlternateContent>
+      <w:p w14:paraId="00000001"/>
+      <mc:Choice Requires="w99"><w:p/></mc:Choice>
+      <mc:Fallback><w:p w14:paraId="00000001"/></mc:Fallback>
+    </mc:AlternateContent>
+  </w:body>
 </w:document>"#
         ),
     );
@@ -5716,4 +5722,38 @@ fn coderabbit_doctype_entities_and_unresolved_general_refs() {
     );
     let report = validate(&d);
     assert_finding(&report, "XML-INVALID-CHAR", Some("word/document.xml"));
+
+    // Direct self-referential DOCTYPE entity reference is XML-MALFORMED.
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY loop "&loop;">]><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>&loop;</w:t></w:r></w:p></w:body></w:document>"#
+        ),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "XML-MALFORMED", Some("word/document.xml"));
+
+    // Indirectly recursive DOCTYPE entity references are also XML-MALFORMED.
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY a "&b;"><!ENTITY b "&a;">]><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>&a;</w:t></w:r></w:p></w:body></w:document>"#
+        ),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "XML-MALFORMED", Some("word/document.xml"));
+
+    // Replacement text containing markup or another entity ref marks the run Incomplete without false Pass.
+    for entity in [r#"<!ENTITY markup "<w:p/>">"#, r#"<!ENTITY greet "hi"><!ENTITY alias "&greet;">"#] {
+        let name = if entity.contains("markup") { "markup" } else { "alias" };
+        d.set(
+            "word/document.xml",
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [{entity}]><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>&{name};</w:t></w:r></w:p></w:body></w:document>"#
+            ),
+        );
+        let report = validate(&d);
+        assert!(!has(&report, "XML-MALFORMED"), "{entity}: {report:?}");
+        assert_eq!(report.verdict, Verdict::Incomplete, "{entity}: {report:?}");
+    }
 }

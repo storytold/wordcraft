@@ -28,7 +28,7 @@ for name,cmd,extra in gates:
   fail_lines=re.findall(r'^test (.*?) \.\.\. FAILED$',content,re.M)
   failures=sorted(set(fail_lines))
   failed_summaries=len(re.findall(r'^test result: FAILED\.',content,re.M))
-  unclassified_failure=bool(re.search(r"process didn't exit successfully:|could not compile",content))
+  unclassified_failure=bool(re.search(r"process didn't exit successfully:|could not compile|could not execute process",content))
   baseline=json.loads(Path('log/fredfix-round6-baseline-failures.json').read_text())['failures'] if name=='workspace-tests' else json.loads(Path('log/fredfix-round17-ci-baseline.json').read_text())['baseline']
   item.update(failures=failures,baseline_exact_match=failures==sorted(baseline),new_blockers=sorted(set(failures)-set(baseline)),missing_baseline_failures=sorted(set(baseline)-set(failures)))
   item['accepted']=item['baseline_exact_match'] and code in {1,101} and item['counts']['failed']>0 and len(fail_lines)==item['counts']['failed'] and failed_summaries>0 and not unclassified_failure

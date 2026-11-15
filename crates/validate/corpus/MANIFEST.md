@@ -2,8 +2,10 @@
 
 Every entry below was computed from the shipped generator output on
 2026-11-06; regenerated 2026-11-07 after the generator learned to list
-its separator notes in footnotePr/endnotePr (NOTE-PR-LISTING). Regenerating with the same seeds reproduces these SHA-256
-hashes byte-for-byte (verified: two `--all` runs, identical hashes).
+its separator notes in footnotePr/endnotePr (NOTE-PR-LISTING), and
+updated after PR#18 schema/chart/glossary fixes in `gen_stress.py`.
+Regenerating with the same seeds reproduces these SHA-256
+hashes byte-for-byte.
 
 ## Stress corpus (generated, binaries not committed)
 
@@ -14,16 +16,16 @@ construction, so any Corrupt/Error finding on it is a false positive.
 
 | File | Seed | Size (bytes) | Parts | Axis | SHA-256 |
 |---|---|---|---|---|---|
-| `monster.docx` | 7 | 2,866,580 | 76 | everything high; altChunk + background on | `70a87e245c0d1c55917e624c8f8701c07f92cc8e6c92c0ff37b69995785ab70f` |
-| `axis-revisions.docx` | 8 | 912,367 | 43 | rev-density 0.95, 10 authors, 900 paragraphs | `9db82bcb1c0cadf22a5d0e3c3fa0571d004e1826f91988020cdd1c6966ac080b` |
-| `axis-comments.docx` | 9 | 1,019,829 | 43 | 220 threads x depth 8 -> 1,089 comments | `58ddf0130287a168c69620938972497ca470bce9228773b357f2bd6b26bb43c2` |
-| `axis-numbering.docx` | 10 | 899,160 | 43 | 300 abstractNum, 60 orphans, 1,200 paragraphs | `3955ee3a1ff074bc12528b06031bd266e3756565f9fafdf3fcae718ccd1ca89b` |
-| `axis-styles.docx` | 11 | 851,185 | 43 | 600 styles, basedOn depth 30 | `d8afe3f7c0f5c91d542ae7bda39046e939a51255a655dfc12e5aeceea680fae9` |
-| `axis-tables.docx` | 12 | 1,331,043 | 43 | 30 tables, 40x8, nesting depth 3 | `84823e4eab65df85c980108506ed0afc7a38172c9d48a2004f7882b74cddd663` |
-| `axis-media.docx` | 13 | 6,473,181 | 89 | 40 media parts, 200 refs, 10 orphans | `b91255ea8b2b62330cb98c247a6373c7fadc7d681029c8b5530377920fc1aa7c` |
-| `axis-sections.docx` | 14 | 876,005 | 103 | 12 sections (72 header/footer parts) | `ad4abb8f93e4ba363f47607ab4e92978aebbe5a2e3a62522f264054caba75dd9` |
-| `axis-fields-math.docx` | 15 | 862,474 | 43 | 150 fields, 120 math expressions, 400 bookmarks | `a7136d054b8d39f83f7297c3affa7f038998109056945065550bff7d32983364` |
-| `small-valid.docx` | 16 | 647,721 | 42 | control: everything on, all knobs low | `83669349c790d3af7f1bdc3c608f05182d12a9415a30838b74b9971ccbbe0a33` |
+| `monster.docx` | 7 | 2,866,457 | 76 | everything high; altChunk + background on | `70d2ba1aabed321b455b4aa8a2585b155c665bcb9d7fdcb01f424df371f6a253` |
+| `axis-revisions.docx` | 8 | 912,376 | 43 | rev-density 0.95, 10 authors, 900 paragraphs | `b48264bbd831b7ac9136803f81fc9b579f3ceaac2d37311af5af31bdb7411baa` |
+| `axis-comments.docx` | 9 | 1,019,182 | 43 | 220 threads x depth 8 -> 1,089 comments | `8171c0bbabd58db20348b61418c2a04fc049f72e0ad48c92a533004296ee87d6` |
+| `axis-numbering.docx` | 10 | 899,180 | 43 | 300 abstractNum, 60 orphans, 1,200 paragraphs | `3229c2a6395193b856cf53410a56d219896568cc124b6e97257a9a56959d9d9c` |
+| `axis-styles.docx` | 11 | 851,202 | 43 | 600 styles, basedOn depth 30 | `d34e2a8157db75d0dba806611f1f4dad4a309d707822a47f6226088e6b15bbaf` |
+| `axis-tables.docx` | 12 | 1,331,052 | 43 | 30 tables, 40x8, nesting depth 3 | `63fb1f30d235a7a155fa0bfb71ebee9829470145bccbc6b4f8ead5bcb8465a70` |
+| `axis-media.docx` | 13 | 6,473,197 | 89 | 40 media parts, 200 refs, 10 orphans | `79516cc44e39e575ab7917dd1ac338118535e2bb10ee174317b7159e0b451958` |
+| `axis-sections.docx` | 14 | 876,031 | 103 | 12 sections (72 header/footer parts) | `f5ef0731cac61ad444e9af91a701d41ffb324fec64bf5439b44790c22bb05cf4` |
+| `axis-fields-math.docx` | 15 | 862,499 | 43 | 150 fields, 120 math expressions, 400 bookmarks | `97a63f04a1505854ddcd709d2a93b8ea9d370b4b71ca35ce4a819660b5e6f844` |
+| `small-valid.docx` | 16 | 647,750 | 42 | control: everything on, all knobs low | `65f4b058f4282ef4c2ccd5eb7bd9ac76cc88b7382f51d7e3825ccb39810eab14` |
 
 **Resolved gap (2026-11-06):** the first build of this corpus declared
 the glossary part with the main document content type in

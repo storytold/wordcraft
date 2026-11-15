@@ -2,7 +2,7 @@
 //! Unsupported tainted operations fail closed; this is deliberately not a Rust type checker.
 use crate::{ident, tokens};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{
@@ -163,7 +163,7 @@ pub(crate) fn analyze(sig: &Signature, block: &Block, names: &Names, file: &str,
 struct Flow {
     names: Names,
     bindings: HashMap<String, Origin>,
-    scopes: Vec<HashSet<String>>,
+    scopes: Vec<HashMap<String, Option<Origin>>>,
     issues: Vec<String>,
     calls: Vec<String>,
     file: String,
@@ -201,7 +201,7 @@ impl Flow {
             Pat::Ident(p) => {
                 let name = ident(&p.ident);
                 if let Some(scope) = self.scopes.last_mut() {
-                    scope.insert(name.clone());
+                    scope.entry(name.clone()).or_insert_with(|| self.bindings.get(&name).cloned());
                 }
                 self.bindings.insert(name, origin);
             }
@@ -375,14 +375,13 @@ impl<'ast> Visit<'ast> for Flow {
     }
 
     fn visit_block(&mut self, block: &'ast Block) {
-        let saved = self.bindings.clone();
         let names = self.names.clone();
-        self.scopes.push(HashSet::new());
+        self.scopes.push(HashMap::new());
         visit::visit_block(self, block);
         if let Some(declared) = self.scopes.pop() {
-            for name in declared {
-                if let Some(previous) = saved.get(&name) {
-                    self.bindings.insert(name, previous.clone());
+            for (name, previous) in declared {
+                if let Some(origin) = previous {
+                    self.bindings.insert(name, origin);
                 } else {
                     self.bindings.remove(&name);
                 }
@@ -702,6 +701,14 @@ mod tests {
     fn nested_shadowing_restores_outer_binding() {
         let issues = analyze_fn(
             "fn f(entries: &[Entry], name: &str) -> bool { let items = entries; { let items: &[Entry] = &[]; let _ = items; } !items.iter().any(|e| e.name == name) }",
+        );
+        assert!(issues.iter().any(|i| i.contains("raw absence")), "expected raw absence issue: {issues:?}");
+    }
+
+    #[test]
+    fn nested_assignment_before_shadowing_retains_outer_raw_provenance() {
+        let issues = analyze_fn(
+            "fn f(entries: &[Entry], name: &str) -> bool { let mut items: &[Entry] = &[]; { items = entries; let items: &[Entry] = &[]; let _ = items; } !items.iter().any(|e| e.name == name) }",
         );
         assert!(issues.iter().any(|i| i.contains("raw absence")), "expected raw absence issue: {issues:?}");
     }

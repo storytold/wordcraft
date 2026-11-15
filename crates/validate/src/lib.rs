@@ -4473,6 +4473,56 @@ mod budget_tests {
         assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
     }
 
+    /// CodeRabbit PR#18 (CWE-409): successful reads exceeding `part_bytes` must still charge `total_bytes`.
+    #[test]
+    fn coderabbit_oversized_part_decompression_charges_total_budget() {
+        use std::io::{Cursor, Write};
+        use zip::write::SimpleFileOptions;
+
+        let ct = content_types();
+        let rels = package_rels();
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}"><w:body><w:p/></w:body></w:document>"#).into_bytes();
+        let prefix = (ct.len() + rels.len() + doc.len()) as u64;
+        let part_bytes = 450u64;
+        let over1 = format!(r#"<?xml version="1.0"?><root><!-- {} --></root>"#, "x".repeat(700)).into_bytes();
+        let over2 = format!(r#"<?xml version="1.0"?><root><!-- {} --></root>"#, "y".repeat(170)).into_bytes();
+
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in [
+            ("[Content_Types].xml", &ct),
+            ("_rels/.rels", &rels),
+            ("word/document.xml", &doc),
+            ("word/over1.xml", &over1),
+            ("word/over2.xml", &over2),
+        ] {
+            w.start_file(name, opts).unwrap();
+            w.write_all(data).unwrap();
+        }
+        let mut bytes = w.finish().unwrap().into_inner();
+        // Forge `word/over1.xml`'s declared uncompressed size in both local and central headers so
+        // it bypasses the header pre-check and trips `buf.len() > limits.part_bytes` during inflate.
+        for (sig, usize_at, nlen_at, name_at) in [(b"PK\x03\x04", 22, 26, 30), (b"PK\x01\x02", 24, 28, 46)] {
+            for i in 0..bytes.len().saturating_sub(name_at) {
+                if bytes.get(i..i + 4) != Some(sig) {
+                    continue;
+                }
+                let n = u16::from_le_bytes(bytes[i + nlen_at..i + nlen_at + 2].try_into().unwrap()) as usize;
+                if bytes.get(i + name_at..i + name_at + n) == Some(b"word/over1.xml".as_slice()) {
+                    bytes[i + usize_at..i + usize_at + 4].copy_from_slice(&1u32.to_le_bytes());
+                }
+            }
+        }
+
+        let report = validate_bytes_limited(&bytes, Limits { part_bytes, total_bytes: prefix + 550, ..Limits::default() });
+        assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+        assert!(
+            report.coverage_notes.iter().any(|n| n.contains("word/over1.xml") && n.contains("decompresses past the 450-byte per-part limit")),
+            "{report:?}"
+        );
+        assert!(report.coverage_notes.iter().any(|n| n.contains("word/over2.xml") && n.contains("total limit")), "{report:?}");
+    }
+
     /// The byte-limit test's twin at the archive entry limit: the
     /// owner part falls beyond the examined prefix, so it is not
     /// proven absent and its consumption is unestablished — the

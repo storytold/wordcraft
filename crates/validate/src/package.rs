@@ -336,6 +336,7 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
         let mut buf = Vec::with_capacity(size.min(read_cap).min(1 << 20) as usize);
         match (&mut f).take(read_cap.saturating_add(1)).read_to_end(&mut buf) {
             Ok(_) if buf.len() as u64 > limits.part_bytes => {
+                total = total.saturating_add(buf.len() as u64);
                 acc.note(format!("part {name} decompresses past the {}-byte per-part limit and was not checked", limits.part_bytes));
                 acc.set_incomplete();
                 entries.push(blank_entry(name, false));
