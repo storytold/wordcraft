@@ -309,6 +309,13 @@ impl WordApp {
         self.windows.viewport(key)
     }
 
+    /// The egui viewport of the window a command was chosen in: while the windows draw, the
+    /// viewport drawing (the viewport map is out of [`Windows`] then, and
+    /// [`WordApp::active_viewport`] would give the root's); otherwise the active window's.
+    pub(crate) fn choosing_viewport(&self, ctx: &egui::Context) -> ViewportId {
+        if self.windows.showing { ctx.viewport_id() } else { self.active_viewport() }
+    }
+
     /// The active window's viewport and surface, for `ui.screenshot`: the root's from this
     /// frame's raw input, another window's from the input it last drew with (the host's raw-input
     /// hook sees only the root's).

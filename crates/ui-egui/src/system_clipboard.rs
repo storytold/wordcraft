@@ -205,7 +205,7 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
         command_held: ctx.input(|i| i.modifiers.command),
         document: app.session.document_id(),
         window: app.windows.shown(),
-        viewport: app.active_viewport(),
+        viewport: app.choosing_viewport(&ctx),
     });
     // What a window found for an earlier Paste isn't this one's answer.
     app.viewport_paste(&ctx, |v| *v = None);

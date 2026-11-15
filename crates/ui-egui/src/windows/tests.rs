@@ -629,6 +629,41 @@ fn a_waiting_menu_paste_stays_with_its_window() {
     assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(crate::system_clipboard::CANCELLED));
 }
 
+/// A Paste chosen while a window of its own draws (here Home's Paste KeyTip, P, as a click on a
+/// menu or ribbon item there would be), with the system clipboard out of reach (#6635): egui is
+/// asked in that window, not the main one, and the text it reads there is pasted once.
+#[test]
+fn a_paste_chosen_while_a_second_window_draws_reads_the_text_there() {
+    let ctx = backend();
+    let services = Services { clipboard_text: Some(Box::new(|| None)), clipboard_unreachable: Some(Box::new(|| true)), ..Default::default() };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    frames(&ctx, &mut a, 2);
+    a.run("view.newWindow", json!({})).unwrap();
+    let b = a.active_viewport();
+    assert_ne!(b, ViewportId::ROOT);
+    focus(b);
+    frames(&ctx, &mut a, 3);
+    a.ui.tab = "Home".into();
+    a.ui.keytips = crate::keytips::Phase::Commands;
+    EVENTS.with(|e| {
+        let mut e = e.borrow_mut();
+        let events = e.entry(b).or_default();
+        for pressed in [true, false] {
+            events.push(egui::Event::Key { key: egui::Key::P, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+        }
+    });
+    frame(&ctx, &mut a);
+    assert!(a.pending_paste.is_some(), "the KeyTip chose Paste, which waits for egui");
+    frames(&ctx, &mut a, 3);
+    assert!(sent(b, &ViewportCommand::RequestPaste), "the second window asks egui");
+    assert!(!sent(ViewportId::ROOT, &ViewportCommand::RequestPaste), "the main window doesn't");
+    EVENTS.with(|e| e.borrow_mut().entry(b).or_default().push(egui::Event::Paste(" there".into())));
+    frames(&ctx, &mut a, 2);
+    assert!(a.pending_paste.is_none());
+    assert_eq!(text(&a).matches("there").count(), 1, "pasted once, in the second window: {:?}", text(&a));
+}
+
 /// A menu Paste in a document opened with File › New, in a window of its own, with the system
 /// clipboard out of reach (#6635): it waits for egui's text in that window, and a key pressed
 /// there first cancels it, as in the main window.
