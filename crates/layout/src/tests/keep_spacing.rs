@@ -245,3 +245,60 @@ fn kept_paragraph_with_its_own_footnote_keeps_the_next_line_height() {
         "the note goes with its reference"
     );
 }
+
+/// A terminal keep-with-next cannot move text that fits with its own leading in the margin.
+#[test]
+fn terminal_keep_next_keeps_its_eligible_last_line_leading() {
+    let document = |room, keep_next, keep_lines, multiple| {
+        let mut doc = pagination_fixture_document("Filler\nTerminal");
+        let full = doc.last_section.text_height();
+        doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props = ParaProps {
+            line_spacing: Some(LineSpacing::Exactly(full - room)),
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            widow_control: Some(false),
+            ..Default::default()
+        };
+        doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props = ParaProps {
+            line_spacing: Some(LineSpacing::Multiple(multiple)),
+            keep_next: Some(keep_next),
+            keep_lines: Some(keep_lines),
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            widow_control: Some(false),
+            ..Default::default()
+        };
+        doc
+    };
+    for multiple in [1.5, 2.0] {
+        for keep_lines in [false, true] {
+            let probe = lay(&document(120.0, false, keep_lines, multiple));
+            assert_pagination_fixture_font(&probe);
+            let line = probe
+                .pages
+                .iter()
+                .flat_map(|p| &p.items)
+                .find_map(|item| match item {
+                    Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == [1] => para.lines.first(),
+                    _ => None,
+                })
+                .unwrap();
+            let text_height = line.baseline - line.top + line.text_desc;
+            assert!(line.height > text_height + 1.0, "fixture has eligible leading");
+            let room = (line.height + text_height) * 0.5;
+            let free = lay(&document(room, false, keep_lines, multiple));
+            let kept = lay(&document(room, true, keep_lines, multiple));
+            assert_pagination_fixture_font(&free);
+            assert_pagination_fixture_font(&kept);
+            assert_eq!(free.caret(&Pos::body(1, 0)).unwrap().page, 0, "terminal text fits");
+            assert_eq!(kept.caret(&Pos::body(1, 0)).unwrap().page, 0, "multiple={multiple}, keep_lines={keep_lines}: no successor to move with");
+            assert!(
+                free.pages[0].items.iter().any(|item| matches!(item,
+                    Placed::Lines { story: StoryRef::Body, path, para, y, .. }
+                        if path.0 == [1] && y + para.height > free.pages[0].body.bottom() + 0.01
+                )),
+                "the control actually uses the bottom-margin leading allowance"
+            );
+        }
+    }
+}

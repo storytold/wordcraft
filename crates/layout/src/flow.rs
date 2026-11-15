@@ -344,7 +344,14 @@ impl<'a> Flow<'a> {
         };
         let (next, leading) =
             if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone(), pb.web) } else { (0.0, 0.0) };
-        let need = height + if rp.keep_next { gap + next - if at_margin { leading } else { 0.0 } } else { -own_leading };
+        // A terminal keep-with-next has no successor height or leading to reserve. Like
+        // ordinary placement, it can leave its own eligible leading in the bottom margin.
+        let need = height
+            + if rp.keep_next && ctx.doc.body.get(self.block.saturating_add(1)).is_some() {
+                gap + next - if at_margin { leading } else { 0.0 }
+            } else {
+                -own_leading
+            };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
