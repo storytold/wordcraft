@@ -138,7 +138,7 @@ const UNSAVED_QUIT: &str = "a document has unsaved changes: save it first, or pa
 const NO_DOCUMENT: &str = "no document is open; create one (file.new) or open one (file.open) first";
 
 /// The methods that take `doc`.
-const DOC_METHODS: &[&str] = &["engine.execute", "command", "document.inspect", "ui.render"];
+const DOC_METHODS: &[&str] = &["engine.execute", "command", "document.inspect", "file.inspect", "ui.render"];
 
 /// The open document other than the active one that a request's `doc` names; `None` for the
 /// active document (no `doc`, null, or the active document's id). An id that names no open
@@ -171,6 +171,7 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
     }
     match method {
         "document.inspect" => reply(app.session.with_document(doc, |s| s.run("document.inspect", p))),
+        "file.inspect" => reply(app.session.with_document(doc, |s| s.run("file.inspect", p))),
         "ui.render" => {
             let page = p.get("page").and_then(Value::as_u64).unwrap_or(1);
             let scale = p.get("scale").and_then(Value::as_f64).map_or(2.0, |v| v as f32);

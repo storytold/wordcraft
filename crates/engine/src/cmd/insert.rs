@@ -14,7 +14,7 @@ mod links;
 mod objects;
 
 pub(crate) use header_footer::saved_copy;
-use header_footer::{create_hf, edit_hf, header_footer, new_empty_headers, strip_headers};
+use header_footer::{create_hf, edit_hf, header_footer, new_empty_headers, remove_hf, strip_headers};
 pub use items::{
     DropCapState, default_date_picture, drop_cap_state, format_date, format_date_at, format_date_in, format_date_parts, format_date_parts_in,
 };
@@ -101,19 +101,11 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         }),
         CommandSpec::new("insert.removeHeader", "Remove Header", "Insert › Header & Footer › Header", |s, _| {
-            s.doc.last_section.headers = Default::default();
-            for path in s.doc.para_paths(StoryRef::Body) {
-                if s.doc.para(StoryRef::Body, &path).is_some_and(|p| p.section.is_some())
-                    && let Ok(p) = s.doc.para_mut(StoryRef::Body, &path)
-                    && let Some(sec) = p.section.as_mut()
-                {
-                    sec.headers = Default::default();
-                }
-            }
+            remove_hf(s, true);
             sel_result(s)
         }),
         CommandSpec::new("insert.removeFooter", "Remove Footer", "Insert › Header & Footer › Footer", |s, _| {
-            s.doc.last_section.footers = Default::default();
+            remove_hf(s, false);
             sel_result(s)
         }),
         CommandSpec::new("insert.dateTime", "Date & Time", "Insert › Text", date_time).params(r#"{"format"?: "M/d/yyyy", "update"?: bool, "language"?: "en-US|pt-BR"}"#),

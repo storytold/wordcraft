@@ -85,6 +85,35 @@ fn methods_address_an_open_document_by_id() {
     assert_eq!(r["result"]["blocks"][0]["text"], "First more", "{r}");
 }
 
+/// W1: `file.inspect` addressed to a document in the background cleans that one: hidden text
+/// goes from the document `doc` names, not from whichever document is active.
+#[test]
+fn file_inspect_cleans_the_document_it_addresses() {
+    let mut a = app();
+    let (first, _second) = two_documents(&mut a);
+    // Hidden text in the parked document.
+    a.session
+        .with_document(first, |s| {
+            s.run("text.insert", &json!({"text": " secret"}))?;
+            s.run("select.text", &json!({"text": "secret"}))?;
+            s.run("format.hidden", &json!({"value": true}))
+        })
+        .unwrap()
+        .unwrap();
+    // The addressed one carries it, the active one reports none.
+    let r = send(&mut a, "file.inspect", json!({"doc": first}));
+    assert_eq!(r["result"]["found"]["hiddenText"], true, "{r}");
+    let r = send(&mut a, "file.inspect", json!({}));
+    assert_eq!(r["result"]["found"]["hiddenText"], false, "{r}");
+    // The cleanup takes it out of the addressed document only: nothing residual, and the
+    // addressed document's text is back to what the human typed.
+    let r = send(&mut a, "file.inspect", json!({"doc": first, "remove": ["hidden"]}));
+    assert_eq!(r["result"]["residual"], json!([]), "{r}");
+    let t = a.session.with_document(first, |s| s.doc.plain_text(wordcraft_doc::StoryRef::Body)).unwrap();
+    assert_eq!(t.trim(), "First", "{t}");
+    assert_eq!(body(&a).trim(), "Second");
+}
+
 /// W1: `file.close` addressed to a document in the background refuses its unsaved changes
 /// unless forced (only a boolean true), as it does for the window's document (#1268), and closes
 /// only that document.
