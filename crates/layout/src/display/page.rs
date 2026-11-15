@@ -48,9 +48,10 @@ pub struct ItemDisplay<'a> {
     page: &'a Page,
     authors: Authors<'a>,
     clips: Clips,
-    /// The page's warped text boxes ([`warped_boxes`]): their text is drawn bent, with their
-    /// first line, as the page draws it, though their frame is another item.
-    warps: Vec<(u32, Rect, wordcraft_doc::wordart::TextWarp)>,
+    /// The page's warped text boxes ([`warped_boxes`]) by story, with their lines on the page in
+    /// order: their text is drawn bent, with their first line, as the page draws it, though their
+    /// frame is another item. Found once for the page, so each item looks its box up.
+    warps: HashMap<u32, WarpedBox<'a>>,
     /// The page's text boxes (see [`text_frames`]): a turned one's lines are drawn turned.
     turned: Vec<(u32, Rect, Spin)>,
 }
@@ -59,7 +60,20 @@ impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
         let cells: Vec<Placed> =
             page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
-        let warps = [&page.header, &page.footer, &page.items].into_iter().flat_map(|items| warped_boxes(doc, items)).collect();
+        let mut warps: HashMap<u32, WarpedBox<'a>> = HashMap::new();
+        for (id, rect, warp) in [&page.header, &page.footer, &page.items].into_iter().flat_map(|items| warped_boxes(doc, items)) {
+            warps.entry(id).or_insert(WarpedBox { rect, warp, lines: Vec::new() });
+        }
+        if !warps.is_empty() {
+            for it in page.header.iter().chain(&page.footer).chain(&page.items) {
+                crate::work::steps(1);
+                if let Placed::Lines { story: StoryRef::Part(id), .. } = it
+                    && let Some(w) = warps.get_mut(id)
+                {
+                    w.lines.push(it);
+                }
+            }
+        }
         let turned = [&page.items, &page.header, &page.footer].into_iter().flat_map(|items| text_frames(items)).collect();
         ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells), warps, turned }
     }
@@ -71,22 +85,17 @@ impl<'a> ItemDisplay<'a> {
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
         if let Placed::Lines { story: StoryRef::Part(id), .. } = it
-            && let Some((_, rect, warp)) = self.warps.iter().find(|(w, ..)| w == id)
+            && let Some(w) = self.warps.get(id)
         {
             // A warped text box's lines are drawn together, bent, with its first one.
             let page = self.page;
-            let lines: Vec<&Placed> = [&page.header, &page.footer, &page.items]
-                .into_iter()
-                .flatten()
-                .filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id))
-                .collect();
-            match lines.iter().position(|l| std::ptr::eq(*l, it)) {
-                Some(0) => {
-                    warped_text(WarpedText { doc: self.doc, lines: &lines, rect: *rect, warp, opts, authors: &self.authors, alpha: ba }, &mut out)
-                }
-                Some(_) => {}
+            let on_page = [&page.header, &page.footer, &page.items].into_iter().any(|v| v.as_ptr_range().contains(&std::ptr::from_ref(it)));
+            if w.lines.first().is_some_and(|l| std::ptr::eq(*l, it)) {
+                let text = WarpedText { doc: self.doc, lines: &w.lines, rect: w.rect, warp: &w.warp, opts, authors: &self.authors, alpha: ba };
+                warped_text(text, &mut out);
+            } else if !on_page {
                 // Not one of the page's own items: drawn on its own, as before.
-                None => stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out),
+                stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
             }
             body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
             return out;
@@ -297,8 +306,16 @@ fn cell_clip(clips: &Clips, story: StoryRef, path: &[u32]) -> Option<Rect> {
         .map(|(_, r)| *r)
 }
 
+/// A warped text box of a page ([`ItemDisplay`]): its frame, its warp and its lines on the page.
+struct WarpedBox<'a> {
+    rect: Rect,
+    warp: wordcraft_doc::wordart::TextWarp,
+    lines: Vec<&'a Placed>,
+}
+
 /// The text boxes among `items` whose text is warped (Text Effects › Transform, drawn bent): their
-/// story, frame and warp. Empty, without a walk of the document, when none is.
+/// story, frame and warp. The paragraphs holding the items' objects are walked once each, up to
+/// the last object asked for.
 fn warped_boxes(doc: &Document, items: &[Placed]) -> Vec<(u32, Rect, wordcraft_doc::wordart::TextWarp)> {
     let warp = |extra: &wordcraft_doc::connector::ShapeExtra| extra.warp.clone().filter(|w| !w.is_plain());
     // The objects the items draw, each paragraph's text walked once up to the last offset asked
