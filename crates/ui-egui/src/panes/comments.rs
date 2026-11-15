@@ -116,24 +116,48 @@ fn drafts(app: &mut WordApp) -> &mut CommentDrafts {
 pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Option<egui::FontId>, focus: bool) {
     let Some(part) = app.session.doc.comments.get(&id).map(|c| c.part) else { return };
     let draft = drafts(app).edits.get(&id).cloned();
-    let mut text = draft.unwrap_or_else(|| app.session.doc.plain_text(StoryRef::Part(part)));
+    let content =
+        draft.map(crate::comment_links::CommentText::plain).unwrap_or_else(|| crate::comment_links::CommentText::new(&app.session.doc, part));
+    let mut text = content.text.clone();
     // Read-only where comments can't change (a protected document), so nothing is typed in vain.
     let editable = crate::widgets::enabled(app, "review.editComment");
     let field = field_id(app, ui, "comment_edit", id);
-    let mut edit = egui::TextEdit::multiline(&mut text)
+    let text_font = font.clone().unwrap_or_else(|| egui::FontSelection::Default.resolve(ui.style()));
+    let t = Tokens::get(ui.ctx());
+    let mut layouter = |ui: &Ui, buffer: &dyn egui::TextBuffer, width: f32| {
+        let job = if buffer.as_str() == content.text {
+            content.job(text_font.clone(), t.text, t.blue, width)
+        } else {
+            crate::comment_links::CommentText::plain(buffer.as_str().to_string()).job(text_font.clone(), t.text, t.blue, width)
+        };
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    // An immutable buffer keeps selection and link clicks available under protection,
+    // while egui refuses typing and paste before either could become a comment draft.
+    let mut read_only = content.text.as_str();
+    let buffer: &mut dyn egui::TextBuffer = if editable { &mut text } else { &mut read_only };
+    let mut edit = egui::TextEdit::multiline(buffer)
         .id(field)
-        .interactive(editable)
         .desired_rows(1)
         .desired_width(f32::INFINITY)
+        .layouter(&mut layouter)
         .hint_text(tl!("Add a comment"));
     if let Some(f) = &font {
         edit = edit.font(f.clone());
     }
-    let r = capped_field(ui, field.with("scroll"), font.as_ref(), edit);
+    let out = capped_field(ui, field.with("scroll"), font.as_ref(), edit);
+    let target = ui
+        .input(|i| i.pointer.hover_pos())
+        .filter(|_| text == content.text)
+        .and_then(|p| content.at(&out.galley, out.galley_pos, out.text_clip_rect.intersect(ui.clip_rect()), p));
+    if let Some(target) = crate::comment_links::interact(ui, &out.response, target) {
+        crate::canvas::follow_link(app, target);
+    }
+    let r = out.response;
     if focus {
         r.request_focus();
     }
-    if r.changed() {
+    if editable && r.changed() {
         drafts(app).edits.insert(id, text);
     }
     if r.lost_focus() {
@@ -156,11 +180,11 @@ const FIELD_FRAME: f32 = 4.0;
 
 /// A comment or reply field at most [`COMMENT_ROWS`] lines tall. Longer text scrolls inside it,
 /// and the field keeps its caret in view.
-fn capped_field(ui: &mut Ui, scroll_id: egui::Id, font: Option<&egui::FontId>, edit: egui::TextEdit<'_>) -> egui::Response {
+fn capped_field(ui: &mut Ui, scroll_id: egui::Id, font: Option<&egui::FontId>, edit: egui::TextEdit<'_>) -> egui::text_edit::TextEditOutput {
     let font = font.cloned().unwrap_or_else(|| egui::FontSelection::Default.resolve(ui.style()));
     let row = ui.fonts_mut(|f| f.row_height(&font));
     let max = row * COMMENT_ROWS as f32 + FIELD_FRAME;
-    egui::ScrollArea::vertical().id_salt(scroll_id).max_height(max).auto_shrink([false, true]).show(ui, |ui| ui.add(edit)).inner
+    egui::ScrollArea::vertical().id_salt(scroll_id).max_height(max).auto_shrink([false, true]).show(ui, |ui| edit.show(ui)).inner
 }
 
 /// A comment field's widget id, per document: egui's own state for the field (its cursor, undo
@@ -206,7 +230,7 @@ pub(crate) fn reply_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Option
     if let Some(f) = &font {
         edit = edit.font(f.clone());
     }
-    let r = capped_field(ui, field.with("scroll"), font.as_ref(), edit);
+    let r = capped_field(ui, field.with("scroll"), font.as_ref(), edit).response;
     if focus {
         r.request_focus();
     }
