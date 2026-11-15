@@ -6220,6 +6220,189 @@ fn interface_size_survives_an_unusable_display_scale() {
     assert_eq!(InterfaceSize::AUTO.drawn_percent(f32::MAX), u16::MAX);
 }
 
+/// #4030: a system that reports a huge scale (an 11-inch 1366x768 panel on X11) must not make Auto
+/// draw an interface larger than the screen holds; the controls stay on screen.
+#[test]
+fn auto_interface_size_is_capped_to_what_fits_the_screen() {
+    use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit};
+    let limit = auto_scale_limit(Some((1366.0, 768.0)));
+    assert!((1.0..1.6).contains(&limit), "{limit}");
+    // Scales that fit are left as the system reports them.
+    for (screen, natives) in [((1920.0, 1080.0), [1.0, 1.25, 1.5]), ((1366.0, 768.0), [1.0, 1.25, 1.5])] {
+        let limit = auto_scale_limit(Some(screen));
+        for native in natives {
+            assert_eq!(f32::from(InterfaceSize::AUTO.drawn_percent_within(native, limit)), native * 100.0, "{screen:?} {native}");
+        }
+    }
+    assert!((auto_scale_limit(Some((1920.0, 1080.0))) - 2.13).abs() < 0.01);
+    for native in [2.0, 3.17] {
+        let drawn = f32::from(InterfaceSize::AUTO.drawn_percent_within(native, limit)) / 100.0;
+        assert!(1366.0 / drawn >= AUTO_MIN_POINTS.0 - 3.0 && 768.0 / drawn >= AUTO_MIN_POINTS.1 - 3.0, "{native}: {drawn}");
+    }
+    // A scale that already fits, an unknown screen and junk are left alone.
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(1.25, limit), 125);
+    assert_eq!(auto_scale_limit(None), f32::INFINITY);
+    assert_eq!(auto_scale_limit(Some((f32::NAN, 768.0))), f32::INFINITY);
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(3.0, auto_scale_limit(None)), 300);
+    // A screen below the minimum is never scaled under 100 %; a 4K screen at 2x is untouched.
+    assert_eq!(auto_scale_limit(Some((640.0, 480.0))), 1.0);
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(2.0, auto_scale_limit(Some((3840.0, 2160.0)))), 200);
+    // A chosen size is the user's and is not capped.
+    assert_eq!(InterfaceSize::from_percent(300.0).unwrap().drawn_percent_within(3.0, limit), 300);
+}
+
+/// #4030: the zoom is shared, so the smallest screen of all the open windows caps Auto, and a
+/// monitor size made with the zoom before a change still gives the same physical screen.
+#[test]
+fn auto_cap_follows_the_smallest_window_screen_and_the_zoom_of_its_points() {
+    use theme::auto_scale_limit_over;
+    let small = auto_scale_limit_over([((1366.0, 768.0), 1.0)], 1.0, 1.0);
+    let large = auto_scale_limit_over([((3840.0, 2160.0), 1.0)], 1.0, 1.0);
+    assert!(small < large);
+    assert_eq!(auto_scale_limit_over([((3840.0, 2160.0), 1.0), ((1366.0, 768.0), 1.0)], 1.0, 1.0), small);
+    // A 1366x768 panel at native scale 3: the points are 455x256 at zoom 1, 304x171 at zoom 1.5.
+    // The pixels, and so the cap, don't depend on which zoom made the points.
+    let a = auto_scale_limit_over([((1366.0 / 3.0, 768.0 / 3.0), 3.0)], 1.0, 3.0);
+    let b = auto_scale_limit_over([((1366.0 / 4.5, 768.0 / 4.5), 3.0)], 1.5, 3.0);
+    assert!((a - b).abs() < 1e-4 && (a - small).abs() < 1e-4, "{a} {b} {small}");
+    assert_eq!(auto_scale_limit_over([], 1.0, 1.0), f32::INFINITY);
+}
+
+/// #4030: with a 1x window on a large screen and a 3x window on a 1366x768 panel, the shared zoom
+/// is the one the 3x window needs, so both windows draw within their own screen.
+#[test]
+fn auto_cap_keeps_every_window_within_its_own_screen_when_scales_differ() {
+    use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit, usable_scale};
+    let windows = [((3840.0, 2160.0), 1.0_f32), ((1366.0 / 3.0, 768.0 / 3.0), 3.0)];
+    for root in [1.0_f32, 3.0] {
+        let limit = theme::auto_scale_limit_over(windows, 1.0, root);
+        let zoom = InterfaceSize::AUTO.zoom_factor_within(root, limit);
+        for ((w, h), own) in windows {
+            let pixels_per_point = usable_scale(own) * zoom;
+            let (px_w, px_h) = (w * own, h * own);
+            assert!(pixels_per_point <= auto_scale_limit(Some((px_w, px_h))) + 1e-4, "root {root}, window {own}: {pixels_per_point}");
+            assert!(
+                px_w / pixels_per_point >= AUTO_MIN_POINTS.0 - 1.0 && px_h / pixels_per_point >= AUTO_MIN_POINTS.1 - 1.0,
+                "root {root}, window {own}"
+            );
+        }
+    }
+}
+
+/// #4030: the cap shows in `ui.interfaceSize` and is never saved; Ctrl+Shift+0 returns to Auto
+/// while Ctrl+Alt+0 (AltGr+0, which types `}` on a German layout) neither resets nor swallows it.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn reset_interface_size_shortcut_and_capped_report() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    {
+        let a = h.state_mut();
+        a.native_scale = 3.0;
+        a.auto_scale_limit = 1.5;
+        assert_eq!(a.run("ui.interfaceSize", json!({})).unwrap(), json!({"auto": true, "percent": 150}));
+        assert!(!serde_json::to_string(&a.ui).unwrap().contains("150"), "the cap is not saved");
+        a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    }
+    let altgr = egui::Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: true, repeat: false, modifiers: altgr });
+    h.event(egui::Event::ModifiersChanged(altgr));
+    h.event(egui::Event::Text("}".into()));
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+0 doesn't reset");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "}", "AltGr+0 types the character");
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto");
+    // AltGr+Shift+0, where the layout leaves the key a zero, doesn't reset either.
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    let altgr_shift = egui::Modifiers { alt: true, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: altgr_shift });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+Shift+0 doesn't reset");
+    // With File › Options open, the place a too-large size pushes off screen, the chord resets.
+    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+    h.state_mut().ui.backstage_page = "options".into();
+    h.step();
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto from File › Options");
+    // A modal dialog keeps the keys: Customize Keyboard records the chord instead.
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "customizeKeyboard"})).unwrap();
+    h.step();
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "no reset while a modal dialog is open");
+}
+
+/// #4030 review: where Shift+0 types `=` (German, Swiss and Nordic layouts) egui-winit reports `=`
+/// as the key and the zero only as the physical key. That press is Ctrl+Shift+=, Superscript, as
+/// on main; it doesn't reset the interface size.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
+    let mut a = app();
+    a.run("document.setText", json!({"text": "x"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "Ctrl+Shift+= doesn't reset");
+    let pos = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+    let props = h.state().session.doc.para_at(&pos).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
+    assert_eq!(props.vert_align, Some(wordcraft_doc::props::VertAlign::Superscript), "Ctrl+Shift+= runs Superscript");
+}
+
+/// #4030 review: a Ctrl+Shift+0 the user binds in Customize Keyboard runs their command instead
+/// of resetting the interface size.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_bound_ctrl_shift_0_beats_the_interface_size_reset() {
+    let mut a = app();
+    a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Shift+0": "view.focus"}}));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "the size stays");
+    assert!(h.state().session.view.focus_mode, "the user's binding runs");
+}
+
 /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.
 #[test]
 fn interface_theme_resolves_against_the_os_appearance() {
