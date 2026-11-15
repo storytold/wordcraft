@@ -11,6 +11,14 @@ impl Session {
         self.layout_with(typing)
     }
 
+    /// The section (an index into [`Document::sections`]) of the page the caret was last on
+    /// ([`Session::page_hint`]), from the cached layout. A header or footer repeats on many pages
+    /// and may be stored on an earlier section ("Link to Previous"), so while one is edited this
+    /// is the section of the page in front of the person, not of the part.
+    pub fn page_hint_section(&self) -> Option<usize> {
+        self.layout.iter().flatten().find_map(|(_, _, _, _, _, l, ..)| l.pages.get(self.page_hint).map(|p| p.section))
+    }
+
     /// [`Session::layout`] with `typing` as the word being typed.
     fn layout_with(&mut self, typing: Option<wordcraft_layout::TypingWord>) -> Arc<DocLayout> {
         let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };

@@ -7,10 +7,10 @@ use super::{
 /// even page or the default), made when there is none: with Different First Page on, a header
 /// inserted on page 1 is the one page 1 shows (#2826).
 pub(super) fn hf_part(s: &mut Session, header: bool) -> u32 {
-    let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
     let layout = s.layout();
     let page = if s.sel.focus.story == StoryRef::Body { layout.page_of(&s.sel.focus) } else { Some(s.page_hint) };
-    let slot = page.and_then(|pg| layout.pages.get(pg)).map(|pg| pg.hf_slot).unwrap_or_default();
+    let pg = page.and_then(|pg| layout.pages.get(pg));
+    let slot = pg.map(|pg| pg.hf_slot).unwrap_or_default();
     fn slot_of(slot: wordcraft_layout::HfSlot, set: &mut wordcraft_doc::section::HeaderSet) -> &mut Option<u32> {
         match slot {
             wordcraft_layout::HfSlot::First => &mut set.first,
@@ -18,6 +18,18 @@ pub(super) fn hf_part(s: &mut Session, header: bool) -> u32 {
             wordcraft_layout::HfSlot::Default => &mut set.default,
         }
     }
+    // The part the page shows is the one being edited, even when an earlier section stores it
+    // (sections link to the previous one by default).
+    let shown = pg.and_then(|pg| if header { pg.header_story } else { pg.footer_story });
+    if let Some(id) = shown.filter(|id| s.doc.parts.contains_key(id)) {
+        return id;
+    }
+    // The section the page being edited belongs to. A page of a later section shows the part an
+    // earlier one stores ("Link to Previous"), but a new part is this section's.
+    let block = match pg {
+        Some(pg) => crate::cmd::page::section_block(s, pg.section),
+        None => s.sel.focus.path.0.first().copied().unwrap_or(0) as usize,
+    };
     let mut sect = s.doc.section_mut(block).clone();
     let existing = *slot_of(slot, if header { &mut sect.headers } else { &mut sect.footers });
     if let Some(id) = existing.filter(|id| s.doc.parts.contains_key(id)) {
@@ -32,11 +44,8 @@ pub(super) fn hf_part(s: &mut Session, header: bool) -> u32 {
 
 /// Three independently editable cells spanning the section's text width.
 fn three_column_hf(s: &Session, style: &str) -> wordcraft_doc::Blocks {
-    let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
-    // The section `section_mut` would pick, read without making anything unique.
-    let sections = s.doc.sections();
-    let own = sections.iter().position(|(end, _)| block <= *end).filter(|i| i + 1 < sections.len()).and_then(|i| sections.get(i));
-    let width = own.map_or_else(|| s.doc.last_section.text_width(), |(_, sec)| sec.text_width());
+    let idx = crate::cmd::page::section_index_of_focus(s);
+    let width = s.doc.sections().get(idx).map_or_else(|| s.doc.last_section.text_width(), |(_, sec)| sec.text_width());
     let mut table = Table::new(1, 3, width);
     table.props.style = Some("TableNormal".into());
     table.props.width = Some(width);
@@ -98,14 +107,11 @@ pub(super) fn edit_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let shown = match page {
         Some(page) => shown_hf(s, page, header)?,
         None => {
-            let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
-            let set = s
-                .doc
-                .sections()
-                .into_iter()
-                .find(|(end, _)| block <= *end)
-                .or_else(|| s.doc.sections().pop())
-                .map(|(_, sp)| if header { sp.headers.default } else { sp.footers.default });
+            // The caret is already in a header or footer, so its path is local to that part: the
+            // page it was opened on names the section (later sections show an earlier one's part
+            // until "Link to Previous" is off).
+            let idx = crate::cmd::page::section_index_of_focus(s);
+            let set = s.doc.sections().get(idx).map(|(_, sp)| if header { sp.headers.default } else { sp.footers.default });
             set.flatten().filter(|id| s.doc.parts.contains_key(id))
         }
     };
