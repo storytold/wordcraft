@@ -225,7 +225,8 @@ pub(crate) fn paste_named_files(app: &mut WordApp, text: &str) -> bool {
 
 /// The files named in text that [`names_picture_files`] accepts: each line's path, with a
 /// `file://` address's `%XX` escapes decoded. An address with a host other than `localhost`,
-/// and one that doesn't decode to an absolute UTF-8 path, is left out.
+/// one that names a share on another host on Windows ([`names_share`]), and one that doesn't
+/// decode to an absolute UTF-8 path, is left out.
 fn named_files(text: &str) -> Vec<PathBuf> {
     let lines = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).take(MAX_FILES);
     lines
@@ -237,6 +238,9 @@ fn named_files(text: &str) -> Vec<PathBuf> {
                     return None;
                 }
                 let path = String::from_utf8(percent_decoded(path)).ok()?;
+                if cfg!(windows) && names_share(&path) {
+                    return None;
+                }
                 // `file:///C:/…` names `C:/…` on Windows.
                 let drive = path.strip_prefix('/').filter(|p| matches!(p.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic()));
                 let path = PathBuf::from(drive.filter(|_| cfg!(windows)).unwrap_or(&path));
@@ -245,6 +249,12 @@ fn named_files(text: &str) -> Vec<PathBuf> {
             None => Some(PathBuf::from(l)),
         })
         .collect()
+}
+
+/// Whether a decoded `file://` path starts with two separators (`file:////server/…`, or an
+/// escaped `/` or `\`), which on Windows names a share on another host.
+fn names_share(path: &str) -> bool {
+    matches!(path.as_bytes(), [b'/' | b'\\', b'/' | b'\\', ..])
 }
 
 /// `s` with each `%XX` escape replaced by its byte; a `%` not followed by two hex digits is kept.
@@ -447,6 +457,17 @@ mod tests {
             [PathBuf::from("/tmp/a b.png"), PathBuf::from("/tmp/c.png")],
             "another host's files are left out"
         );
+        for share in ["//server/share/d.png", "/\\server/share/e.png", "\\\\server\\share\\f.png"] {
+            assert!(names_share(share), "{share}");
+        }
+        for local in ["/tmp/a.png", "/C:/Users/a.png", "/a\\b.png"] {
+            assert!(!names_share(local), "{local}");
+        }
+        let shares = named_files("file:////server/share/d.png\nfile:///%2Fserver/share/e.png\nfile://localhost/%5Cserver/share/f.png");
+        #[cfg(windows)]
+        assert_eq!(shares, Vec::<PathBuf>::new(), "a share on another host is left out");
+        #[cfg(unix)]
+        assert_eq!(shares.len(), 3, "paths that start with two separators are local outside Windows: {shares:?}");
     }
 
     /// A pasted picture is selected, with handles, as one inserted from Insert › Pictures is
