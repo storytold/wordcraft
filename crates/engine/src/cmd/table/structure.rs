@@ -4,28 +4,51 @@ use super::layout::{fix_caret, sync_cell_widths};
 use super::{Block, CmdError, CmdResult, Paragraph, Pos, Selection, Session, Value, json, p, sel_result};
 use wordcraft_doc::Path;
 
-/// Insert Above / Below: rows like the caret's, as many as the selection spans; the caret goes into the first.
+/// Insert Above / Below: as many rows as the selection spans, above its first row or below its
+/// last (the caret's row without a selection), each like that row; the caret goes into the first.
 pub(in crate::cmd) fn row(s: &mut Session, below: bool) -> CmdResult {
     let (tp, r, c) = cell(s)?;
-    let cells = selected_cells(s);
-    let n = cells.iter().map(|x| x.0).collect::<std::collections::BTreeSet<_>>().len().max(1);
+    let rows: std::collections::BTreeSet<usize> = selected_cells(s).into_iter().map(|x| x.0).collect();
+    let n = rows.len().max(1);
+    let like = if below { rows.last() } else { rows.first() }.copied().unwrap_or(r);
+    let at = if below { like + 1 } else { like };
     let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
-    for _ in 0..n {
-        t.insert_row(if below { r + 1 } else { r }, r);
+    // All of them or none: `insert_row` stops quietly at the limit.
+    if t.rows.len().saturating_add(n) > wordcraft_doc::table::MAX_ROWS {
+        return Err(CmdError::Failed(format!("a table can't have more than {} rows", wordcraft_doc::table::MAX_ROWS)));
     }
-    fix_caret(s, &tp, if below { r + 1 } else { r }, c)
+    for _ in 0..n {
+        t.insert_row(at, like);
+    }
+    fix_caret(s, &tp, at, c)
 }
 
 /// Insert Left / Right: a column beside the caret's cell; the caret goes into it.
 pub(in crate::cmd) fn col(s: &mut Session, right: bool) -> CmdResult {
     let (tp, r, c) = cell(s)?;
-    let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
+    let t = s.doc.table(s.sel.focus.story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
     let g = t.grid_col(r, c);
     let span = t.rows.get(r).and_then(|x| x.cells.get(c)).map(|x| x.span()).unwrap_or(1);
-    t.insert_col(if right { g + span } else { g });
+    insert_cols(s, if right { g + span } else { g }, 1, (r, if right { c + 1 } else { c }))
+}
+
+/// Insert `n` grid columns at grid index `g`, keeping the table within its width (all columns
+/// shrink in proportion); the caret goes to cell `caret` (row, cell).
+pub(super) fn insert_cols(s: &mut Session, g: usize, n: usize, caret: (usize, usize)) -> CmdResult {
+    let (tp, _, _) = cell(s)?;
+    let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
+    let n = n.max(1);
+    // All of them or none: a table already at the limit would otherwise shrink for nothing.
+    if t.grid.len().saturating_add(n) > wordcraft_doc::table::MAX_COLS {
+        return Err(CmdError::Failed(format!("a table can't have more than {} columns", wordcraft_doc::table::MAX_COLS)));
+    }
+    for _ in 0..n {
+        t.insert_col(g);
+    }
     // Keep the table within its width: shrink all columns proportionally.
     let total: f32 = t.grid.iter().sum();
-    let before: f32 = total - t.grid.get(if right { g + span } else { g }).copied().unwrap_or(0.0);
+    let added: f32 = t.grid.get(g..g.saturating_add(n).min(t.grid.len())).map_or(0.0, |x| x.iter().sum());
+    let before: f32 = total - added;
     if before > 0.0 {
         let k = before / total;
         t.grid.iter_mut().for_each(|w| *w *= k);
@@ -33,7 +56,7 @@ pub(in crate::cmd) fn col(s: &mut Session, right: bool) -> CmdResult {
     // The inserted cells carry the pre-scale column width, and the layout prefers a cell width
     // over the grid: sync them, or the shrink never reaches the layout or the saved `w:tcW`.
     sync_cell_widths(t);
-    fix_caret(s, &tp, r, if right { c + 1 } else { c })
+    fix_caret(s, &tp, caret.0, caret.1)
 }
 
 pub(super) fn del_row(s: &mut Session, _: &Value) -> CmdResult {

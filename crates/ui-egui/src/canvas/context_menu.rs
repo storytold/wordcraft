@@ -171,6 +171,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
                 item(ui, app, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
                 item(ui, app, "Insert Rows Above", "table.insertRowAbove", json!({}));
                 item(ui, app, "Insert Rows Below", "table.insertRowBelow", json!({}));
+                item(ui, app, "Insert Cells…", "table.insertCells", json!({}));
             })
         });
         // Every Delete is there whatever is selected, as on Word's Delete button: with the caret

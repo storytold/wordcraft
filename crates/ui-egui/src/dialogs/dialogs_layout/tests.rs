@@ -371,6 +371,41 @@ fn split_cells_opens_its_dialog() {
     assert!(a.dialog.is_none(), "no dialog outside a table");
 }
 
+/// #6330: Insert Cells (the Rows & Columns launcher, Insert › Insert Cells…) and Delete Cells
+/// open their dialogs from the ribbon's commands; scripts with a `shift` never see them. Insert
+/// starts on Shift cells down, Delete on Shift cells left, and OK runs the option picked.
+#[test]
+fn insert_cells_and_delete_cells_open_their_dialogs() {
+    let mut a = table_app(2, &["A", "B", "C", "D"]);
+    assert_eq!(a.run("table.insertCells", json!({})).unwrap(), json!({"pending": "insertCells"}));
+    assert_eq!(table_shape(&a), [2, 2], "nothing inserted yet");
+    let LayoutDialog::ShiftCells(mut f) = form(&mut a) else { panic!("insert cells") };
+    assert_eq!((f.name(), f.title(), f.shift), ("insertCells", "Insert Cells", "down"));
+    assert_eq!(f.options().map(|o| o.0), ["right", "down", "row", "column"]);
+    f.shift = "right";
+    let (id, params) = f.command();
+    a.run(id, params).unwrap();
+    // The caret was in D (the last cell): a new cell before it, so its row grows.
+    assert_eq!(table_shape(&a), [2, 3]);
+    assert!(a.dialog.is_none());
+
+    assert_eq!(a.run("table.deleteCells", json!({})).unwrap(), json!({"pending": "deleteCells"}));
+    assert_eq!(table_shape(&a), [2, 3], "nothing deleted yet");
+    let LayoutDialog::ShiftCells(f) = form(&mut a) else { panic!("delete cells") };
+    assert_eq!((f.name(), f.title(), f.shift), ("deleteCells", "Delete Cells", "left"));
+    assert_eq!(f.options().map(|o| o.0), ["left", "up", "row", "column"]);
+    assert_eq!(f.command(), ("table.deleteCells", json!({"shift": "left"})));
+    let (id, params) = f.command();
+    a.run(id, params).unwrap();
+    assert_eq!(table_shape(&a), [2, 2]);
+
+    // Outside a table neither opens.
+    let mut a = app();
+    for name in ["insertCells", "deleteCells"] {
+        assert_eq!(a.run("ui.dialog", json!({"name": name})).unwrap(), json!({"dialog": null}), "{name}");
+    }
+}
+
 /// #2592, as Word does: for a merged cell the dialog's message says the row count must
 /// divide its height (or lie in 1 to the height); the engine refuses the same counts and the
 /// document stays as it was.
