@@ -181,6 +181,13 @@ impl std::fmt::Debug for FontFace {
 }
 
 impl FontFace {
+    /// Apple's last-resort face maps unsupported characters to placeholder boxes. Counting it
+    /// as automatic fallback hides missing glyphs and lets strict export silently succeed.
+    /// Explicit selection remains available; this guard is only for automatic coverage.
+    pub(super) fn allows_automatic_fallback(&self) -> bool {
+        ![&self.family, &self.legacy_family].iter().any(|name| name.trim_start_matches('.').eq_ignore_ascii_case("LastResort"))
+    }
+
     pub fn data(&self) -> &[u8] {
         match &self.bytes {
             FontBytes::Static(b) => b,

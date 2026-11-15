@@ -231,7 +231,7 @@ pub(super) const RUN_FALLBACK_CACHE_CHARS: usize = 1 << 20;
 /// script's own families first, as the per-character fallback ranks them; then the fallback
 /// family, upright, nearest to regular weight.
 pub(super) fn fallback_order(faces: &[Arc<FontFace>], exclude: u32, rtl: bool, complex: Option<char>) -> Vec<&Arc<FontFace>> {
-    let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
+    let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude && f.allows_automatic_fallback()).collect();
     let rank =
         |f: &FontFace| if rtl { RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len()) } else { 0 };
     let shaping = |f: &FontFace| match complex {
