@@ -303,7 +303,7 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 }
 
 /// A dialog's single Close button (Escape too).
-pub(crate) fn close_button(ui: &mut Ui) -> bool {
+pub(super) fn close_button(ui: &mut Ui) -> bool {
     ui.add_space(8.0);
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {

@@ -110,12 +110,26 @@ fn system_install_steps() -> &'static str {
     }
 }
 
+/// The box's last row: `start` at the near side, Close (Escape too) at the far side. In a row
+/// of its own, so the far-side layout takes one row's height and not the rest of the window's.
+fn close_row(ui: &mut egui::Ui, start: impl FnOnce(&mut egui::Ui)) -> bool {
+    let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    ui.horizontal(|ui| {
+        start(ui);
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+            close |= ui.add(crate::widgets::primary_button(ui, tl!("Close"))).clicked();
+        });
+    });
+    close
+}
+
 /// The box's content. Returns true to close.
 pub(crate) fn body(app: &mut WordApp, ui: &mut egui::Ui, fonts: &[Row], dont_show: &mut bool) -> bool {
     ui.set_width(520.0);
     if fonts.is_empty() {
         ui.label(tl!("None of the fonts this document is missing can be downloaded free of charge from their publisher."));
-        return crate::dialogs::close_button(ui);
+        ui.add_space(8.0);
+        return close_row(ui, |_| {});
     }
     ui.label(tl!(
         "This document uses fonts that aren't installed, so it is shown in other fonts and may not look as it was written. These fonts can be downloaded free of charge:"
@@ -152,14 +166,8 @@ pub(crate) fn body(app: &mut WordApp, ui: &mut egui::Ui, fonts: &[Row], dont_sho
         app.ui.font_download_notice = !*dont_show;
     }
     ui.add_space(8.0);
-    let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
     let mut add = false;
-    ui.horizontal(|ui| {
-        add = ui.button(tl!("Add Font…")).clicked();
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-            close |= ui.add(crate::widgets::primary_button(ui, tl!("Close"))).clicked();
-        });
-    });
+    let close = close_row(ui, |ui| add = ui.button(tl!("Add Font…")).clicked());
     if add {
         // The file picker replaces the box; the added font lays the document out again.
         let _ = app.run("font.add", serde_json::json!({}));
