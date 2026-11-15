@@ -24,6 +24,10 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
         Some(Value::String(t)) if t == "document" => true,
         Some(other) => return Err(CmdError::Params(format!("`scope` must be \"selection\" or \"document\", not {other}"))),
     };
+    // Protection leaves only its exceptions editable, so the whole document can't be one.
+    if whole_document && let Some(mode) = s.doc.settings.protection.as_deref() {
+        return Err(CmdError::Disabled(format!("review.language: stop protection ({mode}) before changing the whole document's proofing language")));
+    }
     let lang = match p::str(v, "lang") {
         Some(t) => Some(
             wordcraft_proof::lang::normalize_tag(t)

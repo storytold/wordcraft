@@ -1004,3 +1004,17 @@ fn language_bad_scope_is_a_params_error() {
     assert!(s.doc == before);
     assert!(s.prefs.detect_language);
 }
+
+/// Document scope is refused under editing protection, before anything changes.
+#[test]
+fn language_document_scope_is_refused_under_protection() {
+    for mode in ["readOnly", "comments", "forms"] {
+        let mut s = multi_story_doc();
+        s.doc.settings.protection = Some(mode.into());
+        let before = s.doc.clone();
+        let e = s.run("review.language", &json!({"lang": "fr-FR", "detect": false, "scope": "document"})).unwrap_err();
+        assert!(matches!(e, CmdError::Disabled(_)), "{mode}: {e:?}");
+        assert!(s.doc == before, "{mode}: nothing changed");
+        assert!(s.prefs.detect_language, "{mode}: the detect preference is untouched");
+    }
+}
