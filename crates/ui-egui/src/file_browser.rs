@@ -545,6 +545,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The picture chooser lists both TIFF extensions, including uppercase names, alongside other images.
+    #[test]
+    fn picture_browser_lists_tiff_files() {
+        let dir = scratch("picture-tiff");
+        for name in ["image.png", "scan.tif", "SCAN.TIFF", "notes.txt"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let req = FileDialogRequest::Open { purpose: "picture".into() };
+        let browser = FileBrowser::new(req, AfterPick::Picture, dir.clone(), false);
+        let names: Vec<&str> = browser.listing.as_ref().unwrap().entries.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, ["image.png", "scan.tif", "SCAN.TIFF"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Save As in the browser: a typed folder is opened, a bare name gets the type's extension,
     /// and an existing file is replaced only on the second OK.
     #[test]
