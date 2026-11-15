@@ -188,6 +188,43 @@ pub fn symbol_line(family: &str, resolved: &Resolved) -> Option<(f64, f64)> {
     (resolved.substituted || one_em(line_metrics(&resolved.face), resolved.face.upem)).then_some(m)
 }
 
+/// Arabic-script fonts that come with Office and have a line height of their own in Word, which
+/// this does not know (except for Traditional Arabic, see [`missing_arabic_line`]): a missing one
+/// keeps the substitute's height, as before.
+const OFFICE_ARABIC: &[&str] = &["simplified arabic", "simplified arabic fixed", "arabic typesetting", "sakkal majalla", "andalus", "aldhabi", "urdu typesetting", "dubai"];
+
+/// Is `c` an Arabic-script letter, mark or digit (Arabic, Supplement, Extended-A, presentation forms)?
+pub fn is_arabic_script(c: char) -> bool {
+    matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
+}
+
+/// The (ascent, descent) in em Word gives a line of Arabic-script text in a font that isn't
+/// installed and has no metric twin, when that isn't the substitute's own: Times New Roman's
+/// (hhea 1825 / -443, gap 87 per 2048). Measured in Word for Windows on synthetic documents (12 pt,
+/// single spacing): Persian and Arabic fonts that are missing lie 1.240 em apart, as lines in
+/// Times New Roman do, however tall the face WordCraft draws them in (Noto Naskh Arabic is 1.84).
+/// Traditional Arabic, which comes with Office, is 1.615 em, split like Times New Roman's.
+/// Fonts that come with Office and aren't measured ([`OFFICE_ARABIC`]), symbol fonts and fonts
+/// with a metric twin (Arial, Times New Roman…) keep the face's own line.
+pub fn missing_arabic_line(family: &str, resolved: &Resolved) -> Option<(f64, f64)> {
+    if !resolved.substituted {
+        return None;
+    }
+    let name = family.split(';').map(str::trim).find(|f| !f.is_empty())?;
+    let base = charset_base_family(name);
+    let lower = base.to_ascii_lowercase();
+    if symbol_font_metrics(name).is_some() || metric_twins(base).next().is_some() || OFFICE_ARABIC.contains(&lower.as_str()) {
+        return None;
+    }
+    let (a, d) = hhea_line(1825, -443, 87);
+    let (a, d) = (a / 2048.0, d / 2048.0);
+    if lower == "traditional arabic" {
+        let k = 1.615 / (a + d);
+        return Some((a * k, d * k));
+    }
+    Some((a, d))
+}
+
 /// Is a line's (ascent, descent) one `upem` em tall?
 fn one_em((ascent, descent): (f64, f64), upem: f64) -> bool {
     upem > 0.0 && ((ascent + descent) / upem - 1.0).abs() < 0.005
@@ -867,6 +904,35 @@ mod tests {
         if symbol.substituted {
             assert_eq!(symbol_line("Symbol", &symbol), symbol_font_metrics("Symbol"));
         }
+    }
+
+    #[test]
+    fn a_missing_arabic_font_takes_times_new_romans_line() {
+        let times = 2355.0 / 2048.0;
+        let total = |m: Option<(f64, f64)>| m.map(|(a, d)| a + d);
+        let missing = resolve("Zz Invented Naskh 6803", false, false);
+        assert!(missing.substituted);
+        for family in ["B Lotus", "IRZar", "Zz Invented Naskh 6803", "IranNastaliq", "KFGQPC Uthman Taha Naskh", "B Titr;Arial"] {
+            let t = total(missing_arabic_line(family, &missing)).unwrap_or(0.0);
+            assert!((t - times).abs() < 1e-9, "{family}: {t}");
+        }
+        // Word's value for Traditional Arabic, 1.615 em, whatever face stands in for it.
+        let t = total(missing_arabic_line("Traditional Arabic", &missing)).unwrap_or(0.0);
+        assert!((t - 1.615).abs() < 1e-9, "{t}");
+        // Not for fonts that are installed, or that have a metric twin, are symbol fonts, or ship
+        // with Office unmeasured: they keep the face's own line.
+        let bundled = resolve("Source Serif 4", false, false);
+        assert!(!bundled.substituted);
+        assert_eq!(missing_arabic_line("Source Serif 4", &bundled), None);
+        for family in ["Arial", "Times New Roman", "Calibri", "Symbol", "Simplified Arabic", "Sakkal Majalla"] {
+            assert_eq!(missing_arabic_line(family, &missing), None, "{family}");
+        }
+    }
+
+    #[test]
+    fn arabic_script_is_told_from_latin() {
+        assert!(is_arabic_script('ب') && is_arabic_script('پ') && is_arabic_script('\u{FEFB}') && is_arabic_script('\u{064E}'));
+        assert!(!is_arabic_script('a') && !is_arabic_script('א') && !is_arabic_script('1'));
     }
 
     #[test]

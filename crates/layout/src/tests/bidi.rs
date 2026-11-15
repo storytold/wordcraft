@@ -807,3 +807,63 @@ fn scripts_that_join_their_letters_are_told_apart() {
         assert!(!joins_cursively(c), "{c:?}");
     }
 }
+
+/// Times New Roman's line in em (hhea 1825 / -443, gap 87 per 2048): what Word gives a line of
+/// Arabic text in a font that isn't installed.
+const TIMES_LINE_EM: f64 = 2355.0 / 2048.0;
+
+/// The (ascent + descent) in em of each cluster's style, for one paragraph of `text` set at 12 pt
+/// with the Latin font `font` and complex-script font `font_cs`.
+fn line_em_per_cluster(text: &str, font: &str, font_cs: &str) -> Vec<f64> {
+    crate::test_fonts();
+    let mut d = Document::from_text(text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
+        c.font = Some(font.into());
+        c.font_cs = Some(font_cs.into());
+        c.size = Some(12.0);
+        c.size_cs = Some(12.0);
+    })
+    .unwrap();
+    let l = lay(&d);
+    let (pl, _) = first_line(&l, 0);
+    pl.clusters.iter().filter(|c| c.kind == crate::para::ClKind::Text).filter_map(|c| pl.styles.get(c.style as usize)).map(|st| f64::from(st.ascent + st.descent) / 12.0).collect()
+}
+
+#[test]
+fn arabic_text_in_a_missing_font_has_times_new_romans_line_height() {
+    // Neither font is installed anywhere: the Arabic letters are drawn in some substitute, and the
+    // line is as tall as Times New Roman's, as in Word (#6803).
+    let em = line_em_per_cluster("ببب", "Zz Invented Naskh 6803", "Zz Invented Naskh 6803");
+    assert!(!em.is_empty());
+    for e in &em {
+        assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{em:?}");
+    }
+    // Word's own value for Traditional Arabic.
+    let em = line_em_per_cluster("ببب", "Zz Invented Naskh 6803", "Traditional Arabic");
+    for e in &em {
+        assert!((e - 1.615).abs() < 1e-3, "{em:?}");
+    }
+}
+
+#[test]
+fn latin_text_and_installed_fonts_keep_their_own_line_height() {
+    let own = |face: &str| {
+        let f = wordcraft_fonts::word::resolve(face, false, false);
+        let (a, d) = wordcraft_fonts::word::line_metrics(&f.face);
+        (a + d) / f.face.upem
+    };
+    // Latin text in a missing font: the substitute's line.
+    let latin = line_em_per_cluster("abc", "Zz Invented Naskh 6803", "Zz Invented Naskh 6803");
+    for e in &latin {
+        assert!((e - own("Zz Invented Naskh 6803")).abs() < 1e-3, "{latin:?}");
+    }
+    // Arabic letters in an installed font: that font's own line.
+    let installed = line_em_per_cluster("ببب", "Source Serif 4", "Source Serif 4");
+    for e in &installed {
+        assert!((e - own("Source Serif 4")).abs() < 1e-3, "{installed:?}");
+    }
+    // A mixed run keeps both heights: Latin letters the substitute's, Arabic letters Times New Roman's.
+    let mixed = line_em_per_cluster("abc ببب", "Zz Invented Naskh 6803", "Zz Invented Naskh 6803");
+    assert!(mixed.iter().any(|e| (e - TIMES_LINE_EM).abs() < 1e-3), "{mixed:?}");
+    assert!(mixed.iter().any(|e| (e - own("Zz Invented Naskh 6803")).abs() < 1e-3), "{mixed:?}");
+}
