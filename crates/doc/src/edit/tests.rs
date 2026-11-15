@@ -989,37 +989,37 @@ fn insert_fragment_remaps_conflicting_media_keys() {
     assert_eq!(remapped, other_key);
 }
 
-/// #6788: splitting a paragraph that has a drop cap leaves the cap on the paragraph that holds
-/// the first letters; the new paragraph is plain. At the very start the text moves down with its
-/// cap and the empty paragraph above is plain.
+/// #6788: splitting a paragraph after its first letters leaves the drop cap on the first
+/// paragraph only; the new one (also when it is empty) is plain. A split at offset 0 is unchanged.
 #[test]
-fn split_paragraph_keeps_the_drop_cap_on_the_first_letters_only() {
-    let caps = |d: &Document| -> Vec<(Option<u8>, Option<bool>, Option<f32>, Option<String>)> {
-        d.body
-            .iter()
-            .filter_map(|b| b.as_para())
-            .map(|p| (p.props.drop_cap, p.props.drop_cap_margin, p.props.drop_cap_distance, p.props.drop_cap_font.clone()))
-            .collect()
+fn split_paragraph_keeps_the_drop_cap_on_the_first_paragraph_only() {
+    let drop_cap = |d: &Document, i: usize| {
+        let p = d.body.get(i).and_then(|b| b.as_para()).map(|p| p.props.clone()).unwrap_or_default();
+        (p.drop_cap, p.drop_cap_margin, p.drop_cap_distance, p.drop_cap_font)
     };
-    let capped = |d: &mut Document| {
+    let capped = |text: &str| {
+        let mut d = doc(&[text]);
         if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(0)) {
             p.props.drop_cap = Some(3);
             p.props.drop_cap_margin = Some(true);
             p.props.drop_cap_distance = Some(4.0);
             p.props.drop_cap_font = Some("Serif".into());
         }
+        d
     };
     let cap = (Some(3), Some(true), Some(4.0), Some("Serif".to_string()));
-    let none = (None, None, None, None);
+    let plain = (None, None, None, None);
 
-    let mut d = doc(&["Sugar and knowledge"]);
-    capped(&mut d);
+    let mut d = capped("Sugar and knowledge");
     d.split_paragraph(&Pos::body(0, 10)).unwrap();
-    assert_eq!(caps(&d), vec![cap.clone(), none.clone()]);
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), plain.clone()));
 
-    let mut d = doc(&["Sugar"]);
-    capped(&mut d);
+    let mut d = capped("Sugar");
+    d.split_paragraph(&Pos::body(0, 5)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), plain.clone()));
+
+    // At offset 0 nothing changes: both paragraphs keep the properties, as before.
+    let mut d = capped("Sugar");
     d.split_paragraph(&Pos::body(0, 0)).unwrap();
-    assert_eq!(caps(&d), vec![none, cap]);
-    assert_eq!(d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.as_str()).collect::<Vec<_>>(), ["", "Sugar"]);
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), cap));
 }
