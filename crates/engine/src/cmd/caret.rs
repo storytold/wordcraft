@@ -476,7 +476,7 @@ fn drag_unit(s: &mut Session, v: &Value) -> CmdResult {
 /// Select the n-th occurrence of `text` in the body (agents: "select the word X").
 fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     let needle = p::req_str(v, "text")?;
-    let n = p::u64(v, "occurrence").unwrap_or(1).max(1) as usize;
+    let n = p::u64(v, "occurrence").unwrap_or(1).max(1);
     if needle.is_empty() {
         return Err(CmdError::Params("`text` is empty".into()));
     }
