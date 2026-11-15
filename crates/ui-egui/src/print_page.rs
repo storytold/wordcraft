@@ -118,27 +118,34 @@ fn choice_named(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &
     changed
 }
 
-/// The output layout, kept while the document and Print Markup setting are unchanged.
+/// The output layout, kept while the document, Print Markup setting and numeral mode are
+/// unchanged.
 fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     let id = egui::Id::unique("print_page_layout");
     let rev = app.session.rev();
     let markup = app.session.prefs.print_markup;
-    if let Some((r, m, l)) = ctx.data(|d| d.get_temp::<(u64, bool, Arc<DocLayout>)>(id))
+    // `view.numeral` relayouts without advancing the revision (it changes only display state),
+    // so the cache key has to name it too (#6265).
+    let numeral = app.session.view.numeral;
+    if let Some((r, m, n, l)) = ctx.data(|d| d.get_temp::<(u64, bool, wordcraft_layout::NumeralMode, Arc<DocLayout>)>(id))
         && r == rev
         && m == markup
+        && n == numeral
     {
         return l;
     }
     let l = app.session.export_layout_with(markup);
-    ctx.data_mut(|d| d.insert_temp(id, (rev, markup, l.clone())));
+    ctx.data_mut(|d| d.insert_temp(id, (rev, markup, numeral, l.clone())));
     l
 }
 
-/// A bounded per-cell texture cache, refreshed when the page, scale or Print Markup changes.
+/// A bounded per-cell texture cache, refreshed when the page, scale, Print Markup or numeral
+/// mode changes.
 fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, cache_slot: usize, width: f32) -> Option<TextureHandle> {
     let id = egui::Id::unique(("print_page_texture", cache_slot));
-    let key = (app.session.rev(), app.session.prefs.print_markup, page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
-    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, bool, usize, u32, u32), TextureHandle)>(id))
+    let numeral = app.session.view.numeral;
+    let key = (app.session.rev(), app.session.prefs.print_markup, numeral, page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
+    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, bool, wordcraft_layout::NumeralMode, usize, u32, u32), TextureHandle)>(id))
         && k == key
     {
         return Some(t);
@@ -511,6 +518,30 @@ mod tests {
             previous = Some((layout, texture.id()));
             assert_eq!(app.session.rev(), rev);
             assert_eq!(app.session.dirty, dirty);
+        }
+    }
+
+    /// Numeral display changes layout and pixels without changing the document revision
+    /// (#6265): the preview must not reuse either cache.
+    #[test]
+    fn preview_refreshes_layout_and_texture_when_the_numeral_mode_changes() {
+        let session = Session::new(wordcraft_doc::Document::from_text("2026 Report"));
+        let mut app = WordApp::new(session, Services::default());
+        let ctx = egui::Context::default();
+        let rev = app.session.rev();
+        let mut previous = None;
+        for mode in ["arabic", "hindi", "arabic"] {
+            app.session.run("view.numeral", &json!({ "value": mode })).unwrap();
+            let layout = layout_of(&app, &ctx);
+            assert!(Arc::ptr_eq(&layout, &layout_of(&app, &ctx)), "unchanged layout is reused");
+            let texture = page_texture(&app, &ctx, &layout, 0, 0, 300.0).unwrap();
+            assert_eq!(texture.id(), page_texture(&app, &ctx, &layout, 0, 0, 300.0).unwrap().id());
+            if let Some((old_layout, old_texture)) = previous.take() {
+                assert!(!Arc::ptr_eq(&layout, &old_layout));
+                assert_ne!(texture.id(), old_texture);
+            }
+            previous = Some((layout, texture.id()));
+            assert_eq!(app.session.rev(), rev);
         }
     }
 }
