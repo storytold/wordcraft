@@ -170,6 +170,17 @@ fn return_prints(ctx: &egui::Context) -> bool {
         })
 }
 
+/// Per window: what the Print page needs to know about the last job's message.
+#[derive(Default)]
+pub struct Memo {
+    /// The viewport and pass the page was last drawn in: a gap means it was just opened.
+    pass: Option<(egui::ViewportId, u64)>,
+    /// The job result this window has already said, in its status bar or on this page.
+    pub(crate) said: Option<crate::printing::Feedback>,
+    /// The result held back on this opening of the page.
+    hidden: Option<crate::printing::Feedback>,
+}
+
 /// The Print page: settings on the left, the preview on the right.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -178,22 +189,31 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let total = lay.pages.len();
     let current = app.session.current_pages(&lay);
     app.ui.print.preview = app.ui.print.preview.min(total.saturating_sub(1));
-    // Opened afresh, the page doesn't repeat how the last job went: that was said once in the
-    // status bar. What the printers are doing (finding them, none found) still shows.
-    // Passes are counted per viewport, so the marker is per window and names its viewport.
+    // Opened afresh, the page doesn't repeat how the last job went when this window already said
+    // it (its status bar, or this page): `printing.message` itself stays, as `ui.printSettings`
+    // and other windows still report it. What the printers are doing (finding them, none found)
+    // always shows. Passes are counted per viewport, so the marker is per window.
     let here = (ctx.viewport_id(), ctx.cumulative_pass_nr());
-    let opened = app.print_page_pass.is_none_or(|(viewport, last)| viewport != here.0 || last.saturating_add(1) < here.1);
-    app.print_page_pass = Some(here);
-    // Only once the status bar has said it (`print_feedback`), so nothing goes unsaid.
-    if opened
-        && !app.printing.busy()
-        && app.printing.message == app.print_feedback_seen
-        && matches!(
-            app.printing.message,
-            Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped)
-        )
-    {
-        app.printing.message = None;
+    let opened = app.print_memo.pass.is_none_or(|(viewport, last)| viewport != here.0 || last.saturating_add(1) < here.1);
+    app.print_memo.pass = Some(here);
+    let result = |m: &Option<crate::printing::Feedback>| {
+        matches!(m, Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped))
+    };
+    let message = app.printing.message.clone();
+    if opened {
+        app.print_memo.hidden = if result(&message) && app.print_memo.said == message { message.clone() } else { None };
+    }
+    // A different message (a job started again, then failed the same way) is shown afresh.
+    if app.print_memo.hidden != message {
+        app.print_memo.hidden = None;
+    }
+    let hide_message = app.print_memo.hidden.is_some();
+    if hide_message {
+    } else if result(&message) {
+        // Shown here, so the next opening needn't repeat it.
+        app.print_memo.said = message;
+    } else {
+        app.print_memo.said = None;
     }
 
     let settings = |app: &mut WordApp, ui: &mut Ui| {
@@ -223,7 +243,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 if native {
                     if let Some(discover) = &app.services.printers {
-                        crate::printing::show(&mut app.printing, ui, discover, |label| crate::i18n::t(label).to_owned());
+                        crate::printing::show(&mut app.printing, ui, discover, hide_message, |label| crate::i18n::t(label).to_owned());
                     }
                     // A job can wait long on a sleeping printer's driver; Cancel frees the page.
                     if app.printing.busy() && app.services.cancel_print.is_some() && ui.button(tl!("Cancel printing")).clicked() {

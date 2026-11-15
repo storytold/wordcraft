@@ -787,7 +787,7 @@ pub struct WordApp {
     pub status_counts: (u64, StatusCounts),
     /// The window's viewport and the pass its Print page was last drawn in: a gap means the
     /// page has just been opened. Per window, as each window counts its own passes.
-    print_page_pass: Option<(egui::ViewportId, u64)>,
+    print_memo: crate::print_page::Memo,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,

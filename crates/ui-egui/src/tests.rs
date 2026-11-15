@@ -3767,17 +3767,16 @@ fn the_print_button_shows_only_with_a_print_hook() {
     }
 }
 
-/// Opened again, the Print page doesn't repeat how the last job went (that was said once, in the
-/// status bar), but a failure that comes in while it is open stays, and what the printers are
-/// doing (none found) shows each time.
-#[test]
-fn the_print_page_opens_without_the_last_jobs_message() {
-    use crate::printing::Feedback;
+/// A Print page with printers found (so it draws the job message), in English.
+fn print_page_harness(message: Option<crate::printing::Feedback>) -> egui_kittest::Harness<'static, WordApp> {
     let mut a = app();
-    // A job went away earlier: its message was said in the status bar, and the page closed.
-    a.printing.message = Some(Feedback::Submitted("job 7".into()));
-    a.print_feedback_seen = a.printing.message.clone();
-    a.run("file.print", json!({})).unwrap();
+    a.ui.language = "en".into();
+    a.services.printers = Some(Box::new(|| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(vec![printing::Printer { name: "Test queue".into(), label: String::new(), default: true }]);
+        receiver
+    }));
+    a.services.print_native = Some(Box::new(|_, _, _, _| std::sync::mpsc::channel().1));
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
@@ -3786,22 +3785,99 @@ fn the_print_page_opens_without_the_last_jobs_message() {
         },
         a,
     );
+    // The page's first drawing starts discovery, which replaces the message: draw it once, leave,
+    // and let the printers arrive.
+    let _ = h.state_mut().run("file.print", json!({}));
     h.run_steps(4);
-    assert_eq!(h.state().printing.message, None, "the last job's message is gone");
+    let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
+    h.run_steps(3);
+    set_print_message(&mut h, message);
+    h.state_mut().print_memo = Default::default();
+    h
+}
+
+/// A job message that arrives without the app's own `print_feedback` acting on it (a submitted job
+/// would close the Print page); what the window has said is set by the test.
+fn set_print_message(h: &mut egui_kittest::Harness<'_, WordApp>, message: Option<crate::printing::Feedback>) {
+    h.state_mut().printing.message = message.clone();
+    h.state_mut().print_feedback_seen = message;
+}
+
+fn leave_and_reopen_print(h: &mut egui_kittest::Harness<'_, WordApp>) {
+    let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
+    h.run_steps(2);
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(3);
+}
+
+/// Opened again, the Print page doesn't repeat how the last job went when the window already said
+/// it (in its status bar), but a failure that comes in while it is open stays, and what the
+/// printers are doing (none found) shows each time. The shared message is never cleared, so
+/// `ui.printSettings` still reports it.
+#[test]
+fn the_print_page_opens_without_the_last_jobs_message() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(Some(Feedback::Submitted("job 7".into())));
+    // A job went away earlier: its message was said in this window's status bar, and the page closed.
+    h.state_mut().print_memo.said = h.state().printing.message.clone();
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("job 7").is_none(), "the last job's message isn't repeated");
+    assert_eq!(h.state().printing.message, Some(Feedback::Submitted("job 7".into())), "but the shared message stays");
+    // A failure arrives while the page is open, said (by the status bar) in the very frame, so
+    // only the page being open keeps it showing: wrong reopen detection would hide it.
+    let failure = Some(Feedback::Failed("no paper".into()));
+    set_print_message(&mut h, failure.clone());
+    h.state_mut().print_memo.said = failure.clone();
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("no paper").is_some(), "a failure on the open page stays");
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("no paper").is_none(), "reopened, the failure isn't repeated");
+    assert_eq!(h.state().printing.message, failure, "but it is still the shared message");
+    set_print_message(&mut h, Some(Feedback::NoPrinters));
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("No printers found").is_some(), "no printers still shows");
+}
+
+/// A result nobody has said yet isn't dropped: a failure that arrived while File showed another
+/// page (so no status bar was drawn) shows when Print opens.
+#[test]
+fn the_print_page_shows_a_result_that_was_never_said() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(None);
+    h.state_mut().ui.backstage = true;
+    h.state_mut().ui.backstage_page = "home".into();
+    h.run_steps(2);
+    // Through the app's own `print_feedback` (run each frame), which says it in a status bar that isn't drawn.
     h.state_mut().printing.message = Some(Feedback::Failed("no paper".into()));
     h.run_steps(3);
-    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())), "a failure on the open page stays");
-    let leave_and_reopen = |h: &mut egui_kittest::Harness<'_, WordApp>| {
-        let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
-        h.run_steps(2);
-        let _ = h.state_mut().run("file.print", json!({}));
-        h.run_steps(2);
-    };
-    leave_and_reopen(&mut h);
-    assert_eq!(h.state().printing.message, None, "reopened, the failure is gone");
-    h.state_mut().printing.message = Some(Feedback::NoPrinters);
-    leave_and_reopen(&mut h);
-    assert_eq!(h.state().printing.message, Some(Feedback::NoPrinters), "no printers still shows");
+    assert_eq!(h.state().print_memo.said, None, "File's home page doesn't say it");
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("no paper").is_some());
+}
+
+/// Per window: what one window has said of the last job isn't another window's, and the shared
+/// message is the same in both. (The harness draws one viewport, which re-enters a window of its
+/// own, so the per-window state is checked where windows swap; `the_print_page_opens_without_the_last_jobs_message`
+/// and `the_print_page_shows_a_result_that_was_never_said` show what each state does on the page.)
+#[test]
+fn the_print_pages_of_two_windows_decide_separately() {
+    use crate::printing::Feedback;
+    let failure = Some(Feedback::Failed("no paper".into()));
+    let mut a = app();
+    a.printing.message = failure.clone();
+    let first = a.windows.shown();
+    a.print_memo.said = failure.clone();
+    a.new_window();
+    assert_ne!(first, a.windows.shown());
+    assert_eq!(a.print_memo.said, None, "the second window never said it, so its page shows it");
+    assert_eq!(a.printing.message, failure, "the message is shared, and still there");
+    assert!(a.enter_window(first));
+    assert_eq!(a.print_memo.said, failure, "the first window said it, so its page doesn't repeat it");
+    assert_eq!(a.printing.message, failure);
 }
 
 /// Return on the Print page prints, as in Word, where ⌘P opens on Print as the default

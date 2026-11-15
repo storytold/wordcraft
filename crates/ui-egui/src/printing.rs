@@ -23,8 +23,8 @@ pub fn commands(app: &crate::WordApp) -> Vec<serde_json::Value> {
 }
 
 /// Builds translated print labels, draws the shared print-settings panel, and shows the current
-/// feedback message.
-pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate: impl Fn(&str) -> String) {
+/// feedback message (unless `hide_message`: this window has already said it).
+pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, hide_message: bool, translate: impl Fn(&str) -> String) {
     let labels = Labels {
         printer: &translate("Printer"),
         select_printer: &translate("Select a printer"),
@@ -38,7 +38,7 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate
         grayscale: &translate("Grayscale"),
     };
     state.show(ui, egui::Id::unique("wordcraft_print_settings"), discover, &labels);
-    if let Some(message) = &state.message {
+    if let Some(message) = state.message.as_ref().filter(|_| !hide_message) {
         ui.label(feedback(message, translate));
     }
 }
