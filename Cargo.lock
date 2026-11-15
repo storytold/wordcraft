@@ -1145,6 +1145,11 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
 
 [[package]]
+name = "craft-fonts-build"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f6e5e0857316007a5ea34df6b28c429d0cd1dc16#f6e5e0857316007a5ea34df6b28c429d0cd1dc16"
+
+[[package]]
 name = "craft-html"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa1c659f271d8605303c#41fb227542efb8a7748caa1c659f271d8605303c"
@@ -1161,6 +1166,29 @@ dependencies = [
 name = "craft-i18n"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
+dependencies = [
+ "fixed_decimal",
+ "icu_decimal",
+ "icu_locale_core",
+ "icu_locale_fallback",
+ "icu_normalizer",
+ "icu_plurals",
+ "icu_properties",
+ "icu_provider",
+ "icu_provider_adapters",
+ "icu_provider_blob",
+ "log",
+ "objc2-foundation 0.3.2",
+ "sys-locale",
+ "unicode-bidi",
+ "windows-registry",
+ "writeable",
+]
+
+[[package]]
+name = "craft-i18n"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f6e5e0857316007a5ea34df6b28c429d0cd1dc16#f6e5e0857316007a5ea34df6b28c429d0cd1dc16"
 dependencies = [
  "fixed_decimal",
  "icu_decimal",
@@ -1220,6 +1248,27 @@ dependencies = [
  "craft-math",
  "craft-mime",
  "craft-wordmodel",
+]
+
+[[package]]
+name = "craft-library"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f6e5e0857316007a5ea34df6b28c429d0cd1dc16#f6e5e0857316007a5ea34df6b28c429d0cd1dc16"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "craft-library-egui"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f6e5e0857316007a5ea34df6b28c429d0cd1dc16#f6e5e0857316007a5ea34df6b28c429d0cd1dc16"
+dependencies = [
+ "craft-library",
+ "craft-ui 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f6e5e0857316007a5ea34df6b28c429d0cd1dc16)",
+ "egui",
+ "image",
+ "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -1406,8 +1455,28 @@ name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
 dependencies = [
- "craft-fonts-build",
- "craft-i18n",
+ "craft-fonts-build 0.1.0 (git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0)",
+ "craft-i18n 0.1.0 (git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0)",
+ "egui",
+ "epaint",
+ "js-sys",
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "skrifa 0.44.0",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "craft-ui"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f6e5e0857316007a5ea34df6b28c429d0cd1dc16#f6e5e0857316007a5ea34df6b28c429d0cd1dc16"
+dependencies = [
+ "craft-fonts-build 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f6e5e0857316007a5ea34df6b28c429d0cd1dc16)",
+ "craft-i18n 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f6e5e0857316007a5ea34df6b28c429d0cd1dc16)",
  "egui",
  "epaint",
  "js-sys",
@@ -7265,6 +7334,7 @@ dependencies = [
  "image",
  "serde_json",
  "sys-locale",
+ "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",
@@ -7331,6 +7401,7 @@ dependencies = [
  "chrono",
  "craft-font-catalog",
  "craft-font-store",
+ "craft-library",
  "craft-proof",
  "craft-zip",
  "encoding_rs",
@@ -7484,8 +7555,9 @@ dependencies = [
  "accesskit_consumer",
  "cfb",
  "chrono",
- "craft-i18n",
- "craft-ui",
+ "craft-i18n 0.1.0 (git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0)",
+ "craft-library-egui",
+ "craft-ui 0.1.0 (git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0)",
  "craft-update",
  "craft-window",
  "craft-zip",

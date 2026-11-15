@@ -22,6 +22,7 @@ pub mod index;
 pub mod ink_shape;
 pub mod insert;
 pub mod inspector;
+pub mod library;
 pub mod lists;
 pub mod mailings;
 pub mod md_source;
@@ -77,6 +78,7 @@ pub fn registry() -> Registry {
     v.extend(md_source::specs());
     v.extend(outline::specs());
     v.extend(insert::specs());
+    v.extend(library::specs());
     v.extend(equation::specs());
     v.extend(page::specs());
     v.extend(table::specs());

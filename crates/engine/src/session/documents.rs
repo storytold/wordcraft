@@ -292,6 +292,8 @@ impl Session {
             others: _,
             order: _,
             untitled_count: _,
+            // What the Library has read is the app's, not a document's.
+            library: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
         } = self;

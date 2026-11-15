@@ -162,6 +162,8 @@ impl WordApp {
             colors,
             restrict,
             spelling_review,
+            library: Default::default(),
+            library_thumbs: Default::default(),
             status_msg,
             previews,
             change_picture_target,
@@ -237,6 +239,7 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        crate::library_pane::begin_frame(self);
         // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
         // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
         ctx.add_plugin(super::a11y::FocusGuard);
@@ -459,6 +462,7 @@ impl WordApp {
         } else {
             self.window_ui(ui);
         }
+        crate::library_pane::end_frame(self);
     }
 
     /// Lay out the drawn window. A command that brings another window's state in (New, Open,

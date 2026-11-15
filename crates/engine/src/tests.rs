@@ -5013,10 +5013,11 @@ fn hostile_junk() -> [serde_json::Value; 10] {
     ]
 }
 
-/// `file.*`, `insert.picture` and `insert.textFromFile`: `hostile_file_params_never_panic` runs
-/// them, held to a folder of its own, and `hostile_params_never_panic` every other command.
+/// `file.*`, `insert.picture`, `insert.textFromFile` and the Library's `library.*`:
+/// `hostile_file_params_never_panic` runs them, held to a folder of its own, and
+/// `hostile_params_never_panic` every other command.
 fn reaches_files(id: &str) -> bool {
-    id.starts_with("file.") || id == "insert.picture" || id == "insert.textFromFile"
+    id.starts_with("file.") || id.starts_with("library.") || id == "insert.picture" || id == "insert.textFromFile"
 }
 
 #[test]

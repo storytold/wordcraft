@@ -85,7 +85,7 @@ impl WordApp {
         if let (Ok(_), Some(name)) = (&r, applied) {
             push_recent_font(&mut self.ui.recent_fonts, &name);
         }
-        if matches!(id, "insert.picture" | "insert.icon") {
+        if matches!(id, "insert.picture" | "insert.icon" | "library.insert") {
             self.select_inserted_picture(&r);
         }
         // User proofing opens the persistent task pane; scripts keep structured results.

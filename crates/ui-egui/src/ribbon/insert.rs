@@ -79,6 +79,11 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Illustrations", None, app, |ui, app| {
         big(ui, app, "picture", "Pictures", "insert.picture", json!({}), false);
+        // The Library pane (#2868): pictures from the user's own folders, kept open beside the
+        // document while editing.
+        let open = app.session.view.library_pane;
+        let r = crate::widgets::big_toggle(ui, app, "library", "Library", "view.libraryPane", open);
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, r.enabled(), open, tl!("Library")));
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("shapes", Some("Shapes"), "Shapes", true, "insert.shape"), |ui, app| {
             shape_gallery(ui, app);
             ui.separator();

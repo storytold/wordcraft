@@ -24,6 +24,8 @@ wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-zotero = { workspace = true }
+# Insert ▸ Library (#2868): the Library pane the Craft apps share, over the engine's library.* commands.
+craft-library-egui = { workspace = true }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
 serde = { workspace = true }

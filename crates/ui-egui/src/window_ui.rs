@@ -162,6 +162,9 @@ impl WordApp {
             // App-wide.
             session: _,
             services: _,
+            // One Library, whose thumbnails every window shows.
+            library: _,
+            library_thumbs: _,
             printing: _,
             print_feedback_seen: _,
             font_generation: _,
