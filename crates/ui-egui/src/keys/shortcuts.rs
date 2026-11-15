@@ -25,6 +25,15 @@ pub fn key_name(k: Key) -> Option<&'static str> {
         Key::Comma => ",",
         Key::OpenBracket => "[",
         Key::CloseBracket => "]",
+        // The international-character keys (Ctrl+' then e for é, #6328). egui names a key by the
+        // character it types on the layout in use (Shift included), else by its US position.
+        Key::Quote => "'",
+        Key::Backtick => "`",
+        Key::Slash => "/",
+        Key::Semicolon => ";",
+        Key::Colon => ":",
+        Key::Questionmark => "?",
+        Key::Exclamationmark => "!",
         Key::Num0 => "0",
         Key::Num1 => "1",
         Key::Num2 => "2",
@@ -157,6 +166,41 @@ pub(super) fn shift_variant_params(id: &str) -> Option<Value> {
     } else {
         None
     }
+}
+
+/// Whether a key press ends a waiting accent key (Ctrl+' …, #6328) without typing: a key that
+/// types no character (Escape, arrows, Enter, function keys…) or one held with Ctrl, Alt or ⌘
+/// (another accent key then starts over). Shift and the other modifier keys on their own don't:
+/// Shift types the capital.
+pub(super) fn ends_accent(key: Key, m: Modifiers) -> bool {
+    if is_modifier_key(key) {
+        return false;
+    }
+    // Letters and digits are named by their one character; punctuation by a word.
+    let punctuation = matches!(
+        key,
+        Key::Space
+            | Key::Colon
+            | Key::Comma
+            | Key::Backslash
+            | Key::Slash
+            | Key::Pipe
+            | Key::Questionmark
+            | Key::Exclamationmark
+            | Key::OpenBracket
+            | Key::CloseBracket
+            | Key::OpenCurlyBracket
+            | Key::CloseCurlyBracket
+            | Key::Backtick
+            | Key::Minus
+            | Key::Period
+            | Key::Plus
+            | Key::Equals
+            | Key::Semicolon
+            | Key::Quote
+    );
+    let types_text = punctuation || key.name().len() == 1;
+    m.ctrl || m.command || m.alt || m.mac_cmd || !types_text
 }
 
 /// Shift+Delete, which cuts the selection and does nothing without one, as in Word for Windows

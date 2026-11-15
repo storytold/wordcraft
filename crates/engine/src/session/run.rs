@@ -94,6 +94,11 @@ impl Session {
         let ime_text_join = self.ime_text_join.take();
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
+        // A waiting accent key (Ctrl+' …, #6328) accents the first character typed next; any
+        // other edit, caret move or selection forgets it. The accented text is what runs, is
+        // recorded in a macro and is repeated.
+        let accented = self.accent_params(id, spec.mutates, params);
+        let params: &Value = &accented;
         self.forget_review_style(id, spec.mutates);
         let join = join
             || (equation_join && matches!(id, "equation.type" | "equation.backspace"))
@@ -234,6 +239,8 @@ impl Session {
         {
             result = Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
         }
+        // A refused insertion leaves a waiting accent for the next character.
+        self.accent_typed(id, result.is_ok(), params);
         match &result {
             Ok(_) => self.finish_success(SuccessContext {
                 id,

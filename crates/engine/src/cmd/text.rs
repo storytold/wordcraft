@@ -8,11 +8,14 @@ use wordcraft_doc::{Block, ListKind, Path, Pos, StoryRef, Table};
 use super::{delete_selection, delete_selection_effect, non_mac, sel_result, split_para, type_text, type_text_effect};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+mod accent;
 mod autoformat;
 mod delete;
 mod enter_tab;
 mod unicode;
 
+pub use accent::Accent;
+use accent::{not_in_equation, wait_for_letter};
 use autoformat::insert;
 use delete::{backspace, delete, delete_sentence_back, delete_word_back, delete_word_fwd};
 pub use enter_tab::MAX_TYPED_PARAGRAPHS;
@@ -56,5 +59,46 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("text.registered", "Registered Sign", "Insert › Symbols", |s, _| ins_char(s, '®')).key(non_mac("Mod+Alt+R")),
         CommandSpec::new("text.trademark", "Trademark Sign", "Insert › Symbols", |s, _| ins_char(s, '™')).key(non_mac("Mod+Alt+T")),
         CommandSpec::new("text.ellipsis", "Ellipsis", "Insert › Symbols", |s, _| ins_char(s, '…')).key(non_mac("Mod+Alt+.")),
+        // Word's international-character keys (#6328): an accent key, then the letter (Ctrl+'
+        // then e types é). Windows and Linux only: macOS types these with Option dead keys. The
+        // keys are written as egui names them on a US layout: Ctrl+Shift+^ arrives as
+        // Ctrl+Shift+6 (egui has no ^ key); Ctrl+Shift+: is the colon, or the ; key it is on.
+        accent_key("text.accentGrave", "Grave Accent (à)", Accent::Grave, non_mac("Mod+`")),
+        accent_key("text.accentAcute", "Acute Accent (é)", Accent::Acute, non_mac("Mod+'")),
+        accent_key("text.accentCircumflex", "Circumflex (ê)", Accent::Circumflex, non_mac("Mod+Shift+6")),
+        accent_key("text.accentTilde", "Tilde (ñ)", Accent::Tilde, non_mac("Mod+Shift+`")),
+        accent_key("text.accentDiaeresis", "Diaeresis (ü)", Accent::Diaeresis, non_mac("Mod+Shift+: / Mod+Shift+;")),
+        accent_key("text.accentRing", "Ring (å)", Accent::Ring, non_mac("Mod+Shift+2")),
+        accent_key("text.accentLigature", "Ligature (æ, œ, ß)", Accent::Ligature, non_mac("Mod+Shift+7")),
+        accent_key("text.accentCedilla", "Cedilla (ç)", Accent::Cedilla, non_mac("Mod+,")),
+        accent_key("text.accentStroke", "Stroke (ø)", Accent::Stroke, non_mac("Mod+/")),
+        // Alt+Ctrl+Shift+? and !. With Ctrl+Alt (AltGr on Windows) a US layout names no
+        // character for the key, so Windows reports the / and 1 keys themselves.
+        CommandSpec::new("text.invertedQuestion", "Inverted Question Mark", "Insert › Symbols", |s, _| ins_char(s, '¿'))
+            .key(non_mac("Mod+Alt+Shift+? / Mod+Alt+Shift+/")),
+        CommandSpec::new("text.invertedExclamation", "Inverted Exclamation Mark", "Insert › Symbols", |s, _| ins_char(s, '¡'))
+            .key(non_mac("Mod+Alt+Shift+! / Mod+Alt+Shift+1")),
     ]
+}
+
+/// An accent key's command: the next character typed with `text.insert` at the same selection
+/// takes the accent ([`Accent::compose`]). It changes nothing itself, so typing stays one undo
+/// step. Not in an equation.
+fn accent_key(id: &'static str, label: &'static str, accent: Accent, key: &'static str) -> CommandSpec {
+    let run: fn(&mut Session, &Value) -> CmdResult = match accent {
+        Accent::Grave => |s, _| wait_for_letter(s, Accent::Grave),
+        Accent::Acute => |s, _| wait_for_letter(s, Accent::Acute),
+        Accent::Circumflex => |s, _| wait_for_letter(s, Accent::Circumflex),
+        Accent::Tilde => |s, _| wait_for_letter(s, Accent::Tilde),
+        Accent::Diaeresis => |s, _| wait_for_letter(s, Accent::Diaeresis),
+        Accent::Ring => |s, _| wait_for_letter(s, Accent::Ring),
+        Accent::Ligature => |s, _| wait_for_letter(s, Accent::Ligature),
+        Accent::Cedilla => |s, _| wait_for_letter(s, Accent::Cedilla),
+        Accent::Stroke => |s, _| wait_for_letter(s, Accent::Stroke),
+    };
+    CommandSpec::new(id, label, "Editing", run)
+        .key(key)
+        .params("{} (the next character typed by text.insert takes the accent where it applies, e.g. é; any other is typed as it is)")
+        .pure()
+        .when(not_in_equation)
 }

@@ -287,8 +287,10 @@ impl Session {
                 ime_state_exhausted: _,
             pending_ime_application_change: _,
             ime_origin: _,
-            // A picked Drawing Canvas member is cleared by a switch, not kept per document.
+            // A picked Drawing Canvas member is cleared by a switch; a waiting accent key
+            // remembers its document. Neither is kept per document.
             member: _,
+            accent_prefix: _,
             others: _,
             order: _,
             untitled_count: _,
@@ -393,7 +395,10 @@ impl Session {
         swap(&mut self.widened, widened);
         swap(&mut self.edit_marks, edit_marks);
         swap(&mut self.go_back_step, go_back_step);
-        // A picked Drawing Canvas member (#2637) belongs to the document left behind.
+        // A picked Drawing Canvas member (#2637) belongs to the document left behind. A waiting
+        // accent key (#6328) stays: a front end showing documents in windows of their own makes
+        // each active to draw it, and the key still waits when its window comes back. It
+        // remembers its document, so a letter typed in another one is not accented.
         self.member = None;
     }
 
@@ -455,7 +460,12 @@ impl Session {
     /// already is). A Read Aloud reading of another document stops. An id that isn't open is an
     /// error.
     pub fn activate(&mut self, id: u64) -> Result<(), CmdError> {
+        let switches = id != self.document_id;
         self.switch_to(id)?;
+        // Switching documents by hand forgets a waiting accent key (#6328).
+        if switches {
+            self.accent_prefix = None;
+        }
         self.stop_reading_elsewhere();
         Ok(())
     }
@@ -495,6 +505,7 @@ impl Session {
         let id = d.document_id;
         self.order.push(id);
         self.swap_doc(&mut d);
+        self.accent_prefix = None;
         self.others.push(d);
         self.stop_reading_elsewhere();
         id
