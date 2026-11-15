@@ -216,6 +216,7 @@ fn new_page_builder<'p>(
         max_y: 0.0,
         content_bottom: 0.0,
         balance: None,
+        relaxed: false,
         col_break_page: None,
         sect_beneath: false,
         beneath: false,
@@ -682,7 +683,9 @@ fn balance_pass<'a>(
     (page, top, h): (usize, f32, f32),
     body_top: f32,
 ) -> bool {
+    let relaxed = pb.relaxed;
     snap.restore(pb, ctx);
+    pb.relaxed = relaxed;
     pb.balance = Some((page, h));
     pb.cap_columns();
     for block in first..end {
@@ -761,12 +764,25 @@ fn balance_columns<'a>(ctx: &mut Ctx, pb: &mut PageBuilder<'a>, blocks: (usize, 
         last = Some((mid, ok));
     }
     // End on the best height (the full column, as laid out first, when none was shorter).
+    let mut fits = true;
     if last != Some((hi, true)) {
         thrown = discard(ctx);
-        if !pass(ctx, pb, hi) && hi < full {
+        fits = pass(ctx, pb, hi);
+        if !fits && hi < full {
             thrown = discard(ctx);
-            pass(ctx, pb, full);
+            fits = pass(ctx, pb, full);
         }
+    }
+    // From Word 2013's layout the strict widow/orphan and keep rules (`Flow::strict_widow_control`)
+    // can push text past even the full column (on a page whose columns are only a couple of lines
+    // high, where moving a line on to the next column never helps). The layout first made, without
+    // them, always fit it, so lay the page out as it was then rather than leave the pass that
+    // spilled to a new page.
+    if !fits {
+        thrown = discard(ctx);
+        pb.relaxed = true;
+        pass(ctx, pb, full);
+        pb.relaxed = false;
     }
     thrown
 }

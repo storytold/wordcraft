@@ -349,15 +349,40 @@ impl<'a> Flow<'a> {
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take. Balancing from Word 2013's layout
         // keeps the lines and the next paragraph together at the top of a column too (#6821).
-        if pb.y + need > pb.bottom + 0.01
-            && (!pb.fresh() || Self::strict_widow_control(ctx, pb))
-            && need <= pb.next_room(self.body_top)
-        {
+        let mut moved = false;
+        while pb.y + need > pb.bottom + 0.01 && (!pb.fresh() || Self::strict_widow_control(ctx, pb)) && need <= pb.next_room(self.body_top) {
             pb.advance(self.block, self.body_top);
+            moved = true;
+            // Balancing: the next column is as short, so go on to one that holds it, or to the
+            // page after, which fails the try (the loop ends there, the page isn't balanced).
+            if !Self::strict_widow_control(ctx, pb) {
+                break;
+            }
+        }
+        if moved {
             pb.y += rp.space_before.min(0.0);
             return rp.space_before.min(0.0);
         }
         before
+    }
+
+    /// Balancing from Word 2013's layout, a paragraph that was moved to the top of a column by
+    /// the lines before it (not by `keep_together`) keeps its lines, or itself with the next
+    /// paragraph, together there too: asks again, and places the paragraph's floats again where it
+    /// ends up (#6821).
+    fn keep_again(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms) {
+        let rp = &self.pl.rp;
+        if self.l0 != 0 || !(rp.keep_lines || rp.keep_next) || !pb.fresh() || !Self::strict_widow_control(ctx, pb) {
+            return;
+        }
+        let (col, pages) = (pb.col, pb.pages.len());
+        self.keep_together(ctx, pb, rooms, 0.0);
+        if (pb.col, pb.pages.len()) != (col, pages) {
+            let y0 = pb.y;
+            self.reanchor(ctx, pb, (y0, 0.0), &[]);
+            self.anchor_y = y0;
+            (self.rechecked, self.forced) = (false, Vec::new());
+        }
     }
 
     /// The lines going into a new column (or page) were broken around the wrap areas where the
@@ -519,7 +544,7 @@ impl<'a> Flow<'a> {
     /// orphan control would split, at the top of a column as anywhere (#6821). Before compatibility
     /// mode 15 it splits them.
     fn strict_widow_control(ctx: &Ctx, pb: &PageBuilder) -> bool {
-        ctx.doc.settings.compat_mode >= 15 && pb.balance.is_some_and(|(page, _)| page + 1 == pb.pages.len())
+        ctx.doc.settings.compat_mode >= 15 && !pb.relaxed && pb.balance.is_some_and(|(page, _)| page + 1 == pb.pages.len())
     }
 
     /// Nothing fits on this page: move to the next column or page, and place the floats again
@@ -869,6 +894,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         f.anchor_y = y0 - applied_before;
     }
     while f.l0 < f.n() {
+        f.keep_again(ctx, pb, rooms);
         f.place_due_late(ctx, pb);
         f.relay_wrap(ctx, pb);
         f.relay_pages(ctx, pb);

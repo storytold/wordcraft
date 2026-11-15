@@ -73,22 +73,28 @@ struct Case {
     /// Columns closed by a continuous break (balanced) or running to the end of the document.
     balanced: bool,
     keep: Keep,
+    /// A page of this many lines of text (for a page too short for the rules).
+    page_lines: Option<i32>,
 }
 
 impl Case {
     fn new(cols: u32, from_page_end: i32, k: usize) -> Case {
-        Case { cols, from_page_end, k, q: false, compat: 15, note: false, float: None, intro: 0, balanced: true, keep: Keep::No }
+        Case { cols, from_page_end, k, q: false, compat: 15, note: false, float: None, intro: 0, balanced: true, keep: Keep::No, page_lines: None }
     }
 }
 
-/// The columns of the lines of the `k`-line paragraph (counted from the left, 0 to `cols - 1`),
-/// of "Q1" if there is one, and the number of pages.
-fn columns(c: &Case) -> (Vec<usize>, Option<usize>, usize) {
+/// The document of a case, the index of the `k`-line paragraph and of "Q1", and the offsets of the
+/// paragraph's lines.
+fn build(c: &Case) -> (Document, usize, Option<usize>, Vec<usize>) {
     crate::test_fonts();
     let mut d = Document::new();
     d.settings.compat_mode = c.compat;
     let mut s = SectionProps { start: SectionStart::Continuous, ..Default::default() };
     s.columns.count = c.cols;
+    if let Some(n) = c.page_lines {
+        s.page_h = s.margin_top + s.margin_bottom + n as f32 * LINE + 0.5;
+        d.last_section.page_h = s.page_h;
+    }
     let per_col = ((s.page_h - s.margin_top - s.margin_bottom) / LINE).floor() as i32;
     let fillers = if c.intro > 0 { c.from_page_end.max(0) } else { (per_col * c.cols as i32 + c.from_page_end).max(0) } as usize;
     let mut body: Vec<Arc<Block>> = (0..c.intro).map(|i| para(&format!("i{i}"))).collect();
@@ -148,18 +154,37 @@ fn columns(c: &Case) -> (Vec<usize>, Option<usize>, usize) {
         d.insert_object(&Pos::body(first, end), InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() }, &Default::default())
             .unwrap();
     }
+    (d, first, q, starts)
+}
+
+/// The columns of the lines of the `k`-line paragraph (counted from the left, 0 to `cols - 1`),
+/// of "Q1" if there is one, and the number of pages.
+fn columns(c: &Case) -> (Vec<usize>, Option<usize>, usize) {
+    let (d, first, q, starts) = build(c);
     let l = lay(&d);
     let carets: Vec<_> = starts.iter().map(|&o| l.caret(&Pos::body(first, o)).unwrap()).collect();
     let q_caret = q.map(|qi| l.caret(&Pos::body(qi, 0)).unwrap());
-    // Columns by the order of their left edges, the first at the left edge of the first block.
-    let mut xs = vec![l.caret(&Pos::body(0, 0)).unwrap().x];
-    for x in carets.iter().map(|c| c.x).chain(q_caret.iter().map(|c| c.x)) {
-        if !xs.iter().any(|e| (e - x).abs() < 1.0) {
-            xs.push(x);
+    // The columns' left edges: where the lines on the first page start when that page fills all
+    // the columns, else the left edges of the caret positions seen. A line beside a float starts
+    // right of its column's edge, so a position is in the last edge at or left of it.
+    let mut xs: Vec<f32> = Vec::new();
+    for it in l.pages.first().map_or(&[][..], |p| &p.items[..]) {
+        if let Placed::Lines { story: StoryRef::Body, x, .. } = it
+            && !xs.iter().any(|e| (e - x).abs() < 1.0)
+        {
+            xs.push(*x);
+        }
+    }
+    if xs.len() != c.cols as usize {
+        xs = vec![l.caret(&Pos::body(0, 0)).unwrap().x];
+        for x in carets.iter().map(|c| c.x).chain(q_caret.iter().map(|c| c.x)) {
+            if !xs.iter().any(|e| (e - x).abs() < 1.0) {
+                xs.push(x);
+            }
         }
     }
     xs.sort_by(f32::total_cmp);
-    let col = |x: f32| xs.iter().position(|e| (e - x).abs() < 1.0).unwrap_or(usize::MAX);
+    let col = |x: f32| xs.iter().rposition(|e| *e <= x + 1.0).unwrap_or(usize::MAX);
     (carets.iter().map(|c| col(c.x)).collect(), q_caret.map(|c| col(c.x)), l.pages.len())
 }
 
@@ -334,4 +359,31 @@ fn mode_14_still_splits_the_last_two_lines_of_a_continued_paragraph() {
         let c = Case { compat: 14, ..Case::new(cols, -3, 5) };
         assert_eq!(of(&c)[3..], [0, 1], "{cols} columns");
     }
+}
+
+/// How many lines of body text are laid out, and on how many pages.
+fn shape(c: &Case) -> (usize, usize) {
+    let (d, ..) = build(c);
+    let l = lay(&d);
+    let lines = l
+        .pages
+        .iter()
+        .flat_map(|p| p.items.iter())
+        .map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, l0, l1, .. } => l1 - l0,
+            _ => 0,
+        })
+        .sum();
+    (l.pages.len(), lines)
+}
+
+// A page whose columns hold two lines is too short for the rules that keep three lines together:
+// not even the full column holds the paragraph with them, so the columns are laid out as before
+// (mode 14), with every line placed and no more pages.
+#[test]
+fn a_page_too_short_for_the_strict_rules_is_laid_out_as_in_mode_14() {
+    let tiny = |compat| Case { compat, page_lines: Some(2), ..Case::new(2, 0, 3) };
+    let (pages, lines) = shape(&tiny(14));
+    assert!(lines >= 4, "the paragraph's three lines and After: {lines}");
+    assert_eq!(shape(&tiny(15)), (pages, lines));
 }
