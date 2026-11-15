@@ -120,9 +120,7 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 },
             );
         });
-        let fit_resp = big(ui, app, "fitOnePage", "Fit\nOne Page", "layout.fitOnePage", json!({}), false);
-        let fit_label = tl!("Fit\nOne Page").replace('\n', " ");
-        fit_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, fit_label.clone()));
+        big(ui, app, "fitOnePage", "Fit\nOne Page", "layout.fitOnePage", json!({}), false);
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
         let rp = app.session.doc.para_at(&app.session.sel.focus).map(|_| wordcraft_engine::cmd::para::selection_para(&app.session));
@@ -143,7 +141,9 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         crate::rtl::Table::new("layout_para").columns(0).spacing(vec2(4.0, 1.5)).min_row_height(FIELD.y).show(ui, |t| {
             t.row(|r| {
                 r.cell(|ui| ui.label(egui::RichText::new(tl!("Indent")).small().strong()));
-                r.cell(|ui| ui.label(""));
+                // An empty cell, not an empty label: one would be selectable text that a screen
+                // reader stops on with nothing to say.
+                r.cell(|ui| ui.allocate_exact_size(egui::Vec2::ZERO, egui::Sense::hover()));
                 r.cell(|ui| spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong()));
             });
             // Indents in the File › Options unit.

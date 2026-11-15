@@ -82,6 +82,9 @@ pub use tabs::{
 use underline::{UNDERLINE_STYLES, underline_menu};
 use view::{outlining, view};
 
+/// Height of the ribbon under the tab strip: the content, the group titles and the margins.
+pub(crate) const RIBBON_H: f32 = CONTENT_H + LABEL_H + 10.0;
+
 /// Draws the Read toolbar or the full ribbon, switching to and from the contextual Equation and
 /// Outlining tabs and showing the available tab strip.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
@@ -384,7 +387,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         return;
     }
     egui::Panel::top("ribbon")
-        .exact_size(CONTENT_H + LABEL_H + 10.0)
+        .exact_size(RIBBON_H)
         .frame(
             egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
         )
@@ -402,7 +405,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if !app.has_document() && app.ui.tab != "Help" {
                 ui.disable();
             }
-            let bg = ui.interact(ui.max_rect(), ui.scope_id().with("ribbon_background"), Sense::click());
+            // Not focusable: empty ribbon space is no control, so neither Tab nor a screen reader
+            // stops on it as a nameless one.
+            let bg = ui.interact(ui.max_rect(), ui.scope_id().with("ribbon_background"), Sense::CLICK);
             crate::rtl::context_menu(&bg, |ui| crate::rtl::root(ui, |ui| crate::widgets::customize_menu_items(ui, app)));
             let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
             crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
