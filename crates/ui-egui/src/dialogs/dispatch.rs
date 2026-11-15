@@ -40,6 +40,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Icons { query, category, selected } => icons_body(app, ui, query, category, selected),
         Dialog::PasteSpecial { .. } => paste_special_dialog(app, ui, d),
         Dialog::About { .. } => about_dialog(ui, d),
+        Dialog::FontDownload { fonts, dont_show } => crate::font_download::body(app, ui, fonts, dont_show),
         Dialog::DiscardRecovery { .. } => discard_recovery_dialog(app, ui, d),
         Dialog::SaveChanges { .. } => save_changes_dialog(app, ui, d),
         Dialog::RecipientList { fields, rows, message, filter } => recipient_list(app, ui, fields, rows, message, filter),

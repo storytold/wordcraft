@@ -35,7 +35,7 @@ use bookmarks::bookmark_at_caret;
 use bookmarks::bookmark_names;
 pub use chrome::show;
 pub(crate) use chrome::{
-    block_behind, buttons, cancel_key_pressed, color_menu, drag_by_title_bar, forget_nudge, ok_cancel_responses, release_keyboard,
+    block_behind, buttons, cancel_key_pressed, close_button, color_menu, drag_by_title_bar, forget_nudge, ok_cancel_responses, release_keyboard,
 };
 pub(crate) use dispatch::search_results;
 pub(crate) use find::swallow_shortcut_text;
@@ -315,6 +315,12 @@ pub enum Dialog {
         #[serde(skip)]
         note: String,
     },
+    /// The document's missing fonts that can be downloaded, and how ([`crate::font_download`]).
+    FontDownload {
+        fonts: Vec<crate::font_download::Row>,
+        /// "Don't show this again".
+        dont_show: bool,
+    },
     /// Tabs: 0 About, 1 Contributors, 2 Models.
     About {
         tab: u8,
@@ -531,6 +537,7 @@ impl Dialog {
             Dialog::Icons { .. } => "icons",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
+            Dialog::FontDownload { .. } => "fontDownload",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::RecipientList { .. } => "recipientList",
@@ -783,6 +790,7 @@ impl Dialog {
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "renameDocument" => Dialog::RenameDocument { name: app.title_stem(), message: String::new(), focus: true },
             "about" => Dialog::About { tab: 0 },
+            "fontDownload" => crate::font_download::open(app),
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
             "languageData" => Dialog::About { tab: 3 },

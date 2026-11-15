@@ -169,6 +169,8 @@ impl WordApp {
             mac_titlebar: _,
             control_rx: _,
             updates_rt: _,
+            font_notice_seen: _,
+            font_notices: _,
             packs_rt: _,
             // The control channel's screenshots and input go to the active window, whichever it is.
             shots: _,
@@ -300,6 +302,7 @@ impl WordApp {
             print_backgrounds: _,
             update_fields_before_print: _,
             dictionary: _,
+            font_download_notice: _,
             // Where each task pane sits, and their order.
             styles_pane_dock: _,
             styles_pane_float: _,

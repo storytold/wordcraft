@@ -188,6 +188,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Icons { .. } => "Icons",
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
+        Dialog::FontDownload { .. } => "Get the Missing Fonts",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
         Dialog::RecipientList { .. } => "Recipient List",
@@ -302,7 +303,7 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 }
 
 /// A dialog's single Close button (Escape too).
-pub(super) fn close_button(ui: &mut Ui) -> bool {
+pub(crate) fn close_button(ui: &mut Ui) -> bool {
     ui.add_space(8.0);
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
