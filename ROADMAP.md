@@ -893,7 +893,7 @@ Quoted field escapes are interpreted like Word, and body `PAGE` fields use their
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
-- 2026-11-15: Layout: a paragraph that starts a table cell's part of a page in a split row is split where its lines fall, as in Word, instead of the row running off the bottom of the page (#6823). Readiness estimates unchanged.
+- 2026-11-15: Layout: a paragraph that starts a table cell's part of a page in a split row is split where its lines fall, and a can't split row taller than a page splits at the page's end, as in Word, instead of the row running off the bottom of the page (#6823). Readiness estimates unchanged.
 
 ## Revision history
 
