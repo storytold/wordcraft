@@ -62,8 +62,9 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         && let Some(text) = app.services.clipboard_text.as_ref().and_then(|f| f()).filter(|t| !t.is_empty())
     {
         // Picture files copied in a file manager reach us as their paths: paste the pictures,
-        // as Ctrl+V does.
+        // as Ctrl+V does, unless the caller brought HTML or RTF.
         if id == "edit.paste"
+            && !["html", "rtf"].iter().any(|k| o.contains_key(*k))
             && app.session.math.is_none()
             && paste_picture::names_picture_files(&text)
             && let Some(r) = paste_picture::paste(app)
@@ -1179,6 +1180,70 @@ mod tests {
         assert!(a.pending_paste.is_none());
         assert_eq!(first_para(&a), "plain strong");
         assert!(bold_at(&a, 7));
+    }
+
+    /// A paste that brings its own HTML or RTF pastes it, never the host's clipboard picture instead,
+    /// whether the clipboard is out of reach or holds no text, and a picture that can't be read
+    /// doesn't stop it.
+    #[test]
+    fn a_paste_bringing_its_own_content_skips_the_hosts_picture() {
+        let pixels = || Some(ClipboardPicture::Pixels { width: 4, height: 4, rgba: vec![200; 64] });
+        let unreadable = || Some(ClipboardPicture::Unreadable("the system clipboard couldn't be opened".into()));
+        let reachable =
+            || Services { clipboard_text: Some(Box::new(|| None)), clipboard_unreachable: Some(Box::new(|| false)), ..Default::default() };
+        let cases: [(Services, &str); 3] = [
+            (Services { clipboard_picture: Some(Box::new(pixels)), ..unreachable() }, "out of reach, with a picture"),
+            (Services { clipboard_picture: Some(Box::new(unreadable)), ..unreachable() }, "out of reach, unreadable"),
+            (Services { clipboard_picture: Some(Box::new(pixels)), ..reachable() }, "no text, with a picture"),
+        ];
+        for (services, case) in cases {
+            let mut a = app(services);
+            a.ctx = Some(egui::Context::default());
+            a.run("edit.paste", json!({"html": "<p>plain <b>strong</b></p>"})).unwrap();
+            assert!(a.session.doc.media.is_empty(), "{case}");
+            assert_eq!(first_para(&a), "plain strong", "{case}");
+            assert!(bold_at(&a, 7), "{case}");
+        }
+        // RTF the same.
+        let mut a = app(Services { clipboard_picture: Some(Box::new(pixels)), ..unreachable() });
+        a.ctx = Some(egui::Context::default());
+        a.run("edit.paste", json!({"rtf": r"{\rtf1\ansi {\b bold}}"})).unwrap();
+        assert!(a.session.doc.media.is_empty());
+        assert_eq!(first_para(&a), "bold");
+        // With no HTML or RTF of its own (Paste reads no `picture` param), the paste still takes
+        // the host's picture.
+        for params in [json!({}), json!({"picture": "AAAA"})] {
+            let mut a = app(Services { clipboard_picture: Some(Box::new(pixels)), ..reachable() });
+            a.run("edit.paste", params.clone()).unwrap();
+            assert_eq!(a.session.doc.media.len(), 1, "{params}");
+        }
+        // HTML on the host's clipboard beside its picture isn't the caller's: the picture wins.
+        let host_html = Services {
+            clipboard_picture: Some(Box::new(pixels)),
+            clipboard_html: Some(Box::new(|| Some("<p>the <b>host's</b> copy</p>".into()))),
+            ..reachable()
+        };
+        let mut a = app(host_html);
+        a.run("edit.paste", json!({})).unwrap();
+        assert_eq!(a.session.doc.media.len(), 1);
+        // Copied picture files, which the host's text names, don't replace the caller's HTML either.
+        let dir = std::env::temp_dir().join(format!("wc-paste-brings-html-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("copied.png");
+        std::fs::write(&file, paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap()).unwrap();
+        let (named, copied) = (file.to_string_lossy().into_owned(), file.clone());
+        let files = Services {
+            clipboard_text: Some(Box::new(move || Some(named.clone()))),
+            clipboard_picture: Some(Box::new(move || Some(ClipboardPicture::Files(vec![copied.clone()])))),
+            clipboard_unreachable: Some(Box::new(|| false)),
+            ..Default::default()
+        };
+        let mut a = app(files);
+        a.run("edit.paste", json!({"html": "<p>plain <b>strong</b></p>"})).unwrap();
+        assert!(a.session.doc.media.is_empty());
+        assert_eq!(first_para(&a), "plain strong");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

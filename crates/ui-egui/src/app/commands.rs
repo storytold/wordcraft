@@ -65,13 +65,16 @@ impl WordApp {
         // Ctrl+V's paste event carries it (#584), and its HTML and RTF, which egui's paste event
         // doesn't carry (#687).
         let mut params = params;
+        // HTML or RTF the caller brought, before the host's are added.
+        let brings_formatted = ["html", "rtf"].iter().any(|k| params.get(*k).is_some());
         if let Some(r) = system_clipboard::fill(self, id, &mut params) {
             return r;
         }
         // Paste without system clipboard text: a picture there is newer than our own copy (copying
-        // here replaces it with text), so it wins (#45).
+        // here replaces it with text), so it wins (#45). HTML or RTF the caller brought wins over it.
         if id == "edit.paste"
             && params.get("text").is_none()
+            && !brings_formatted
             && let Some(r) = paste_picture::paste(self)
         {
             return r;
