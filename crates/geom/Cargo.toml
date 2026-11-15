@@ -10,8 +10,9 @@ workspace = true
 
 [features]
 # Picture decoding within a memory budget (`picture`), for the crates that decode pictures.
-image = ["dep:image"]
+image = ["dep:image", "dep:craft-image-codecs"]
 
 [dependencies]
+craft-image-codecs = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 serde = { workspace = true }

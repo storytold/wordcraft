@@ -2556,9 +2556,8 @@ fn right_click_on_a_picture_offers_wrap_text() {
     use egui_kittest::kittest::Queryable;
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "Text before the picture "})).unwrap();
-    let mut png = Vec::new();
     let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap();
     a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 160})).unwrap();
     let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
     a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
@@ -2939,9 +2938,8 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
             a.run("insert.editHeader", json!({})).unwrap();
         }
         a.run("text.insert", json!({"text": "The picture overlaps this line of text."})).unwrap();
-        let mut png = Vec::new();
         let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
-        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap();
         a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 160})).unwrap();
         let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
         a.run("arrange.bounds", json!({"x": 120, "y": 80})).unwrap();
@@ -3373,9 +3371,8 @@ fn the_context_menu_in_a_table_follows_the_selection() {
 fn right_click_on_a_picture_offers_insert_caption() {
     let mut h = table_window();
     h.state_mut().run("caret.end", json!({})).unwrap();
-    let mut png = Vec::new();
     let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([30, 90, 200, 255]));
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap();
     h.state_mut().run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 60})).unwrap();
     let pos = wordcraft_engine::cmd::objects::selected(&h.state().session).unwrap().0;
     h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(1, 0));
@@ -5457,9 +5454,8 @@ fn a_picture_linked_from_its_context_menu_shows_and_follows_its_link() {
         a.run("select.text", json!({"text": "before"})).unwrap();
         a.run("insert.bookmark", json!({"name": "Spot"})).unwrap();
         a.run("caret.docEnd", json!({})).unwrap();
-        let mut png = Vec::new();
         let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
-        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap();
         a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 160})).unwrap();
         if floating {
             a.run("arrange.wrap", json!({"wrap": "inFrontOfText"})).unwrap();

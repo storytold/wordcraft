@@ -5,9 +5,8 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     let img = image::RgbaImage::from_fn(w, h, |x, y| {
         if x > 2 && x < w - 3 && y > 2 && y < h - 3 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
     });
-    let mut b = Vec::new();
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
-    b
+
+    wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap()
 }
 /// The laid-out area of the only picture or shape (not a text box).
 fn object_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
@@ -451,8 +450,9 @@ fn remove_background_keeps_a_small_stack() {
 /// 1 × 2,000,000 picture Thick Frame asked for about 1.8 TB and aborted the process.
 #[test]
 fn picture_styles_and_borders_check_the_size_they_draw() {
-    let mut thin = Vec::new();
-    image::GrayImage::new(1, 2_000_000).write_to(&mut std::io::Cursor::new(&mut thin), image::ImageFormat::Png).unwrap();
+    let thin =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::GrayImage::new(1, 2_000_000).clone()), image::ImageFormat::Png)
+            .unwrap();
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&thin)})).unwrap();
     let media = s.doc.media.len();
@@ -526,7 +526,7 @@ fn transparency_is_absolute_from_the_original() {
         let (_, o) = selected(s).unwrap();
         let InlineObject::Image { media, .. } = o else { panic!("a picture") };
         let bytes = s.doc.media.get(&media).cloned().unwrap();
-        image::load_from_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>()
+        wordcraft_geom::picture::decode_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>()
     };
     let alpha = |s: &Session| rgba(s).iter().map(|p| p[3]).collect::<Vec<_>>();
     let orig = rgba(&s);
@@ -579,7 +579,7 @@ fn picture_edits_replace_the_file_corrections() {
         let (_, o) = selected(s).unwrap();
         let InlineObject::Image { media, fx, .. } = o else { panic!("a picture") };
         let bytes = s.doc.media.get(&media).cloned().unwrap();
-        (media, fx, image::load_from_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>())
+        (media, fx, wordcraft_geom::picture::decode_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>())
     };
     let (orig_media, _, orig) = state(&s);
     // Transparency 50%: 50% (not 75%), the file's transparency dropped, its lum kept.
@@ -670,7 +670,7 @@ fn picture_styles_borders_and_effects_replace_the_last_one() {
     let bitmap = |s: &Session| {
         let (_, o) = selected(s).unwrap();
         let InlineObject::Image { media, .. } = o else { panic!("a picture") };
-        image::load_from_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
+        wordcraft_geom::picture::decode_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
     };
     let after = |cmds: &[(&str, Value)]| {
         let mut s = picture();
@@ -1274,9 +1274,9 @@ fn arrange_bounds_on_header_picture_writes_page_anchored_odt_frame() {
     assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
     assert_eq!((float.x, float.y), (0.0, 0.0));
 
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
-    let mut styles = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("styles.xml").unwrap(), &mut styles).unwrap();
+    let _z_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let styles = String::from_utf8(z.read("styles.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(styles.contains(r#"text:anchor-type="page""#), "frame should be page-anchored: {styles}");
     assert!(styles.contains(r#"svg:x="0pt""#) && styles.contains(r#"svg:y="0pt""#), "offsets should be 0pt: {styles}");
     assert!(!styles.contains(r#"text:anchor-type="paragraph""#), "frame should not be paragraph-anchored: {styles}");
@@ -1288,9 +1288,9 @@ fn arrange_bounds_on_header_picture_writes_page_anchored_odt_frame() {
     assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
     assert_eq!((float.x, float.y), (10.0, 20.0));
 
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
-    let mut styles = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("styles.xml").unwrap(), &mut styles).unwrap();
+    let _z_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let styles = String::from_utf8(z.read("styles.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(styles.contains(r#"text:anchor-type="page""#), "{styles}");
     assert!(styles.contains(r#"svg:x="10pt""#) && styles.contains(r#"svg:y="20pt""#), "{styles}");
 }
@@ -1325,9 +1325,9 @@ fn a_moved_body_picture_is_placed_by_its_paragraph_even_when_fixed_to_the_page()
     let hit = s.layout().object(&pos, 0).expect("laid out");
     assert!((hit.rect.x - 50.0).abs() < 1.0 && (hit.rect.y - 80.0).abs() < 1.0, "dropped: {:?}", hit.rect);
 
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
-    let mut content = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut content).unwrap();
+    let _z_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(content.contains(r#"text:anchor-type="paragraph""#), "body picture should export with paragraph anchor: {content}");
     assert!(!content.contains("anchor-page-number"), "{content}");
 }
@@ -1606,7 +1606,6 @@ fn mirrored_indents_make_no_extra_column() {
 /// A Word file whose only paragraph holds a group of a rectangle and Word's own ink (with its
 /// picture fallback).
 fn group_with_word_ink() -> Vec<u8> {
-    use std::io::Write;
     let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk""#;
     let rect = r#"<wps:wsp><wps:cNvPr id="2" name="Box"/><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp>"#;
     let ink = r#"<mc:AlternateContent><mc:Choice Requires="wpi"><w14:contentPart bwMode="auto" r:id="rInk"><w14:nvContentPartPr><w14:cNvPr id="3" name="Ink 3"/><w14:cNvContentPartPr/></w14:nvContentPartPr><w14:xfrm><a:off x="914400" y="0"/><a:ext cx="914400" cy="457200"/></w14:xfrm></w14:contentPart></mc:Choice><mc:Fallback><pic:pic><pic:nvPicPr><pic:cNvPr id="3" name="Ink 3"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rPreview"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="914400" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></mc:Fallback></mc:AlternateContent>"#;
@@ -1626,14 +1625,12 @@ fn group_with_word_ink() -> Vec<u8> {
         ),
         ("word/ink/ink1.xml", r#"<ink xmlns="http://www.w3.org/2003/InkML"><trace>0 0, 1 1</trace></ink>"#.to_string()),
     ];
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, xml) in parts {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(xml.as_bytes()).unwrap();
+        zw.add(name, xml.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.start_file("word/media/preview.png", zip::write::SimpleFileOptions::default()).unwrap();
-    zw.write_all(&png(8, 4)).unwrap();
-    zw.finish().unwrap().into_inner()
+    zw.add("word/media/preview.png", &png(8, 4), craft_zip::Compression::Deflated).unwrap();
+    zw.finish().unwrap()
 }
 
 fn ink_members(doc: &wordcraft_doc::Document) -> usize {
@@ -1653,7 +1650,6 @@ fn ink_members(doc: &wordcraft_doc::Document) -> usize {
 /// yet), so open → Ungroup → save → reopen keeps the ink in the group with its part.
 #[test]
 fn ungroup_refuses_a_group_holding_word_ink_and_the_ink_survives_saving() {
-    use std::io::Read;
     let mut s = Session::new(wordcraft_docx::read(&group_with_word_ink()).unwrap());
     assert_eq!(ink_members(&s.doc), 1, "the fixture's ink is read into the group");
     let pos = Pos::body(0, 0);
@@ -1666,16 +1662,14 @@ fn ungroup_refuses_a_group_holding_word_ink_and_the_ink_survives_saving() {
     let err = ungroup(&mut s, &json!({})).unwrap_err();
     assert!(matches!(err, CmdError::Disabled(_)), "{err:?}");
     let bytes = wordcraft_docx::write(&s.doc).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
-    let mut xml = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(xml.matches("<w14:contentPart").count(), 1, "{xml}");
     assert!(xml.contains("<mc:Fallback>"), "{xml}");
     assert_eq!(bytes, before, "the refused ungroup leaves the document unchanged");
-    let names: Vec<String> = z.file_names().map(String::from).collect();
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
     assert_eq!(names.iter().filter(|n| n.starts_with("word/ink/")).count(), 1, "{names:?}");
-    let mut rels = String::new();
-    z.by_name("word/_rels/document.xml.rels").unwrap().read_to_string(&mut rels).unwrap();
+    let rels = String::from_utf8(z.read("word/_rels/document.xml.rels", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(rels.matches("/customXml\"").count(), 1, "one ink relationship: {rels}");
     let back = wordcraft_docx::read(&bytes).unwrap();
     assert_eq!(ink_members(&back), 1);
