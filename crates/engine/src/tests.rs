@@ -5220,6 +5220,22 @@ fn caret_navigation() {
 }
 
 #[test]
+fn select_text_does_not_wrap_large_occurrence_numbers() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "match match"}));
+    run(&mut s, "select.text", json!({"text": "match", "occurrence": 2}));
+    let selected = s.sel.clone();
+    let depth = s.undo_depth();
+    // On a 32-bit target, narrowing either number to usize would select the first match.
+    for occurrence in [4_294_967_297u64, 8_589_934_593] {
+        let result = s.run("select.text", &json!({"text": "match", "occurrence": occurrence}));
+        assert!(matches!(result, Err(crate::CmdError::Failed(_))), "{occurrence}: no such match");
+        assert_eq!(s.sel, selected, "{occurrence}: a failed search keeps the selection");
+        assert_eq!(s.undo_depth(), depth, "{occurrence}: a failed search adds no undo step");
+    }
+}
+
+#[test]
 fn text_box_insert_puts_the_caret_inside() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Before "}));
