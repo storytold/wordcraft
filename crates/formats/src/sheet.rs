@@ -100,7 +100,12 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
                             (Value::Number(n), _) => formats.get(cell.style as usize).and_then(|f| f.date_kind(*n)),
                             _ => None,
                         };
-                        let s = display(&value, kind, wb.date_1904);
+                        let s = match (&value, &cell.value) {
+                            // A `t="d"` cell the workbook's date system cannot hold, such as a date
+                            // before 1904 in the 1904 system, keeps its text.
+                            (Value::Empty, craft_xlsx::CellValue::Date(text)) if iso_date_text(text) => clamp_cell(text.clone()),
+                            _ => display(&value, kind, wb.date_1904),
+                        };
                         if !s.is_empty() {
                             grid.insert((cell.at.row, cell.at.col), s);
                         }
@@ -205,6 +210,14 @@ fn display(v: &Value, kind: Option<DateKind>, date_1904: bool) -> String {
         (Value::Number(n), Some(kind)) => serial_date(*n, date_1904, kind).unwrap_or_else(|| format_value(v)),
         _ => format_value(v),
     }
+}
+
+/// Whether `text` is an ISO 8601 date, with or without a time, in any year:
+/// `craft_xlsx::iso_date_serial` accepts it with its year replaced by 2000.
+fn iso_date_text(text: &str) -> bool {
+    text.trim().split_once('-').is_some_and(|(year, rest)| {
+        !year.is_empty() && year.bytes().all(|b| b.is_ascii_digit()) && craft_xlsx::iso_date_serial(&format!("2000-{rest}"), false).is_some()
+    })
 }
 
 /// A number as a spreadsheet shows it in General format: up to 15 significant digits, no
@@ -527,11 +540,18 @@ mod tests {
 
     /// An `.xlsx` with one sheet of `rows` and a styles part with `num_fmts` and `xfs`.
     fn styled_workbook(rows: &str, num_fmts: &str, xfs: &str) -> Vec<u8> {
+        workbook_with(rows, num_fmts, xfs, "")
+    }
+
+    /// [`styled_workbook`] with `book_pr` (such as `<workbookPr date1904="1"/>`) in the workbook part.
+    fn workbook_with(rows: &str, num_fmts: &str, xfs: &str, book_pr: &str) -> Vec<u8> {
         let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>"#;
         let root = format!(
             r#"<Relationships xmlns="{RELS}"><Relationship Id="rId1" Type="{DOC_RELS}/officeDocument" Target="xl/workbook.xml"/></Relationships>"#
         );
-        let book = format!(r#"<workbook xmlns="{MAIN}" xmlns:r="{DOC_RELS}"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>"#);
+        let book = format!(
+            r#"<workbook xmlns="{MAIN}" xmlns:r="{DOC_RELS}">{book_pr}<sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>"#
+        );
         let book_rels = format!(
             r#"<Relationships xmlns="{RELS}"><Relationship Id="rId1" Type="{DOC_RELS}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="{DOC_RELS}/styles" Target="styles.xml"/></Relationships>"#
         );
@@ -616,6 +636,20 @@ mod tests {
         let rows = r#"<row r="1"><c r="A1" s="1" t="d"><v>2024-03-05T13:45:00</v></c><c r="B1" s="2" t="d"><v>2024-03-05</v></c></row>"#;
         let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="20"/>"#);
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["2024-03-05 13:45", "2024-03-05"]]);
+    }
+
+    #[test]
+    fn a_date_cell_outside_the_date_system_keeps_its_text() {
+        let rows = r#"<row r="1"><c r="A1" t="d"><v>1899-12-31</v></c><c r="B1" s="1" t="d"><v>1899-12-31T08:30:00</v></c></row>"#;
+        let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/><xf numFmtId="14"/>"#);
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1899-12-31", "1899-12-31T08:30:00"]]);
+        let rows = r#"<row r="1"><c r="A1" t="d"><v>1903-12-31</v></c><c r="B1" t="d"><v>1904-01-02</v></c></row>"#;
+        let book = workbook_with(rows, "", r#"<xf numFmtId="0"/>"#, r#"<workbookPr date1904="1"/>"#);
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1903-12-31", "1904-01-02"]]);
+        // Text that is not an ISO date stays unread.
+        let rows = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="d"><v>not-a-date</v></c><c r="C1" t="d"><v>1899-13-01</v></c></row>"#;
+        let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1"]]);
     }
 
     #[test]
