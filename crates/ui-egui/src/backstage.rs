@@ -125,7 +125,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
-            if back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+            let recent_clear_confirm_open = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique("recent_clear_confirm"))).unwrap_or(false);
+            if back.clicked() || (!app.file_dialog_open() && !recent_clear_confirm_open && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }

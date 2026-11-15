@@ -5282,8 +5282,18 @@ fn byte_backed_open_does_not_read_filesystem_modification_metadata() {
     std::fs::write(&path, b"unrelated file at the same path").unwrap();
     let bytes = std::fs::read(docx_on_disk(&dir, "In-memory document")).unwrap();
     let mut app = app();
+    let old_timestamp = "2000-01-01T00:00:00Z".to_string();
+    app.ui.recent.push(RecentDocument { path: path.to_string_lossy().into_owned(), last_opened: old_timestamp.clone(), modified: String::new() });
+    app.ui
+        .recent_metadata
+        .insert(path.to_string_lossy().into_owned(), RecentMetadata { last_opened: old_timestamp.clone(), modified: String::new() });
     app.run("file.open", json!({"path": path, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})).unwrap();
-    assert_eq!(app.ui.recent.first().map(|entry| entry.modified.as_str()), Some(""));
+    let entry = app.ui.recent.first().expect("the opened path is first in Recent");
+    assert_eq!(entry.modified, "", "byte-backed opens do not read filesystem metadata");
+    assert_ne!(entry.last_opened, old_timestamp, "reopening refreshes the previous open timestamp");
+    let metadata = app.ui.recent_metadata.get(&entry.path).expect("Recent metadata stays in sync");
+    assert_eq!(metadata.last_opened, entry.last_opened);
+    assert_eq!(metadata.modified, "");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

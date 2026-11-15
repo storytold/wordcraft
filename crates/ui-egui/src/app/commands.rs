@@ -409,6 +409,12 @@ impl WordApp {
 
     fn refresh_recent_saved_path_without_disk_metadata(&mut self, path: &str) {
         self.refresh_recent_saved_path_with_metadata(path, false);
+        if let Some(entry) = self.ui.recent.first_mut() {
+            entry.last_opened = wordcraft_engine::cmd::now_iso();
+            self.ui
+                .recent_metadata
+                .insert(entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() });
+        }
     }
 
     fn refresh_recent_saved_path_with_metadata(&mut self, path: &str, read_disk_metadata: bool) {

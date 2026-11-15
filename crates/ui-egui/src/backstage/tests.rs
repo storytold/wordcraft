@@ -598,6 +598,17 @@ fn recent_documents_are_listed_in_one_table() {
     h.get_by_label("Clear Recent").click();
     h.run_steps(2);
     assert!(!h.state().ui.recent.is_empty(), "clearing requires confirmation");
+    let recent_before_cancel = h.state().ui.recent.clone();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.backstage, "Escape cancels the confirmation without leaving Backstage");
+    assert_eq!(h.state().ui.backstage_page, "home", "Recent stays visible after cancelling");
+    assert_eq!(h.state().ui.recent, recent_before_cancel, "cancelling leaves the Recent entries unchanged");
+    assert!(h.query_by_label("Clear").is_none(), "Escape closes the confirmation");
+    h.get_by_label("Recent").click();
+    h.run_steps(2);
+    h.get_by_label("Clear Recent").click();
+    h.run_steps(2);
     h.get_by_label("Clear").click();
     h.run_steps(2);
     assert!(h.state().ui.recent.is_empty(), "the Recent menu clears the persisted list after confirmation");
