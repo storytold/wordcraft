@@ -884,11 +884,7 @@ fn fit_one_page_preserves_budget_across_document_serialization() {
                 let extra_text = "x".repeat(extra_chars);
                 let extra_p = wordcraft_doc::Paragraph::with_text(
                     &extra_text,
-                    CharProps {
-                        font: Some(wordcraft_fonts::DEFAULT_FAMILY.into()),
-                        size: Some(12.0),
-                        ..Default::default()
-                    },
+                    CharProps { font: Some(wordcraft_fonts::DEFAULT_FAMILY.into()), size: Some(12.0), ..Default::default() },
                 );
                 reopened.doc.body.push(wordcraft_doc::para_block(extra_p));
                 reopened.touch();
