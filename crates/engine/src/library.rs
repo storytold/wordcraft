@@ -18,6 +18,8 @@ use wordcraft_geom::picture;
 
 use crate::io;
 
+pub mod drawer;
+
 /// The files the Pictures tab lists: the raster pictures `insert.picture` decodes. Metafiles
 /// (WMF, EMF) insert too, but have no thumbnail here yet, and SVG doesn't insert at all.
 pub const EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"];

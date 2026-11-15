@@ -188,3 +188,141 @@ fn pictures_share_one_grid() {
     assert!(h.query_by_label("a").is_none(), "no per-file heading");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A `w` × `h` JPEG of noise, which compresses badly and decodes slowly, as a camera photo does.
+fn noisy_jpeg(w: u32, h: u32) -> Vec<u8> {
+    let mut seed = 0x2545_f491_u32;
+    let img = RgbaImage::from_fn(w, h, |x, y| {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        let n = (seed & 0x3f) as u8;
+        Rgba([(x / 24) as u8 ^ n, (y / 16) as u8 ^ n, n.wrapping_mul(3), 255])
+    });
+    wordcraft_geom::picture::encode_format(&DynamicImage::ImageRgba8(img), ImageFormat::Jpeg).unwrap()
+}
+
+/// The size of the texture the pane draws `file`'s picture with, if it has made one: the pane
+/// names them `library {file} {index} {width}`, which the background drawing relies on.
+fn texture(h: &Harness<'_, WordApp>, file: &str) -> Option<[usize; 2]> {
+    let prefix = format!("library {file} 0 ");
+    let textures = h.ctx.tex_manager();
+    let textures = textures.read();
+    textures.allocated().find(|(_, m)| m.name.starts_with(&prefix)).map(|(_, m)| m.size)
+}
+
+/// The file the pane lists whose name ends with `name`.
+fn listed(h: &Harness<'_, WordApp>, name: &str) -> String {
+    h.state().library.files.iter().find(|f| f.file.ends_with(name)).map(|f| f.file.clone()).unwrap()
+}
+
+/// Step, a frame every 10 ms, until `done`, at most a minute; the slowest frame.
+fn step_until(h: &mut Harness<'_, WordApp>, done: impl Fn(&Harness<'_, WordApp>) -> bool) -> std::time::Duration {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut slowest = std::time::Duration::ZERO;
+    while !done(h) {
+        assert!(std::time::Instant::now() < until, "not within a minute");
+        let t = std::time::Instant::now();
+        h.step();
+        slowest = slowest.max(t.elapsed());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    slowest
+}
+
+#[test]
+fn a_large_photo_never_holds_up_a_frame_and_its_thumbnail_arrives() {
+    let jpeg = noisy_jpeg(4000, 3000);
+    let t = std::time::Instant::now();
+    wordcraft_engine::library::draw_thumbnail(&jpeg, 256).unwrap();
+    let decode = t.elapsed();
+    let dir = folder("large");
+    std::fs::write(dir.join("harbour.jpg"), &jpeg).unwrap();
+    let mut h = harness(app());
+    h.state_mut().run("library.addFolder", json!({"path": dir.to_string_lossy()})).unwrap();
+    h.state_mut().run("view.libraryPane", json!({"value": true})).unwrap();
+    // The first frames list the folder and ask for the thumbnail: a placeholder of the pane's
+    // blank-cell shape comes back while the photo is drawn on the worker.
+    let mut slowest = step_until(&mut h, |h| h.state().library.ready() && texture(h, &listed(h, "harbour.jpg")).is_some());
+    let file = listed(&h, "harbour.jpg");
+    assert_eq!(texture(&h, &file), Some([4, 3]), "the placeholder");
+    assert!(h.state().library_thumbs.drawing() || h.state().library_thumbs.waiting().0 == 1, "drawn on the worker");
+    // Frames go on while it is drawn; then the pane's texture is the thumbnail.
+    slowest = slowest.max(step_until(&mut h, |h| texture(h, &file).is_some_and(|s| s[0] > 4)));
+    let [w, ht] = texture(&h, &file).unwrap();
+    assert!(w >= 128 && (ht as f32 / w as f32 - 0.75).abs() < 0.02, "{w} × {ht}");
+    assert_eq!(h.state().library_thumbs.waiting(), (0, 0));
+    assert!(slowest < decode / 2, "a frame took {slowest:?}; drawing the photo takes {decode:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A PNG whose header says `w` × `h`, with no pixels to speak of: listed, never drawn.
+fn png_claiming(w: u32, h: u32) -> Vec<u8> {
+    fn crc(bytes: &[u8]) -> u32 {
+        let mut c = 0xffff_ffffu32;
+        for b in bytes {
+            c ^= u32::from(*b);
+            for _ in 0..8 {
+                c = if c & 1 == 1 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend((data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend(data);
+        out.extend(&body);
+        out.extend(crc(&body).to_be_bytes());
+    }
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = w.to_be_bytes().to_vec();
+    ihdr.extend(h.to_be_bytes());
+    ihdr.extend([8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &[0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+#[test]
+fn a_picture_that_cannot_be_drawn_shows_the_question_mark() {
+    let dir = folder("bomb");
+    std::fs::write(dir.join("bomb.png"), png_claiming(100_000, 100_000)).unwrap();
+    let mut h = open_on(&dir);
+    let file = listed(&h, "bomb.png");
+    assert!(h.state().library.files.iter().all(|f| f.error.is_none()), "its header reads");
+    step_until(&mut h, |h| texture(h, &file).is_some_and(|s| s != [4, 3]));
+    assert_eq!(texture(&h, &file), Some(super::thumbs::FAILED), "the \"?\"");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn another_folder_or_closing_the_pane_drops_the_photos_waiting() {
+    let photos = folder("waiting-photos");
+    let jpeg = noisy_jpeg(4000, 3000);
+    for name in ["a.jpg", "b.jpg", "c.jpg", "d.jpg"] {
+        std::fs::write(photos.join(name), &jpeg).unwrap();
+    }
+    let empty = folder("waiting-empty");
+    let mut h = open_on(&photos);
+    h.state_mut().run("library.addFolder", json!({"path": empty.to_string_lossy()})).unwrap();
+    h.state_mut().library.folder = None;
+    step_until(&mut h, |h| h.state().library_thumbs.waiting().0 >= 2);
+    // Another folder: what waits is dropped (the photo being drawn finishes), and the pane reads
+    // its folders again, so none of its placeholders is left blank.
+    let shown = h.state().session.prefs.library_folders.iter().find(|f| f.contains("waiting-empty")).cloned();
+    h.state_mut().library.folder = shown;
+    h.step();
+    assert_eq!(h.state().library_thumbs.waiting(), (0, 0));
+    // All folders again: the photos are asked for again.
+    h.state_mut().library.folder = None;
+    step_until(&mut h, |h| h.state().library_thumbs.waiting().0 >= 1);
+    // The pane closed: dropped in the same frame.
+    h.state_mut().run("view.libraryPane", json!({"value": false})).unwrap();
+    h.step();
+    assert_eq!(h.state().library_thumbs.waiting(), (0, 0));
+    assert!(!h.state().library.ready(), "the pane reads its folders again when it opens");
+    let _ = std::fs::remove_dir_all(photos);
+    let _ = std::fs::remove_dir_all(empty);
+}

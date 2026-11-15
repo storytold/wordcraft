@@ -670,6 +670,8 @@ pub struct WordApp {
     /// The Library pane's tab, folder, search and thumbnails (#2868): one Library for every
     /// window, so a thumbnail drawn in one shows in the others.
     pub library: library_pane::State,
+    /// The Library pane's thumbnails being drawn in the background.
+    pub library_thumbs: library_pane::Thumbs,
     pub status_msg: Option<(String, f64)>,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).

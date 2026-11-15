@@ -5,7 +5,8 @@
 //!
 //! WordCraft has no folder picker (its folder options take a typed path too), so Add Folder…
 //! shows the pane's path field. A tab of WordCraft's own (icons, diagrams, charts) would join the
-//! strip in [`LABELS`] and be drawn in `WordHost`'s `Host::tab`.
+//! strip in [`LABELS`] and be drawn in `WordHost`'s `Host::tab`. Thumbnails are drawn off the UI
+//! thread ([`thumbs`]), so a folder of camera photos scrolls without a stall.
 
 use std::borrow::Cow;
 
@@ -13,6 +14,8 @@ use craft_library_egui::{Host, Labels, Palette};
 pub use craft_library_egui::{ITEMS, MAX_SHOWN_FILES, State};
 use egui::Ui;
 use serde_json::Value;
+pub use thumbs::Thumbs;
+pub(crate) use thumbs::{begin_frame, end_frame};
 
 use crate::WordApp;
 use crate::theme::Tokens;
@@ -69,7 +72,13 @@ impl Host for WordHost<'_> {
         }
         r
     }
+    /// A thumbnail not drawn yet is drawn in the background; the pane gets a placeholder at once.
     fn ask(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if id == "library.thumbnail"
+            && let Some(answer) = thumbs::ask(self.0, &params)
+        {
+            return answer;
+        }
         self.0.session.run(id, &params).map_err(|e| e.to_string())
     }
     fn folders(&self) -> Vec<String> {
@@ -93,12 +102,16 @@ impl Host for WordHost<'_> {
 /// Draw the pane's body.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let pal = palette(&Tokens::get(ui.ctx()));
+    thumbs::before_pane(app, ui.ctx(), pal.control, pal.text_dim);
     // The pane's state is the app's; it is lent to the pane while the app is the pane's host. The
     // pane scrolls its own grid, so its folder and search controls stay in view.
     let mut state = std::mem::take(&mut app.library);
     craft_library_egui::show(ui, &mut state, &mut WordHost(app), &LABELS, &pal);
     app.library = state;
+    thumbs::after_pane(app);
 }
+
+mod thumbs;
 
 #[cfg(test)]
 mod ui_tests;
