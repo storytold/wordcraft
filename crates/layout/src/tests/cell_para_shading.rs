@@ -11,11 +11,15 @@ const PARA: Rgb = Rgb(0xBF, 0xBF, 0xBF);
 
 /// The page's fills, laid out from a one-cell red table holding `p`.
 fn page_fills(p: Paragraph) -> Vec<(Rgb, Rect)> {
+    page_fills_with_margin(p, 1.4)
+}
+
+fn page_fills_with_margin(p: Paragraph, margin: f32) -> Vec<(Rgb, Rect)> {
     let mut d = Document::from_text("Before");
     let mut t = Table::new(1, 2, 200.0);
     t.props.style = None;
     t.props.fixed = true;
-    t.props.cell_margins = Some([0.0, 1.4, 0.0, 1.4]);
+    t.props.cell_margins = Some([0.0, margin, 0.0, margin]);
     let cell = &mut t.rows[0].cells[0];
     cell.props.shading = Some(CELL);
     cell.blocks = vec![wordcraft_doc::para_block(p)];
@@ -74,4 +78,20 @@ fn unshaded_paragraph_with_a_highlight_adds_no_fill_over_the_cell_margins() {
     for (c, r) in f.iter().filter(|(c, _)| *c != CELL) {
         assert!(r.x > cell.x + 1.0, "fill {c:?} {r:?} starts at the cell's edge {cell:?}");
     }
+}
+
+#[test]
+fn bordered_paragraph_shading_stays_within_its_borders() {
+    use wordcraft_doc::props::{Border, Borders};
+    let side = Some(Border { space: 1.0, ..Border::single(0.5) });
+    let mut p = Paragraph::with_text("Header", Default::default());
+    p.props.shading = Some(PARA);
+    p.props.borders = Some(Borders { top: side, left: side, bottom: side, right: side, ..Default::default() });
+    let f = page_fills_with_margin(p, 5.4);
+    let (cell, para) = (fill(&f, CELL), fill(&f, PARA));
+    // The fill reaches the border rules, not the cell's edges.
+    assert!((para.x - 75.9).abs() < 0.01, "cell {cell:?} paragraph {para:?}");
+    assert!((para.right() - 168.1).abs() < 0.01, "cell {cell:?} paragraph {para:?}");
+    assert!(para.x > cell.x + 1.0 && para.right() < cell.right() - 1.0, "cell {cell:?} paragraph {para:?}");
+    assert!(para.y >= cell.y && para.bottom() <= cell.bottom(), "cell {cell:?} paragraph {para:?}");
 }

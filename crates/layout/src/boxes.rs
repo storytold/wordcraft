@@ -333,7 +333,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
                 // In a cell, shading that reaches the text column's edge runs on over the cell
                 // margin to the cell's edge, so the cell's own fill doesn't show beside it (Word).
-                if let (Some(edges), Some(shade)) = (cell_edges, pl.rp.shading) {
+                // A side with a border keeps its shading inside the border (Word).
+                if let (Some((el, er)), Some(shade)) = (cell_edges, pl.rp.shading) {
+                    let b = pl.rp.borders.unwrap_or_default();
+                    let edges = (b.left.is_none_or(|l| !l.is_visible()).then_some(el), b.right.is_none_or(|r| !r.is_visible()).then_some(er));
                     shade_to_cell_edges(items.get_mut(pushed..).unwrap_or_default(), shade, width, edges);
                 }
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
@@ -661,15 +664,22 @@ impl Edges {
 }
 
 /// Runs a cell paragraph's shading fills (colour `shade`) that reach the text column's edge on
-/// to the cell's edges; other fills are left alone.
-fn shade_to_cell_edges(items: &mut [Placed], shade: Rgb, width: f32, (left, right): (f32, f32)) {
+/// to the cell's edges (`None`: a side that is not run on); other fills are left alone.
+fn shade_to_cell_edges(items: &mut [Placed], shade: Rgb, width: f32, (left, right): (Option<f32>, Option<f32>)) {
     for it in items {
         let Placed::Fill { rect, color } = it else { continue };
         if *color != shade {
             continue;
         }
-        let (l, r) = (if rect.x <= 0.01 { rect.x.min(left) } else { rect.x }, rect.right());
-        let r = if r >= width - 0.01 { r.max(right) } else { r };
+        let l = match left {
+            Some(left) if rect.x <= 0.01 => rect.x.min(left),
+            _ => rect.x,
+        };
+        let r = rect.right();
+        let r = match right {
+            Some(right) if r >= width - 0.01 => r.max(right),
+            _ => r,
+        };
         *rect = Rect::new(l, rect.y, r - l, rect.h);
     }
 }
