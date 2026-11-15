@@ -333,6 +333,8 @@ impl Exporter<'_> {
         i
     }
 
+    /// Consume the collected nonempty tag groups into a tree using the document's default
+    /// language. Drains the pending entries; call after painting has attached their children.
     pub(crate) fn tag_tree(&mut self) -> TagTree {
         let mut tree = TagTree::new().with_lang(self.doc.styles.default_chr.lang.clone());
         for e in std::mem::take(&mut self.tags) {

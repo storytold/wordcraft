@@ -180,7 +180,8 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
     }
 }
 
-// Dash lengths use the effective width used by both path painters.
+/// Effective freeform stroke width in points: clamp finite positive widths to 0.25..=200,
+/// otherwise use 0.75. Dash lengths use this same width as the screen and PDF path painters.
 fn path_stroke_width(width: f32) -> f32 {
     if width.is_finite() && width > 0.0 { width.clamp(0.25, 200.0) } else { 0.75 }
 }

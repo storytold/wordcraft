@@ -6952,6 +6952,9 @@ fn floats_are_drawn_in_their_stacking_order() {
     assert_eq!(xs, [200.0, 100.0, 300.0], "no order after ordered ones: drawn last");
 }
 
+/// A page-anchored, behind-text float in a header keeps its page coordinates and paints behind
+/// the header text; a square-wrapped, paragraph-relative float laid out in its table cell stays
+/// horizontally inside the cell.
 #[test]
 fn floats_in_headers_and_table_cells_are_drawn() {
     crate::test_fonts();
