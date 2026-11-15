@@ -13455,6 +13455,51 @@ fn an_inserted_or_pasted_picture_fits_where_it_goes() {
     assert!((widths(&s)[0].0 - text_w).abs() < 0.5);
 }
 
+/// #5428 review: Web Layout and Read Mode reflow the text to the window, but a picture put in
+/// there is fitted to the page's text width, as in Print Layout: the size stays in the document.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_picture_put_in_in_web_layout_fits_the_page_not_the_window() {
+    let png = |w: u32, h: u32| {
+        let mut b = Vec::new();
+        image::RgbaImage::from_pixel(w, h, image::Rgba([30, 90, 200, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png)
+            .unwrap();
+        cmd::insert::base64_encode(&b)
+    };
+    let width = |s: &Session| {
+        s.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
+            wordcraft_doc::InlineObject::Image { w, .. } => Some(*w),
+            _ => None,
+        })
+    };
+    let text_w = crate::io::text_width(&Session::new(wordcraft_doc::Document::new()).doc);
+    let web = || {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "view.webLayout", json!({}));
+        // A narrow window, or a high zoom.
+        s.view.web_width = 350.0;
+        assert!(s.layout().pages[0].w < text_w, "the window is narrower than the page's text");
+        s
+    };
+    let mut s = web();
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    let mut p = web();
+    let html = format!("<p><img src=\"data:image/png;base64,{}\"></p>", png(1000, 200));
+    run(&mut p, "edit.pasteSpecial", json!({"as": "html", "html": html}));
+    for (how, s) in [("inserted", &s), ("pasted", &p)] {
+        let w = width(s).unwrap();
+        assert!((w - text_w).abs() < 0.5, "{how}: {w} fits the page's text width ({text_w})");
+    }
+    // Read Mode's narrow pages don't set it either.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Read"}));
+    run(&mut s, "view.readMode", json!({}));
+    s.view.read_width = 240.0;
+    let room = s.room_at(&s.sel.focus.clone());
+    assert!((room - text_w).abs() < 0.5, "Read Mode: {room} is the page's text width ({text_w})");
+}
+
 /// A picture an OpenDocument file gives no size is shown at its own, fitted to the text as other
 /// formats' are; one with a stated size keeps it, in line too.
 #[test]

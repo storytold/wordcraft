@@ -186,10 +186,11 @@ impl Session {
     /// (#5428): the room its paragraph's lines have (inside a table cell, the innermost cell's
     /// text area, nested tables included; the paragraph's indents left out), never wider than the
     /// column it is in, of its own section. The first section's text width when `pos` isn't laid
-    /// out.
+    /// out. It is measured on the pages, whatever the view: Web Layout and Read Mode reflow the
+    /// text to the window, and a picture put in there keeps the size it gets in the document.
     pub(crate) fn room_at(&mut self, pos: &wordcraft_doc::Pos) -> f32 {
         let first = self.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
-        let l = self.layout();
+        let l = if !self.view.read_mode && self.view.mode == ViewMode::Print { self.layout() } else { self.export_layout_of(&self.doc, false) };
         let Some((caret, page)) = l.caret(pos).and_then(|c| Some((c, l.pages.get(c.page)?))) else { return first };
         let section = self.doc.sections().get(page.section).map(|(_, sp)| (*sp).clone());
         let column = match (&section, pos.story) {
