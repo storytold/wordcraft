@@ -8,18 +8,28 @@
 //! The expectations were measured in Word for Windows 16.0 (compatibility mode 15, widow control
 //! on, Letter with 1 inch margins) on synthetic documents laid out like these.
 use crate::*;
+use wordcraft_doc::para::{Anchor, Float, InlineObject, Wrap};
 use wordcraft_doc::props::{LineSpacing, ParaProps};
 use wordcraft_doc::{Table, para_block};
+
+fn lay(doc: &Document) -> DocLayout {
+    let mut c = LayoutCache::new();
+    layout(doc, &mut c, &LayoutOptions::default())
+}
 
 fn exact(height: f32, widow: bool) -> ParaProps {
     ParaProps { line_spacing: Some(LineSpacing::Exactly(height)), space_before: Some(0.0), space_after: Some(0.0), widow_control: Some(widow), ..Default::default() }
 }
 
 fn lines_para(lines: usize, height: f32, widow: bool, name: &str) -> Arc<Block> {
+    para_block(lines_paragraph(lines, height, widow, name))
+}
+
+fn lines_paragraph(lines: usize, height: f32, widow: bool, name: &str) -> Paragraph {
     let text: Vec<String> = (1..=lines).map(|i| format!("{name}{i}")).collect();
     let mut p = Paragraph::with_text(&text.join(&wordcraft_doc::para::LINE_BREAK.to_string()), Default::default());
     p.props = exact(height, widow);
-    para_block(p)
+    p
 }
 
 /// What the table is made of: `pre` one-line paragraphs of 16 pt before it, an optional repeated
@@ -36,11 +46,13 @@ struct Case {
     before: Vec<(usize, f32)>,
     last: (usize, f32),
     widow: bool,
+    /// A picture floating through the text, anchored in the last paragraph and placed above it.
+    float_above: bool,
 }
 
 impl Case {
     fn new(last: (usize, f32)) -> Case {
-        Case { pre: 0, header: false, cant_split: false, nested: false, fill: 45, fill_height: 14.0, before: Vec::new(), last, widow: true }
+        Case { pre: 0, header: false, cant_split: false, nested: false, fill: 45, fill_height: 14.0, before: Vec::new(), last, widow: true, float_above: false }
     }
 
     /// The lines of the last paragraph on each page.
@@ -64,7 +76,13 @@ impl Case {
         }
         t.rows[row].props.cant_split = self.cant_split;
         let mut inner: Vec<Arc<Block>> = self.before.iter().map(|&(n, h)| lines_para(n, h, w, "P")).collect();
-        inner.push(lines_para(self.last.0, self.last.1, w, "B"));
+        let mut last = lines_paragraph(self.last.0, self.last.1, w, "B");
+        if self.float_above {
+            let float = Float { wrap: Wrap::Through, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 250.0, y: -6.0, ..Default::default() };
+            let picture = InlineObject::Image { media: "float".into(), w: 20.0, h: 20.0, alt: "float".into(), float, crop: [0.0; 4], fx: Default::default(), ole: None };
+            last.insert_object(0, picture, &Default::default()).unwrap();
+        }
+        inner.push(para_block(last));
         let mut blocks = vec![lines_para(self.fill, self.fill_height, w, "A")];
         let mut at = vec![self.pre as u32, row as u32, 1, inner.len() as u32];
         if self.nested {
@@ -226,4 +244,22 @@ fn a_cant_split_row_that_fits_the_next_page_moves_there_whole() {
     c.fill = 5;
     c.fill_height = 16.0;
     assert_eq!(c.per_page(), vec![0, 3]);
+}
+
+/// A picture floating above the paragraph that starts the page doesn't make it any less the
+/// first: only the text in the flow decides.
+#[test]
+fn a_floating_picture_above_the_first_paragraph_doesnt_keep_it_from_splitting() {
+    let mut c = Case::new((3, 400.0));
+    c.float_above = true;
+    assert_eq!(c.per_page(), vec![0, 1, 1, 1]);
+}
+
+/// Guard (passes without the fix): a can't split row that fits a page with room to spare stays
+/// whole on it, whatever the border below it needs.
+#[test]
+fn a_cant_split_row_that_fits_a_page_is_left_whole() {
+    let mut c = Case::new((1, 10.0));
+    c.cant_split = true;
+    assert_eq!(c.per_page(), vec![1]);
 }

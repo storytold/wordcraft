@@ -297,7 +297,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             // (#4272): moving on can give the cell room there.
             let first_part = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers;
             let moves_on = first_part && short_of_min(ri, room);
-            let split = match ((splittable || (splits_when_too_tall && !first_part)) && !moves_on && !defer_kept, first_part) {
+            // A row that fits the room but for the border below it is still placed whole.
+            let too_tall_to_keep = splits_when_too_tall && !first_part && cur.height > room + 0.01;
+            let split = match ((splittable || too_tall_to_keep) && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
                 (true, true) => split_keeping_nested(ctx.doc, cur, room),
                 // On a fresh page, a nested row taller than the room splits rather than overflowing.

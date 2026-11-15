@@ -918,6 +918,9 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let own_depth = row.items.iter().filter_map(|it| if let Placed::Cell { table, .. } = it { Some(table.0.len()) } else { None }).min();
     // The first line of each paragraph that moves on (`l1` when all of them stay), by cell and
     // item.
+    // The top of a cell's text on this page decides which paragraph starts the cell's part of the
+    // page. Only text in the flow counts: a floating picture or shape anchored in the cell can sit
+    // above it without the text being any less the first.
     let content_top = |it: &Placed| -> Option<f32> {
         if background(it) {
             return None;
@@ -925,10 +928,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
         if let Some((_, _, _, y)) = text_lines(it) {
             return Some(y);
         }
-        match it {
-            Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Graphic { rect, .. } | Placed::Clip { rect, .. } => Some(rect.y),
-            _ => it.turned_bounds().map(|r| r.y),
-        }
+        it.turned_bounds().map(|r| r.y)
     };
     let splits: Vec<Vec<usize>> = cells
         .iter()
