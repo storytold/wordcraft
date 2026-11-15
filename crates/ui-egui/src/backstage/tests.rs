@@ -771,22 +771,21 @@ fn options_back_arrow_with_accessibility_on() {
         h.get_by_label("Display").click();
         h.run_steps(4);
         click_at(&mut h, back);
+        // Options keeps its Back, also with no document (#6782 greys out only the Start screen's).
+        assert!(!h.state().ui.backstage, "mac {mac} start {start}: the arrow closes the File page");
         if start {
-            // #6782: no document, so no page to go back to.
-            assert!(h.state().ui.backstage, "mac {mac}: from the Start screen the arrow is off");
-            assert!(!h.state().has_document(), "mac {mac}");
+            assert!(!h.state().has_document(), "mac {mac}: from the Start screen, an empty window");
         } else {
-            assert!(!h.state().ui.backstage, "mac {mac}: the arrow closes the File page");
             assert!(h.state().canvas.focused, "mac {mac}: and the page has the keyboard");
         }
     }
 }
 
-/// #6782: on the Start screen with no document open, Back and Escape do nothing (the arrow is
-/// greyed out like Save As, Print and Export); they used to leave an empty window of tabs
-/// without a page. Once a document is open they close the File page again.
+/// #6782: on the Start screen with no document open, the Back arrow does nothing (it is greyed
+/// out like Save As, Print and Export); it used to leave an empty window of tabs without a page.
+/// Once a document is open it closes the File page again.
 #[test]
-fn back_and_escape_are_off_without_a_document() {
+fn back_is_off_on_the_start_screen() {
     for mac in [false, true] {
         let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
         a.integrated_titlebar = mac;
@@ -797,11 +796,8 @@ fn back_and_escape_are_off_without_a_document() {
         assert!(!h.state().has_document());
         assert!(h.state().ui.backstage, "mac {mac}: the Start screen is showing");
         click_at(&mut h, back);
-        assert!(h.state().ui.backstage, "mac {mac}: the arrow does nothing with no document");
-        h.key_press(egui::Key::Escape);
-        h.run_steps(4);
-        assert!(h.state().ui.backstage, "mac {mac}: Escape does nothing with no document");
-        // A document makes both work again.
+        assert!(h.state().ui.backstage, "mac {mac}: the arrow does nothing on the Start screen");
+        // A document makes it work again.
         h.get_by_label("Blank document").click();
         h.run_steps(4);
         assert!(h.state().has_document() && !h.state().ui.backstage, "mac {mac}: Blank document opens the page");
