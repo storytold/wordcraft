@@ -349,7 +349,9 @@ impl LanguageForm {
             if lang_changed || !proof_changed {
                 m.insert("lang".into(), json!(self.lang));
             }
-            if proof_changed {
+            // A ticked box means "don't check the whole document", changed or not; an unticked,
+            // unchanged box is omitted so it doesn't clear runs that differ elsewhere.
+            if proof_changed || self.no_proof {
                 m.insert("noProof".into(), json!(self.no_proof));
             }
         }

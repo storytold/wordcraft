@@ -328,6 +328,21 @@ fn language_dialog_whole_document_sends_only_changes() {
     assert_eq!(f.params()["noProof"], false);
 }
 
+/// #3518: a ticked Do-not-check box on a whole-document apply marks the whole document, even
+/// when the caret's text already had it (so the box is unchanged).
+#[test]
+fn language_dialog_whole_document_ticked_unchanged_no_proof_is_sent() {
+    let mut a = proofing_mix_app();
+    a.run("select.text", json!({"text": "code"})).unwrap();
+    let mut f = LanguageForm::read(&a);
+    assert!(f.no_proof && f.initial.1);
+    f.whole_document = true;
+    let p = f.params();
+    assert_eq!(p["noProof"], true);
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("de-DE".into()), Some(true)));
+}
+
 /// #407: Envelopes starts from the selected address; Add to Document puts an envelope
 /// section before the letter without asking to save (nothing is replaced).
 #[test]
