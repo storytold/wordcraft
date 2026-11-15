@@ -318,3 +318,38 @@ fn a_paste_into_a_cell_of_a_table_inside_a_cell_works_on_that_table() {
     assert_eq!(grid(&inner).len(), 6);
     assert!(!nested(&inner));
 }
+
+/// A locked control in a table nested in a cell the copy would overwrite is not deleted: the
+/// paste nests instead (#6739 review).
+#[test]
+fn a_locked_control_in_a_nested_table_of_an_overwritten_cell_is_kept() {
+    use wordcraft_doc::{ContentControl, ControlKind, ControlLock};
+    let mut s = dest(0, 0);
+    let mut inner = table("n", 1, 1);
+    let mut ctl = ContentControl::new(ControlKind::RichText);
+    ctl.lock = ControlLock::SdtContentLocked;
+    inner.rows[0].cells[0].controls.open.push(ctl);
+    inner.rows[0].cells[0].controls.close = 1;
+    if let Some(Block::Table(t)) = s.doc.body.get_mut(0).map(Arc::make_mut) {
+        t.rows[1].cells[0].blocks = vec![Arc::new(Block::Table(inner)), para_block(Paragraph::new())];
+    }
+    let before = t0(&s).rows[1].cells[0].clone();
+    // Copy one cell, caret above the cell with the nested table: it would be overwritten.
+    copy(&mut s, table("s", 2, 1));
+    paste(&mut s);
+    let kept = |t: &Table| t.rows.iter().flat_map(|r| &r.cells).any(|c| c.blocks == before.blocks);
+    assert!(kept(t0(&s)), "the cell with the locked control survives");
+    assert_eq!(t0(&s).grid.len(), 3);
+}
+
+/// A caret in a control that shows its placeholder: rows are not inserted around it and the
+/// placeholder is not turned into ordinary text (#6739 review).
+#[test]
+fn rows_are_not_inserted_from_a_control_showing_its_placeholder() {
+    let mut s = dest(1, 0);
+    s.run("developer.plainText", &json!({})).unwrap();
+    let before = s.doc.body[0].as_table().map(|t| t.rows.len());
+    copy(&mut s, table("s", 3, 3));
+    paste(&mut s);
+    assert_eq!(t0(&s).rows.len(), before.unwrap_or(0), "no rows inserted above the caret's row");
+}

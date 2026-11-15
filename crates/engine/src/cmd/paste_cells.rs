@@ -63,13 +63,26 @@ fn plain_destination(t: &Table) -> bool {
         })
 }
 
-/// Whether a cell holds a content control, or a control's start or end in its text: overwriting
-/// it could remove a locked control (the caret's own cell is checked by the caller's edit rules).
+/// How deep [`has_control`] looks into tables nested in a cell; a deeper cell counts as holding a
+/// control, so a hostile document can't make the walk recurse without bound.
+const MAX_CONTROL_DEPTH: usize = 16;
+
+/// Whether a cell holds a content control, or a control's start or end in its text, at any depth
+/// of nested tables: overwriting the cell replaces all of its blocks, which could remove a locked
+/// control (the caret's own cell is checked by the caller's edit rules).
 fn has_control(c: &Cell) -> bool {
-    !c.controls.is_empty()
-        || c.blocks.iter().any(
-            |b| matches!(&**b, Block::Para(p) if p.objects.iter().any(|o| matches!(o, InlineObject::ControlStart { .. } | InlineObject::ControlEnd))),
-        )
+    cell_has_control(c, 0)
+}
+
+fn cell_has_control(c: &Cell, depth: usize) -> bool {
+    if !c.controls.is_empty() || depth > MAX_CONTROL_DEPTH {
+        return true;
+    }
+    c.blocks.iter().any(|b| match &**b {
+        Block::Para(p) => p.objects.iter().any(|o| matches!(o, InlineObject::ControlStart { .. } | InlineObject::ControlEnd)),
+        Block::Table(t) => !t.controls.is_empty() || t.rows.iter().any(|r| !r.controls.is_empty() || r.cells.iter().any(|c| cell_has_control(c, depth + 1))),
+        _ => false,
+    })
 }
 
 /// What a paste into a cell does with the copied table `src` at (`row0`, `col0`) of `dest`.
@@ -122,6 +135,11 @@ pub fn paste_cells(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
     let Some((tp, row0, col0)) = s.sel.focus.path.cell() else { return Ok(false) };
     let Some(dest) = s.doc.table(s.sel.focus.story, &tp) else { return Ok(false) };
     if plan(dest, src, src_cols, row0, col0).is_none() {
+        return Ok(false);
+    }
+    // A caret in a control that shows its placeholder: the edit rules would select the
+    // placeholder to replace it, which the row insertion would not do. The ordinary paste does.
+    if s.doc.control_at(&s.sel.focus).is_some_and(|r| r.control.showing_placeholder) {
         return Ok(false);
     }
     // Protection: the edit rules may move the caret (to where typing goes) or refuse.
