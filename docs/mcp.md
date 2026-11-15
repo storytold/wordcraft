@@ -149,8 +149,9 @@ craft-libs): the same commands and answers as DeckCraft's, with WordCraft's noun
 | `library.insert {file, width?, alt?}` | put the picture at the selection, as `insert.picture` does (one undo step) |
 
 It lists PNG, JPEG, GIF, WebP, BMP and TIFF files, at most 5,000 entries and 8 folders deep per
-folder, and never follows links; a file larger than 256 MB, or one that isn't a picture WordCraft
-decodes, is listed with its `error`. Headless `mcp` and `run` start with the folders the desktop
+folder, and never follows links. A picture is known from its file name, so listing and search read
+no picture: a file larger than 256 MB is listed with its `error`, and one that isn't a picture
+WordCraft decodes says so when `library.thumbnail` or `library.insert` reads it. Headless `mcp` and `run` start with the folders the desktop
 app keeps in its preferences (`ui.json` in its settings folder, or `WORDCRAFT_PROFILE_DIR`);
 `WORDCRAFT_NO_PREFS` leaves them out. The read root still confines every one of them. The browser
 build has no folders to read: every `library.*` command says so.

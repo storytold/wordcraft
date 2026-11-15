@@ -92,7 +92,7 @@ fn insert_library_opens_the_pane_on_its_pictures_tab() {
         h.step();
     }
     assert_eq!(h.state().session.prefs.library_folders.len(), 1, "kept with the preferences");
-    assert!(h.query_by_label("Picture 1: kiln.png").is_some());
+    assert!(h.query_by_label("Picture: kiln.png").is_some());
     // The same button closes it again (the topmost "Library": the pane's title is below the ribbon).
     let button = h.get_all_by_label("Library").map(|n| n.rect().center()).min_by(|a, b| a.y.total_cmp(&b.y)).unwrap();
     click(&mut h, button);
@@ -108,7 +108,7 @@ fn clicking_a_picture_inserts_it_selected_in_one_undo_step() {
     std::fs::write(dir.join("teal.png"), png(16, 16, [20, 160, 160])).unwrap();
     let mut h = open_on(&dir);
     let depth = h.state().session.undo_depth();
-    h.get_by_label("Picture 1: red.png").click();
+    h.get_by_label("Picture: red.png").click();
     h.run_steps(3);
     let s = &h.state().session;
     assert_eq!(s.undo_depth(), depth + 1, "one undo step");
@@ -125,41 +125,66 @@ fn search_shows_only_the_pictures_that_match() {
     std::fs::write(dir.join("harbour.png"), png(8, 8, [10, 60, 200])).unwrap();
     std::fs::write(dir.join("orchard.png"), png(8, 8, [30, 160, 40])).unwrap();
     let mut h = open_on(&dir);
-    assert!(h.query_by_label("Picture 1: harbour.png").is_some() && h.query_by_label("Picture 1: orchard.png").is_some());
+    assert!(h.query_by_label("Picture: harbour.png").is_some() && h.query_by_label("Picture: orchard.png").is_some());
     h.state_mut().library.query = "HARB".into();
     for _ in 0..40 {
         h.step();
     }
     assert_eq!(h.state().library.hits(), Some(1));
-    assert!(h.query_by_label("Picture 1: harbour.png").is_some());
-    assert!(h.query_by_label("Picture 1: orchard.png").is_none());
+    assert!(h.query_by_label("Picture: harbour.png").is_some());
+    assert!(h.query_by_label("Picture: orchard.png").is_none());
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A damaged picture is listed by its name (listing reads nothing); its thumbnail can't be drawn
+/// and a click on it inserts nothing and says why, while the others work as usual.
 #[test]
-fn a_damaged_picture_shows_its_error_and_the_others_still_show() {
+fn a_damaged_picture_is_listed_but_not_inserted() {
     let dir = folder("damaged");
-    std::fs::write(dir.join("good.png"), png(8, 8, [90, 90, 90])).unwrap();
+    let good = png(8, 8, [90, 90, 90]);
+    std::fs::write(dir.join("good.png"), &good).unwrap();
     std::fs::write(dir.join("bad.png"), b"\x89PNG not really").unwrap();
-    let h = open_on(&dir);
-    let files = &h.state().library.files;
-    assert_eq!(files.len(), 2);
-    assert!(files.iter().any(|f| f.file.ends_with("bad.png") && f.error.is_some()), "{files:?}");
-    assert!(h.query_by_label("Picture 1: good.png").is_some());
-    assert!(h.query_by_label("Picture 1: bad.png").is_none(), "nothing to insert from it");
+    let mut h = open_on(&dir);
+    assert_eq!(h.state().library.files.len(), 2);
+    h.get_by_label("Picture: bad.png").click();
+    h.run_steps(3);
+    assert!(h.state().session.doc.media.is_empty(), "nothing went in");
+    assert!(h.state().status_msg.as_ref().is_some_and(|(m, _)| !m.is_empty()), "the status line says why");
+    h.get_by_label("Picture: good.png").click();
+    h.run_steps(3);
+    let media: Vec<Vec<u8>> = h.state().session.doc.media.values().map(|m| m.to_vec()).collect();
+    assert_eq!(media, vec![good]);
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// The pane's words come from the interface catalog, so they can be translated.
+/// Every word the pane shows, WordCraft's and the shared pane's own, comes from the interface
+/// catalog, so it can be shown in the person's language; placeholders survive for the pane.
 #[test]
 fn the_pane_speaks_the_interface_language() {
+    let mut app = app();
+    let host = super::WordHost(&mut app);
     crate::i18n::pseudo::set(true);
-    let labels = super::labels();
-    let words = [labels.tabs.first().map(|(_, l)| *l).unwrap_or_default(), labels.item, labels.insert_item, labels.search_hint, labels.empty];
+    let shown: Vec<String> = super::words().map(|w| craft_library_egui::Host::text(&host, w).into_owned()).collect();
     crate::i18n::pseudo::set(false);
-    for w in words {
-        assert!(w.contains('⟦'), "{w} goes through tl!");
+    for (english, w) in super::words().zip(&shown) {
+        assert!(w.contains('⟦'), "{english} goes through tl!: {w}");
     }
-    assert_eq!(super::labels().nouns, wordcraft_engine::library::NOUNS, "the commands' keys stay as they are");
-    assert_eq!(super::labels().tabs, &[(super::ITEMS, "Pictures")]);
+    let reading = shown.iter().find(|w| w.contains("{read}")).map(String::as_str).unwrap_or_default();
+    assert!(reading.contains("{total}"), "placeholders are kept for the pane: {reading}");
+    assert!(super::words().any(|w| w == "All folders"), "the shared pane's own words are listed");
+    assert_eq!(super::LABELS.nouns, wordcraft_engine::library::NOUNS, "the commands' keys stay as they are");
+}
+
+/// The shared pane draws WordCraft's pictures as one grid, each named under its thumbnail.
+#[test]
+fn pictures_share_one_grid() {
+    let dir = folder("grid");
+    for (name, rgb) in [("a.png", [200, 40, 40]), ("b.png", [40, 200, 40]), ("c.png", [40, 40, 200])] {
+        std::fs::write(dir.join(name), png(30, 20, rgb)).unwrap();
+    }
+    let h = open_on(&dir);
+    let rects: Vec<egui::Rect> = ["a.png", "b.png", "c.png"].iter().map(|n| h.get_by_label(&format!("Picture: {n}")).rect()).collect();
+    assert_eq!(rects[0].top(), rects[1].top(), "side by side, not under a heading each");
+    assert!(h.query_by_label("a").is_none(), "no per-file heading");
+    let _ = std::fs::remove_dir_all(dir);
 }

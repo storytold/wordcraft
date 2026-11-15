@@ -40,7 +40,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("library.list", "List Library", "Insert › Library", list)
             .params(
-                "{folder?, file?, pictures?: bool (default true; false lists the files without reading them)} → [{file, folder, title, pictures: [{index, title, hidden}], pictureCount, truncated?, error?}]: the picture files in the Library folders (or one folder, or one file), one picture each; a file that can't be read is listed with its `error`",
+                "{folder?, file?} → [{file, folder, title, pictures: [{index, title, hidden}], pictureCount, error?}]: the picture files in the Library folders (or one folder, or one file), one picture each, listed from their names without reading them; a file over 256 MB carries its `error`, and one that isn't a picture says so when library.thumbnail or library.insert reads it",
             )
             .when(native)
             .pure(),

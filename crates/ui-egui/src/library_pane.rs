@@ -5,7 +5,9 @@
 //!
 //! WordCraft has no folder picker (its folder options take a typed path too), so Add Folder…
 //! shows the pane's path field. A tab of WordCraft's own (icons, diagrams, charts) would join the
-//! strip in `tabs` and be drawn in `WordHost`'s `Host::tab`.
+//! strip in [`LABELS`] and be drawn in `WordHost`'s `Host::tab`.
+
+use std::borrow::Cow;
 
 use craft_library_egui::{Host, Labels, Palette};
 pub use craft_library_egui::{ITEMS, MAX_SHOWN_FILES, State};
@@ -15,53 +17,31 @@ use serde_json::Value;
 use crate::WordApp;
 use crate::theme::Tokens;
 
-/// Words the shared pane draws itself, with no way yet for the app to give them in the interface
-/// language: its folder drop-down and buttons. They stay English until craft-library-egui takes
-/// them from the app too (to raise for storytold/craft-libs#1584); the interface audit
-/// (`i18n::audit`) lets exactly these through, and only while the Library pane is open.
-pub const SHARED_ENGLISH: [&str; 4] = ["All folders", "Add Folder…", "Remove", "Refresh"];
+/// WordCraft's words in the shared pane, in English: every one goes through the interface catalog
+/// in `WordHost`'s `Host::text`. The nouns are the commands' keys and are never shown. A picture file
+/// holds one picture, so the pictures share one grid, each named under its thumbnail.
+pub const LABELS: Labels = Labels {
+    nouns: wordcraft_engine::library::NOUNS,
+    tabs: &[(ITEMS, "Pictures")],
+    item: "Picture",
+    insert_item: "Insert picture",
+    insert_shapes: None,
+    insert_element: None,
+    search_hint: "Search pictures",
+    add_folder_tip: "Show the pictures in a folder: PNG, JPEG, GIF, WebP, BMP and TIFF files",
+    empty: "Add a folder of pictures to see them here. Click a picture to insert it.",
+    not_in_browser: "The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library.",
+    aspect: 0.75,
+    one_per_file: true,
+};
 
-/// The tab strip in the interface language: `Labels::tabs` must outlive the frame, so each
-/// translation of it is made once and kept (one per language the window is shown in, at most
-/// [`MAX_TAB_STRIPS`]).
-fn tabs() -> &'static [(&'static str, &'static str)] {
-    type Strip = &'static [(&'static str, &'static str)];
-    static STRIPS: std::sync::Mutex<Vec<Strip>> = std::sync::Mutex::new(Vec::new());
-    const ENGLISH: Strip = &[(ITEMS, "Pictures")];
-    let label: &'static str = tl!("Pictures");
-    let Ok(mut strips) = STRIPS.lock() else { return ENGLISH };
-    if let Some(strip) = strips.iter().find(|s| s.first().is_some_and(|(_, l)| *l == label)) {
-        return strip;
-    }
-    if strips.len() >= MAX_TAB_STRIPS {
-        return ENGLISH;
-    }
-    let strip: Strip = Box::leak(Box::new([(ITEMS, label)]));
-    strips.push(strip);
-    strip
-}
-
-/// More translations of the tab strip than there are interface languages: past it, English.
-const MAX_TAB_STRIPS: usize = 256;
-
-/// WordCraft's words in the shared pane, in the interface language. The nouns are the commands'
-/// keys, so they stay as they are.
-pub fn labels() -> Labels {
-    Labels {
-        nouns: wordcraft_engine::library::NOUNS,
-        tabs: tabs(),
-        item: tl!("Picture"),
-        insert_item: tl!("Insert picture"),
-        insert_shapes: None,
-        insert_element: None,
-        search_hint: tl!("Search pictures"),
-        add_folder_tip: tl!("Show the pictures in a folder: PNG, JPEG, GIF, WebP, BMP and TIFF files"),
-        empty: tl!("Add a folder of pictures to see them here. Click a picture to insert it."),
-        not_in_browser: tl!(
-            "The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library."
-        ),
-        aspect: 0.75,
-    }
+/// Every word the pane can show, WordCraft's and the shared pane's own, in English: what the
+/// missing-translation report lists for translators even when no test reaches the state that
+/// shows it.
+pub fn words() -> impl Iterator<Item = &'static str> {
+    let l = LABELS;
+    let own = [l.item, l.insert_item, l.search_hint, l.add_folder_tip, l.empty, l.not_in_browser];
+    l.tabs.iter().map(|(_, label)| *label).chain(own).chain(craft_library_egui::words::ALL.iter().copied())
 }
 
 /// The pane's colours from the theme.
@@ -104,17 +84,19 @@ impl Host for WordHost<'_> {
     fn report(&mut self, message: String) {
         self.0.status(message);
     }
+    /// The interface catalog's wording; a `{name}` placeholder stays for the pane to fill in.
+    fn text<'a>(&self, english: &'a str) -> Cow<'a, str> {
+        Cow::Borrowed(tl!(english))
+    }
 }
 
 /// Draw the pane's body.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let pal = palette(&Tokens::get(ui.ctx()));
-    let labels = labels();
-    // The pane's state is the app's; it is lent to the pane while the app is the pane's host.
+    // The pane's state is the app's; it is lent to the pane while the app is the pane's host. The
+    // pane scrolls its own grid, so its folder and search controls stay in view.
     let mut state = std::mem::take(&mut app.library);
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        craft_library_egui::show(ui, &mut state, &mut WordHost(app), &labels, &pal);
-    });
+    craft_library_egui::show(ui, &mut state, &mut WordHost(app), &LABELS, &pal);
     app.library = state;
 }
 

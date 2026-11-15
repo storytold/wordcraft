@@ -130,18 +130,20 @@ Beyond Word, which inserts icons, diagrams and charts from modal pickers: Insert
 Library opens a task pane, docked right by default like the others (F6, Dock Left/Right, Float),
 that stays open while the document is edited. Its first tab, Pictures, shows the pictures in folders
 the user adds (Add Folder… takes a typed path, as WordCraft's folder options do; there is no folder
-picker yet), grouped by file with a thumbnail each, a folder drop-down, Remove and Refresh, and a
-search box over file names and formats. A click inserts the picture at the selection as Insert ›
-Pictures does, selected, in one undo step; its context menu has Insert picture. The pane is the
-one the Craft apps share (`craft-library-egui`); its folder drop-down and its buttons are drawn by
-that crate in English until it takes words from the app (the interface audit lets exactly those
-through while the pane is open). Not yet: icons from folders of SVGs (WordCraft doesn't insert SVG),
-diagrams, charts and royalty-free pictures as further tabs.
+picker yet), in one grid with each picture's name under its thumbnail, with a folder drop-down,
+Remove and Refresh, and a search box over file names and formats that stay in view while the grid
+scrolls. Pictures are listed by name, so a large folder shows at once and a picture is read only to
+draw its thumbnail or insert it. A click inserts the picture at the selection as Insert › Pictures
+does, selected, in one undo step; its context menu has Insert picture. The pane is the one the
+Craft apps share (`craft-library-egui`); every word in it, the shared pane's own included, comes
+from WordCraft's interface catalog. Not yet: icons from folders of SVGs (WordCraft doesn't insert
+SVG), diagrams, charts and royalty-free pictures as further tabs.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | trivial | Library on craft-libs f6e5e085: pictures in one grid, listed without reading them, every word of the pane translatable (the audit exemption is gone), controls kept in view |
 | 2026-11-15 | trivial | Insert › Library (#2868): a task pane of the pictures in the user's own folders, searchable, inserting at the selection in one undo step; the shared Craft Library pane, beyond Word |
 | 2026-11-12 | trivial | Clipboard: a copied picture is published as PNG (and HTML where the host writes it); WordCraft's own paste still keeps the original fragment, and a copy of only shapes carries no HTML or RTF (#6205). Native external-app paste remains untested. |
 | 2026-11-07 | trivial | Vertical scrollbar track: clicking above the elevator moves one screen up and clicking below it moves one screen down, as in Word, instead of jumping to that position in the document (#5853) |

@@ -90,10 +90,9 @@ fn folders_are_added_listed_and_removed() {
     assert_eq!(sunrise["pictures"], json!([{"index": 0, "title": "Sunrise.png", "hidden": false}]), "one picture, titled by its file name");
     assert_eq!(sunrise["pictureCount"], json!(1));
     assert!(sunrise.get("error").is_none(), "{sunrise}");
-    // Without reading the files.
+    // A picture is known from its name, so the quick listing has it too.
     let quick = list(&mut ss, json!({"pictures": false}));
-    assert_eq!(quick.len(), 3);
-    assert!(quick.iter().all(|f| f.get("pictures").is_none()), "{quick:?}");
+    assert_eq!(quick, files, "listed alike with or without reading");
     // One folder, one file.
     assert_eq!(list(&mut ss, json!({"folder": s(&dir)})).len(), 3);
     assert_eq!(list(&mut ss, json!({"file": s(&dir.join("sea.JPG"))})).len(), 1);
@@ -228,7 +227,7 @@ fn jpeg_strip_tiff() -> Vec<u8> {
 }
 
 #[test]
-fn corrupt_and_hostile_pictures_are_listed_with_their_error() {
+fn corrupt_and_hostile_pictures_have_no_thumbnail_and_are_not_inserted() {
     let dir = folder("corrupt");
     let good = png(5, 5);
     // Cut off inside its pixel data: the header reads, the pixels don't.
@@ -252,19 +251,14 @@ fn corrupt_and_hostile_pictures_are_listed_with_their_error() {
     }
     let mut ss = session_with(&dir);
     let listed = list(&mut ss, json!({}));
+    // Listing reads no picture, so each is listed by its name, damaged or not.
     assert_eq!(listed.len(), files.len(), "every file is listed: {listed:?}");
-    for f in &listed {
-        let name = Path::new(f["file"].as_str().unwrap()).file_name().unwrap().to_string_lossy().into_owned();
-        let readable = matches!(name.as_str(), "good.png" | "half.png" | "named-wrong.jpg");
-        assert_eq!(f.get("error").is_none(), readable, "{f}");
-        if !readable {
-            assert_eq!(f["pictures"], json!([]), "{f}");
-        }
-    }
+    assert!(listed.iter().all(|f| f.get("error").is_none() && f["pictureCount"] == json!(1)), "{listed:?}");
+    // Reading one for its thumbnail or an insert says what is wrong with it.
     for name in ["noise.png", "empty.jpg", "vast.png", "strips.tif", "half.png"] {
         let path = s(&dir.join(name));
         let r = ss.run("library.thumbnail", &json!({"file": path, "picture": 0}));
-        assert!(matches!(r, Err(CmdError::Failed(_))), "{name}: {r:?}");
+        assert!(matches!(&r, Err(CmdError::Failed(m)) if !m.is_empty()), "{name}: {r:?}");
         if name != "half.png" {
             assert!(ss.run("library.insert", &json!({"file": path})).is_err(), "{name}");
         }
@@ -274,6 +268,31 @@ fn corrupt_and_hostile_pictures_are_listed_with_their_error() {
     ss.run("library.thumbnail", &json!({"file": s(&dir.join("named-wrong.jpg")), "picture": 0})).unwrap();
     ss.run("library.insert", &json!({"file": s(&dir.join("good.png"))})).unwrap();
     assert_eq!(inserted(&ss), vec![good]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Listing and searching read no picture: a file that can't be read at all is still listed and
+/// found by its name; only drawing or inserting it reads it, and says why that failed.
+#[cfg(unix)]
+#[test]
+fn listing_and_search_read_no_picture() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = folder("unread");
+    let locked = dir.join("locked.png");
+    std::fs::write(&locked, b"not a picture either").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mut ss = session_with(&dir);
+    let listed = list(&mut ss, json!({}));
+    assert_eq!(names(&listed), ["locked.png"]);
+    assert_eq!(listed[0]["pictures"], json!([{"index": 0, "title": "locked.png", "hidden": false}]), "{}", listed[0]);
+    assert!(listed[0].get("error").is_none(), "{}", listed[0]);
+    assert_eq!(ss.run("library.search", &json!({"query": "LOCKED"})).unwrap().as_array().map(Vec::len), Some(1));
+    assert_eq!(ss.library.sizes().3, 0, "no picture was opened");
+    let path = s(&locked);
+    assert!(ss.run("library.thumbnail", &json!({"file": path, "picture": 0})).is_err());
+    assert!(ss.run("library.insert", &json!({"file": path})).is_err());
+    assert!(inserted(&ss).is_empty());
+    let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644));
     let _ = std::fs::remove_dir_all(dir);
 }
 

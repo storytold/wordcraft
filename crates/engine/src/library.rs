@@ -1,10 +1,10 @@
 //! Insert ▸ Library (#2868): the pictures in the user's own folders, on the Library core the Craft
 //! apps share ([`craft_library`], first asked for in storytold/deckcraft#958). This module is what
 //! is WordCraft's own: the files its Pictures tab lists ([`Pictures`]: the raster pictures
-//! WordCraft decodes, one picture per file), how it opens one and draws its thumbnail, and its
-//! file access ([`Confined`]), which goes through [`crate::io`] so the automation read roots
-//! confine every folder listing and file read. The `library.*` commands are in
-//! [`crate::cmd::library`].
+//! WordCraft decodes, one picture per file, known from its name, so listing and search read no
+//! file), how it opens one and draws its thumbnail, and its file access ([`Confined`]), which goes
+//! through [`crate::io`] so the automation read roots confine every folder listing and file read.
+//! The `library.*` commands are in [`crate::cmd::library`].
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -55,15 +55,14 @@ impl craft_library::Fs for Confined {
     }
 }
 
-/// A picture file as the Library holds it: its bytes, which an insert puts into the document as
-/// they are, and what its header says. Nothing is decoded until a thumbnail is drawn.
+/// A picture file as the Library holds it once it is read for a thumbnail or an insert: its
+/// bytes, which an insert puts into the document as they are, and the size its header gives.
+/// Nothing is decoded until a thumbnail is drawn.
 #[derive(Clone, Debug)]
 pub struct Picture {
     /// The file name, which is the item's title.
     pub name: String,
     pub bytes: Vec<u8>,
-    /// The format's name, for search (`PNG`, `JPEG`…).
-    pub format: &'static str,
     pub width: u32,
     pub height: u32,
 }
@@ -84,10 +83,10 @@ impl craft_library::Kind for Pictures {
     }
 
     /// Reads only the header: a file that isn't a picture WordCraft decodes, or one it never
-    /// decodes (a TIFF with JPEG strips, #3645), is listed with why.
+    /// decodes (a TIFF with JPEG strips, #3645), has no thumbnail and isn't inserted, and says why.
     fn open(&self, name: &str, bytes: &[u8]) -> Result<Picture, String> {
         let probe = picture::probe(bytes).map_err(|e| e.to_string())?;
-        Ok(Picture { name: name.to_string(), bytes: bytes.to_vec(), format: format_name(probe.format), width: probe.width, height: probe.height })
+        Ok(Picture { name: name.to_string(), bytes: bytes.to_vec(), width: probe.width, height: probe.height })
     }
 
     fn title(&self, _doc: &Picture) -> Option<String> {
@@ -99,22 +98,35 @@ impl craft_library::Kind for Pictures {
     }
 
     fn item(&self, doc: &Picture, _index: usize) -> Item {
-        Item { title: doc.name.clone(), hidden: false, text: doc.format.to_string() }
+        picture_item(&doc.name)
     }
 
     fn thumbnail(&self, doc: &Picture, _index: usize, width: u32) -> Result<Thumbnail, String> {
         draw_thumbnail(&doc.bytes, width)
     }
+
+    /// Every picture file is one picture, titled by its name: the Library lists and searches
+    /// pictures without reading them, and reads one only for its thumbnail or an insert.
+    fn item_from_name(&self, name: &str) -> Option<Item> {
+        is_picture(name).then(|| picture_item(name))
+    }
 }
 
-fn format_name(format: image::ImageFormat) -> &'static str {
-    match format {
-        image::ImageFormat::Png => "PNG",
-        image::ImageFormat::Jpeg => "JPEG",
-        image::ImageFormat::Gif => "GIF",
-        image::ImageFormat::WebP => "WebP",
-        image::ImageFormat::Bmp => "BMP",
-        image::ImageFormat::Tiff => "TIFF",
+/// The picture `name` holds: titled by the file name, its format (by the extension) searchable.
+fn picture_item(name: &str) -> Item {
+    Item { title: name.to_string(), hidden: false, text: format_by_extension(name).to_string() }
+}
+
+/// The format a picture's extension names, for search (`PNG`, `JPEG`…).
+fn format_by_extension(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "png" => "PNG",
+        "jpg" | "jpeg" => "JPEG",
+        "gif" => "GIF",
+        "webp" => "WebP",
+        "bmp" => "BMP",
+        "tif" | "tiff" => "TIFF",
         _ => "picture",
     }
 }
@@ -160,6 +172,17 @@ mod tests {
         }
         for no in ["~$a.png", ".a.png", "a.svg", "a.emf", "a.wmf", "a.docx", "png", "a.png.txt"] {
             assert!(!is_picture(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn a_picture_is_known_from_its_name() {
+        use craft_library::Kind;
+        let item = Pictures.item_from_name("Harbour.JPG").unwrap();
+        assert_eq!((item.title.as_str(), item.text.as_str(), item.hidden), ("Harbour.JPG", "JPEG", false));
+        assert_eq!(Pictures.item_from_name("scan.tif").map(|i| i.text), Some("TIFF".into()));
+        for no in ["notes.txt", ".hidden.png", "~$lock.png", "drawing.svg"] {
+            assert!(Pictures.item_from_name(no).is_none(), "{no}");
         }
     }
 

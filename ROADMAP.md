@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-15: Library pane on craft-libs `f6e5e085` (#2868): pictures share one grid, each named under its thumbnail; a folder is listed from its file names without reading a picture (one is read only for its thumbnail or an insert); every word of the pane goes through the interface catalog; its controls stay in view while the grid scrolls. Readiness estimates unchanged.
 - 2026-11-15: Insert › Library (#2868): a side pane, opened from Insert › Illustrations › Library, that shows the pictures in folders the user chooses (PNG, JPEG, GIF, WebP, BMP, TIFF) as thumbnails, searchable by name and format; a click puts one at the selection as Insert › Pictures does, in one undo step, while the document stays open for editing. It is the Library the Craft apps share (craft-libs' `craft-library` and `craft-library-egui`, also in DeckCraft): `library.*` commands, bounded folders and files, links never followed, automation read roots confining every read; the folders are kept with the preferences, and headless `mcp` and `run` browse them too. Goes beyond Word (no ranked gap); readiness estimates unchanged.
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.

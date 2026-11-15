@@ -198,12 +198,6 @@ impl<'a> Exempt<'a> {
         if let Some(form) = &app.spelling_review {
             names.extend(form.content_text());
         }
-        // The Library pane's own folder controls (#2868): the shared craft-library-egui draws
-        // them and takes no words from the app for them yet, so they stay English until it does
-        // (`library_pane::SHARED_ENGLISH`). WordCraft's own words in the pane go through `tl!`.
-        if app.session.view.library_pane {
-            names.extend(crate::library_pane::SHARED_ENGLISH.map(str::to_string));
-        }
         Exempt { body: app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), names, math: math_placeholders }
     }
 
@@ -442,6 +436,9 @@ fn report_catalog_gaps(mut keys: std::collections::BTreeSet<String>) {
     keys.extend(tabs.map(|t| t.to_string()));
     keys.extend(["Good morning", "Good afternoon", "Good evening"].map(String::from));
     keys.extend(disabled_reasons());
+    // The Library pane's words (#2868), the shared pane's own included: most show only with
+    // folders of pictures, which the audit's fresh app has none of.
+    keys.extend(crate::library_pane::words().map(String::from));
     // Reasons the UI itself gives (`widgets.rs::tooltip`), which the engine's checks never reach.
     keys.insert("Open a document first".to_string());
     for doc in [wordcraft_doc::Document::new(), wordcraft_engine::sample::sample_document()] {
