@@ -259,12 +259,14 @@ const ARROW_BORDER: f32 = 1.0;
 struct ComboSearch {
     /// The match list is showing (the user typed since focusing the field).
     open: bool,
+    /// Whether the user has typed or modified the search query.
+    typed: bool,
     /// The query `matches` were computed for, and the list length then.
     query: String,
     items_len: usize,
     matches: std::sync::Arc<Vec<usize>>,
     /// Index among the entries: the recent families shown, then `matches`.
-    highlight: usize,
+    highlight: Option<usize>,
     /// Up or Down moved the highlight since the query last changed.
     moved: bool,
     /// Rows the list drew last frame; 0 while it is hidden.
@@ -273,6 +275,187 @@ struct ComboSearch {
     popup: Option<Rect>,
     offset: f32,
     view_h: f32,
+}
+
+/// Selects all characters in the text edit widget with `id`.
+///
+/// Requires that `text` matches the widget's current content, since only its character
+/// count (`text.chars().count()`) is used to define the character selection range `0..len`.
+fn select_all_text(ctx: &egui::Context, id: egui::Id, text: &str) {
+    if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
+        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
+        state.cursor.set_char_range(Some(all));
+        state.store(ctx, id);
+    }
+}
+
+/// Squares the inner corners between the text edit field and the dropdown arrow button.
+///
+/// Zeroes the right corners (`ne`, `se`) in left-to-right layouts or the left corners
+/// (`nw`, `sw`) in right-to-left (`rtl`) layouts across all widget visual states
+/// (`noninteractive`, `inactive`, `hovered`, `active`, `open`) so the text box and arrow button
+/// appear as a unified single border control.
+fn square_inner_corners(ui: &mut Ui, rtl: bool) {
+    let w = &mut ui.visuals_mut().widgets;
+    for v in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        let (a, b) = if rtl { (&mut v.corner_radius.nw, &mut v.corner_radius.sw) } else { (&mut v.corner_radius.ne, &mut v.corner_radius.se) };
+        *a = 0;
+        *b = 0;
+    }
+}
+
+/// Consumes Up and Down arrow key events to step through the combo list.
+///
+/// Only consumes key events when the combo list is `open` and the text edit field `has_focus`.
+/// Returns `+1` when ArrowDown was pressed, `-1` when ArrowUp was pressed, or `0` if neither
+/// was pressed or if the preconditions were not met.
+fn consume_arrow_steps(ui: &mut Ui, open: bool, has_focus: bool) -> i32 {
+    let mut step = 0i32;
+    if open && has_focus {
+        ui.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                step += 1;
+            }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                step -= 1;
+            }
+        });
+    }
+    step
+}
+
+/// Handles open/close state transitions, focus, and text selection for searchable combos.
+///
+/// - `resp`: the text edit field's interaction response.
+/// - `aresp`: the dropdown arrow button's interaction response.
+/// - `te_id`: the text edit widget ID used to inspect and manipulate focus and selection.
+/// - `text`: the current text string in the edit field.
+/// - `reveal`: set to `true` when opening or changing search query to scroll the list/highlight into view.
+///
+/// Clicking the text box (`resp.clicked()`) when the dropdown is closed sets `s.open = true`,
+/// `s.typed = false`, `s.moved = false`, `*reveal = true`, and selects all text with [`select_all_text`].
+/// Clicking while already open preserves caret positioning for partial edits without re-selecting all text.
+/// Gaining focus alone (`resp.gained_focus()` when `!was_open`, such as on Tab navigation) selects all text
+/// for typing without opening the 420px dropdown popup, while regaining focus when already open (e.g. after
+/// interacting with the popup scrollbar) preserves query text and caret placement without re-selecting all.
+/// Clicking the dropdown arrow (`aresp.clicked()`) toggles `s.open`; when opening, it requests focus on `te_id`,
+/// resets `typed` and `moved`, sets `*reveal = true`, and selects all text.
+/// Changing the text (`resp.changed()`) opens the dropdown with `s.typed = true`, clears `s.highlight`,
+/// clears `s.moved`, and sets `*reveal = true`.
+fn handle_search_interactions(
+    ui: &mut Ui,
+    s: &mut ComboSearch,
+    resp: &egui::Response,
+    aresp: &egui::Response,
+    te_id: egui::Id,
+    text: &str,
+    reveal: &mut bool,
+) {
+    let was_open = s.open;
+    if resp.clicked() {
+        if !was_open {
+            s.open = true;
+            s.typed = false;
+            s.moved = false;
+            *reveal = true;
+            select_all_text(ui.ctx(), te_id, text);
+        }
+    } else if resp.gained_focus() && !was_open {
+        select_all_text(ui.ctx(), te_id, text);
+    } else if aresp.clicked() {
+        if was_open {
+            s.open = false;
+        } else {
+            s.open = true;
+            s.typed = false;
+            s.moved = false;
+            *reveal = true;
+            ui.memory_mut(|m| m.request_focus(te_id));
+            select_all_text(ui.ctx(), te_id, text);
+        }
+    } else if resp.changed() {
+        s.open = true;
+        s.typed = true;
+        s.highlight = None;
+        s.moved = false;
+        *reveal = true;
+    }
+}
+
+/// Refreshes the filtered list matches and updates keyboard navigation position.
+///
+/// Operates in one of two modes:
+/// - When `s.typed` is `false` (the combo is opened without active typing), resets `s.matches` to
+///   the full list of `items` in original order, clears `s.query`, and if `s.moved` is `false`,
+///   initializes `s.highlight` to the position of `current` in `recent_shown` or in `items`
+///   (offset by `recent_shown.len()`), leaving `s.highlight = None` if `current` is not in either list.
+/// - When `s.typed` is `true`, filters `items` matching `text` using [`font_matches`], stores the
+///   active `text` in `s.query`, and if `s.moved` is `false`, highlights the first match if any.
+///
+/// Finally, if `step != 0`, marks `s.moved = true`, adjusts `s.highlight` by `step` (+1 for Down, -1 for Up),
+/// and clamps `s.highlight` to the valid range across `recent_shown` and `s.matches`.
+fn update_search_matches(s: &mut ComboSearch, text: &str, items: &[String], recent_shown: &[String], current: &str, step: i32) {
+    if !s.typed {
+        if !s.query.is_empty() || s.matches.len() != items.len() || s.items_len != items.len() {
+            s.matches = std::sync::Arc::new((0..items.len()).collect());
+            s.query.clear();
+            s.items_len = items.len();
+        }
+        if !s.moved {
+            if let Some(pos) = recent_shown.iter().position(|r| r == current) {
+                s.highlight = Some(pos);
+            } else if let Some(pos) = s.matches.iter().position(|&i| items.get(i).is_some_and(|it| it == current)) {
+                s.highlight = Some(recent_shown.len().saturating_add(pos));
+            } else {
+                s.highlight = None;
+            }
+        }
+    } else if s.query != text || s.items_len != items.len() {
+        s.matches = std::sync::Arc::new(font_matches(text, items));
+        s.query = text.to_string();
+        s.items_len = items.len();
+        if !s.moved {
+            s.highlight = if s.matches.is_empty() { None } else { Some(0) };
+        }
+    }
+    let total_len = recent_shown.len().saturating_add(s.matches.len());
+    if total_len > 0 {
+        let last = total_len.saturating_sub(1);
+        if step != 0 {
+            s.moved = true;
+            s.highlight = match (s.highlight, step) {
+                (Some(cur), 1..) => Some(cur.saturating_add(step as usize).min(last)),
+                (Some(cur), ..=-1) => Some(cur.saturating_sub((-step) as usize)),
+                (Some(cur), 0) => Some(cur),
+                (None, 1..) => Some(0),
+                (None, ..=-1) => Some(last),
+                (None, 0) => None,
+            };
+        }
+    } else {
+        s.highlight = None;
+    }
+}
+
+/// Returns the font name at the current highlight index in the combined recent and matched lists.
+///
+/// If the user has neither typed a query nor moved the highlight via arrow keys (`!s.typed && !s.moved`),
+/// or if no item is currently highlighted (`s.highlight` is `None`), the edit field's current `text` is
+/// returned as-is so an unchanged or uninstalled font is not replaced. When the text edit box has been
+/// cleared (`text.trim().is_empty()`) and the user has not explicitly moved the highlight via arrow keys
+/// (`!s.moved`), `text` is returned as-is.
+fn pick_highlighted_font(s: &ComboSearch, text: &str, items: &[String], recent_shown: &[String]) -> String {
+    if !s.typed && !s.moved {
+        return text.to_string();
+    }
+    let Some(hl) = s.highlight else {
+        return text.to_string();
+    };
+    let picked = recent_shown.get(hl).or_else(|| hl.checked_sub(recent_shown.len()).and_then(|k| s.matches.get(k)).and_then(|&i| items.get(i)));
+    match picked {
+        Some(name) if !text.trim().is_empty() || s.moved => name.clone(),
+        _ => text.to_string(),
+    }
 }
 
 /// The warning mark at the right end of the field `resp` when its font `current` isn't installed
@@ -299,6 +482,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
     let mut text = ui.data_mut(|d| d.get_temp::<String>(edit_id)).unwrap_or_else(|| current.to_string());
     let mut s: ComboSearch = if search { ui.data_mut(|d| d.get_temp(search_id)).unwrap_or_default() } else { ComboSearch::default() };
     let mut focused = false;
+    let mut cancelled = false;
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -308,24 +492,9 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         // arrow's underlap are the mirror image.
         let rtl = ui.layout().prefer_right_to_left();
         let r = ui.visuals().widgets.inactive.corner_radius;
-        let w = &mut ui.visuals_mut().widgets;
-        for v in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-            let (a, b) = if rtl { (&mut v.corner_radius.nw, &mut v.corner_radius.sw) } else { (&mut v.corner_radius.ne, &mut v.corner_radius.se) };
-            *a = 0;
-            *b = 0;
-        }
+        square_inner_corners(ui, rtl);
         // Up/Down move the list's highlight: take them before the text field moves its cursor.
-        let mut step = 0i32;
-        if s.open && ui.memory(|m| m.has_focus(te_id)) {
-            ui.input_mut(|i| {
-                if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
-                    step += 1;
-                }
-                if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
-                    step -= 1;
-                }
-            });
-        }
+        let step = consume_arrow_steps(ui, s.open, ui.memory(|m| m.has_focus(te_id)));
         // A font that isn't installed: room at the field's right end for the warning mark.
         let mark = shown_as.filter(|_| !current.is_empty());
         let right = if mark.is_some() { 18 } else { 4 };
@@ -338,6 +507,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         // The arrow's box is painted here, under the field, once its size is known.
         let arrow_bg = ui.painter().add(egui::Shape::Noop);
         let resp = ui.add(te);
+        let (ar, aresp) = ui.allocate_exact_size(vec2(16.0, resp.rect.height()), Sense::click());
         // The field says what it is: without a name a screen reader has only "edit" to say
         // (#3172). The arrow says whose options it opens, as the split buttons' arrow does.
         if !tip.is_empty() {
@@ -348,43 +518,28 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         focused = resp.has_focus();
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let mut reveal = step != 0;
-        if search && resp.changed() {
-            s.open = true;
-            s.highlight = 0;
-            s.moved = false;
-            reveal = true;
+        if search {
+            handle_search_interactions(ui, &mut s, &resp, &aresp, te_id, &text, &mut reveal);
         }
+        // The recent section keeps its order while the list stays open: a pick moves the family to
+        // the top for the next time the list opens, not under the pointer.
+        let frozen_id = search_id.with("recent_frozen");
+        let menu_recent: Vec<String> = ui.data(|d| d.get_temp(frozen_id)).unwrap_or_else(|| recent.to_vec());
         // The recent section shows while nothing is typed; a query lists its matches only.
-        let recent_shown: &[String] = if text.trim().is_empty() { recent } else { &[] };
+        let recent_shown: &[String] = if !s.typed || text.trim().is_empty() { &menu_recent } else { &[] };
         let mut regain_focus = false;
+        let list_id = search_id.with("list");
         if s.open {
-            if s.query != text || s.items_len != items.len() {
-                s.matches = std::sync::Arc::new(font_matches(&text, items));
-                s.query = text.clone();
-                s.items_len = items.len();
-            }
-            let last = recent_shown.len().saturating_add(s.matches.len()).saturating_sub(1);
-            s.moved |= step != 0;
-            s.highlight = match step {
-                1.. => s.highlight.saturating_add(1),
-                0 => s.highlight,
-                _ => s.highlight.saturating_sub(1),
-            }
-            .min(last);
+            egui::Popup::open_id(ui.ctx(), list_id);
+            update_search_matches(&mut s, &text, items, recent_shown, current, step);
             if enter {
-                let picked = recent_shown
-                    .get(s.highlight)
-                    .or_else(|| s.highlight.checked_sub(recent_shown.len()).and_then(|k| s.matches.get(k)).and_then(|&i| items.get(i)));
-                // A cleared box commits as typed (nothing) unless Up or Down picked an entry.
-                out = Some(match picked {
-                    Some(name) if !text.trim().is_empty() || s.moved => name.clone(),
-                    _ => text.clone(),
-                });
+                out = Some(pick_highlighted_font(&s, &text, items, recent_shown));
                 s.open = false;
             } else if ui.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Tab)) {
                 s.open = false;
-            } else if !focused {
-                // A click in the list takes focus from the field: keep the list, give focus back.
+                cancelled = true;
+                ui.memory_mut(|m| m.surrender_focus(te_id));
+            } else if !focused && !aresp.clicked() {
                 let over = ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| s.popup.is_some_and(|r| r.contains(p)));
                 if over {
                     regain_focus = true;
@@ -395,7 +550,9 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         } else if enter {
             out = Some(text.clone());
         }
-        let (ar, aresp) = ui.allocate_exact_size(vec2(16.0, resp.rect.height()), Sense::click());
+        if !s.open {
+            egui::Popup::close_id(ui.ctx(), list_id);
+        }
         if !tip.is_empty() {
             let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]);
             aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &arrow_name));
@@ -414,64 +571,40 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
             show_hint(&aresp, tip, &notes);
         }
         icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", t.icon, t.accent);
-        // The list drops from the box's left edge, as in Word, not from the arrow (#535).
-        // The font list closes on a chosen entry or a click outside it, not on its headings.
-        let close = if search { egui::PopupCloseBehavior::CloseOnClickOutside } else { egui::PopupCloseBehavior::CloseOnClick };
-        let mut menu_field = aresp.clone();
-        menu_field.rect = resp.rect.union(ar);
-        let menu = craft_ui::combo::Menu::new(ui, &menu_field).close_behavior(close).height(420.0);
-        let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
-        // The recent section keeps its order while the list stays open: a pick moves the family to
-        // the top for the next time the list opens, not under the pointer.
-        let frozen_id = search_id.with("recent_frozen");
-        let menu_recent: Vec<String> = ui.data(|d| d.get_temp(frozen_id)).unwrap_or_else(|| recent.to_vec());
-        let item = |k: usize| items.get(k);
-        let row = |k: usize| section_row(k, &menu_recent, &item);
-        let total = section_rows(menu_recent.len(), items.len());
-        let list = |ui: &mut Ui, range: std::ops::Range<usize>, ()| {
-            let picked = draw_rows(
-                ui,
-                RowDrawOptions { width, current, range, row: &row, highlight: None, preview, row_height: row_h, recent_rows: menu_recent.len() },
-            );
-            if picked.is_some() {
-                ui.close();
+        if !search {
+            let close = egui::PopupCloseBehavior::CloseOnClick;
+            let mut menu_field = aresp.clone();
+            menu_field.rect = resp.rect.union(ar);
+            let menu = craft_ui::combo::Menu::new(ui, &menu_field).close_behavior(close).height(420.0);
+            let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
+            let item = |k: usize| items.get(k);
+            let row = |k: usize| section_row(k, &[], &item);
+            let total = section_rows(0, items.len());
+            let list = |ui: &mut Ui, range: std::ops::Range<usize>, ()| {
+                let picked =
+                    draw_rows(ui, RowDrawOptions { width, current, range, row: &row, highlight: None, preview, row_height: row_h, recent_rows: 0 });
+                if picked.is_some() {
+                    ui.close();
+                }
+                picked
+            };
+            let picked = menu.show_rows_with_header(|_| (), row_h, |()| total, list).flatten();
+            if let Some(v) = picked {
+                out = Some(v);
             }
-            picked
-        };
-        let footer = |ui: &mut Ui| {
-            let mut picked = None;
-            ui.separator();
-            if ui.button(tl!("Add Font…")).clicked() {
-                picked = Some(ADD_FONT.to_string());
-                ui.close();
-            }
-            #[cfg(target_arch = "wasm32")]
-            if ui.button(tl!("Load System Installed Fonts…")).clicked() {
-                picked = Some(LOAD_SYSTEM_FONTS.to_string());
-                ui.close();
-            }
-            picked
-        };
-        let picked = if search {
-            menu.show_rows_with_header_footer(|_| (), row_h, |()| total, list, footer).map(|(v, f)| v.or(f))
-        } else {
-            menu.show_rows_with_header(|_| (), row_h, |()| total, list)
-        };
+        }
         ui.data_mut(|d| {
-            if picked.is_some() {
+            if s.open {
                 d.insert_temp(frozen_id, menu_recent.clone());
             } else {
                 d.remove::<Vec<String>>(frozen_id);
             }
         });
-        if let Some(v) = picked.flatten() {
-            out = Some(v);
-        }
         let n = section_rows(recent_shown.len(), s.matches.len());
         if s.open && n > 0 {
             let matches = s.matches.clone();
             let scroll = reveal.then_some((s.offset, s.view_h));
-            let lit = highlight_row(s.highlight, recent_shown.len());
+            let lit = s.highlight.map(|hl| highlight_row(hl, recent_shown.len()));
             // A list of a new length is sized again (an area keeps its last size, so a list that
             // once held one match stayed one row tall). That pass draws nothing, so it is
             // discarded and the frame drawn again, as egui does for its own sizing passes.
@@ -487,10 +620,21 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
                     .show(ui, |ui| {
                         let item = |k: usize| matches.get(k).and_then(|&i| items.get(i));
                         let row = |k: usize| section_row(k, recent_shown, &item);
-                        list_rows(
+                        let (mut picked, offset, view_h) = list_rows(
                             ui,
-                            RowListOptions { width, current, n, row: &row, highlight: Some(lit), scroll, preview, recent_rows: recent_shown.len() },
-                        )
+                            RowListOptions { width, current, n, row: &row, highlight: lit, scroll, preview, recent_rows: recent_shown.len() },
+                        );
+                        if !s.typed {
+                            ui.separator();
+                            if ui.button(tl!("Add Font…")).clicked() {
+                                picked = Some(ADD_FONT.to_string());
+                            }
+                            #[cfg(target_arch = "wasm32")]
+                            if ui.button(tl!("Load System Installed Fonts…")).clicked() {
+                                picked = Some(LOAD_SYSTEM_FONTS.to_string());
+                            }
+                        }
+                        (picked, offset, view_h)
                     })
                     .inner
             });
@@ -511,7 +655,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
             ui.memory_mut(|m| m.request_focus(te_id));
         }
     });
-    let keep = (focused || s.open) && out.is_none();
+    let keep = (focused || s.open) && out.is_none() && !cancelled;
     ui.data_mut(|d| {
         if keep {
             d.insert_temp(edit_id, text);
