@@ -147,11 +147,19 @@ fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize
     // Zoomed in, the texture stays within what the GPU takes and is stretched beyond that.
     let max_side = ctx.input(|i| i.max_texture_side) as f32 / pg.w.max(pg.h).max(1.0);
     let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
-    let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &Default::default());
+    let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &preview_render_options());
     let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
     let tex = ctx.load_texture("print_page_preview", color, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
     Some(tex)
+}
+
+/// How a preview page is drawn: the printed page, with headers and footers at full strength
+/// rather than dimmed as the editing view shows them (#6267).
+fn preview_render_options() -> wordcraft_render::RenderOptions {
+    let mut opts = wordcraft_render::RenderOptions::default();
+    opts.display.dim_header = false;
+    opts
 }
 
 /// Return pressed with nothing else to take it: no field or list open and no control focused (a
@@ -483,6 +491,47 @@ mod tests {
     use super::*;
     use crate::Services;
     use wordcraft_engine::Session;
+
+    /// #6267: the preview draws the printed page, so headers and footers are at full strength,
+    /// not dimmed as the editing view shows them. Through the texture the preview uploads, so
+    /// the options it renders with are covered, not just the helper that builds them.
+    #[test]
+    fn preview_draws_headers_at_full_strength() {
+        let mut session = Session::new(wordcraft_doc::Document::new());
+        session.run("insert.header", &json!({ "text": "Header text" })).unwrap();
+        let app = WordApp::new(session, Services::default());
+        let ctx = egui::Context::default();
+        let lay = app.session.export_layout_with(false);
+        let width = 300.0;
+        let tex = page_texture(&app, &ctx, &lay, 0, 0, width).expect("preview texture");
+        // What the preview actually uploaded (headless: read it back from the pending upload).
+        let mut delta = ctx.tex_manager().write().take_delta();
+        let got = delta
+            .set
+            .get(&tex.id())
+            .expect("preview upload")
+            .iter()
+            .find_map(|d| match (&d.pos, &d.image) {
+                (None, egui::ImageData::Color(image)) => Some(image.clone()),
+                _ => None,
+            })
+            .expect("whole image");
+        // Deltas must be handled, not dropped: the texture manager panics on drop otherwise.
+        delta.clear();
+        // The scale `page_texture` draws at, from the same inputs.
+        let pg = lay.pages.first().expect("one page");
+        let max_side = ctx.input(|i| i.max_texture_side) as f32 / pg.w.max(pg.h).max(1.0);
+        let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
+        let render = |options: &wordcraft_render::RenderOptions| {
+            let img = wordcraft_render::render_page(&app.session.doc, pg, scale, options);
+            egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight())
+        };
+        let mut full = wordcraft_render::RenderOptions::default();
+        full.display.dim_header = false;
+        assert_eq!(got.pixels, render(&full).pixels, "headers are drawn at full strength");
+        assert_eq!(got.pixels, render(&preview_render_options()).pixels, "the preview uses the page-image options");
+        assert_ne!(got.pixels, render(&wordcraft_render::RenderOptions::default()).pixels, "not the dimmed editing view");
+    }
 
     /// Print Markup changes layout and pixels without changing the document revision.
     #[test]

@@ -85,6 +85,39 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
             return Err(report.refusal());
         }
     }
-    let img = wordcraft_render::render_page(doc, p, scale, &Default::default());
+    let img = wordcraft_render::render_page(doc, p, scale, &png_render_options());
     Ok(img.to_png())
+}
+
+/// A page image is the printed page: headers and footers at full strength, as in PDF and
+/// desktop PNG exports, not the dimmed on-screen header view (#6267).
+fn png_render_options() -> wordcraft_render::RenderOptions {
+    let mut opts = wordcraft_render::RenderOptions::default();
+    opts.display.dim_header = false;
+    opts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// #6267: a downloaded page image shows headers and footers at full strength, as PDF and
+    /// desktop PNG exports do, not dimmed as the editing view draws them.
+    #[test]
+    fn downloaded_page_images_do_not_dim_headers() {
+        let mut s = crate::Session::new(Document::new());
+        s.run("insert.header", &json!({"text": "Header text"})).unwrap();
+        let opts = crate::io::ExportOptions::default();
+        let png = render_png(&s.doc, 0, 1.0, &opts).unwrap();
+        let lo = wordcraft_layout::LayoutOptions { comment_balloons: false, numeral: opts.numeral, ..Default::default() };
+        let l = wordcraft_layout::layout(&s.doc, &mut wordcraft_layout::LayoutCache::new(), &lo);
+        let page = l.pages.first().expect("one page");
+        let render = |options: &wordcraft_render::RenderOptions| wordcraft_render::render_page(&s.doc, page, 1.0, options).to_png();
+        assert_eq!(png, render(&png_render_options()), "the download uses the page-image options");
+        let mut full = wordcraft_render::RenderOptions::default();
+        full.display.dim_header = false;
+        assert_eq!(png, render(&full), "headers draw at full strength");
+        assert_ne!(png, render(&wordcraft_render::RenderOptions::default()), "not the dimmed editing view");
+    }
 }
