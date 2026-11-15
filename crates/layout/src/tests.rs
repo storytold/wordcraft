@@ -11,6 +11,7 @@ mod cell_floats;
 mod complex;
 mod float_top;
 mod grid;
+mod header_legacy_float;
 mod ligature;
 pub(crate) mod linear;
 mod missing_glyphs;

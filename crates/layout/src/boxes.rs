@@ -217,6 +217,14 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // bottom edge (#3108). Behind-text and in-front-of-text objects don't: a page-anchored logo or
     // watermark behind a cell's text must not stretch its row (see `align_h` in table.rs).
     let mut float_objects_bottom = 0.0f32;
+    // A header in a document of Word 2010's layout or older (compatibility mode below 15): its
+    // text keeps its place beside its own objects, which wrap nothing, and only a top and bottom
+    // object reaching down from the text makes the header taller (#6805). Not in a table cell.
+    let legacy_header = !in_cell
+        && ctx.doc.settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT
+        && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Header));
+    // Top and bottom objects of such a header: where each starts and ends.
+    let mut legacy_reach: Vec<(f32, f32)> = Vec::new();
     let mut table_areas = Vec::new();
     let mut page_table_wraps = Vec::new();
     let mut y = 0.0f32;
@@ -307,8 +315,13 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     {
                         r.x = keep_in_cell(r.x, r.w, left, right);
                     }
-                    let outline = ctx.wrap_outline(o);
-                    excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                    if !legacy_header {
+                        let outline = ctx.wrap_outline(o);
+                        excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                    } else if float.wrap == Wrap::TopAndBottom {
+                        let bounds = float.spin().bounds(r);
+                        legacy_reach.push((bounds.y, bounds.bottom()));
+                    }
                     floats.insert(oi, r);
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
@@ -401,6 +414,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 }
             }
         }
+    }
+    // The header ends below a top and bottom object that starts above the end of its text.
+    let text_bottom = y;
+    if let Some(reach) = legacy_reach.iter().filter(|(top, _)| *top < text_bottom).map(|(_, bottom)| *bottom).reduce(f32::max) {
+        y = y.max(reach);
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
