@@ -29,6 +29,10 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // While Markdown Source is open, Undo and Redo work on its typing, as Ctrl+Z does there.
+        if matches!(id, "edit.undo" | "edit.redo") && self.session.md_source.is_some() {
+            return crate::md_source::undo(self, id == "edit.redo");
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -45,10 +49,9 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
-        if (self.session.dirty || self.save_unconfirmed() || refused.is_some())
-            && discards_document(id, &params)
-            && !self.closes_only_its_window(id, &params)
-        {
+        // The same unsaved work the control channel's refusal covers, so the prompt and the
+        // refusal can't drift apart (#3274).
+        if (self.document_unsaved() || refused.is_some()) && discards_document(id, &params) && !self.closes_only_its_window(id, &params) {
             let name = self.prompt_name();
             self.dialog = Some(dialogs::Dialog::SaveChanges {
                 name,
@@ -119,6 +122,13 @@ impl WordApp {
         }
         if id == "file.close" {
             return self.close_document(&params);
+        }
+        // `file.closeDocument` closes the document its `id` names (the active one by default):
+        // the same unsaved work would go with it, so it needs the same explicit `force` (#3274).
+        if id == "file.closeDocument"
+            && let Some(e) = crate::control::close_refused(self, id, &params)
+        {
+            return Err(e.into());
         }
         if id == "file.autosave" {
             return self.set_autosave(&params);
@@ -254,6 +264,13 @@ impl WordApp {
         {
             self.autosave_path = self.session.path.clone();
         }
+        // A Markdown file edited in the formatted view was written out again, not kept as it was.
+        if let Ok(v) = &r
+            && matches!(id, "file.save" | "file.saveAs")
+            && v.get("rewritten").and_then(Value::as_bool) == Some(true)
+        {
+            self.status_long(tl!("Saved. Edits in the formatted view meant writing the Markdown out again, so its own layout wasn't kept."));
+        }
         // A renamed file is the same file: AutoSave keeps covering it, and Recent drops the old name.
         if r.is_ok()
             && id == "file.rename"
@@ -335,7 +352,8 @@ impl WordApp {
                 file_dialogs::Asked::Busy => Ok(json!({"saved": false})),
             };
         }
-        let retry = (id == "file.open").then(|| params.clone());
+        // Opening a file, or a new document from a template, reads a file that may be protected.
+        let retry = matches!(id, "file.open" | "file.newFromTemplate").then(|| params.clone());
         let retry_path = retry.clone();
         let r = self.execute(id, params);
         if let (Err(e), Some(params)) = (&r, retry)
@@ -343,7 +361,8 @@ impl WordApp {
         {
             let path = params.get("path").and_then(Value::as_str).unwrap_or("");
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-            self.dialog = Some(dialogs::Dialog::Password { name, params, password: Default::default(), message: String::new() });
+            self.dialog =
+                Some(dialogs::Dialog::Password { name, then: id.to_string(), params, password: Default::default(), message: String::new() });
             return Ok(json!({"pending": "password"}));
         }
         // Whoever asked, a failed open names the file and the cause (#1103).
@@ -527,6 +546,7 @@ impl WordApp {
         if req.get("close").is_some() {
             self.quit_requested = true;
         }
+        crate::windows::arrange::request(self, req);
     }
 
     /// A request made for document `document`, which isn't shown and which no other window
@@ -626,18 +646,35 @@ impl WordApp {
                 json!({"pending": "contextMenu"})
             }
             "ui.recentClear" => {
+                let removed = self.ui.recent.len();
                 self.ui.recent.clear();
                 self.ui.recent_metadata.clear();
-                json!({"cleared": true})
+                let saved = self.save_prefs_now();
+                if !matches!(saved, Some(Err(_))) {
+                    self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
+                }
+                let mut result = json!({"cleared": true, "removed": removed, "recent": self.ui.recent});
+                add_saved(&mut result, saved);
+                result
             }
             "ui.recentRemove" => {
                 let Some(path) = s("path") else {
-                    return Some(Err("`path` is required".into()));
+                    return Some(Err("`path` must name a document on the recent list".into()));
                 };
                 let before = self.ui.recent.len();
                 self.ui.recent.retain(|entry| entry.path != path);
+                if self.ui.recent.len() == before {
+                    return Some(Err(format!("`{path}` is not on the recent list")));
+                }
                 self.ui.recent_metadata.remove(path);
-                json!({"removed": before != self.ui.recent.len()})
+                let saved = self.save_prefs_now();
+                if !matches!(saved, Some(Err(_))) {
+                    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
+                    self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
+                }
+                let mut result = json!({"removed": true, "recent": self.ui.recent});
+                add_saved(&mut result, saved);
+                result
             }
             "ui.recentShowInFolder" => {
                 let Some(path) = s("path") else {
@@ -748,6 +785,39 @@ impl WordApp {
                 self.read_system_animations();
                 json!({"animations": self.ui.animations.code(), "enabled": self.animations_on(), "system": self.system_animations})
             }
+            "ui.statusCount" => {
+                // `words` (the default), `characters` or `charactersNoSpaces`: what the status
+                // bar's live count shows; no value reads it (#2797).
+                if let Some(v) = s("value") {
+                    match crate::StatusCount::from_code(v) {
+                        Some(c) => self.ui.status_count = c,
+                        None => return Some(Err(format!("unknown status count {v:?}; use words, characters or charactersNoSpaces"))),
+                    }
+                }
+                json!({"statusCount": self.ui.status_count.code()})
+            }
+            "ui.scrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: mouse-wheel scroll speed (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.scroll_speed = s,
+                        None => return Some(Err(format!("unknown scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"scrollSpeed": self.ui.scroll_speed.code(), "factor": self.ui.scroll_speed.wheel_factor()})
+            }
+            "ui.touchpadScrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: touchpad scroll speed on Wayland (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.touchpad_scroll_speed = s,
+                        None => return Some(Err(format!("unknown touchpad scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"touchpadScrollSpeed": self.ui.touchpad_scroll_speed.code(), "factor": self.ui.touchpad_scroll_speed.touchpad_factor()})
+            }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
                 if let Some(v) = s("value") {
@@ -825,6 +895,7 @@ impl WordApp {
             // Native printing submits the selected queue on a worker; the browser owns its dialog.
             "ui.printSettings" => return Some(printing::settings(&mut self.printing, p, self.services.printers.as_ref())),
             "ui.print" | "ui.printSubmit" => return Some(self.print_to_system(p)),
+            "ui.printCancel" => return Some(printing::cancel(self)),
             // File › Options › General › Make WordCraft the default… changes the user's system
             // default apps (Linux) or opens system settings (Windows), so only a click on that
             // button does it ([`WordApp::make_default_app`]); scripts, the control channel and
@@ -868,6 +939,18 @@ impl WordApp {
                     Some(_) => return Some(Err("`value` must be true or false".into())),
                 }
                 json!({"startScreen": self.ui.start_screen})
+            }
+            "ui.displayServer" => {
+                // File › Options › Advanced › Linux display server (#2184): `value` `auto`,
+                // `wayland` or `x11`; no value reads it. The desktop app reads it at the next launch.
+                match p.get("value") {
+                    None => {}
+                    Some(v) => match v.as_str().and_then(crate::DisplayServer::from_code) {
+                        Some(d) => self.ui.display_server = d,
+                        None => return Some(Err(format!("unknown display server {v}; use auto, wayland or x11"))),
+                    },
+                }
+                json!({"displayServer": self.ui.display_server.code()})
             }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
@@ -1101,6 +1184,19 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
     }
 }
 
+/// The result fields of a command that saves the preferences at once: `saved` is true when the
+/// write worked, false with `saveError` when it failed (the change still holds for this run) and
+/// null when the host has no preferences hook or wrote nothing.
+fn add_saved(r: &mut Value, saved: Option<Result<(), String>>) {
+    r["saved"] = match &saved {
+        None => Value::Null,
+        Some(res) => json!(res.is_ok()),
+    };
+    if let Some(Err(e)) = saved {
+        r["saveError"] = json!(e);
+    }
+}
+
 /// Commands that work while no document is open (#1129): opening or creating one, closing the
 /// window, Help, adding fonts (a font file dropped on the empty window), and the settings (File ›
 /// Options, the view and interface preferences it sets, AutoCorrect Options, Customize Ribbon and
@@ -1126,6 +1222,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
             | "view.darkMode"
+            | "view.paperColor"
             | "view.marks"
             | "view.ruler"
             | "view.numeral"
@@ -1143,14 +1240,19 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.language"
             | "ui.saveChanges"
             | "ui.openFileDialog"
+            | "ui.printCancel"
             | "ui.fileBrowser"
             | "ui.makeDefaultApp"
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
-            | "ui.recentClear"
             | "ui.recentRemove"
+            | "ui.recentClear"
             | "ui.recentShowInFolder"
+            | "ui.displayServer"
+            | "ui.statusCount"
+            | "ui.scrollSpeed"
+            | "ui.touchpadScrollSpeed"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }

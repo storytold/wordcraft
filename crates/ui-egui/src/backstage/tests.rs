@@ -617,10 +617,12 @@ fn empty_recent_list_explains_how_to_open_a_document() {
 fn recent_actions_use_ui_commands() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
     app.ui.recent = vec![RecentDocument { path: "/tmp/remove.docx".into(), last_opened: String::new(), modified: String::new() }];
-    assert_eq!(app.run("ui.recentRemove", json!({"path": "/tmp/remove.docx"})).unwrap(), json!({"removed": true}));
+    let removed = app.run("ui.recentRemove", json!({"path": "/tmp/remove.docx"})).unwrap();
+    assert_eq!(removed["removed"], true);
     assert!(app.ui.recent.is_empty());
     app.ui.recent.push(RecentDocument { path: "/tmp/clear.docx".into(), last_opened: String::new(), modified: String::new() });
-    assert_eq!(app.run("ui.recentClear", json!({})).unwrap(), json!({"cleared": true}));
+    let cleared = app.run("ui.recentClear", json!({})).unwrap();
+    assert_eq!(cleared["cleared"], true);
     assert!(app.ui.recent.is_empty());
 }
 

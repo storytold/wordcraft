@@ -55,6 +55,17 @@ fn back_chevron_c(band_min_x: f32, center_y: f32, fullscreen: bool, content_left
     pos2(band_min_x + x, center_y)
 }
 
+/// The bottom of the backstage menu: About, and the community link unless the user turned the
+/// community button off — the title bar pill honors the same setting, so the menu hides the
+/// link with it.
+fn bottom_links(app: &WordApp) -> Vec<(&'static str, &'static str)> {
+    let mut links = vec![("About", "about")];
+    if app.ui.show_discord {
+        links.push(("Discord community", "discord"));
+    }
+    links
+}
+
 /// Draws the Backstage side menu and the active page. Without a document only the Home, New, Open
 /// and Options pages work, and it handles Back, Escape, Save, Save As and Close routing.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
@@ -81,6 +92,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
+                crate::chrome::note_title_drag(ui.ctx(), band);
                 // The chevron's stroke starts at the content edge.
                 let c = if rtl {
                     pos2(band.max.x - 26.0, band.center().y)
@@ -155,7 +167,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in [("About", "about"), ("Discord community", "discord")] {
+                for (label, id) in bottom_links(app) {
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
                     if resp.hovered() {
@@ -173,23 +185,28 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             });
         });
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(0, 30))).show(ui, |ui| {
+        // The side padding sits inside the pages, so the scroll area reaches the window's edge.
+        let pad = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 0));
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if app.ui.backstage_page == "print" {
-            crate::rtl::root(ui, |ui| export_page(app, ui));
+            pad.show(ui, |ui| crate::rtl::root(ui, |ui| export_page(app, ui)));
             return;
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
-                "home" => home_page(app, ui),
-                "new" => new_page(app, ui),
-                "open" => open_page(app, ui),
-                "saveAs" => save_as_page(app, ui),
-                "info" => info_page(app, ui),
-                "recover" => recovery_page(app, ui),
-                "print" | "export" => export_page(app, ui),
-                "options" => crate::options::page(app, ui),
-                _ => home_page(app, ui),
+        // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
+        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+            pad.show(ui, |ui| {
+                crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
+                    "home" => home_page(app, ui),
+                    "new" => new_page(app, ui),
+                    "open" => open_page(app, ui),
+                    "saveAs" => save_as_page(app, ui),
+                    "info" => info_page(app, ui),
+                    "recover" => recovery_page(app, ui),
+                    "print" | "export" => export_page(app, ui),
+                    "options" => crate::options::page(app, ui),
+                    _ => home_page(app, ui),
+                })
             })
         });
     });
@@ -304,7 +321,9 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         let galley = ui.painter().layout_no_wrap(caption.to_string(), regular(12.5), ui.visuals().text_color());
         let (tile, resp) = ui.allocate_exact_size(vec2(galley.size().x.max(150.0), 194.0 + galley.size().y), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), caption));
-        let r = Rect::from_min_size(tile.min, vec2(150.0, 194.0));
+        let flows = crate::rtl::flows(ui);
+        let r_min_x = if flows { tile.max.x - 150.0 } else { tile.min.x };
+        let r = Rect::from_min_size(pos2(r_min_x, tile.min.y), vec2(150.0, 194.0));
         ui.painter().rect(
             r,
             2.0,
@@ -335,7 +354,8 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         if let Some(h) = tex {
             ui.painter().image(h.id(), r.shrink(1.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
-        ui.painter().galley(pos2(r.min.x, r.max.y), galley, ui.visuals().text_color());
+        let x = if flows { r.max.x - galley.size().x } else { r.min.x };
+        ui.painter().galley(pos2(x, r.max.y), galley, ui.visuals().text_color());
         if resp.clicked() {
             let _ = app.run("file.new", json!({"template": template}));
             app.ui.backstage = false;

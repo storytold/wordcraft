@@ -54,6 +54,7 @@ pub mod keys;
 pub mod keytips;
 pub(crate) mod language_packs;
 mod local_time;
+pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
@@ -69,6 +70,7 @@ pub mod ribbon_fit;
 pub mod rtl;
 pub mod ruler_tabs;
 pub mod scroll;
+pub use scroll::ScrollSpeed;
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
@@ -111,7 +113,7 @@ mod services;
 mod state;
 
 use app::control_click_as_secondary;
-pub(crate) use app::{discards_document, works_without_document};
+pub(crate) use app::works_without_document;
 pub use clock::now_ms;
 pub use services::{HostSaveFn, Inbox, Services};
 pub use state::{AutoSaveBlock, DefaultApp, SaveChoice, keeps_everything};
@@ -323,6 +325,12 @@ pub struct UiState {
     pub recent_metadata: std::collections::BTreeMap<String, RecentMetadata>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
+    /// Saved choices in Insert > Date & Time: format picture.
+    pub date_time_format: String,
+    /// Saved language tag in Insert > Date & Time.
+    pub date_time_language: String,
+    /// Saved preference for updating inserted date/time fields automatically (defaults to false).
+    pub date_time_update: bool,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
     pub recent_colors: Vec<String>,
     /// Fonts applied from the font box, the mini toolbar or the Font dialog, most recent first:
@@ -455,6 +463,12 @@ pub struct UiState {
     /// spaces, or characters without spaces. Right-click the count in the status bar, or File ›
     /// Options › Display. Junk saved values read as words.
     pub status_count: StatusCount,
+    /// How far a mouse-wheel notch scrolls (#6146).
+    #[serde(default, alias = "scrollSpeed")]
+    pub scroll_speed: ScrollSpeed,
+    /// How far a touchpad swipe the system reports in points (Wayland, macOS) scrolls (#6146).
+    #[serde(default, alias = "touchpadScrollSpeed")]
+    pub touchpad_scroll_speed: ScrollSpeed,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -474,6 +488,7 @@ pub const MAX_RECENT_FONTS: usize = 10;
 pub const MAX_FONT_NAME_BYTES: usize = 128;
 
 impl Default for UiState {
+    /// Default user interface preferences matching Word defaults.
     fn default() -> Self {
         UiState {
             tab: DEFAULT_TAB.into(),
@@ -485,6 +500,9 @@ impl Default for UiState {
             recent: Vec::new(),
             recent_metadata: Default::default(),
             recent_symbols: Vec::new(),
+            date_time_format: String::new(),
+            date_time_language: String::new(),
+            date_time_update: false,
             recent_colors: Vec::new(),
             recent_fonts: Vec::new(),
             theme: theme::Appearance::default(),
@@ -533,6 +551,8 @@ impl Default for UiState {
             dictionary: Vec::new(),
             display_server: DisplayServer::Auto,
             status_count: StatusCount::default(),
+            scroll_speed: ScrollSpeed::default(),
+            touchpad_scroll_speed: ScrollSpeed::default(),
         }
     }
 }
@@ -621,16 +641,20 @@ fn lenient_recent_fonts<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<St
 /// Load legacy path strings and timestamped Recent entries, dropping malformed values individually.
 fn lenient_recent_documents<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<RecentDocument>, D::Error> {
     let v = Value::deserialize(d)?;
-    Ok(v.as_array().into_iter().flatten().filter_map(|entry| {
-        entry.as_str().map(|path| RecentDocument { path: path.to_string(), last_opened: String::new(), modified: String::new() }).or_else(|| {
-            let object = entry.as_object()?;
-            Some(RecentDocument {
-                path: object.get("path")?.as_str()?.to_string(),
-                last_opened: object.get("lastOpened").and_then(Value::as_str).unwrap_or_default().to_string(),
-                modified: object.get("modified").and_then(Value::as_str).unwrap_or_default().to_string(),
+    Ok(v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry.as_str().map(|path| RecentDocument { path: path.to_string(), last_opened: String::new(), modified: String::new() }).or_else(|| {
+                let object = entry.as_object()?;
+                Some(RecentDocument {
+                    path: object.get("path")?.as_str()?.to_string(),
+                    last_opened: object.get("lastOpened").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    modified: object.get("modified").and_then(Value::as_str).unwrap_or_default().to_string(),
+                })
             })
         })
-    }).collect())
+        .collect())
 }
 
 /// The family a command applies: `format.font {"name"}` (the font box, the mini toolbar, command
@@ -666,6 +690,8 @@ pub struct WordApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// Only a successfully published copy may reuse this window's private fragment.
+    pub clipboard_published: bool,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     pub canvas: canvas::CanvasState,
@@ -716,6 +742,11 @@ pub struct WordApp {
     synthetic_pending: bool,
     /// How many events of `synthetic` the pending batch contains.
     synthetic_injected: usize,
+    /// Number of raw input events whose scroll delta has already been scaled in the pending host batch.
+    pub(crate) raw_scroll_events_scaled: usize,
+    /// Exact snapshot of the raw input events scaled during the current pending batch, to avoid
+    /// compounding scroll multipliers when eframe replays unconsumed RawInput across hidden logic ticks.
+    pub(crate) last_scaled_scroll_events: Vec<egui::Event>,
     /// macOS: the primary button went down with Control, so it is being read as the secondary.
     control_click: bool,
     /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).
@@ -864,6 +895,9 @@ pub(crate) fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files.sort();
     files
 }
+
+#[cfg(test)]
+mod tests_dialog_tabs;
 
 #[cfg(test)]
 mod tests;
