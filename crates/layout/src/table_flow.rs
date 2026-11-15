@@ -259,9 +259,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         // ends, as in Word (measured with synthetic documents): it moves to a new page first
         // when it fits there, and only on a page it still doesn't fit does it break.
         let splits_when_too_tall = ri >= header_rows.len()
-            && t.rows.get(ri).is_some_and(|r| {
-                r.props.cant_split && !(r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0))
-            });
+            && t.rows
+                .get(ri)
+                .is_some_and(|r| r.props.cant_split && !(r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
         let mut rest: Option<table::RowLayout> = None;
         // On a new page holding only the repeated header rows.
         let mut fresh = false;

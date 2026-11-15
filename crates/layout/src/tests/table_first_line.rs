@@ -18,7 +18,13 @@ fn lay(doc: &Document) -> DocLayout {
 }
 
 fn exact(height: f32, widow: bool) -> ParaProps {
-    ParaProps { line_spacing: Some(LineSpacing::Exactly(height)), space_before: Some(0.0), space_after: Some(0.0), widow_control: Some(widow), ..Default::default() }
+    ParaProps {
+        line_spacing: Some(LineSpacing::Exactly(height)),
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        widow_control: Some(widow),
+        ..Default::default()
+    }
 }
 
 fn lines_para(lines: usize, height: f32, widow: bool, name: &str) -> Arc<Block> {
@@ -52,7 +58,18 @@ struct Case {
 
 impl Case {
     fn new(last: (usize, f32)) -> Case {
-        Case { pre: 0, header: false, cant_split: false, nested: false, fill: 45, fill_height: 14.0, before: Vec::new(), last, widow: true, float_above: false }
+        Case {
+            pre: 0,
+            header: false,
+            cant_split: false,
+            nested: false,
+            fill: 45,
+            fill_height: 14.0,
+            before: Vec::new(),
+            last,
+            widow: true,
+            float_above: false,
+        }
     }
 
     /// The lines of the last paragraph on each page.
@@ -79,16 +96,26 @@ impl Case {
         let mut last = lines_paragraph(self.last.0, self.last.1, w, "B");
         if self.float_above {
             let float = Float { wrap: Wrap::Through, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 250.0, y: -6.0, ..Default::default() };
-            let picture = InlineObject::Image { media: "float".into(), w: 20.0, h: 20.0, alt: "float".into(), float, crop: [0.0; 4], fx: Default::default(), ole: None };
+            let picture = InlineObject::Image {
+                media: "float".into(),
+                w: 20.0,
+                h: 20.0,
+                alt: "float".into(),
+                float,
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            };
             last.insert_object(0, picture, &Default::default()).unwrap();
         }
         inner.push(para_block(last));
-        let mut blocks = vec![lines_para(self.fill, self.fill_height, w, "A")];
-        let mut at = vec![self.pre as u32, row as u32, 1, inner.len() as u32];
+        // Without a fill paragraph the cell starts with `inner`.
+        let mut blocks = if self.fill > 0 { vec![lines_para(self.fill, self.fill_height, w, "A")] } else { Vec::new() };
+        let mut at = vec![self.pre as u32, row as u32, 1, (blocks.len() + inner.len()) as u32 - 1];
         if self.nested {
             let mut nested = Table::new(1, 1, 200.0);
             nested.rows[0].cells[0].blocks = inner.clone();
-            at = vec![self.pre as u32, row as u32, 1, 1, 0, 0, inner.len() as u32 - 1];
+            at = vec![self.pre as u32, row as u32, 1, blocks.len() as u32, 0, 0, inner.len() as u32 - 1];
             blocks.push(Arc::new(Block::Table(nested)));
             blocks.push(lines_para(1, 1.0, w, "Z"));
         } else {
@@ -246,13 +273,15 @@ fn a_cant_split_row_that_fits_the_next_page_moves_there_whole() {
     assert_eq!(c.per_page(), vec![0, 3]);
 }
 
-/// A picture floating above the paragraph that starts the page doesn't make it any less the
-/// first: only the text in the flow decides.
+/// A picture floating above the paragraph that starts the cell doesn't make it any less the
+/// first: only the text in the flow decides. (Floats are placed with the first piece of their
+/// paragraph, so this is the table's first page.)
 #[test]
 fn a_floating_picture_above_the_first_paragraph_doesnt_keep_it_from_splitting() {
     let mut c = Case::new((3, 400.0));
+    c.fill = 0;
     c.float_above = true;
-    assert_eq!(c.per_page(), vec![0, 1, 1, 1]);
+    assert_eq!(c.per_page(), vec![1, 1, 1]);
 }
 
 /// Guard (passes without the fix): a can't split row that fits a page with room to spare stays
@@ -261,5 +290,5 @@ fn a_floating_picture_above_the_first_paragraph_doesnt_keep_it_from_splitting() 
 fn a_cant_split_row_that_fits_a_page_is_left_whole() {
     let mut c = Case::new((1, 10.0));
     c.cant_split = true;
-    assert_eq!(c.per_page(), vec![1]);
+    assert_eq!(c.per_page(), vec![1, 0], "the row stays on page 1 (the paragraph after it is on page 2)");
 }
