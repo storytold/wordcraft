@@ -95,3 +95,40 @@ fn bordered_paragraph_shading_stays_within_its_borders() {
     assert!(para.x > cell.x + 1.0 && para.right() < cell.right() - 1.0, "cell {cell:?} paragraph {para:?}");
     assert!(para.y >= cell.y && para.bottom() <= cell.bottom(), "cell {cell:?} paragraph {para:?}");
 }
+
+fn rtl_para(indent: f32) -> Paragraph {
+    let mut p = Paragraph::with_text("Header", Default::default());
+    p.props.shading = Some(PARA);
+    p.props.bidi = Some(true);
+    p.props.indent_left = Some(indent);
+    p
+}
+
+#[test]
+fn rtl_paragraph_shading_covers_the_cell_margins() {
+    let f = page_fills(rtl_para(0.0));
+    let (cell, para) = (fill(&f, CELL), fill(&f, PARA));
+    assert!((para.x - cell.x).abs() < 0.01, "cell {cell:?} paragraph {para:?}");
+    assert!((para.right() - cell.right()).abs() < 0.01, "cell {cell:?} paragraph {para:?}");
+}
+
+#[test]
+fn rtl_paragraph_shading_stops_at_its_start_indent_on_the_right() {
+    // The start indent of a right-to-left paragraph is on the right; the left margin is covered.
+    let f = page_fills(rtl_para(20.0));
+    let (cell, para) = (fill(&f, CELL), fill(&f, PARA));
+    assert!((para.x - cell.x).abs() < 0.01, "cell {cell:?} paragraph {para:?}");
+    assert!((para.right() - (cell.right() - 1.4 - 20.0)).abs() < 0.01, "cell {cell:?} paragraph {para:?}");
+}
+
+#[test]
+fn rtl_bordered_paragraph_shading_stays_within_its_borders() {
+    use wordcraft_doc::props::{Border, Borders};
+    let side = Some(Border { space: 1.0, ..Border::single(0.5) });
+    let mut p = rtl_para(0.0);
+    p.props.borders = Some(Borders { top: side, left: side, bottom: side, right: side, ..Default::default() });
+    let f = page_fills_with_margin(p, 5.4);
+    let (cell, para) = (fill(&f, CELL), fill(&f, PARA));
+    assert!((para.x - 75.9).abs() < 0.01, "cell {cell:?} paragraph {para:?}");
+    assert!((para.right() - 168.1).abs() < 0.01, "cell {cell:?} paragraph {para:?}");
+}
