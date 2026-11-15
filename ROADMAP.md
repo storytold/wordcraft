@@ -885,6 +885,8 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 
 ## Revision history
 
+> 2026-11-14 · Progress log: Recent documents (#2716) now use a metadata table with Open, Show in folder, Remove from Recent and Clear Recent; legacy preferences, RTL layout and copy-save behavior are preserved. Translation catalog entries remain outstanding; readiness unchanged.
+
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >
 > 2026-11-08 · Progress log: turned inline pictures without a recorded effect extent keep their line to the frame, as in Word.
@@ -908,6 +910,7 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | trivial | Recent documents (#2716): metadata table, Open, Show in folder, Remove from Recent and Clear Recent; older preference compatibility, RTL layout and copy-save behavior preserved. Translation catalog entries remain outstanding. |
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |

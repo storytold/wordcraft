@@ -281,7 +281,7 @@ impl WordApp {
         if let Ok(v) = &r {
             self.keep_web_font(id, &params, v);
         }
-        self.after_command(id, &r);
+        self.after_command(id, &params, &r);
         if let Err(e) = &r {
             self.status(e.clone());
         }
@@ -299,6 +299,7 @@ impl WordApp {
             return;
         };
         let metadata = self.ui.recent_metadata.remove(old.as_ref());
+        self.ui.recent.retain(|entry| entry.path != new || entry.path == old);
         if let Some(entry) = self.ui.recent.iter_mut().find(|entry| entry.path == old) {
             // Renaming does not constitute a new open: retain the existing record and its
             // timestamps while changing only the persisted path.
@@ -403,9 +404,17 @@ impl WordApp {
 
     /// Record a confirmed save by its destination, independent of which document is active now.
     pub(super) fn refresh_recent_saved_path(&mut self, path: &str) {
+        self.refresh_recent_saved_path_with_metadata(path, true);
+    }
+
+    fn refresh_recent_saved_path_without_disk_metadata(&mut self, path: &str) {
+        self.refresh_recent_saved_path_with_metadata(path, false);
+    }
+
+    fn refresh_recent_saved_path_with_metadata(&mut self, path: &str, read_disk_metadata: bool) {
         let path = std::path::Path::new(path);
         let p = path.to_string_lossy().to_string();
-        let modified = recent_modified_date(path);
+        let modified = if read_disk_metadata { recent_modified_date(path) } else { String::new() };
         let opened = self.ui.recent.iter().find(|r| r.path == p).map(|r| r.last_opened.clone()).unwrap_or_default();
         self.ui.recent.retain(|r| r.path != p);
         self.ui
@@ -420,7 +429,7 @@ impl WordApp {
         self.ui.recent_metadata.retain(|path, _| self.ui.recent.iter().any(|entry| &entry.path == path));
     }
 
-    fn after_command(&mut self, id: &str, result: &Result<Value, String>) {
+    fn after_command(&mut self, id: &str, params: &Value, result: &Result<Value, String>) {
         let succeeded = result.is_ok();
         options::sync(self);
         self.canvas.caret_visible_since = now_ms();
@@ -484,7 +493,13 @@ impl WordApp {
             _ => succeeded,
         };
         if completed_file_operation && matches!(id, "file.open" | "file.save" | "file.saveAs" | "file.rename") {
-            self.refresh_recent_after_file(id);
+            if id == "file.open" && params.get("data").and_then(Value::as_str).is_some() {
+                if let Some(path) = result.as_ref().ok().and_then(|value| value.get("path")).and_then(Value::as_str) {
+                    self.refresh_recent_saved_path_without_disk_metadata(path);
+                }
+            } else {
+                self.refresh_recent_after_file(id);
+            }
         }
         if !self.session.status.is_empty() {
             // Engine messages are English; the catalog translates the ones it knows.
