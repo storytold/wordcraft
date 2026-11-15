@@ -14,6 +14,7 @@ use wordcraft_engine::cmd::options::{MAX_WORD_CHARS, PANES};
 use wordcraft_geom::Unit;
 
 use crate::WordApp;
+use crate::file_dialogs::{AfterPick, FileDialogRequest};
 use crate::theme::{Tokens, semibold};
 
 thread_local! {
@@ -357,6 +358,37 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     custom_dictionary(app, ui);
 }
 
+/// The typed folder of Dictionaries folder and User templates while it is edited (egui memory).
+const DICTIONARIES_FIELD: &str = "options_dictionaries_folder";
+const TEMPLATES_FIELD: &str = "options_user_templates_folder";
+
+/// Browse… beside a folder setting, where the host can ask for a folder (the desktop); true when
+/// clicked. The row asks ([`ask_folder`]) once its field is put away, so an answer that comes at
+/// once shows in the field.
+fn browse_button(app: &WordApp, ui: &mut Ui) -> bool {
+    app.has_folder_picker() && ui.button(tl!("Browse…")).clicked()
+}
+
+/// The system's folder dialog for the setting `key`; the answer sets it ([`folder_picked`]).
+fn ask_folder(app: &mut WordApp, purpose: &str, key: &'static str) {
+    let _ = app.ask_file(FileDialogRequest::Folder { purpose: purpose.into() }, AfterPick::OptionsFolder { key });
+}
+
+/// Browse…'s answer: the folder setting `key` (`dictionariesFolder`, `userTemplatesFolder`) is
+/// the picked folder, and its field shows it as saved instead of what was typed before.
+pub(crate) fn folder_picked(app: &mut WordApp, key: &str, path: &str) -> Result<Value, String> {
+    let mut params = json!({});
+    params[key] = json!(path);
+    let r = app.run("file.options", params);
+    if r.is_ok()
+        && let Some(ctx) = app.ctx.clone()
+    {
+        let field = if key == "dictionariesFolder" { DICTIONARIES_FIELD } else { TEMPLATES_FIELD };
+        ctx.data_mut(|d| d.remove::<String>(egui::Id::unique(field)));
+    }
+    r
+}
+
 /// Where the spelling dictionaries come from (#1063): a folder searched before the system's
 /// usual places, saved with the settings. An app started from Finder or the Dock doesn't see
 /// `WORDCRAFT_DICTIONARIES`, so this is how it finds a dictionary kept in a folder of the user's
@@ -364,9 +396,10 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
 /// each language found is under Dictionary files.
 fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     let saved = app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
-    let id = egui::Id::unique("options_dictionaries_folder");
+    let id = egui::Id::unique(DICTIONARIES_FIELD);
     let mut folder = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| saved.clone());
     let folder_label = ui.label(tl!("Dictionaries folder:")).id;
+    let mut browse = false;
     ui.horizontal(|ui| {
         let r = ui
             .add(egui::TextEdit::singleline(&mut folder).desired_width(320.0).hint_text(tl!("Not set: the system's usual places")))
@@ -386,8 +419,12 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
         {
             folder.clear();
         }
+        browse = browse_button(app, ui);
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
+    if browse {
+        ask_folder(app, "dictionaries", "dictionariesFolder");
+    }
     note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
     note(ui, "An installed Language pack is used after this folder.");
     ui.add_space(6.0);
@@ -697,10 +734,11 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
 /// Template starts. Empty is the app's own folder, shown as the hint.
 fn templates_folder(app: &mut WordApp, ui: &mut Ui) {
     let saved = app.session.prefs.user_templates_folder.clone().unwrap_or_default();
-    let id = egui::Id::unique("options_user_templates_folder");
+    let id = egui::Id::unique(TEMPLATES_FIELD);
     let mut folder = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| saved.clone());
     let default = app.services.templates_dir.as_ref().map(|d| d.to_string_lossy().into_owned());
     let templates_label = ui.label(tl!("User templates:")).id;
+    let mut browse = false;
     ui.horizontal(|ui| {
         let hint = default.clone().unwrap_or_else(|| tl!("Not set").to_string());
         let r = ui.add(egui::TextEdit::singleline(&mut folder).desired_width(320.0).hint_text(hint)).labelled_by(templates_label);
@@ -718,8 +756,12 @@ fn templates_folder(app: &mut WordApp, ui: &mut Ui) {
         {
             folder.clear();
         }
+        browse = browse_button(app, ui);
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
+    if browse {
+        ask_folder(app, "templates", "userTemplatesFolder");
+    }
     note(ui, "File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.");
 }
 

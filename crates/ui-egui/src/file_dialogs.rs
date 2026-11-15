@@ -28,6 +28,9 @@ pub enum FileDialogRequest {
     /// Pick a path to save to, given a suggested file name and, if it matters, the folder to
     /// start in (Save as Word Template starts in the user templates folder, #2852).
     Save { name: String, dir: Option<String> },
+    /// Pick a folder; `purpose` says what for (`library`: Insert › Library › Add Folder…,
+    /// `dictionaries` and `templates`: the File › Options folders). The web has no folders.
+    Folder { purpose: String },
 }
 
 /// The host's answer to a [`FileDialogRequest`]: the picked paths (one for everything but
@@ -80,6 +83,12 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
+    /// Add the picked folder to the Library, keep it with the preferences at once and show it in
+    /// the pane (Insert › Library › Add Folder…, #2868).
+    LibraryFolder,
+    /// Set the File › Options folder setting `key` (`dictionariesFolder`, `userTemplatesFolder`)
+    /// to the picked folder (Browse…).
+    OptionsFolder { key: &'static str },
 }
 
 /// What to do once Save As has written the document.
@@ -148,8 +157,16 @@ impl WordApp {
                 self.services.pick_open.as_ref().and_then(|f| f(purpose))
             }
             FileDialogRequest::Save { name, .. } => self.services.pick_save.as_ref().and_then(|f| f(name)),
+            // Only an asynchronous host picks folders ([`Self::has_folder_picker`]).
+            FileDialogRequest::Folder { .. } => None,
         };
         Asked::Done(self.finish_pick(after, picked))
+    }
+
+    /// Whether the host can ask for a folder: the desktop's system dialog, or the built-in
+    /// browser when it has none (#576). The web can't, so its folder settings take a typed path.
+    pub(crate) fn has_folder_picker(&self) -> bool {
+        self.services.file_dialog.is_some()
     }
 
     /// Pick up the answer of an open file dialog, if it has arrived (every frame, from `logic`),
@@ -293,6 +310,21 @@ impl WordApp {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 crate::dialogs_review::set_compare_path(self, revised, path);
                 Ok(json!({"picked": true}))
+            }
+            AfterPick::LibraryFolder => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // A failure (not a folder, the Library full) shows on the status bar.
+                let r = self.run("library.addFolder", json!({"path": path}));
+                if let Ok(v) = &r {
+                    // Kept at once, as the pane's own Add does, so it survives a crash.
+                    let _ = self.save_prefs_now();
+                    self.library.folder = v["path"].as_str().map(String::from);
+                }
+                r
+            }
+            AfterPick::OptionsFolder { key } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                crate::options::folder_picked(self, key, &path)
             }
             AfterPick::Export { ext } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };

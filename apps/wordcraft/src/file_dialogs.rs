@@ -1,4 +1,4 @@
-//! Native file dialogs (Open, Save As, Export, pictures) that don't freeze the window (#94).
+//! Native file dialogs (Open, Save As, Export, pictures, folders) that don't freeze the window (#94).
 //!
 //! The blocking `rfd::FileDialog` ran on the UI thread: on Linux the xdg-desktop-portal call
 //! blocked the event loop until the dialog closed, and with no parent window the dialog could open
@@ -229,6 +229,8 @@ fn picker(dialog: rfd::AsyncFileDialog, req: &FileDialogRequest) -> Picking {
             }
             Box::pin(async move { dialog.save_file().await.into_iter().collect() })
         }
+        // Insert › Library › Add Folder… and the File › Options folders.
+        FileDialogRequest::Folder { .. } => Box::pin(async move { dialog.pick_folder().await.into_iter().collect() }),
     }
 }
 

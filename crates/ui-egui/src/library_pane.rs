@@ -3,9 +3,11 @@
 //! the pictures in the user's Library folders; clicking one inserts it at the selection, as
 //! Insert › Pictures does, while the document stays open for editing.
 //!
-//! WordCraft has no folder picker (its folder options take a typed path too), so Add Folder…
-//! shows the pane's path field. A tab of WordCraft's own (icons, diagrams, charts) would join the
-//! strip in [`LABELS`] and be drawn in `WordHost`'s `Host::tab`.
+//! Add Folder… asks for a folder in the system's dialog (the built-in browser where there is none,
+//! #576) without waiting for it: the answer adds the folder on a later frame
+//! ([`AfterPick::LibraryFolder`](crate::file_dialogs::AfterPick::LibraryFolder)). Where nothing
+//! can pick a folder (the web) it shows the pane's path field. A tab of WordCraft's own (icons,
+//! diagrams, charts) would join the strip in [`LABELS`] and be drawn in `WordHost`'s `Host::tab`.
 
 use std::borrow::Cow;
 
@@ -15,6 +17,7 @@ use egui::Ui;
 use serde_json::Value;
 
 use crate::WordApp;
+use crate::file_dialogs::{AfterPick, FileDialogRequest};
 use crate::theme::Tokens;
 
 /// WordCraft's words in the shared pane, in English: every one goes through the interface catalog
@@ -75,8 +78,16 @@ impl Host for WordHost<'_> {
     fn folders(&self) -> Vec<String> {
         self.0.session.prefs.library_folders.clone()
     }
+    /// The pane asks synchronously, but WordCraft's dialogs answer on a later frame: the dialog is
+    /// started and the pane told "cancelled" (it does nothing more), and the answer adds the folder
+    /// and shows it. No picker (the web): `None`, so the pane takes a typed path.
     fn pick_folder(&mut self) -> Option<Option<String>> {
-        None
+        if !self.0.has_folder_picker() {
+            return None;
+        }
+        let req = FileDialogRequest::Folder { purpose: "library".into() };
+        let _ = self.0.ask_file(req, AfterPick::LibraryFolder);
+        Some(None)
     }
     fn can_place(&self) -> bool {
         self.0.has_document()
@@ -97,7 +108,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // pane scrolls its own grid, so its folder and search controls stay in view.
     let mut state = std::mem::take(&mut app.library);
     craft_library_egui::show(ui, &mut state, &mut WordHost(app), &LABELS, &pal);
+    // A folder picked while the state was lent (a host that answered Add Folder… at once) was
+    // shown on the stand-in; it is shown on the pane's own state.
+    let picked = std::mem::take(&mut app.library).folder;
     app.library = state;
+    if picked.is_some() {
+        app.library.folder = picked;
+    }
 }
 
 #[cfg(test)]

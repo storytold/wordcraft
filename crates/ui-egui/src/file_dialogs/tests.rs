@@ -729,3 +729,148 @@ fn many_failed_fonts_end_with_a_count() {
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert_eq!(msg, "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// An app whose host shows dialogs asynchronously, as [`async_app`], and counts the times the
+/// preferences were written out.
+fn async_app_saving_prefs() -> (WordApp, Shown, Rc<std::cell::Cell<usize>>) {
+    let (mut a, shown) = async_app();
+    let saves = Rc::new(std::cell::Cell::new(0));
+    let count = saves.clone();
+    a.services.save_prefs = Some(Box::new(move |_| {
+        count.set(count.get() + 1);
+        Ok(true)
+    }));
+    (a, shown, saves)
+}
+
+/// Insert › Library › Add Folder… (#2868): the host's folder dialog is asked for without waiting
+/// (the pane is told nothing more), and its answer adds the folder, keeps the preferences at once
+/// and shows that folder in the pane.
+#[test]
+fn a_picked_library_folder_is_added_kept_and_shown() {
+    use craft_library_egui::Host as _;
+    let dir = scratch("library-pick");
+    let (mut a, shown, saves) = async_app_saving_prefs();
+    assert_eq!(crate::library_pane::WordHost(&mut a).pick_folder(), Some(None), "the answer comes later");
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Folder { purpose: "library".into() });
+    assert!(a.file_dialog_open() && a.session.prefs.library_folders.is_empty(), "nothing is added before the answer");
+    answer(&shown, Some(&dir.to_string_lossy()));
+    let r = a.poll_file_dialog().unwrap().unwrap();
+    let real = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+    assert_eq!(r["added"], true);
+    assert_eq!(a.session.prefs.library_folders, vec![real.clone()]);
+    assert_eq!(a.library.folder.as_deref(), Some(real.as_str()), "the pane shows the new folder");
+    assert_eq!(saves.get(), 1, "kept with the preferences at once");
+    assert!(!a.file_dialog_open());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Cancelling the folder dialog adds nothing and writes nothing; a folder the Library can't take
+/// says why on the status bar.
+#[test]
+fn a_cancelled_or_refused_library_folder_adds_nothing() {
+    use craft_library_egui::Host as _;
+    let (mut a, shown, saves) = async_app_saving_prefs();
+    let _ = crate::library_pane::WordHost(&mut a).pick_folder();
+    answer(&shown, None);
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap(), json!({"cancelled": true}));
+    let dir = scratch("library-refused");
+    let file = dir.join("not-a-folder.png");
+    std::fs::write(&file, b"x").unwrap();
+    let _ = crate::library_pane::WordHost(&mut a).pick_folder();
+    answer(&shown, Some(&file.to_string_lossy()));
+    assert!(a.poll_file_dialog().unwrap().is_err());
+    assert!(a.session.prefs.library_folders.is_empty() && a.library.folder.is_none());
+    assert_eq!(saves.get(), 0);
+    let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(msg.contains("not a folder"), "{msg}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A host with no asynchronous dialog (the web, where the Library is off, or a blocking-only
+/// host) has no folder picker: the pane takes a typed path instead.
+#[test]
+fn without_a_folder_picker_the_library_takes_a_typed_path() {
+    use craft_library_egui::Host as _;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    assert!(!a.has_folder_picker());
+    assert_eq!(crate::library_pane::WordHost(&mut a).pick_folder(), None);
+    let blocking = Services { pick_open: Some(Box::new(|_| Some("/somewhere".into()))), ..Default::default() };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), blocking);
+    assert_eq!(crate::library_pane::WordHost(&mut a).pick_folder(), None);
+    assert!(!a.file_dialog_open(), "nothing was asked");
+}
+
+/// No system dialog (#576): the folder is chosen in the built-in browser, which lists only
+/// folders, and its answer adds the folder as the system dialog's would.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn without_a_system_dialog_the_folder_is_chosen_in_the_built_in_browser() {
+    use craft_library_egui::Host as _;
+    let dir = scratch("library-builtin");
+    std::fs::create_dir(dir.join("Holiday")).unwrap();
+    let services = Services {
+        file_dialog: Some(Box::new(|_req| {
+            let (tx, rx) = channel();
+            tx.send(Err("no portal".to_string())).unwrap();
+            rx
+        })),
+        ..Default::default()
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    assert_eq!(crate::library_pane::WordHost(&mut a).pick_folder(), Some(None));
+    let b = a.file_browser.open.as_mut().expect("the built-in browser is open");
+    b.navigate(dir.join("Holiday"));
+    let crate::file_browser::Step::Pick(picked) = b.accept() else { panic!("the folder shown is chosen") };
+    assert_eq!(picked, dir.join("Holiday"));
+    a.close_file_browser(Some(picked));
+    let real = std::fs::canonicalize(dir.join("Holiday")).unwrap().to_string_lossy().into_owned();
+    assert_eq!(a.session.prefs.library_folders, vec![real.clone()]);
+    assert_eq!(a.library.folder.as_deref(), Some(real.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// File › Options › Advanced › Browse… beside User templates asks for a folder; the answer sets
+/// the setting and the field shows it, over what was typed there. A cancel leaves it as it was,
+/// and a host with no folder picker shows no Browse….
+#[test]
+fn browse_sets_an_options_folder() {
+    use egui_kittest::kittest::Queryable;
+    let harness = |a: WordApp| {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": "options", "pane": "advanced"})).unwrap();
+        h.run_steps(4);
+        h
+    };
+    let h = harness(WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default()));
+    assert!(h.query_by_label("User templates:").is_some() && h.query_by_label("Browse…").is_none(), "no picker, no Browse…");
+    drop(h);
+
+    let dir = scratch("options-browse");
+    let (a, shown) = async_app();
+    let mut h = harness(a);
+    let field = egui::Id::unique("options_user_templates_folder");
+    h.get_by_label("Browse…").click();
+    h.run_steps(2);
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Folder { purpose: "templates".into() });
+    answer(&shown, None);
+    h.run_steps(2);
+    assert_eq!(h.state().session.prefs.user_templates_folder, None, "cancelled");
+    h.ctx.data_mut(|d| d.insert_temp(field, "typed, not applied".to_string()));
+    h.get_by_label("Browse…").click();
+    h.run_steps(2);
+    answer(&shown, Some(&dir.to_string_lossy()));
+    h.run_steps(3);
+    let path = dir.to_string_lossy().into_owned();
+    assert_eq!(h.state().session.prefs.user_templates_folder.as_deref(), Some(path.as_str()));
+    assert_eq!(h.ctx.data(|d| d.get_temp::<String>(field)), Some(path), "the field shows the folder");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

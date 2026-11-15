@@ -6,6 +6,8 @@
 //! A folder path field with Up and Home folder, the folder's subfolders and the files of the
 //! chosen type, a file name field and the file types. It only lists folders the user navigates to
 //! and never reads a file: the picked path goes to the same follow-up as the system dialog's.
+//! Choosing a folder (Insert › Library › Add Folder…) lists only subfolders and has no file name
+//! or types: Choose takes the highlighted subfolder, else the folder shown.
 
 use std::path::{Path, PathBuf};
 
@@ -157,6 +159,8 @@ impl FileBrowser {
                 f.push(("All files".into(), vec!["*".into()]));
                 (name.clone(), f)
             }
+            // No file types: only folders are listed.
+            FileDialogRequest::Folder { .. } => (String::new(), Vec::new()),
         };
         let mut b = FileBrowser {
             req,
@@ -197,8 +201,12 @@ impl FileBrowser {
 
     /// OK: a highlighted folder, or a typed folder, is opened; otherwise the typed name is the
     /// pick. Save adds the chosen type's extension to a name without one and asks once more
-    /// before replacing a file; Open wants a file that exists.
+    /// before replacing a file; Open wants a file that exists. Choosing a folder is
+    /// [`Self::accept_folder`].
     pub(crate) fn accept(&mut self) -> Step {
+        if self.picks_folder() {
+            return self.accept_folder();
+        }
         if let Some(dir) = self.selected.take().filter(|p| p.is_dir()) {
             self.navigate(dir);
             return Step::Stay;
@@ -229,7 +237,28 @@ impl FileBrowser {
                 }
                 Step::Pick(path)
             }
+            // Answered by `accept_folder` above.
+            FileDialogRequest::Folder { .. } => Step::Stay,
         }
+    }
+
+    /// Whether the browser asks for a folder rather than a file.
+    fn picks_folder(&self) -> bool {
+        matches!(self.req, FileDialogRequest::Folder { .. })
+    }
+
+    /// Choose (or Enter): the highlighted subfolder, else the folder shown. A double click opens
+    /// a subfolder instead, so a folder is chosen from inside it or from its parent. A folder
+    /// that isn't there (typed in the path field) stays and says so.
+    fn accept_folder(&mut self) -> Step {
+        if let Some(dir) = self.selected.take().filter(|p| p.is_dir()) {
+            return Step::Pick(dir);
+        }
+        if self.dir.is_dir() {
+            return Step::Pick(self.dir.clone());
+        }
+        self.note = Note::NotFound(self.dir.to_string_lossy().into_owned());
+        Step::Stay
     }
 
     /// A click on an entry: highlight it, and a file's name goes into the file name field.
@@ -245,6 +274,7 @@ impl FileBrowser {
         match self.req {
             FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
             FileDialogRequest::Save { .. } => "Save As",
+            FileDialogRequest::Folder { .. } => "Choose a Folder",
         }
     }
 
@@ -252,6 +282,7 @@ impl FileBrowser {
         match self.req {
             FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
             FileDialogRequest::Save { .. } => "Save",
+            FileDialogRequest::Folder { .. } => "Choose",
         }
     }
 }
@@ -443,6 +474,35 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
     }
     ui.add_space(6.0);
     let mut refilter = false;
+    // Choosing a folder has no file name or file types: the path field above takes a typed folder.
+    if !b.picks_folder() {
+        file_name_row(ui, b, &mut refilter);
+    }
+    if refilter {
+        b.navigate(b.dir.clone());
+    }
+    ui.add_space(8.0);
+    let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let enter = !location_done && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    ui.horizontal(|ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+            let (ok, cancelb) =
+                crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!(b.ok_label()))), tl!("Cancel"));
+            cancel |= cancelb.clicked();
+            pick |= ok.clicked() || enter;
+        });
+    });
+    if cancel {
+        return Some(None);
+    }
+    if pick && let Step::Pick(path) = b.accept() {
+        return Some(Some(path));
+    }
+    None
+}
+
+/// The file name field and the file types; `refilter` when another type was chosen.
+fn file_name_row(ui: &mut Ui, b: &mut FileBrowser, refilter: &mut bool) {
     ui.horizontal(|ui| {
         let label = ui.label(tl!("File name:"));
         // The name field takes what the label (longer in some languages) and the type list leave.
@@ -468,29 +528,8 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
             })
             .response
             .accessible_name(tl!("File type"));
-        refilter = b.filter != before;
+        *refilter = b.filter != before;
     });
-    if refilter {
-        b.navigate(b.dir.clone());
-    }
-    ui.add_space(8.0);
-    let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
-    let enter = !location_done && ui.input(|i| i.key_pressed(egui::Key::Enter));
-    ui.horizontal(|ui| {
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-            let (ok, cancelb) =
-                crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!(b.ok_label()))), tl!("Cancel"));
-            cancel |= cancelb.clicked();
-            pick |= ok.clicked() || enter;
-        });
-    });
-    if cancel {
-        return Some(None);
-    }
-    if pick && let Step::Pick(path) = b.accept() {
-        return Some(Some(path));
-    }
-    None
 }
 
 /// A small button with a drawn icon and a tooltip; true when clicked.
@@ -562,6 +601,57 @@ mod tests {
         b.name = "old".into();
         assert_eq!(b.accept(), Step::Stay, "asks before replacing");
         assert_eq!(b.accept(), Step::Pick(dir.join("drafts").join("old.docx")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Choosing a folder (#2868): only folders are listed and there is no file name or type;
+    /// Choose takes the highlighted subfolder, else the folder shown, and a typed folder that
+    /// isn't there stays and says so.
+    #[test]
+    fn choosing_a_folder_takes_the_highlighted_or_the_shown_folder() {
+        let dir = scratch("folder");
+        std::fs::create_dir(dir.join("Holiday")).unwrap();
+        std::fs::write(dir.join("kiln.png"), b"x").unwrap();
+        let req = FileDialogRequest::Folder { purpose: "library".into() };
+        let mut b = FileBrowser::new(req, AfterPick::LibraryFolder, dir.clone(), false);
+        let entries = b.listing.as_ref().map(|l| l.entries.clone()).unwrap();
+        assert_eq!(entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Holiday"], "no files");
+        assert!(b.filters.is_empty() && b.name.is_empty());
+        assert_eq!((b.title(), b.ok_label()), ("Choose a Folder", "Choose"));
+        assert_eq!(b.accept(), Step::Pick(dir.clone()), "the folder shown");
+        b.select(&entries[0]);
+        assert_eq!(b.accept(), Step::Pick(dir.join("Holiday")), "the highlighted subfolder");
+        b.navigate(dir.join("missing"));
+        assert_eq!(b.accept(), Step::Stay);
+        assert!(matches!(b.note, Note::NotFound(_)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The folder browser draws no file name or file type controls, and Choose answers with the
+    /// folder shown.
+    #[test]
+    fn the_folder_browser_has_no_file_name_and_chooses_the_folder_shown() {
+        use egui_kittest::kittest::Queryable;
+        let dir = scratch("folder_ui");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let req = FileDialogRequest::Folder { purpose: "library".into() };
+        a.file_browser.open = Some(Box::new(FileBrowser::new(req, AfterPick::LibraryFolder, dir.clone(), false)));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert!(h.query_by_label("Choose a Folder").is_some());
+        assert!(h.query_by_label("File name:").is_none() && h.query_by_label("File type").is_none());
+        h.get_by_label("Choose").click();
+        h.run_steps(3);
+        assert!(!h.state().file_browser_open());
+        let real = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+        assert_eq!(h.state().session.prefs.library_folders, vec![real]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

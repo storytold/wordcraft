@@ -188,3 +188,94 @@ fn pictures_share_one_grid() {
     assert!(h.query_by_label("a").is_none(), "no per-file heading");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Dialogs the fake host was asked to show, each with the channel its answer goes through.
+type Shown = std::rc::Rc<std::cell::RefCell<Vec<(crate::FileDialogRequest, std::sync::mpsc::Sender<crate::FileDialogAnswer>)>>>;
+
+/// Add Folder… with a system folder dialog (#2868): no path field; the dialog is asked for and
+/// the window goes on drawing while it is open. Its answer adds the folder, keeps the
+/// preferences, and shows the folder's pictures; a cancel changes nothing.
+#[test]
+fn add_folder_asks_the_folder_dialog_and_shows_what_it_picks() {
+    let shown: Shown = Default::default();
+    let log = shown.clone();
+    let saves = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = saves.clone();
+    let services = Services {
+        file_dialog: Some(Box::new(move |req| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            log.borrow_mut().push((req, tx));
+            rx
+        })),
+        save_prefs: Some(Box::new(move |_| {
+            count.set(count.get() + 1);
+            Ok(true)
+        })),
+        ..Default::default()
+    };
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Field notes")), services);
+    app.run("view.libraryPane", json!({"value": true})).unwrap();
+    let mut h = harness(app);
+    let dir = folder("picker");
+    std::fs::write(dir.join("kiln.png"), png(40, 30, [180, 90, 40])).unwrap();
+
+    h.get_by_label("Add Folder…").click();
+    h.run_steps(3);
+    assert_eq!(shown.borrow().len(), 1);
+    assert_eq!(shown.borrow()[0].0, crate::FileDialogRequest::Folder { purpose: "library".into() });
+    assert!(!h.state().library.adding && h.query_by_label("Add").is_none(), "no path field");
+    let (_, cancel) = shown.borrow_mut().remove(0);
+    cancel.send(Ok(Vec::new())).unwrap();
+    h.run_steps(3);
+    assert!(h.state().session.prefs.library_folders.is_empty() && saves.get() == 0, "a cancel adds nothing");
+
+    h.get_by_label("Add Folder…").click();
+    h.run_steps(3);
+    let (_, pick) = shown.borrow_mut().remove(0);
+    pick.send(Ok(vec![dir.to_string_lossy().into_owned()])).unwrap();
+    for _ in 0..60 {
+        h.step();
+    }
+    let real = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+    assert_eq!(h.state().session.prefs.library_folders, vec![real.clone()]);
+    assert_eq!(saves.get(), 1, "kept with the preferences at once");
+    assert_eq!(h.state().library.folder.as_deref(), Some(real.as_str()), "the pane shows the new folder");
+    let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+    let drawn: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(drawn.contains(&name), "the folder drop-down names it: {drawn:?}");
+    assert!(h.query_by_label("Picture: kiln.png").is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A dialog that answers at once (as the pane draws) still shows the folder it picked: the
+/// answer reaches the pane's own state, not the stand-in it has while the pane draws.
+#[test]
+fn a_folder_picked_at_once_is_shown() {
+    let dir = folder("at-once");
+    let picked = dir.to_string_lossy().into_owned();
+    let services = Services {
+        file_dialog: Some(Box::new(move |_| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let _ = tx.send(Ok(vec![picked.clone()]));
+            rx
+        })),
+        ..Default::default()
+    };
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Field notes")), services);
+    app.run("view.libraryPane", json!({"value": true})).unwrap();
+    let mut h = harness(app);
+    h.get_by_label("Add Folder…").click();
+    h.run_steps(3);
+    let real = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+    assert_eq!(h.state().session.prefs.library_folders, vec![real.clone()]);
+    assert_eq!(h.state().library.folder.as_deref(), Some(real.as_str()));
+    let _ = std::fs::remove_dir_all(dir);
+}
