@@ -38,7 +38,7 @@ pub type FileDialogAnswer = Result<Vec<String>, String>;
 /// Most font files one Add Font pick tries; the rest of a bigger selection is skipped.
 const MAX_FONTS_PER_PICK: usize = 2000;
 
-const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
+const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "wmf", "emf"];
 const DOCUMENTS: &[&str] =
     &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 
