@@ -19,22 +19,32 @@ fn csv_separator(text: &str) -> char {
     [',', ';', '\t'].into_iter().max_by_key(|c| unquoted.matches(*c).count()).unwrap_or(',')
 }
 
-/// Ends the current row: kept when it has any non-empty field, otherwise dropped.
-fn push_csv_row(rows: &mut Vec<Vec<String>>, row: &mut Vec<String>) {
-    if row.iter().any(|x| !x.is_empty()) {
-        rows.push(std::mem::take(row));
-    } else {
-        row.clear();
-    }
+/// What a CSV may hold while it is read: the parser refuses a list that is over these, so a
+/// hostile file is never built and then cut.
+#[derive(Clone, Copy)]
+pub struct CsvLimits {
+    /// Most columns in a record.
+    pub fields: usize,
+    /// Most cells in the list: its records times its widest record.
+    pub cells: usize,
+    /// Most bytes of cell text in all.
+    pub text: usize,
 }
 
 /// Parse CSV (RFC 4180-ish: quotes, doubled quotes, commas/semicolons/tabs).
-pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
+///
+/// The limits are kept while the list is read, not after it: a record wider than
+/// `limits.fields`, a list of more than `limits.cells` cells, or more than `limits.text` bytes
+/// of cell text is refused, rather than built and then cut.
+fn parse_csv_limited(text: &str, limits: &CsvLimits) -> Result<Vec<Vec<String>>, CmdError> {
     let sep = csv_separator(text);
     let mut rows = Vec::new();
     let mut row = Vec::new();
     let mut cell = String::new();
     let mut q = false;
+    // The widest record read so far, and the bytes of cell text read so far.
+    let mut widest = 0usize;
+    let mut text_bytes = 0usize;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         if q {
@@ -51,23 +61,59 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
         } else if c == '"' {
             q = true;
         } else if c == sep {
-            row.push(std::mem::take(&mut cell));
+            end_cell(&mut row, &mut cell, &mut text_bytes, limits)?;
         } else if c == '\n' || c == '\r' {
             if c == '\r' && chars.peek() == Some(&'\n') {
                 chars.next();
             }
-            row.push(std::mem::take(&mut cell));
-            push_csv_row(&mut rows, &mut row);
+            end_cell(&mut row, &mut cell, &mut text_bytes, limits)?;
+            end_row(&mut rows, &mut row, &mut widest, limits)?;
         } else {
             cell.push(c);
+        }
+        // The text read so far: the finished cells and the one being read.
+        if text_bytes.saturating_add(cell.len()) > limits.text {
+            return Err(CmdError::Failed(format!("the CSV can't have more than {} of text", text_size(limits.text))));
         }
         if rows.len() > 100_000 {
             break;
         }
     }
-    row.push(cell);
-    push_csv_row(&mut rows, &mut row);
-    rows
+    // The last cell, when the file doesn't end with a line break.
+    end_cell(&mut row, &mut cell, &mut text_bytes, limits)?;
+    end_row(&mut rows, &mut row, &mut widest, limits)?;
+    Ok(rows)
+}
+
+/// A finished cell joins the record: the record's width stays inside the limit.
+fn end_cell(row: &mut Vec<String>, cell: &mut String, text_bytes: &mut usize, limits: &CsvLimits) -> Result<(), CmdError> {
+    *text_bytes = text_bytes.saturating_add(cell.len());
+    row.push(std::mem::take(cell));
+    if row.len() > limits.fields {
+        return Err(CmdError::Failed(format!("the CSV can't have more than {} columns", limits.fields)));
+    }
+    Ok(())
+}
+
+/// A finished record joins the list (an empty one is dropped). The list costs its records times
+/// its widest record — a recipient list pads every record to the header's width — so a list
+/// over the limit is refused here, while it is read.
+fn end_row(rows: &mut Vec<Vec<String>>, row: &mut Vec<String>, widest: &mut usize, limits: &CsvLimits) -> Result<(), CmdError> {
+    if row.iter().any(|x| !x.is_empty()) {
+        *widest = (*widest).max(row.len());
+        rows.push(std::mem::take(row));
+    } else {
+        row.clear();
+    }
+    if rows.len().saturating_mul(*widest) > limits.cells {
+        return Err(CmdError::Failed(format!("the CSV can't have more than {} cells (its records times its widest record)", limits.cells)));
+    }
+    Ok(())
+}
+
+/// A byte budget, said the way a reader says it.
+fn text_size(bytes: usize) -> String {
+    if bytes >= 1 << 20 { format!("{} MB", bytes >> 20) } else { format!("{bytes} bytes") }
 }
 
 /// Most records and fields a recipient list keeps.
