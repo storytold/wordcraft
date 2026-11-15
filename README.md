@@ -124,7 +124,7 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | **References** | Table of contents, footnotes and endnotes, citations and bibliography (APA, MLA, Chicago, IEEE), captions, table of figures, cross-references, index, table of authorities |
 | **Review** | Spelling and grammar with suggestions (English and Polish, by each run's language), thesaurus, word count, comments in margin balloons or a pane, track changes, accept/reject, compare documents, restrict editing, accessibility checker, document inspector |
 | **Mailings** | Mail merge from CSV, merge fields, address block, greeting line, rules, preview, finish to a document; envelopes and labels |
-| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski, Eesti, Türkçe, Русский, Italiano, Deutsch, Polski, Čeština, Magyar, Français, Български, Tiếng Việt, 한국어, Svenska, Hrvatski or Slovenščina (follows the system language by default) |
+| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski, Eesti, Türkçe, Русский, Italiano, Deutsch, Polski, Čeština, Magyar, Français, Български, Tiếng Việt, 한국어, Svenska, Hrvatski, Nederlands, Dansk, Română, العربية (mirrored) or Slovenščina (follows the system language by default) |
 | **Files** | .docx read/write, legacy 97-2003 .doc import, PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
 
 The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md), the
@@ -140,16 +140,64 @@ cargo run --release -p wordcraft -- --sample        # the desktop app with the s
 cargo run --release -p wordcraft -- report.docx     # open a document
 ```
 
+The interface translations and the spelling and hyphenation data come from
+[craft-i18n](https://github.com/storytold/craft-i18n), an optional build input. To build with them,
+check it out at the commit in `craft-i18n.rev` and point `CRAFT_I18N_DIR` at it (an absolute
+path); without it WordCraft builds with an English interface, English spelling falls back to an
+installed Hunspell English or craft-proof's built-in word list, and only Bulgarian, Turkish and
+Russian hyphenate (by rule):
+
+```sh
+git clone https://github.com/storytold/craft-i18n ../craft-i18n
+git -C ../craft-i18n checkout "$(cat craft-i18n.rev)"
+CRAFT_I18N_DIR="$PWD/../craft-i18n" cargo run --release -p wordcraft -- --sample
+```
+
 Command line:
 
 ```sh
 wordcraft-cli convert report.docx report.pdf        # docx, pdf, odt, rtf, html, md, tex, txt, png
+wordcraft-cli convert report.docx report.pdf --strict   # exit 3, no file, if a character or picture would be left out
 wordcraft-cli text report.docx                      # plain text
 wordcraft-cli inspect report.docx                   # structure as JSON
 wordcraft-cli run --template sample \
   --cmd 'select.text={"text":"Membership"}' --cmd format.bold --save out.docx
 wordcraft-cli run --script job.json                 # the same from a file: commands, then save to docx and pdf
 ```
+
+`convert --strict` (a `.pdf` or `.png` output only) and `render --strict` (a PNG of one page) refuse a silently incomplete render: they exit 3
+and write nothing if the output would draw a character no font has (an empty box) or leave out a
+picture. Exit codes are 0 (written), 1 (unreadable input, usage error, or `--strict` with another
+output type, checked before the input is read) and 3 (strict refusal). On exit 3, stderr has one
+`wordcraft-cli: strict: …` line per kind, then one JSON line:
+
+```sh
+wordcraft-cli convert in.docx out.pdf --strict
+# wordcraft-cli: strict: 1 character cannot be drawn: U+2D30 (×3)
+# wordcraft-cli: strict: 1 picture(s) left out: word/media/image2.bin (header2.xml): unsupported format
+# {"schema":1,"strict":"failed","missing_glyphs":[{"cp":"U+2D30","count":3}],"missing_pictures":[{"part":"word/media/image2.bin","source_part":"word/header2.xml","reason":"unsupported_format"}],"truncated":false,"total_missing_glyphs":1,"total_missing_pictures":1,"glyphs_truncated":false,"pictures_truncated":false}
+```
+
+The JSON line (schema 1, also what `file.strictReport` returns) has `schema`, `strict`
+(`"passed"` or `"failed"`), `missing_glyphs` (entries `{"cp", "count"}`, sorted by code point),
+`missing_pictures` (entries `{"part", "source_part", "reason"}`: the picture's part or target, the
+story part it sits in such as `word/header2.xml`, and a reason code; `source_part` is also
+`background` (the page picture), `body`, `header`, `footer`, `footnote`, `endnote`, `comment` or
+`text box` where the part name is not known (a document not opened from a DOCX), or a chunk path such as
+`word/afchunk1.docx > word/header1.xml` for a picture inside an embedded DOCX chunk), `truncated`, the two totals
+`total_missing_glyphs` and `total_missing_pictures`, and `glyphs_truncated` and
+`pictures_truncated` for each list. The reason codes are `missing_part`, `external_target`,
+`link_only`, `undecodable` and `unsupported_format`; the stderr lines use plain words for them. When a list is cut, the stderr line gives the total
+(`300 characters cannot be drawn (first 256 listed)`).
+Each list stops at 256 entries separately; `truncated` is true when either was cut, and the totals
+count every distinct character and picture found, those past the cap included. Only characters the output draws count (not hidden text, or deleted text
+without `--markup`), and a character a fallback font draws is fine. Text inside a WMF or EMF picture counts too, shaped in the font the picture names with no fallback. A Private Use Area character
+fails only if no installed font maps it. The result depends on the fonts installed on the host
+(see #5624 for a fixed font set). An external picture target is never fetched: it is reported, not
+loaded. Pictures dropped when a DOCX is opened (a missing part, an external target, or a `link only` picture with no embedded copy) are reported for DOCX input only. They have no page, so a PNG of any page is also refused for a missing or external picture anywhere in the document, unused headers included. `render --strict` checks only the page it
+writes (`--page`; `--scale` doesn't matter), prints nothing on stdout when it refuses, and reports the
+same way. The engine takes `strict: true` on `file.save`, `file.saveAs`, `file.exportPdf` and
+`file.exportPng`, and `file.strictReport {markup?, page?}` returns the report without writing.
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
 
@@ -194,7 +242,7 @@ covers every target starting with it (`wordcraft*=debug`). The logger is
 | Layer | Crate | Job |
 |---|---|---|
 | L0 | `wordcraft-geom` | units and measurements |
-| L1 | `wordcraft-doc`, `wordcraft-fonts`, `wordcraft-proof` | document model and editing; fonts and shaping; spelling, grammar, hyphenation |
+| L1 | `wordcraft-doc`, `wordcraft-fonts`, `wordcraft-proof` ([`craft-proof`](https://github.com/storytold/craft-libs/tree/main/crates/proof) from craft-libs) | document model and editing; fonts and shaping; spelling, grammar, hyphenation (data: craft-i18n `language-data/`, `CRAFT_I18N_DIR`) |
 | L2 | `wordcraft-layout`, `wordcraft-docx`, `wordcraft-formats` | line breaking, pagination, tables, notes, hit testing; OOXML; ODT/RTF/HTML/Markdown/TXT |
 | L3 | `wordcraft-render`, `wordcraft-pdf` | rasteriser (vello_cpu); PDF ([craft-pdf](docs/shared-pdf.md), Krilla) |
 | L4 | `wordcraft-engine` | session, undo, 422 commands, document feature catalog |
@@ -286,14 +334,30 @@ adapter. The log file records the choice (lines starting with
 RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compiled for glibc 2.39+
 (Ubuntu 24.04, Debian 13 and newer).
 
+**Read Aloud** (Review › Read Aloud) speaks through a speech program installed on the system: it
+tries `espeak-ng`, then `espeak`, and when neither is installed it talks to Speech Dispatcher.
+The `.rpm` package recommends `espeak-ng`; the `.deb` recommends `espeak-ng` or
+`speech-dispatcher`, so the package manager installs one of the two by default. With the
+AppImage or the tarball, install one yourself if neither is there (`sudo apt install espeak-ng`,
+`sudo dnf install espeak-ng`, `sudo pacman -S espeak-ng`). The Flatpak doesn't speak yet: it has
+no audio access and doesn't include `espeak-ng`, `espeak` or Speech Dispatcher.
+
 **Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
 winit (the windowing library) supports dragging files into the window only on X11. To use the
 native Wayland backend instead (for example for sharper text with fractional scaling, at the cost
-of file drag-and-drop), start it with `WORDCRAFT_WAYLAND=1`:
+of file drag-and-drop), choose **File › Options › Advanced › Linux display server › Wayland**; it
+applies the next time WordCraft starts, and **X11 (XWayland)** or **Automatic** switches back. The
+`WORDCRAFT_WAYLAND` environment variable overrides the setting: `1` for native Wayland, `0` for
+XWayland:
 
 ```sh
 WORDCRAFT_WAYLAND=1 wordcraft
 ```
+
+XWayland needs the X11 libraries, which the packages only recommend and the tarball doesn't
+install: libX11, libX11-xcb, libXcursor, libXi and libxkbcommon-x11 (on Debian and Ubuntu,
+`libx11-6`, `libx11-xcb1`, `libxcursor1`, `libxi6` and `libxkbcommon-x11-0`). Without them the app
+opens on native Wayland, whatever the setting says, and logs which ones are missing.
 
 **Arch Linux (AUR).** Community members maintain three AUR packages; the project doesn't publish
 to the AUR itself. Install one of them:

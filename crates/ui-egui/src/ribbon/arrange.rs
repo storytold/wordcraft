@@ -55,14 +55,16 @@ pub(super) fn wrap_menu(ui: &mut Ui, app: &mut WordApp) {
         }
         ui.separator();
         ui.menu_button(tl!("Wrap Text Sides"), |ui| {
-            for (l, s, v) in [
-                ("Both Sides", WrapText::BothSides, "bothSides"),
-                ("Left Only", WrapText::Left, "left"),
-                ("Right Only", WrapText::Right, "right"),
-                ("Largest Only", WrapText::Largest, "largest"),
-            ] {
-                mi_check(ui, app, l, side == s, "arrange.wrapText", json!({"side": v}));
-            }
+            crate::rtl::root(ui, |ui| {
+                for (l, s, v) in [
+                    ("Both Sides", WrapText::BothSides, "bothSides"),
+                    ("Left Only", WrapText::Left, "left"),
+                    ("Right Only", WrapText::Right, "right"),
+                    ("Largest Only", WrapText::Largest, "largest"),
+                ] {
+                    mi_check(ui, app, l, side == s, "arrange.wrapText", json!({"side": v}));
+                }
+            })
         });
     });
 }

@@ -3,6 +3,7 @@ use super::paint::{append_path, norm};
 use super::{
     Arc, Fill, FillRule, Image, LineCap, LineJoin, NormalizedF32, Path, PathBuilder, Picture, PlacedItem, Rect, Size, Stroke, Surface, Transform, rgb,
 };
+use wordcraft_doc::picfx::PicFx;
 
 /// Largest picture side we embed (pixels).
 const MAX_IMAGE_SIDE: u32 = 30_000;
@@ -16,7 +17,7 @@ pub(crate) struct Vector {
 
 /// Parses a metafile and embeds its bitmaps. None when the picture has no usable size.
 pub(crate) fn build_vector(bytes: &[u8]) -> Option<Vector> {
-    let mut pic = wordcraft_metafile::parse(bytes).ok()?;
+    let mut pic = craft_metafile::parse(bytes).ok()?;
     if !pic.has_size() {
         return None;
     }
@@ -47,7 +48,7 @@ pub(crate) fn vector_picture(ex: &mut Exporter, s: &mut Surface, v: &Vector, r: 
     s.push_clip_path(clip, &FillRule::NonZero);
     for it in v.pic.place(target, *crop) {
         match it {
-            PlacedItem::Path { path, fill, stroke, even_odd } => {
+            PlacedItem::Path { path, fill, stroke, even_odd, .. } => {
                 let Some(p) = path_from(&path) else { continue };
                 let fill = fill.map(|c| {
                     let (paint, opacity) = paint_of(c);
@@ -69,16 +70,17 @@ pub(crate) fn vector_picture(ex: &mut Exporter, s: &mut Surface, v: &Vector, r: 
                 s.set_stroke(stroke);
                 s.draw_path(&p);
             }
-            PlacedItem::Bitmap { index, rect } => {
+            PlacedItem::Bitmap { index, rect, .. } => {
                 let Some(Some(img)) = v.images.get(index) else { continue };
                 let Some(size) = Size::from_wh(rect.width() as f32, rect.height() as f32) else { continue };
                 s.push_transform(&Transform::from_translate(rect.x0 as f32, rect.y0 as f32));
                 s.draw_image(img.clone(), size);
                 s.pop();
             }
-            PlacedItem::Text { index, tf } => {
-                if let Some(wordcraft_metafile::Item::Text(t)) = v.pic.items.get(index) {
-                    ex.vector_text(s, t, tf);
+            PlacedItem::Pattern { .. } => {}
+            PlacedItem::Text { index, transform, .. } => {
+                if let Some(craft_metafile::Item::Text(t)) = v.pic.items.get(index) {
+                    ex.vector_text(s, t, transform);
                 }
             }
         }
@@ -99,45 +101,31 @@ fn path_from(b: &kurbo::BezPath) -> Option<Path> {
 }
 
 /// Decode a picture for embedding (validated with the `image` crate first, so a broken file
-/// can't fail the whole export).
-pub(crate) fn load_image(data: &Arc<Vec<u8>>) -> Option<Image> {
+/// can't fail the whole export), with its brightness and contrast `fx` applied to the pixels.
+///
+/// A JPEG goes in as it is unless `fx` changes its pixels; corrected pixels go in raw and krilla
+/// compresses them (Flate), and `Exporter::image` embeds one picture with the same corrections
+/// once. Corrected or not, a picture goes through the same size checks and decode, so it never
+/// fails here only because it has corrections.
+pub(crate) fn load_image(data: &Arc<Vec<u8>>, fx: PicFx) -> Option<Image> {
     // The shared probe also charges what the decoder holds beside its output (#3644).
     if !wordcraft_geom::picture::probe(data).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)) {
         return None;
     }
-    load_image_within(data, wordcraft_geom::MAX_DECODED_BYTES)
+    load_image_within(data, fx, wordcraft_geom::MAX_DECODED_BYTES)
 }
 
 /// [`load_image`] with an explicit RGBA byte budget (a small one in tests).
-pub(crate) fn load_image_within(data: &Arc<Vec<u8>>, budget: u64) -> Option<Image> {
-    use image::ImageDecoder;
-    let fmt = image::guess_format(data).ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_IMAGE_SIDE);
-    limits.max_image_height = Some(MAX_IMAGE_SIDE);
-    let reader = || {
-        let mut r = image::ImageReader::new(std::io::Cursor::new(data.as_slice())).with_guessed_format().ok()?;
-        r.limits(limits.clone());
-        Some(r)
-    };
-    // Header-only size check before anything is allocated (the decoder's buffer at its own pixel
-    // size, 8 bytes for 16-bit RGBA, plus the RGBA conversion are charged); the side limits and
-    // the default 512 MB allocation cap apply to the header read and the decode alike.
-    let (hw, hh, native) = {
-        let d = reader()?.into_decoder().ok()?;
-        let (w, h) = d.dimensions();
-        (w, h, u64::from(d.color_type().bytes_per_pixel()))
-    };
-    if !wordcraft_geom::decode_peak_fits(hw, hh, native, budget) {
-        return None;
-    }
-    let dec = reader()?.decode().ok()?;
+pub(crate) fn load_image_within(data: &Arc<Vec<u8>>, fx: PicFx, budget: u64) -> Option<Image> {
+    let fmt = wordcraft_geom::picture::guess_format(data)?;
+    // The decision to draw or not is the shared one (`wordcraft_geom::picture`), the one strict
+    // export checks with.
+    let dec = wordcraft_geom::picture::decode_for_drawing(data, budget, MAX_IMAGE_SIDE).ok()?;
     let (w, h) = (dec.width(), dec.height());
-    if w == 0 || h == 0 || w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
-        return None;
-    }
-    if fmt == image::ImageFormat::Jpeg && matches!(dec.color(), image::ColorType::L8 | image::ColorType::Rgb8) {
+    if !fx.changes_pixels() && fmt == image::ImageFormat::Jpeg && matches!(dec.color(), image::ColorType::L8 | image::ColorType::Rgb8) {
         return Image::from_jpeg(data.clone().into(), true).ok();
     }
-    Some(Image::from_rgba8(dec.into_rgba8().into_raw(), w, h))
+    let mut px = dec.into_rgba8().into_raw();
+    fx.apply_rgba(&mut px);
+    Some(Image::from_rgba8(px, w, h))
 }
