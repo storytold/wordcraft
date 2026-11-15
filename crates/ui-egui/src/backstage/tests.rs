@@ -1380,44 +1380,87 @@ fn a_right_to_left_file_page_follows_the_window_width() {
     crate::i18n::set_current(crate::i18n::Lang::EN);
 }
 
-/// #5396: a window too narrow for Print's preview shows the settings alone, in either direction.
+/// #5396: a window too narrow for Print's preview shows the settings alone, in either direction,
+/// and a window narrower than the settings column itself scrolls sideways cleanly without clipping.
 #[test]
 fn a_narrow_print_page_shows_its_settings_alone() {
-    for lang in [crate::i18n::Lang::EN, right_to_left()] {
-        for width in [760.0, 850.0] {
-            let h = page_at("print", width, Rc::new(Cell::new(lang)));
+    use egui::accesskit::Role;
+    for (lang, dx) in [(crate::i18n::Lang::EN, -2000.0), (right_to_left(), 2000.0)] {
+        for width in [500.0, 760.0, 850.0] {
+            let mut h = page_at("print", width, Rc::new(Cell::new(lang)));
             assert!(h.query_by_label("Next sheet").is_none(), "at {width}: there is no room for the preview");
             let save = h.get_by_label("Save these pages as PDF…").rect();
-            assert!(save.left() >= 8.0 && save.right() <= width - 8.0, "at {width}: the settings must fit: {save:?}");
+            if width >= 760.0 {
+                assert!(save.left() >= 8.0 && save.right() <= width - 8.0, "at {width}: the settings must fit: {save:?}");
+            } else {
+                let v_bars: Vec<egui::Rect> = h.query_all_by_role(Role::ScrollBar).map(|n| n.rect()).filter(|r| r.height() > r.width()).collect();
+                assert!(v_bars.len() <= 1, "at {width} (rtl={}): expected no clipped inner vertical bar: {v_bars:?}", lang.rtl());
+                if lang.rtl() {
+                    let close_nav = h.get_by_label("Close").rect();
+                    assert!(save.right() < close_nav.left(), "at {width}: RTL settings {save:?} must stay left of nav {close_nav:?}");
+                    assert!(save.left() < 8.0, "at {width}: RTL wide button {save:?} extends leftward to scroll");
+                } else {
+                    let nav = h.get_by_label("Close").rect();
+                    assert!(save.left() > nav.right(), "at {width}: LTR settings {save:?} must start right of nav {nav:?}");
+                }
+                wheel_page_sideways(&mut h, dx);
+                let scrolled = h.get_by_label("Save these pages as PDF…").rect();
+                if lang.rtl() {
+                    assert!(scrolled.left() >= 8.0, "at {width}: after RTL sideways scroll, button far left {scrolled:?} must fit");
+                } else {
+                    assert!(scrolled.right() <= width - 8.0, "at {width}: after LTR sideways scroll, button far right {scrolled:?} must fit");
+                }
+            }
         }
     }
     crate::i18n::set_current(crate::i18n::Lang::EN);
 }
 
 /// #5396: Print's preview bar stays inside a narrower preview, on two rows when it needs them, with
-/// three-digit page numbers too, and no button or the page indicator runs over another.
+/// three-digit page numbers and wide sheet labels too, and no button or page indicator runs over another.
 #[test]
 fn a_print_preview_keeps_its_whole_bar_at_any_width_it_shows() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::NodeT;
     let text = "line\n".repeat(9000);
-    for lang in [crate::i18n::Lang::EN, right_to_left()] {
-        for width in [950.0, 1000.0, 1010.0, 1050.0, 1100.0] {
+    let wide_sheet_ltr = crate::i18n::fixture_lang("x-fixture", "\tSheet {page} of {pages}\tSheet {page} out of all {pages}\n");
+    let wide_sheet_ar = crate::i18n::fixture_lang("ar", "\tSheet {page} of {pages}\tSheet {page} out of all {pages}\n");
+    let mut tested_preview = false;
+    for (lang, needle) in [(crate::i18n::Lang::EN, "Sheet "), (right_to_left(), "Sheet "), (wide_sheet_ltr, "out"), (wide_sheet_ar, "out")] {
+        for width in [884.0, 890.0, 900.0, 910.0, 920.0, 950.0, 1000.0, 1004.0, 1010.0, 1020.0, 1050.0, 1100.0] {
             let doc = wordcraft_doc::Document::from_text(&text);
             let mut h = opened_page(doc, "print", width, Rc::new(Cell::new(lang)));
             h.run_steps(2);
             h.state_mut().ui.print.preview = 120;
             h.run_steps(4);
+            if h.query_by_label("Next sheet").is_none() {
+                continue;
+            }
+            tested_preview = true;
             let mut bar: Vec<_> =
                 ["Previous sheet", "Next sheet", "Zoom Out", "Zoom In", "One Page"].into_iter().map(|name| h.get_by_label(name).rect()).collect();
-            let page = h.query_all_by_role(Role::Label).find(|n| n.accesskit_node().value().is_some_and(|v| v.starts_with("Sheet 121")));
-            bar.push(page.expect("the page indicator").rect());
+            let page = h.query_all_by_role(Role::Label).find(|n| n.accesskit_node().value().is_some_and(|v| v.contains("121") && v.contains(needle)));
+            bar.push(
+                page.unwrap_or_else(|| {
+                    let vals: Vec<_> = h.query_all_by_role(Role::Label).filter_map(|n| n.accesskit_node().value()).collect();
+                    panic!("no page indicator matching {needle:?} at {width} (rtl={}) in {vals:?}", lang.rtl());
+                })
+                .rect(),
+            );
             for (i, r) in bar.iter().enumerate() {
-                assert!(r.left() >= 8.0 && r.right() <= width - 8.0 && r.bottom() <= 492.0, "at {width}: {r:?} must fit");
-                assert!(!bar[i + 1..].iter().any(|o| o.intersects(*r)), "at {width}: {r:?} covers something in {bar:?}");
+                assert!(r.left() >= 8.0 && r.right() <= width - 8.0 && r.bottom() <= 492.0, "at {width} (rtl={}): {r:?} must fit", lang.rtl());
+                assert!(!bar[i + 1..].iter().any(|o| o.intersects(*r)), "at {width} (rtl={}): {r:?} covers something in {bar:?}", lang.rtl());
+            }
+            if lang.rtl() {
+                assert!(bar[0].left() > bar[1].right(), "at {width} RTL: Prev {:?} must be right of Next {:?}", bar[0], bar[1]);
+                assert!(bar[4].right() < bar[2].left(), "at {width} RTL: One Page {:?} must be left of Zoom Out {:?}", bar[4], bar[2]);
+            } else {
+                assert!(bar[0].right() < bar[1].left(), "at {width} LTR: Prev {:?} must be left of Next {:?}", bar[0], bar[1]);
+                assert!(bar[4].left() > bar[2].right(), "at {width} LTR: One Page {:?} must be right of Zoom Out {:?}", bar[4], bar[2]);
             }
         }
     }
+    assert!(tested_preview, "must verify at least one width where preview is shown");
     crate::i18n::set_current(crate::i18n::Lang::EN);
 }
 
@@ -1572,4 +1615,383 @@ fn rtl_template_titles_are_right_aligned() {
         wide_thumbnail.max.x,
         wide_text_right,
     );
+}
+
+/// Finds the first `Label` whose AccessKit value starts with `prefix`.
+fn label_rect_starting(h: &egui_kittest::Harness<'static, WordApp>, prefix: &str) -> egui::Rect {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    h.query_all_by_role(Role::Label)
+        .find(|n| n.accesskit_node().value().is_some_and(|v| v.starts_with(prefix)))
+        .unwrap_or_else(|| panic!("expected label starting with {prefix:?}"))
+        .rect()
+}
+
+/// Builds a document whose paragraphs use distinct proofing tags so Options > Language > Your
+/// languages shows multiple rows without touching the global pack backend.
+fn multilingual_doc(tags: &[&str]) -> wordcraft_doc::Document {
+    let text = vec!["Hello"; tags.len()].join("\n");
+    let mut doc = wordcraft_doc::Document::from_text(&text);
+    for (i, tag) in tags.iter().enumerate() {
+        let mut s = wordcraft_engine::Session::new(doc);
+        s.run("caret.set", &json!({"pos": {"block": i, "off": 0}})).unwrap();
+        s.run("select.paragraph", &json!({})).unwrap();
+        s.run("review.language", &json!({"lang": tag})).unwrap();
+        doc = s.doc;
+    }
+    doc
+}
+
+/// Scrolls the Backstage page sideways with the pointer inside `CentralPanel` for any window width
+/// (from 500 up) and direction, above inner sub-tables such as Your languages.
+fn wheel_page_sideways(h: &mut egui_kittest::Harness<'static, WordApp>, dx: f32) {
+    h.event(egui::Event::PointerMoved(egui::pos2(250.0, 100.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(dx, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+}
+
+/// #5396: Options > Language > Your languages keeps a fixed column count while Backstage scrolls
+/// sideways (no mid-scroll column jump) and draws no inner horizontal scrollbar over Set as default.
+#[test]
+fn your_languages_keeps_columns_and_buttons_unobscured_while_scrolling() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    for (width, lang, dx_click, dx_edge) in [
+        (1440.0, crate::i18n::Lang::EN, 0.0, 0.0),
+        (1440.0, right_to_left(), 0.0, 0.0),
+        (760.0, crate::i18n::Lang::EN, -2000.0, -2000.0),
+        (760.0, right_to_left(), 200.0, 2000.0),
+    ] {
+        let doc = multilingual_doc(&["en-US", "fr-FR", "pl-PL"]);
+        let mut h = opened_page(doc, "options", width, Rc::new(Cell::new(lang)));
+        h.state_mut().ui.options_pane = "language".into();
+        // Verify first frame (single step) keeps 3 columns right-to-left too before settling.
+        h.step();
+        let built_in_first = label_rect_starting(&h, "Built in");
+        let set_first = h
+            .query_all_by_role(Role::Button)
+            .find(|n| n.accesskit_node().label().as_deref() == Some("Set as default"))
+            .expect("Set as default on first frame")
+            .rect();
+        assert!(set_first.left() > built_in_first.right(), "first frame at {width} (rtl={}): {set_first:?} vs {built_in_first:?}", lang.rtl());
+        if lang.rtl() {
+            let sidebar = h.get_by_label("General").rect();
+            assert!(set_first.right() < sidebar.left(), "first frame RTL action at {width}: {set_first:?} crossed sidebar {sidebar:?}");
+        }
+        h.run_steps(4);
+
+        let heading_before = label_rect_starting(&h, "Your languages");
+        let built_in_before = label_rect_starting(&h, "Built in");
+        let set_before = h
+            .query_all_by_role(Role::Button)
+            .find(|n| n.accesskit_node().label().as_deref() == Some("Set as default"))
+            .expect("Set as default button")
+            .rect();
+
+        // Keep the three-column grid (actions sit in column 3, beside column 2, not stacked under it).
+        assert!(
+            set_before.left() > built_in_before.right(),
+            "at {width} (rtl={}): Set as default {set_before:?} must sit right of col 2 {built_in_before:?}",
+            lang.rtl()
+        );
+
+        // Any sideways scrollbar belongs at the bottom of the Backstage window, never over Set as default.
+        let h_bars: Vec<egui::Rect> = h.query_all_by_role(Role::ScrollBar).map(|n| n.rect()).filter(|r| r.width() > r.height()).collect();
+        if width >= 1440.0 {
+            assert!(h_bars.is_empty(), "desktop {width} (rtl={}) needs no horizontal scrollbar: {h_bars:?}", lang.rtl());
+            assert!(set_before.left() >= 8.0 && set_before.right() <= width - 8.0, "desktop button must fit: {set_before:?}");
+        } else {
+            assert!(h_bars.len() <= 1, "at {width} (rtl={}): expected at most one sideways scrollbar, got {h_bars:?}", lang.rtl());
+            for bar in &h_bars {
+                assert!((bar.bottom() - 462.0).abs() < 1.0, "bar must sit at Backstage bottom: {bar:?}");
+                assert!(!bar.intersects(set_before), "bar {bar:?} overlaps Set as default {set_before:?}");
+            }
+            let view = *h_bars.first().expect("narrow Backstage exposes horizontal scrollbar");
+            wheel_sideways(&mut h, dx_click);
+            let heading_after = label_rect_starting(&h, "Your languages");
+            let built_in_after = label_rect_starting(&h, "Built in");
+            let set_after = h
+                .query_all_by_role(Role::Button)
+                .find(|n| n.accesskit_node().label().as_deref() == Some("Set as default"))
+                .expect("Set as default after scroll")
+                .rect();
+            assert!(
+                ((set_after.top() - heading_after.top()) - (set_before.top() - heading_before.top())).abs() < 0.5
+                    && ((set_after.left() - heading_after.left()) - (set_before.left() - heading_before.left())).abs() < 0.5,
+                "Set as default jumped relative to heading during scroll at rtl={}: before=({heading_before:?}, {set_before:?}), after=({heading_after:?}, {set_after:?})",
+                lang.rtl(),
+            );
+            assert!(
+                ((built_in_after.top() - heading_after.top()) - (built_in_before.top() - heading_before.top())).abs() < 0.5
+                    && ((built_in_after.left() - heading_after.left()) - (built_in_before.left() - heading_before.left())).abs() < 0.5,
+                "column 2 jumped relative to heading during scroll at rtl={}: before=({heading_before:?}, {built_in_before:?}), after=({heading_after:?}, {built_in_after:?})",
+                lang.rtl(),
+            );
+            assert!(
+                set_after.left() >= view.left() && set_after.right() <= view.right(),
+                "Set as default must stay inside CentralPanel {view:?} at rtl={}: {set_after:?}",
+                lang.rtl()
+            );
+            h.query_all_by_role(Role::Button)
+                .find(|n| n.accesskit_node().label().as_deref() == Some("Set as default"))
+                .expect("clickable Set as default")
+                .click();
+            h.run_steps(2);
+            assert_eq!(
+                h.state().session.prefs.default_language.as_deref(),
+                Some("fr-FR"),
+                "clicking scrolled Set as default applies French at rtl={}",
+                lang.rtl()
+            );
+
+            // Also scroll to the trailing horizontal edge to confirm columns stay rigid end-to-end.
+            wheel_sideways(&mut h, dx_edge);
+            let heading_end = label_rect_starting(&h, "Your languages");
+            let built_in_end = label_rect_starting(&h, "Built in");
+            assert!(
+                ((built_in_end.top() - heading_end.top()) - (built_in_before.top() - heading_before.top())).abs() < 0.5
+                    && ((built_in_end.left() - heading_end.left()) - (built_in_before.left() - heading_before.left())).abs() < 0.5,
+                "column 2 jumped at scroll end for rtl={}: before=({heading_before:?}, {built_in_before:?}), end=({heading_end:?}, {built_in_end:?})",
+                lang.rtl(),
+            );
+        }
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: a tall Your languages list renders inside Backstage's own scroll area (never a nested
+/// inner vertical scrollbar that clips onto column 2 before scrolling sideways), reaches Dictionaries
+/// below when scrolled vertically, and stays strictly left of the Options sidebar in RTL from frame 1.
+#[test]
+fn your_languages_tall_list_scrolls_vertically_without_bar_overlap() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    let tags = ["en-US", "fr-FR", "de-DE", "es-ES", "it-IT", "nl-NL", "pl-PL", "pt-BR", "sv-SE", "cs-CZ", "tr-TR", "hr-HR"];
+    for (width, lang, dx) in [
+        (1440.0, crate::i18n::Lang::EN, 0.0),
+        (1440.0, right_to_left(), 0.0),
+        (760.0, crate::i18n::Lang::EN, -2000.0),
+        (760.0, right_to_left(), 2000.0),
+    ] {
+        let mut h = opened_page(multilingual_doc(&tags), "options", width, Rc::new(Cell::new(lang)));
+        h.state_mut().ui.options_pane = "language".into();
+        // Frame 1 of the language pane must already anchor RTL cleanly inside the Options sidebar.
+        h.step();
+        if lang.rtl() {
+            let sidebar = h.get_by_label("General").rect();
+            let built_in_first = label_rect_starting(&h, "Built in");
+            assert!(built_in_first.right() < sidebar.left(), "at {width}: frame 1 RTL col 2 {built_in_first:?} crossed sidebar {sidebar:?}");
+            for btn in h.query_all_by_role(Role::Button).filter(|n| n.accesskit_node().label().as_deref() == Some("Set as default")) {
+                assert!(btn.rect().right() < sidebar.left(), "at {width}: frame 1 RTL action {:?} crossed sidebar {sidebar:?}", btn.rect());
+            }
+        }
+        h.run_steps(4);
+
+        // Before scrolling sideways too, keep at most Backstage's single page vertical scrollbar and
+        // keep RTL columns strictly left of the Options sidebar.
+        let v_bars_before: Vec<egui::Rect> = h.query_all_by_role(Role::ScrollBar).map(|n| n.rect()).filter(|r| r.height() > r.width()).collect();
+        assert!(v_bars_before.len() <= 1, "at {width} (rtl={}): expected no nested vertical scrollbar, got {v_bars_before:?}", lang.rtl());
+        if lang.rtl() {
+            let sidebar = h.get_by_label("General").rect();
+            let built_in_before = label_rect_starting(&h, "Built in");
+            assert!(built_in_before.right() < sidebar.left(), "at {width}: settled RTL col 2 {built_in_before:?} crossed sidebar {sidebar:?}");
+            for btn in h.query_all_by_role(Role::Button).filter(|n| n.accesskit_node().label().as_deref() == Some("Set as default")) {
+                assert!(btn.rect().right() < sidebar.left(), "at {width}: settled RTL action {:?} crossed sidebar {sidebar:?}", btn.rect());
+            }
+        }
+
+        if width < 1440.0 {
+            wheel_page_sideways(&mut h, dx);
+        }
+        let v_bars: Vec<egui::Rect> = h.query_all_by_role(Role::ScrollBar).map(|n| n.rect()).filter(|r| r.height() > r.width()).collect();
+        assert!(v_bars.len() <= 1, "at {width} (rtl={}) after sideways scroll: {v_bars:?}", lang.rtl());
+        let v_bar = v_bars.into_iter().next().expect("tall Options > Language exposes Backstage's vertical scrollbar");
+        let built_in = label_rect_starting(&h, "Built in");
+        if width >= 1440.0 {
+            assert!(!v_bar.intersects(built_in), "at {width} (rtl={}): vbar {v_bar:?} overlaps status {built_in:?}", lang.rtl());
+        }
+        for btn in h.query_all_by_role(Role::Button).filter(|n| n.accesskit_node().label().as_deref() == Some("Set as default")) {
+            assert!(!v_bar.intersects(btn.rect()), "at {width} (rtl={}): vbar {v_bar:?} overlaps button {:?}", lang.rtl(), btn.rect());
+        }
+        if lang.rtl() {
+            // Table and page scrollbar stay left of the Options sidebar instead of jutting right past it.
+            let sidebar = h.get_by_label("General").rect();
+            assert!(v_bar.right() < sidebar.left(), "RTL vertical bar {v_bar:?} must not cross sidebar {sidebar:?}");
+            assert!(built_in.right() < sidebar.left(), "RTL col 2 {built_in:?} must not cross sidebar {sidebar:?}");
+            for btn in h.query_all_by_role(Role::Button).filter(|n| n.accesskit_node().label().as_deref() == Some("Set as default")) {
+                assert!(btn.rect().right() < sidebar.left(), "RTL action {:?} must not cross sidebar {sidebar:?}", btn.rect());
+            }
+        }
+
+        // Scrolling vertically reaches Dictionaries below a tall Your languages list.
+        h.event(egui::Event::PointerMoved(egui::pos2(250.0, 200.0)));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -2000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(4);
+        let dicts = label_rect_starting(&h, "Dictionaries folder:");
+        assert!(dicts.top() >= 0.0 && dicts.bottom() <= 500.0, "at {width} (rtl={}): Dictionaries must scroll into view: {dicts:?}", lang.rtl());
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: File > Info separates Properties/Protect Document and Statistics cleanly without column
+/// overlap across desktop and narrow windows (encrypted and unencrypted), in both directions, and
+/// scrolls sideways cleanly when narrower than both columns.
+#[test]
+fn info_page_columns_never_overlap_across_widths_and_directions() {
+    use egui::accesskit::Role;
+    for width in [1440.0, 760.0, 500.0] {
+        for encrypted in [false, true] {
+            for (lang, dx) in [(crate::i18n::Lang::EN, -2000.0), (right_to_left(), 2000.0)] {
+                let doc = wordcraft_doc::Document::from_text("XYZ");
+                let mut h = opened_page(doc, "info", width, Rc::new(Cell::new(lang)));
+                if encrypted {
+                    h.state_mut().session.run("file.encrypt", &json!({"password": "synthetic-password"})).unwrap();
+                }
+                // Check first frame before settling too, so RTL overflow or layout init never overlaps.
+                h.step();
+                let first_prop = h.get_by_label(if encrypted { "Change Password…" } else { "Encrypt with Password…" }).rect();
+                let first_stat = label_rect_starting(&h, "Statistics");
+                assert!(!first_prop.intersects(first_stat), "first frame overlap at {width} encrypted={encrypted} rtl={}", lang.rtl());
+                h.run_steps(4);
+
+                let rtl = lang.rtl();
+                let protect_desc = label_rect_starting(&h, if encrypted { "A password is required" } else { "Anyone can open" });
+                if width < 1440.0 && !encrypted {
+                    assert!(
+                        protect_desc.width() <= 365.0,
+                        "at {width} rtl={rtl}: Protect description must wrap inside Properties column: {protect_desc:?}"
+                    );
+                }
+                let prop_rects = [
+                    label_rect_starting(&h, "Properties"),
+                    h.get_by_role_and_label(Role::TextInput, "Category").rect(),
+                    h.get_by_label("Advanced Properties…").rect(),
+                    label_rect_starting(&h, "Protect Document"),
+                    protect_desc,
+                    h.get_by_label(if encrypted { "Change Password…" } else { "Encrypt with Password…" }).rect(),
+                ];
+                let mut prop_list = prop_rects.to_vec();
+                if encrypted {
+                    let remove = h.get_by_label("Remove Password").rect();
+                    assert!(!prop_rects[5].intersects(remove), "password buttons overlap at {width} rtl={rtl}");
+                    prop_list.push(remove);
+                }
+                let stat_rects = [
+                    label_rect_starting(&h, "Statistics"),
+                    label_rect_starting(&h, "Paragraphs:"),
+                    label_rect_starting(&h, "Comments:"),
+                    label_rect_starting(&h, "Location:"),
+                ];
+
+                for p in &prop_list {
+                    for s in &stat_rects {
+                        assert!(!p.intersects(*s), "at width={width} encrypted={encrypted} rtl={rtl}: Properties {p:?} overlaps Statistics {s:?}");
+                        if rtl {
+                            assert!(
+                                s.right() < p.left() - 1.0,
+                                "at width={width} encrypted={encrypted} rtl=true: Statistics {s:?} must sit strictly left of Properties {p:?}"
+                            );
+                        } else {
+                            assert!(
+                                p.right() < s.left() - 1.0,
+                                "at width={width} encrypted={encrypted} rtl=false: Properties {p:?} must sit strictly left of Statistics {s:?}"
+                            );
+                        }
+                    }
+                }
+
+                if width >= 1440.0 {
+                    assert!(
+                        h.query_all_by_role(Role::ScrollBar).all(|n| n.rect().height() > n.rect().width()),
+                        "desktop {width} encrypted={encrypted} rtl={rtl} needs no horizontal scrollbar",
+                    );
+                    for r in prop_list.iter().chain(stat_rects.iter()) {
+                        assert!(r.left() >= 8.0 && r.right() <= width - 8.0, "desktop item clipped: {r:?}");
+                    }
+                } else {
+                    let h_bars: Vec<egui::Rect> = h.query_all_by_role(Role::ScrollBar).map(|n| n.rect()).filter(|r| r.width() > r.height()).collect();
+                    let view = *h_bars.first().expect("narrow Info exposes Backstage horizontal scrollbar");
+                    wheel_page_sideways(&mut h, dx);
+                    let scrolled_stat = label_rect_starting(&h, "Statistics");
+                    let scrolled_loc = label_rect_starting(&h, "Location:");
+                    assert!(
+                        scrolled_stat.left() >= view.left()
+                            && scrolled_stat.right() <= view.right()
+                            && scrolled_loc.left() >= view.left()
+                            && scrolled_loc.right() <= view.right(),
+                        "after sideways scroll at width={width} encrypted={encrypted} rtl={rtl}, Statistics ({scrolled_stat:?}, {scrolled_loc:?}) must fit inside CentralPanel {view:?}",
+                    );
+                }
+            }
+        }
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: when Your languages is wider than an RTL parent column with `rtl::sync` active, the grid
+/// grows leftward from its right anchor instead of spilling rightwards into an adjacent sidebar
+/// already on true frame 1.
+#[test]
+fn your_languages_rtl_anchors_right_when_wider_than_container() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    let tags = ["en-US", "fr-FR", "de-DE", "es-ES", "it-IT", "nl-NL", "pl-PL", "pt-BR", "sv-SE", "cs-CZ", "tr-TR", "hr-HR"];
+    let doc = multilingual_doc(&tags);
+    let app = WordApp::new(wordcraft_engine::Session::new(doc), Services::default());
+    let rtl_lang = right_to_left();
+    let show = Rc::new(Cell::new(false));
+    let show_in_ui = Rc::clone(&show);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 500.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            crate::i18n::set_current(rtl_lang);
+            crate::rtl::sync(&ctx);
+            if !show_in_ui.get() {
+                return;
+            }
+            let box_rect = egui::Rect::from_min_max(egui::pos2(280.0, 20.0), egui::pos2(700.0, 460.0));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(box_rect).layout(egui::Layout::top_down(egui::Align::Max)), |ui| {
+                crate::language_packs::your_languages_section(app, ui);
+            });
+        },
+        app,
+    );
+    show.set(true);
+    // True frame 1 for your_languages_section: must already anchor right without spilling past 700.
+    h.step();
+    let english_first = label_rect_starting(&h, "English (United States)");
+    let set_first = h
+        .query_all_by_role(Role::Button)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Set as default"))
+        .expect("Set as default button on true frame 1")
+        .rect();
+    let built_in_first = label_rect_starting(&h, "Built in");
+    assert!(set_first.left() > built_in_first.right(), "frame 1 keeps 3 columns: {set_first:?} vs {built_in_first:?}");
+    assert!(set_first.right() <= 700.5, "frame 1 RTL button {set_first:?} must stay left of container right edge 700");
+    assert!(english_first.left() < 280.0, "frame 1 RTL table {english_first:?} must extend leftward past 280 instead of spilling right");
+    assert!(h.query_all_by_role(Role::ScrollBar).count() == 0, "table itself needs no nested scrollbars inside RTL container");
+    h.run_steps(4);
+    let set_settled = h
+        .query_all_by_role(Role::Button)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Set as default"))
+        .expect("Set as default button after settle")
+        .rect();
+    let english_settled = label_rect_starting(&h, "English (United States)");
+    assert!(set_settled.right() <= 700.5, "settled RTL button {set_settled:?} must stay left of container right edge 700");
+    assert!(english_settled.left() < 280.0, "settled RTL table {english_settled:?} must stay extended leftward past 280");
+    assert!(h.query_all_by_role(Role::ScrollBar).count() == 0, "settled table keeps zero inner scrollbars");
+    crate::i18n::set_current(crate::i18n::Lang::EN);
 }
