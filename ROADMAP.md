@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Comment links update:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (#6693: web and email links in comment text; readiness estimates unchanged).
+> **Comment links update:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (#6693: web and email links in comment text, including the Ctrl/⌘ hover cursor; readiness estimates unchanged).
 
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
@@ -153,7 +153,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-15: Comment web and mail links (#6693) are underlined and open with Ctrl/⌘+click in the Comments pane and selected or unselected margin balloons, including replies. Imported hyperlink labels and field results use their stored targets. Plain clicks still edit; protected comments allow link opening through a read-only text buffer. Synthetic tests cover mixed-direction wrapping, clipping, blocked schemes, editing/undo and DOCX/ODT/RTF open/save preservation. No new native Word comparison or readiness estimate change.
+- 2026-11-15: Comment web and mail links (#6693) are underlined and open with Ctrl/⌘+click in the Comments pane and selected or unselected margin balloons, including replies. Imported hyperlink labels and field results use their stored targets. The link hand cursor survives the canvas cursor pass, including modifier changes without moving the pointer. Plain clicks still edit; protected comments allow link opening through a read-only text buffer. Synthetic tests cover mixed-direction wrapping, clipping, blocked schemes, editing/undo and DOCX/ODT/RTF open/save preservation. No new native Word comparison or readiness estimate change.
 
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
@@ -898,7 +898,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 ## Revision history
 
-> 2026-11-15 · Comment text links in the pane and balloons (#6693); synthetic UI and format-preservation coverage, readiness unchanged.
+> 2026-11-15 · Comment text links in the pane and balloons (#6693); synthetic UI, hover cursor and format-preservation coverage, readiness unchanged.
 
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >

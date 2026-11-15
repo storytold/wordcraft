@@ -1,8 +1,8 @@
 # Where WordCraft falls short of Word
 
-> **Comment links update:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (#6693: web and email links in comment text; readiness estimates unchanged).
+> **Comment links update:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (#6693: web and email links in comment text, including the Ctrl/⌘ hover cursor; readiness estimates unchanged).
 
-Comment links (#6693): the Comments pane and margin balloons now show web and mail targets with underlines and a modifier-click tooltip. Ctrl/⌘+click follows the existing safe URL policy; imported labels retain their destinations when viewed, followed and saved in DOCX, ODT and RTF. Plain-text comment editing retains its existing command and undo behavior. This improves review UI; the ranked fidelity and stability gaps remain open.
+Comment links (#6693): the Comments pane and margin balloons now show web and mail targets with underlines and a modifier-click tooltip. Holding Ctrl/⌘ over a link shows the hand cursor, without the underlying canvas replacing it. Ctrl/⌘+click follows the existing safe URL policy; imported labels retain their destinations when viewed, followed and saved in DOCX, ODT and RTF. Plain-text comment editing retains its existing command and undo behavior. This improves review UI; the ranked fidelity and stability gaps remain open.
 
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 
@@ -186,7 +186,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 ## Revision history
 
-> 2026-11-15 · Comment links in both review surfaces (#6693); no ranked gap or readiness estimate changed.
+> 2026-11-15 · Comment links and their hover cursor in both review surfaces (#6693); no ranked gap or readiness estimate changed.
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
 

@@ -7,6 +7,37 @@ fn harness(text: &str, pane: bool, active: bool) -> (egui_kittest::Harness<'stat
     mount(app, id, pane, active)
 }
 
+/// Pressing or releasing Ctrl/Cmd while the pointer stays still must update the final
+/// window cursor, including balloons painted before the canvas chooses its own cursor.
+#[test]
+fn comment_link_cursor_tracks_the_modifier_without_clicking() {
+    let text = "این صفحه: https://example.com";
+    let modifiers = egui::Modifiers { ctrl: !cfg!(target_os = "macos"), mac_cmd: cfg!(target_os = "macos"), command: true, ..Default::default() };
+    for (pane, active) in [(true, false), (false, false), (false, true)] {
+        let (mut h, _) = harness(text, pane, active);
+        let at = glyph_at(&h, text, "https://");
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.step();
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "pane={pane}, active={active}");
+        assert!(h.output().platform_output.commands.is_empty(), "hovering never opens a link");
+        if pane || active {
+            h.event(egui::Event::PointerMoved(glyph_at(&h, text, "صفحه")));
+            h.step();
+            assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "plain comment text keeps its editing cursor");
+            h.event(egui::Event::PointerMoved(at));
+            h.step();
+            assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
+        }
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.step();
+        if pane || active {
+            assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "releasing the modifier restores editing");
+        }
+    }
+}
+
 fn mount(mut app: WordApp, id: u32, pane: bool, active: bool) -> (egui_kittest::Harness<'static, WordApp>, u32) {
     app.run("view.commentsPane", json!({"value": pane})).unwrap();
     if active {
