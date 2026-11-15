@@ -75,6 +75,26 @@ pub fn parse_length(text: &str, unit: Unit) -> Option<f64> {
     wordcraft_geom::parse_measure(&text, unit).map(|pt| f64::from(pt / unit.pt_per_unit()))
 }
 
+/// A number of characters typed into an indent field (`2 ch`, Word's unit for East Asian
+/// indents), with the unit's name in the interface language as well as in English. With `bare`,
+/// a number alone counts too: the field shows characters.
+pub fn parse_chars(text: &str, bare: bool) -> Option<f64> {
+    let mut text: String = text.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
+    let translated = tl!("ch").to_lowercase();
+    if translated != "ch"
+        && let Some(number) = text.strip_suffix(translated.as_str())
+    {
+        text = format!("{number}ch");
+    }
+    wordcraft_geom::parse_chars(&text, bare).map(f64::from)
+}
+
+/// `n` with the region's decimal separator `sep`.
+fn region_number(n: f64, decimals: std::ops::RangeInclusive<usize>, sep: char) -> String {
+    let s = egui::emath::format_with_decimals_in_range(n, decimals);
+    if sep == '.' { s } else { s.replace('.', &sep.to_string()) }
+}
+
 /// Copy the session's settings the UI reads without the app.
 pub(crate) fn sync(app: &WordApp) {
     UNIT.set(app.session.units());
@@ -89,20 +109,26 @@ pub trait MeasureExt {
     /// The same field showing nothing, not even the unit, until a length is typed in: a value
     /// the selected paragraphs differ in.
     fn measure_blank(self, unit: Unit) -> Self;
+    /// A field in characters (`2 ch`), the unit's name in the interface language.
+    fn measure_chars(self) -> Self;
 }
 
 impl MeasureExt for egui::DragValue<'_> {
     fn measure(self, unit: Unit) -> Self {
         let sep = decimal();
         self.suffix(unit_suffix(unit))
-            .custom_formatter(move |n, decimals| {
-                let s = egui::emath::format_with_decimals_in_range(n, decimals);
-                if sep == '.' { s } else { s.replace('.', &sep.to_string()) }
-            })
+            .custom_formatter(move |n, decimals| region_number(n, decimals, sep))
             .custom_parser(move |text| parse_length(text, unit))
     }
     fn measure_blank(self, unit: Unit) -> Self {
         self.custom_formatter(|_, _| String::new()).custom_parser(move |text| parse_length(text, unit))
+    }
+    fn measure_chars(self) -> Self {
+        let sep = decimal();
+        // Whole characters without decimals (`2 ch`, not `2.0 ch`), however fine the drag.
+        self.suffix(format!(" {}", tl!("ch")))
+            .custom_formatter(move |n, decimals| region_number(n, 0..=*decimals.end(), sep))
+            .custom_parser(|text| parse_chars(text, true))
     }
 }
 
