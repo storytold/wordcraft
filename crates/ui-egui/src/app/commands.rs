@@ -692,6 +692,28 @@ impl WordApp {
                 }
                 json!({"statusCount": self.ui.status_count.code()})
             }
+            "ui.scrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: mouse-wheel scroll speed (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.scroll_speed = s,
+                        None => return Some(Err(format!("unknown scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"scrollSpeed": self.ui.scroll_speed.code(), "factor": self.ui.scroll_speed.wheel_factor()})
+            }
+            "ui.touchpadScrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: touchpad scroll speed on Wayland (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.touchpad_scroll_speed = s,
+                        None => return Some(Err(format!("unknown touchpad scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"touchpadScrollSpeed": self.ui.touchpad_scroll_speed.code(), "factor": self.ui.touchpad_scroll_speed.touchpad_factor()})
+            }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
                 if let Some(v) = s("value") {
@@ -1134,6 +1156,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.recentClear"
             | "ui.displayServer"
             | "ui.statusCount"
+            | "ui.scrollSpeed"
+            | "ui.touchpadScrollSpeed"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }
