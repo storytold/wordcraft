@@ -11984,13 +11984,15 @@ fn cell_widths_override_grid() {
     }
 }
 
-/// Text set out of its cell to the left is cut off at the cell's edge (#6670). Measured in Word
-/// for Windows 16.0.20625 in a two-column table with cell margins of 5.4 pt: a line of
-/// underscores with a left indent of -21.3 pt starts at the cell's edge in the first cell and in
-/// the second, with borders and without, three of its underscores and part of the fourth gone;
-/// a hanging indent does the same; with an indent of -4 pt, within the margin, it is whole.
+/// Text set out of its cell is cut off at the cell's edges (#6670). Measured in Word for Windows
+/// 16.0.20625 in a two-column table with cell margins of 5.4 pt: a line of underscores with a
+/// left indent of -21.3 pt starts at the cell's edge in the first cell and in the second, with
+/// borders and without, three of its underscores and part of the fourth gone; a hanging indent
+/// does the same; a line that a right indent of -40 pt lets run past the cell ends at the cell's
+/// edge, in the first cell and in the last; with an indent of -4 pt, within the margin, it is
+/// whole.
 #[test]
-fn text_set_out_of_its_cell_to_the_left_is_cut_off_at_the_cells_edge() {
+fn text_set_out_of_its_cell_is_cut_off_at_the_cells_edges() {
     crate::test_fonts();
     // Whether each of the two cells is clipped, with the paragraph in cell `at` set out by `f`.
     let clipped = |at: usize, f: &dyn Fn(&mut ParaProps)| {
@@ -12011,11 +12013,15 @@ fn text_set_out_of_its_cell_to_the_left_is_cut_off_at_the_cells_edge() {
         (cells[0].1, cells[1].1)
     };
     let out: &dyn Fn(&mut ParaProps) = &|p| p.indent_left = Some(-21.3);
-    assert_eq!(clipped(0, out), (true, false), "set out of the first cell");
-    assert_eq!(clipped(1, out), (false, true), "set out of the second cell");
+    assert_eq!(clipped(0, out), (true, false), "set out of the first cell to the left");
+    assert_eq!(clipped(1, out), (false, true), "set out of the second cell to the left");
     assert_eq!(clipped(0, &|p| (p.indent_left, p.indent_first) = (Some(0.0), Some(-21.3))), (true, false), "a first line hanging out");
+    let right: &dyn Fn(&mut ParaProps) = &|p| p.indent_right = Some(-40.0);
+    assert_eq!(clipped(0, right), (true, false), "let run past the first cell's right edge");
+    assert_eq!(clipped(1, right), (false, true), "let run past the last cell's right edge");
     // Within the cell's margin nothing leaves the cell, and nothing is cut.
-    assert_eq!(clipped(0, &|p| p.indent_left = Some(-4.0)), (false, false), "set out by less than the margin");
+    assert_eq!(clipped(0, &|p| p.indent_left = Some(-4.0)), (false, false), "set out to the left by less than the margin");
+    assert_eq!(clipped(0, &|p| p.indent_right = Some(-4.0)), (false, false), "set out to the right by less than the margin");
     assert_eq!(clipped(0, &|_| {}), (false, false), "not set out at all");
 }
 
