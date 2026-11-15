@@ -5756,4 +5756,15 @@ fn coderabbit_doctype_entities_and_unresolved_general_refs() {
         assert!(!has(&report, "XML-MALFORMED"), "{entity}: {report:?}");
         assert_eq!(report.verdict, Verdict::Incomplete, "{entity}: {report:?}");
     }
+
+    // Entity-supplied field begin paired with a later visible field end stays Incomplete without FLD-UNBALANCED.
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY fbegin "<w:fldChar w:fldCharType='begin'/>">]><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r>&fbegin;<w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#
+        ),
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "FLD-UNBALANCED"), "{report:?}");
+    assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
 }

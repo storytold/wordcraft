@@ -3,7 +3,7 @@
 //! reference/id collection, structural checks and the small auxiliary parsers for numbering,
 //! settings and the comment-threading parts.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
@@ -648,6 +648,7 @@ struct State {
     wrapper_depth: i64,
     fld_depth: i64,
     fld_extra_end: usize,
+    fld_state_unknown: bool,
     move_from_start: BTreeSet<DecimalId>,
     move_from_end: BTreeSet<DecimalId>,
     move_to_start: BTreeSet<DecimalId>,
@@ -836,7 +837,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "-";
-        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*4,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.refs*2,field.special_notes*2,field.unknown_prefixes*4,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
+        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*4,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.refs*2,field.special_notes*2,field.unknown_prefixes*4,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -872,6 +873,8 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     let mut doctype_seen = false;
     let mut complete_entities = Observed::complete(HashSet::new()).into_complete_set();
     let mut entity_decls = BTreeMap::new();
+    let mut entity_status = HashMap::new();
+    let mut entity_work = acc.limits.events;
     let mut entity_notes = (false, false);
     loop {
         if events >= acc.limits.events {
@@ -1018,8 +1021,13 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 entity_decls = decl_texts;
             }
             Ok(Event::GeneralRef(e)) => {
-                if handle_general_ref_event(part, state.frames.is_empty(), root_count, &mut entity_notes, &mut out, acc, |acc| {
-                    scan_general_ref(part, e.as_ref(), complete_entities.as_ref(), &entity_decls, acc)
+                let outside_err = if state.frames.is_empty() {
+                    Some(if root_count == 0 { "a reference before the document element" } else { "content after the document element" })
+                } else {
+                    None
+                };
+                if handle_general_ref_event(part, outside_err, &mut entity_notes, &mut state.fld_state_unknown, &mut out, acc, |acc| {
+                    scan_general_ref(part, e.as_ref(), complete_entities.as_ref(), &entity_decls, &mut entity_status, &mut entity_work, acc)
                 }) {
                     break;
                 }
@@ -1072,15 +1080,14 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
 /// Apply entity reference validation and update malformed/incomplete status; returns `true` to stop scanning.
 fn handle_general_ref_event(
     part: &str,
-    outside_element: bool,
-    root_count: usize,
+    outside_err: Option<&'static str>,
     entity_notes: &mut (bool, bool),
+    fld_state_unknown: &mut bool,
     out: &mut PartScan,
     acc: &mut Acc,
     resolve: impl FnOnce(&mut Acc) -> GeneralRefOutcome,
 ) -> bool {
-    if outside_element {
-        let msg = if root_count == 0 { "a reference before the document element" } else { "content after the document element" };
+    if let Some(msg) = outside_err {
         out.malformed = Some(msg.to_string());
         return true;
     }
@@ -1106,6 +1113,7 @@ fn handle_general_ref_event(
                 acc.set_incomplete();
                 entity_notes.1 = true;
             }
+            *fld_state_unknown = true;
             false
         }
     }
@@ -2106,7 +2114,9 @@ fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &N
                     "begin" => state.fld_depth += 1,
                     "end" => {
                         if state.fld_depth == 0 {
-                            state.fld_extra_end += 1;
+                            if !state.fld_state_unknown {
+                                state.fld_extra_end += 1;
+                            }
                         } else {
                             state.fld_depth -= 1;
                         }
@@ -2783,61 +2793,74 @@ fn next_named_entity_ref(text: &str, mut offset: usize) -> Option<(&str, usize)>
     None
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum EntityValueStatus {
     Plain,
     Unchecked,
     Recursive,
 }
 
-fn slice_has(list: &[&str], target: &str) -> bool {
-    for &item in list {
-        if item == target {
-            return true;
-        }
-    }
-    false
-}
-
-/// Check an entity's replacement text for direct/indirect recursion and unexpanded markup/references.
-fn check_entity_value(start: &str, decl_texts: &BTreeMap<String, String>) -> EntityValueStatus {
+/// Check an entity's replacement text for direct/indirect recursion and unexpanded markup/references,
+/// memoizing verified acyclic nodes and charging a shared per-part work budget.
+fn check_entity_value(
+    start: &str,
+    decl_texts: &BTreeMap<String, String>,
+    entity_status: &mut HashMap<String, EntityValueStatus>,
+    work_remaining: &mut usize,
+) -> EntityValueStatus {
     observation_contract! {
         rules: "-";
-        collections: "type.BTreeMap*1,type.Vec*4";
+        collections: "type.BTreeMap*1,type.HashMap*3,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
         package_loss: "independent";
     }
 
-    let Some(root_val) = decl_texts.get(start) else {
+    if let Some(cached) = entity_status.get(start) {
+        return *cached;
+    }
+    let Some((start_key, _)) = decl_texts.get_key_value(start) else {
         return EntityValueStatus::Unchecked;
     };
-    let mut stack: Vec<(&str, usize)> = vec![(start, 0)];
-    let mut active: Vec<&str> = vec![start];
-    let mut visited: Vec<&str> = Vec::new();
+    let mut stack: Vec<(&str, usize)> = vec![(start_key.as_str(), 0)];
+    let mut visit_state: HashMap<&str, bool> = HashMap::from([(start_key.as_str(), true)]);
     while let Some((cur, offset)) = stack.last_mut() {
         let Some(val) = decl_texts.get(*cur) else {
-            active.pop();
-            visited.push(*cur);
+            visit_state.insert(*cur, false);
             stack.pop();
             continue;
         };
+        if *work_remaining == 0 {
+            return EntityValueStatus::Unchecked;
+        }
+        *work_remaining -= 1;
         if let Some((next, next_offset)) = next_named_entity_ref(val, *offset) {
             *offset = next_offset;
-            if slice_has(&active, next) {
-                return EntityValueStatus::Recursive;
-            }
-            if !slice_has(&visited, next) && decl_texts.get(next).is_some() {
-                active.push(next);
-                stack.push((next, 0));
+            match visit_state.get(next).copied() {
+                Some(true) => return EntityValueStatus::Recursive,
+                Some(false) => {}
+                None => {
+                    if let Some(cached) = entity_status.get(next) {
+                        if *cached == EntityValueStatus::Recursive {
+                            return EntityValueStatus::Recursive;
+                        }
+                        visit_state.insert(next, false);
+                    } else if let Some((next_key, _)) = decl_texts.get_key_value(next) {
+                        visit_state.insert(next_key.as_str(), true);
+                        stack.push((next_key.as_str(), 0));
+                    }
+                }
             }
         } else {
-            active.pop();
-            visited.push(*cur);
+            let finished = *cur;
             stack.pop();
+            visit_state.insert(finished, false);
+            let status = if val.find(['<', '&']).is_some() { EntityValueStatus::Unchecked } else { EntityValueStatus::Plain };
+            entity_status.insert(finished.to_string(), status);
         }
     }
-    if root_val.find(['<', '&']).is_some() { EntityValueStatus::Unchecked } else { EntityValueStatus::Plain }
+    entity_status.get(start).copied().unwrap_or(EntityValueStatus::Unchecked)
 }
 
 /// Check a general entity reference: numeric character references for `XML-INVALID-CHAR`, and named
@@ -2847,11 +2870,13 @@ fn scan_general_ref(
     content: &[u8],
     entities: Option<&CompleteSet<String>>,
     decl_texts: &BTreeMap<String, String>,
+    entity_status: &mut HashMap<String, EntityValueStatus>,
+    work_remaining: &mut usize,
     acc: &mut Acc,
 ) -> GeneralRefOutcome {
     observation_contract! {
         rules: "XML-INVALID-CHAR";
-        collections: "access.missing*1,field.first*1,type.BTreeMap*1,type.CompleteSet*1";
+        collections: "access.missing*1,field.first*1,type.BTreeMap*1,type.CompleteSet*1,type.HashMap*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -2870,7 +2895,7 @@ fn scan_general_ref(
     }
     let name = body.into_owned();
     if decl_texts.get(&name).is_some() {
-        return match check_entity_value(&name, decl_texts) {
+        return match check_entity_value(&name, decl_texts, entity_status, work_remaining) {
             EntityValueStatus::Plain => GeneralRefOutcome::Ok,
             EntityValueStatus::Unchecked => GeneralRefOutcome::UncheckedReplacement,
             EntityValueStatus::Recursive => GeneralRefOutcome::Malformed(format!("recursive entity reference `&{name};`")),
@@ -3882,5 +3907,53 @@ mod tests {
         assert!(!scan.syntax_complete);
         assert!(!scan.facts_complete);
         assert!(!scan.facts.bookmarks.is_complete());
+    }
+
+    #[test]
+    fn unchecked_entity_replacement_suppresses_later_extra_field_end_but_keeps_earlier() {
+        // Entity supplies begin, visible markup supplies end -> no FLD-UNBALANCED, verdict Incomplete.
+        let mut acc = Acc::with_limits(crate::Limits::default());
+        let balanced_via_entity = r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY b "<w:fldChar w:fldCharType='begin'/>">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r>&b;<w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+        let _ = scan_part("word/document.xml", balanced_via_entity, PartRole::Main, &mut acc);
+        let report = acc.finish();
+        assert_eq!(report.verdict, crate::Verdict::Incomplete, "{report:?}");
+        assert!(!report.findings.iter().any(|f| f.rule == "FLD-UNBALANCED"), "{report:?}");
+
+        // Extra end BEFORE unchecked replacement stays proven (1 extra end, not 2).
+        let mut acc2 = Acc::with_limits(crate::Limits::default());
+        let earlier_and_later = r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY b "<w:fldChar w:fldCharType='begin'/>">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:fldChar w:fldCharType="end"/>&b;<w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+        let _ = scan_part("word/document.xml", earlier_and_later, PartRole::Main, &mut acc2);
+        let report2 = acc2.finish();
+        let f = report2.findings.iter().find(|f| f.rule == "FLD-UNBALANCED").expect("earlier extra end survives");
+        assert!(f.message.contains("1 w:fldChar end(s)"), "unexpected count: {f:?}");
+    }
+
+    #[test]
+    fn entity_chain_memoization_and_work_budget_scale_linearly() {
+        let mut decls = String::new();
+        for i in 0..9_999usize {
+            decls.push_str(&format!(r#"<!ENTITY e{i} "&e{};">"#, i + 1));
+        }
+        decls.push_str(r#"<!ENTITY e9999 "x">"#);
+        let refs = "&e0;".repeat(1_000);
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [{decls}]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{refs}</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let start = std::time::Instant::now();
+        let mut acc = Acc::with_limits(crate::Limits::default());
+        let scan = scan_part("word/document.xml", &xml, PartRole::Main, &mut acc);
+        assert!(scan.malformed.is_none(), "{:?}", scan.malformed);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "entity traversal took {:?}", start.elapsed());
+
+        // Exhausted work budget yields Unchecked (Incomplete) rather than unbounded work or false pass.
+        let mut tiny_decls = BTreeMap::new();
+        for i in 0..20usize {
+            tiny_decls.insert(format!("k{i}"), format!("&k{};", i + 1));
+        }
+        tiny_decls.insert("k20".to_string(), "ok".to_string());
+        let mut cache = HashMap::new();
+        let mut budget = 5usize;
+        assert!(matches!(check_entity_value("k0", &tiny_decls, &mut cache, &mut budget), EntityValueStatus::Unchecked));
+        assert_eq!(budget, 0);
     }
 }
