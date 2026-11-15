@@ -224,6 +224,7 @@ Layout|Page Setup|Columns|layout.columns
 Layout|Page Setup|Breaks|layout.break
 Layout|Page Setup|Line Numbers|layout.lineNumbers
 Layout|Page Setup|Hyphenation|layout.hyphenation
+Layout|Page Setup|Fit One Page|layout.fitOnePage
 Layout|Page Setup|Page Setup Dialog|layout.pageSetup
 Layout|Page Setup|Vertical Alignment|layout.verticalAlign
 Layout|Page Setup|Document Grid|layout.documentGrid

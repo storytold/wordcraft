@@ -1,8 +1,6 @@
 //! Emphasis marks (`w:em`, ISO/IEC 29500-1 §17.3.2.12: Font › Emphasis mark) are read and
 //! saved again, in their place in `w:rPr`. Fixtures are hand-written from the spec.
 
-use std::io::{Read, Write};
-
 use wordcraft_doc::props::EmphasisMark;
 
 fn docx(body: &str) -> Vec<u8> {
@@ -10,12 +8,11 @@ fn docx(body: &str) -> Vec<u8> {
     let doc = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#
     );
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, xml) in [("_rels/.rels", root.to_string()), ("word/document.xml", doc)] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(xml.as_bytes()).unwrap();
+        zw.add(name, xml.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn marks(d: &wordcraft_doc::Document) -> Vec<Option<EmphasisMark>> {
@@ -39,9 +36,8 @@ fn emphasis_marks_are_read_and_saved() {
     let want = [EmphasisMark::Dot, EmphasisMark::Comma, EmphasisMark::Circle, EmphasisMark::UnderDot, EmphasisMark::None].map(Some);
     assert_eq!(marks(&d), want);
     let saved = wordcraft_docx::write(&d).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
-    let mut xml = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&saved, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     // In its place: after w:cs, before w:lang.
     assert!(xml.contains(r#"<w:cs/><w:em w:val="underDot"/><w:lang"#), "{xml}");
     assert_eq!(marks(&wordcraft_docx::read(&saved).unwrap()), want);

@@ -21,7 +21,7 @@ pub use fontdb::{
 pub use harfrust::Feature;
 use harfrust::{Direction, ShapeOptions, ShapePlan, ShapePlanKey, Shaper, Tag, UnicodeBuffer};
 pub use kurbo::BezPath;
-pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks};
+pub use script::{fallback_rank, is_emoji, joins_cursively, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
 pub use ui_fallback::{
@@ -185,13 +185,34 @@ fn direction_runs(text: &str) -> Vec<(std::ops::Range<usize>, bool)> {
 /// order: right-to-left runs are shaped right to left, then their clusters put back in text
 /// order (each cluster's glyphs keep the shaper's order); line layout reorders them visually.
 pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char) -> Vec<ShapedGlyph> {
+    shape_in(face, text, features, map, ShapeContext::default())
+}
+
+/// The text shown on either side of what is being shaped. Only a letter's form depends on it: the
+/// letters of an Arabic word join across a change of formatting, so each piece has to know what
+/// it continues (#4093). Nothing outside the shaped text is drawn or measured.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShapeContext<'a> {
+    pub before: &'a str,
+    pub after: &'a str,
+}
+
+impl<'a> ShapeContext<'a> {
+    /// This context for the part `r` of `text`: what's beyond `text` where `r` reaches its edge.
+    fn at_edges_of(self, text: &str, r: &std::ops::Range<usize>) -> ShapeContext<'a> {
+        ShapeContext { before: if r.start == 0 { self.before } else { "" }, after: if r.end == text.len() { self.after } else { "" } }
+    }
+}
+
+/// [`shape`] of a piece of longer text (see [`ShapeContext`]).
+pub fn shape_in(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char, around: ShapeContext<'_>) -> Vec<ShapedGlyph> {
     if !text.chars().any(is_rtl) {
-        return shape_dir(face, text, features, &map, false);
+        return shape_dir(face, text, features, &map, false, around);
     }
     let mut out = Vec::with_capacity(text.len());
     for (r, rtl) in direction_runs(text) {
         let Some(sub) = text.get(r.clone()) else { continue };
-        let mut g = shape_run(face, sub, features, &map, rtl);
+        let mut g = shape_run_in(face, sub, features, &map, rtl, around.at_edges_of(text, &r));
         for x in &mut g {
             x.cluster += r.start;
         }
@@ -205,7 +226,19 @@ pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(cha
 /// mark positioning. Glyphs come back in logical order like [`shape`]: clusters in text order,
 /// each cluster's glyphs in the shaper's (visual) order.
 pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
-    let g = shape_dir(face, text, features, &map, rtl);
+    shape_run_in(face, text, features, map, rtl, ShapeContext::default())
+}
+
+/// [`shape_run`] of a piece of longer text (see [`ShapeContext`]).
+pub fn shape_run_in(
+    face: &FontFace,
+    text: &str,
+    features: &[Feature],
+    map: impl Fn(char) -> char,
+    rtl: bool,
+    around: ShapeContext<'_>,
+) -> Vec<ShapedGlyph> {
+    let g = shape_dir(face, text, features, &map, rtl, around);
     if !rtl {
         return g;
     }
@@ -221,7 +254,14 @@ pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn
     groups.into_iter().flatten().collect()
 }
 
-fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
+fn shape_dir(
+    face: &FontFace,
+    text: &str,
+    features: &[Feature],
+    map: &impl Fn(char) -> char,
+    rtl: bool,
+    around: ShapeContext<'_>,
+) -> Vec<ShapedGlyph> {
     let mut out = Vec::with_capacity(text.len());
     let shaped = face.hb().map(|hb| {
         let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
@@ -234,6 +274,10 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
             for (i, c) in sub.char_indices() {
                 buf.add(map(c), (r.start + i) as u32);
             }
+            // After the text: adding to a buffer clears what follows it.
+            let around = around.at_edges_of(text, &r);
+            buf.set_pre_context(around.before);
+            buf.set_post_context(around.after);
             buf.guess_segment_properties();
             buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
             let plan = shape_plan(face, &shaper, &buf, features);
@@ -386,7 +430,10 @@ mod tests {
             gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, i.cluster, p.x_advance, p.x_offset, p.y_offset)).collect()
         };
         let kept = |face: &FontFace, text: &str, features: &[Feature], rtl: bool| -> Vec<(u32, u32, i32, i32, i32)> {
-            shape_dir(face, text, features, &|c| c, rtl).iter().map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset)).collect()
+            shape_dir(face, text, features, &|c| c, rtl, ShapeContext::default())
+                .iter()
+                .map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset))
+                .collect()
         };
         let db = FontDb::global();
         let faces = [db.face(DEFAULT_FAMILY, "Regular"), db.face(DEFAULT_FAMILY, "Italic"), db.face("Source Sans 3", "Regular")];
@@ -421,7 +468,8 @@ mod tests {
         for n in 0..3 * MAX_SHAPE_PLANS as u32 {
             let features = [feature_value(b"kern", n % 2), feature_value(b"liga", n)];
             let rtl = n % 3 == 0;
-            let kept: Vec<(u32, i32)> = shape_dir(&face, "office", &features, &|c| c, rtl).iter().map(|g| (g.gid, g.x_advance)).collect();
+            let kept: Vec<(u32, i32)> =
+                shape_dir(&face, "office", &features, &|c| c, rtl, ShapeContext::default()).iter().map(|g| (g.gid, g.x_advance)).collect();
             assert_eq!(kept, fresh(&features, rtl), "{n}");
             assert!(kept_shape_plans() <= MAX_SHAPE_PLANS, "{}", kept_shape_plans());
         }

@@ -66,6 +66,8 @@ pub fn save_exts(name: &str) -> Vec<String> {
         .extension()
         .and_then(std::ffi::OsStr::to_str)
         .map(str::to_ascii_lowercase)
+        // A .markdown file is under Markdown's one entry in the list.
+        .map(|e| if e == "markdown" { "md".to_string() } else { e })
         .filter(|e| saves.contains(&e.as_str()))
         .unwrap_or_else(|| "docx".to_string());
     let mut exts: Vec<String> = Vec::with_capacity(saves.len());
@@ -77,8 +79,9 @@ pub fn save_exts(name: &str) -> Vec<String> {
 /// The "Save as type" list (#1399): one named entry per format, the suggested one first (see
 /// [`save_exts`] for why the order matters).
 ///
-/// rfd doesn't report which entry the user picked, so if they choose "PDF" but leave "name.docx"
-/// in the name box, the extension in the name wins, as the format is chosen by extension.
+/// On Linux and the BSDs, the app asks the desktop portal directly over D-Bus and gives a name
+/// the dialog left alone the chosen type's extension (#6180). When falling back to `rfd`, the
+/// extension in the name wins, as `rfd` doesn't report which entry the user picked.
 pub fn save_filters(name: &str) -> Vec<(String, Vec<String>)> {
     save_exts(name).into_iter().map(|e| (format!("{} (*.{e})", format_name(&e)), vec![e])).collect()
 }
@@ -251,6 +254,9 @@ impl WordApp {
     /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn give_up_file_dialog(&mut self) {
+        if let Some(cancel) = &self.services.cancel_file_dialog {
+            cancel();
+        }
         if let Some(d) = self.file_dialog.take() {
             let _ = self.finish_pick(d.after, None);
         }
