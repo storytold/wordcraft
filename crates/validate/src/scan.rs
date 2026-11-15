@@ -2778,10 +2778,15 @@ fn next_named_entity_ref(text: &str, mut offset: usize) -> Option<(&str, usize)>
     while let Some(rel_amp) = text.get(offset..)?.find('&') {
         let amp = offset + rel_amp;
         let after_amp = amp + 1;
-        let rel_semi = text.get(after_amp..)?.find(';')?;
+        let tail = text.get(after_amp..)?;
+        let token_len = tail.find(|c: char| c == '&' || c == '<' || c.is_ascii_whitespace()).unwrap_or(tail.len());
+        let Some(rel_semi) = tail.get(..token_len)?.find(';') else {
+            offset = after_amp;
+            continue;
+        };
         let end = after_amp + rel_semi;
         let candidate = text.get(after_amp..end)?;
-        offset = after_amp;
+        offset = end + 1;
         if !candidate.is_empty()
             && !candidate.starts_with('#')
             && !candidate.chars().any(|c| c.is_ascii_whitespace() || c == '&' || c == '<')
@@ -3955,5 +3960,14 @@ mod tests {
         let mut budget = 5usize;
         assert!(matches!(check_entity_value("k0", &tiny_decls, &mut cache, &mut budget), EntityValueStatus::Unchecked));
         assert_eq!(budget, 0);
+    }
+
+    #[test]
+    fn next_named_entity_ref_repeated_ampersand_scales_linearly() {
+        let text = format!("{}&target;", "& ".repeat(50_000));
+        let start = std::time::Instant::now();
+        let found = next_named_entity_ref(&text, 0);
+        assert_eq!(found, Some(("target", text.len())));
+        assert!(start.elapsed() < std::time::Duration::from_millis(200), "scanning took {:?}", start.elapsed());
     }
 }
