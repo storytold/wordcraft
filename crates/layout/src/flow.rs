@@ -346,7 +346,7 @@ impl<'a> Flow<'a> {
             return before;
         }
         // A paragraph closing a section that the next one starts on a new page keeps with
-        // nothing: what follows is not on this page (Word ignores Keep with next there).
+        // nothing: what follows is not on this page (Word ignores Keep with next there; measured for a next-page break, odd and even by analogy).
         let closes_page = pb.next_starts_page && self.p.section.is_some();
         let need = height + if rp.keep_next && !closes_page { next_first_line(ctx, self.block, self.width, 0, pb.next_starts_page, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)

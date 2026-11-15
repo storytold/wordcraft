@@ -286,7 +286,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 ## Revision history
 
-> 2026-11-15 · Keep with next on the paragraph closing a section whose next section starts on a new page (next page, odd or even) no longer moves it to the next page for want of room for the following line, which left an empty page; Word ignores it there. Before a continuous section it still keeps with the next section's first line (not measured in Word). `layout::tests::keep_next_section` (#6834).
+> 2026-11-15 · Keep with next on the paragraph closing a section whose next section starts on a new page (next page, odd or even) no longer moves it to the next page for want of room for the following line, which left an empty page; Word ignores it there (measured for a next-page break; odd-page and even-page breaks follow by analogy, not measured). Before a continuous section it still keeps with the next section's first line (not measured in Word). `layout::tests::keep_next_section` (#6834).
 
 > 2026-11-05 · Arabic letters join across a change of formatting and past hidden or deleted text (#4093): each run is shaped with the text shown on either side of it.
 
