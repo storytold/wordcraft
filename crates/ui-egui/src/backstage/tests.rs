@@ -771,12 +771,44 @@ fn options_back_arrow_with_accessibility_on() {
         h.get_by_label("Display").click();
         h.run_steps(4);
         click_at(&mut h, back);
-        assert!(!h.state().ui.backstage, "mac {mac} start {start}: the arrow closes the File page");
         if start {
-            assert!(!h.state().has_document(), "mac {mac}: from the Start screen, an empty window");
+            // #6782: no document, so no page to go back to.
+            assert!(h.state().ui.backstage, "mac {mac}: from the Start screen the arrow is off");
+            assert!(!h.state().has_document(), "mac {mac}");
         } else {
+            assert!(!h.state().ui.backstage, "mac {mac}: the arrow closes the File page");
             assert!(h.state().canvas.focused, "mac {mac}: and the page has the keyboard");
         }
+    }
+}
+
+/// #6782: on the Start screen with no document open, Back and Escape do nothing (the arrow is
+/// greyed out like Save As, Print and Export); they used to leave an empty window of tabs
+/// without a page. Once a document is open they close the File page again.
+#[test]
+fn back_and_escape_are_off_without_a_document() {
+    for mac in [false, true] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.integrated_titlebar = mac;
+        a.ui.start_screen = true;
+        assert!(a.start_screen());
+        let back = if mac { mac_chevron(&a) } else { egui::pos2(26.0, 32.0) };
+        let mut h = a11y_harness(a);
+        assert!(!h.state().has_document());
+        assert!(h.state().ui.backstage, "mac {mac}: the Start screen is showing");
+        click_at(&mut h, back);
+        assert!(h.state().ui.backstage, "mac {mac}: the arrow does nothing with no document");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(4);
+        assert!(h.state().ui.backstage, "mac {mac}: Escape does nothing with no document");
+        // A document makes both work again.
+        h.get_by_label("Blank document").click();
+        h.run_steps(4);
+        assert!(h.state().has_document() && !h.state().ui.backstage, "mac {mac}: Blank document opens the page");
+        h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+        h.run_steps(4);
+        click_at(&mut h, back);
+        assert!(!h.state().ui.backstage, "mac {mac}: with a document the arrow closes the File page");
     }
 }
 

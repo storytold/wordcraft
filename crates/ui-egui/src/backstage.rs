@@ -84,6 +84,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .show(ui, |ui| {
             // Right to left the navigation is on the right, away from the macOS traffic lights.
             let rtl = crate::rtl::on();
+            // No document open (#6782): there is no page to go back to, so Back (and Escape) is
+            // greyed out like Save As, Print and Export. The empty window is reached by closing
+            // the last document, not from the Start screen.
+            let back_ink = if has_document { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
             let back = if mac {
                 // macOS (#222): the Backstage covers the title bar, so its top band is the title
                 // bar: the back button sits beside the traffic lights, centred with them and as far
@@ -99,14 +103,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 } else {
                     back_chevron_c(band.min.x, band.center().y, app.session.view.full_screen, app.mac_titlebar.content_left)
                 };
-                let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.scope_id().with("backstage_back"), Sense::click());
-                icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(c, vec2(18.0, 18.0)),
-                    if rtl { "chevronRight" } else { "chevronLeft" },
-                    egui::Color32::WHITE,
-                    egui::Color32::WHITE,
-                );
+                let sense = if has_document { Sense::click() } else { Sense::hover() };
+                let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.scope_id().with("backstage_back"), sense);
+                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), if rtl { "chevronRight" } else { "chevronLeft" }, back_ink, back_ink);
                 resp
             } else {
                 // The hit area is scoped to the chevron, not the whole 200px-wide row (#3041):
@@ -114,18 +113,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // not also close the File page, same as the macOS chevron fix (#2972) below.
                 let (r, _) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::hover());
                 let c = pos2(crate::rtl::lead_x(rtl, r, 26.0), r.center().y);
-                let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), Sense::click());
-                icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(c, vec2(18.0, 18.0)),
-                    if rtl { "chevronRight" } else { "chevronLeft" },
-                    egui::Color32::WHITE,
-                    egui::Color32::WHITE,
-                );
+                let sense = if has_document { Sense::click() } else { Sense::hover() };
+                let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), sense);
+                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), if rtl { "chevronRight" } else { "chevronLeft" }, back_ink, back_ink);
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
-            if back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+            if has_document && (back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape)))) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }

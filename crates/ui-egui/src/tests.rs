@@ -804,8 +804,9 @@ fn empty_window_ribbon_tabs_reach_the_start_screen() {
     a.start_screen();
     let mut h = harness(a);
     h.run_steps(4);
-    // Esc (or the back arrow) leaves the Start screen for the empty window, as #1129 has it.
-    h.key_press(egui::Key::Escape);
+    // The empty window, as #1129 has it, is what is left after the last document is closed
+    // (Esc and Back are off on the Start screen with no document, #6782).
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
     h.run_steps(4);
     assert!(!h.state().ui.backstage, "the empty window");
     assert!(!h.state().has_document(), "with no document");
