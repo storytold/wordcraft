@@ -188,6 +188,30 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     true
 }
 
+/// Whether `story` is a header in a document of Word 2010's layout or older (compatibility mode
+/// below 15), whose text keeps its place beside the header's own floating objects (#6805).
+fn is_legacy_header(ctx: &Ctx, story: StoryRef) -> bool {
+    ctx.doc.settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT
+        && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Header))
+}
+
+/// Where a top and bottom object at `r` starts and ends for such a header; none for a square one.
+/// The distance below it counts (Word: 14.4 pt more for 14.4 pt); the one above neither moves it
+/// nor makes the header taller.
+fn legacy_reach_of(float: &wordcraft_doc::para::Float, r: Rect) -> Option<(f32, f32)> {
+    let below = if float.dist_bottom.is_finite() { float.dist_bottom.clamp(0.0, 1584.0) } else { 0.0 };
+    let bounds = float.spin().bounds(r);
+    (float.wrap == Wrap::TopAndBottom).then_some((bounds.y, bounds.bottom() + below))
+}
+
+/// The bottom of the lowest top and bottom object (`reach`) that starts above `text_bottom`, the
+/// end of the header's text with the space after its last paragraph (Word counts an object
+/// starting in it). Word also counts one starting a little further down (about 25 pt below one
+/// line of text), not modelled here. Zero when there is none.
+fn legacy_header_reach(text_bottom: f32, reach: &[(f32, f32)]) -> f32 {
+    reach.iter().filter(|(top, _)| *top < text_bottom).map(|(_, bottom)| *bottom).fold(0.0, f32::max)
+}
+
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
 /// headers, footers, notes, text boxes. Returns items relative to (0, 0) and the height. `frame`
 /// says where the box sits on its page, for floating objects positioned relative to the page or
@@ -220,9 +244,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // A header in a document of Word 2010's layout or older (compatibility mode below 15): its
     // text keeps its place beside its own objects, which wrap nothing, and only a top and bottom
     // object reaching down from the text makes the header taller (#6805). Not in a table cell.
-    let legacy_header = !in_cell
-        && ctx.doc.settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT
-        && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Header));
+    let legacy_header = !in_cell && is_legacy_header(ctx, story);
     // Top and bottom objects of such a header: where each starts and ends.
     let mut legacy_reach: Vec<(f32, f32)> = Vec::new();
     let mut table_areas = Vec::new();
@@ -315,12 +337,12 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     {
                         r.x = keep_in_cell(r.x, r.w, left, right);
                     }
-                    if !legacy_header {
+                    if legacy_header && matches!(float.wrap, Wrap::TopAndBottom | Wrap::Square) {
+                        // Only the wraps measured in Word; Tight and Through keep wrapping as before.
+                        legacy_reach.extend(legacy_reach_of(float, r));
+                    } else {
                         let outline = ctx.wrap_outline(o);
                         excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
-                    } else if float.wrap == Wrap::TopAndBottom {
-                        let bounds = float.spin().bounds(r);
-                        legacy_reach.push((bounds.y, bounds.bottom()));
                     }
                     floats.insert(oi, r);
                 }
@@ -415,11 +437,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
             }
         }
     }
-    // The header ends below a top and bottom object that starts above the end of its text.
-    let text_bottom = y;
-    if let Some(reach) = legacy_reach.iter().filter(|(top, _)| *top < text_bottom).map(|(_, bottom)| *bottom).reduce(f32::max) {
-        y = y.max(reach);
-    }
+    y = y.max(legacy_header_reach(y, &legacy_reach));
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
     BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
