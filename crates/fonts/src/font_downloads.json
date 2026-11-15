@@ -1,0 +1,23 @@
+{
+  "about": "Fonts a document may ask for that their publisher gives away, and the publisher's own download page. Only pages where the publisher offers the font to anyone free of charge. WordCraft links to the page; it never downloads, bundles or redistributes the fonts. 'family' also covers every name that continues it after a space: 'Aptos' covers 'Aptos Display'.",
+  "downloads": [
+    {
+      "family": "Aptos",
+      "publisher": "Microsoft",
+      "url": "https://www.microsoft.com/download/details.aspx?id=106087",
+      "note": "Microsoft Download Center, 'Microsoft Aptos Fonts': the whole Aptos family."
+    },
+    {
+      "family": "Cascadia Code",
+      "publisher": "Microsoft",
+      "url": "https://github.com/microsoft/cascadia-code/releases",
+      "note": "Microsoft's own repository; SIL Open Font License."
+    },
+    {
+      "family": "Cascadia Mono",
+      "publisher": "Microsoft",
+      "url": "https://github.com/microsoft/cascadia-code/releases",
+      "note": "Comes in the Cascadia Code release."
+    }
+  ]
+}

@@ -382,7 +382,7 @@ fn a_missing_font_its_publisher_gives_away_names_the_download_page() {
     let layout = s.layout();
     let m = crate::cmd::font::missing_fonts(&s.doc, &layout);
     let aptos = m.iter().find(|f| f.font == "Aptos").unwrap();
-    assert_eq!(aptos.download.map(|d| d.publisher), Some("Microsoft"));
+    assert_eq!(aptos.download.map(|d| d.publisher.as_str()), Some("Microsoft"));
     assert!(m.iter().find(|f| f.font == "Wordcraft Nowhere Face").unwrap().download.is_none());
     let out = s.run("font.missing", &json!({})).unwrap();
     let listed = out["missing"].as_array().unwrap();

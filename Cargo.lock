@@ -6963,6 +6963,7 @@ dependencies = [
  "harfrust 0.13.3",
  "kurbo",
  "log",
+ "serde_json",
  "skrifa 0.47.0",
  "unicode-bidi",
  "unicode-script",

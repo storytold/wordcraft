@@ -48,9 +48,9 @@ pub(crate) fn rows(app: &mut WordApp) -> Vec<Row> {
             Some(Row {
                 font: f.font.clone(),
                 shown_as: f.shown_as.clone(),
-                download: d.name.into(),
-                publisher: d.publisher.into(),
-                url: d.url.into(),
+                download: d.name.clone(),
+                publisher: d.publisher.clone(),
+                url: d.url.clone(),
             })
         })
         .take(LISTED)
