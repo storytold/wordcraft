@@ -81,7 +81,6 @@ fn cell_has_control(c: &Cell, depth: usize) -> bool {
     c.blocks.iter().any(|b| match &**b {
         Block::Para(p) => p.objects.iter().any(|o| matches!(o, InlineObject::ControlStart { .. } | InlineObject::ControlEnd)),
         Block::Table(t) => !t.controls.is_empty() || t.rows.iter().any(|r| !r.controls.is_empty() || r.cells.iter().any(|c| cell_has_control(c, depth + 1))),
-        _ => false,
     })
 }
 
@@ -123,7 +122,10 @@ fn plan(dest: &Table, src: &Table, src_cols: usize, row0: usize, col0: usize) ->
 /// - Track Changes is on (the cell edits aren't tracked here);
 /// - the copied table has merged cells, ragged rows, empty cells, pictures or other objects, or a
 ///   paragraph with a section break, or the destination table has merged cells or offset rows, or
-///   a control in a cell that would be overwritten (they are not laid over);
+///   a control in a cell that would be overwritten, at any depth of nested tables (they are not
+///   laid over);
+/// - the caret is in a content control that shows its placeholder (the ordinary paste replaces
+///   the placeholder);
 /// - the destination has one column and the copy more (a layout wrapper), or the paste would pass
 ///   the limits on a table's rows or columns.
 pub fn paste_cells(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
@@ -139,6 +141,8 @@ pub fn paste_cells(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
     }
     // A caret in a control that shows its placeholder: the edit rules would select the
     // placeholder to replace it, which the row insertion would not do. The ordinary paste does.
+    // This also covers a caret at the edge of such a control (drop-down, check box): rows used to
+    // be inserted there, now the table nests. Overwrite already declined for cells with controls.
     if s.doc.control_at(&s.sel.focus).is_some_and(|r| r.control.showing_placeholder) {
         return Ok(false);
     }

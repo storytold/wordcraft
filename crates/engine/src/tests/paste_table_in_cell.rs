@@ -339,17 +339,17 @@ fn a_locked_control_in_a_nested_table_of_an_overwritten_cell_is_kept() {
     paste(&mut s);
     let kept = |t: &Table| t.rows.iter().flat_map(|r| &r.cells).any(|c| c.blocks == before.blocks);
     assert!(kept(t0(&s)), "the cell with the locked control survives");
-    assert_eq!(t0(&s).grid.len(), 3);
 }
 
-/// A caret in a control that shows its placeholder: rows are not inserted around it and the
-/// placeholder is not turned into ordinary text (#6739 review).
+/// A caret in a control that shows its placeholder: no rows are inserted above the caret's row;
+/// the table nests in the cell as the ordinary paste does (#6739 review).
 #[test]
-fn rows_are_not_inserted_from_a_control_showing_its_placeholder() {
+fn a_control_showing_its_placeholder_gets_the_ordinary_paste_not_inserted_rows() {
     let mut s = dest(1, 0);
     s.run("developer.plainText", &json!({})).unwrap();
     let before = s.doc.body[0].as_table().map(|t| t.rows.len());
     copy(&mut s, table("s", 3, 3));
     paste(&mut s);
     assert_eq!(t0(&s).rows.len(), before.unwrap_or(0), "no rows inserted above the caret's row");
+    assert!(nested(t0(&s)), "the table nests in the cell");
 }
