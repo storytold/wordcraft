@@ -425,16 +425,34 @@ pub fn ink_mask(img: &mut egui::ColorImage) {
     }
 }
 
+/// Plain sans faces for drawing CJK font names. A decorative face (娃娃体, 行楷…) draws its own
+/// name in that same decorative style, which reads as garbled text in a font list (#6752).
+const LIST_CJK_FACES: &[&str] = &["PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC"];
+
+/// The face a font-list entry is drawn in. CJK names all use one plain face, so every entry reads
+/// the same way whatever the family's own glyphs look like; Latin names use their own face. The
+/// bundled Latin fallback has no ideographs, so it is never handed a Chinese name (#6752).
+fn entry_face(name: &str) -> std::sync::Arc<wordcraft_fonts::FontFace> {
+    let db = wordcraft_fonts::FontDb::global();
+    let covers = |f: &std::sync::Arc<wordcraft_fonts::FontFace>| name.chars().filter(|c| !c.is_whitespace()).all(|c| f.covers(c));
+    let pick = |f: &str| db.preview_face(f).filter(covers);
+    if !name.is_ascii() {
+        if let Some(f) = LIST_CJK_FACES.iter().find_map(|f| pick(f)) {
+            return f;
+        }
+        if let Some(f) = db.east_asian_families().iter().find_map(|f| pick(f)) {
+            return f;
+        }
+    }
+    pick(name).unwrap_or_else(|| db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular"))
+}
+
 /// A font list entry: `name` in its own face, 244×22 pt. The face is read for the preview alone
 /// and dropped (#848): browsing the list used to load every family shown for good, so each trip
-/// through the Font box grew memory by tens of megabytes. A name the font has no glyphs for (a
-/// symbol font's), or a font that can't be read, shows in the default face.
+/// through the Font box grew memory by tens of megabytes. A Latin name whose font has no glyphs
+/// for it, or can't be read, shows in the default face; a CJK name uses one plain CJK face (#6752).
 pub fn font_entry_image(name: &str, ppp: f32) -> egui::ColorImage {
-    let db = wordcraft_fonts::FontDb::global();
-    let face = db
-        .preview_face(name)
-        .filter(|f| name.chars().filter(|c| !c.is_whitespace()).all(|c| f.covers(c)))
-        .unwrap_or_else(|| db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular"));
+    let face = entry_face(name);
     // Rendered taller than the row and cut back to the drawn text: faces with tall line metrics
     // (Arabic, CJK) put their baseline well below a Latin face's, and a fixed 22 pt strip showed
     // only the top of their names.

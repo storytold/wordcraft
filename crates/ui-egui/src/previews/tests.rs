@@ -24,6 +24,24 @@ fn font_menu_entries_leave_installed_families_unloaded() {
     assert!(loaded.len() <= 2, "previewing loaded {loaded:?}");
 }
 
+/// #6752: a Chinese family name is drawn by a face with ideographs, not by the family's own
+/// decorative glyphs (which read as garbled text), and never by the Latin-only fallback.
+#[test]
+fn localized_font_names_are_drawn_by_a_face_with_ideographs() {
+    let db = wordcraft_fonts::FontDb::global();
+    let plain = entry_face("宋体-简");
+    assert_eq!(entry_face("娃娃体-简").family, plain.family, "every Chinese name uses one plain face");
+    assert_eq!(entry_face("楷体-简").family, plain.family);
+    // Latin names keep their own face; an unknown one falls back to the bundled face.
+    assert_eq!(entry_face("Source Sans 3").family, "Source Sans 3");
+    assert_eq!(entry_face("No Such Font 6752").family, wordcraft_fonts::FALLBACK_FAMILY);
+    // With only bundled Latin fonts installed there is no CJK face to pick; on a system that has
+    // one, the name must be drawn in a face that actually covers the ideographs.
+    if !db.east_asian_families().is_empty() {
+        assert!(plain.covers('娃') && plain.covers('宋'), "{} covers the names", plain.family);
+    }
+}
+
 /// A window whose Styles gallery lists `style` first: runs the gallery for a few frames and
 /// returns the painted shapes of the last one and every texture picture uploaded on the way.
 fn run_gallery(mut doc: Document, style: wordcraft_doc::styles::Style) -> (Vec<egui::epaint::ClippedShape>, Vec<egui::ColorImage>) {
