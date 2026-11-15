@@ -21,6 +21,14 @@ const REMEMBERED: usize = 256;
 /// Most fonts the box lists: a hostile file can name thousands.
 const LISTED: usize = 12;
 
+/// The height the box takes around its cards: the title bar, the headline, the steps and the
+/// row with Close. The cards get what the window has left over, within the two limits below.
+const ROOM_AROUND_CARDS: f32 = 380.0;
+/// The least room the cards get: one card and the top of the next, however short the window.
+const CARDS_MIN: f32 = 96.0;
+/// The most room the cards get before they scroll.
+const CARDS_MAX: f32 = 320.0;
+
 /// One missing font the box lists.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,43 +210,52 @@ pub(crate) fn body(app: &mut WordApp, ui: &mut egui::Ui, fonts: &[Row], dont_sho
     });
     ui.add_space(12.0);
     let mut open_url = None;
-    for g in groups(fonts) {
-        egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)).corner_radius(8).inner_margin(egui::Margin::symmetric(14, 10)).show(
-            ui,
-            |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        // A label to a name: each is the document's own word, not interface text.
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            for (i, font) in g.fonts.iter().enumerate() {
-                                if i > 0 {
-                                    ui.label(egui::RichText::new(", ").font(semibold(14.0)));
+    // The cards scroll in a short window, so the steps, the opt-out and Close below them stay
+    // in reach however many downloads there are.
+    let cards = (ui.ctx().content_rect().height() - ROOM_AROUND_CARDS).clamp(CARDS_MIN, CARDS_MAX);
+    egui::ScrollArea::vertical().id_salt("font_downloads").max_height(cards).show(ui, |ui| {
+        for g in groups(fonts) {
+            egui::Frame::NONE
+                .fill(t.panel)
+                .stroke(egui::Stroke::new(1.0, t.border))
+                .corner_radius(8)
+                .inner_margin(egui::Margin::symmetric(14, 10))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            // A label to a name: each is the document's own word, not interface text.
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                for (i, font) in g.fonts.iter().enumerate() {
+                                    if i > 0 {
+                                        ui.label(egui::RichText::new(", ").font(semibold(14.0)));
+                                    }
+                                    ui.label(egui::RichText::new(*font).font(semibold(14.0)));
                                 }
-                                ui.label(egui::RichText::new(*font).font(semibold(14.0)));
+                            });
+                            let shown = crate::i18n::fmt(
+                                tl!("Shown as {fonts} · {publisher}"),
+                                &[("fonts", &g.shown_as.join(", ")), ("publisher", g.publisher)],
+                            );
+                            ui.label(egui::RichText::new(shown).color(t.text_dim));
+                            if g.restricted {
+                                let limits = tl!("Its licence limits who may use it: read the terms first.");
+                                ui.label(egui::RichText::new(limits).small().color(t.text_dim));
                             }
                         });
-                        let shown =
-                            crate::i18n::fmt(tl!("Shown as {fonts} · {publisher}"), &[("fonts", &g.shown_as.join(", ")), ("publisher", g.publisher)]);
-                        ui.label(egui::RichText::new(shown).color(t.text_dim));
-                        if g.restricted {
-                            let limits = tl!("Its licence limits who may use it: read the terms first.");
-                            ui.label(egui::RichText::new(limits).small().color(t.text_dim));
-                        }
-                    });
-                    ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-                        let tip = crate::i18n::fmt(tl!("Download from {publisher}"), &[("publisher", g.publisher)]);
-                        if ui.add(crate::widgets::primary_button(ui, tl!("Download"))).on_hover_text(format!("{tip}\n{}", g.url)).clicked() {
-                            open_url = Some(g.url.to_string());
-                        }
+                        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                            let tip = crate::i18n::fmt(tl!("Download from {publisher}"), &[("publisher", g.publisher)]);
+                            if ui.add(crate::widgets::primary_button(ui, tl!("Download"))).on_hover_text(format!("{tip}\n{}", g.url)).clicked() {
+                                open_url = Some(g.url.to_string());
+                            }
+                        });
                     });
                 });
-            },
-        );
-        ui.add_space(6.0);
-    }
+            ui.add_space(6.0);
+        }
+    });
     if open_url.is_some() {
         // The publisher's page, in the browser: WordCraft downloads nothing itself.
         app.canvas.open_url = open_url;

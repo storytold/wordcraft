@@ -26,7 +26,11 @@ fn app(opened: bool) -> WordApp {
 }
 
 fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    harness_sized(app, egui::vec2(1440.0, 900.0))
+}
+
+fn harness_sized(app: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
+    let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -186,6 +190,34 @@ fn fonts_of_one_download_are_listed_together() {
         (["Aptos", "Aptos Display"].as_slice(), ["Carlito"].as_slice(), "https://a")
     );
     assert_eq!((g[1].fonts.as_slice(), g[1].url), (["Cascadia Code"].as_slice(), "https://c"));
+}
+
+/// As many downloads as the box lists, in a short window: the cards scroll, and the steps, the
+/// opt-out and Close below them stay on screen.
+#[test]
+fn many_downloads_in_a_short_window_leave_the_rest_of_the_box_in_reach() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    let fonts: Vec<Row> = (0..LISTED)
+        .map(|i| Row {
+            font: format!("Harbour Face {i}"),
+            shown_as: vec!["Carlito".into()],
+            download: format!("Harbour Face {i}"),
+            publisher: "Lantern Works".into(),
+            url: format!("https://example.org/{i}"),
+            restricted: false,
+        })
+        .collect();
+    a.dialog = Some(Dialog::FontDownload { fonts, dont_show: false });
+    let height = 600.0;
+    let h = harness_sized(a, egui::vec2(1000.0, height));
+    for label in ["Add Font…", "Don't show this again", "Close"] {
+        // Close is also the window's close box: every match is on screen.
+        let bottoms: Vec<f32> = h.query_all_by_label(label).map(|n| n.rect().max.y).collect();
+        assert!(!bottoms.is_empty(), "no {label}");
+        for bottom in bottoms {
+            assert!(bottom <= height, "{label} ends at {bottom}, below the {height} pt window");
+        }
+    }
 }
 
 /// A font whose publisher limits its use says so on its card, and has a card of its own.
