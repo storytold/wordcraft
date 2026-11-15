@@ -5441,6 +5441,21 @@ fn right_clicking_a_repeated_header_picture_selects_it_on_its_own_page() {
     assert_eq!(h.state().session.page_hint, 1, "its frame is drawn on the page clicked");
 }
 
+/// The same for a left-click: it selects the page-2 copy and moves the frame there, not the copy
+/// on page 1 that was being edited.
+#[test]
+fn left_clicking_a_repeated_header_picture_selects_it_on_its_own_page() {
+    let (mut h, pos, _) = header_picture_app(false, 200.0, 400.0, 2);
+    edit_story(&mut h, false, 0);
+    assert_eq!(h.state().session.page_hint, 0, "editing the header on page 1");
+    let rect = h.state_mut().session.layout().object(&pos, 1).unwrap().rect;
+    assert_eq!(h.state_mut().session.layout().object(&pos, 1).unwrap().page, 1, "the picture is repeated on page 2");
+    let at = picture_point(&h, 1, rect);
+    press(&mut h, at, egui::PointerButton::Primary);
+    assert_eq!(wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p), Some(pos), "the left-click selected it");
+    assert_eq!(h.state().session.page_hint, 1, "its frame is drawn on the page clicked");
+}
+
 fn pointer_button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
     egui::Event::PointerButton { pos, button, pressed, modifiers: Default::default() }
 }
