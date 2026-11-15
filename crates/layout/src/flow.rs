@@ -281,6 +281,17 @@ impl<'a> Flow<'a> {
         if self.pl.rp.before_auto && self.block == 0 {
             before = 0.0;
         }
+        // An empty paragraph after a document's leading table, placed floating on this page, has no
+        // space before (Word's PDFs: 0 pt and 12 pt before put the text after it at the same place).
+        // Only that shape is observed: later pages and columns keep theirs.
+        if self.block == 1
+            && pb.fresh()
+            && !pb.web
+            && pb.pages.last().is_some_and(|pg| pg.float_tables.contains(&Path::top(0)))
+            && only_markers(self.p, 0..self.p.text.len())
+        {
+            before = 0.0;
+        }
         before
     }
 
@@ -766,7 +777,8 @@ fn add_notes(pb: &mut PageBuilder, mut new_notes: Vec<NoteBox>, notes: &[(usize,
     }
 }
 
-/// Line numbers in the left margin for lines `l0..l1` of `pl` laid out from `y`.
+/// Line numbers for lines `l0..l1` of `pl` laid out from `y`, left of the column they are in:
+/// each column of a multi-column section gets its own (#6018), as in Word.
 fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): (usize, usize), y: f32) -> Vec<Placed> {
     let mut items = Vec::new();
     if let Some(ln) = pb.sect.line_numbers.clone().filter(|_| !pb.web && pl.rp.style != "Header" && !pl.rp.suppress_line_numbers)
@@ -789,7 +801,7 @@ fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): 
                 para: num.clone(),
                 l0: 0,
                 l1: 1,
-                x: pb.sect.margin_left + pb.sect.gutter - dist - w,
+                x: pb.col_x() - dist - w,
                 y: ly,
                 turn: TextDirection::Horizontal,
             });
@@ -816,7 +828,8 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let mut f = Flow::new(ctx, pb, p, (block, body_top));
     let spot = |pb: &PageBuilder| (pb.pages.len(), pb.col);
     let placed_at = spot(pb);
-    let broke_before = f.pl.rp.page_break_before && !pb.at_top() && !pb.web;
+    // A continuous section's top mid-page is not a page top, so the break still applies.
+    let broke_before = f.pl.rp.page_break_before && !pb.fresh() && !pb.web;
     if broke_before {
         pb.new_page(block, body_top);
     }
