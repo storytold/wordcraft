@@ -16,6 +16,7 @@ workspace = true
 test-support = []
 
 [dependencies]
+craft-codepage = { workspace = true }
 wordcraft-geom = { workspace = true }
 base64 = { workspace = true }
 log = { workspace = true }

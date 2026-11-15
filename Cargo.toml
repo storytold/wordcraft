@@ -36,6 +36,7 @@ wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
+craft-codepage = { git = "https://github.com/storytold/craft-libs", rev = "41fb227542efb8a7748caa1c659f271d8605303c", version = "=0.1.0" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "41fb227542efb8a7748caa1c659f271d8605303c", version = "=0.1.0" }
 
 # foundation
