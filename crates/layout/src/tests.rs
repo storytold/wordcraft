@@ -2078,6 +2078,23 @@ fn a_deleted_list_items_number_is_drawn_as_deleted_text() {
     let kl = lay(&kept);
     let plain = display::page_display(&kept, &kl.pages[0], &display::DisplayOptions { markup: false, ..Default::default() });
     assert!(glyph_color(&plain, "1.").is_some());
+    // #4828 review: only the paragraph mark deleted (Delete at the end of the item): the text
+    // stays, and so does its number, plain, with markup and without (and in print, where markup
+    // is off).
+    let mut joined = kept.clone();
+    joined.revisions = d.revisions.clone();
+    joined.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.del = Some(0);
+    let jl = lay(&joined);
+    for markup in [false, true] {
+        let shown = display::page_display(&joined, &jl.pages[0], &display::DisplayOptions { markup, ..Default::default() });
+        let (number, jx) = glyph_color(&shown, "1.").unwrap_or_else(|| panic!("markup {markup}: the number stays"));
+        let (text, _) = glyph_color(&shown, "Chapter").unwrap_or_else(|| panic!("markup {markup}: the text stays"));
+        assert_eq!(number, text, "markup {markup}: in the text's colour");
+        let struck = shown
+            .iter()
+            .any(|i| matches!(i, display::Draw::Line { x0, x1, y0, y1, .. } if (y0 - y1).abs() < 0.01 && *x0 <= jx + 0.01 && *x1 > jx + 1.0));
+        assert!(!struck, "markup {markup}: not struck through");
+    }
 }
 
 #[test]

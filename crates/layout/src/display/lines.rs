@@ -472,9 +472,12 @@ fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     // A list number goes with its paragraph mark: when the mark is a tracked deletion the number
     // is drawn as deleted text is, in the deletion's colour and with its mark (struck through by
-    // default, a caret, #s, bold…), and not at all where deletions aren't shown (#4828).
+    // default, a caret, #s, bold…), and not at all where deletions aren't shown (#4828). Only
+    // when the item is deleted whole, its text too: a deleted mark alone joins the item to the
+    // next one, and its text and number stay as they are.
     let m = &ctx.opts.revisions;
-    let mark_del = ctx.para.and_then(|p| p.mark.del);
+    let whole = ctx.para.is_some_and(|p| p.runs.iter().all(|r| r.len == 0 || r.props.del.is_some()));
+    let mark_del = ctx.para.filter(|_| whole).and_then(|p| p.mark.del);
     let moved = mark_del.is_some() && ctx.doc.move_name(mark_del).is_some();
     let hidden = mark_del.is_some() && (!ctx.opts.markup || m.hides_deletion(moved));
     let deleted = mark_del.filter(|_| ctx.opts.markup && m.insertions_deletions);
