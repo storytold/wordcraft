@@ -23,7 +23,14 @@ fn section_badges_are_painted_when_editing_header_or_footer() {
         h.state_mut().run(command, json!({"page": 0})).unwrap();
         steps(&mut h, 6);
         assert!(matches!(h.state().session.sel.focus.story, StoryRef::Part(_)));
-        assert_eq!(count(&h), 2, "both header and footer lines show the section while {command} is active");
+        assert_eq!(count(&h), 0, "single-section document hides section badges");
+    }
+    h.state_mut().run("insert.closeHeader", json!({})).unwrap();
+    h.state_mut().run("layout.break", json!({"kind": "nextPage"})).unwrap();
+    for command in ["insert.editHeader", "insert.editFooter"] {
+        h.state_mut().run(command, json!({"page": 0})).unwrap();
+        steps(&mut h, 6);
+        assert_eq!(count(&h), 2, "multi-section document shows section badges on both header and footer lines");
     }
 }
 

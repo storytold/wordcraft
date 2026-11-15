@@ -1257,12 +1257,14 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                     let tr = Rect::from_min_size(pos2(visual_sr.min.x + 2.0, if label == "Header" { y } else { y - 18.0 }), vec2(52.0, 18.0));
                     painter.rect_filled(tr, 2.0, t.checked);
                     painter.text(tr.center(), egui::Align2::CENTER_CENTER, tl!(label), regular(11.0), t.accent_text);
-                    let section = crate::i18n::fmt(tl!("Section {n}"), &[("n", &page.section.saturating_add(1).to_string())]);
-                    let text = painter.layout_no_wrap(section, regular(11.0), t.accent_text);
-                    let width = text.size().x + 12.0;
-                    let badge = Rect::from_min_size(pos2(visual_sr.max.x - width - 2.0, tr.min.y), vec2(width, tr.height()));
-                    painter.rect_filled(badge, 2.0, t.checked);
-                    painter.galley(badge.center() - text.size() / 2.0, text, t.accent_text);
+                    if app.session.doc.sections().len() > 1 {
+                        let section = crate::i18n::fmt(tl!("Section {n}"), &[("n", &page.section.saturating_add(1).to_string())]);
+                        let text = painter.layout_no_wrap(section, regular(11.0), t.accent_text);
+                        let width = text.size().x + 12.0;
+                        let badge = Rect::from_min_size(pos2(visual_sr.max.x - width - 2.0, tr.min.y), vec2(width, tr.height()));
+                        painter.rect_filled(badge, 2.0, t.checked);
+                        painter.galley(badge.center() - text.size() / 2.0, text, t.accent_text);
+                    }
                 }
             }
         }
