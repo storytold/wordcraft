@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 28] = [
+pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -129,6 +129,9 @@ pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "ar", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Bosnian, Latin script; `bs`, `bs-BA`, `bs_BA.UTF-8` and `bs-Latn-BA` resolve here. Cyrillic
+    // Bosnian (`bs-Cyrl-*`) has no catalog, so it stays in English.
+    LangInfo { code: "bs", prefer_hans: false, editing_lang: None },
 ];
 
 /// Interface languages written right to left. Their catalogs are written in typing order and
