@@ -9004,7 +9004,7 @@ fn convert_to_text_takes_each_separator() {
         let err = s.run("table.toText", &bad).unwrap_err();
         if bad["separator"] == "other" {
             assert!(
-                matches!(err, crate::CmdError::Params(ref message) if message == "`char` with `other` must start with a character other than CR, LF or U+FFFC (the object marker)"),
+                matches!(err, crate::CmdError::Params(ref message) if message == "`char` with `other` must start with a character other than CR, LF or U+FFFC (the object marker); only the first character is used"),
                 "{bad}: {err}"
             );
         }
@@ -9373,7 +9373,7 @@ fn convert_text_to_table_dialog_options() {
     ] {
         let err = s1.run("table.fromText", &bad).unwrap_err();
         assert!(
-            matches!(err, crate::CmdError::Params(ref message) if message == "`char` with `other` must start with a character other than CR or LF"),
+            matches!(err, crate::CmdError::Params(ref message) if message == "`char` with `other` must start with a character other than CR or LF; only the first character is used"),
             "{bad}: {err}"
         );
     }
