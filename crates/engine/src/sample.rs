@@ -231,6 +231,7 @@ fn gost_indented(text: &str) -> Paragraph {
 /// capital letters, one-and-a-half spacing, from a new page as GOST 7.32 requires.
 fn gost_heading(text: &str) -> Paragraph {
     let mut p = Paragraph::with_text(text, CharProps { style: Some("Heading1".into()), bold: Some(true), size: Some(14.0), ..gost_body() });
+    p.props.style = Some("Heading1".into());
     p.props.align = Some(Align::Center);
     p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
     p.props.page_break_before = Some(true);
@@ -243,6 +244,7 @@ fn gost_heading(text: &str) -> Paragraph {
 /// subsections flow on.
 fn gost_section(text: &str, level: &str, new_page: bool) -> Paragraph {
     let mut p = Paragraph::with_text(text, CharProps { style: Some(level.into()), bold: Some(true), size: Some(14.0), ..gost_body() });
+    p.props.style = Some(level.into());
     p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
     p.props.indent_first = Some(1.25 * 72.0 / 25.4);
     p.props.page_break_before = Some(new_page);
@@ -359,7 +361,7 @@ mod tests {
             .iter()
             .filter_map(|b| {
                 let p = b.as_para()?;
-                (p.props.page_break_before == Some(true)).then_some(p.text.as_str())
+                (p.props.page_break_before == Some(true) && p.props.style == Some("Heading1".into())).then_some(p.text.as_str())
             })
             .collect();
         for name in ["РЕФЕРАТ", "СОДЕРЖАНИЕ", "ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]
