@@ -8,6 +8,7 @@ mod autospace;
 mod bidi;
 mod budget;
 mod cell_floats;
+mod cell_para_shading;
 mod complex;
 mod float_top;
 mod grid;
