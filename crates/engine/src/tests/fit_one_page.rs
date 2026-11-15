@@ -14,6 +14,11 @@ fn create_multiline_doc(lines: usize) -> Session {
     Session::new(Document::from_text(&text))
 }
 
+/// Fit One Page boundary tests need stable glyph metrics across host font substitutes.
+fn use_pagination_test_font(s: &mut Session) {
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.font = Some("Source Sans 3".into());
+}
+
 #[test]
 fn fit_one_page_fails_on_single_page() {
     let mut s = create_multiline_doc(5);
@@ -122,6 +127,7 @@ fn fit_one_page_respects_step_pt() {
         text.push_str(&format!("Line {i}: The quick brown fox jumps over the lazy dog.\n"));
     }
     let mut s = Session::new(Document::from_text(&text));
+    use_pagination_test_font(&mut s);
     for b in &mut s.doc.body {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
             p.mark.size = Some(11.4);
@@ -130,6 +136,8 @@ fn fit_one_page_respects_step_pt() {
             }
         }
     }
+    s.touch();
+    s.relayout();
     assert_eq!(s.layout().pages.len(), 2, "must start as 2-page document at 11.4 pt");
 
     // Both calls hold maxDeltaPt constant at 0.4 and disable spacing adjustments.
@@ -854,6 +862,9 @@ fn fit_one_page_tracks_reduced_complex_script_font_sizes() {
 #[test]
 fn fit_one_page_preserves_budget_across_document_serialization() {
     let mut s = create_multiline_doc(27);
+    use_pagination_test_font(&mut s);
+    s.touch();
+    s.relayout();
     assert_eq!(s.layout().pages.len(), 2);
 
     // Apply fit
