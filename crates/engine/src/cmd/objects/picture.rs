@@ -1,5 +1,5 @@
 use super::select::{obj_size, selected, with_obj};
-use super::{CmdError, CmdResult, InlineObject, Rgb, Session, Value, Wrap, p};
+use super::{CmdError, CmdResult, InlineObject, Session, Value, Wrap, p};
 use wordcraft_doc::picfx::PicFx;
 
 /// `picture.crop`: the crop, and optionally the new display size, as one edit. With a size, a
@@ -14,27 +14,50 @@ pub(super) fn crop(s: &mut Session, v: &Value) -> CmdResult {
     c[3] = c[3].min(0.95 - c[1]);
     let size = |k: &str| p::f32(v, k).map(|x| x.clamp(1.0, 4000.0));
     let (nw, nh) = (size("width"), size("height"));
+    // A look drawn round the picture holds only what the old crop showed: it is drawn again from
+    // its bitmap with the new crop, the frame keeping the room its effects take (#3344).
+    if let Some((look, shown, float)) = super::look::drawn_round(s) {
+        let (w, h, dx, dy) = cropped(shown.crop, (shown.w, shown.h), &float, c, (nw, nh));
+        let shift = (dx + (w - shown.w) / 2.0, dy + (h - shown.h) / 2.0);
+        return super::look::place(s, look, super::look::Placement { crop: c, w, h }, shown.room, shift, |_| {});
+    }
     with_obj(s, |o| {
         if let InlineObject::Image { crop, w, h, float, .. } = o {
-            // The source's full size at the new display size (the visible part is 1-lo-hi of it).
-            let full = |len: f32, lo: f32, hi: f32| len / (1.0 - lo - hi).max(0.05);
-            // Flipped, the source's right (bottom) edge is the one on the page's left (top).
-            let (left, top) = (if float.flip_h { 2 } else { 0 }, if float.flip_v { 3 } else { 1 });
-            if let Some(nw) = nw {
-                if float.wrap != Wrap::Inline && float.h_align.is_none() {
-                    float.x += (c[left] - crop[left]) * full(nw, c[0], c[2]);
-                }
-                *w = nw;
-            }
-            if let Some(nh) = nh {
-                if float.wrap != Wrap::Inline && float.v_align.is_none() {
-                    float.y += (c[top] - crop[top]) * full(nh, c[1], c[3]);
-                }
-                *h = nh;
-            }
-            *crop = c;
+            let (nw, nh, dx, dy) = cropped(*crop, (*w, *h), float, c, (nw, nh));
+            (float.x, float.y, *w, *h, *crop) = (float.x + dx, float.y + dy, nw, nh, c);
         }
     })
+}
+
+/// A picture `size` points cropped `old`, cropped `c` instead, its display size set to `new` (a
+/// side left out keeps its length): the new size, and how far its top-left corner moves on the
+/// page so what stays visible keeps its place (a floating picture positioned by offsets only).
+fn cropped(
+    old: [f32; 4],
+    size: (f32, f32),
+    float: &wordcraft_doc::para::Float,
+    c: [f32; 4],
+    new: (Option<f32>, Option<f32>),
+) -> (f32, f32, f32, f32) {
+    // The source's full size at the new display size (the visible part is 1-lo-hi of it).
+    let full = |len: f32, lo: f32, hi: f32| len / (1.0 - lo - hi).max(0.05);
+    // Flipped, the source's right (bottom) edge is the one on the page's left (top).
+    let (left, top) = (if float.flip_h { 2 } else { 0 }, if float.flip_v { 3 } else { 1 });
+    let free = float.wrap != Wrap::Inline;
+    let (mut w, mut h, mut dx, mut dy) = (size.0, size.1, 0.0, 0.0);
+    if let Some(nw) = new.0 {
+        if free && float.h_align.is_none() {
+            dx = (c[left] - old[left]) * full(nw, c[0], c[2]);
+        }
+        w = nw;
+    }
+    if let Some(nh) = new.1 {
+        if free && float.v_align.is_none() {
+            dy = (c[top] - old[top]) * full(nh, c[1], c[3]);
+        }
+        h = nh;
+    }
+    (w, h, dx, dy)
 }
 
 /// A picture's original size: its image's pixels at 96 ppi (the size Insert › Pictures gives it)
@@ -74,7 +97,13 @@ pub fn cropped_original_size(s: &Session, o: &InlineObject) -> Option<(f32, f32)
 /// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
 /// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
 pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
-    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no object".into()))?;
+    let (_, mut o) = selected(s).ok_or_else(|| CmdError::Disabled("no object".into()))?;
+    // Under a look drawn round it, the size is the picture's own, without the room its effects
+    // take (as Word's Size is): the look is drawn again at the new size.
+    let round = super::look::drawn_round(s);
+    if let (Some((_, shown, _)), InlineObject::Image { w, h, crop, .. }) = (&round, &mut o) {
+        (*w, *h, *crop) = (shown.w, shown.h, shown.crop);
+    }
     let lock = p::bool(v, "lockAspect").unwrap_or(true);
     let (w0, h0) = obj_size(&o);
     let (mut w, mut h) = (w0, h0);
@@ -125,6 +154,10 @@ pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
         let left = |new: f32, old: f32| !original && new == old;
         (if left(w, w0) { w } else { fw }, if left(h, h0) { h } else { fh })
     };
+    if let Some((look, shown, _)) = round {
+        let shift = ((w - shown.w) / 2.0, (h - shown.h) / 2.0);
+        return super::look::place(s, look, super::look::Placement { crop: shown.crop, w, h }, shown.room, shift, |_| {});
+    }
     // Any drawing: a group's members scale with its frame (its child space is kept); a chart or
     // SmartArt graphic lays itself out again at the new size.
     let theme = s.doc.settings.theme_colors.clone();
@@ -163,19 +196,6 @@ pub(super) fn adjust(s: &mut Session, f: impl Fn(image::DynamicImage) -> Result<
     adjust_media(s, &media, |_| {}, f)
 }
 
-/// The selected picture's pre-edit media key (itself when never edited).
-pub(super) fn original_media(s: &Session) -> Result<String, CmdError> {
-    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
-    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-    Ok(s.originals.get(&media).cloned().unwrap_or(media))
-}
-
-/// Drops brightness and contrast read from the file: an edit baked them from the original.
-pub(super) fn clear_lum(fx: &mut PicFx) {
-    fx.bright = 0;
-    fx.contrast = 0;
-}
-
 /// Like [`adjust`], but decodes `base` (a media key, usually the pre-edit original) instead
 /// of the picture's current bitmap. The result still chains onto the originals map, so Reset
 /// Picture keeps working.
@@ -187,12 +207,23 @@ pub(super) fn adjust_media(
     fx: impl Fn(&mut PicFx),
     f: impl Fn(image::DynamicImage) -> Result<image::DynamicImage, CmdError>,
 ) -> CmdResult {
-    let bytes = s.doc.media.get(base).cloned().ok_or_else(|| CmdError::Failed("picture data missing".into()))?;
-    // Within the budget pictures are drawn within, checked from the header first (#3644, #3647).
-    let img = wordcraft_geom::picture::decode(&bytes, wordcraft_geom::MAX_DECODED_BYTES).map_err(|e| match e {
-        wordcraft_geom::picture::Refusal::TooLarge { .. } => too_large(),
-        e => CmdError::Failed(format!("can't decode the picture: {e}")),
-    })?;
+    let key = draw_media(s, base, f)?;
+    with_obj(s, |o| {
+        if let InlineObject::Image { media, fx: pic_fx, .. } = o {
+            *media = key.clone();
+            fx(pic_fx);
+        }
+    })
+}
+
+/// `base` decoded, drawn by `f` and stored as a new PNG, chained onto the selected picture's
+/// original so Reset Picture finds it. Returns the new media key; the picture isn't changed.
+pub(super) fn draw_media(
+    s: &mut Session,
+    base: &str,
+    f: impl Fn(image::DynamicImage) -> Result<image::DynamicImage, CmdError>,
+) -> Result<String, CmdError> {
+    let img = decode(s, base)?;
     let out = f(img)?;
     let png = wordcraft_geom::picture::encode_png(&out).map_err(CmdError::Failed)?;
     let key = s.doc.add_media(png, "png");
@@ -209,15 +240,154 @@ pub(super) fn adjust_media(
         .or_else(|| cur.as_ref().and_then(|m| s.originals.get(m).cloned()))
         .unwrap_or_else(|| cur.clone().unwrap_or_else(|| key.clone()));
     s.originals.entry(key.clone()).or_insert(orig);
-    with_obj(s, |o| {
-        if let InlineObject::Image { media, fx: pic_fx, .. } = o {
-            *media = key.clone();
-            fx(pic_fx);
-        }
+    Ok(key)
+}
+
+/// The bitmap `media` names, within the budget pictures are drawn within, checked from the header
+/// first (#3644, #3647).
+fn decode(s: &Session, media: &str) -> Result<image::DynamicImage, CmdError> {
+    let bytes = s.doc.media.get(media).cloned().ok_or_else(|| CmdError::Failed("picture data missing".into()))?;
+    wordcraft_geom::picture::decode(&bytes, wordcraft_geom::MAX_DECODED_BYTES).map_err(|e| match e {
+        wordcraft_geom::picture::Refusal::TooLarge { .. } => too_large(),
+        e => CmdError::Failed(format!("can't decode the picture: {e}")),
     })
 }
 
-fn too_large() -> CmdError {
+/// The part of `img` that `crop` (left, top, right, bottom fractions) leaves showing, as the
+/// renderer cuts it ([`crop_window`]): at least one pixel each way.
+pub(super) fn visible(img: image::DynamicImage, crop: [f32; 4]) -> image::DynamicImage {
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return img;
+    }
+    let [x, y, vw, vh] = crop_window(crop);
+    let px = |f: f64, n: u32| ((f * f64::from(n)).round().max(0.0) as u32).min(n);
+    let (x0, y0) = (px(x, w).min(w - 1), px(y, h).min(h - 1));
+    let (x1, y1) = (px(x + vw, w).clamp(x0 + 1, w), px(y + vh, h).clamp(y0 + 1, h));
+    if (x0, y0, x1, y1) == (0, 0, w, h) {
+        return img;
+    }
+    img.crop_imm(x0, y0, x1 - x0, y1 - y0)
+}
+
+/// What a crop leaves showing, as fractions of the source: x, y, width and height. The same window
+/// the renderer and PDF export draw (`wordcraft_metafile::crop_window`): a side crops at most all
+/// but half a percent, and at least half a percent shows each way.
+pub(super) fn crop_window(crop: [f32; 4]) -> [f64; 4] {
+    const MIN_VISIBLE: f64 = 0.005;
+    let [l, t, r, b] = crop.map(|v| if v.is_finite() { f64::from(v.clamp(0.0, 1.0)) } else { 0.0 });
+    let axis = |lo: f64, hi: f64| {
+        let lo = lo.min(1.0 - MIN_VISIBLE);
+        (lo, (1.0 - lo - hi).max(MIN_VISIBLE))
+    };
+    let ((x, w), (y, h)) = (axis(l, r), axis(t, b));
+    [x, y, w, h]
+}
+
+/// The most pictures one Compress Pictures goes through.
+const MAX_COMPRESSED: usize = 10_000;
+
+/// `picture.compress`: the selected picture (or, with `all`, every picture in the document) down
+/// to `maxPixels` on its longer side, or to what `ppi` needs at its size (0: as it is); with
+/// `deleteCropped`, what its crop hides is cut away first.
+pub(super) fn compress(s: &mut Session, v: &Value) -> CmdResult {
+    let max = p::u64(v, "maxPixels").map(|m| m.clamp(32, 20_000) as u32);
+    let ppi = p::f32(v, "ppi").filter(|x| x.is_finite()).map(|x| x.clamp(0.0, 2000.0));
+    let opts = Compress { max, ppi, default: max.is_none() && ppi.is_none(), delete: p::bool(v, "deleteCropped") == Some(true) };
+    if p::bool(v, "all") == Some(true) {
+        let mut done = 0usize;
+        for pos in every_picture(s).into_iter().take(MAX_COMPRESSED) {
+            // One picture that can't be drawn (too large, unreadable) is left as it is.
+            if compress_at(s, &pos, opts).unwrap_or(false) {
+                done += 1;
+            }
+        }
+        return Ok(serde_json::json!({"compressed": done}));
+    }
+    let (pos, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
+    if !matches!(o, InlineObject::Image { .. }) {
+        return Err(CmdError::Disabled("not a picture".into()));
+    }
+    let done = compress_at(s, &pos, opts)?;
+    let o = selected(s).map(|(_, o)| serde_json::to_value(o).unwrap_or(Value::Null)).unwrap_or(Value::Null);
+    Ok(serde_json::json!({"object": o, "compressed": usize::from(done)}))
+}
+
+#[derive(Clone, Copy)]
+struct Compress {
+    max: Option<u32>,
+    ppi: Option<f32>,
+    /// Neither given: the 1600 pixels scripts have had.
+    default: bool,
+    delete: bool,
+}
+
+/// Every picture in the document's stories (body, headers, footers, notes, text boxes).
+fn every_picture(s: &Session) -> Vec<wordcraft_doc::Pos> {
+    let stories = std::iter::once(wordcraft_doc::StoryRef::Body).chain(s.doc.parts.keys().map(|k| wordcraft_doc::StoryRef::Part(*k)));
+    let mut out = Vec::new();
+    for story in stories {
+        for path in s.doc.para_paths(story) {
+            let Some(para) = s.doc.para(story, &path) else { continue };
+            for off in para.object_offsets() {
+                if matches!(para.object_at(off), Some(InlineObject::Image { .. })) {
+                    out.push(wordcraft_doc::Pos { story, path: path.clone(), off });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Compress the picture at `pos`; whether it changed.
+fn compress_at(s: &mut Session, pos: &wordcraft_doc::Pos, opts: Compress) -> Result<bool, CmdError> {
+    let Some(InlineObject::Image { media, w, h, crop, .. }) = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned() else {
+        return Ok(false);
+    };
+    let mut img = decode(s, &media)?;
+    let cut = opts.delete && crop.iter().any(|c| *c > 0.0);
+    if cut {
+        img = visible(img, crop);
+    }
+    let left = if cut { [0.0; 4] } else { crop };
+    let limit = match (opts.max, opts.ppi) {
+        (Some(m), _) => Some(m),
+        (None, Some(ppi)) if ppi > 0.0 => Some(compression_pixels(w, h, left, ppi)),
+        _ if opts.default => Some(1600),
+        _ => None,
+    };
+    let shrink = limit.filter(|m| img.width().max(img.height()) > *m);
+    if !cut && shrink.is_none() {
+        return Ok(false);
+    }
+    if let Some(m) = shrink {
+        img = img.resize(m, m, image::imageops::FilterType::Lanczos3);
+    }
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| CmdError::Failed(e.to_string()))?;
+    let key = s.doc.add_media(png, "png");
+    let orig = s.originals.get(&media).cloned().unwrap_or_else(|| media.clone());
+    s.originals.entry(key.clone()).or_insert(orig);
+    super::select::edit_obj(s, pos, |o| {
+        if let InlineObject::Image { media, crop, .. } = o {
+            *media = key.clone();
+            *crop = left;
+        }
+    })?;
+    Ok(true)
+}
+
+/// The source pixels a picture `w` × `h` points cropped `crop` needs on its longer side for `ppi`
+/// (32 to 20,000): compression resizes the whole source bitmap, so the limit includes what the
+/// crop hides.
+pub fn compression_pixels(w: f32, h: f32, crop: [f32; 4], ppi: f32) -> u32 {
+    let full = |len: f32, lo: f32, hi: f32| f64::from(len).max(0.0) / f64::from((1.0 - lo - hi).max(0.05));
+    let long = full(w, crop[0], crop[2]).max(full(h, crop[1], crop[3]));
+    let px = (long / 72.0 * f64::from(ppi)).ceil();
+    if px.is_finite() { px.clamp(32.0, 20_000.0) as u32 } else { 20_000 }
+}
+
+pub(super) fn too_large() -> CmdError {
     CmdError::Failed("picture is too large to edit".into())
 }
 
@@ -236,74 +406,9 @@ pub(super) fn grown(w: u32, h: u32, pad: u32) -> Option<(u32, u32)> {
     Some((w.checked_add(twice)?, h.checked_add(twice)?))
 }
 
-/// What Artistic Effects, Picture Styles and Picture Border drew on a picture's bitmap: the
-/// bitmap they started from and the effect, style and border on it, so the next one draws again
-/// from that bitmap instead of over the last result. Picking a second style replaces the first,
-/// as in Word, instead of framing the frame (#2052). Kept in [`Session::picture_looks`] under the
-/// media key of the drawn bitmap.
-#[derive(Clone, Debug, Default)]
-pub struct PictureLook {
-    /// The media key of the bitmap before any of them.
-    pub base: String,
-    pub effect: Option<String>,
-    pub style: Option<String>,
-    pub border: Option<(Rgb, u32)>,
-    /// The drawn bitmap: a media key that names other bytes later (undo then a new picture
-    /// reusing the key) is not this look's.
-    pub drawn: std::sync::Arc<Vec<u8>>,
-}
-
-/// Change the selected picture's effect, style or border and draw it again from the bitmap
-/// under them (effect, then style, then border).
-pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> CmdResult {
-    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
-    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-    let cur = s.doc.media.get(&media).cloned();
-    let mut look = s
-        .picture_looks
-        .get(&media)
-        .filter(|l| cur.as_ref().is_some_and(|c| std::sync::Arc::ptr_eq(c, &l.drawn)) && s.doc.media.contains_key(&l.base))
-        .cloned()
-        .unwrap_or_else(|| PictureLook { base: media.clone(), ..Default::default() });
-    change(&mut look);
-    if look.effect.is_none() && look.style.is_none() && look.border.is_none() {
-        // Nothing left on it: the bitmap as it was.
-        let base = look.base.clone();
-        return with_obj(s, |o| {
-            if let InlineObject::Image { media, .. } = o {
-                *media = base.clone();
-            }
-        });
-    }
-    let l = look.clone();
-    // Styles, borders and effects leave the file's brightness, contrast and transparency alone.
-    let out = adjust_media(
-        s,
-        &look.base,
-        |_| {},
-        move |img| {
-            let mut img = match &l.effect {
-                Some(e) => artistic_effect(img, e),
-                None => img,
-            };
-            if let Some(st) = &l.style {
-                img = picture_style(img, st)?;
-            }
-            if let Some((c, w)) = l.border {
-                img = frame(img, w, [c.0, c.1, c.2, 255])?;
-            }
-            Ok(img)
-        },
-    )?;
-    if let Some((_, InlineObject::Image { media, .. })) = selected(s)
-        && let Some(drawn) = s.doc.media.get(&media).cloned()
-    {
-        s.picture_looks.insert(media, PictureLook { drawn, ..look });
-    }
-    Ok(out)
-}
-
-fn artistic_effect(img: image::DynamicImage, effect: &str) -> image::DynamicImage {
+/// Artistic Effects: blur, sharpen, invert, posterize and pixelate here, the gallery's others in
+/// [`super::effects`].
+pub(super) fn artistic_effect(img: image::DynamicImage, effect: &str) -> image::DynamicImage {
     match effect {
         "blur" => img.blur(3.0),
         "sharpen" => img.unsharpen(2.0, 2),
@@ -329,23 +434,30 @@ fn artistic_effect(img: image::DynamicImage, effect: &str) -> image::DynamicImag
                 image::imageops::FilterType::Nearest,
             )
         }
-        _ => img,
+        other => super::effects::artistic(img, other),
     }
 }
 
-pub(super) fn reset(s: &mut Session, _: &Value) -> CmdResult {
+/// `picture.reset`; with `size`, Reset Picture & Size: the original size too.
+pub(super) fn reset(s: &mut Session, v: &Value) -> CmdResult {
+    // The frame first gives back the room the look's effects took.
+    super::look::unbake(s)?;
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
     let orig = s.originals.get(&media).cloned().unwrap_or(media);
     // Like Word, Reset Picture discards every correction, those read from the file (`fx`:
     // brightness, contrast, transparency, #1711, #1766) included.
-    with_obj(s, |o| {
+    let out = with_obj(s, |o| {
         if let InlineObject::Image { media, crop, fx, .. } = o {
             *media = orig.clone();
             *crop = [0.0; 4];
             *fx = PicFx::default();
         }
-    })
+    })?;
+    if p::bool(v, "size") == Some(true) {
+        return size(s, &serde_json::json!({"original": true}));
+    }
+    Ok(out)
 }
 
 pub(super) fn recolor(img: image::DynamicImage, mode: &str, sat: f32) -> image::DynamicImage {
@@ -461,7 +573,7 @@ fn push_open_runs(stack: &mut Vec<(u32, u32)>, x0: u32, x1: u32, ny: u32, open: 
     }
 }
 
-fn frame(img: image::DynamicImage, border: u32, color: [u8; 4]) -> Result<image::DynamicImage, CmdError> {
+pub(super) fn frame(img: image::DynamicImage, border: u32, color: [u8; 4]) -> Result<image::DynamicImage, CmdError> {
     let (w, h) = grown(img.width(), img.height(), border).ok_or_else(too_large)?;
     let mut out = canvas(w, h, color)?;
     image::imageops::overlay(&mut out, &img.to_rgba8(), border as i64, border as i64);

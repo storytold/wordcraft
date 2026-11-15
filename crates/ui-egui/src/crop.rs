@@ -156,7 +156,13 @@ struct Picture {
 fn picture(app: &WordApp) -> Option<Picture> {
     match crate::objects::selected(app)? {
         (pos, InlineObject::Image { w, h, crop, media, float, .. }) if wordcraft_geom::normalize_degrees(float.rot) == 0.0 => {
-            Some(Picture { pos, w: *w, h: *h, crop: *crop, media: media.clone(), flip_h: float.flip_h, flip_v: float.flip_v })
+            // Under a look drawn round it the bitmap holds only what shows: crop the picture
+            // under the look, as it shows.
+            let (w, h, crop, media) = match crate::objects::picture_shown(app) {
+                Some((sh, base)) => (sh.w, sh.h, sh.crop, base),
+                None => (*w, *h, *crop, media.clone()),
+            };
+            Some(Picture { pos, w, h, crop, media, flip_h: float.flip_h, flip_v: float.flip_v })
         }
         _ => None,
     }
@@ -217,7 +223,7 @@ fn screen(pages: &[Rect], scale: f32, page: usize, r: wordcraft_geom::Rect) -> O
 /// The picture in crop mode, laid out: its frame (page points) and page.
 fn laid_out(app: &WordApp, layout: &DocLayout) -> Option<(usize, wordcraft_geom::Rect)> {
     let pos = active(app)?;
-    layout.object(&pos, app.session.page_hint).map(|o| (o.page, o.rect))
+    layout.object(&pos, app.session.page_hint).map(|o| (o.page, crate::objects::picture_part(app, o.rect)))
 }
 
 /// Presses and drags in crop mode. `Some(true)`: taken; `Some(false)` / `None`: not about crop
@@ -629,6 +635,30 @@ mod tests {
         assert!(active(h.state()).is_some(), "crop mode stays on after a drop");
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(image_at(&h, 0), (200.0, 100.0, [0.0; 4]));
+    }
+
+    /// Crop mode on a picture with a shadow crops the picture, not its frame: the handles sit on
+    /// the picture, and after the drop the shadow goes round what is left, at the same scale.
+    #[test]
+    fn crop_mode_under_picture_effects_crops_the_picture_itself() {
+        let mut h = crop_window(1);
+        h.state_mut().run("picture.pictureEffects", json!({"shadow": {"preset": "offsetBottomRight", "distance": 8}})).unwrap();
+        steps(&mut h, 3);
+        assert!(active(h.state()).is_some(), "crop mode stays on");
+        let frame = rect_of(&mut h, 0);
+        let pic = crate::objects::picture_part(h.state(), frame);
+        assert!(frame.w > pic.w + 5.0 && (pic.w - 200.0).abs() < 0.5, "the frame holds the shadow: {frame:?} {pic:?}");
+        let from = screen(&mut h, pic.right(), pic.bottom());
+        let to = from + egui::vec2(-40.0, -20.0);
+        drag(&mut h, from, to);
+        button(&h, to, false);
+        steps(&mut h, 3);
+        let session = &h.state().session;
+        let sh = wordcraft_engine::cmd::objects::look::shown(session).unwrap();
+        assert!(sh.crop[2] > 0.05 && sh.crop[3] > 0.05 && sh.crop[0] == 0.0, "{sh:?}");
+        assert!((sh.w / (1.0 - sh.crop[2]) - 200.0).abs() < 0.5, "scale kept: {sh:?}");
+        assert!(wordcraft_engine::cmd::objects::look::current(session).is_some_and(|l| l.effects.shadow.is_some()), "the shadow stays");
+        assert_eq!(image_at(&h, 0).2, [0.0; 4], "the bitmap holds only what shows");
     }
 
     /// A click outside the picture leaves crop mode, keeping the crop.

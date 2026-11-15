@@ -108,6 +108,24 @@ pub fn selected(app: &WordApp) -> Option<(Pos, &InlineObject)> {
     wordcraft_engine::cmd::objects::object_selection(&app.session).filter(|(p, _)| selectable_story(app, p.story))
 }
 
+/// The selected picture under a look drawn round its edge (a style, a border, Picture Effects):
+/// as it shows (its crop, its own size and the room round it in its frame) and the bitmap under
+/// the look, which crop mode and Remove Background show and work on.
+pub fn picture_shown(app: &WordApp) -> Option<(wordcraft_engine::cmd::objects::look::Shown, String)> {
+    use wordcraft_engine::cmd::objects::look;
+    let l = look::current(&app.session).filter(|l| l.draws_round() && l.vis.0 > 0)?;
+    let sh = look::shown(&app.session)?;
+    Some((sh, l.base))
+}
+
+/// `r`, the selected picture's laid-out frame (page points), less the room its look takes round
+/// it: where the picture itself is.
+pub fn picture_part(app: &WordApp, r: wordcraft_geom::Rect) -> wordcraft_geom::Rect {
+    let (Some((sh, _)), Some((_, InlineObject::Image { float, .. }))) = (picture_shown(app), selected(app)) else { return r };
+    let [l, t, rr, b] = wordcraft_engine::cmd::objects::look::page_room(sh.room, float.flip_h, float.flip_v);
+    wordcraft_geom::Rect::new(r.x + l, r.y + t, (r.w - l - rr).max(0.1), (r.h - t - b).max(0.1))
+}
+
 /// Whether objects of `story` can be selected and dragged on the canvas: the body and
 /// headers/footers.
 fn selectable_story(app: &WordApp, story: StoryRef) -> bool {
@@ -248,6 +266,9 @@ fn screen(pages: &[Rect], scale: f32, page: usize, r: wordcraft_geom::Rect) -> O
 /// Pressing, dragging, releasing or double-clicking on an object (or a frame handle). Returns
 /// true when it was about an object, so the text doesn't also get it.
 pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect], layout: &DocLayout, scale: f32, at: Pos2) -> bool {
+    if let Some(taken) = crate::background::pointer(app, ui, resp, pages, layout, scale, at) {
+        return taken;
+    }
     if let Some(taken) = crate::crop::pointer(app, ui, resp, pages, layout, scale, at) {
         return taken;
     }
@@ -792,7 +813,7 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
 
 /// Draw the frame of the active object, or the drag preview.
 pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
-    if crate::crop::paint(app, painter, t, layout, pages, scale) {
+    if crate::background::paint(app, painter, t, layout, pages, scale) || crate::crop::paint(app, painter, t, layout, pages, scale) {
         return;
     }
     if let Some(d) = app.canvas.obj_drag.as_ref().filter(|d| d.end.is_some()) {
@@ -922,7 +943,7 @@ fn paint_end_drag(app: &WordApp, d: &ObjectDrag, painter: &Painter, t: &Tokens, 
 
 /// The pointer over an object or a handle (or dragging): its cursor.
 pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<egui::CursorIcon> {
-    if let Some(c) = crate::crop::cursor(app, layout, pages, scale, at) {
+    if let Some(c) = crate::background::cursor(app, layout, pages, scale, at).or_else(|| crate::crop::cursor(app, layout, pages, scale, at)) {
         return Some(c);
     }
     if let Some(d) = &app.canvas.obj_drag {
@@ -953,8 +974,8 @@ fn hover_cursor(app: &WordApp, o: &ObjectHit, g: Grab) -> egui::CursorIcon {
 /// Keys for a selected object: arrows nudge a floating one; typing or Enter goes into a text box.
 /// Returns true if handled.
 pub fn key(app: &mut WordApp, key: egui::Key, m: egui::Modifiers) -> bool {
-    // Crop mode takes Esc and Enter (leaving it, the crop kept).
-    if crate::crop::key(app, key) {
+    // Background Removal and crop mode take Esc and Enter (leaving them, the changes kept).
+    if crate::background::key(app, key) || crate::crop::key(app, key) {
         return true;
     }
     if selected(app).is_none() {

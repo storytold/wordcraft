@@ -30,6 +30,10 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
         None if id.starts_with("ui.zotero.") => app.zotero.busy.is_none() && !cfg!(target_arch = "wasm32"),
         None if id == "ui.linkTextBox" => enabled(app, "shape.link"),
         None if id == "ui.crop" => crate::crop::can_toggle(app),
+        None if id == "ui.removeBackground" || id == "ui.setTransparentColor" => crate::background::can_start(app),
+        None if matches!(id, "ui.markAreasToKeep" | "ui.markAreasToRemove" | "ui.discardBackgroundChanges" | "ui.keepBackgroundChanges") => {
+            crate::background::active(app).is_some()
+        }
         None => id.starts_with("ui."),
     }
 }

@@ -276,6 +276,11 @@ pub struct Tokens {
     /// Crop mode: the crop handles, and the dim over the cropped-away part of a picture.
     pub crop_handle: Color32,
     pub crop_dim: Color32,
+    /// Background Removal: the tint over what will be removed, and the Mark Areas to Keep and Mark
+    /// Areas to Remove strokes. Drawn on the picture, so the same in both themes.
+    pub removed_tint: Color32,
+    pub mark_keep: Color32,
+    pub mark_remove: Color32,
     /// Comment and revision balloons in the markup area beside the page (#2045): the card, the
     /// area behind it and its edge. The card holds `text`, so it is dark in the dark theme.
     pub balloon: Color32,
@@ -338,6 +343,9 @@ impl Tokens {
             equation_box: Color32::from_rgb(0x6E, 0x9B, 0xE6),
             crop_handle: Color32::BLACK,
             crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
+            removed_tint: Color32::from_rgb(0xB4, 0x2C, 0xC8),
+            mark_keep: Color32::from_rgb(0x1E, 0x9E, 0x4A),
+            mark_remove: Color32::from_rgb(0xD1, 0x3B, 0x3B),
             balloon: Color32::WHITE,
             markup_area: Color32::from_rgb(0xF3, 0xF3, 0xF3),
             markup_edge: Color32::from_rgb(0xE0, 0xE0, 0xE0),
@@ -405,6 +413,9 @@ impl Tokens {
             equation_box: Color32::from_rgb(0x6E, 0x9B, 0xE6),
             crop_handle: Color32::BLACK,
             crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
+            removed_tint: Color32::from_rgb(0xB4, 0x2C, 0xC8),
+            mark_keep: Color32::from_rgb(0x1E, 0x9E, 0x4A),
+            mark_remove: Color32::from_rgb(0xD1, 0x3B, 0x3B),
             balloon: Color32::from_rgb(0x2B, 0x2B, 0x2B),
             markup_area: Color32::from_rgb(0x1B, 0x1B, 0x1B),
             markup_edge: Color32::from_rgb(0x3A, 0x3A, 0x3A),

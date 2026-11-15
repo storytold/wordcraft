@@ -516,7 +516,8 @@ fn a_tiny_sharpen_value_does_not_panic() {
 
 /// Transparency is absolute from the original pixels: 80% then 0% is opaque again
 /// (it used to stay faded), and repeating a value is idempotent. Corrections and color
-/// re-set the same way: brightness 0 and saturation 100 restore the original.
+/// re-set the same way: brightness 0 and saturation 100 restore what they changed, and each
+/// keeps the others' settings, as in Word (#3344): the picture stays 50% transparent.
 #[test]
 fn transparency_is_absolute_from_the_original() {
     let mut s = Session::new(wordcraft_doc::Document::new());
@@ -543,14 +544,14 @@ fn transparency_is_absolute_from_the_original() {
     s.run("picture.corrections", &json!({"brightness": 20})).unwrap();
     assert_ne!(rgba(&s), orig);
     s.run("picture.corrections", &json!({"brightness": 0})).unwrap();
-    assert_eq!(rgba(&s), orig, "brightness 0 restores the original");
+    assert_eq!(rgba(&s), once, "brightness 0 restores the colours, the transparency stays");
     s.run("picture.color", &json!({"mode": "saturation", "saturation": 0})).unwrap();
-    assert!(rgba(&s).iter().all(|p| p[0] == p[1] && p[1] == p[2]), "grayscale");
+    assert!(rgba(&s).iter().all(|p| p[0] == p[1] && p[1] == p[2] && p[3] == 127), "grayscale, still 50% transparent");
     s.run("picture.color", &json!({"mode": "saturation", "saturation": 100})).unwrap();
-    assert!(
-        rgba(&s).iter().zip(orig.iter()).all(|(a, b)| a.iter().zip(b.iter()).all(|(x, y)| (*x as i16 - *y as i16).abs() <= 2)),
-        "saturation 100 restores within float rounding"
-    );
+    assert_eq!(rgba(&s), once, "saturation 100 restores the colours");
+    s.run("picture.transparency", &json!({"percent": 0})).unwrap();
+    assert_eq!(rgba(&s), orig, "nothing left: the original");
+    s.run("picture.transparency", &json!({"percent": 30})).unwrap();
     s.run("picture.reset", &json!({})).unwrap();
     assert_eq!(rgba(&s), orig, "reset still finds the original");
 }
@@ -598,6 +599,10 @@ fn picture_edits_replace_the_file_corrections() {
     assert_eq!(state(&s).1, PicFx::new(80_000, -80_000, 0));
     s.run("picture.color", &json!({"mode": "washout"})).unwrap();
     assert_eq!(state(&s).1, PicFx::default());
+    // No Recolor: the colours back; the lum Washout replaced stays replaced.
+    s.run("picture.color", &json!({"recolor": "none"})).unwrap();
+    let (_, fx, px) = state(&s);
+    assert_eq!((fx, px), (PicFx::default(), orig.clone()));
     // Corrections bake from the original and replace the file's lum.
     set_fx(&mut s, imported);
     s.run("picture.corrections", &json!({"brightness": 0})).unwrap();

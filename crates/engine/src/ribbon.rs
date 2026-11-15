@@ -18,8 +18,8 @@ use crate::Registry;
 pub const TABS: [&str; 13] =
     ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Developer", "Zotero", "Help"];
 /// Tabs that come up with the selection; custom tabs can't take their names.
-pub const CONTEXTUAL_TABS: [&str; 7] =
-    ["Table Design", "Table Layout", "Picture Format", "Shape Format", "Equation", "Chart Design", "SmartArt Design"];
+pub const CONTEXTUAL_TABS: [&str; 8] =
+    ["Table Design", "Table Layout", "Picture Format", "Background Removal", "Shape Format", "Equation", "Chart Design", "SmartArt Design"];
 /// The Quick Access Toolbar's commands until the user changes them.
 pub const DEFAULT_QAT: [&str; 3] = ["file.save", "edit.undo", "edit.redo"];
 

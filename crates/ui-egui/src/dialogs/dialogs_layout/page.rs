@@ -44,7 +44,8 @@ impl SizeForm {
     /// The selected picture's or shape's size; None when nothing that has one is selected.
     pub fn read(app: &WordApp) -> Option<SizeForm> {
         use wordcraft_doc::para::InlineObject;
-        let (at, o) = wordcraft_engine::cmd::objects::selected(&app.session)?;
+        // A picture as its look shows it: its own size, without the room its effects take.
+        let (at, o) = wordcraft_engine::cmd::objects::look::selected_shown(&app.session)?;
         let (w, h, _) = o.frame()?;
         let full = match &o {
             InlineObject::Image { media, .. } => wordcraft_engine::cmd::objects::original_size(&app.session, media),
@@ -70,7 +71,7 @@ impl SizeForm {
     /// on what is selected, or there is nothing to size (false: close the dialog). OK and Reset
     /// never work from numbers read from another object or an older state of this one.
     pub fn follow(&mut self, app: &WordApp) -> bool {
-        match wordcraft_engine::cmd::objects::selected(&app.session) {
+        match wordcraft_engine::cmd::objects::look::selected_shown(&app.session) {
             Some((at, o)) if at == self.at && seen(&o) == self.seen => true,
             Some(_) => SizeForm::read(app).map(|f| *self = f).is_some(),
             None => false,
