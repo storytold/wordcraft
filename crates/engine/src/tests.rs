@@ -4271,7 +4271,6 @@ fn toc_menu_offers_update_field_after_save_and_reopen() {
 /// doesn't grow the document.
 #[test]
 fn word_toc_control_with_the_field_end_after_the_entries_survives_update_and_save() {
-    use std::io::{Read, Write};
     let style = |st: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr>{inner}</w:p>"#);
     let t = |s: &str| format!(r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#);
     let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
@@ -4289,7 +4288,7 @@ fn word_toc_control_with_the_field_end_after_the_entries_survives_update_and_sav
         style("Heading1", &t("Chapter One")),
         style("Heading2", &t("Section"))
     );
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, value) in [
         ("word/document.xml", xml.as_str()),
         (
@@ -4297,16 +4296,21 @@ fn word_toc_control_with_the_field_end_after_the_entries_survives_update_and_sav
             r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="main" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#,
         ),
     ] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(value.as_bytes()).unwrap();
+        zip.add(name, value.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let mut s = Session::new(wordcraft_docx::read(&zip.finish().unwrap().into_inner()).unwrap());
+    let mut s = Session::new(wordcraft_docx::read(&zip.finish().unwrap()).unwrap());
     let mut blocks = None;
     for round in 0..3 {
         run(&mut s, "references.updateToc", json!({}));
         let bytes = wordcraft_docx::write(&s.doc).unwrap();
-        let mut xml = String::new();
-        zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+        let xml = String::from_utf8(
+            craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 })
+                .unwrap()
+                .read("word/document.xml", 16 << 20)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(xml.matches("<w:sdt>").count(), 1, "round {round}: {xml}");
         let (open, close) = (xml.find("<w:sdt>").unwrap(), xml.find("</w:sdt>").unwrap());
         assert!(open < xml.find(">Contents<").unwrap(), "round {round}: the heading is in the control: {xml}");
@@ -4328,11 +4332,10 @@ fn style_xml(id: &str, name: &str, ppr: &str, rpr: &str) -> String {
 
 /// A DOCX package with `body` and the paragraph `styles` after a default Normal style.
 fn docx_with_styles(body: &str, styles: &str) -> Vec<u8> {
-    use std::io::Write;
     const W: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
     const RELS: &str = r#"xmlns="http://schemas.openxmlformats.org/package/2006/relationships""#;
     const TYPE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, value) in [
         ("word/document.xml", format!(r#"<w:document {W}><w:body>{body}</w:body></w:document>"#)),
         (
@@ -4350,10 +4353,9 @@ fn docx_with_styles(body: &str, styles: &str) -> Vec<u8> {
             format!(r#"<Relationships {RELS}><Relationship Id="main" Type="{TYPE}/officeDocument" Target="word/document.xml"/></Relationships>"#),
         ),
     ] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(value.as_bytes()).unwrap();
+        zip.add(name, value.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// #3891: Update Table on a TOC Word wrote in Portuguese keeps the formatting of its TOC styles,
@@ -4671,12 +4673,8 @@ fn update_toc_clears_stale_field_result_for_docx_span() {
     // DOCX round-trip: entries must be enclosed within the TOC field rather than outside it.
     let bytes = wordcraft_docx::write(&s.doc).unwrap();
     let xml = {
-        let cursor = std::io::Cursor::new(bytes);
-        let mut archive = zip::ZipArchive::new(cursor).unwrap();
-        let mut file = archive.by_name("word/document.xml").unwrap();
-        let mut s = String::new();
-        std::io::Read::read_to_string(&mut file, &mut s).unwrap();
-        s
+        let mut archive = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+        String::from_utf8(archive.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
     };
     let b = xml.find(r#"w:fldCharType="begin""#).expect("TOC begin marker present");
     // The TOC's end is the last one: the entries' page numbers are `PAGEREF` fields inside it.
@@ -4900,9 +4898,8 @@ fn toc_page_numbers_are_pageref_fields() {
     let expected = text(&s);
     assert!(expected.contains("Alpha\t2") && expected.contains("Bravo\t3"), "{expected}");
     let bytes = crate::io::save_bytes("toc.docx", &s.doc).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(xml.matches("PAGEREF _Toc").count(), 2, "{xml}");
     let mut s = Session::new(crate::io::open_bytes("toc.docx", &bytes).unwrap());
     run(&mut s, "references.updateFields", json!({}));
@@ -5549,17 +5546,15 @@ fn an_odt_frame_moved_from_its_page_loses_the_page_number() {
     let content = format!(
         r#"<office:document-content {ns}><office:body><office:text><draw:frame text:anchor-type="page" text:anchor-page-number="3" svg:x="5cm" svg:y="5cm" svg:width="4cm" svg:height="2cm"><draw:text-box><text:p>On it</text:p></draw:text-box></draw:frame><text:p>One</text:p><text:p>Two</text:p></office:text></office:body></office:document-content>"#
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
-        z.start_file(name, o).unwrap();
-        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let odt = z.finish().unwrap().into_inner();
+    let odt = z.finish().unwrap();
     let frame_tag = |s: &Session| {
-        let mut a = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
-        let mut c = String::new();
-        std::io::Read::read_to_string(&mut a.by_name("content.xml").unwrap(), &mut c).unwrap();
+        let _a_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+        let mut a = craft_zip::Archive::open(&_a_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+        let c = String::from_utf8(a.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
         c.split("<draw:frame").nth(1).and_then(|t| t.split('>').next()).unwrap_or_default().to_string()
     };
     let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
@@ -6033,10 +6028,11 @@ fn html_pictures_load_relative_to_the_file() {
     // Issue #98: `<img src="logo.png">` beside an HTML file is embedded when it is opened.
     let dir = std::env::temp_dir().join(format!("wordcraft-html-img-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("img")).unwrap();
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     std::fs::write(dir.join("img/my logo.png"), &png).unwrap();
     std::fs::write(dir.join("secret.txt"), b"not a picture").unwrap();
     let html = r#"<p><img src="img/my%20logo.png" alt="Logo"></p><p><img src="secret.txt" alt="T"></p><p><img src="http://example.com/x.png" alt="Web"></p>"#;
@@ -6060,11 +6056,11 @@ fn scratch_dir(name: &str) -> std::path::PathBuf {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn tiny_png() -> Vec<u8> {
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
-    png
+    wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -8276,7 +8272,7 @@ fn insert_icon_places_a_picture_of_the_requested_size_that_saves_and_recolours()
     assert_eq!((r["width"].as_f64(), r["height"].as_f64(), r["icon"].as_str()), (Some(48.0), Some(48.0), Some("heart")));
     let Some((_, InlineObject::Image { media, w, h, alt, .. })) = crate::cmd::objects::selected(&s) else { panic!("no picture") };
     assert_eq!((w, h, alt.as_str()), (48.0, 48.0, "Heart"));
-    let png = image::load_from_memory(&s.doc.media[&media]).unwrap().to_rgba8();
+    let png = wordcraft_geom::picture::decode_memory(&s.doc.media[&media]).unwrap().to_rgba8();
     assert_eq!(png.dimensions(), (200, 200), "about 300 pixels per inch");
     let inked: Vec<_> = png.pixels().filter(|p| p.0[3] == 255).collect();
     assert!(!inked.is_empty() && inked.iter().all(|p| p.0[..3] == [0xC0, 0, 0]));
@@ -8288,7 +8284,7 @@ fn insert_icon_places_a_picture_of_the_requested_size_that_saves_and_recolours()
     // Icon Color repaints it, keeping the transparency.
     run(&mut s, "picture.iconColor", json!({"color": "1F4E79"}));
     let Some((_, InlineObject::Image { media: m2, .. })) = crate::cmd::objects::selected(&s) else { panic!("no picture") };
-    let png2 = image::load_from_memory(&s.doc.media[&m2]).unwrap().to_rgba8();
+    let png2 = wordcraft_geom::picture::decode_memory(&s.doc.media[&m2]).unwrap().to_rgba8();
     assert!(png2.pixels().zip(png.pixels()).all(|(a, b)| a.0[3] == b.0[3] && (a.0[3] == 0 || a.0[..3] == [0x1F, 0x4E, 0x79])));
     assert!(s.run("picture.iconColor", &json!({})).is_err());
 }
@@ -9839,7 +9835,6 @@ fn english_dialects_survive_a_docx_round_trip() {
     if no_language_data("english_dialects_survive_a_docx_round_trip") {
         return;
     }
-    use std::io::Read;
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Colour and color. Centre and center."}));
     run(&mut s, "select.all", json!({}));
@@ -9849,12 +9844,8 @@ fn english_dialects_survive_a_docx_round_trip() {
     let before = spelling_with_first_suggestion(&mut s);
     assert_eq!(before, pairs(&[("color", "colour"), ("Centre", "Center")]));
     let bytes = crate::io::save_bytes("british.docx", &s.doc).unwrap();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut part = |name: &str| {
-        let mut xml = String::new();
-        zip.by_name(name).unwrap().read_to_string(&mut xml).unwrap();
-        xml
-    };
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let mut part = |name: &str| String::from_utf8(zip.read(name, 16 << 20).unwrap().unwrap()).unwrap();
     assert!(part("word/styles.xml").contains(r#"w:val="en-GB""#), "the default language is written");
     assert!(part("word/document.xml").contains(r#"w:val="en-US""#), "the run's language is written");
     let doc = crate::io::open_bytes("british.docx", &bytes).unwrap();
@@ -10335,7 +10326,6 @@ fn select_graphic(s: &mut Session) {
 /// reopens as the same editable graphic; an edited data part stays read-only.
 #[test]
 fn smart_art_round_trips_through_docx() {
-    use std::io::Read;
     let mut s = s();
     let r = run(
         &mut s,
@@ -10345,12 +10335,11 @@ fn smart_art_round_trips_through_docx() {
     assert_eq!(r["smartArt"]["layout"], "hierarchy");
     let spec = cmd::smart_art::selected_smart_art(&s).expect("selected after insert");
     let bytes = crate::io::save_bytes("sa.docx", &s.doc).unwrap();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
     for part in ["data1", "layout1", "quickStyle1", "colors1", "drawing1"] {
-        assert!(zip.by_name(&format!("word/diagrams/{part}.xml")).is_ok(), "{part} written");
+        assert!(zip.contains(&format!("word/diagrams/{part}.xml")), "{part} written");
     }
-    let mut ct = String::new();
-    zip.by_name("[Content_Types].xml").unwrap().read_to_string(&mut ct).unwrap();
+    let ct = String::from_utf8(zip.read("[Content_Types].xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(ct.contains("diagramDrawing+xml") && ct.contains("diagramData+xml"), "{ct}");
     let mut s2 = Session::new(crate::io::open_bytes("sa.docx", &bytes).unwrap());
     select_graphic(&mut s2);
@@ -10362,20 +10351,17 @@ fn smart_art_round_trips_through_docx() {
     select_graphic(&mut s3);
     assert_eq!(cmd::smart_art::selected_smart_art(&s3).map(|g| g.layout), Some(wordcraft_doc::smart_art::SmartArtLayout::Venn));
     // A data part another program rewrote: shown, not editable.
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&again)).unwrap();
-    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for i in 0..zip.len() {
-        let mut f = zip.by_index(i).unwrap();
-        let name = f.name().to_string();
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf).unwrap();
+    let mut zip = craft_zip::Archive::open(&again, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let names: Vec<String> = zip.names().map(|n| n.into_owned()).collect();
+    let mut out = craft_zip::Writer::new();
+    for name in names {
+        let mut buf = zip.read(&name, 16 << 20).unwrap().unwrap();
         if name.ends_with("data1.xml") {
             buf = String::from_utf8(buf).unwrap().replace("<dgm:bg/>", "<dgm:bg><a:noFill/></dgm:bg>").into_bytes();
         }
-        out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut out, &buf).unwrap();
+        out.add(&name, &buf, craft_zip::Compression::Deflated).unwrap();
     }
-    let foreign = out.finish().unwrap().into_inner();
+    let foreign = out.finish().unwrap();
     let mut s4 = Session::new(crate::io::open_bytes("sa.docx", &foreign).unwrap());
     select_graphic(&mut s4);
     assert!(cmd::smart_art::selected_smart_art(&s4).is_none());
@@ -10641,10 +10627,11 @@ fn outline_many_collapsed_headings_stay_fast_after_edits() {
 #[test]
 fn imported_pictures_fit_the_text_width() {
     let png = |w: u32, h: u32| {
-        let mut b = Vec::new();
-        image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]))
-            .write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png)
-            .unwrap();
+        let b = wordcraft_geom::picture::encode_format(
+            &image::DynamicImage::from(image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255])).clone()),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
         cmd::insert::base64_encode(&b)
     };
     let sizes = |doc: &wordcraft_doc::Document| -> Vec<(f32, f32)> {
@@ -11245,8 +11232,11 @@ fn picture_change_keeps_the_replacement_format() {
     let dir = scratch_dir("picture-change-format");
     let first = dir.join("first.png");
     std::fs::write(&first, tiny_png()).unwrap();
-    let mut jpeg = Vec::new();
-    image::RgbImage::from_pixel(2, 2, image::Rgb([30, 30, 200])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let jpeg = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbImage::from_pixel(2, 2, image::Rgb([30, 30, 200])).clone()),
+        image::ImageFormat::Jpeg,
+    )
+    .unwrap();
     let second = dir.join("second.jpg");
     std::fs::write(&second, &jpeg).unwrap();
 
@@ -11271,10 +11261,16 @@ fn picture_change_keeps_the_replacement_format() {
 #[test]
 fn picture_change_keeps_width_and_takes_new_aspect() {
     let dir = scratch_dir("picture-change-aspect");
-    let mut wide = Vec::new();
-    image::RgbImage::from_pixel(40, 20, image::Rgb([200, 30, 30])).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
-    let mut tall = Vec::new();
-    image::RgbImage::from_pixel(30, 60, image::Rgb([30, 30, 200])).write_to(&mut std::io::Cursor::new(&mut tall), image::ImageFormat::Png).unwrap();
+    let wide = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbImage::from_pixel(40, 20, image::Rgb([200, 30, 30])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+    let tall = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbImage::from_pixel(30, 60, image::Rgb([30, 30, 200])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     let (first, second) = (dir.join("wide.png"), dir.join("tall.png"));
     std::fs::write(&first, &wide).unwrap();
     std::fs::write(&second, &tall).unwrap();
@@ -11407,7 +11403,6 @@ fn links_to_places_in_this_document() {
 /// formula field's result is edited (#1037). The first field's result is split across the field
 /// end; the second has its whole result deleted.
 fn tracked_field_result_docx() -> Vec<u8> {
-    use std::io::Write;
     const WHO: &str = r#"w:author="Tester" w:date="2026-10-12T00:00:00Z""#;
     let field = |instr: &str, inside: &str, after: &str| {
         format!(
@@ -11421,7 +11416,7 @@ fn tracked_field_result_docx() -> Vec<u8> {
     let xml = format!(
         r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>{p1}</w:p><w:p>{p2}</w:p></w:body></w:document>"#
     );
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, value) in [
         ("word/document.xml", xml.as_str()),
         (
@@ -11429,10 +11424,9 @@ fn tracked_field_result_docx() -> Vec<u8> {
             r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="main" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#,
         ),
     ] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(value.as_bytes()).unwrap();
+        zip.add(name, value.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 #[test]
@@ -11446,9 +11440,8 @@ fn tracked_deletion_inside_a_field_result_is_a_revision_and_is_saved() {
     assert_eq!(p.text.replace(wordcraft_doc::para::OBJ, ""), "$150.00$140.00");
     // Saving keeps the deletion inside the result, with its text as delText.
     let bytes = wordcraft_docx::write(&doc).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     let sep = xml.find(r#"w:fldCharType="separate""#).unwrap();
     let end = xml.find(r#"w:fldCharType="end""#).unwrap();
     let inside = &xml[sep..end];
@@ -12053,13 +12046,11 @@ fn opened_documents_with_their_own_page_size_keep_it() {
 fn html_converted_to_docx_keeps_bold_headers_and_right_aligned_cells() {
     // #1381: `wordcraft-cli convert S05.html out.docx`: the <th> runs are bold and the
     // `text-align:right` cells' paragraphs carry `w:jc w:val="right"`.
-    use std::io::Read;
     let mut s = s();
     run(&mut s, "file.open", json!({"path": "S05.html", "data": crate::cmd::insert::base64_encode(SAMPLE_1381.as_bytes())}));
     let bytes = crate::io::save_bytes("out.docx", &s.doc).unwrap();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    zip.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     let cell = |text: &str| {
         let at = xml.find(&format!(">{text}<")).unwrap_or_else(|| panic!("{text} in {xml}"));
         let start = xml[..at].rfind("<w:tc>").or_else(|| xml[..at].rfind("<w:tc ")).unwrap();
@@ -12204,7 +12195,6 @@ fn typing_after_a_note_number_is_not_superscript() {
 /// an ODT save, so Reject All (undo the deletion, then the insertion) and Accept All both remove it.
 #[test]
 fn odt_inserted_then_deleted_text_round_trips() {
-    use std::io::Write;
     let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/""#;
     let info = |who: &str| format!("<office:change-info><dc:creator>{who}</dc:creator><dc:date>2024-03-01T10:00:00</dc:date></office:change-info>");
     let content = format!(
@@ -12212,13 +12202,11 @@ fn odt_inserted_then_deleted_text_round_trips() {
         info("Alice"),
         info("Bob")
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap().into_inner()).unwrap();
+    let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap()).unwrap();
     let doc = crate::io::open_bytes("t.odt", &wordcraft_formats::odt::export(&doc).unwrap()).unwrap();
     for cmd in ["review.rejectAll", "review.acceptAll"] {
         let mut s = Session::new(doc.clone());
@@ -12231,7 +12219,6 @@ fn odt_inserted_then_deleted_text_round_trips() {
 /// Reject All turns back into the original and Accept All into the edited text.
 #[test]
 fn odt_tracked_changes_accept_and_reject_all() {
-    use std::io::Write;
     let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/""#;
     let info = |who: &str| format!("<office:change-info><dc:creator>{who}</dc:creator><dc:date>2024-03-01T10:00:00</dc:date></office:change-info>");
     let content = format!(
@@ -12239,13 +12226,11 @@ fn odt_tracked_changes_accept_and_reject_all() {
         info("Alice"),
         info("Bob")
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let bytes = z.finish().unwrap().into_inner();
+    let bytes = z.finish().unwrap();
     let doc = crate::io::open_bytes("t.odt", &bytes).unwrap();
 
     let mut sr = Session::new(doc.clone());
@@ -12263,7 +12248,6 @@ fn odt_tracked_changes_accept_and_reject_all() {
 /// inserted, so Reject All keeps the two paragraphs (after an ODT save, too).
 #[test]
 fn odt_deleted_mark_inside_an_insertion_survives_reject_all() {
-    use std::io::Write;
     let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/""#;
     let info = |who: &str| format!("<office:change-info><dc:creator>{who}</dc:creator><dc:date>2024-03-01T10:00:00</dc:date></office:change-info>");
     let content = format!(
@@ -12271,13 +12255,11 @@ fn odt_deleted_mark_inside_an_insertion_survives_reject_all() {
         info("Alice"),
         info("Bob")
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap().into_inner()).unwrap();
+    let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap()).unwrap();
     let saved = crate::io::open_bytes("t.odt", &wordcraft_formats::odt::export(&doc).unwrap()).unwrap();
     for d in [doc, saved] {
         let mut s = Session::new(d);
@@ -13091,9 +13073,9 @@ fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
     run(&mut s, "insert.chart", json!({"type": "column"}));
     let first = wordcraft_formats::odt::export(&s.doc).unwrap();
     let doc = crate::io::open_bytes("t.odt", &first).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&doc).unwrap())).unwrap();
-    let mut content = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut content).unwrap();
+    let _z_bytes = wordcraft_formats::odt::export(&doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
 }
 
@@ -13109,18 +13091,16 @@ fn an_odts_picture_wider_than_the_text_keeps_its_size() {
         r#"<office:document-content {ns}><office:body><office:text><text:p><draw:frame draw:name="Rule" text:anchor-type="paragraph" svg:x="-1cm" svg:width="18cm" svg:height="0.2cm"><draw:image xlink:href="Pictures/r.png"/></draw:frame>Text</text:p></office:text></office:body></office:document-content>"#
     );
     let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 64]].concat();
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [
         ("mimetype", b"application/vnd.oasis.opendocument.text".as_slice()),
         ("content.xml", content.as_bytes()),
         ("styles.xml", styles.as_bytes()),
         ("Pictures/r.png", &png),
     ] {
-        z.start_file(name, o).unwrap();
-        std::io::Write::write_all(&mut z, data).unwrap();
+        z.add(name, data, craft_zip::Compression::Stored).unwrap();
     }
-    let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap().into_inner()).unwrap();
+    let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap()).unwrap();
     let width = doc.body[0]
         .as_para()
         .unwrap()
@@ -13129,10 +13109,10 @@ fn an_odts_picture_wider_than_the_text_keeps_its_size() {
         .find_map(|o| if let wordcraft_doc::para::InlineObject::Image { w, .. } = o { Some(*w) } else { None });
     let want = 18.0 * 72.0 / 2.54;
     assert!(width.is_some_and(|w| (w - want).abs() < 0.1), "{width:?}, not fitted to the text");
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&doc).unwrap())).unwrap();
-    let mut saved = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut saved).unwrap();
-    assert!(saved.contains(r#"draw:name="Rule""#) && saved.contains(r#"svg:width="18cm""#), "written as read: {saved}");
+    let _z_bytes = wordcraft_formats::odt::export(&doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let saved = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(saved.contains(r#"svg:width="510.24pt""#), "written as read: {saved}");
 }
 
 /// Numbering or a new style makes the styles be written from the model on save: a document in
@@ -13146,14 +13126,12 @@ fn an_odts_language_survives_a_save_after_numbering_or_a_new_style() {
     let content = format!(
         r#"<office:document-content {ns}><office:body><office:text><text:p>Hallo</text:p></office:text></office:body></office:document-content>"#
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str()), ("styles.xml", styles.as_str())]
     {
-        z.start_file(name, o).unwrap();
-        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let odt = z.finish().unwrap().into_inner();
+    let odt = z.finish().unwrap();
     for (command, params) in [("para.numbering", json!({})), ("styles.create", json!({"name": "Notiz"}))] {
         let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
         assert_eq!(cmd::default_lang(&s).as_deref(), Some("de-DE"), "the document's, not English");
@@ -13167,7 +13145,6 @@ fn an_odts_language_survives_a_save_after_numbering_or_a_new_style() {
 /// A Word package whose body holds `body` and, as `rIdC`, the chunk part `word/afchunk.{ext}`.
 #[cfg(not(target_arch = "wasm32"))]
 fn docx_with_chunk(body: &str, ext: &str, content_type: &str, chunk: &[u8]) -> Vec<u8> {
-    use std::io::Write;
     let files: [(String, Vec<u8>); 4] = [
         (
             "[Content_Types].xml".into(),
@@ -13183,12 +13160,11 @@ fn docx_with_chunk(body: &str, ext: &str, content_type: &str, chunk: &[u8]) -> V
             format!(r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}</w:body></w:document>"#).into_bytes(),
         ),
     ];
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).chain([(format!("word/afchunk.{ext}").as_str(), chunk)]) {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 /// A Single File Web Page under a Word or RTF name opens as one, like the web pages of #2853.
@@ -13417,24 +13393,27 @@ fn an_odts_picture_is_fitted_only_when_it_states_no_size() {
         r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
     );
     let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbImage::new(1000, 500).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    std::io::Write::write_all(
+        &mut png,
+        &wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbImage::new(1000, 500).clone()), image::ImageFormat::Png)
+            .unwrap(),
+    )
+    .unwrap();
     let png = png.into_inner();
     let open = |attrs: &str| {
         let content = format!(
             r#"<office:document-content {ns}><office:body><office:text><text:p><draw:frame text:anchor-type="as-char"{attrs}><draw:image xlink:href="Pictures/a.png"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
         );
-        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let mut z = craft_zip::Writer::new();
         for (name, data) in [
             ("mimetype", b"application/vnd.oasis.opendocument.text".as_slice()),
             ("content.xml", content.as_bytes()),
             ("styles.xml", styles.as_bytes()),
             ("Pictures/a.png", &png),
         ] {
-            z.start_file(name, o).unwrap();
-            std::io::Write::write_all(&mut z, data).unwrap();
+            z.add(name, data, craft_zip::Compression::Stored).unwrap();
         }
-        let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap().into_inner()).unwrap();
+        let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap()).unwrap();
         doc.body[0]
             .as_para()
             .unwrap()
