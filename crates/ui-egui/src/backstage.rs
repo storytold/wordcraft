@@ -612,7 +612,11 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
             ui.label(tl!("Clear Recent"));
             ui.horizontal(|ui| {
                 if ui.button(tl!("Clear")).clicked() {
-                    let _ = app.run("ui.recentClear", json!({}));
+                    let result = app.run("ui.recentClear", json!({}));
+                    set_recent_save_error(
+                        ui.ctx(),
+                        result.as_ref().ok().and_then(|v| v.get("saved")).and_then(serde_json::Value::as_bool) == Some(false),
+                    );
                     close = true;
                 }
                 close |= ui.button(tl!("Cancel")).clicked();
@@ -621,6 +625,14 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         if close || modal.should_close() {
             ui.ctx().data_mut(|d| d.remove::<bool>(confirm_id));
         }
+    }
+    let save_error = ui.ctx().data(|d| d.get_temp::<bool>(recent_save_error_id())).unwrap_or(false);
+    if save_error {
+        ui.label(
+            egui::RichText::new(tl!("Recent documents changed, but the change could not be saved. It may return after restarting WordCraft."))
+                .color(ui.visuals().error_fg_color),
+        );
+        ui.add_space(6.0);
     }
     let error = ui.ctx().data(|d| d.get_temp::<String>(open_error_id())).unwrap_or_default();
     if !error.is_empty() {
@@ -766,8 +778,23 @@ fn recent_row(app: &mut WordApp, ui: &mut Ui, entry: &RecentDocument, name: &str
         }
     });
     if remove {
-        let _ = app.run("ui.recentRemove", json!({"path": path}));
+        let result = app.run("ui.recentRemove", json!({"path": path}));
+        set_recent_save_error(ui.ctx(), result.as_ref().ok().and_then(|v| v.get("saved")).and_then(serde_json::Value::as_bool) == Some(false));
     }
+}
+
+fn recent_save_error_id() -> egui::Id {
+    egui::Id::unique("backstage_recent_save_error")
+}
+
+fn set_recent_save_error(ctx: &egui::Context, failed: bool) {
+    ctx.data_mut(|data| {
+        if failed {
+            data.insert_temp(recent_save_error_id(), true);
+        } else {
+            data.remove::<bool>(recent_save_error_id());
+        }
+    });
 }
 
 /// Load the existing attributed WordCraft application icon once per egui context.

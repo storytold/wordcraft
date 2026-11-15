@@ -388,26 +388,36 @@ impl WordApp {
     /// running unrelated command post-processing.
     pub(super) fn refresh_recent_after_file(&mut self, id: &str) {
         if let Some(path) = self.session.path.as_ref() {
-            let p = path.to_string_lossy().to_string();
-            let modified = recent_modified_date(path);
-            let opened = self.ui.recent.iter().find(|r| r.path == p).map(|r| r.last_opened.clone()).unwrap_or_default();
-            self.ui.recent.retain(|r| r.path != p);
-            self.ui.recent.insert(
-                0,
-                RecentDocument {
-                    path: p,
-                    last_opened: if id == "file.open" || opened.is_empty() { wordcraft_engine::cmd::now_iso() } else { opened },
-                    modified,
-                },
-            );
-            if let Some(entry) = self.ui.recent.first() {
+            let saved_path = path.to_string_lossy().into_owned();
+            self.refresh_recent_saved_path(&saved_path);
+            if id == "file.open"
+                && let Some(entry) = self.ui.recent.first_mut()
+            {
+                entry.last_opened = wordcraft_engine::cmd::now_iso();
                 self.ui
                     .recent_metadata
                     .insert(entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() });
             }
-            self.ui.recent.truncate(MAX_RECENT);
-            self.ui.recent_metadata.retain(|path, _| self.ui.recent.iter().any(|entry| &entry.path == path));
         }
+    }
+
+    /// Record a confirmed save by its destination, independent of which document is active now.
+    pub(super) fn refresh_recent_saved_path(&mut self, path: &str) {
+        let path = std::path::Path::new(path);
+        let p = path.to_string_lossy().to_string();
+        let modified = recent_modified_date(path);
+        let opened = self.ui.recent.iter().find(|r| r.path == p).map(|r| r.last_opened.clone()).unwrap_or_default();
+        self.ui.recent.retain(|r| r.path != p);
+        self.ui
+            .recent
+            .insert(0, RecentDocument { path: p, last_opened: if opened.is_empty() { wordcraft_engine::cmd::now_iso() } else { opened }, modified });
+        if let Some(entry) = self.ui.recent.first() {
+            self.ui
+                .recent_metadata
+                .insert(entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() });
+        }
+        self.ui.recent.truncate(MAX_RECENT);
+        self.ui.recent_metadata.retain(|path, _| self.ui.recent.iter().any(|entry| &entry.path == path));
     }
 
     fn after_command(&mut self, id: &str, result: &Result<Value, String>) {

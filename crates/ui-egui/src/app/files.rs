@@ -131,12 +131,8 @@ impl WordApp {
                 match &outcome {
                     async_saves::SaveOutcome::Saved => {
                         log::info!("saved {} through the save picker", save.name);
-                        if save.marked_saved
-                            && save.document == current
-                            && self.services.host_save.is_some()
-                            && self.session.path.as_deref() == Some(std::path::Path::new(&save.name))
-                        {
-                            self.refresh_recent_after_file("file.saveAs");
+                        if save.marked_saved && self.services.host_save.is_some() {
+                            self.refresh_recent_saved_path(&save.name);
                         }
                     }
                     async_saves::SaveOutcome::Cancelled | async_saves::SaveOutcome::Failed(_) => {
