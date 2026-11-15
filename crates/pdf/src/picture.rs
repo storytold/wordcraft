@@ -17,7 +17,7 @@ pub(crate) struct Vector {
 
 /// Parses a metafile and embeds its bitmaps. None when the picture has no usable size.
 pub(crate) fn build_vector(bytes: &[u8]) -> Option<Vector> {
-    let mut pic = wordcraft_metafile::parse(bytes).ok()?;
+    let mut pic = craft_metafile::parse(bytes).ok()?;
     if !pic.has_size() {
         return None;
     }
@@ -48,7 +48,7 @@ pub(crate) fn vector_picture(ex: &mut Exporter, s: &mut Surface, v: &Vector, r: 
     s.push_clip_path(clip, &FillRule::NonZero);
     for it in v.pic.place(target, *crop) {
         match it {
-            PlacedItem::Path { path, fill, stroke, even_odd } => {
+            PlacedItem::Path { path, fill, stroke, even_odd, .. } => {
                 let Some(p) = path_from(&path) else { continue };
                 let fill = fill.map(|c| {
                     let (paint, opacity) = paint_of(c);
@@ -70,16 +70,17 @@ pub(crate) fn vector_picture(ex: &mut Exporter, s: &mut Surface, v: &Vector, r: 
                 s.set_stroke(stroke);
                 s.draw_path(&p);
             }
-            PlacedItem::Bitmap { index, rect } => {
+            PlacedItem::Bitmap { index, rect, .. } => {
                 let Some(Some(img)) = v.images.get(index) else { continue };
                 let Some(size) = Size::from_wh(rect.width() as f32, rect.height() as f32) else { continue };
                 s.push_transform(&Transform::from_translate(rect.x0 as f32, rect.y0 as f32));
                 s.draw_image(img.clone(), size);
                 s.pop();
             }
-            PlacedItem::Text { index, tf } => {
-                if let Some(wordcraft_metafile::Item::Text(t)) = v.pic.items.get(index) {
-                    ex.vector_text(s, t, tf);
+            PlacedItem::Pattern { .. } => {}
+            PlacedItem::Text { index, transform, .. } => {
+                if let Some(craft_metafile::Item::Text(t)) = v.pic.items.get(index) {
+                    ex.vector_text(s, t, transform);
                 }
             }
         }
@@ -116,7 +117,7 @@ pub(crate) fn load_image(data: &Arc<Vec<u8>>, fx: PicFx) -> Option<Image> {
 
 /// [`load_image`] with an explicit RGBA byte budget (a small one in tests).
 pub(crate) fn load_image_within(data: &Arc<Vec<u8>>, fx: PicFx, budget: u64) -> Option<Image> {
-    let fmt = image::guess_format(data).ok()?;
+    let fmt = wordcraft_geom::picture::guess_format(data)?;
     // The decision to draw or not is the shared one (`wordcraft_geom::picture`), the one strict
     // export checks with.
     let dec = wordcraft_geom::picture::decode_for_drawing(data, budget, MAX_IMAGE_SIDE).ok()?;
