@@ -727,9 +727,21 @@ impl Document {
     }
 
     /// Split the paragraph at `pos`; returns the start of the new (second) paragraph.
+    ///
+    /// A drop cap belongs to the first letters of its paragraph (Word: Enter makes a normal
+    /// paragraph), so it stays with the text that holds them: the new paragraph never gets one,
+    /// except when the split is at the very start, where the text (and its cap) moves down and
+    /// the empty paragraph left above is plain.
     pub fn split_paragraph(&mut self, pos: &Pos) -> Result<Pos> {
         let i = pos.path.last();
-        let tail = self.para_mut(pos.story, &pos.path)?.split_off(pos.off)?;
+        let para = self.para_mut(pos.story, &pos.path)?;
+        let mut tail = para.split_off(pos.off)?;
+        if pos.off == 0 {
+            clear_drop_cap(&mut para.props);
+            para.touch();
+        } else {
+            clear_drop_cap(&mut tail.props);
+        }
         let bl = self.container_mut(pos.story, &pos.path)?;
         bl.insert((i + 1).min(bl.len()), para_block(tail));
         Ok(Pos { story: pos.story, path: pos.path.with_last(i + 1), off: 0 })
@@ -1597,6 +1609,14 @@ impl Document {
         }
         Ok(())
     }
+}
+
+/// Take the drop cap (and its options) off a paragraph's properties.
+fn clear_drop_cap(props: &mut crate::props::ParaProps) {
+    props.drop_cap = None;
+    props.drop_cap_margin = None;
+    props.drop_cap_distance = None;
+    props.drop_cap_font = None;
 }
 
 #[cfg(test)]
