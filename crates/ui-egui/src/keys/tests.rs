@@ -171,6 +171,86 @@ fn a_paste_event_after_mod_shift_v_pasted_formatting_is_ignored() {
     assert_eq!(body(&a), "source pasted", "the next Mod+V pastes");
 }
 
+/// #5616: on a desktop, Mod+Shift+V with nothing copied pastes the text; releasing Shift before V
+/// leaves the V release as plain Mod+V, which mustn't paste a second time through the picture hook.
+/// Likewise after pasting copied formatting.
+#[test]
+fn mod_shift_v_released_shift_first_pastes_once() {
+    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let ctrl = Modifiers { shift: false, ..chord };
+    for formatting in [false, true] {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let services = crate::Services {
+            clipboard_picture: Some(Box::new(move || {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                None
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+        a.canvas.paste_event_follows_chord = false;
+        a.canvas.focused = true;
+        a.run("text.insert", json!({"text": "source target"})).unwrap();
+        if formatting {
+            a.run("select.text", json!({"text": "source"})).unwrap();
+            a.run("format.bold", json!({})).unwrap();
+            a.run("edit.copyFormat", json!({})).unwrap();
+        }
+        // The clipboard holds "source"; "target" is selected.
+        a.run("select.text", json!({"text": "source"})).unwrap();
+        a.run("edit.copy", json!({})).unwrap();
+        a.run("select.text", json!({"text": "target"})).unwrap();
+        let ctx = egui::Context::default();
+        mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord)]);
+        mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::ShiftLeft, false, ctrl)]);
+        mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::V, false, ctrl)]);
+        let body = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert_eq!(body, if formatting { "source target" } else { "source source" }, "formatting={formatting}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0, "formatting={formatting}: the release asked for a picture");
+        // The release used it up: a later plain Mod+V release still pastes a picture.
+        assert!(!a.canvas.pasted);
+    }
+}
+
+/// #5616: Mod+Shift+V pressed with the canvas unfocused (after a ribbon click) runs through the
+/// global shortcuts, and its V release never reaches the canvas: it mustn't leave a paste marked
+/// done that swallows the clipboard picture of a later Mod+V.
+#[test]
+fn a_global_mod_shift_v_leaves_the_next_mod_v_picture_paste_alone() {
+    let ctx = egui::Context::default();
+    let mut a = picture_app();
+    a.canvas.paste_event_follows_chord = false;
+    a.canvas.focused = false;
+    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let events = vec![egui::Event::ModifiersChanged(chord), key_event(Key::V, true, chord)];
+    ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| super::shortcuts::global_shortcuts(&mut a, ui.ctx()))
+        .drop_without_applying_deltas();
+    assert!(!a.canvas.pasted, "no canvas release is coming to use the mark up");
+    a.canvas.focused = true;
+    let ctrl = Modifiers { shift: false, ..chord };
+    mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::V, false, ctrl)]);
+    assert_eq!(pictures(&mut a), 1);
+}
+
+/// #5616: Mod+Shift+V pressed, then focus leaves before V is released: the lost release mustn't
+/// swallow a later Mod+V's picture.
+#[test]
+fn a_focus_change_clears_the_mod_shift_v_paste_mark() {
+    let ctx = egui::Context::default();
+    let mut a = picture_app();
+    a.canvas.paste_event_follows_chord = false;
+    a.canvas.focused = true;
+    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord)]);
+    assert!(a.canvas.pasted);
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![egui::Event::WindowFocused(false)]);
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![egui::Event::WindowFocused(true)]);
+    let ctrl = Modifiers { shift: false, ..chord };
+    mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::V, false, ctrl)]);
+    assert_eq!(pictures(&mut a), 1);
+}
+
 /// An empty document whose clipboard holds a 4 × 4 picture.
 fn picture_app() -> WordApp {
     use crate::paste_picture::ClipboardPicture;

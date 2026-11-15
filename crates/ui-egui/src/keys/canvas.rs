@@ -206,6 +206,8 @@ fn note_key_state(app: &mut WordApp, e: &egui::Event) {
         egui::Event::PointerButton { pressed: true, .. } => app.canvas.paste_event_mods = None,
         egui::Event::WindowFocused(_) => {
             app.canvas.v_pressed = false;
+            // A V release lost to a focus change must not swallow a later Mod+V's picture.
+            app.canvas.pasted = false;
             app.canvas.paste_mods = None;
             app.canvas.paste_event_mods = None;
         }
