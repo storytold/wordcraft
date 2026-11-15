@@ -20,7 +20,11 @@ fn part_text(doc: &Document, id: Option<u32>) -> String {
 fn tiny_png_b64() -> String {
     let img = image::RgbaImage::from_fn(2, 2, |x, y| image::Rgba([x as u8 * 100, y as u8 * 100, 50, 255]));
     let mut out = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    std::io::Write::write_all(
+        &mut out,
+        &wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap(),
+    )
+    .unwrap();
     let b64 = base64::engine::general_purpose::STANDARD.encode(out.into_inner());
     // Line breaks inside base64, as the formats write it.
     b64.as_bytes().chunks(20).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join("\n")
@@ -269,4 +273,13 @@ fn flat_opc_limits_count_what_is_not_kept() {
     assert!(limited(&"<x/>".repeat(20_000)));
     // A part nothing reads, one element over what the XML tree reader takes in a part (8 000 000).
     assert!(limited(&format!(r#"<pkg:part pkg:name="/word/unused.xml"><pkg:xmlData><r>{}</r></pkg:xmlData></pkg:part>"#, "<y/>".repeat(8_000_000))));
+}
+
+/// A Word 2003 XML Document saved with Windows line ends: XML reads CR LF as one line feed (XML
+/// 1.0 §2.11), so a line break inside `w:t` is one space, not two.
+#[test]
+fn word_2003_xml_with_windows_line_ends_reads_one_space_per_line_break() {
+    let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<w:wordDocument xmlns:w=\"http://schemas.microsoft.com/office/word/2003/wordml\">\r\n<w:body><w:p><w:r><w:t>a\r\nb</w:t></w:r></w:p></w:body></w:wordDocument>\r\n";
+    let d = read_xml(xml.as_bytes()).unwrap();
+    assert_eq!(paras(&d)[0].plain_text(), "a b");
 }
