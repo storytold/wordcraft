@@ -31,9 +31,10 @@ const SEP_W: f32 = 9.0;
 const COMBO_SIZE_W: f32 = 52.0;
 /// Gap between the size box and the grow/shrink buttons.
 const GAP: f32 = 3.0;
-/// Row 2, like Word's: B I U S | highlight, font colour | the four alignments. Fourteen
-/// allocations, so thirteen gaps; the two inside the split buttons are counted in `SPLIT_W`.
-const ROW2_W: f32 = 8.0 * BTN_W + 2.0 * SPLIT_W + 2.0 * SEP_W + 11.0 * SPACING;
+/// Row 2, like Word's: B I U S | highlight, font colour | the four alignments | Clear All
+/// Formatting. Sixteen allocations, so fifteen gaps; the two inside the split buttons are
+/// counted in `SPLIT_W`.
+const ROW2_W: f32 = 9.0 * BTN_W + 2.0 * SPLIT_W + 3.0 * SEP_W + 13.0 * SPACING;
 /// Row 1: font, size, grow, shrink. The font box takes what row 2 leaves, so both rows end
 /// together and the box starts at the bar's left edge.
 const COMBO_FONT_W: f32 = ROW2_W - (COMBO_SIZE_W + GAP + 2.0 * BTN_W + 3.0 * SPACING);
@@ -370,6 +371,8 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens, preview_on_hover: b
         hover_small(ui, app, "alignCenter", "Center", "para.alignCenter", align == A::Center, preview_on_hover);
         hover_small(ui, app, "alignRight", "Align Right", "para.alignRight", align == A::Right, preview_on_hover);
         hover_small(ui, app, "justify", "Justify", "para.justify", align == A::Justify, preview_on_hover);
+        sep(ui, t);
+        hover_small(ui, app, "clear", "Clear All Formatting", "format.clear", false, preview_on_hover);
     });
 }
 

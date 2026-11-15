@@ -2840,6 +2840,53 @@ fn context_menu_offers_the_ribbons_paste_items() {
     }
 }
 
+/// #6068: the text context menu offers Clear All Formatting, which clears the selection's direct
+/// character formatting (the ribbon's own command).
+#[test]
+fn context_menu_clears_all_formatting() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Bold\nTarget")), Default::default());
+    a.session
+        .doc
+        .format_range(&Pos::body(0, 0), &Pos::body(0, 4), &|c| {
+            c.bold = Some(true);
+            c.italic = Some(true);
+        })
+        .unwrap();
+    a.session.relayout();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 2)).expect("laid out");
+    let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    h.step();
+    // The ribbon's own Clear All Formatting stays above the document viewport; only the
+    // context popup may offer it here, so the menu item is what this finds.
+    let top = h.state().canvas.viewport.expect("the canvas is shown").top();
+    let item = h
+        .query_all_by_label_contains("Clear All Formatting")
+        .find(|n| n.rect().min.y > top)
+        .expect("the menu offers Clear All Formatting");
+    item.click();
+    for _ in 0..3 {
+        h.step();
+    }
+    let p = h.state().session.doc.para_at(&Pos::body(0, 0)).expect("the paragraph");
+    assert_eq!((p.props_of_char(0).bold, p.props_of_char(0).italic), (None, None), "the selection's direct formatting is gone");
+}
+
 /// Word's frame around the equation being edited: as wide as the equation plus the options
 /// strip at its right, as tall as its line, with the grip over its top-left corner. The
 /// strip and grip keep their screen size at every zoom.
