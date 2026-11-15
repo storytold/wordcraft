@@ -5,7 +5,9 @@ use super::{
 };
 
 impl WordApp {
-    /// `run` for a command a mouse drag on a table sends: the view stays where it is.
+    /// `run` for a command the pointer sends (a mouse drag on a table; a click, drag or nudge of a
+    /// picture, shape or text box): the view stays where it is. An object's caret is its anchor
+    /// in the text, which can be a page away from the object (#4929).
     pub(crate) fn run_keep_view(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.canvas.keep_view = true;
         let r = self.run(id, params);
