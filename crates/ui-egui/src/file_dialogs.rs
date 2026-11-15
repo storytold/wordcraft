@@ -297,12 +297,22 @@ impl WordApp {
                 Ok(json!({"picked": true}))
             }
             AfterPick::Export { ext } => {
-                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let Some(mut path) = picked else { return Ok(json!({"cancelled": true})) };
                 let r = if ext == "png" {
                     self.run("file.exportPng", json!({"path": path}))
                 } else if ext == crate::print_page::EXPORT_WORD_2003 {
                     self.run("file.saveAs", json!({"path": path, "format": ext}))
                 } else if ext == "xml" {
+                    // The engine takes an explicit format only for an .xml path, and a system Save
+                    // dialog lets the user type any name: add the extension, as the built-in
+                    // browser does (`notes.docx` becomes `notes.docx.xml`).
+                    if !std::path::Path::new(&path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("xml")) {
+                        path.push_str(".xml");
+                        // The dialog only confirmed the name it was given, not this one.
+                        if std::path::Path::new(&path).exists() {
+                            return Err(format!("{path} already exists; choose another name"));
+                        }
+                    }
                     // Word XML even over a Word 2003 XML file, which a save by path would keep.
                     self.run("file.saveAs", json!({"path": path, "format": wordcraft_engine::cmd::file::FORMAT_FLAT_OPC}))
                 } else {

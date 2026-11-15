@@ -861,6 +861,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A system Save dialog lets the user type a name without `.xml`; Word XML export still
+    /// writes `<name>.xml` (as the built-in browser does) and won't silently replace an existing one.
+    #[test]
+    fn exporting_word_xml_to_a_name_without_xml_appends_the_extension() {
+        let dir = scratch("export_xml_ext");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+        let bare = dir.join("letter").to_string_lossy().into_owned();
+        a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap();
+        let xml = std::fs::read_to_string(dir.join("letter.xml")).unwrap();
+        assert!(xml.contains("pkg:package"), "Word XML written at letter.xml");
+        let docx = dir.join("notes.docx").to_string_lossy().into_owned();
+        a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(docx)).unwrap();
+        assert!(dir.join("notes.docx.xml").is_file());
+        // The appended name already exists: the system dialog never confirmed it, so refuse.
+        let bare = dir.join("letter").to_string_lossy().into_owned();
+        assert!(a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// #3037: an empty folder (or a type filter that matches nothing) says so instead of a blank
     /// box; a matching file replaces the hint.
     #[test]
