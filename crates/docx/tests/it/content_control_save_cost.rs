@@ -136,18 +136,14 @@ fn the_controls_are_written_where_they_were() {
 
 /// The names of the parts of a package, in the order they are in it.
 fn part_names(bytes: &[u8]) -> Vec<String> {
-    let z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    z.file_names().map(str::to_string).collect()
+    let z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).expect("zip");
+    z.names().map(|n| n.into_owned()).collect()
 }
 
 /// The body of the document part of a package.
 fn document_body(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    let mut xml = String::new();
-    {
-        use std::io::Read;
-        z.by_name("word/document.xml").expect("the document part").read_to_string(&mut xml).expect("read");
-    }
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).expect("zip");
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).expect("read").expect("the document part")).expect("utf8");
     let rest = xml.split_once("<w:body>").expect("the body").1;
     let body = rest.split_once("</w:body>").expect("the end of the body").0;
     format!("<w:body>{body}</w:body>")
