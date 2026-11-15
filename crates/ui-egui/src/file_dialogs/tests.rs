@@ -478,7 +478,20 @@ fn web_pdf_export_keeps_an_existing_suffix_in_any_case() {
         ..Default::default()
     };
     let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
-    for (name, expected) in [("Report.pdf", "Report.pdf"), ("Report.PDF", "Report.PDF"), ("Résumé.PdF", "Résumé.PdF"), ("Report", "Report.pdf")] {
+    for (name, expected) in [
+        ("Report.pdf", "Report.pdf"),
+        ("Report.PDF", "Report.PDF"),
+        ("Résumé.PdF", "Résumé.PdF"),
+        ("😀.PDF", "😀.PDF"),
+        (".hidden.PDF", ".hidden.PDF"),
+        ("Report..PDF", "Report..PDF"),
+        ("é", "é.pdf"),
+        ("😀", "😀.pdf"),
+        ("Report.pdf.exe", "Report.pdf.exe.pdf"),
+        ("Report.ＰＤＦ", "Report.ＰＤＦ.pdf"),
+        ("Report.pdf.", "Report.pdf..pdf"),
+        ("Report", "Report.pdf"),
+    ] {
         let result = a.execute("file.exportPdf", json!({"path": name})).unwrap();
         assert_eq!(result["downloaded"], expected, "{name}");
         assert_eq!(downloaded.borrow().last().cloned(), Some((expected.to_string(), true)), "{name}");
