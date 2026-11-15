@@ -124,6 +124,39 @@ fn page_numbers_dialog_preserves_zero_and_continue() {
     }
 }
 
+/// #4911: typing zero in Start at and pressing OK restarts numbering from zero.
+#[test]
+fn page_numbers_dialog_accepts_typed_zero() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut a = app();
+    a.run("ui.language", json!({"value": "en"})).unwrap();
+    a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    // The dialog's existing numeric input and format picker lack accessible names.
+    let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Start at:").click();
+    h.run_steps(2);
+    h.get_by_role(Role::SpinButton).click();
+    h.run_steps(2);
+    h.get_by_role(Role::SpinButton).type_text("0");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc.last_section.page_num_start, None, "typing does not apply before OK");
+
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    assert_eq!(h.state().session.doc.last_section.page_num_start, Some(0));
+}
+
 /// #755: the Line Numbers "From text" distance and the Hyphenation zone follow the
 /// File › Options unit (centimeters here); `params` sends points whatever the unit.
 #[test]
