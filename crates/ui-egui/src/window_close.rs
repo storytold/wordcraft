@@ -11,11 +11,15 @@ use crate::theme::Tokens;
 const WIDTH: f32 = 1.6;
 /// Half the ✕'s width and height.
 const GLYPH: f32 = 5.0;
+/// Room around a window's title: the title starts in line with the content below it.
+const TITLE_MARGIN: Margin = Margin { left: 18, right: 18, top: 11, bottom: 7 };
+/// Room around a window's content, so it doesn't crowd the frame line.
+const CONTENT_MARGIN: Margin = Margin { left: 18, right: 18, top: 12, bottom: 16 };
 
 /// The title bar's measurements for the current style.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Geometry {
-    /// Title bar height inside the frame line: the heading row plus the window margin.
+    /// Title bar height inside the frame line: the heading row plus the title's margin.
     pub title_h: f32,
     /// The box's width, a whole number so the title bar's margin can reserve it.
     pub width: f32,
@@ -24,18 +28,42 @@ pub(crate) struct Geometry {
 pub(crate) fn geometry(ctx: &egui::Context) -> Geometry {
     let style = ctx.global_style();
     let heading = ctx.fonts_mut(|f| f.row_height(&TextStyle::Heading.resolve(&style)));
-    let m = style.spacing.window_margin;
-    let title_h = heading + f32::from(m.top) + f32::from(m.bottom);
+    let title_h = heading + f32::from(TITLE_MARGIN.top) + f32::from(TITLE_MARGIN.bottom);
     Geometry { title_h, width: (WIDTH * title_h).round().clamp(0.0, 127.0) }
 }
 
-/// Reserves the box's room at the right end of `w`'s title bar. Pair with [`show`] after
-/// `Window::show`; the window must not use egui's own close button (`Window::open`).
-pub(crate) fn window<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::Window<'a> {
+/// Gives `w` the app's window look: roomy margins around the title and the content, and the
+/// box's room reserved at the right end of the title bar.
+fn window<'a>(ctx: &egui::Context, w: egui::Window<'a>) -> egui::Window<'a> {
     let style = ctx.global_style();
-    let m = style.spacing.window_margin;
     let right = geometry(ctx).width as i8;
-    w.title_frame(egui::Frame::window(&style).inner_margin(Margin { right, ..m }))
+    w.frame(egui::Frame::window(&style).inner_margin(CONTENT_MARGIN))
+        .title_frame(egui::Frame::window(&style).stroke(Stroke::NONE).inner_margin(Margin { right, ..TITLE_MARGIN }))
+}
+
+/// Shows `w` with the app's window look and `add_contents` inside it. Pair with [`show`] after
+/// it; the window must not use egui's own close button (`Window::open`).
+///
+/// The title bar is the window's own colour, with no band behind the title: egui fills the
+/// front window's title bar with the colour of an open menu button, so that colour is the
+/// window's while the title bar is drawn and put back before the content is.
+pub(crate) fn show_window<R>(
+    ctx: &egui::Context,
+    w: egui::Window<'_>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Option<egui::InnerResponse<Option<R>>> {
+    let band = ctx.global_style().visuals.widgets.open.weak_bg_fill;
+    let fill = ctx.global_style().visuals.window_fill;
+    let set = |c: egui::Color32| ctx.global_style_mut(|s| s.visuals.widgets.open.weak_bg_fill = c);
+    set(fill);
+    let shown = window(ctx, w).show(ctx, |ui| {
+        set(band);
+        ui.visuals_mut().widgets.open.weak_bg_fill = band;
+        add_contents(ui)
+    });
+    // A window that drew no content (collapsed, closing) didn't put it back.
+    set(band);
+    shown
 }
 
 /// The box for a window whose outer rect is `window` (frame line included), with a title bar
@@ -116,7 +144,7 @@ mod tests {
         assert_eq!(r, Rect::from_min_max(pos2(351.0, 51.0), pos2(399.0, 81.0)));
     }
 
-    /// With the app's style, the box is the heading row plus the window margin tall and about
+    /// With the app's style, the box is the heading row plus the title's margin tall and about
     /// 1.6× as wide, a whole number of points.
     #[test]
     fn geometry_follows_the_style() {
@@ -125,7 +153,7 @@ mod tests {
         crate::theme::apply(&ctx, crate::theme::Appearance::Light);
         ctx.begin_pass(Default::default());
         let g = geometry(&ctx);
-        let m = ctx.global_style().spacing.window_margin;
+        let m = TITLE_MARGIN;
         let font = TextStyle::Heading.resolve(&ctx.global_style());
         let heading = ctx.fonts_mut(|f| f.row_height(&font));
         ctx.end_pass().drop_without_applying_deltas();
