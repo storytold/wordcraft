@@ -348,7 +348,12 @@ impl<'a> Flow<'a> {
         // A paragraph closing a section that the next one starts on a new page keeps with
         // nothing: what follows is not on this page (Word ignores Keep with next there; measured for a next-page break, odd and even by analogy).
         let closes_page = pb.next_starts_page && self.p.section.is_some();
-        let need = height + if rp.keep_next && !closes_page { next_first_line(ctx, self.block, self.width, 0, pb.next_starts_page, &mut ctx.counters.clone()) } else { 0.0 };
+        let need = height
+            + if rp.keep_next && !closes_page {
+                next_first_line(ctx, self.block, self.width, 0, pb.next_starts_page, &mut ctx.counters.clone())
+            } else {
+                0.0
+            };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
@@ -1043,7 +1048,12 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
             // with nothing on this page (Word ignores its Keep with next).
             if pl.rp.keep_next && depth < 8 && !(new_page && p.section.is_some()) {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, new_page, counters)
+                pl.rp.space_before
+                    + top
+                    + pl.height
+                    + bottom
+                    + pl.rp.space_after
+                    + next_first_line(ctx, block + 1, width, depth + 1, new_page, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).

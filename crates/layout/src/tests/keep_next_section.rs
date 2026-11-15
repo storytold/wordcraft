@@ -17,7 +17,16 @@ fn lay(doc: &Document) -> DocLayout {
 
 /// A 400 x 300 pt page with 50 pt margins: 200 pt of body, ten 20 pt lines.
 fn small_page(start: SectionStart) -> SectionProps {
-    SectionProps { start, page_w: 400.0, page_h: 300.0, margin_top: 50.0, margin_bottom: 50.0, margin_left: 50.0, margin_right: 50.0, ..Default::default() }
+    SectionProps {
+        start,
+        page_w: 400.0,
+        page_h: 300.0,
+        margin_top: 50.0,
+        margin_bottom: 50.0,
+        margin_left: 50.0,
+        margin_right: 50.0,
+        ..Default::default()
+    }
 }
 
 fn exact(text: &str, height: f32, keep: bool) -> Paragraph {
