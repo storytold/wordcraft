@@ -756,6 +756,10 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         let w = text_width(ui.painter(), s, &font, track, t.text_dim);
                         let lead = if icon.is_some() { 17.0 } else { 0.0 };
                         let (r, resp) = ui.allocate_exact_size(vec2(lead + w + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                        // The item under the pointer is tinted so it reads as a control (#6012).
+                        if resp.hovered() {
+                            ui.painter().rect_filled(r.expand2(vec2(6.0, 3.0)), 3.0, t.status_hover);
+                        }
                         if let Some(icon) = icon {
                             let ir = Rect::from_min_size(pos2(crate::rtl::lead_left(rtl, r, 0.0, 13.0), r.center().y - 6.5), vec2(13.0, 13.0));
                             icons::paint(ui.painter(), ir, icon, t.icon, t.accent);
