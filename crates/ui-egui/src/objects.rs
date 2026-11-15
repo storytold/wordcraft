@@ -792,6 +792,10 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
 
 /// Draw the frame of the active object, or the drag preview.
 pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
+    if app.session.view.viewing {
+        paint_selection(app, painter, t, layout, pages, scale);
+        return;
+    }
     if crate::crop::paint(app, painter, t, layout, pages, scale) {
         return;
     }
@@ -846,6 +850,11 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
         paint_drop_caret(d, painter, layout, pages, scale);
         return;
     }
+    paint_selection(app, painter, t, layout, pages, scale);
+}
+
+/// Draw selection outlines in either mode, with transform handles only while editing.
+fn paint_selection(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
     // The others selected along with it (Shift+click): their outlines.
     for p in &app.session.also_selected {
         if let Some(o) = layout.object(p, app.session.page_hint)
@@ -866,7 +875,7 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
         }
         // Handles where it can be resized and turned (body and header/footer objects,
         // not charts): else a plain frame.
-        let handles = selectable_story(app, o.story) && !fixed(app, &o);
+        let handles = !app.session.view.viewing && selectable_story(app, o.story) && !fixed(app, &o);
         frame::paint(painter, t, f, o.spin.deg, editing, handles, handles && !size_only(app, &o));
     }
 }

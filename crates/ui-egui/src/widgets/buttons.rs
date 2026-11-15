@@ -24,6 +24,9 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
     if !app.has_document() && !crate::works_without_document(id) {
         return false;
     }
+    if app.viewing_blocks_command(id, &Value::Null) {
+        return false;
+    }
     match app.session.registry.get(id) {
         Some(_) => app.session.why_disabled(id).is_none(),
         // Zotero: one command at a time, and only in the desktop app.

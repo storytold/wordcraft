@@ -118,7 +118,11 @@ pub(super) fn edit_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     if let Some(page) = page {
         s.page_hint = page;
     }
-    s.touch();
+    if s.view.viewing {
+        s.relayout();
+    } else {
+        s.touch();
+    }
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
     Ok(json!({"story": id}))
 }

@@ -20,6 +20,7 @@ mod ime_noop;
 mod para_tools;
 mod revision_checks;
 mod typing;
+mod viewing;
 mod wordart;
 
 /// True, after saying so on stderr, when this build lacks the Language data the proofing tests
