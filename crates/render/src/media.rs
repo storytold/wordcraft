@@ -119,18 +119,18 @@ pub(crate) fn premul_pixmap(w: u32, h: u32, rgba: &[u8]) -> Option<Pixmap> {
 
 /// Pixel size of an encoded image.
 pub fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
+    wordcraft_geom::picture::dimensions(bytes)
 }
 
 /// The natural size in points of a Windows Metafile or Enhanced Metafile picture, and the file
 /// extension it is stored under (`"wmf"` or `"emf"`), or None for anything else (#802). Very large
 /// frames are scaled down to 22 inches on the longer side, keeping the shape.
 pub fn metafile_size(bytes: &[u8]) -> Option<(f32, f32, &'static str)> {
-    if !wordcraft_metafile::is_metafile(bytes) {
+    if !craft_metafile::is_metafile(bytes) {
         return None;
     }
     // The frame comes from the header where the file has one, so no bitmap is decoded for it.
-    let (w, h) = wordcraft_metafile::size(bytes).ok()?;
+    let (w, h) = craft_metafile::size(bytes).ok()?;
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
         return None;
     }
@@ -157,7 +157,7 @@ impl Vector {
             .iter()
             .map(|it| match it {
                 Item::Path { segs, .. } => segs.len() * std::mem::size_of::<Seg>(),
-                Item::Bitmap { .. } => 0,
+                Item::Bitmap { .. } | Item::Pattern { .. } => 0,
                 Item::Text(t) => t.text.len() + t.dx.len() * 4,
             })
             .sum();
@@ -169,7 +169,7 @@ impl Vector {
 /// the caller falls back to the raster path (and the grey box).
 pub(crate) fn vector_for(doc: &Document, key: &str) -> Option<Arc<Vector>> {
     let bytes = doc.media.get(key)?;
-    if !wordcraft_metafile::is_metafile(bytes) {
+    if !craft_metafile::is_metafile(bytes) {
         return None;
     }
     if let Some(v) = lock(vectors()).get(key, bytes) {
@@ -186,7 +186,7 @@ pub(crate) fn vector_for(doc: &Document, key: &str) -> Option<Arc<Vector>> {
 
 /// Parses a metafile and decodes its bitmaps. None when the picture has no usable size.
 fn build_vector(bytes: &[u8]) -> Option<Vector> {
-    let mut pic = wordcraft_metafile::parse(bytes).ok()?;
+    let mut pic = craft_metafile::parse(bytes).ok()?;
     if !pic.has_size() {
         return None;
     }
@@ -214,7 +214,7 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
     let pixel = device_pixel(view);
     for it in v.pic.place(*r, *crop) {
         match it {
-            PlacedItem::Path { path, fill, stroke, even_odd } => {
+            PlacedItem::Path { path, fill, stroke, even_odd, .. } => {
                 if let Some(f) = fill {
                     ctx.set_paint(rgba_color(f));
                     ctx.set_fill_rule(if even_odd { peniko::Fill::EvenOdd } else { peniko::Fill::NonZero });
@@ -226,7 +226,7 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
                     ctx.stroke_path(&path);
                 }
             }
-            PlacedItem::Bitmap { index, rect } => {
+            PlacedItem::Bitmap { index, rect, .. } => {
                 let Some(Some(pm)) = v.pixmaps.get(index) else { continue };
                 let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
                 ctx.set_paint(vello_cpu::Image {
@@ -237,9 +237,10 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
                 ctx.fill_rect(&rect);
                 ctx.reset_paint_transform();
             }
-            PlacedItem::Text { index, tf } => {
+            PlacedItem::Pattern { .. } => {}
+            PlacedItem::Text { index, transform, .. } => {
                 if let Some(Item::Text(t)) = v.pic.items.get(index) {
-                    draw_vector_text(ctx, t, view * tf);
+                    draw_vector_text(ctx, t, view * transform);
                 }
                 ctx.set_transform(view);
             }
@@ -253,10 +254,10 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
 }
 
 /// Draws a metafile text run: `tf` maps the run's own space (see [`PlacedItem::Text`]) to the device.
-fn draw_vector_text(ctx: &mut RenderContext, t: &wordcraft_metafile::Text, tf: Affine) {
+fn draw_vector_text(ctx: &mut RenderContext, t: &craft_metafile::Text, tf: Affine) {
     let (face, shaped) = wordcraft_layout::metafile_text_run(t);
     let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
-    let Some(lay) = t.layout(face.upem, face.ascent, face.descent, &glyphs) else { return };
+    let Some(lay) = wordcraft_layout::layout_metafile_text(t, face.upem, face.ascent, face.descent, &glyphs) else { return };
     let k = lay.em / face.upem.max(1.0);
     ctx.set_paint(rgba_color(t.color));
     let db = FontDb::global();
