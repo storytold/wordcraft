@@ -476,17 +476,27 @@ impl<'a> Flow<'a> {
 
     /// The end of the lines on this page after widow/orphan control, and keeping the rows beside
     /// floating objects together.
-    fn settled_end(&self, pb: &PageBuilder, fit: &Fit) -> usize {
+    fn settled_end(&self, ctx: &Ctx, pb: &PageBuilder, fit: &Fit) -> usize {
         let (n, l0, mut l1) = (self.n(), self.l0, fit.l1);
-        // Widow/orphan control (2-line minimum at either end).
+        // Widow/orphan control (2-line minimum at either end). Balancing the columns of a
+        // section's last page from Word 2013's layout (compatibility mode 15) applies it at the
+        // top of a column too, where moving on is no loss, and never leaves one line of a
+        // paragraph that goes on in the next column, even when the paragraph began in an earlier
+        // one (#6821).
+        let strict = Self::strict_widow_control(ctx, pb);
         if fit.forced.is_none() && l1 < n && self.pl.rp.widow_control && n >= 2 {
-            if l1 - l0 == 1 && l0 == 0 && !pb.fresh() {
+            if l1 - l0 == 1 && l0 == 0 && (!pb.fresh() || strict) {
                 l1 = l0; // orphan: move the first line to the next page
             } else if n - l1 == 1 && (l1 - l0 >= 3 || (l0 > 0 && l1 - l0 >= 2)) {
                 l1 -= 1; // widow: take one more line along
-            } else if n - l1 == 1 && l0 == 0 && l1 - l0 == 2 && !pb.fresh() {
+            } else if n - l1 == 1 && l0 == 0 && l1 - l0 == 2 && (!pb.fresh() || strict) {
                 // Neither split of a three-line paragraph is allowed (two and a widow, or an
                 // orphan and two): it moves whole, as in Word.
+                l1 = l0;
+            }
+            // One line of a continued paragraph, with more after it (what was left of two lines
+            // after the widow line went along included): the rest moves with it.
+            if strict && l0 > 0 && l1 - l0 == 1 && l1 < n {
                 l1 = l0;
             }
         }
@@ -495,6 +505,14 @@ impl<'a> Flow<'a> {
             l1 -= 1;
         }
         l1
+    }
+
+    /// Whether the columns of this page are being balanced (`balance_columns`) and the document
+    /// has Word 2013's layout: Word then keeps the lines of a paragraph together that widow or
+    /// orphan control would split, at the top of a column as anywhere (#6821). Before compatibility
+    /// mode 15 it splits them.
+    fn strict_widow_control(ctx: &Ctx, pb: &PageBuilder) -> bool {
+        ctx.doc.settings.compat_mode >= 15 && pb.balance.is_some_and(|(page, _)| page + 1 == pb.pages.len())
     }
 
     /// Nothing fits on this page: move to the next column or page, and place the floats again
@@ -854,12 +872,15 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let lead = if f.l0 == 0 { first.top.max(0.0) + rooms.top } else { 0.0 };
         let notes = para_notes(ctx.doc, p, &f.pl);
         let mut fit = f.fit_lines(ctx, pb, &notes, lead);
-        fit.l1 = f.settled_end(pb, &fit);
+        let fitted = fit.l1;
+        fit.l1 = f.settled_end(ctx, pb, &fit);
         if f.settle_late(pb, fit.l1) {
             continue;
         }
         if fit.l1 == f.l0 {
-            if !pb.fresh() {
+            // Balancing: widow/orphan control moved lines that fit on; the next column (or, short
+            // of room, the page after, which fails the try) has them, never an overflowing line.
+            if !pb.fresh() || (fitted > f.l0 && Flow::strict_widow_control(ctx, pb)) {
                 f.move_on(ctx, pb);
                 continue;
             }

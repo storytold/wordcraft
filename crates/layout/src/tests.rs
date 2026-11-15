@@ -5,6 +5,7 @@ use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps, TextD
 use wordcraft_doc::{Pos, Table};
 
 mod autospace;
+mod balanced_tail;
 mod bidi;
 mod budget;
 mod cell_floats;
