@@ -776,10 +776,13 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     };
                     let st = |ui: &mut Ui, s: &str| st_icon(ui, None, s);
                     if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
-                        .on_hover_text(tl!("Go To (⌘⌥G)"))
+                        .on_hover_text(tl!("Navigation Pane"))
                         .clicked()
                     {
-                        let _ = app.run("ui.dialog", json!({"name": "goto"}));
+                        // A toggle (#6012): opens the Navigation pane on the tab last used, and a
+                        // second click closes it from whichever tab it shows. Go To keeps its own
+                        // shortcuts (`edit.goto`).
+                        let _ = app.run("view.navigationPane", json!({}));
                     }
                     // The live count: words (the default, as Word's status bar counts), characters
                     // with spaces, or characters without spaces — whichever the person chose (#2797).
