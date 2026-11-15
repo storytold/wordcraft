@@ -99,6 +99,7 @@ pub enum Draw {
         stroke_width: f32,
         /// Alternating dash/space lengths in page points; empty means solid.
         dash: Vec<f32>,
+        /// Outline ends for both screen and PDF strokes; missing imported caps use flat ends.
         cap: wordcraft_doc::connector::LineCap,
         /// Shadow, glow and soft edges (drawn with [`wordcraft_doc::effects::bands`]).
         effects: wordcraft_doc::effects::ShapeEffects,
@@ -109,6 +110,8 @@ pub enum Draw {
     /// wide, in `color` at opacity `alpha`.
     Ink { pts: Vec<(f32, f32)>, color: Rgb, width: f32, alpha: f32 },
     /// A vector path (a chart's or diagram's polygons, slices, lines): filled, then stroked.
+    /// `cap` sets the ends of open subpaths and dash segments in screen and PDF strokes; it has
+    /// no effect on fills.
     Path { segs: Vec<PathSeg>, fill: Option<Paint>, stroke: Option<Rgb>, stroke_width: f32, dash: Vec<f32>, cap: wordcraft_doc::connector::LineCap },
     /// An inline chart, diagram or described shape's draws, as one figure with its alt text (for
     /// tagged PDF). `kind` is the graphic's, `None` for a shape (see [`crate::shape_figure_alt`]).

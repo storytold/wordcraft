@@ -1269,6 +1269,8 @@ fn shapes_have_paths() {
     }
 }
 
+/// A dashed rectangle leaves visible gaps where the same solid outline paints, using the
+/// default outline cap and the same width and placement.
 #[test]
 fn dashed_outline_has_gaps() {
     use wordcraft_doc::{
@@ -1341,6 +1343,8 @@ fn shape_line_caps_reach_the_screen() {
     }
 }
 
+/// A zero-width elbow connector is dashed as a 0.75 pt hairline: 3 pt dashes and 2.25 pt gaps
+/// when rasterized.
 #[test]
 fn zero_width_connector_dashes() {
     use wordcraft_doc::{
