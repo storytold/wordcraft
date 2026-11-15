@@ -75,8 +75,8 @@ fn parse_csv_limited(text: &str, limits: &CsvLimits) -> Result<Vec<Vec<String>>,
         if text_bytes.saturating_add(cell.len()) > limits.text {
             return Err(CmdError::Failed(format!("the CSV can't have more than {} of text", text_size(limits.text))));
         }
-        if rows.len() > 100_000 {
-            break;
+        if rows.len() > MAX_RECORDS + 1 {
+            return Err(CmdError::Failed("the CSV has too many records".into()));
         }
     }
     // The last cell, when the file doesn't end with a line break.
@@ -120,6 +120,27 @@ fn text_size(bytes: usize) -> String {
 const MAX_RECORDS: usize = 100_000;
 
 const MAX_FIELDS: usize = 1_000;
+const MAX_CELLS: usize = 2_000_000;
+const MAX_TEXT_BYTES: usize = 64 << 20;
+const RECIPIENT_LIMITS: CsvLimits = CsvLimits { fields: MAX_FIELDS, cells: MAX_CELLS, text: MAX_TEXT_BYTES };
+
+/// Refuse excessive CSV input instead of returning a silently truncated list.
+pub fn parse_csv(text: &str) -> Result<Vec<Vec<String>>, CmdError> {
+    parse_csv_limited(text, &RECIPIENT_LIMITS)
+}
+
+// A sparse list is padded and cloned: charge its normalized shape BEFORE allocating it.
+fn check_shape(records: usize, fields: usize, max_cells: usize) -> Result<(), CmdError> {
+    if records > MAX_RECORDS || fields > MAX_FIELDS || records.checked_mul(fields).is_none_or(|n| n > max_cells) {
+        return Err(CmdError::Failed("the recipient list exceeds its record, field or aggregate cell limit".into()));
+    }
+    Ok(())
+}
+
+fn spend_text(left: &mut usize, n: usize) -> Result<(), CmdError> {
+    *left = left.checked_sub(n).ok_or_else(|| CmdError::Failed("the recipient list exceeds its text budget".into()))?;
+    Ok(())
+}
 
 pub(super) fn cell(x: &Value) -> String {
     match x {
@@ -132,8 +153,27 @@ pub(super) fn cell(x: &Value) -> String {
 /// A recipient table from `rows` (objects keyed by field, or arrays in `fields` order). Without
 /// `fields`, the columns are the objects' keys.
 fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<String>, Vec<Vec<String>>), CmdError> {
+    let mut left = MAX_TEXT_BYTES;
     let headers: Vec<String> = match fields {
-        Some(f) => f.iter().take(MAX_FIELDS).map(|h| cell(h).trim().to_string()).collect(),
+        Some(f) => {
+            check_shape(0, f.len(), MAX_CELLS)?;
+            let mut headers = Vec::new();
+            for h in f {
+                let text = match h {
+                    Value::String(t) => {
+                        spend_text(&mut left, t.trim().len())?;
+                        t.trim().to_string()
+                    }
+                    other => {
+                        let t = cell(other);
+                        spend_text(&mut left, t.trim().len())?;
+                        t.trim().to_string()
+                    }
+                };
+                headers.push(text);
+            }
+            headers
+        }
         None => {
             if arr.iter().any(Value::is_array) {
                 return Err(CmdError::Params("`fields` is required when `rows` are arrays".into()));
@@ -141,7 +181,9 @@ fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<St
             let mut headers: Vec<String> = Vec::new();
             for o in arr.iter().filter_map(Value::as_object) {
                 for k in o.keys() {
-                    if !headers.contains(k) && headers.len() < MAX_FIELDS {
+                    if !headers.contains(k) {
+                        check_shape(0, headers.len().saturating_add(1), MAX_CELLS)?;
+                        spend_text(&mut left, k.len())?;
                         headers.push(k.clone());
                     }
                 }
@@ -149,21 +191,43 @@ fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<St
             headers
         }
     };
-    let rows = arr
-        .iter()
-        .take(MAX_RECORDS)
-        .filter_map(|r| match r {
-            Value::Array(cells) => Some((0..headers.len()).map(|i| cells.get(i).map(cell).unwrap_or_default()).collect()),
-            Value::Object(o) => Some(headers.iter().map(|h| o.get(h).map(cell).unwrap_or_default()).collect()),
-            _ => None,
-        })
-        .collect();
+    let count = arr.iter().filter(|v| v.is_array() || v.is_object()).count();
+    check_shape(count, headers.len(), MAX_CELLS)?;
+    let mut rows = Vec::new();
+    for value in arr {
+        let mut row = Vec::new();
+        if !value.is_array() && !value.is_object() {
+            continue;
+        }
+        for (i, h) in headers.iter().enumerate() {
+            let v = match value {
+                Value::Array(a) => a.get(i),
+                Value::Object(o) => o.get(h),
+                _ => None,
+            };
+            // String cells can be charged before cloning their potentially large payload.
+            let text = match v {
+                Some(Value::String(t)) => {
+                    spend_text(&mut left, t.len())?;
+                    t.clone()
+                }
+                Some(v) => {
+                    let t = cell(v);
+                    spend_text(&mut left, t.len())?;
+                    t
+                }
+                None => String::new(),
+            };
+            row.push(text);
+        }
+        rows.push(row);
+    }
     Ok((headers, rows))
 }
 
 /// Skip unquoted blank prefix lines only when a text recipient list has a header.
 /// Headerless lists and the shared CSV reader keep whitespace records.
-fn recipient_csv(text: &str, headers: bool) -> Vec<Vec<String>> {
+fn recipient_csv(text: &str, headers: bool) -> Result<Vec<Vec<String>>, CmdError> {
     let prefix = text
         .split_inclusive(['\n', '\r'])
         .take_while(|line| headers && line.trim().is_empty())
@@ -177,7 +241,7 @@ pub(super) fn recipients(s: &mut Session, v: &Value) -> CmdResult {
         table_from_rows(v.get("fields").and_then(Value::as_array), arr)?
     } else {
         let all = if let Some(c) = p::str(v, "csv") {
-            recipient_csv(c, p::bool(v, "headers").unwrap_or(true))
+            recipient_csv(c, p::bool(v, "headers").unwrap_or(true))?
         } else {
             let (bytes, ext) = if let Some(d) = p::str(v, "data") {
                 let b = crate::cmd::insert::base64_decode(d.trim()).ok_or_else(|| CmdError::Params("`data` isn't valid base64".into()))?;
@@ -234,7 +298,7 @@ pub(super) fn recipients(s: &mut Session, v: &Value) -> CmdResult {
                 sheet = json!(chosen);
                 rows
             } else {
-                recipient_csv(&decode(&bytes, v)?, p::bool(v, "headers").unwrap_or(true))
+                recipient_csv(&decode(&bytes, v)?, p::bool(v, "headers").unwrap_or(true))?
             }
         };
         header_split(all, p::bool(v, "headers").unwrap_or(true))?
@@ -289,14 +353,60 @@ fn header_split(mut all: Vec<Vec<String>>, headers: bool) -> Result<(Vec<String>
     }
     let fields = if headers {
         let first = all.remove(0);
-        wordcraft_formats::sheet::field_names(&first[..first.len().min(MAX_FIELDS)])
+        check_shape(0, first.len(), MAX_CELLS)?;
+        wordcraft_formats::sheet::field_names(&first)
     } else {
-        let width = all.iter().map(Vec::len).max().unwrap_or(0).min(MAX_FIELDS);
+        let width = all.iter().map(Vec::len).max().unwrap_or(0);
+        check_shape(0, width, MAX_CELLS)?;
         (1..=width).map(|i| format!("Column {i}")).collect()
     };
-    all.truncate(MAX_RECORDS);
+    check_shape(all.len(), fields.len(), MAX_CELLS)?;
+    let mut left = MAX_TEXT_BYTES;
+    for h in &fields {
+        spend_text(&mut left, h.len())?;
+    }
+    for row in &all {
+        for text in row.iter().take(fields.len()) {
+            spend_text(&mut left, text.len())?;
+        }
+    }
     for r in &mut all {
         r.resize(fields.len(), String::new());
     }
     Ok((fields, all))
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    #[test]
+    fn sparse_rows_are_charged_at_their_padded_width() {
+        let limits = CsvLimits { fields: 3, cells: 8, text: 100 };
+        assert!(parse_csv_limited("a,b,c\nx\nx\n", &limits).is_err());
+        assert!(check_shape(3, 3, 8).is_err());
+        assert!(check_shape(2, 3, 6).is_ok());
+        assert!(check_shape(usize::MAX, usize::MAX, usize::MAX).is_err());
+    }
+    #[test]
+    fn width_text_and_record_limits_refuse_instead_of_truncating() {
+        let limits = CsvLimits { fields: 2, cells: 20, text: 4 };
+        assert!(parse_csv_limited("a,b,c", &limits).is_err());
+        assert!(parse_csv_limited("abcde", &limits).is_err());
+        assert!(parse_csv_limited("a\nb\n", &limits).is_ok());
+        assert!(parse_csv(&"x\n".repeat(MAX_RECORDS + 2)).is_err());
+    }
+    #[test]
+    fn rejected_csv_and_json_keep_the_existing_list() {
+        let mut session = Session::new(wordcraft_doc::Document::from_text("Hello"));
+        recipients(&mut session, &json!({"csv": "Name\nKeep"})).unwrap();
+        let fields: Vec<String> = (0..MAX_FIELDS).map(|i| format!("F{i}")).collect();
+        let count = MAX_CELLS / MAX_FIELDS + 1;
+        let csv = format!("{}\n{}", fields.join(","), "x\n".repeat(count));
+        assert!(recipients(&mut session, &json!({"csv": csv})).is_err());
+        let rows: Vec<Value> = (0..count).map(|_| json!({})).collect();
+        assert!(recipients(&mut session, &json!({"fields": fields, "rows": rows})).is_err());
+        assert_eq!(session.merge.headers, vec!["Name"]);
+        assert_eq!(session.merge.rows, vec![vec!["Keep"]]);
+        assert_eq!(session.merge.source, session.merge.rows);
+    }
 }

@@ -1,5 +1,10 @@
 use super::*;
 
+// Keep existing delimiter/parity assertions exercising the now-fallible public parser.
+fn parse_csv(text: &str) -> Vec<Vec<String>> {
+    super::parse_csv(text).unwrap()
+}
+
 #[test]
 fn csv_parsing() {
     let r = parse_csv("Name,City\n\"Smith, Ann\",Paris\r\nBo,\"Oslo \"\"N\"\"\"\n\n");
