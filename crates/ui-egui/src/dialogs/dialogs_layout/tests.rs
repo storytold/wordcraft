@@ -569,8 +569,7 @@ fn labels_dialog_builds_a_sheet() {
 /// A `w`×`h` pixel PNG, base64 for `insert.picture`.
 fn png_data(w: u32, h: u32) -> String {
     let img = image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]));
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap();
     wordcraft_engine::cmd::insert::base64_encode(&png)
 }
 

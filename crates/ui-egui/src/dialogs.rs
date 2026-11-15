@@ -869,6 +869,9 @@ impl Dialog {
                 kept[k] = json!(t);
             }
         }
+        if let Some(own) = payload.get("privateClipboard").and_then(Value::as_bool) {
+            kept["privateClipboard"] = json!(own);
+        }
         let note = if formats.is_empty() { crate::system_clipboard::nothing_to_paste(app) } else { String::new() };
         Dialog::PasteSpecial { formats, choice: 0, payload: kept, note }
     }
