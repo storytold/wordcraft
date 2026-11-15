@@ -65,7 +65,11 @@ pub(super) fn to_text(s: &mut Session, v: &Value) -> CmdResult {
         Some("other") => match p::str(v, "char").and_then(|c| c.chars().next()) {
             // U+FFFC marks an object in the text, so it cannot set the cells apart.
             Some(c) if c != '\n' && c != '\r' && c != wordcraft_doc::para::OBJ => Some(c),
-            _ => return Err(CmdError::Params("`char` (the separating character) is required with `other`".into())),
+            _ => {
+                return Err(CmdError::Params(
+                    "`char` with `other` must start with a character other than CR, LF or U+FFFC (the object marker)".into(),
+                ));
+            }
         },
         Some(x) => return Err(CmdError::Params(format!("unknown separator `{x}`"))),
     };
@@ -364,7 +368,7 @@ pub(super) fn from_text(s: &mut Session, v: &Value) -> CmdResult {
         Some("paragraph") => None,
         Some("other") => match p::str(v, "char").and_then(|c| c.chars().next()) {
             Some(c) if c != '\n' && c != '\r' => Some(c),
-            _ => return Err(CmdError::Params("`char` (the separating character) is required with `other`".into())),
+            _ => return Err(CmdError::Params("`char` with `other` must start with a character other than CR or LF".into())),
         },
         Some(x) => return Err(CmdError::Params(format!("unknown separator `{x}`"))),
     };
