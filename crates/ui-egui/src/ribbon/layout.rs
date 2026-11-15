@@ -222,19 +222,21 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
 /// with `cmd` and `params`. A drag changes it frame by frame: every change after the drag's
 /// first joins the undo step before it, so one Undo takes the whole drag back (#5171), not 0.1 cm
 /// of it. The first change starts its own step, whatever frame it comes on. A change joins only
-/// while the undo history stands where the drag's last change left it: an edit that came in
-/// between (a control-channel command, say) keeps its own step, and the drag goes on in a new one.
+/// while the document stands where the drag's last change left it: the undo mark and the
+/// revision both match. An edit that came in between (a control-channel command, say) keeps its
+/// own step, and the drag goes on in a new one. The revision is what catches an Undo followed by
+/// an edit: the undo mark comes back to the same number, but each of them bumps the revision.
 fn apply_box(app: &mut WordApp, ui: &Ui, r: &egui::Response, cmd: &str, params: serde_json::Value) {
     let applied = r.id.with("drag_applied");
     if !r.dragged() {
-        ui.data_mut(|d| d.remove::<u64>(applied));
+        ui.data_mut(|d| d.remove::<(u64, u64)>(applied));
     }
     if !r.changed() {
         return;
     }
     let drag = r.dragged();
     let before = app.session.undo_mark();
-    let join = drag && ui.data(|d| d.get_temp::<u64>(applied)) == Some(before);
+    let join = drag && ui.data(|d| d.get_temp::<(u64, u64)>(applied)) == Some((before, app.session.rev()));
     if join {
         app.session.join_next_undo();
     }
@@ -243,6 +245,7 @@ fn apply_box(app: &mut WordApp, ui: &Ui, r: &egui::Response, cmd: &str, params: 
     // The newest step is the drag's when this change joined it or made it; a change that made
     // none leaves the next one to start the drag's step.
     if drag && (join || after != before) {
-        ui.data_mut(|d| d.insert_temp(applied, after));
+        let rev = app.session.rev();
+        ui.data_mut(|d| d.insert_temp(applied, (after, rev)));
     }
 }

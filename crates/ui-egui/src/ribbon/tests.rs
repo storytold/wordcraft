@@ -1169,3 +1169,22 @@ fn an_edit_in_the_middle_of_a_box_drag_keeps_its_own_undo_step() {
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert!(!text(&h).contains(" now") && left_indent(&h) == mid, "the edit is its own step");
 }
+
+/// #5171 review: an Undo and then an edit in the middle of a drag bring the undo mark back to
+/// where the drag left it. The drag's next change still doesn't join that edit: one Undo takes
+/// back the rest of the drag and leaves the edit.
+#[test]
+fn an_undo_then_an_edit_in_the_middle_of_a_box_drag_keeps_the_edit_apart() {
+    let (mut h, _) = drag_left_indent(|h, k| {
+        if k == 5 {
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            h.state_mut().run("text.insert", json!({"text": " now"})).unwrap();
+        }
+    });
+    let text = |h: &LayoutH| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text(&h).contains(" now"), "{}", text(&h));
+    assert!(left_indent(&h) > 0.0, "the drag goes on after the edit");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(left_indent(&h), 0.0, "one Undo takes back the drag after the edit");
+    assert!(text(&h).contains(" now"), "and leaves the edit: {}", text(&h));
+}
