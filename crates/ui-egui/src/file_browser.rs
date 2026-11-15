@@ -199,11 +199,11 @@ impl FileBrowser {
     /// pick. Save adds the chosen type's extension to a name without one and asks once more
     /// before replacing a file; Open wants a file that exists.
     pub(crate) fn accept(&mut self) -> Step {
-        if let Some(dir) = self.selected.take().filter(|p| p.is_dir()) {
+        if let Some(dir) = self.selected.clone().filter(|p| p.is_dir()) {
             self.navigate(dir);
             return Step::Stay;
         }
-        let Some(mut path) = resolve(&self.dir, &self.name) else { return Step::Stay };
+        let Some(mut path) = self.selected.clone().or_else(|| resolve(&self.dir, &self.name)) else { return Step::Stay };
         if path.is_dir() {
             self.name.clear();
             self.navigate(path);
@@ -562,6 +562,34 @@ mod tests {
         b.name = "old".into();
         assert_eq!(b.accept(), Step::Stay, "asks before replacing");
         assert_eq!(b.accept(), Step::Pick(dir.join("drafts").join("old.docx")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A selected file keeps its exact name for Open and both steps of Save's replacement check.
+    #[test]
+    fn selecting_a_file_preserves_leading_spaces() {
+        let dir = scratch("selected-path");
+        let selected = dir.join(" report.docx");
+        let sibling = dir.join("report.docx");
+        std::fs::write(&selected, b"selected original").unwrap();
+        std::fs::write(&sibling, b"sibling original").unwrap();
+        for save in [false, true] {
+            let req = if save {
+                FileDialogRequest::Save { name: "Draft.docx".into(), dir: None }
+            } else {
+                FileDialogRequest::Open { purpose: "document".into() }
+            };
+            let mut browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+            let entry = browser.listing.as_ref().unwrap().entries.iter().find(|entry| entry.path == selected).unwrap().clone();
+            browser.select(&entry);
+            if save {
+                assert_eq!(browser.accept(), Step::Stay, "Save still asks before replacing the selected file");
+                assert_eq!(browser.note, Note::Replace(selected.clone()));
+            }
+            assert_eq!(browser.accept(), Step::Pick(selected.clone()));
+            assert_eq!(std::fs::read(&selected).unwrap(), b"selected original");
+            assert_eq!(std::fs::read(&sibling).unwrap(), b"sibling original");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
