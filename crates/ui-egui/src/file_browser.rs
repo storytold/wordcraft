@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
 
-use crate::file_dialogs::{AfterPick, FileDialogRequest, open_filters, save_filters};
+use crate::file_dialogs::{AfterPick, FileDialogRequest, format_name, open_filters, save_filters};
 use crate::theme::{Tokens, regular};
 use crate::{WordApp, icons};
 
@@ -150,6 +150,15 @@ impl FileBrowser {
         let (name, filters) = match &req {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
+            }
+            // An export and Print's Save as PDF write their own format whatever type is picked:
+            // only that one, then All files.
+            FileDialogRequest::Save { name, .. } if matches!(after, AfterPick::Export { .. } | AfterPick::PrintPdf { .. }) => {
+                let ext = Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty());
+                let mut f: Vec<(String, Vec<String>)> =
+                    ext.map(|e| (format!("{} (*.{e})", format_name(&e.to_ascii_lowercase())), vec![e.to_string()])).into_iter().collect();
+                f.push(("All files".into(), vec!["*".into()]));
+                (name.clone(), f)
             }
             // Every format WordCraft saves, the suggested one first, as the system dialog lists them (#5368).
             FileDialogRequest::Save { name, .. } => {
@@ -634,6 +643,32 @@ mod tests {
         std::fs::write(dir.join("Bare.docx"), b"x").unwrap();
         assert_eq!(b.accept(), Step::Stay, "asks before replacing Bare.docx");
         assert_eq!(b.accept(), Step::Pick(dir.join("Bare.docx")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #5368 review: an export and Print's Save as PDF write their own format whatever type is
+    /// picked, so the built-in browser offers only that one and All files; the file asked about
+    /// before it's replaced is the one written, `.pdf` added as `file.printPdf` adds it.
+    #[test]
+    fn an_export_lists_only_its_own_format() {
+        let dir = scratch("export-types");
+        let req = || FileDialogRequest::Save { name: "Handout.pdf".into(), dir: None };
+        for after in [AfterPick::Export { ext: "pdf".into() }, AfterPick::PrintPdf { settings: serde_json::json!({}) }] {
+            let mut b = FileBrowser::new(req(), after, dir.clone(), false);
+            assert_eq!(b.filters.len(), 2, "{:?}", b.filters);
+            assert_eq!(b.filters[0].1, ["pdf"]);
+            assert!(b.filters[0].0.starts_with("PDF"), "{}", b.filters[0].0);
+            assert_eq!(b.filters[1].1, ["*"]);
+            b.filter = 1;
+            b.retype();
+            b.name = "Handout.docx".into();
+            assert_eq!(b.accept(), Step::Pick(dir.join("Handout.docx.pdf")), "a PDF is written, named so");
+            std::fs::write(dir.join("Notes.pdf"), b"x").unwrap();
+            b.name = "Notes".into();
+            assert_eq!(b.accept(), Step::Stay, "asks before replacing Notes.pdf");
+            assert_eq!(b.accept(), Step::Pick(dir.join("Notes.pdf")));
+            let _ = std::fs::remove_file(dir.join("Notes.pdf"));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

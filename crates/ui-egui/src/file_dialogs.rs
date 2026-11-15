@@ -87,7 +87,7 @@ pub fn save_filters(name: &str) -> Vec<(String, Vec<String>)> {
 }
 
 /// A readable name for a save format's extension.
-fn format_name(ext: &str) -> String {
+pub(crate) fn format_name(ext: &str) -> String {
     match ext {
         "docx" => "Word Document".into(),
         "docm" => "Word Macro-Enabled Document".into(),
@@ -146,12 +146,14 @@ impl AfterPick {
     }
 
     /// The path a save or export writes for the `path` picked (#5368): Save As adds the format's
-    /// extension to a name with none it saves, an export to a name without its own format's.
-    /// Applied before asking to replace a file too, so the file asked about is the one written.
+    /// extension to a name with none it saves, an export to a name without its own format's, and
+    /// Print's Save as PDF `.pdf` to a name without it, as `file.printPdf` does. Applied before
+    /// asking to replace a file too, so the file asked about is the one written.
     pub(crate) fn written_path(&self, path: &str) -> String {
         match self {
             AfterPick::SaveAs { ext, .. } => wordcraft_engine::io::with_save_ext(path, ext),
             AfterPick::Export { ext } => wordcraft_engine::io::with_export_ext(path, export_file_ext(ext)),
+            AfterPick::PrintPdf { .. } => wordcraft_engine::io::with_export_ext(path, "pdf"),
             _ => path.to_string(),
         }
     }
