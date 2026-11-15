@@ -67,7 +67,7 @@ pub(super) fn to_text(s: &mut Session, v: &Value) -> CmdResult {
             Some(c) if c != '\n' && c != '\r' && c != wordcraft_doc::para::OBJ => Some(c),
             _ => {
                 return Err(CmdError::Params(
-                    "`char` with `other` must start with a character other than CR, LF or U+FFFC (the object marker)".into(),
+                    "`char` with `other` must start with a character other than CR, LF or U+FFFC (the object marker); only the first character is used".into(),
                 ));
             }
         },
@@ -368,7 +368,11 @@ pub(super) fn from_text(s: &mut Session, v: &Value) -> CmdResult {
         Some("paragraph") => None,
         Some("other") => match p::str(v, "char").and_then(|c| c.chars().next()) {
             Some(c) if c != '\n' && c != '\r' => Some(c),
-            _ => return Err(CmdError::Params("`char` with `other` must start with a character other than CR or LF".into())),
+            _ => {
+                return Err(CmdError::Params(
+                    "`char` with `other` must start with a character other than CR or LF; only the first character is used".into(),
+                ));
+            }
         },
         Some(x) => return Err(CmdError::Params(format!("unknown separator `{x}`"))),
     };
