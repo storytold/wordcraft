@@ -265,7 +265,7 @@ pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<u
         // its sources to this document (#2640); the list above follows on the next frame.
         #[cfg(not(target_arch = "wasm32"))]
         if ui.button(tl!("Import…")).clicked()
-            && let Asked::Done(Err(e)) = app.ask_file(FileDialogRequest::Open { purpose: "sources".into() }, AfterPick::Sources)
+            && let Asked::Done(Err(e)) = app.ask_file(FileDialogRequest::Open { purpose: "sources".into(), dir: None }, AfterPick::Sources)
         {
             app.status(e);
         }

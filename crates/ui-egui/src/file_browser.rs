@@ -148,7 +148,7 @@ pub(crate) struct FileBrowser {
 impl FileBrowser {
     pub(crate) fn new(req: FileDialogRequest, after: AfterPick, start: PathBuf, unavailable: bool) -> Self {
         let (name, filters) = match &req {
-            FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
+            FileDialogRequest::Open { purpose, .. } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
             FileDialogRequest::Save { name, .. } => {
@@ -259,9 +259,12 @@ impl FileBrowser {
 impl WordApp {
     /// Ask for a file in the built-in browser and do `after` with the answer when it closes.
     pub(crate) fn show_file_browser(&mut self, req: FileDialogRequest, after: AfterPick, unavailable: bool) {
-        // A folder the request names (the user templates folder, #2852) comes first.
+        // A folder the request names (the user templates folder, #2852; the default local file
+        // location, #6721) comes first.
         let asked = match &req {
-            FileDialogRequest::Save { dir: Some(d), .. } => Some(PathBuf::from(d)).filter(|d| d.is_dir()),
+            FileDialogRequest::Save { dir: Some(d), .. } | FileDialogRequest::Open { dir: Some(d), .. } => {
+                Some(PathBuf::from(d)).filter(|d| d.is_dir())
+            }
             _ => None,
         };
         let start = asked
@@ -281,14 +284,17 @@ impl WordApp {
             return;
         }
         let (req, after) = match purpose {
-            "picture" => (FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture),
-            "recipients" => (FileDialogRequest::Open { purpose: "recipients".into() }, AfterPick::Recipients),
+            "picture" => (FileDialogRequest::Open { purpose: "picture".into(), dir: None }, AfterPick::Picture),
+            "recipients" => (FileDialogRequest::Open { purpose: "recipients".into(), dir: None }, AfterPick::Recipients),
             "save" => (
                 FileDialogRequest::Save { name: self.default_save_name(), dir: None },
                 AfterPick::SaveAs { after: crate::file_dialogs::AfterSave::Nothing, document: self.session.document_id() },
             ),
-            _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() }),
+            _ => {
+                (FileDialogRequest::Open { purpose: "document".into(), dir: None }, AfterPick::OpenDocument { document: self.session.document_id() })
+            }
         };
+        let req = self.with_default_location(req);
         self.show_file_browser(req, after, false);
     }
 
@@ -612,7 +618,7 @@ mod tests {
             a,
         );
         h.run_steps(4);
-        let req = FileDialogRequest::Open { purpose: "template".into() };
+        let req = FileDialogRequest::Open { purpose: "template".into(), dir: None };
         h.state_mut().file_browser.open = Some(Box::new(FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false)));
         let browser = egui::LayerId::new(egui::Order::Middle, egui::Id::unique("builtin_file_browser"));
         let backdrop = egui::LayerId::new(egui::Order::Middle, browser.id.with("modal_backdrop"));
@@ -654,7 +660,7 @@ mod tests {
             a,
         );
         h.run_steps(4);
-        let req = FileDialogRequest::Open { purpose: "template".into() };
+        let req = FileDialogRequest::Open { purpose: "template".into(), dir: None };
         h.state_mut().file_browser.open = Some(Box::new(FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false)));
         h.run_steps(3);
         h.key_press(egui::Key::Escape);
@@ -708,7 +714,7 @@ mod tests {
         a.dialog = crate::dialogs::Dialog::open("find", &mut a);
         assert!(a.dialog.as_ref().is_some_and(|d| !d.is_modal()));
         a.show_file_browser(
-            FileDialogRequest::Open { purpose: "document".into() },
+            FileDialogRequest::Open { purpose: "document".into(), dir: None },
             AfterPick::OpenDocument { document: a.session.document_id() },
             false,
         );
@@ -724,7 +730,7 @@ mod tests {
         let ctx = egui::Context::default();
         assert!(!crate::keytips::suppressed(&a, &ctx));
         a.show_file_browser(
-            FileDialogRequest::Open { purpose: "document".into() },
+            FileDialogRequest::Open { purpose: "document".into(), dir: None },
             AfterPick::OpenDocument { document: a.session.document_id() },
             false,
         );
@@ -737,8 +743,12 @@ mod tests {
     fn an_empty_folder_says_there_are_no_items() {
         let dir = scratch("empty_state");
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-        let mut b =
-            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        let mut b = FileBrowser::new(
+            FileDialogRequest::Open { purpose: "document".into(), dir: None },
+            AfterPick::OpenDocument { document: 0 },
+            dir.clone(),
+            false,
+        );
         b.navigate(dir.clone());
         assert!(matches!(&b.listing, Ok(l) if l.entries.is_empty()), "the folder starts empty");
         a.file_browser.open = Some(Box::new(b));
@@ -773,6 +783,33 @@ mod tests {
         }
         assert!(texts(&h).iter().any(|t| t.contains("chapter.docx")), "the file is listed");
         assert!(!texts(&h).iter().any(|t| t.contains("No items to show.")), "the hint is gone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #6721: the built-in browser opens in the default local file location for Open and, for a
+    /// document that was never saved, Save As; a folder that is gone falls back to the usual
+    /// choice, and other kinds of file (pictures) keep it.
+    #[test]
+    fn the_browser_starts_in_the_default_local_file_location() {
+        let dir = scratch("default_location");
+        let own = dir.join("Letters");
+        let elsewhere = dir.join("Elsewhere");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("file.options", serde_json::json!({"defaultFileLocation": own.to_string_lossy()})).unwrap();
+        a.file_browser.last_dir = Some(elsewhere.clone());
+        for purpose in ["document", "save"] {
+            a.browse_builtin(purpose);
+            assert_eq!(a.file_browser.open.as_ref().map(|b| b.dir.clone()), Some(own.clone()), "{purpose} starts in the default folder");
+            a.file_browser.open = None;
+        }
+        a.browse_builtin("picture");
+        assert_eq!(a.file_browser.open.as_ref().map(|b| b.dir.clone()), Some(elsewhere.clone()), "pictures keep the last folder");
+        a.file_browser.open = None;
+        std::fs::remove_dir_all(&own).unwrap();
+        a.browse_builtin("document");
+        assert_eq!(a.file_browser.open.as_ref().map(|b| b.dir.clone()), Some(elsewhere.clone()), "a folder that is gone is skipped");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

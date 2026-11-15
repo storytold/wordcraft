@@ -443,7 +443,7 @@ fn a_second_dialog_while_one_is_open_is_ignored() {
     assert!(!a.file_dialog_open());
     a.open_dialog();
     assert_eq!(shown.borrow().len(), 1, "a new dialog once the first was answered");
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into() });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into(), dir: None });
 }
 
 /// #2313: Export PDF from the command search (no path given) asks where to save it, as the
@@ -470,7 +470,7 @@ fn export_pdf_without_a_path_asks_where_to_save() {
 fn file_commands_without_a_path_ask_for_one() {
     let (mut a, shown) = async_app();
     a.run("file.open", json!({})).unwrap();
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into() });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into(), dir: None });
     // A second dialog can't open while one is up, so cancel before the next command.
     answer(&shown, None);
     a.poll_file_dialog();
@@ -537,7 +537,7 @@ fn a_recipient_list_picked_later_loads_recipients() {
     let (mut a, shown) = async_app();
     typed(&mut a);
     a.run("ui.openRecipientList", json!({})).unwrap();
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "recipients".into() });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "recipients".into(), dir: None });
     assert!(a.file_dialog_open());
     answer(&shown, Some(&csv.to_string_lossy()));
     a.poll_file_dialog().unwrap().unwrap();
@@ -693,11 +693,11 @@ fn add_font_imports_every_selected_file() {
 fn only_add_font_asks_for_several_files() {
     let (mut a, shown) = async_app();
     a.open_dialog();
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into() });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into(), dir: None });
     answer(&shown, None);
     a.poll_file_dialog();
     a.pick_picture();
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "picture".into() });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "picture".into(), dir: None });
     answer(&shown, None);
     a.poll_file_dialog();
     a.pick_font();
@@ -728,4 +728,106 @@ fn many_failed_fonts_end_with_a_count() {
     a.add_fonts(paths).unwrap();
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert_eq!(msg, "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
+}
+
+/// #6721: the default local file location is where Open starts, and where Save As starts for a
+/// document that was never saved. Pictures and a saved document's Save As are left alone, and a
+/// folder that is gone, or on another machine, is never offered.
+#[test]
+fn open_and_save_as_start_in_the_default_local_file_location() {
+    let dir = scratch("default-location");
+    let own = dir.join("Letters");
+    std::fs::create_dir_all(&own).unwrap();
+    let want = Some(own.to_string_lossy().into_owned());
+    let (mut a, shown) = async_app();
+    let asked = |shown: &Shown| shown.borrow()[0].0.clone();
+    let finish = |a: &mut WordApp, shown: &Shown| {
+        answer(shown, None);
+        a.poll_file_dialog();
+    };
+
+    a.open_dialog();
+    assert_eq!(asked(&shown), FileDialogRequest::Open { purpose: "document".into(), dir: None }, "no folder set: the system's choice");
+    finish(&mut a, &shown);
+
+    a.run("file.options", json!({"defaultFileLocation": own.to_string_lossy()})).unwrap();
+    a.open_dialog();
+    assert_eq!(asked(&shown), FileDialogRequest::Open { purpose: "document".into(), dir: want.clone() });
+    finish(&mut a, &shown);
+
+    typed(&mut a);
+    a.save_as_dialog();
+    assert_eq!(asked(&shown), FileDialogRequest::Save { name: format!("{UNSAVED}.docx"), dir: want.clone() }, "a new document saves there");
+    finish(&mut a, &shown);
+    a.export_dialog("pdf");
+    assert!(matches!(asked(&shown), FileDialogRequest::Save { dir, .. } if dir == want), "so does Export");
+    finish(&mut a, &shown);
+
+    a.pick_picture();
+    assert_eq!(asked(&shown), FileDialogRequest::Open { purpose: "picture".into(), dir: None }, "pictures are not documents");
+    finish(&mut a, &shown);
+
+    a.session.path = Some(dir.join("saved.docx"));
+    a.save_as_dialog();
+    assert!(matches!(asked(&shown), FileDialogRequest::Save { dir: None, .. }), "a saved document keeps its own say");
+    finish(&mut a, &shown);
+    a.session.path = None;
+
+    a.session.prefs.default_file_location = Some(r"\\host\share\docs".into());
+    a.open_dialog();
+    assert_eq!(asked(&shown), FileDialogRequest::Open { purpose: "document".into(), dir: None }, "a network folder is never offered");
+    finish(&mut a, &shown);
+
+    a.session.prefs.default_file_location = want.clone();
+    std::fs::remove_dir_all(&own).unwrap();
+    a.open_dialog();
+    assert_eq!(asked(&shown), FileDialogRequest::Open { purpose: "document".into(), dir: None }, "a folder that is gone is skipped");
+    finish(&mut a, &shown);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The choice of the starting folder, on its own: what a request becomes with a default folder.
+#[test]
+fn the_default_folder_fills_only_what_names_no_folder() {
+    let open = |purpose: &str, dir: Option<&str>| FileDialogRequest::Open { purpose: purpose.into(), dir: dir.map(String::from) };
+    let save = |dir: Option<&str>| FileDialogRequest::Save { name: "a.docx".into(), dir: dir.map(String::from) };
+    let f = Some("/docs");
+    assert_eq!(with_default_folder(open("document", None), f, false), open("document", Some("/docs")));
+    assert_eq!(with_default_folder(open("document", None), f, true), open("document", Some("/docs")), "Open ignores the open file");
+    assert_eq!(with_default_folder(open("document", Some("/own")), f, false), open("document", Some("/own")));
+    assert_eq!(with_default_folder(open("picture", None), f, false), open("picture", None));
+    assert_eq!(with_default_folder(open("recipients", None), f, false), open("recipients", None));
+    assert_eq!(with_default_folder(save(None), f, false), save(Some("/docs")));
+    assert_eq!(with_default_folder(save(None), f, true), save(None), "a saved document's Save As");
+    assert_eq!(with_default_folder(save(Some("/templates")), f, false), save(Some("/templates")));
+    assert_eq!(with_default_folder(save(None), None, false), save(None), "nothing saved");
+    let many = FileDialogRequest::OpenMany { purpose: "font".into() };
+    assert_eq!(with_default_folder(many.clone(), f, false), many);
+}
+
+/// The saved folder is checked again at use: only a full local path to a folder that exists.
+#[test]
+fn a_saved_default_folder_is_used_only_while_it_is_usable() {
+    let dir = scratch("usable-default");
+    let own = dir.to_string_lossy().into_owned();
+    assert_eq!(usable_default_location(Some(&own)), Some(own.clone()));
+    assert_eq!(usable_default_location(Some(&format!("  {own}  "))), Some(own.clone()), "trimmed");
+    let junk = [
+        None,
+        Some(""),
+        Some("   "),
+        Some("relative/folder"),
+        Some(r"\\host\share"),
+        Some("//host/share"),
+        Some("/no/such/folder/6721"),
+        Some("bad\u{0}path"),
+    ];
+    for saved in junk {
+        assert_eq!(usable_default_location(saved), None, "{saved:?}");
+    }
+    let file = dir.join("note.txt");
+    std::fs::write(&file, "x").unwrap();
+    assert_eq!(usable_default_location(Some(&file.to_string_lossy())), None, "a file is not a folder");
+    assert_eq!(usable_default_location(Some(&"x".repeat(10_000))), None);
+    let _ = std::fs::remove_dir_all(&dir);
 }

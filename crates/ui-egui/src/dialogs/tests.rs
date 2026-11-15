@@ -2135,7 +2135,7 @@ fn open_modal_state(a: &mut WordApp, state: &str) {
         "fileBrowser" => {
             let document = a.session.document_id();
             a.show_file_browser(
-                crate::file_dialogs::FileDialogRequest::Open { purpose: "document".into() },
+                crate::file_dialogs::FileDialogRequest::Open { purpose: "document".into(), dir: None },
                 crate::file_dialogs::AfterPick::OpenDocument { document },
                 false,
             );

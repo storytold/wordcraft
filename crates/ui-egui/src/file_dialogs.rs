@@ -21,8 +21,9 @@ use crate::WordApp;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileDialogRequest {
     /// Pick a file to open; `purpose` says what for (`document`, `picture`, `recipients`, `font`,
-    /// `sources`), as for `pick_open`.
-    Open { purpose: String },
+    /// `sources`), as for `pick_open`. `dir` is the folder to start in, when one is known (Open
+    /// starts in the default local file location, #6721).
+    Open { purpose: String, dir: Option<String> },
     /// Pick one or more files (Add Font…); the answer lists every one picked.
     OpenMany { purpose: String },
     /// Pick a path to save to, given a suggested file name and, if it matters, the folder to
@@ -52,6 +53,34 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
         "sources" => &[("Word sources", &["xml"]), ("All files", &["*"])],
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
+    }
+}
+
+/// `saved` (the default local file location File › Options holds, #6721) if it can be used right
+/// now: a full local path to a folder that exists. The saved value is checked again here, as the
+/// settings file may have been edited or the folder removed, and a folder on another machine is
+/// never looked at (even checking it would make Windows authenticate to that host).
+pub(crate) fn usable_default_location(saved: Option<&str>) -> Option<String> {
+    let folder = saved?.trim();
+    if folder.is_empty() {
+        return None;
+    }
+    wordcraft_engine::cmd::user_templates::check_dir(folder).ok()?;
+    std::path::Path::new(folder).is_dir().then(|| folder.to_string())
+}
+
+/// `req` with the folder it starts in filled from the default local file location, where the
+/// request names none: Open (documents only) always starts there, and so does a Save for a
+/// document that was never saved (`has_path` false), as in Word, where a saved document's Save As
+/// starts in its own folder. (The `document` purpose also serves Compare's document pickers,
+/// which start there too.) Anything that already names a folder (Save as Word Template) and
+/// every other kind of request is left alone.
+pub(crate) fn with_default_folder(req: FileDialogRequest, default_folder: Option<&str>, has_path: bool) -> FileDialogRequest {
+    let Some(folder) = default_folder else { return req };
+    match req {
+        FileDialogRequest::Open { purpose, dir: None } if purpose == "document" => FileDialogRequest::Open { purpose, dir: Some(folder.to_string()) },
+        FileDialogRequest::Save { name, dir: None } if !has_path => FileDialogRequest::Save { name, dir: Some(folder.to_string()) },
+        req => req,
     }
 }
 
@@ -137,6 +166,7 @@ impl WordApp {
             self.status(tl!("A file dialog is already open."));
             return Asked::Busy;
         }
+        let req = self.with_default_location(req);
         if let Some(show) = &self.services.file_dialog {
             let rx = show(req.clone());
             self.file_dialog = Some(PendingDialog { rx, req, after });
@@ -144,12 +174,19 @@ impl WordApp {
             return self.poll_file_dialog().map_or(Asked::Pending, Asked::Done);
         }
         let picked = match &req {
-            FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
+            FileDialogRequest::Open { purpose, .. } | FileDialogRequest::OpenMany { purpose } => {
                 self.services.pick_open.as_ref().and_then(|f| f(purpose))
             }
             FileDialogRequest::Save { name, .. } => self.services.pick_save.as_ref().and_then(|f| f(name)),
         };
         Asked::Done(self.finish_pick(after, picked))
+    }
+
+    /// `req` starting in the default local file location File › Options names (#6721), where it
+    /// applies and the folder is usable now ([`with_default_folder`]).
+    pub(crate) fn with_default_location(&self, req: FileDialogRequest) -> FileDialogRequest {
+        let folder = usable_default_location(self.session.prefs.default_file_location.as_deref());
+        with_default_folder(req, folder.as_deref(), self.session.path.is_some())
     }
 
     /// Pick up the answer of an open file dialog, if it has arrived (every frame, from `logic`),
@@ -454,8 +491,10 @@ impl WordApp {
             f("document");
             return;
         }
-        let _ =
-            self.ask_file(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() });
+        let _ = self.ask_file(
+            FileDialogRequest::Open { purpose: "document".into(), dir: None },
+            AfterPick::OpenDocument { document: self.session.document_id() },
+        );
     }
 
     pub(crate) fn pick_picture(&mut self) {
@@ -463,7 +502,7 @@ impl WordApp {
             f("picture");
             return;
         }
-        let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture);
+        let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into(), dir: None }, AfterPick::Picture);
     }
 
     /// Pick a font file to add (Add Font…; web: it arrives through the inbox).

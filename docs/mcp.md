@@ -88,7 +88,7 @@ config works across the suite) keep the agent to the folders you give it:
   `picture.change` with a `path`, `mailings.recipients` with a `path` (csv, tsv, txt, xlsx, xlsm,
   ods), `review.compare` (`path` and `original`), the templates and documents `tools.updateStyles`,
   `styles.organizer` and `styles.copyFrom` read, and the folders `file.options` takes
-  (`dictionariesFolder`, `userTemplatesFolder`). The pictures an opened HTML file names are read
+  (`dictionariesFolder`, `userTemplatesFolder`, `defaultFileLocation`). The pictures an opened HTML file names are read
   from beside that file and must be inside the read root too, even when the file was opened through
   a link (#3736).
 - Every file a command writes must lie inside the **write root**: `save_document`, `file.save`,

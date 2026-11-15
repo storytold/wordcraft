@@ -59,7 +59,7 @@ fn can_pick(app: &WordApp) -> bool {
 
 /// Ask for a template or document; the answer arrives in `app.dialog_pick`.
 fn pick(app: &mut WordApp) {
-    let _ = app.ask_file(FileDialogRequest::Open { purpose: "template".into() }, AfterPick::ForDialog);
+    let _ = app.ask_file(FileDialogRequest::Open { purpose: "template".into(), dir: None }, AfterPick::ForDialog);
 }
 
 /// Returns true to close.

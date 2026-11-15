@@ -938,7 +938,7 @@ impl WordApp {
             self.recipient_list_pending = true;
             return;
         }
-        let _ = self.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "recipients".into() }, file_dialogs::AfterPick::Recipients);
+        let _ = self.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "recipients".into(), dir: None }, file_dialogs::AfterPick::Recipients);
     }
 
     /// Load mail-merge recipients and say how many there are. A workbook with several sheets

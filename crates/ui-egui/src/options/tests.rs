@@ -316,6 +316,53 @@ fn save_privacy_checkboxes_set_the_privacy_options() {
     assert!(!h.state().session.doc.settings.remove_personal_info, "and off again");
 }
 
+/// File › Options › Save › Default local file location (#6721): the folder is typed in, applied
+/// through `file.options` and cleared again; a folder that doesn't exist is refused and changes
+/// nothing. The setting is saved with the other preferences.
+#[test]
+fn save_pane_sets_and_clears_the_default_local_file_location() {
+    let dir = std::env::temp_dir().join(format!("wc-ui-default-location-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut a = app();
+    a.run("file.options", json!({"pane": "save"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let field = "Default local file location:";
+    let type_in = |h: &mut egui_kittest::Harness<'_, WordApp>, text: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, field).click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.key_press(egui::Key::Backspace);
+        h.run_steps(1);
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, field).type_text(text);
+        h.run_steps(2);
+    };
+    assert!(h.state().session.prefs.default_file_location.is_none(), "nothing is set to begin with");
+    type_in(&mut h, &dir.join("missing").to_string_lossy());
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert!(h.state().session.prefs.default_file_location.is_none(), "a folder that doesn't exist is refused");
+    type_in(&mut h, &dir.to_string_lossy());
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs.default_file_location.as_deref(), Some(dir.to_string_lossy().as_ref()));
+    let saved = serde_json::to_vec(&h.state().prefs()).unwrap();
+    let mut restarted = app();
+    restarted.apply_prefs(UiState::from_json(&saved).unwrap());
+    assert_eq!(restarted.session.prefs.default_file_location.as_deref(), Some(dir.to_string_lossy().as_ref()), "kept across a restart");
+    h.get_by_label("Clear").click();
+    h.run_steps(4);
+    assert!(h.state().session.prefs.default_file_location.is_none(), "Clear forgets it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// File › Options › Accessibility › Animation effects: Use system setting (the default), On
 /// or Off, with a line saying what the system's own setting is while it is followed.
 #[test]

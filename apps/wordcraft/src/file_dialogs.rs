@@ -216,7 +216,14 @@ impl Launcher {
 /// The picker for `req` on `dialog`.
 fn picker(dialog: rfd::AsyncFileDialog, req: &FileDialogRequest) -> Picking {
     match req.clone() {
-        FileDialogRequest::Open { purpose } => Box::pin(async move { open_filters(dialog, &purpose).pick_file().await.into_iter().collect() }),
+        FileDialogRequest::Open { purpose, dir } => {
+            // Open starts in the default local file location (#6721).
+            let dialog = match dir.filter(|d| std::path::Path::new(d).is_dir()) {
+                Some(dir) => dialog.set_directory(dir),
+                None => dialog,
+            };
+            Box::pin(async move { open_filters(dialog, &purpose).pick_file().await.into_iter().collect() })
+        }
         FileDialogRequest::OpenMany { purpose } => Box::pin(async move { open_filters(dialog, &purpose).pick_files().await.unwrap_or_default() }),
         FileDialogRequest::Save { name, dir } => {
             let mut dialog = dialog.set_file_name(name.clone());

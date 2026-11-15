@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-15: File › Options › Save › Default local file location (`file.options` `defaultFileLocation`, #6721): the folder Open and Save As start in, saved with the other preferences. Open (documents) starts there; so does Save As, Export and Save these pages as PDF for a document that was never saved; a saved document's Save As, pictures and other pickers are unchanged. A folder that is gone or on another machine is skipped at use time. The built-in file browser follows. A Browse button needs a folder picker, which WordCraft's dialogs don't have yet. Readiness estimates unchanged.
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
 

@@ -507,6 +507,12 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
         app.session.autosave = autosave;
     }
     note(ui, "AutoSave writes your changes to the file a moment after you stop typing.");
+    // The web app has no folders to name.
+    if !cfg!(target_arch = "wasm32") {
+        ui.add_space(8.0);
+        section(ui, "File locations");
+        default_file_location(app, ui);
+    }
     ui.add_space(8.0);
     // The open document's `file.privacyOptions` (#1062): saved with it, honoured when it is saved.
     section(ui, "Privacy for this document");
@@ -524,6 +530,41 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
         }
     }
     note(ui, "The document you are editing keeps the names and dates; only the saved file leaves them out.");
+}
+
+/// The default local file location (#6721): the folder Open and Save As start in. Empty leaves
+/// the choice to the system's file dialog.
+fn default_file_location(app: &mut WordApp, ui: &mut Ui) {
+    let saved = app.session.prefs.default_file_location.clone().unwrap_or_default();
+    let id = egui::Id::unique("options_default_file_location");
+    // The text being edited, with the saved value it started from: a change made elsewhere
+    // (the command, another window) replaces what is typed.
+    let (seen, typed) = ui.data(|d| d.get_temp::<(String, String)>(id)).unwrap_or_else(|| (saved.clone(), saved.clone()));
+    let mut folder = if seen == saved { typed } else { saved.clone() };
+    let location_label = ui.label(tl!("Default local file location:")).id;
+    ui.horizontal(|ui| {
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut folder).desired_width(320.0).hint_text(tl!("Not set: the system's choice")))
+            .labelled_by(location_label);
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let changed = folder.trim() != saved;
+        if ui.add_enabled(changed, egui::Button::new(tl!("Apply"))).clicked() || (enter && changed) {
+            let value = if folder.trim().is_empty() { "auto" } else { folder.trim() };
+            match app.run("file.options", json!({"defaultFileLocation": value})) {
+                // Shown as saved (`~/` expanded).
+                Ok(_) => folder = app.session.prefs.default_file_location.clone().unwrap_or_default(),
+                Err(e) => app.status(e),
+            }
+        }
+        if ui.add_enabled(!saved.is_empty(), egui::Button::new(tl!("Clear"))).clicked()
+            && app.run("file.options", json!({"defaultFileLocation": "auto"})).is_ok()
+        {
+            folder.clear();
+        }
+    });
+    let saved_now = app.session.prefs.default_file_location.clone().unwrap_or_default();
+    ui.data_mut(|d| d.insert_temp(id, (saved_now, folder)));
+    note(ui, "Open, and Save As for a document you have not saved yet, start in this folder.");
 }
 
 fn language(app: &mut WordApp, ui: &mut Ui) {
