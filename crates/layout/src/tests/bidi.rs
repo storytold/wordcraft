@@ -815,8 +815,15 @@ const TIMES_LINE_EM: f64 = 2355.0 / 2048.0;
 /// The (ascent + descent) in em of each cluster's style, for one paragraph of `text` set at 12 pt
 /// with the Latin font `font` and complex-script font `font_cs`.
 fn line_em_per_cluster(text: &str, font: &str, font_cs: &str) -> Vec<f64> {
+    line_em_in(text, font, font_cs, &[])
+}
+
+/// [`line_em_per_cluster`] in a document whose font table classes the `roman` fonts as roman (a
+/// missing one is then looked up as another font, as Word draws it).
+fn line_em_in(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> Vec<f64> {
     crate::test_fonts();
     let mut d = Document::from_text(text);
+    d.settings.roman_fonts = roman.iter().map(|f| f.to_string()).collect();
     d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
         c.font = Some(font.into());
         c.font_cs = Some(font_cs.into());
@@ -826,7 +833,12 @@ fn line_em_per_cluster(text: &str, font: &str, font_cs: &str) -> Vec<f64> {
     .unwrap();
     let l = lay(&d);
     let (pl, _) = first_line(&l, 0);
-    pl.clusters.iter().filter(|c| c.kind == crate::para::ClKind::Text).filter_map(|c| pl.styles.get(c.style as usize)).map(|st| f64::from(st.ascent + st.descent) / 12.0).collect()
+    pl.clusters
+        .iter()
+        .filter(|c| matches!(c.kind, crate::para::ClKind::Text | crate::para::ClKind::Space))
+        .filter_map(|c| pl.styles.get(c.style as usize))
+        .map(|st| f64::from(st.ascent + st.descent) / 12.0)
+        .collect()
 }
 
 #[test]
@@ -838,10 +850,27 @@ fn arabic_text_in_a_missing_font_has_times_new_romans_line_height() {
     for e in &em {
         assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{em:?}");
     }
-    // Word's own value for Traditional Arabic.
+    // Spaces and digits between Arabic letters are as tall as the letters.
+    let em = line_em_per_cluster("ببب ببب 12", "Zz Invented Naskh 6803", "Zz Invented Naskh 6803");
+    assert!(em.len() >= 9, "{em:?}");
+    for e in &em {
+        assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{em:?}");
+    }
+    // A missing font the font table classes as roman is looked up as another font, but its Arabic
+    // letters still have the line.
+    let em = line_em_in("ببب ببب", "CTraditional Arabic", "CTraditional Arabic", &["CTraditional Arabic"]);
+    assert!(!em.is_empty());
+    for e in &em {
+        assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{em:?}");
+    }
+    // Word's own value for Simplified Arabic (1.792 em between paragraphs).
+    for e in &line_em_per_cluster("ببب", "Simplified Arabic", "Simplified Arabic") {
+        assert!((e - 1.792 / 1.08).abs() < 1e-3, "{e}");
+    }
+    // Word's own value for Traditional Arabic (paragraphs 1.615 em apart, a line of 1.615 / 1.08).
     let em = line_em_per_cluster("ببب", "Zz Invented Naskh 6803", "Traditional Arabic");
     for e in &em {
-        assert!((e - 1.615).abs() < 1e-3, "{em:?}");
+        assert!((e - 1.615 / 1.08).abs() < 1e-3, "{em:?}");
     }
 }
 
@@ -862,8 +891,14 @@ fn latin_text_and_installed_fonts_keep_their_own_line_height() {
     for e in &installed {
         assert!((e - own("Source Serif 4")).abs() < 1e-3, "{installed:?}");
     }
-    // A mixed run keeps both heights: Latin letters the substitute's, Arabic letters Times New Roman's.
+    // A font Windows has keeps its own line too, in the substitute.
+    let tahoma = line_em_per_cluster("ببب", "Tahoma", "Tahoma");
+    for e in &tahoma {
+        assert!((e - own("Tahoma")).abs() < 1e-3, "{tahoma:?}");
+    }
+    // A run with Arabic letters is one height throughout, its Latin letters included.
     let mixed = line_em_per_cluster("abc ببب", "Zz Invented Naskh 6803", "Zz Invented Naskh 6803");
-    assert!(mixed.iter().any(|e| (e - TIMES_LINE_EM).abs() < 1e-3), "{mixed:?}");
-    assert!(mixed.iter().any(|e| (e - own("Zz Invented Naskh 6803")).abs() < 1e-3), "{mixed:?}");
+    for e in &mixed {
+        assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{mixed:?}");
+    }
 }

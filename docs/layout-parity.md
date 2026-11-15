@@ -286,7 +286,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 ## Revision history
 
-> 2026-11-15 · Arabic text in a Persian or Arabic font that isn't installed lines up 1.240 em apart at single spacing, like Times New Roman, however tall the face drawn instead; Traditional Arabic, 1.615 em (#6803). Office's other Arabic fonts keep the substitute's height until measured.
+> 2026-11-15 · Arabic text in a font that isn't installed takes Times New Roman's line height (paragraphs 1.240 em apart at 12 pt, single spacing), as Word does, instead of the tall Naskh substitute's; Traditional Arabic, Simplified Arabic, Arabic Typesetting, Sakkal Majalla, Andalus, Aldhabi, Urdu Typesetting, Dubai and Arial Unicode MS have the heights measured in Word (#6803). Hebrew, Syriac, Thaana, and an empty paragraph's mark in a missing font, are not covered.
 
 > 2026-11-05 · Arabic letters join across a change of formatting and past hidden or deleted text (#4093): each run is shaped with the text shown on either side of it.
 

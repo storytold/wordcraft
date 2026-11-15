@@ -74,6 +74,9 @@ pub struct StyleRun {
     /// Line ascent/descent at this size, points.
     pub ascent: f32,
     pub descent: f32,
+    /// The line is Times New Roman's, as Word gives Arabic text in a missing font (see
+    /// `wordcraft_fonts::word::missing_arabic_line`), not the face's own.
+    pub arabic_line: bool,
     /// Baseline shift (superscript etc.), points, positive up.
     pub shift: f32,
 }

@@ -115,9 +115,11 @@ impl<'a> Builder<'a> {
     /// [`Self::style`] for text that is `arabic` (Arabic-script letters): in a missing font it
     /// takes the line height Word gives it ([`wordcraft_fonts::word::missing_arabic_line`]).
     pub(super) fn style_for(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool, arabic: bool) -> u32 {
-        let r = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let family = lookup_family(self.env.doc, &rc.font);
+        let r = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
         let face = face_override.unwrap_or(r.face);
-        let arabic_line = if arabic { wordcraft_fonts::word::missing_arabic_line(lookup_family(self.env.doc, &rc.font), &r) } else { None };
+        // A font isn't installed when it was substituted, or looked up as a missing roman font.
+        let arabic_line = if arabic { wordcraft_fonts::word::missing_arabic_line(&rc.font, r.substituted || family != rc.font) } else { None };
         // The display list reads every run's format (link target, strike kind, underline colour,
         // baseline shift…) from its StyleRun, so runs share one only when their formats are equal.
         // Keyed by a hash of the commonly varying fields (no allocation: this runs for every shaped
@@ -138,6 +140,7 @@ impl<'a> Builder<'a> {
             if s == small
                 && let Some(st) = self.styles.get(i as usize)
                 && st.face.id() == face.id()
+                && st.arabic_line == arabic_line.is_some()
                 && (Arc::ptr_eq(&st.rc, rc) || *st.rc == **rc)
             {
                 return i;
@@ -165,6 +168,7 @@ impl<'a> Builder<'a> {
             rc: rc.clone(),
             ascent: (a * k) as f32,
             descent: (d * k) as f32,
+            arabic_line: arabic_line.is_some(),
             shift: rc.baseline_shift(),
         };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
@@ -330,6 +334,9 @@ impl<'a> Builder<'a> {
         };
         self.note_missing_fonts(text, &segs, (primary, primary_cs, primary_ea), &missing);
         let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
+        // Word gives every line of a run with Arabic letters the height of its missing font, spaces
+        // and digits between the letters included.
+        let arabic_run = text.chars().any(wordcraft_fonts::word::is_arabic_script);
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
             let rc = match (&rc_cs, key.complex) {
@@ -338,7 +345,7 @@ impl<'a> Builder<'a> {
             };
             let rc = &rc;
             let small = key.small;
-            let si = self.style_for(rc, key.face, small, sub.chars().any(wordcraft_fonts::word::is_arabic_script));
+            let si = self.style_for(rc, key.face, small, arabic_run);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
             // All Caps and Small Caps draw a letter's full capital, which can be several

@@ -188,39 +188,62 @@ pub fn symbol_line(family: &str, resolved: &Resolved) -> Option<(f64, f64)> {
     (resolved.substituted || one_em(line_metrics(&resolved.face), resolved.face.upem)).then_some(m)
 }
 
-/// Arabic-script fonts that come with Office and have a line height of their own in Word, which
-/// this does not know (except for Traditional Arabic, see [`missing_arabic_line`]): a missing one
-/// keeps the substitute's height, as before.
-const OFFICE_ARABIC: &[&str] = &["simplified arabic", "simplified arabic fixed", "arabic typesetting", "sakkal majalla", "andalus", "aldhabi", "urdu typesetting", "dubai"];
+/// Word's distance between paragraphs of Arabic text, in em at 12 pt and single spacing in a
+/// style with 1.08 line spacing, in fonts that come with Office and Windows and have Arabic letters
+/// of their own. Measured in Word for Windows on synthetic documents, with the font missing here.
+const WORD_ARABIC_PITCH: &[(&str, f64)] = &[
+    ("traditional arabic", 1.615),
+    ("simplified arabic", 1.792),
+    ("arabic typesetting", 1.229),
+    ("sakkal majalla", 1.500),
+    ("andalus", 1.240),
+    ("aldhabi", 1.885),
+    ("urdu typesetting", 1.833),
+    ("dubai", 1.812),
+    ("arial unicode ms", 1.875),
+];
+
+/// Fonts that Word has with Arabic letters and lines of their own, installed where it measured,
+/// that aren't in [`WORD_ARABIC_PITCH`]: Tahoma's paragraphs are 1.302 em apart, Segoe UI's 1.438,
+/// Microsoft Sans Serif's 1.219. (Word draws Arabic text in a font without Arabic letters, such
+/// as Verdana, Georgia, Aptos or Sylfaen, in Times New Roman, 1.240.)
+fn has_arabic_line_of_its_own(lower: &str) -> bool {
+    let segoe = lower.starts_with("segoe ui") && !["symbol", "emoji", "historic"].iter().any(|w| lower.contains(w));
+    segoe
+        || ["microsoft sans serif", "tahoma", "arial", "times", "courier", "consolas", "calibri", "symbol", "wingdings", "webdings"]
+            .iter()
+            .any(|p| lower.starts_with(p))
+}
 
 /// Is `c` an Arabic-script letter, mark or digit (Arabic, Supplement, Extended-A, presentation forms)?
 pub fn is_arabic_script(c: char) -> bool {
     matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
 }
 
-/// The (ascent, descent) in em Word gives a line of Arabic-script text in a font that isn't
-/// installed and has no metric twin, when that isn't the substitute's own: Times New Roman's
-/// (hhea 1825 / -443, gap 87 per 2048). Measured in Word for Windows on synthetic documents (12 pt,
-/// single spacing): Persian and Arabic fonts that are missing lie 1.240 em apart, as lines in
-/// Times New Roman do, however tall the face WordCraft draws them in (Noto Naskh Arabic is 1.84).
-/// Traditional Arabic, which comes with Office, is 1.615 em, split like Times New Roman's.
-/// Fonts that come with Office and aren't measured ([`OFFICE_ARABIC`]), symbol fonts and fonts
-/// with a metric twin (Arial, Times New Roman…) keep the face's own line.
-pub fn missing_arabic_line(family: &str, resolved: &Resolved) -> Option<(f64, f64)> {
-    if !resolved.substituted {
+/// The (ascent, descent) in em Word gives a line of Arabic-script text in the font `family` when
+/// it `missing` (not installed, or drawn as another font) and the line isn't the substitute's own.
+/// For a font Word doesn't have it is Times New Roman's (hhea 1825 / -443, gap 87 per 2048, 1.150
+/// em). Measured in Word for Windows on synthetic documents (12 pt, single spacing in a style with
+/// 1.08 line spacing): paragraphs of Persian and Arabic text in a missing font are 1.240 em apart,
+/// as in Times New Roman (1.150 times 1.08), however tall the face WordCraft draws the letters in
+/// (Noto Naskh Arabic's line is 1.84). The Office fonts of [`WORD_ARABIC_PITCH`] have their
+/// measured line, split like Times New Roman's. Fonts with a metric twin (Arial, Times New
+/// Roman…), symbol fonts and [`has_arabic_line_of_its_own`] keep the face's own line.
+pub fn missing_arabic_line(family: &str, missing: bool) -> Option<(f64, f64)> {
+    if !missing {
         return None;
     }
     let name = family.split(';').map(str::trim).find(|f| !f.is_empty())?;
     let base = charset_base_family(name);
     let lower = base.to_ascii_lowercase();
-    if symbol_font_metrics(name).is_some() || metric_twins(base).next().is_some() || OFFICE_ARABIC.contains(&lower.as_str()) {
-        return None;
-    }
     let (a, d) = hhea_line(1825, -443, 87);
     let (a, d) = (a / 2048.0, d / 2048.0);
-    if lower == "traditional arabic" {
-        let k = 1.615 / (a + d);
+    if let Some((_, pitch)) = WORD_ARABIC_PITCH.iter().find(|(n, _)| *n == lower) {
+        let k = pitch / 1.08 / (a + d);
         return Some((a * k, d * k));
+    }
+    if symbol_font_metrics(name).is_some() || metric_twins(base).next().is_some() || has_arabic_line_of_its_own(&lower) {
+        return None;
     }
     Some((a, d))
 }
@@ -908,24 +931,60 @@ mod tests {
 
     #[test]
     fn a_missing_arabic_font_takes_times_new_romans_line() {
+        // Times New Roman's 1.150 em; Word's paragraphs in it lie 1.240 = 1.150 x 1.08 em apart.
         let times = 2355.0 / 2048.0;
         let total = |m: Option<(f64, f64)>| m.map(|(a, d)| a + d);
-        let missing = resolve("Zz Invented Naskh 6803", false, false);
-        assert!(missing.substituted);
-        for family in ["B Lotus", "IRZar", "Zz Invented Naskh 6803", "IranNastaliq", "KFGQPC Uthman Taha Naskh", "B Titr;Arial"] {
-            let t = total(missing_arabic_line(family, &missing)).unwrap_or(0.0);
+        // Fonts Word hasn't, and fonts it has without Arabic letters (measured: also 1.240).
+        for family in [
+            "B Lotus",
+            "IRZar",
+            "Zz Invented Naskh 6803",
+            "IranNastaliq",
+            "KFGQPC Uthman Taha Naskh",
+            "CTraditional Arabic",
+            "Verdana",
+            "Aptos",
+            "Sylfaen",
+            "Nirmala UI",
+        ] {
+            let t = total(missing_arabic_line(family, true)).unwrap_or(0.0);
             assert!((t - times).abs() < 1e-9, "{family}: {t}");
         }
-        // Word's value for Traditional Arabic, 1.615 em, whatever face stands in for it.
-        let t = total(missing_arabic_line("Traditional Arabic", &missing)).unwrap_or(0.0);
-        assert!((t - 1.615).abs() < 1e-9, "{t}");
-        // Not for fonts that are installed, or that have a metric twin, are symbol fonts, or ship
-        // with Office unmeasured: they keep the face's own line.
+        // A font list is classed by its first font.
+        let t = total(missing_arabic_line("B Titr;Arial", true)).unwrap_or(0.0);
+        assert!((t - times).abs() < 1e-9, "{t}");
+        // Installed fonts keep their own line, a face drawn as another doesn't change that.
         let bundled = resolve("Source Serif 4", false, false);
         assert!(!bundled.substituted);
-        assert_eq!(missing_arabic_line("Source Serif 4", &bundled), None);
-        for family in ["Arial", "Times New Roman", "Calibri", "Symbol", "Simplified Arabic", "Sakkal Majalla"] {
-            assert_eq!(missing_arabic_line(family, &missing), None, "{family}");
+        assert_eq!(missing_arabic_line("B Lotus", bundled.substituted), None);
+        let invented = resolve("Zz Invented Naskh 6803", false, false);
+        assert!(invented.substituted);
+        assert!(missing_arabic_line("Zz Invented Naskh 6803", invented.substituted).is_some());
+    }
+
+    #[test]
+    fn office_arabic_fonts_have_the_line_word_measured() {
+        // Word's paragraphs lie this far apart (em), a line of that over 1.08.
+        for (family, pitch) in
+            [("Traditional Arabic", 1.615), ("Simplified Arabic", 1.792), ("Sakkal Majalla", 1.5), ("Andalus", 1.24), ("Arial Unicode MS", 1.875)]
+        {
+            let (a, d) = missing_arabic_line(family, true).unwrap_or_default();
+            assert!(((a + d) * 1.08 - pitch).abs() < 1e-9, "{family}: {}", (a + d) * 1.08);
+        }
+        // Fonts with Arabic letters and lines of their own, symbol fonts and fonts with a metric twin.
+        for family in [
+            "Arial",
+            "Arial Narrow",
+            "Times New Roman",
+            "Calibri",
+            "Symbol",
+            "Tahoma",
+            "Segoe UI",
+            "Segoe UI Light",
+            "Microsoft Sans Serif",
+            "Courier New",
+        ] {
+            assert_eq!(missing_arabic_line(family, true), None, "{family}");
         }
     }
 
