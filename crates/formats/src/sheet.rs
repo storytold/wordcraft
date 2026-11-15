@@ -217,12 +217,36 @@ fn display(v: &Value, kind: Option<DateKind>, date_1904: bool) -> String {
     }
 }
 
-/// Whether `text` is an ISO 8601 date, with or without a time, in any year:
+/// Whether `text` is an ISO 8601 date, with or without a time, in any year: its day exists in its
+/// month and year, or it is 1900-02-29, which Excel counts as a day, and
 /// `craft_xlsx::iso_date_serial` accepts it with its year replaced by 2000.
 fn iso_date_text(text: &str) -> bool {
     text.trim().split_once('-').is_some_and(|(year, rest)| {
-        !year.is_empty() && year.bytes().all(|b| b.is_ascii_digit()) && craft_xlsx::iso_date_serial(&format!("2000-{rest}"), false).is_some()
+        !year.is_empty()
+            && year.bytes().all(|b| b.is_ascii_digit())
+            && day_in_month(year, rest)
+            && craft_xlsx::iso_date_serial(&format!("2000-{rest}"), false).is_some()
     })
+}
+
+/// Whether the `MM-DD` at the start of `rest` names a day that `year` (ASCII digits) has.
+fn day_in_month(year: &str, rest: &str) -> bool {
+    let Some((month, day)) = rest.split(['T', ' ']).next().and_then(|md| md.split_once('-')) else {
+        return false;
+    };
+    let (Ok(month), Ok(day)) = (month.parse::<u32>(), day.parse::<u32>()) else {
+        return false;
+    };
+    // The last four digits give the year modulo 10,000, which decides the leap year.
+    let y = year[year.len().saturating_sub(4)..].parse::<u32>().unwrap_or(0);
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let last = match month {
+        2 if leap || year.trim_start_matches('0') == "1900" => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=last).contains(&day)
 }
 
 /// A number as a spreadsheet shows it in General format: up to 15 significant digits, no
@@ -652,6 +676,10 @@ mod tests {
         let rows = r#"<row r="1"><c r="A1" t="d"><v>1903-12-31</v></c><c r="B1" t="d"><v>1904-01-02</v></c></row>"#;
         let book = workbook_with(rows, "", r#"<xf numFmtId="0"/>"#, r#"<workbookPr date1904="1"/>"#);
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1903-12-31", "1904-01-02"]]);
+        // Before 1904, a day the month does not have stays unread; 1900-02-29 is kept, as Excel has it.
+        let rows = r#"<row r="1"><c r="A1" t="d"><v>1900-02-29</v></c><c r="B1" t="d"><v>1896-02-29</v></c><c r="C1" t="d"><v>1903-02-29</v></c><c r="D1" t="d"><v>1903-04-31T08:30:00</v></c></row>"#;
+        let book = workbook_with(rows, "", r#"<xf numFmtId="0"/>"#, r#"<workbookPr date1904="1"/>"#);
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1900-02-29", "1896-02-29"]]);
         // Text that is not an ISO date stays unread.
         let rows = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="d"><v>not-a-date</v></c><c r="C1" t="d"><v>1899-13-01</v></c></row>"#;
         let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
