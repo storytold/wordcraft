@@ -54,9 +54,8 @@ fn shape_line_caps_reach_pdf_content() {
 
 fn png() -> Vec<u8> {
     let img = image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]));
-    let mut buf = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
-    buf
+
+    wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap()
 }
 
 /// Headings, a bold run, a hyperlink, an internal link, a list, a table and a picture.
@@ -1117,8 +1116,8 @@ fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
 /// A JPEG whose headers say progressive (SOF2, a DC-only first scan) and `w` × `h`, its three
 /// components unsubsampled, with no pixel data that size.
 fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
-    let mut jpeg = Vec::new();
-    image::RgbImage::new(16, 16).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let mut jpeg =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbImage::new(16, 16).clone()), image::ImageFormat::Jpeg).unwrap();
     let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
     jpeg[sof + 1] = 0xC2;
     jpeg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
@@ -1137,8 +1136,8 @@ fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
 fn progressive_jpeg_coefficients_count_toward_the_image_budget() {
     assert!(wordcraft_geom::decode_fits(7900, 7900, wordcraft_geom::MAX_DECODED_BYTES));
     assert!(load_image(&Arc::new(progressive_jpeg_header(7900, 7900)), PicFx::default()).is_none());
-    let mut baseline = Vec::new();
-    image::RgbImage::new(64, 64).write_to(&mut std::io::Cursor::new(&mut baseline), image::ImageFormat::Jpeg).unwrap();
+    let baseline =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbImage::new(64, 64).clone()), image::ImageFormat::Jpeg).unwrap();
     assert!(load_image(&Arc::new(baseline), PicFx::default()).is_some(), "other JPEGs still embed");
 }
 
@@ -2175,12 +2174,12 @@ fn pdf_fill_opacities(bytes: &[u8]) -> Vec<f32> {
 fn picture_fx_is_baked_into_the_embedded_image() {
     use wordcraft_doc::picfx::PicFx;
     let img = image::RgbImage::from_fn(32, 32, |x, _| image::Rgb([if x < 16 { 100 } else { 0 }, 100, 255]));
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut jpeg = Vec::new();
-    image::RgbImage::from_pixel(32, 32, image::Rgb([100, 100, 100]))
-        .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
-        .unwrap();
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap();
+    let jpeg = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbImage::from_pixel(32, 32, image::Rgb([100, 100, 100])).clone()),
+        image::ImageFormat::Jpeg,
+    )
+    .unwrap();
     let export_with = |bytes: &[u8], ext: &str, fxs: &[PicFx]| {
         let mut d = Document::new();
         let media = d.add_media(bytes.to_vec(), ext);
@@ -2262,7 +2261,7 @@ fn hostile_picture_header_is_refused_without_allocating() {
     png.extend_from_slice(&0u32.to_be_bytes());
     png.extend_from_slice(b"IDAT");
     png.extend_from_slice(&crc32(b"IDAT").to_be_bytes());
-    assert_eq!(image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().unwrap().into_dimensions().unwrap(), (20_000, 20_000));
+    assert_eq!(wordcraft_geom::picture::dimensions(&png).ok_or("bad image").unwrap(), (20_000, 20_000));
     let data = Arc::new(png.clone());
     // Refused from the header by the shared decode budget, before anything is decoded, not by
     // the missing pixel data that follows.
@@ -2483,15 +2482,14 @@ fn image_budget_is_checked_from_the_header() {
     assert!(load_image_within(&data, PicFx::default(), 1024).is_some());
     assert!(load_image_within(&data, PicFx::default(), 1023).is_none());
     // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 conversion: 12 bytes a pixel.
-    let mut wide = Vec::new();
     let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
-    image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+    let wide = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba16(img16).clone(), image::ImageFormat::Png).unwrap();
     let wide = Arc::new(wide);
     assert!(load_image_within(&wide, PicFx::default(), 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
     assert!(load_image_within(&wide, PicFx::default(), 1536).is_some());
     // A header (valid CRC) claiming 30000x30000 with no pixel data reads fine, then the budget refuses it.
     let hdr = ihdr_only_png(30_000, 30_000);
-    let dims = image::ImageReader::new(std::io::Cursor::new(hdr.as_slice())).with_guessed_format().unwrap().into_dimensions().unwrap();
+    let dims = wordcraft_geom::picture::dimensions(hdr.as_slice()).unwrap();
     assert_eq!(dims, (30_000, 30_000));
     assert!(load_image(&Arc::new(hdr), PicFx::default()).is_none());
 }
