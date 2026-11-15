@@ -15482,3 +15482,44 @@ fn header_text_covers_the_whole_width_of_a_wrapped_first_line() {
     let (px, py) = (x + first.2 - 15.0, y + first.0 + first.1 / 2.0);
     assert!(l.object_at_in(0, px, py, 0.0, wordcraft_doc::StoryRef::Part(id)).is_none(), "on the first line's text, not the picture: {lines:?}");
 }
+
+/// `Line::left`/`right` are the edges available to a line, not where its ink sits: a centred or
+/// right-aligned header line covers the Behind Text picture across its whole band, so a click in
+/// the empty space beside its text is still on the header text. Beyond the band (an indent, or
+/// beside a float) and 40pt of slack the picture is hit (#5601 review).
+#[test]
+fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
+    use wordcraft_doc::Align;
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for align in [Align::Center, Align::Right] {
+        let mut d = Document::new();
+        let mut p = wordcraft_doc::Paragraph::with_text("Header", Default::default());
+        p.props.align = Some(align);
+        p.props.indent_left = Some(150.0);
+        let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+        d.last_section.headers.default = Some(id);
+        let story = wordcraft_doc::StoryRef::Part(id);
+        let at = Pos::new(story, wordcraft_doc::Path(vec![0]), 0);
+        // A Behind Text picture across the whole text width, level with the header line.
+        let behind = Float { wrap: Wrap::BehindText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, ..Default::default() };
+        d.insert_object(&at, rect_shape(460.0, 20.0, behind), &Default::default()).unwrap();
+        let l = lay(&d);
+        let (x, y, left, right, height) = l.pages[0]
+            .header
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { para, l0, x, y, .. } => para.lines.get(*l0).map(|ln| (*x, *y, ln.left, ln.right, ln.height)),
+                _ => None,
+            })
+            .expect("header line");
+        assert!(left > 100.0, "{align:?}: the line's band starts at the indent: {left}");
+        let ym = y + height / 2.0;
+        let hit = |px: f32| l.object_at_in(0, px, ym, 0.0, story).is_some();
+        // Inside the band, wherever the centred or right-aligned ink sits: header text.
+        assert!(!hit(x + left + 5.0), "{align:?}: the band's left end is text");
+        assert!(!hit(x + (left + right) / 2.0), "{align:?}: the band's middle is text");
+        // Within 40pt of the band's left end is still text; further left the picture is hit.
+        assert!(!hit(x + left - 30.0), "{align:?}: within 40pt left of the band is text");
+        assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
+    }
+}
