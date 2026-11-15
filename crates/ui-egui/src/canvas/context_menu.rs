@@ -69,6 +69,9 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         let on = crate::widgets::enabled(app, id);
         if ui.add_enabled(on, crate::rtl::menu_item(ui, tl!(label), &sc, 0.0)).clicked() {
             let _ = app.run(id, params);
+            if !id.starts_with("ui.") {
+                app.canvas.want_focus = true;
+            }
             ui.close();
         }
     };
@@ -85,6 +88,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         for sgt in sugg {
             if ui.button(egui::RichText::new(&sgt).strong()).clicked() {
                 let _ = app.run("review.applySuggestion", json!({"text": sgt}));
+                app.canvas.want_focus = true;
                 ui.close();
             }
         }
@@ -114,6 +118,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
                         let end = wordcraft_doc::Pos { off: a.off + trimmed, ..b };
                         app.session.sel = wordcraft_engine::Selection { anchor: a, focus: end };
                         let _ = app.run("text.insert", json!({"text": w, "raw": true}));
+                        app.canvas.want_focus = true;
                         ui.close();
                     }
                 }
