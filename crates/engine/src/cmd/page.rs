@@ -16,15 +16,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.margins", "Margins", "Layout › Page Setup", margins).params(
             r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt, "mirror"?: bool}"#,
         ),
-        CommandSpec::new("layout.orientation", "Orientation", "Layout › Page Setup", |s, v| {
-            let land = match p::str(v, "value") {
-                Some("landscape") => true,
-                Some("portrait") => false,
-                _ => !sect(s).landscape,
-            };
-            with_sect(s, |x| x.set_landscape(land))
-        })
-        .params(r#"{"value": "portrait|landscape"}"#),
+        CommandSpec::new("layout.orientation", "Orientation", "Layout › Page Setup", orientation)
+            .params(r#"{"value"?: "portrait|landscape" (toggles when left out), "apply"?: "section|selection"} (default: selection when text is selected in the main text, outside tables: next-page section breaks go before and after it and only that text turns, as in Word (#6421); else the section(s) of the selection)"#),
         CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
         CommandSpec::new("layout.columns", "Columns", "Layout › Page Setup", columns)
             .params(
@@ -98,6 +91,56 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
     ]
+}
+
+/// Orientation: with text selected in the main text only that text turns (next-page section
+/// breaks around it), otherwise the section(s) of the selection (#6421). `apply: "section"` skips
+/// the breaks, as Page Setup's OK does.
+fn orientation(s: &mut Session, v: &Value) -> CmdResult {
+    let land = match p::str(v, "value") {
+        Some("landscape") => true,
+        Some("portrait") => false,
+        _ => !sect(s).landscape,
+    };
+    let default = if selection_sectionable(s) { "selection" } else { "section" };
+    match p::str(v, "apply").unwrap_or(default) {
+        "section" => with_sect(s, |x| x.set_landscape(land)),
+        "selection" => {
+            // Text that already has this orientation gets no section breaks for nothing.
+            if selection_sectionable(s) {
+                let sections = s.doc.sections();
+                if selected_section_ends(s).iter().all(|e| sections.iter().any(|(end, x)| end == e && x.landscape == land)) {
+                    return sel_result(s);
+                }
+            }
+            selection_to_sections(s, SectionStart::NextPage)?;
+            let turned = with_sect(s, |x| x.set_landscape(land));
+            pages_start_where_orientation_changes(s);
+            turned
+        }
+        x => Err(CmdError::Params(format!("unknown apply `{x}` (section or selection)"))),
+    }
+}
+
+/// Word always starts a new page where the page orientation changes. A selection that began or
+/// ended at an existing section boundary got no break of its own, so a neighbouring section that
+/// starts continuous would share a page with a differently turned one: the selected sections, and
+/// the one after them, start on a new page where their orientation differs from the section before.
+fn pages_start_where_orientation_changes(s: &mut Session) {
+    let all: Vec<(usize, bool, SectionStart)> = s.doc.sections().iter().map(|(e, x)| (*e, x.landscape, x.start)).collect();
+    let selected = selected_section_ends(s);
+    let index_of = |end: Option<&usize>| end.and_then(|e| all.iter().position(|(a, _, _)| a == e));
+    let (Some(first), Some(last)) = (index_of(selected.first()), index_of(selected.last())) else {
+        return;
+    };
+    for i in first.max(1)..=last.saturating_add(1) {
+        let (Some(prev), Some((end, land, start))) = (i.checked_sub(1).and_then(|j| all.get(j)), all.get(i)) else {
+            break;
+        };
+        if *land != prev.1 && *start == SectionStart::Continuous {
+            s.doc.section_mut(*end).start = SectionStart::NextPage;
+        }
+    }
 }
 
 /// Line Numbers: on with a restart mode (`value`), or off (`none`). `start`, `countBy` and
@@ -625,7 +668,7 @@ fn columns(s: &mut Session, v: &Value) -> CmdResult {
             with_sect(s, |x| x.columns = cols.clone())
         }
         "selection" => {
-            selection_to_sections(s)?;
+            selection_to_sections(s, SectionStart::Continuous)?;
             with_sect(s, |x| x.columns = cols.clone())
         }
         x => Err(CmdError::Params(format!("unknown apply `{x}` (section, document, forward or selection)"))),
@@ -639,14 +682,16 @@ pub fn selection_sectionable(s: &Session) -> bool {
     !s.sel.is_collapsed() && [a, b].iter().all(|p| p.story == StoryRef::Body && p.path.depth() == 0)
 }
 
-/// Columns for the selected text (#2024), as Word does it: a continuous section break where the
-/// selection starts and one where it ends, splitting paragraphs there, unless that end already
+/// Columns or a page orientation for the selected text (#2024, #6421), as Word does it: a section
+/// break (`start_kind`: continuous or next page) where the selection starts and one where it ends,
+/// splitting paragraphs there, unless that end already
 /// meets a section boundary (the document's start or end, or a section break). The selection keeps
 /// its text, which is then the section(s) between.
-fn selection_to_sections(s: &mut Session) -> Result<(), CmdError> {
+fn selection_to_sections(s: &mut Session, start_kind: SectionStart) -> Result<(), CmdError> {
     if !selection_sectionable(s) {
         return Err(CmdError::Params("selected text in the main text, outside tables, is needed".into()));
     }
+    let kind = if start_kind == SectionStart::Continuous { "continuous" } else { "nextPage" };
     let old = s.sel.clone();
     let (a, mut b) = old.ordered();
     let block = |p: &Pos| p.path.0.first().copied().unwrap_or(0) as usize;
@@ -664,11 +709,11 @@ fn selection_to_sections(s: &mut Session) -> Result<(), CmdError> {
     // The end first: the start's position doesn't move.
     if end_break {
         s.sel = Selection::caret(b.clone());
-        breaks(s, &json!({"kind": "continuous"}))?;
+        breaks(s, &json!({"kind": kind}))?;
     }
     let (first, last) = if start_break {
         s.sel = Selection::caret(a.clone());
-        breaks(s, &json!({"kind": "continuous"}))?;
+        breaks(s, &json!({"kind": kind}))?;
         let first = s.sel.focus.clone();
         let last = shifted_by_split(&b, &a, &first);
         (first, last)

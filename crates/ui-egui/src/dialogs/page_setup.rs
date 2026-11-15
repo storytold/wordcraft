@@ -46,7 +46,7 @@ pub(super) fn page_layout_commands(
     let ((w0, h0), (w1, h1)) = (turned(false, paper), turned(false, was));
     let new_size = (w0 - w1).abs() >= 0.01 || (h0 - h1).abs() >= 0.01;
     let size = ("layout.size", json!({"width": paper.0, "height": paper.1}));
-    let orientation = ("layout.orientation", json!({"value": if landscape { "landscape" } else { "portrait" }}));
+    let orientation = ("layout.orientation", json!({"value": if landscape { "landscape" } else { "portrait" }, "apply": "section"}));
     let margins = ("layout.margins", json!({"top": m.0, "bottom": m.1, "left": m.2, "right": m.3}));
     let old_margins = (cur.margin_top, cur.margin_bottom, cur.margin_left, cur.margin_right);
     Ok(if !new_size || margins_fit(turned(cur.landscape, paper), old_margins, cur.gutter) {

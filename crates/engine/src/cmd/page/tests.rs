@@ -352,6 +352,182 @@ fn columns_apply_to_the_selected_text() {
     assert!(s.run("layout.columns", &json!({"count": 2, "apply": "selection"})).is_err());
 }
 
+/// Each section's paragraphs and whether it is landscape.
+fn orientations_of(s: &Session) -> Vec<(Vec<String>, bool)> {
+    let mut from = 0;
+    let mut out = Vec::new();
+    for (end, x) in s.doc.sections() {
+        let paras = (from..=end).map(|i| s.doc.para_at(&Pos::body(i, 0)).map(|p| p.text.clone()).unwrap_or_default()).collect();
+        out.push((paras, x.landscape));
+        from = end + 1;
+    }
+    out
+}
+
+fn landscape_flags(d: &wordcraft_doc::Document) -> Vec<bool> {
+    d.sections().iter().map(|(_, x)| x.landscape).collect()
+}
+
+/// #6421: Orientation with text selected turns only that text, as in Word: next-page section
+/// breaks go before and after it. It used to turn the whole one-section document.
+#[test]
+fn orientation_applies_to_the_selected_text() {
+    let five = || Session::new(wordcraft_doc::Document::from_text("p1\np2\nalpha beta gamma\np4\np5"));
+    let mut s = five();
+    select(&mut s, (2, 0), (3, 0));
+    let whole = s.selected_text();
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!(orientations_of(&s), vec![(strs(&["p1", "p2", ""]), false), (strs(&["alpha beta gamma", ""]), true), (strs(&["p4", "p5"]), false)]);
+    assert!(s.doc.sections().iter().skip(1).all(|(_, x)| x.start == SectionStart::NextPage));
+    assert_eq!(s.selected_text(), whole, "the paragraph stays selected");
+    // Saved and opened again, the section breaks and their orientation stay.
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    assert_eq!(landscape_flags(&back), vec![false, true, false]);
+    assert!(back.sections().iter().skip(1).all(|(_, x)| x.start == SectionStart::NextPage));
+    // The same text again: nothing changes, no more breaks, no undo step.
+    let depth = s.undo_depth();
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!((s.doc.sections().len(), s.undo_depth()), (3, depth));
+    // And back to portrait: the section stays, turned.
+    s.run("layout.orientation", &json!({"value": "portrait"})).unwrap();
+    assert_eq!(landscape_flags(&s.doc), vec![false, false, false]);
+
+    // One undo step takes the breaks and the orientation away.
+    let mut s = five();
+    select(&mut s, (2, 0), (3, 0));
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(orientations_of(&s), vec![(strs(&["p1", "p2", "alpha beta gamma", "p4", "p5"]), false)]);
+
+    // Words inside a paragraph: the breaks split it there.
+    let mut s = five();
+    select(&mut s, (2, 10), (2, 6));
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!(orientations_of(&s), vec![(strs(&["p1", "p2", "alpha "]), false), (strs(&["beta"]), true), (strs(&[" gamma", "p4", "p5"]), false)]);
+    assert_eq!(s.selected_text(), "beta");
+
+    // Without a value the selected text's own orientation flips.
+    let mut s = five();
+    select(&mut s, (2, 0), (3, 0));
+    s.run("layout.orientation", &json!({})).unwrap();
+    assert_eq!(landscape_flags(&s.doc), vec![false, true, false]);
+
+    // Select All: the whole document, no breaks.
+    let mut s = five();
+    s.run("select.all", &json!({})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!(orientations_of(&s), vec![(strs(&["p1", "p2", "alpha beta gamma", "p4", "p5"]), true)]);
+}
+
+/// #6421: the pages follow: portrait, landscape, portrait, each section on a page of its own.
+#[test]
+fn orientation_of_selected_text_shows_on_the_pages() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(
+        "p1
+p2
+alpha beta gamma
+p4
+p5",
+    ));
+    select(&mut s, (2, 0), (3, 0));
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    let l = s.layout();
+    let shape: Vec<bool> = l.pages.iter().map(|pg| pg.w > pg.h).collect();
+    assert_eq!(shape, vec![false, true, false]);
+}
+
+/// #6421: a selection that starts at an existing section boundary gets no break of its own; the
+/// section that starts continuous there starts a new page once its orientation differs, as in
+/// Word, so a landscape section never shares a page with a portrait one.
+#[test]
+fn orientation_starts_a_new_page_at_a_continuous_boundary() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(
+        "a1
+a2
+b1
+b2
+c1",
+    ));
+    select(&mut s, (1, 0), (1, 0));
+    s.run("layout.break", &json!({"kind": "continuous"})).unwrap();
+    select(&mut s, (4, 0), (4, 0));
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
+    assert!(s.doc.sections()[1].1.start == SectionStart::Continuous);
+    // The whole second section, from its first line to its break.
+    select(&mut s, (ends[0] + 1, 0), (ends[1], 0));
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!(s.doc.sections().len(), 3, "no breaks added");
+    assert_eq!(landscape_flags(&s.doc), vec![false, true, false]);
+    assert_eq!(s.doc.sections()[1].1.start, SectionStart::NextPage);
+    // Back to portrait: the break stays, the section stays on its own page.
+    s.run("layout.orientation", &json!({"value": "portrait"})).unwrap();
+    assert_eq!(landscape_flags(&s.doc), vec![false, false, false]);
+}
+
+/// #6421: a selection across sections turns each of them; a caret alone, `apply: "section"` and a
+/// selection outside the main text's top level keep turning the section as before. Junk is
+/// refused or ignored, never a panic.
+#[test]
+fn orientation_keeps_its_section_scope_without_selected_body_text() {
+    let three = || {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("a1\na2\nb1\nb2\nc1"));
+        select(&mut s, (1, 0), (1, 0));
+        s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+        select(&mut s, (4, 0), (4, 0));
+        s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+        s
+    };
+    // A caret: the caret's section only, no breaks.
+    let mut s = three();
+    let n = s.doc.sections().len();
+    select(&mut s, (0, 0), (0, 0));
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!(s.doc.sections().len(), n);
+    assert_eq!(landscape_flags(&s.doc).iter().filter(|l| **l).count(), 1);
+    assert!(landscape_flags(&s.doc)[0]);
+    // apply "section" with text selected: no breaks either.
+    let mut s = three();
+    let n = s.doc.sections().len();
+    select(&mut s, (0, 1), (0, 2));
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "section"})).unwrap();
+    assert_eq!(s.doc.sections().len(), n);
+    assert_eq!(landscape_flags(&s.doc).iter().filter(|l| **l).count(), 1);
+    // A selection across the first two sections turns both whole sections.
+    let mut s = three();
+    let end1 = s.doc.sections().get(1).map(|(e, _)| *e).unwrap_or(0);
+    select(&mut s, (0, 0), (end1, 0));
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    let flags = landscape_flags(&s.doc);
+    assert!(flags[0] && flags[1], "both sections the selection touches turn");
+    assert!(!flags[2], "the section after the selection stays portrait");
+    // "selection" needs selected text; junk values never panic.
+    let mut s = three();
+    select(&mut s, (0, 0), (0, 0));
+    assert!(s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).is_err());
+    assert!(s.run("layout.orientation", &json!({"value": "landscape", "apply": "elsewhere"})).is_err());
+    for junk in [json!({"value": 7}), json!({"value": null, "apply": 3}), json!({"value": "sideways"}), json!([1, 2])] {
+        let _ = s.run("layout.orientation", &junk);
+    }
+    // Text selected in a table cell: the section turns, no breaks inside a table.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("x"));
+    s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap();
+    s.run("text.insert", &json!({"text": "cell text"})).unwrap();
+    s.run("select.text", &json!({"text": "cell text"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!(s.doc.sections().len(), 1);
+    assert!(landscape_flags(&s.doc)[0]);
+    // Text selected in a header: its section turns, no breaks in the body.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("body"));
+    s.run("insert.header", &json!({"text": "head words"})).unwrap();
+    let id = sect(&s).headers.default.unwrap();
+    let at = |off| Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off };
+    s.sel = Selection { anchor: at(0), focus: at(4) };
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!(s.doc.sections().len(), 1);
+    assert!(landscape_flags(&s.doc)[0]);
+}
+
 /// #407 Line Numbers options: start, count by, distance and restart; options alone keep the
 /// restart mode, `none` turns numbering off.
 #[test]
