@@ -44,6 +44,7 @@ pub mod picfx;
 pub mod props;
 pub mod resolve;
 pub mod section;
+pub mod shrink;
 pub mod smart_art;
 pub mod styles;
 pub mod symbol_fonts;
@@ -64,6 +65,7 @@ pub use numbering::{ListKind, Numbering};
 pub use para::{InlineObject, Paragraph, Run};
 pub use props::{Align, CharProps, ParaProps, Rgb, TextColor};
 pub use section::SectionProps;
+pub use shrink::FitState;
 pub use styles::{Style, StyleKind, StyleSheet};
 pub use table::{Cell, Row, Table};
 
@@ -144,6 +146,9 @@ pub struct Document {
     /// export reports them); never saved, never drawn, ignored by `==`.
     #[serde(skip)]
     pub missing_pictures: MissingPictures,
+    /// Cumulative fit-to-page typography reduction state; internal tracking outside user-visible custom properties.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_state: Option<shrink::FitState>,
 }
 
 #[cfg(test)]
