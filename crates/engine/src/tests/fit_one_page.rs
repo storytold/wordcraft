@@ -864,9 +864,9 @@ fn fit_one_page_tracks_reduced_complex_script_font_sizes() {
 
 #[test]
 fn fit_one_page_preserves_budget_across_document_serialization() {
-    // Find a two-page document that fits within this test's budget. Font
-    // rasterization and fallback metrics vary between CI hosts, so a fixed
-    // line count can exceed the same budget on one platform.
+    // Find a two-page document that fits within this test's budget and has
+    // room for a small second overflow after serialization. Font metrics vary
+    // between CI hosts, so a fixed line count and added paragraph are brittle.
     let mut fitted = None;
     for lines in 20..=80 {
         let mut candidate = create_multiline_doc(lines);
@@ -877,32 +877,47 @@ fn fit_one_page_preserves_budget_across_document_serialization() {
             continue;
         }
         if candidate.run("layout.fitOnePage", &json!({"maxDeltaPt": 0.5, "adjustSpacing": false})).is_ok() {
-            fitted = Some(candidate);
-            break;
+            let json_bytes = serde_json::to_vec(&candidate.doc).expect("serialization must succeed");
+            let reopened_doc: wordcraft_doc::Document = serde_json::from_slice(&json_bytes).expect("deserialization must succeed");
+            for extra_chars in 1..=64 {
+                let mut reopened = Session::new(reopened_doc.clone());
+                let extra_text = "x".repeat(extra_chars);
+                let extra_p = wordcraft_doc::Paragraph::with_text(
+                    &extra_text,
+                    CharProps {
+                        font: Some(wordcraft_fonts::DEFAULT_FAMILY.into()),
+                        size: Some(12.0),
+                        ..Default::default()
+                    },
+                );
+                reopened.doc.body.push(wordcraft_doc::para_block(extra_p));
+                reopened.touch();
+                reopened.relayout();
+                if reopened.layout().pages.len() <= 1 {
+                    continue;
+                }
+                if reopened.run("layout.fitOnePage", &json!({"maxDeltaPt": 0.5, "adjustSpacing": false})).is_ok()
+                    && reopened.layout().pages.len() == 1
+                {
+                    fitted = Some((candidate, reopened_doc, reopened));
+                    break;
+                }
+            }
+            if fitted.is_some() {
+                break;
+            }
         }
     }
-    let s = fitted.expect("must find a two-page document that fits within 0.5 pt");
+    let (s, reopened_doc, mut s2) = fitted.expect("must find a portable two-step fit case within the cumulative budget");
     assert_eq!(s.doc.fit_state.as_ref().map(|f| f.cum_delta), Some(0.5));
-
-    // Serialize and deserialize document (e.g. saving and reopening)
-    let json_bytes = serde_json::to_vec(&s.doc).expect("serialization must succeed");
-    let reopened_doc: wordcraft_doc::Document = serde_json::from_slice(&json_bytes).expect("deserialization must succeed");
 
     // Verify fit_state is preserved outside custom properties
     assert_eq!(reopened_doc.fit_state.as_ref().map(|f| f.cum_delta), Some(0.5));
     assert!(reopened_doc.custom_props.is_empty(), "custom_props must remain empty");
 
-    // Reopen into a new session with additional spill
-    let mut s2 = Session::new(reopened_doc);
-    let extra_p = wordcraft_doc::Paragraph::with_text("Extra overflow paragraph.", CharProps::default());
-    s2.doc.body.push(wordcraft_doc::para_block(extra_p));
-    s2.touch();
-    s2.relayout();
-
-    // Second fit on reopened document preserves previous 0.5 delta, allowing only remaining 0.5 pt up to 1.0 cap
-    let res2 = s2.run("layout.fitOnePage", &json!({"maxDeltaPt": 0.5, "adjustSpacing": false}));
-    assert!(res2.is_ok(), "second fit within remaining budget must succeed");
+    // The second successful fit used only the remaining 0.5 pt on the reopened document.
     assert_eq!(s2.doc.fit_state.as_ref().map(|f| f.cum_delta), Some(1.0));
+    assert_eq!(s2.layout().pages.len(), 1);
 
     // Third fit exceeding the cumulative 1.0 limit must be refused
     let res3 = s2.run("layout.fitOnePage", &json!({"maxDeltaPt": 0.5, "adjustSpacing": false}));
