@@ -7727,7 +7727,16 @@ fn square_wrapped_header_logo_is_drawn_and_pushes_the_body_down() {
         let mut hp = wordcraft_doc::Paragraph::with_text("Header label", Default::default());
         hp.insert_object(
             0,
-            InlineObject::Image { media: "logo.wmf".into(), w, h, alt: String::new(), float: logo, crop: [0.0; 4], ole: None },
+            InlineObject::Image {
+                media: "logo.wmf".into(),
+                w,
+                h,
+                alt: String::new(),
+                float: logo,
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
             &Default::default(),
         )
         .unwrap();
@@ -7764,7 +7773,16 @@ fn framed_header_paragraphs_flow_and_keep_their_floats() {
             let logo = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
             p.insert_object(
                 0,
-                InlineObject::Image { media: "logo.wmf".into(), w: 47.3, h: 65.55, alt: String::new(), float: logo, crop: [0.0; 4], ole: None },
+                InlineObject::Image {
+                    media: "logo.wmf".into(),
+                    w: 47.3,
+                    h: 65.55,
+                    alt: String::new(),
+                    float: logo,
+                    crop: [0.0; 4],
+                    fx: Default::default(),
+                    ole: None,
+                },
                 &Default::default(),
             )
             .unwrap();
@@ -11283,11 +11301,10 @@ fn an_oversized_square_wrapped_header_image_keeps_the_body_on_the_page() {
 /// A margin-anchored header float is placed from the rendered body top, so it follows the body
 /// instead of pushing it down. The body start stays at the top margin and the float is drawn at
 /// its offset from that body top.
-#[test]
-fn a_margin_anchored_header_float_follows_the_body_top() {
+fn margin_anchored_logo(y: f32) -> (f32, f32, f32) {
     use wordcraft_doc::para::{Anchor, Float, Wrap};
     let mut d = Document::from_text("Body text.");
-    let logo = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Margin, y: 200.0, dist: 9.0, ..Default::default() };
+    let logo = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Margin, y, dist: 9.0, ..Default::default() };
     let mut hp = wordcraft_doc::Paragraph::with_text("Header label", Default::default());
     hp.insert_object(
         0,
@@ -11315,17 +11332,26 @@ fn a_margin_anchored_header_float_follows_the_body_top() {
             _ => None,
         })
         .expect("the logo is drawn in the header");
-    let body = first_line_top(&l.pages[0].items);
-    assert!((body - d.last_section.margin_top).abs() < 0.5, "the body starts at the top margin: {body}");
+    (first_line_top(&l.pages[0].items), logo_top, d.last_section.margin_top)
+}
+
+/// A float well below the body top: the body stays at the top margin, the float 200 pt below it.
+#[test]
+fn a_margin_anchored_header_float_follows_the_body_top() {
+    let (body, logo_top, margin_top) = margin_anchored_logo(200.0);
+    assert!((body - margin_top).abs() < 0.5, "the body starts at the top margin: {body}");
     assert!((logo_top - (body + 200.0)).abs() < 0.5, "the float is placed 200 pt below the body top: {logo_top} vs {body}");
 }
 
-/// Where a list paragraph's text starts when its style has indents of its own (measured in Word,
-/// `plan/word` R16): the list level's indents go on top of the most derived style that gives the
-/// list, so that style's own indent (and those of styles based on it) win, its base styles' don't
-/// and the paragraph's own list wins over every style; a paragraph that switches the list off
-/// (`num: 0`) drops the styles' indents. NIH's Heading 3 (its own 0.9" on Heading 2's list) sat at
-/// the list's 0.6", and its "sample text" paragraphs with the list off at 0.9" instead of the margin.
+/// The same float with no offset: it sits on the body top instead of being measured from the
+/// section's top margin, so the first body line cannot be laid over it.
+#[test]
+fn a_margin_anchored_header_float_with_no_offset_follows_the_body_top() {
+    let (body, logo_top, margin_top) = margin_anchored_logo(0.0);
+    assert!((body - margin_top).abs() < 0.5, "the body starts at the top margin: {body}");
+    assert!((logo_top - body).abs() < 0.5, "the float sits on the body top: {logo_top} vs {body}");
+}
+
 #[test]
 fn list_indents_and_style_indents_combine_like_word() {
     crate::test_fonts();
