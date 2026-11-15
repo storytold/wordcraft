@@ -13,10 +13,10 @@ fn csv_separator(text: &str) -> char {
             if c == '\n' || c == '\r' {
                 break;
             }
-            if let Some(i) = [',', ';', '\t'].iter().position(|candidate| *candidate == c) {
-                if let Some(count) = counts.get_mut(i) {
-                    *count = count.saturating_add(1);
-                }
+            if let Some(i) = [',', ';', '\t'].iter().position(|candidate| *candidate == c)
+                && let Some(count) = counts.get_mut(i)
+            {
+                *count = count.saturating_add(1);
             }
         }
     }
