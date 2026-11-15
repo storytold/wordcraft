@@ -449,6 +449,24 @@ pub const DEFAULT_TAB: &str = "Home";
 
 /// ⌘Q, which only the Mac sends: quit.
 const QUIT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q);
+/// Ctrl+Shift+0 (⌘⇧0): back to the Auto interface size (#4030). Not Ctrl+Alt+0, which is AltGr+0
+/// on some layouts and types a character there (#3424).
+const RESET_INTERFACE_SIZE: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::Num0);
+
+/// Consume Ctrl+Shift+0 (⌘⇧0), matched on the key the layout types and exactly these modifiers.
+/// Where Shift+0 types `=` (German, Swiss and Nordic layouts) the press is Ctrl+Shift+=, which
+/// stays Superscript; an extra Alt (AltGr+Shift+0) doesn't match.
+fn consume_reset_interface_size(input: &mut egui::InputState) -> bool {
+    let mut found = false;
+    input.events.retain(|e| {
+        let hit = matches!(e, egui::Event::Key { key: egui::Key::Num0, pressed: true, modifiers, .. }
+            if modifiers.matches_exact(RESET_INTERFACE_SIZE.modifiers));
+        found |= hit;
+        !hit
+    });
+    found
+}
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.
@@ -730,6 +748,12 @@ pub struct WordApp {
     /// The display scale (native pixels per point) seen in the last frame, 1.0 before the first;
     /// `ui.interfaceSize` reports the size Auto draws at with it.
     native_scale: f32,
+    /// The most pixels per point Auto may draw at on this screen ([`theme::auto_scale_limit`], #4030).
+    auto_scale_limit: f32,
+    /// The zoom factor in force during the previous frame's `logic`: egui-winit turns each
+    /// window's monitor size into points with the zoom of the frame before a pending change is
+    /// applied, so the physical size is that size times this zoom ([`theme::auto_scale_limit_over`]).
+    monitor_zoom: f32,
     /// A pre-#822 interface size (percent on top of the display scale) waiting for the first frame
     /// that knows the display's scale, to become the absolute size it drew at
     /// ([`theme::migrate_legacy_interface_size`]).
