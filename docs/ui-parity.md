@@ -141,8 +141,8 @@ SVG), diagrams, charts and royalty-free pictures as further tabs.
 
 Windows Metafiles and Enhanced Metafiles (WMF, EMF) are listed beside raster pictures, as Insert ›
 Pictures inserts them: their thumbnails are drawn as vectors by the page renderer, the cell's full
-width and transparent where the picture draws nothing, and a damaged one is listed with why. The
-Add Folder… tooltip still names only the raster formats.
+width and transparent where the picture draws nothing, and a damaged one says why when its
+thumbnail is drawn or it is inserted. The Add Folder… tooltip still names only the raster formats.
 
 ## Revision history
 

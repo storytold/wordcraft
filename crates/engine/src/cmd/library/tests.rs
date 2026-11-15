@@ -720,7 +720,7 @@ fn metafiles_are_listed_thumbnailed_and_inserted() {
 /// nothing; hostile frame sizes are drawn and inserted within the bounds pictures have. Nothing
 /// panics.
 #[test]
-fn damaged_and_hostile_metafiles_are_listed_with_their_error() {
+fn damaged_and_hostile_metafiles_say_why_when_read() {
     let dir = folder("bad-metafiles");
     let (good, emf_good) = (green_left_wmf(), blue_top_emf());
     let noise: Vec<u8> = (0..512u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8).collect();
@@ -750,20 +750,10 @@ fn damaged_and_hostile_metafiles_are_listed_with_their_error() {
         std::fs::write(dir.join(name), bytes).unwrap();
     }
     let mut ss = session_with(&dir);
+    // Listing reads no picture, so each is listed by its name, damaged or not.
     let listed = list(&mut ss, json!({}));
     assert_eq!(listed.len(), files.len(), "every file is listed: {listed:?}");
-    for f in &listed {
-        let name = Path::new(f["file"].as_str().unwrap()).file_name().unwrap().to_string_lossy().into_owned();
-        let (_, _, ok) = files.iter().find(|(n, ..)| *n == name).unwrap();
-        assert_eq!(f.get("error").is_none(), *ok, "{f}");
-        if !ok {
-            let e = f["error"].as_str().unwrap();
-            let why =
-                if name == "noise.emf" { "not a supported picture (PNG, JPEG, GIF, WebP, BMP, TIFF, WMF or EMF)" } else { "the metafile is damaged" };
-            assert!(e.starts_with(why), "{name}: {e}");
-            assert_eq!(f["pictures"], json!([]), "{f}");
-        }
-    }
+    assert!(listed.iter().all(|f| f.get("error").is_none() && f["pictureCount"] == json!(1)), "{listed:?}");
     let max_width = ss.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap();
     for (name, bytes, ok) in &files {
         let path = s(&dir.join(name));
@@ -775,7 +765,15 @@ fn damaged_and_hostile_metafiles_are_listed_with_their_error() {
                     assert!((1..=width).contains(&w) && (1..=u64::from(MAX_THUMB_HEIGHT)).contains(&h), "{name} at {width}: {t}");
                     assert_eq!(decode_png(t["png"].as_str().unwrap()).dimensions(), (w as u32, h as u32), "{name}");
                 }
-                r => assert!(!ok && matches!(r, Err(CmdError::Failed(_))), "{name} at {width}: {r:?}"),
+                r => {
+                    // Reading it for its thumbnail says what is wrong with it.
+                    let why = if *name == "noise.emf" {
+                        "not a supported picture (PNG, JPEG, GIF, WebP, BMP, TIFF, WMF or EMF)"
+                    } else {
+                        "the metafile is damaged"
+                    };
+                    assert!(!ok && matches!(&r, Err(CmdError::Failed(m)) if m.starts_with(why)), "{name} at {width}: {r:?}");
+                }
             }
         }
         let before = inserted(&ss).len();
@@ -796,6 +794,6 @@ fn damaged_and_hostile_metafiles_are_listed_with_their_error() {
     // Searching and listing without reading still work beside them.
     assert_eq!(list(&mut ss, json!({"pictures": false})).len(), files.len());
     let hits = ss.run("library.search", &json!({"query": "wmf"})).unwrap();
-    assert_eq!(hits.as_array().map(Vec::len), Some(2), "the two readable WMFs: {hits}");
+    assert_eq!(hits.as_array().map(Vec::len), Some(5), "every .wmf, by its name, read or not: {hits}");
     let _ = std::fs::remove_dir_all(dir);
 }

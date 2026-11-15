@@ -159,7 +159,7 @@ build has no folders to read: every `library.*` command says so.
 It lists Windows Metafiles and Enhanced Metafiles (WMF, EMF) too, as `insert.picture` inserts
 them: a thumbnail is drawn as vectors as pages draw the picture, at the full width asked for (never
 taller than 2,048 pixels) and transparent where the picture draws nothing, and an insert takes the
-picture's own frame; a damaged one is listed with why.
+picture's own frame; a damaged one says why when its thumbnail is drawn or it is inserted.
 
 ## Language packs
 
