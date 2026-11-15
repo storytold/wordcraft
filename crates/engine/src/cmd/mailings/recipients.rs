@@ -4,7 +4,7 @@ use super::{CmdError, CmdResult, Session, Value, json, p};
 /// The field separator: whichever of `,` `;` and tab the first non-blank record (outside quotes) uses most.
 fn csv_separator(text: &str) -> char {
     let mut quoted = false;
-    let mut unquoted = String::new();
+    let mut counts = [0usize; 3];
     // A quoted header may span physical lines; infer from the first complete record.
     for c in text.split_inclusive(['\n', '\r']).skip_while(|line| line.trim().is_empty()).flat_map(str::chars) {
         if c == '"' {
@@ -13,10 +13,14 @@ fn csv_separator(text: &str) -> char {
             if c == '\n' || c == '\r' {
                 break;
             }
-            unquoted.push(c);
+            if let Some(i) = [',', ';', '\t'].iter().position(|candidate| *candidate == c) {
+                if let Some(count) = counts.get_mut(i) {
+                    *count = count.saturating_add(1);
+                }
+            }
         }
     }
-    [',', ';', '\t'].into_iter().max_by_key(|c| unquoted.matches(*c).count()).unwrap_or(',')
+    [',', ';', '\t'].into_iter().zip(counts).max_by_key(|(_, count)| *count).map_or(',', |(c, _)| c)
 }
 
 /// What a CSV may hold while it is read: the parser refuses a list that is over these, so a
@@ -150,6 +154,40 @@ pub(super) fn cell(x: &Value) -> String {
     }
 }
 
+// Serialize non-string JSON cells through a bounded sink, not to_string() before charging.
+fn budget_cell(value: &Value, left: &mut usize) -> Result<String, CmdError> {
+    match value {
+        Value::Null => Ok(String::new()),
+        Value::String(text) => {
+            spend_text(left, text.len())?;
+            Ok(text.clone())
+        }
+        _ => {
+            struct Sink {
+                bytes: Vec<u8>,
+                limit: usize,
+            }
+            impl std::io::Write for Sink {
+                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                    if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+                        return Err(std::io::Error::other("recipient text budget"));
+                    }
+                    self.bytes.try_reserve(bytes.len()).map_err(std::io::Error::other)?;
+                    self.bytes.extend_from_slice(bytes);
+                    Ok(bytes.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            let mut sink = Sink { bytes: Vec::new(), limit: *left };
+            serde_json::to_writer(&mut sink, value).map_err(|_| CmdError::Failed("the recipient list exceeds its text budget".into()))?;
+            spend_text(left, sink.bytes.len())?;
+            String::from_utf8(sink.bytes).map_err(|_| CmdError::Failed("invalid recipient text".into()))
+        }
+    }
+}
+
 /// A recipient table from `rows` (objects keyed by field, or arrays in `fields` order). Without
 /// `fields`, the columns are the objects' keys.
 fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<String>, Vec<Vec<String>>), CmdError> {
@@ -159,17 +197,7 @@ fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<St
             check_shape(0, f.len(), MAX_CELLS)?;
             let mut headers = Vec::new();
             for h in f {
-                let text = match h {
-                    Value::String(t) => {
-                        spend_text(&mut left, t.trim().len())?;
-                        t.trim().to_string()
-                    }
-                    other => {
-                        let t = cell(other);
-                        spend_text(&mut left, t.trim().len())?;
-                        t.trim().to_string()
-                    }
-                };
+                let text = budget_cell(h, &mut left)?.trim().to_string();
                 headers.push(text);
             }
             headers
@@ -205,17 +233,8 @@ fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<St
                 Value::Object(o) => o.get(h),
                 _ => None,
             };
-            // String cells can be charged before cloning their potentially large payload.
             let text = match v {
-                Some(Value::String(t)) => {
-                    spend_text(&mut left, t.len())?;
-                    t.clone()
-                }
-                Some(v) => {
-                    let t = cell(v);
-                    spend_text(&mut left, t.len())?;
-                    t
-                }
+                Some(v) => budget_cell(v, &mut left)?,
                 None => String::new(),
             };
             row.push(text);
@@ -408,5 +427,24 @@ mod budget_tests {
         assert_eq!(session.merge.headers, vec!["Name"]);
         assert_eq!(session.merge.rows, vec![vec!["Keep"]]);
         assert_eq!(session.merge.source, session.merge.rows);
+    }
+    #[test]
+    fn complex_json_text_is_bounded_during_serialization() {
+        let value = json!({"nested": ["abcdefgh", {"tail": true}]});
+        let mut left = 5;
+        assert!(budget_cell(&value, &mut left).is_err());
+        let mut left = 100;
+        let text = budget_cell(&value, &mut left).unwrap();
+        assert_eq!(text, value.to_string());
+        assert_eq!(left, 100 - text.len());
+    }
+
+    #[test]
+    fn delimiter_counting_preserves_ties_and_multiline_quotes() {
+        assert_eq!(csv_separator("A,B;C\n1,2;3"), ';');
+        assert_eq!(csv_separator("A;B\tC\n1;2\t3"), '\t');
+        assert_eq!(csv_separator("\n\"A,\nB\";C\nx;y"), ';');
+        let limits = CsvLimits { fields: 2, cells: 8, text: 4 };
+        assert!(parse_csv_limited(&"x".repeat(100_000), &limits).is_err());
     }
 }
