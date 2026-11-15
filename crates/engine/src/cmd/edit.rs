@@ -667,6 +667,7 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
     }
     let story = s.sel.focus.story;
     s.find.results = search(s, story)?;
+    s.find.from_pane = true;
     // Select the first match after the caret.
     let caret = s.sel.focus.clone();
     let idx = s.find.results.iter().position(|(a, _)| *a >= caret).unwrap_or(0);
@@ -702,6 +703,7 @@ fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
         s.find.highlight = h;
         s.find.highlights = None;
     }
+    s.find.from_pane = false;
     let n = found.len();
     let matches: Vec<Value> = found.iter().take(200).map(|(a, b)| json!({"start": pos_json(a), "end": pos_json(b)})).collect();
     s.find.current = 0;

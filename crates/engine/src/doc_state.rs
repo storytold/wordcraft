@@ -114,6 +114,10 @@ pub struct FindState {
     pub current: usize,
     /// Reading Highlight: mark every match of `query` in the body.
     pub highlight: bool,
+    /// The last search came from Find (the Navigation pane's search box), not Advanced Find: its
+    /// matches are marked on the page while the pane is open, as in Word.
+    #[serde(skip)]
+    pub from_pane: bool,
     /// Highlighted matches, for the document revision they were found in.
     #[serde(skip)]
     pub highlights: Option<(u64, Vec<(Pos, Pos)>)>,

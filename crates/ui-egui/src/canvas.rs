@@ -1709,15 +1709,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         } else {
             balloons(app, ui, &painter, &rects, &layout, geo.scale, view_rect);
         }
-        // Find › Reading Highlight. Its places are the document's, not the preview's.
+        // Find › Reading Highlight, or the Navigation pane's matches. Its places are the
+        // document's, not the preview's. The match the selection is on stands out from the rest.
         let marks: Vec<(Pos, Pos)> =
             if preview_sel(app).is_some() { Vec::new() } else { app.session.find_highlights().iter().take(5000).cloned().collect() };
+        let current = app.session.sel.ordered();
         for (a, b) in &marks {
+            let color = if (a, b) == (&current.0, &current.1) { t.find_current } else { t.find_highlight };
             for (pi, r) in layout.selection_rects(&app.session.doc, a, b, app.session.page_hint) {
                 if let Some(pr) = rects.get(pi) {
                     let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
                     let hr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
-                    painter.rect_filled(hr, 0.0, t.find_highlight);
+                    painter.rect_filled(hr, 0.0, color);
                 }
             }
         }
