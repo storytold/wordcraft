@@ -352,8 +352,19 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
     }
 }
 
-/// Replace the selection with `frag`, marking it as an insertion under Track Changes.
-pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+/// Paste `frag` at the selection. A copied table pasted with the caret in a table cell goes the way
+/// Word's Paste does it (rows inserted or cells overwritten, #6739; see [`super::paste_cells`]);
+/// anything else is [`insert_as_is`].
+pub fn insert(s: &mut Session, frag: Fragment) -> Result<(), CmdError> {
+    if super::paste_cells::paste_cells(s, &frag)? {
+        return Ok(());
+    }
+    insert_as_is(s, frag)
+}
+
+/// Replace the selection with `frag`, marking it as an insertion under Track Changes. A table pasted
+/// with the caret in a cell nests in that cell (Word's Paste as Nested Table).
+pub fn insert_as_is(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
     super::controls::prepare_edit(s)?;
     let at = delete_selection(s)?;
     let track = s.doc.settings.track_changes;

@@ -89,6 +89,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste)
             .key("Mod+V / Shift+Insert")
             .params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "privateClipboard"?: bool}"#),
+        CommandSpec::new("edit.pasteNestedTable", "Paste as Nested Table", "Home › Clipboard › Paste", paste_nested)
+            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "privateClipboard"?: bool} (a copied table with the caret in a table cell nests in that cell; Paste instead inserts its rows or overwrites the cells from the caret's)"#),
         CommandSpec::new("edit.pasteText", "Paste: Keep Text Only", "Home › Clipboard › Paste", paste_text)
             .params(r#"{"text"?: string}"#)
             .key("Mod+Shift+Alt+V"),
@@ -299,6 +301,16 @@ fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
     match super::paste::paste_content(s, v)? {
         super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
+        super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
+    }
+    sel_result(s)
+}
+
+/// Paste as Nested Table: like Paste, but a copied table goes inside the cell the caret is in
+/// instead of laying its rows or cells over the table (#6739).
+fn paste_nested(s: &mut Session, v: &Value) -> CmdResult {
+    match super::paste::paste_content(s, v)? {
+        super::paste::Pasted::Fragment(frag) => super::paste::insert_as_is(s, frag)?,
         super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
     }
     sel_result(s)
