@@ -70,7 +70,7 @@ const MAX_SIZE: egui::Vec2 = egui::vec2(16384.0, 16384.0);
 const MAX_COORD: f32 = 32768.0;
 /// Room a window leaves on each side of its monitor for the taskbar, the Dock or a desktop panel,
 /// which the monitor size (all egui reports) includes.
-const SYSTEM_BAR: egui::Vec2 = egui::vec2(48.0, 48.0);
+pub const SYSTEM_BAR: egui::Vec2 = egui::vec2(48.0, 48.0);
 /// How much of a window's top edge must be on one monitor for the pointer to drag it back.
 const GRIP: egui::Vec2 = egui::vec2(96.0, 16.0);
 
@@ -232,6 +232,30 @@ pub fn requested_size(size: egui::Vec2, max_side: f32) -> Option<egui::Vec2> {
         return None;
     }
     Some(size.max(MIN_SIZE).min(max))
+}
+
+/// Clamps an inner window size so that the window (including decoration `frame`) fits on `monitor_size`
+/// leaving room on each side for system bars ([`SYSTEM_BAR`]), bounded below by [`MIN_SIZE`] (#5871).
+pub fn fit_inner_size(inner: egui::Vec2, monitor_size: egui::Vec2, frame: egui::Vec2) -> egui::Vec2 {
+    if !inner.is_finite() || inner.x <= 0.0 || inner.y <= 0.0 {
+        return MIN_SIZE;
+    }
+    if !monitor_size.is_finite() || monitor_size.x <= 0.0 || monitor_size.y <= 0.0 {
+        return inner.max(MIN_SIZE);
+    }
+    let frame = if frame.is_finite() { frame.max(egui::Vec2::ZERO) } else { egui::Vec2::ZERO };
+    let room = (monitor_size - 2.0 * SYSTEM_BAR).max(MIN_SIZE);
+    let max = (room - frame).max(MIN_SIZE);
+    inner.min(max).max(MIN_SIZE)
+}
+
+/// Returns a copy of `builder` whose requested inner size is clamped to fit within `monitor_size`
+/// (including decoration `frame`) with room for system bars ([`SYSTEM_BAR`]) (#5871).
+pub fn fit_builder_to_monitor(builder: egui::ViewportBuilder, monitor_size: egui::Vec2, frame: egui::Vec2) -> egui::ViewportBuilder {
+    match builder.inner_size {
+        Some(inner) => builder.with_inner_size(fit_inner_size(inner, monitor_size, frame)),
+        None => builder,
+    }
 }
 
 #[cfg(test)]
@@ -566,5 +590,39 @@ mod tests {
         assert_eq!(system.fit_on_monitor(&i), None);
         // Wayland reports no rects.
         assert_eq!(system.fit_on_monitor(&RawWindowState { monitor_size: Some(laptop), ..Default::default() }), None);
+    }
+
+    /// On displays with smaller dimensions or high DPI scaling (e.g. 2560x1440 at 200% scale,
+    /// yielding a 1280x720 pt screen), the requested inner size shrinks to fit the screen
+    /// rather than extending past the boundaries (#5871).
+    #[test]
+    fn fit_inner_size_constrains_window_to_available_screen_dimensions() {
+        let default_inner = egui::vec2(1440.0, 920.0);
+        let frame = egui::vec2(16.0, 39.0);
+
+        // 2560x1440 display with 200% scaling: 1280x720 pt.
+        let scaled_1440p = egui::vec2(1280.0, 720.0);
+        let fitted = fit_inner_size(default_inner, scaled_1440p, frame);
+        assert_eq!(fitted, egui::vec2(1168.0, 585.0));
+        assert!(fitted.x + frame.x <= scaled_1440p.x);
+        assert!(fitted.y + frame.y <= scaled_1440p.y);
+
+        // Standard 2560x1440 at 100% scaling: ample room, size remains untouched.
+        let large_monitor = egui::vec2(2560.0, 1440.0);
+        assert_eq!(fit_inner_size(default_inner, large_monitor, frame), default_inner);
+
+        // Tiny display: clamps to minimum inner size.
+        let tiny = egui::vec2(600.0, 400.0);
+        assert_eq!(fit_inner_size(default_inner, tiny, frame), MIN_SIZE);
+
+        // Hostile / non-finite inputs never panic and fall back safely.
+        assert_eq!(fit_inner_size(egui::vec2(f32::NAN, 100.0), scaled_1440p, frame), MIN_SIZE);
+        assert_eq!(fit_inner_size(default_inner, egui::vec2(f32::INFINITY, f32::NAN), frame), default_inner.max(MIN_SIZE));
+
+        // Viewport builder adaptation preserves other builder properties while clamping inner size.
+        let builder = egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_title("Test");
+        let adapted = fit_builder_to_monitor(builder, scaled_1440p, frame);
+        assert_eq!(adapted.inner_size, Some(egui::vec2(1168.0, 585.0)));
+        assert_eq!(adapted.title, Some("Test".into()));
     }
 }

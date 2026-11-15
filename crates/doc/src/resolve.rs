@@ -137,9 +137,12 @@ impl ResolvedChar {
     pub fn uses_complex(&self, c: char) -> bool {
         self.rtl || self.cs || crate::bidi::is_complex_script(c)
     }
-    /// The size glyphs are drawn at (super/subscript shrink to ~2/3).
+    /// The size glyphs are drawn and measured at. Word sets superscript and subscript text at
+    /// 0.65 of the run's size rounded to the half point, a font size the format can store
+    /// (measured in Word for Mac from digit advances: 8 pt → 5, 9 → 6, 11 → 7, 12 → 8,
+    /// 16 → 10.5, 24 → 15.5, 36 → 23.5).
     pub fn draw_size(&self) -> f32 {
-        if self.vert_align == VertAlign::Baseline { self.size } else { self.size * 0.65 }
+        if self.vert_align == VertAlign::Baseline { self.size } else { (self.size * 0.65 * 2.0).round() / 2.0 }
     }
     /// Baseline shift, points (positive = up).
     pub fn baseline_shift(&self) -> f32 {
@@ -452,6 +455,32 @@ fn diff_patch<T: Serialize + serde::de::DeserializeOwned + Default>(with: &T, wi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Superscript and subscript sizes as Word for Mac sets them (measured from digit advances in
+    /// its PDF export): 0.65 of the size, rounded to the half point.
+    #[test]
+    fn raised_and_lowered_text_is_sized_to_the_half_point() {
+        for (size, want) in [
+            (8.0, 5.0),
+            (9.0, 6.0),
+            (10.0, 6.5),
+            (11.0, 7.0),
+            (12.0, 8.0),
+            (13.0, 8.5),
+            (14.0, 9.0),
+            (16.0, 10.5),
+            (20.0, 13.0),
+            (24.0, 15.5),
+            (36.0, 23.5),
+        ] {
+            for vert_align in [VertAlign::Superscript, VertAlign::Subscript] {
+                let rc = ResolvedChar { size, vert_align, ..StyleSheet::builtin().resolve_char(None, &CharProps::default()) };
+                assert_eq!(rc.draw_size(), want, "{size} pt {vert_align:?}");
+            }
+        }
+        let rc = StyleSheet::builtin().resolve_char(None, &CharProps { size: Some(11.0), ..Default::default() });
+        assert_eq!(rc.draw_size(), 11.0, "baseline text keeps its size");
+    }
 
     /// #2036: only a character itself (direct formatting) has a symbol font of its own; a
     /// style never gives one to its text.
