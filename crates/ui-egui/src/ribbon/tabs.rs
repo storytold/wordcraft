@@ -380,6 +380,34 @@ pub fn in_table_public(app: &WordApp) -> bool {
     app.session.sel.focus.path.cell().is_some()
 }
 
+/// Per-viewport slide state; reversal starts at the last displayed height.
+#[derive(Clone)]
+struct RibbonSlide {
+    open: bool,
+    from: f32,
+    value: f32,
+    start: f64,
+}
+
+pub(super) fn ribbon_openness(ctx: &egui::Context, open: bool, now: f64, animate: bool) -> f32 {
+    let id = egui::Id::unique(("ribbon_slide", ctx.viewport_id()));
+    let target = if open { 1.0 } else { 0.0 };
+    let previous = ctx.data(|d| d.get_temp::<RibbonSlide>(id));
+    let mut slide = match previous {
+        Some(p) if animate && p.open != open => RibbonSlide { open, from: p.value, value: p.value, start: now },
+        Some(p) if animate => p,
+        _ => RibbonSlide { open, from: target, value: target, start: now },
+    };
+    let t = ((now - slide.start) / 0.20).clamp(0.0, 1.0) as f32;
+    slide.value = slide.from + (target - slide.from) * ease_out_cubic(t);
+    let value = slide.value;
+    ctx.data_mut(|d| d.insert_temp(id, slide));
+    if value != target {
+        ctx.request_repaint();
+    }
+    value
+}
+
 #[cfg(test)]
 mod transition_tests {
     use super::*;

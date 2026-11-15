@@ -71,8 +71,8 @@ use table::{table_design, table_layout};
 #[cfg(test)]
 use tabs::MIN_TAB_W;
 use tabs::{
-    CONTENT_SWITCH_SLIDE, MORE_TABS_W, TAB_ENTRY_SECS, TAB_ENTRY_SLIDE, ease_out_cubic, note_contextual_tabs, reading_toolbar, slide_underline,
-    tab_content_entry, tab_entry,
+    CONTENT_SWITCH_SLIDE, MORE_TABS_W, TAB_ENTRY_SECS, TAB_ENTRY_SLIDE, ease_out_cubic, note_contextual_tabs, reading_toolbar, ribbon_openness,
+    slide_underline, tab_content_entry, tab_entry,
 };
 pub use tabs::{
     StripPlan, TABS, TabSpec, contextual_tabs, fit_tabs, has_chart_selected, has_picture_selected, has_shape_selected, has_smart_art_selected,
@@ -327,10 +327,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     slide_underline(ui, tab, u, t.accent.gamma_multiply(entry), now, animate);
                                 }
                                 if resp.clicked() {
-                                    let _ = app.run("ui.tab", json!({"tab": tab}));
-                                }
-                                if resp.double_clicked() && tab != "File" {
-                                    let _ = app.run("ui.collapseRibbon", json!({}));
+                                    let _ = app.run("ui.tab", json!({"tab": tab, "toggle": true}));
                                 }
                                 if ghost.is_none() {
                                     resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
@@ -369,7 +366,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 crate::rtl::menu(&resp).show(|ui| {
                                     for (tab, shown) in left_out {
                                         if ui.selectable_label(app.ui.tab == tab, shown).clicked() {
-                                            let _ = app.run("ui.tab", json!({"tab": tab}));
+                                            let _ = app.run("ui.tab", json!({"tab": tab, "toggle": true}));
                                             ui.close();
                                         }
                                     }
@@ -380,15 +377,29 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 });
             })
         });
-    if app.ui.ribbon_collapsed {
+    let open = ribbon_openness(ui.ctx(), !app.ui.ribbon_collapsed, now, animate);
+    if open <= 0.0 {
         return;
     }
+    let height = CONTENT_H + LABEL_H + 10.0;
     egui::Panel::top("ribbon")
-        .exact_size(CONTENT_H + LABEL_H + 10.0)
+        .exact_size(height * open)
         .frame(
-            egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
+            egui::Frame::NONE
+                .fill(t.ribbon)
+                .inner_margin(egui::Margin { left: 8, right: 8, top: (4.0 * open) as i8, bottom: (4.0 * open) as i8 })
+                .stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
+            // Keep controls at full size while the panel slides behind the tab strip.
+            let clip = ui.max_rect().intersect(ui.clip_rect());
+            let rect = Rect::from_min_size(ui.max_rect().min - vec2(0.0, (height - 8.0) * (1.0 - open)), vec2(ui.available_width(), height - 8.0));
+            let mut sliding = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+            sliding.set_clip_rect(clip);
+            if app.ui.ribbon_collapsed {
+                sliding.disable();
+            }
+            let ui = &mut sliding;
             // Bring newly selected ribbon content in from the side of its tab.
             let index = tabs.iter().position(|(name, _)| name == &app.ui.tab).unwrap_or(0);
             let (settled, direction) = tab_content_entry(ui.ctx(), &app.ui.tab, index, now, animate);

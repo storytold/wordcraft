@@ -43,8 +43,9 @@ pub(crate) fn paint(painter: &Painter, first: usize, file: bool, animate: bool, 
     let now = ctx.input(|i| i.time);
     let mut live = Vec::new();
     let mut index = 0;
+    let mut budget = MAX_SHAPES;
     painter.for_each_shape(|s| {
-        if index >= first && live.len() < MAX_SHAPES {
+        if index >= first && fits_budget(&s.shape, &mut budget, 0) {
             live.push(s.clone());
         }
         index += 1;
@@ -67,8 +68,8 @@ pub(crate) fn paint(painter: &Painter, first: usize, file: bool, animate: bool, 
             let eased = 1.0 - (1.0 - t).powi(3);
             let distance = if file { 8.0 } else { 24.0 };
             let offset = vec2(if rtl { distance } else { -distance } * eased, 0.0);
-            for s in leaving.iter().take(MAX_SHAPES.saturating_sub(live.len())) {
-                if !replayable(ctx, &s.shape, 0) {
+            for s in leaving.iter() {
+                if !fits_budget(&s.shape, &mut budget, 0) || !replayable(ctx, &s.shape, 0) {
                     continue;
                 }
                 let mut faded = s.clone();
@@ -92,6 +93,18 @@ pub(crate) fn paint(painter: &Painter, first: usize, file: bool, animate: bool, 
     ctx.data_mut(|d| d.insert_temp(id, screen));
 }
 
+/// Count groups and every descendant before cloning; reject overly deep paint too.
+fn fits_budget(shape: &Shape, remaining: &mut usize, depth: usize) -> bool {
+    if depth > 16 || *remaining == 0 {
+        return false;
+    }
+    *remaining -= 1;
+    match shape {
+        Shape::Vec(children) => children.iter().all(|s| fits_budget(s, remaining, depth + 1)),
+        _ => true,
+    }
+}
+
 /// Skip backend callbacks and expired textures; bound traversal of nested paint groups.
 fn replayable(ctx: &egui::Context, shape: &Shape, depth: usize) -> bool {
     if depth > 16 {
@@ -112,6 +125,25 @@ fn replayable(ctx: &egui::Context, shape: &Shape, depth: usize) -> bool {
 mod tests {
     use super::*;
     use egui::{Color32, Pos2, RawInput};
+
+    /// Nested groups count before capture, and the composed frame shares the same budget.
+    #[test]
+    fn capture_budget_counts_nested_shapes_before_cloning() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(RawInput::default(), |ui| {
+            let first = shape_count(ui.painter());
+            ui.painter().add(Shape::Vec(vec![Shape::Noop; MAX_SHAPES + 1]));
+            paint(ui.painter(), first, false, true, false);
+            let screen = ctx.data(|d| d.get_temp::<Screen>(id(&ctx))).unwrap();
+            assert!(screen.presented.is_empty(), "oversized nested paint is never cached");
+        });
+        output.textures_delta.clear();
+        let nested = Shape::Vec(vec![Shape::Vec(vec![Shape::Noop; 3])]);
+        let mut exact = 5;
+        assert!(fits_budget(&nested, &mut exact, 0));
+        assert_eq!(exact, 0);
+        assert!(!fits_budget(&nested, &mut 4, 0));
+    }
 
     const EDITOR: Color32 = Color32::from_rgb(200, 40, 40);
     const FILE: Color32 = Color32::from_rgb(40, 40, 200);
