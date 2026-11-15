@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::WordApp;
 use crate::dialogs::Dialog;
+use crate::theme::{Tokens, semibold};
 
 /// Most documents the box has been considered for that are remembered: beyond that the oldest
 /// are forgotten (a document shown again after hundreds of others may be told about twice).
@@ -28,6 +29,8 @@ pub struct Row {
     pub font: String,
     /// The families its text is drawn in instead.
     pub shown_as: Vec<String>,
+    /// The download the font comes in (a family: "Aptos" holds Aptos Display too).
+    pub download: String,
     /// Who publishes the font and hosts the page.
     pub publisher: String,
     /// The publisher's download page.
@@ -42,7 +45,13 @@ pub(crate) fn rows(app: &mut WordApp) -> Vec<Row> {
         .iter()
         .filter_map(|f| {
             let d = f.download?;
-            Some(Row { font: f.font.clone(), shown_as: f.shown_as.clone(), publisher: d.publisher.into(), url: d.url.into() })
+            Some(Row {
+                font: f.font.clone(),
+                shown_as: f.shown_as.clone(),
+                download: d.name.into(),
+                publisher: d.publisher.into(),
+                url: d.url.into(),
+            })
         })
         .take(LISTED)
         .collect()
@@ -110,12 +119,11 @@ fn system_install_steps() -> &'static str {
     }
 }
 
-/// The box's last row: `start` at the near side, Close (Escape too) at the far side. In a row
-/// of its own, so the far-side layout takes one row's height and not the rest of the window's.
-fn close_row(ui: &mut egui::Ui, start: impl FnOnce(&mut egui::Ui)) -> bool {
+/// The Close button (Escape too) at the far side, in a row of its own: the far-side layout
+/// then takes one row's height and not the rest of the window's.
+fn close_row(ui: &mut egui::Ui) -> bool {
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.horizontal(|ui| {
-        start(ui);
         ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             close |= ui.add(crate::widgets::primary_button(ui, tl!("Close"))).clicked();
         });
@@ -123,51 +131,142 @@ fn close_row(ui: &mut egui::Ui, start: impl FnOnce(&mut egui::Ui)) -> bool {
     close
 }
 
-/// The box's content. Returns true to close.
+/// The fonts one download brings: listed once, however many of its fonts are missing.
+struct Group<'a> {
+    /// Its missing fonts.
+    fonts: Vec<&'a str>,
+    /// The families they are drawn in instead, each once.
+    shown_as: Vec<&'a str>,
+    publisher: &'a str,
+    url: &'a str,
+}
+
+/// `fonts` by download page, in the order first met.
+fn groups(fonts: &[Row]) -> Vec<Group<'_>> {
+    let mut out: Vec<Group> = Vec::new();
+    for f in fonts {
+        let at = match out.iter().position(|g| g.url == f.url && g.publisher == f.publisher) {
+            Some(at) => at,
+            None => {
+                out.push(Group { fonts: Vec::new(), shown_as: Vec::new(), publisher: &f.publisher, url: &f.url });
+                out.len() - 1
+            }
+        };
+        if let Some(g) = out.get_mut(at) {
+            g.fonts.push(&f.font);
+            for s in &f.shown_as {
+                if !g.shown_as.contains(&s.as_str()) {
+                    g.shown_as.push(s);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A step's number in a filled circle.
+fn step_badge(ui: &mut egui::Ui, n: usize, t: &Tokens) {
+    let (r, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+    ui.painter().circle_filled(r.center(), 10.0, t.accent);
+    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, n.to_string(), semibold(12.0), t.on_accent);
+}
+
+/// The box's content: a headline, a card to a download with its button, the two steps that
+/// add the downloaded font (Add Font… beside the step that uses it), then the opt-out and Close.
+/// Returns true to close.
 pub(crate) fn body(app: &mut WordApp, ui: &mut egui::Ui, fonts: &[Row], dont_show: &mut bool) -> bool {
     ui.set_width(520.0);
     if fonts.is_empty() {
         ui.label(tl!("None of the fonts this document is missing can be downloaded free of charge from their publisher."));
         ui.add_space(8.0);
-        return close_row(ui, |_| {});
+        return close_row(ui);
     }
-    ui.label(tl!(
-        "This document uses fonts that aren't installed, so it is shown in other fonts and may not look as it was written. These fonts can be downloaded free of charge:"
-    ));
-    ui.add_space(8.0);
-    crate::rtl::Table::new("font_download").columns(3).spacing(egui::vec2(24.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.label(egui::RichText::new(tl!("Font")).strong()));
-            r.cell(|ui| ui.label(egui::RichText::new(tl!("Shown as")).strong()));
-            r.cell(|ui| ui.label(egui::RichText::new(tl!("Download")).strong()));
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        let (r, _) = ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
+        crate::icons::paint(ui.painter(), r, "fontMissing", t.icon, t.accent);
+        ui.add_space(4.0);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            let headline =
+                crate::i18n::tn(fonts.len() as u64, "{n} font in this document isn't installed", "{n} fonts in this document aren't installed");
+            ui.label(egui::RichText::new(headline).font(semibold(15.0)));
+            let note = tl!("It is shown in other fonts, so it may not look as it was written. You can download them free of charge.");
+            ui.label(egui::RichText::new(note).color(t.text_dim));
         });
-        for f in fonts {
-            t.row(|r| {
-                r.cell(|ui| ui.label(&f.font));
-                r.cell(|ui| ui.label(f.shown_as.join(", ")));
-                r.cell(|ui| {
-                    let label = crate::i18n::fmt(tl!("Download from {publisher}"), &[("publisher", &f.publisher)]);
-                    ui.hyperlink_to(label, &f.url).on_hover_text(&f.url)
-                });
-            });
-        }
     });
-    ui.add_space(10.0);
-    ui.label(egui::RichText::new(tl!("To install a font")).strong());
-    ui.label(tl!("1. Open its download page and download the font. If it comes as a .zip file, unpack it."));
-    ui.label(tl!("2. Choose Add Font… below and pick the font files. The document is shown in them at once."));
+    ui.add_space(12.0);
+    let mut open_url = None;
+    for g in groups(fonts) {
+        egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)).corner_radius(8).inner_margin(egui::Margin::symmetric(14, 10)).show(
+            ui,
+            |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        // A label to a name: each is the document's own word, not interface text.
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            for (i, font) in g.fonts.iter().enumerate() {
+                                if i > 0 {
+                                    ui.label(egui::RichText::new(", ").font(semibold(14.0)));
+                                }
+                                ui.label(egui::RichText::new(*font).font(semibold(14.0)));
+                            }
+                        });
+                        let shown =
+                            crate::i18n::fmt(tl!("Shown as {fonts} · {publisher}"), &[("fonts", &g.shown_as.join(", ")), ("publisher", g.publisher)]);
+                        ui.label(egui::RichText::new(shown).color(t.text_dim));
+                    });
+                    ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                        let tip = crate::i18n::fmt(tl!("Download from {publisher}"), &[("publisher", g.publisher)]);
+                        if ui.add(crate::widgets::primary_button(ui, tl!("Download"))).on_hover_text(format!("{tip}\n{}", g.url)).clicked() {
+                            open_url = Some(g.url.to_string());
+                        }
+                    });
+                });
+            },
+        );
+        ui.add_space(6.0);
+    }
+    if open_url.is_some() {
+        // The publisher's page, in the browser: WordCraft downloads nothing itself.
+        app.canvas.open_url = open_url;
+    }
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(tl!("Then add it to WordCraft")).font(semibold(14.0)));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        step_badge(ui, 1, &t);
+        ui.label(tl!("Download the font. If it comes as a .zip file, unpack it."));
+    });
+    ui.add_space(2.0);
+    let mut add = false;
+    ui.horizontal(|ui| {
+        step_badge(ui, 2, &t);
+        ui.label(tl!("Pick the font files:"));
+        add = ui.button(tl!("Add Font…")).clicked();
+    });
     let system = system_install_steps();
     if !system.is_empty() {
-        ui.label(system);
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(system).small().color(t.text_dim));
     }
-    ui.add_space(10.0);
-    if ui.checkbox(dont_show, tl!("Don't show this again")).changed() {
-        // Kept at once, however the box is closed.
-        app.ui.font_download_notice = !*dont_show;
-    }
+    ui.add_space(12.0);
+    ui.separator();
     ui.add_space(8.0);
-    let mut add = false;
-    let close = close_row(ui, |ui| add = ui.button(tl!("Add Font…")).clicked());
+    // The downloads are the accent buttons; Close (Escape too) is plain beside them.
+    let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    ui.horizontal(|ui| {
+        if ui.checkbox(dont_show, tl!("Don't show this again")).changed() {
+            // Kept at once, however the box is closed.
+            app.ui.font_download_notice = !*dont_show;
+        }
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+            close |= ui.button(tl!("Close")).clicked();
+        });
+    });
     if add {
         // The file picker replaces the box; the added font lays the document out again.
         let _ = app.run("font.add", serde_json::json!({}));

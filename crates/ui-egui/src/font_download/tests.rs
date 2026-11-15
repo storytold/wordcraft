@@ -55,12 +55,23 @@ fn an_opened_document_missing_a_downloadable_font_is_told_about_once() {
     assert!(fonts[0].url.starts_with("https://www.microsoft.com/"), "{}", fonts[0].url);
     assert!(!fonts[0].shown_as.is_empty() && !fonts[0].shown_as.iter().any(|f| f == "Aptos"), "{:?}", fonts[0].shown_as);
     assert!(!dont_show);
-    // The box says so: the font, its substitute, the link, how to install, and the opt-out.
+    // The box says so: the font, its substitute and publisher, the download, how to add it,
+    // and the opt-out.
+    assert!(h.query_by_label("1 font in this document isn't installed").is_some());
     assert!(h.query_by_label("Aptos").is_some());
-    assert!(h.query_by_label(fonts[0].shown_as.join(", ").as_str()).is_some());
-    assert!(h.query_by_label("Download from Microsoft").is_some());
-    assert!(h.query_by_label_contains("Add Font… below").is_some());
+    assert!(h.query_by_label(format!("Shown as {} · Microsoft", fonts[0].shown_as.join(", ")).as_str()).is_some());
+    assert!(h.query_by_label("Pick the font files:").is_some());
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Add Font…").is_some());
     assert!(h.query_by_label("Don't show this again").is_some());
+    // Download opens the publisher's page in the browser; nothing is downloaded here.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Download").click();
+    let mut opened = false;
+    for _ in 0..4 {
+        h.step();
+        opened |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::OpenUrl(u) if u.url == fonts[0].url));
+    }
+    assert!(opened, "the page is opened");
+    assert_eq!(shown(&h), Some("fontDownload"), "and the box stays for the next step");
     // Closed, it stays closed for this document.
     // The box's own Close button, below the title bar's.
     let close =
@@ -151,6 +162,27 @@ fn a_document_with_nothing_to_download_says_so_when_asked() {
     h.state_mut().run("ui.dialog", json!({"name": "fontDownload"})).unwrap();
     h.run_steps(3);
     assert!(h.query_by_label_contains("None of the fonts").is_some());
+}
+
+/// Fonts that come in one download share a card and a Download button.
+#[test]
+fn fonts_of_one_download_are_listed_together() {
+    let row = |font: &str, shown: &str, url: &str| Row {
+        font: font.into(),
+        shown_as: vec![shown.into()],
+        download: font.into(),
+        publisher: "Microsoft".into(),
+        url: url.into(),
+    };
+    let fonts =
+        [row("Aptos", "Carlito", "https://a"), row("Cascadia Code", "Liberation Mono", "https://c"), row("Aptos Display", "Carlito", "https://a")];
+    let g = groups(&fonts);
+    assert_eq!(g.len(), 2);
+    assert_eq!(
+        (g[0].fonts.as_slice(), g[0].shown_as.as_slice(), g[0].url),
+        (["Aptos", "Aptos Display"].as_slice(), ["Carlito"].as_slice(), "https://a")
+    );
+    assert_eq!((g[1].fonts.as_slice(), g[1].url), (["Cascadia Code"].as_slice(), "https://c"));
 }
 
 #[test]
