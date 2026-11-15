@@ -833,8 +833,7 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
             };
             image::Rgba(colours[quadrant])
         });
-        let mut bytes = Vec::new();
-        image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+        let bytes = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image.clone()), image::ImageFormat::Png).unwrap();
         let picture = InlineObject::Image {
             media: "rotation-test".into(),
             w: 200.0,
@@ -976,8 +975,7 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     use crate::table_resize::tests::{H, button, steps};
     use egui::Event;
     let image = image::RgbaImage::from_pixel(16, 16, image::Rgba([30, 120, 210, 255]));
-    let mut bytes = Vec::new();
-    image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+    let bytes = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image.clone()), image::ImageFormat::Png).unwrap();
     let picture = InlineObject::Image {
         media: "large-preview-test".into(),
         w: 14_400.0,
@@ -1016,6 +1014,89 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     let preview = drag.preview.as_ref().expect("large picture preview is generated");
     let [width, height] = preview.size();
     assert!(width <= max_side && height <= max_side, "preview is {width}×{height}, texture limit is {max_side}");
+}
+
+/// #6027: a click, or a double-click, in the text of a text box inside a group puts the caret
+/// there, and typing edits that text; the group stays. Before, the click selected the whole
+/// group and typing replaced it.
+#[test]
+fn typing_after_a_click_in_a_grouped_text_box_edits_its_text() {
+    use egui::{Event, PointerButton};
+    for clicks in [1, 2] {
+        let mut d = Document::new();
+        let id = d.add_part(
+            wordcraft_doc::PartKind::TextBox,
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Card", Default::default()))],
+        );
+        let shape = |kind, h, story| InlineObject::Shape {
+            kind,
+            w: 200.0,
+            h,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float: Default::default(),
+            story,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let float = wordcraft_doc::para::Float {
+            wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+            h_rel: wordcraft_doc::para::Anchor::Page,
+            v_rel: wordcraft_doc::para::Anchor::Page,
+            x: 150.0,
+            y: 200.0,
+            ..Default::default()
+        };
+        let group = InlineObject::Group {
+            w: 200.0,
+            h: 100.0,
+            float,
+            ch_w: 200.0,
+            ch_h: 100.0,
+            children: vec![
+                wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::Rectangle, 30.0, None) },
+                wordcraft_doc::para::GroupChild { x: 0.0, y: 40.0, obj: shape(ShapeKind::TextBox, 60.0, Some(id)) },
+            ],
+            canvas: None,
+        };
+        d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
+        let mut a = WordApp::new(wordcraft_engine::Session::new(d), crate::Services::default());
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        // In the box's text, right of "Card" (the box starts 40 pt into the group).
+        let at = crate::canvas::page_to_screen(h.state_mut(), 0, 150.0 + 120.0, 200.0 + 52.0).unwrap();
+        h.event(Event::PointerMoved(at));
+        for _ in 0..clicks {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        }
+        for _ in 0..3 {
+            h.step();
+        }
+        h.event(Event::Text("!".into()));
+        for _ in 0..3 {
+            h.step();
+        }
+        let doc = &h.state().session.doc;
+        let text: String = doc.parts.get(&id).unwrap().blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect();
+        assert!(text.contains('!'), "{clicks} click(s): typed into the box: {text:?}");
+        assert!(
+            matches!(doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.objects.first()), Some(InlineObject::Group { .. })),
+            "{clicks} click(s): the group is still there"
+        );
+    }
 }
 
 /// #2637: inside a Drawing Canvas the mouse works on the members, as in Word. A click on a
