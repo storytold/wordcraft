@@ -32,6 +32,13 @@ pub(super) fn enters_header_footer(app: &WordApp, story: StoryRef, zone: Option<
     })
 }
 
+/// Whether a double-click outside the header/footer area leaves `story` (the caret's) for the
+/// body, as from a header or footer. Not from the body, a text box, or a footnote or endnote:
+/// notes are edited like the body, so a double-click in one selects the word (#6290).
+pub(super) fn double_click_leaves(app: &WordApp, story: StoryRef) -> bool {
+    story != StoryRef::Body && !matches!(part_kind(app, story), Some(PartKind::TextBox | PartKind::Footnote | PartKind::Endnote))
+}
+
 /// Editing a header or footer, or a text box in one.
 pub fn editing_header_footer(app: &WordApp, layout: &DocLayout) -> bool {
     let story = text_box_host(app, layout).unwrap_or(app.session.sel.focus.story);

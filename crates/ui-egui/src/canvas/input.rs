@@ -1,7 +1,7 @@
 use super::balloons::over_balloon;
 use super::links::{field_showing_code, follow_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
-use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
+use super::story::{double_click_leaves, enters_header_footer, part_kind, text_box_host};
 use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, StoryRef, Ui, WordApp, json};
 
 /// Drag-select auto-scroll (#688): the pointer within this many points of the viewport's edge
@@ -249,7 +249,7 @@ fn handle_primary_press(
         app.canvas.hf_press_switched = false;
     }
     // A double-click that enters or leaves a header/footer is handled on release.
-    let hf_switch = hf_enter || app.canvas.hf_press_switched || (matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none());
+    let hf_switch = hf_enter || app.canvas.hf_press_switched || (double_click_leaves(app, story) && hf_zone.is_none());
     // Clicking into a footnote/endnote or a text box edits it; clicking outside a text box goes
     // back to where it is. While editing a header/footer, only its own text boxes are in reach.
     let story = pointer_story(app, layout, page, x, y, story);
@@ -379,9 +379,19 @@ fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32,
         (None, Some(s)) if is_note(s) => s,
         (None, Some(s)) if is_box(s) && !in_hf => s,
         (None, Some(StoryRef::Body)) if is_note(story) => StoryRef::Body,
+        (None, None) if is_note(story) && above_note(layout, page, x, y, story) => StoryRef::Body,
         _ if is_box(story) => host,
         _ => story,
     }
+}
+
+/// Whether (x, y) on `page`, on no story's text, lies above the text of `note` on that page and
+/// there is body text there: blank space beside or below the body text, which is the body's, as the
+/// notes sit below the body. Blank space beside or between the note's own lines stays the note's.
+fn above_note(layout: &DocLayout, page: usize, x: f32, y: f32, note: StoryRef) -> bool {
+    // The note's topmost line on the page: the one nearest the page's top-left corner.
+    let note_top = layout.hit(page, 0.0, 0.0, note).and_then(|pos| layout.caret_on(&pos, page)).filter(|c| c.page == page).map(|c| c.top);
+    note_top.is_none_or(|top| y < top - 2.0) && layout.hit(page, x, y, StoryRef::Body).is_some()
 }
 
 fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool {
@@ -426,7 +436,7 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
             }
             return true;
         }
-        if matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none() {
+        if double_click_leaves(app, story) && hf_zone.is_none() {
             let _ = app.run("insert.closeHeader", json!({}));
             if let Some(pos) = layout.hit(page, x, y, StoryRef::Body) {
                 app.session.sel = wordcraft_engine::Selection::caret(pos);
