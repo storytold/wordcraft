@@ -1,6 +1,8 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Cursor update:** 2026-11-05 · Windows uses a cached native contrasting I-beam for Magnifier mouse tracking. Live fractional-DPI and accessibility-preference validation remain open; readiness estimates are unchanged.
+
+> **Last reviewed:** 2026-11-05 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously trivial (Windows uses a cached native contrasting I-beam for Magnifier mouse tracking; live fractional-DPI and accessibility-preference validation remain open; readiness estimates unchanged); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -196,6 +198,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-04: CLI `convert` rejects a missing or repeated `--format` value before opening the input or writing output, matching the existing page/scale option checks. Readiness estimates unchanged.
 - 2026-11-04: MHT import keeps semicolons and escaped quotes inside quoted MIME parameters, so an unrelated parameter cannot supply a false multipart boundary and hide the document text. Readiness estimates unchanged.
 - 2026-10-30: Equations: `\int`, `\sum` and the other n-ary operators typed with AutoCorrect wait for their limits. `\int` + Space, then `_0^1` and Space, gives ∫ with its limits and the caret in its operand, and `\int_0^1` typed in one go does the same, since any character that can't continue `\name` corrects it; this is observed in Word for Windows on #4938. Enter or an arrow key builds it without going into the operand, and `∫∫` puts the operand in the inner operator; those two are not observed in Word (#4917). Readiness unchanged.
+- 2026-11-05: Windows' contrasting I-beam is a native RGBA cursor rather than a hidden system pointer with a canvas-painted replacement. A controlled original/disabled/original experiment implicated pointer replacement in centered Magnifier panning jumps; a native-cursor prototype passed light/dark page, text/table selection and border-resizing checks at 100% display scale and 400% Magnifier. Live 125%/150% display scaling, enlarged pointers, custom colors, High Contrast and native allocation-failure recovery remain unverified. Caret accessibility is unchanged.
 
 - 2026-11-04: RTF import skips the declared Unicode fallback count even when it exceeds eight fallback units, so longer ANSI alternatives do not leak into the document text. Skipping stays bounded by the available input and ends at a group boundary. Readiness estimates unchanged.
 - 2026-11-05: Linux: a WordCraft started by an AppImage app no longer takes that app's file for its own (#5653). The AppImage runtime's `APPIMAGE`, `APPDIR`, `ARGV0` and `OWD` pass to whatever the app starts, so an installed WordCraft opened through `xdg-open` saw another program's `APPIMAGE`, and its self-update replaced that program's file. The app now starts over without those variables unless its executable is under `APPDIR`, so the update goes through the package or plain file it really is. Should starting over fail, the self-update is off in that window and Help › Check for Updates says why. Readiness estimates unchanged.
@@ -897,6 +900,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >
 > 2026-11-08 · Progress log: turned inline pictures without a recorded effect extent keep their line to the frame, as in Word.
+>
+> 2026-11-05 · Native contrasting Windows I-beam and centered Magnifier prototype evidence; fractional-DPI, preference and failure-path acceptance remain open. Readiness unchanged.
 >
 > 2026-11-05 · Linux self-update ignores another program's AppImage variables (#5653); recorded in the progress log, readiness unchanged.
 > 2026-11-05 · A template opened from the file manager starts a new document instead of being edited and saved over (#3433); recorded in the progress log, readiness unchanged.
