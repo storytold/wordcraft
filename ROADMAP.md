@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-15: Find and Replace by formatting (#6147, #6385): the find and replace commands take a `format` filter (bold, italic, underline, strike, small caps, all caps, hidden, super/subscript, font, size, colour, highlight, paragraph or character style) and Replace takes `withFormat`. With empty text a search finds the stretches of text that have the formatting, partial words included; with text, every character of a match must have it; the formatting is what the text shows, so a style's bold counts. Replace All with only formats changes the formatting and is one undo step. Not yet: the dialog's Format button, paragraph formatting and language as search criteria. Readiness estimates unchanged.
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
 
@@ -894,6 +895,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 ## Revision history
 
+> 2026-11-15 · Progress log: Find and Replace by formatting through the commands (#6147).
+>
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >
 > 2026-11-08 · Progress log: turned inline pictures without a recorded effect extent keep their line to the frame, as in Word.

@@ -13,6 +13,7 @@ use crate::{Session, cmd};
 mod bidi;
 mod documents;
 mod find_apostrophes;
+mod find_formatting;
 mod fit_one_page;
 mod font_sizes;
 mod fonts;
