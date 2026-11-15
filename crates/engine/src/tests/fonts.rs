@@ -389,6 +389,7 @@ fn a_missing_font_its_publisher_gives_away_names_the_download_page() {
     let aptos = listed.iter().find(|f| f["font"] == "Aptos").unwrap();
     assert!(aptos["download"]["url"].as_str().unwrap().starts_with("https://www.microsoft.com/"), "{aptos}");
     assert_eq!(aptos["download"]["publisher"], "Microsoft");
+    assert_eq!(aptos["download"]["restricted"], false);
     assert!(listed.iter().find(|f| f["font"] == "Wordcraft Nowhere Face").unwrap().get("download").is_none());
 }
 

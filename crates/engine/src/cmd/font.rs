@@ -24,7 +24,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("font.remove", "Remove Added Font", "Home › Font", remove).params(r#"{"family": string}"#).pure(),
         CommandSpec::new("font.loadSystem", "Load System Installed Fonts…", "Home › Font", load_system).pure(),
         CommandSpec::new("font.missing", "Missing Fonts", "Status Bar", missing)
-            .params(r#"{} → {"missing": [{"font": string, "shownAs": [string] (the families drawn instead), "metricCompatible": bool (its substitute measures like the font), "download"?: {"name": string, "publisher": string, "url": string} (its publisher's page, when it gives the font away)}]} — the text the current view shows"#)
+            .params(r#"{} → {"missing": [{"font": string, "shownAs": [string] (the families drawn instead), "metricCompatible": bool (its substitute measures like the font), "download"?: {"name": string, "publisher": string, "url": string, "restricted": bool (the publisher limits who may use it: check its licence terms)} (its publisher's download page, when it offers the font at no charge)}]} — the text the current view shows"#)
             .pure(),
     ]
 }
@@ -136,7 +136,7 @@ pub struct MissingFont {
     /// Fallback faces for characters the substitute lacks don't count: the font itself might
     /// lack them too (an emoji in Calibri text).
     pub metric_compatible: bool,
-    /// Its publisher's download page, when the publisher gives the font away
+    /// Its publisher's download page, when the publisher offers the font at no charge
     /// ([`wordcraft_fonts::download`]): installing it shows the document as it was written.
     pub download: Option<&'static wordcraft_fonts::download::FontDownload>,
 }
@@ -225,7 +225,7 @@ fn missing(s: &mut Session, _: &Value) -> CmdResult {
         .map(|f| {
             let mut font = json!({"font": f.font, "shownAs": f.shown_as, "metricCompatible": f.metric_compatible});
             if let Some(d) = f.download {
-                font["download"] = json!({"name": d.name, "publisher": d.publisher, "url": d.url});
+                font["download"] = json!({"name": d.name, "publisher": d.publisher, "url": d.url, "restricted": d.restricted});
             }
             font
         })

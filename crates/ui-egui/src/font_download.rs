@@ -35,6 +35,8 @@ pub struct Row {
     pub publisher: String,
     /// The publisher's download page.
     pub url: String,
+    /// The publisher limits who may use the font: the box says so beside the download.
+    pub restricted: bool,
 }
 
 /// The shown document's missing fonts that can be downloaded.
@@ -51,6 +53,7 @@ pub(crate) fn rows(app: &mut WordApp) -> Vec<Row> {
                 download: d.name.clone(),
                 publisher: d.publisher.clone(),
                 url: d.url.clone(),
+                restricted: d.restricted,
             })
         })
         .take(LISTED)
@@ -139,16 +142,18 @@ struct Group<'a> {
     shown_as: Vec<&'a str>,
     publisher: &'a str,
     url: &'a str,
+    /// The publisher limits who may use them.
+    restricted: bool,
 }
 
 /// `fonts` by download page, in the order first met.
 fn groups(fonts: &[Row]) -> Vec<Group<'_>> {
     let mut out: Vec<Group> = Vec::new();
     for f in fonts {
-        let at = match out.iter().position(|g| g.url == f.url && g.publisher == f.publisher) {
+        let at = match out.iter().position(|g| g.url == f.url && g.publisher == f.publisher && g.restricted == f.restricted) {
             Some(at) => at,
             None => {
-                out.push(Group { fonts: Vec::new(), shown_as: Vec::new(), publisher: &f.publisher, url: &f.url });
+                out.push(Group { fonts: Vec::new(), shown_as: Vec::new(), publisher: &f.publisher, url: &f.url, restricted: f.restricted });
                 out.len() - 1
             }
         };
@@ -218,6 +223,10 @@ pub(crate) fn body(app: &mut WordApp, ui: &mut egui::Ui, fonts: &[Row], dont_sho
                         let shown =
                             crate::i18n::fmt(tl!("Shown as {fonts} · {publisher}"), &[("fonts", &g.shown_as.join(", ")), ("publisher", g.publisher)]);
                         ui.label(egui::RichText::new(shown).color(t.text_dim));
+                        if g.restricted {
+                            let limits = tl!("Its licence limits who may use it: read the terms first.");
+                            ui.label(egui::RichText::new(limits).small().color(t.text_dim));
+                        }
                     });
                     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
                         let tip = crate::i18n::fmt(tl!("Download from {publisher}"), &[("publisher", g.publisher)]);
@@ -234,7 +243,10 @@ pub(crate) fn body(app: &mut WordApp, ui: &mut egui::Ui, fonts: &[Row], dont_sho
         // The publisher's page, in the browser: WordCraft downloads nothing itself.
         app.canvas.open_url = open_url;
     }
-    ui.add_space(8.0);
+    // Whose part the licence is: WordCraft only points at the publisher's page.
+    let terms = tl!("Fonts come with licence terms. Read the publisher's terms on the download page: following them is up to you.");
+    ui.label(egui::RichText::new(terms).small().color(t.text_dim));
+    ui.add_space(12.0);
     ui.label(egui::RichText::new(tl!("Then add it to WordCraft")).font(semibold(14.0)));
     ui.add_space(4.0);
     ui.horizontal(|ui| {

@@ -60,6 +60,8 @@ fn an_opened_document_missing_a_downloadable_font_is_told_about_once() {
     assert!(h.query_by_label("1 font in this document isn't installed").is_some());
     assert!(h.query_by_label("Aptos").is_some());
     assert!(h.query_by_label(format!("Shown as {} · Microsoft", fonts[0].shown_as.join(", ")).as_str()).is_some());
+    assert!(h.query_by_label_contains("following them is up to you").is_some(), "whose part the licence is");
+    assert!(h.query_by_label_contains("limits who may use it").is_none(), "Aptos has no such limit");
     assert!(h.query_by_label("Pick the font files:").is_some());
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Add Font…").is_some());
     assert!(h.query_by_label("Don't show this again").is_some());
@@ -173,6 +175,7 @@ fn fonts_of_one_download_are_listed_together() {
         download: font.into(),
         publisher: "Microsoft".into(),
         url: url.into(),
+        restricted: false,
     };
     let fonts =
         [row("Aptos", "Carlito", "https://a"), row("Cascadia Code", "Liberation Mono", "https://c"), row("Aptos Display", "Carlito", "https://a")];
@@ -183,6 +186,23 @@ fn fonts_of_one_download_are_listed_together() {
         (["Aptos", "Aptos Display"].as_slice(), ["Carlito"].as_slice(), "https://a")
     );
     assert_eq!((g[1].fonts.as_slice(), g[1].url), (["Cascadia Code"].as_slice(), "https://c"));
+}
+
+/// A font whose publisher limits its use says so on its card, and has a card of its own.
+#[test]
+fn a_font_with_a_limited_licence_says_so() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "Segoe UI Variable"})).unwrap();
+    let layout = a.session.layout();
+    if !wordcraft_engine::cmd::font::missing_fonts(&a.session.doc, &layout).iter().any(|f| f.font == "Segoe UI Variable") {
+        return; // Installed here: not missing.
+    }
+    a.dialog = Dialog::open("fontDownload", &mut a);
+    let Some(Dialog::FontDownload { fonts, .. }) = a.dialog.clone() else { panic!("no box") };
+    assert!(fonts.iter().any(|f| f.font == "Segoe UI Variable" && f.restricted), "{fonts:?}");
+    let h = harness(a);
+    assert!(h.query_by_label_contains("limits who may use it").is_some());
 }
 
 #[test]
