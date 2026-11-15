@@ -77,6 +77,8 @@ impl Document {
             glossary: Vec::new(),
             media_index: MediaIndex::default(),
             kept: Default::default(),
+            missing_pictures: Default::default(),
+            fit_state: None,
         }
     }
 
@@ -154,6 +156,8 @@ impl Document {
             glossary,
             media_index: _,
             kept: _,
+            missing_pictures: _,
+            fit_state: _,
         } = self;
         let Document {
             body: other_body,
@@ -174,6 +178,8 @@ impl Document {
             glossary: other_glossary,
             media_index: _,
             kept: _,
+            missing_pictures: _,
+            fit_state: _,
         } = other;
         same_blocks(body, other_body)
             && same_parts(parts, other_parts)
@@ -716,37 +722,6 @@ impl Document {
             }
         }
         max.saturating_add(1).max(1)
-    }
-
-    /// The stacking orders ([`para::Float::z`]) the floating objects of every story have, and how
-    /// many floating objects have none (objects made here). Every story saved with the document
-    /// counts: the body, the parts, the note separators and the glossary's building blocks (saved
-    /// with the same numbering, so none of their orders is left out when it is renumbered).
-    pub fn stacking_orders(&self) -> (std::collections::BTreeSet<u32>, usize) {
-        let (mut orders, mut unset) = (std::collections::BTreeSet::new(), 0usize);
-        let separators = [&self.footnote_separators, &self.endnote_separators]
-            .into_iter()
-            .flat_map(|s| [&s.separator, &s.continuation_separator, &s.continuation_notice])
-            .flatten();
-        let stories = std::iter::once(&self.body)
-            .chain(self.parts.values().map(|p| &p.blocks))
-            .chain(separators)
-            .chain(self.glossary.iter().map(|g| &g.blocks));
-        for blocks in stories {
-            for b in blocks {
-                edit::each_para(b, 0, &mut |p| {
-                    for (_, _, f) in p.objects.iter().filter_map(InlineObject::frame).filter(|(_, _, f)| f.wrap != para::Wrap::Inline) {
-                        match f.z {
-                            0 => unset = unset.saturating_add(1),
-                            z => {
-                                orders.insert(z);
-                            }
-                        }
-                    }
-                });
-            }
-        }
-        (orders, unset)
     }
 
     /// Change every inline object in every story (paragraphs inside tables too), copying only
