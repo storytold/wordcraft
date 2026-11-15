@@ -14,6 +14,42 @@ fn create_multiline_doc(lines: usize) -> Session {
     Session::new(Document::from_text(&text))
 }
 
+/// A document that just spills onto a second page, whatever fonts this machine has: the most
+/// lines `make` can put on one page, then space before the last paragraph until it moves to
+/// page 2 ([`spill_last_paragraph`]). A plain document asks for Aptos, which test machines don't
+/// have, and the sans font that stands in for it differs between them (DejaVu Sans on FreeBSD),
+/// so a fixed line count overflows by a different amount on each.
+fn just_spilling(make: impl Fn(usize) -> Session) -> Session {
+    let mut lines = 10;
+    while make(lines + 1).layout().pages.len() < 2 {
+        lines += 1;
+        assert!(lines < 120, "{lines} lines still fit on one page");
+    }
+    let mut s = make(lines);
+    assert_eq!(s.layout().pages.len(), 1, "{lines} lines must fit on one page");
+    spill_last_paragraph(&mut s);
+    s
+}
+
+/// Adds space before the last paragraph, half a point at a time, until it moves to page 2. The
+/// document then overflows by less than half a point, which any font reduction it is fitted with
+/// brings back.
+fn spill_last_paragraph(s: &mut Session) {
+    let mut before = match s.doc.body.last().map(|b| &**b) {
+        Some(wordcraft_doc::Block::Para(p)) => p.props.space_before.unwrap_or(0.0),
+        _ => 0.0,
+    };
+    while s.layout().pages.len() < 2 {
+        before += 0.5;
+        assert!(before <= 200.0, "space before the last paragraph never moved it to page 2");
+        if let Some(wordcraft_doc::Block::Para(p)) = s.doc.body.last_mut().map(std::sync::Arc::make_mut) {
+            p.props.space_before = Some(before);
+        }
+        s.touch();
+        s.relayout();
+    }
+}
+
 #[test]
 fn fit_one_page_fails_on_single_page() {
     let mut s = create_multiline_doc(5);
@@ -117,19 +153,20 @@ fn fit_one_page_respects_max_delta() {
 
 #[test]
 fn fit_one_page_respects_step_pt() {
-    let mut text = String::new();
-    for i in 1..=28 {
-        text.push_str(&format!("Line {i}: The quick brown fox jumps over the lazy dog.\n"));
-    }
-    let mut s = Session::new(Document::from_text(&text));
-    for b in &mut s.doc.body {
-        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
-            p.mark.size = Some(11.4);
-            for r in &mut p.runs {
-                r.props.size = Some(11.4);
+    let at_11_4 = |lines: usize| {
+        let mut s = create_multiline_doc(lines);
+        for b in &mut s.doc.body {
+            if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+                p.mark.size = Some(11.4);
+                for r in &mut p.runs {
+                    r.props.size = Some(11.4);
+                }
             }
         }
-    }
+        s.touch();
+        s
+    };
+    let mut s = just_spilling(at_11_4);
     assert_eq!(s.layout().pages.len(), 2, "must start as 2-page document at 11.4 pt");
 
     // Both calls hold maxDeltaPt constant at 0.4 and disable spacing adjustments.
@@ -138,7 +175,7 @@ fn fit_one_page_respects_step_pt() {
     let default_res = s.run("layout.fitOnePage", &json!({"maxDeltaPt": 0.4, "adjustSpacing": false}));
     assert!(default_res.is_err(), "default step 0.5 must skip all candidates when maxDelta is 0.4");
 
-    // With stepPt = 0.1 under the same maxDeltaPt = 0.4, fine-grained steps (0.1..0.4) succeed (11.4 -> 11.0 pt).
+    // With stepPt = 0.1 under the same maxDeltaPt = 0.4, a fine-grained step (0.1 to 0.4 pt) succeeds.
     s.doc = doc_backup;
     let res = s.run("layout.fitOnePage", &json!({"maxDeltaPt": 0.4, "stepPt": 0.1, "adjustSpacing": false}));
     assert!(res.is_ok(), "stepPt=0.1 must generate fine-grained candidates under maxDelta 0.4: {res:?}");
@@ -853,7 +890,7 @@ fn fit_one_page_tracks_reduced_complex_script_font_sizes() {
 
 #[test]
 fn fit_one_page_preserves_budget_across_document_serialization() {
-    let mut s = create_multiline_doc(27);
+    let mut s = just_spilling(create_multiline_doc);
     assert_eq!(s.layout().pages.len(), 2);
 
     // Apply fit
@@ -869,12 +906,10 @@ fn fit_one_page_preserves_budget_across_document_serialization() {
     assert_eq!(reopened_doc.fit_state.as_ref().map(|f| f.cum_delta), Some(0.5));
     assert!(reopened_doc.custom_props.is_empty(), "custom_props must remain empty");
 
-    // Reopen into a new session with additional spill
+    // Reopen into a new session with additional spill: the last paragraph moves to page 2 again
     let mut s2 = Session::new(reopened_doc);
-    let extra_p = wordcraft_doc::Paragraph::with_text("Extra overflow paragraph.", CharProps::default());
-    s2.doc.body.push(wordcraft_doc::para_block(extra_p));
-    s2.touch();
-    s2.relayout();
+    assert_eq!(s2.layout().pages.len(), 1);
+    spill_last_paragraph(&mut s2);
 
     // Second fit on reopened document preserves previous 0.5 delta, allowing only remaining 0.5 pt up to 1.0 cap
     let res2 = s2.run("layout.fitOnePage", &json!({"maxDeltaPt": 0.5, "adjustSpacing": false}));
