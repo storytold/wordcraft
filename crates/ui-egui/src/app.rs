@@ -497,6 +497,7 @@ impl WordApp {
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);
             backstage::forget_save_as_error(&ctx);
+            backstage::forget_export_error(&ctx);
         }
         self.paint_window(ui, &ctx, t);
         if !moved(self) {

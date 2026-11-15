@@ -128,7 +128,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-14 | trivial | Save As and Export (also the formats on the Print page) offer Browse in WordCraft… on Linux/BSD, as Open does; exporting there lists Export's formats as the types (#3535) |
+| 2026-11-14 | trivial | Save As and Export (also the formats on the Print page) offer Browse in WordCraft… on Linux/BSD, as Open does; exporting there lists Export's formats as the types, whose extension replaces a known document extension on the name; an export refusal or failure shows on the Export page, as Save As's does (#3535) |
 | 2026-11-12 | trivial | Clipboard: a copied picture is published as PNG (and HTML where the host writes it); WordCraft's own paste still keeps the original fragment, and a copy of only shapes carries no HTML or RTF (#6205). Native external-app paste remains untested. |
 | 2026-11-07 | trivial | Vertical scrollbar track: clicking above the elevator moves one screen up and clicking below it moves one screen down, as in Word, instead of jumping to that position in the document (#5853) |
 | 2026-11-04 | trivial | Canvas: a press the canvas handles itself (Ctrl+click on a link, switching into a header or footer, equation entry) skips the link tooltip that frame; hovering shows it again; a regression from the #4501 refactor (#4683) |

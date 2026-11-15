@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
 
 use crate::file_dialogs::{AfterPick, FileDialogRequest, open_filters};
-use crate::print_page::{EXPORT_FORMATS, export_file_ext};
+use crate::print_page::{EXPORT_FORMATS, export_file_ext, export_name, is_document_ext};
 use crate::theme::{Tokens, regular};
 use crate::{WordApp, icons};
 
@@ -205,11 +205,9 @@ impl FileBrowser {
     /// A type was chosen: when exporting it is the format, and the name's export extension follows it.
     fn type_changed(&mut self) {
         let Some(format) = self.exports.get(self.filter).cloned() else { return };
-        let name = Path::new(&self.name);
-        let known =
-            name.extension().and_then(|e| e.to_str()).is_some_and(|e| self.exports.iter().any(|f| export_file_ext(f).eq_ignore_ascii_case(e)));
-        if known {
-            self.name = name.with_extension(export_file_ext(&format)).to_string_lossy().into_owned();
+        // Only a known document extension is replaced; `notes.v2` keeps its `.v2`.
+        if Path::new(&self.name).extension().and_then(|e| e.to_str()).is_some_and(is_document_ext) {
+            self.name = export_name(&self.name, &format);
         }
         self.after = AfterPick::Export { ext: format };
     }
@@ -221,8 +219,8 @@ impl FileBrowser {
     }
 
     /// OK: a highlighted folder, or a typed folder, is opened; otherwise the typed name is the
-    /// pick. Save adds the chosen type's extension to a name without one (an export, to a name
-    /// without the export's) and asks once more before replacing a file; Open wants a file that exists.
+    /// pick. Save adds the chosen type's extension to a name without one (an export replaces a
+    /// known document extension with the type's) and asks once more before replacing a file; Open wants a file that exists.
     pub(crate) fn accept(&mut self) -> Step {
         if let Some(dir) = self.selected.take().filter(|p| p.is_dir()) {
             self.navigate(dir);
@@ -244,11 +242,9 @@ impl FileBrowser {
             }
             FileDialogRequest::Save { .. } => {
                 if let AfterPick::Export { ext } = &self.after {
-                    // The chosen type is the format, so its extension goes on any name without it.
-                    let want = export_file_ext(ext);
-                    if !path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(want)) {
-                        path.as_mut_os_string().push(format!(".{want}"));
-                    }
+                    // The chosen type is the format: its extension replaces a known document
+                    // extension on the name, and is added to any other.
+                    path = PathBuf::from(export_name(&path.to_string_lossy(), ext));
                 } else if path.extension().is_none()
                     && let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*")
                 {
@@ -786,10 +782,17 @@ mod tests {
         assert!(b.name.ends_with(".txt"), "{}", b.name);
         assert!(matches!(&b.after, AfterPick::Export { ext } if ext == "txt"));
         b.navigate(dir.clone());
-        // A name typed afterwards with another extension still gets the chosen format's.
+        // A name typed afterwards with another document extension gets the chosen format's instead,
+        // and a name with an unknown one keeps it.
+        b.name = "notes.v2".into();
+        let Step::Pick(v2) = b.accept() else { panic!("picked") };
+        assert_eq!(v2.file_name().unwrap(), "notes.v2.txt");
         b.name = "notes.docx".into();
         let Step::Pick(path) = b.accept() else { panic!("picked") };
-        assert_eq!(path.file_name().unwrap(), "notes.docx.txt");
+        assert_eq!(path.file_name().unwrap(), "notes.txt");
+        for (typed, want) in [("a.PDF", "a.txt"), ("a.htm", "a.txt"), ("a", "a.txt"), ("a.TXT", "a.TXT"), ("sub/a.rtf", "sub/a.txt")] {
+            assert_eq!(crate::print_page::export_name(typed, "txt"), want);
+        }
         a.close_file_browser(Some(path.clone()));
         assert!(std::fs::read_to_string(&path).unwrap().contains("Exported in WordCraft"));
         // Word 2003 XML starts on its own type, though Word XML writes .xml too.
@@ -872,14 +875,16 @@ mod tests {
         a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap();
         let xml = std::fs::read_to_string(dir.join("letter.xml")).unwrap();
         assert!(xml.contains("pkg:package"), "Word XML written at letter.xml");
+        // A known document extension gives way to .xml; an unknown one stays.
         let docx = dir.join("notes.docx").to_string_lossy().into_owned();
         a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(docx)).unwrap();
-        assert!(dir.join("notes.docx.xml").is_file());
-        // The appended name already exists: the system dialog never confirmed it, so refuse.
+        assert!(dir.join("notes.xml").is_file());
+        let v2 = dir.join("notes.v2").to_string_lossy().into_owned();
+        a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(v2)).unwrap();
+        assert!(dir.join("notes.v2.xml").is_file());
+        // The resulting name already exists: the system dialog never confirmed it, so refuse.
         let bare = dir.join("letter").to_string_lossy().into_owned();
         assert!(a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).is_err());
-        let said = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
-        assert!(said.contains("letter.xml already exists"), "the refusal is on the status bar: {said:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

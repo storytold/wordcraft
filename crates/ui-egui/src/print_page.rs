@@ -476,6 +476,25 @@ pub(crate) fn export_file_ext(format: &str) -> &str {
     if format == EXPORT_WORD_2003 { "xml" } else { format }
 }
 
+/// Is `ext` an extension of a document or export type (the Export types, plus the older `.doc`
+/// and `.htm`)? Such an extension on a typed name gives way to the chosen type's; any other
+/// (`notes.v2`) is part of the name.
+pub(crate) fn is_document_ext(ext: &str) -> bool {
+    ["doc", "htm"].iter().any(|e| e.eq_ignore_ascii_case(ext)) || EXPORT_FORMATS.iter().any(|&(_, f)| export_file_ext(f).eq_ignore_ascii_case(ext))
+}
+
+/// The name an export to `format` is saved under: the chosen type's extension replaces a known
+/// document extension (`notes.docx` as plain text is `notes.txt`) and is added to any other name.
+pub(crate) fn export_name(name: &str, format: &str) -> String {
+    let want = export_file_ext(format);
+    let path = std::path::Path::new(name);
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(e) if e.eq_ignore_ascii_case(want) => name.to_string(),
+        Some(e) if is_document_ext(e) => path.with_extension(want).to_string_lossy().into_owned(),
+        _ => format!("{name}.{want}"),
+    }
+}
+
 /// The "save a copy" formats (File › Export, and below the settings on the Print page).
 pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
     for &(label, ext) in EXPORT_FORMATS {

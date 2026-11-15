@@ -304,16 +304,15 @@ impl WordApp {
                     self.run("file.saveAs", json!({"path": path, "format": ext}))
                 } else if ext == "xml" {
                     // The engine takes an explicit format only for an .xml path, and a system Save
-                    // dialog lets the user type any name: add the extension, as the built-in
-                    // browser does (`notes.docx` becomes `notes.docx.xml`).
-                    if !std::path::Path::new(&path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("xml")) {
-                        path.push_str(".xml");
+                    // dialog lets the user type any name: give it the extension, as the built-in
+                    // browser does (`notes.docx` becomes `notes.xml`, `notes.v2` `notes.v2.xml`).
+                    let named = crate::print_page::export_name(&path, "xml");
+                    if named != path {
+                        path = named;
                         // The dialog only confirmed the name it was given, not this one.
                         if std::path::Path::new(&path).exists() {
                             // Callers drop the result, so say it where the person sees it.
-                            let msg = format!("{path} already exists; choose another name");
-                            self.status(msg.clone());
-                            return Err(msg);
+                            return Err(self.fail_export(format!("{path} already exists; choose another name")));
                         }
                     }
                     // Word XML even over a Word 2003 XML file, which a save by path would keep.
@@ -321,8 +320,14 @@ impl WordApp {
                 } else {
                     self.run("file.saveAs", json!({"path": path}))
                 };
-                if r.is_ok() {
-                    self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
+                match &r {
+                    Ok(_) => {
+                        self.clear_export_error();
+                        self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
+                    }
+                    Err(e) => {
+                        self.fail_export(e.clone());
+                    }
                 }
                 r
             }
@@ -401,6 +406,22 @@ impl WordApp {
         }
     }
 
+    /// An export failed or was refused: say so on the status bar and, for the Export page,
+    /// there too, since Backstage's render loop skips the status bar (callers drop the result).
+    fn fail_export(&mut self, error: String) -> String {
+        self.status(error.clone());
+        if let Some(ctx) = self.ctx.clone() {
+            ctx.data_mut(|d| d.insert_temp(crate::backstage::export_error_id(), error.clone()));
+        }
+        error
+    }
+
+    fn clear_export_error(&mut self) {
+        if let Some(ctx) = self.ctx.clone() {
+            crate::backstage::forget_export_error(&ctx);
+        }
+    }
+
     /// Drop a Save As page error once a later attempt has actually saved.
     fn clear_save_as_error(&mut self) {
         if let Some(ctx) = self.ctx.clone() {
@@ -455,6 +476,7 @@ impl WordApp {
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
         let name = format!("{}.{}", self.title_stem(), crate::print_page::export_file_ext(ext));
+        // A refusal or failure is reported by `finish_pick` itself (Export page and status bar).
         let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext: ext.to_string() });
     }
 

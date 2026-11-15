@@ -1363,3 +1363,33 @@ fn rtl_template_titles_are_right_aligned() {
         wide_text_right,
     );
 }
+
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_export_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Export page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
