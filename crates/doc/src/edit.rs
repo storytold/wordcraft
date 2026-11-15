@@ -16,8 +16,9 @@ use crate::{Table, table::MAX_TABLE_DEPTH};
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Fragment {
     pub blocks: Vec<Block>,
-    /// Copies of the text box stories its shapes show, by the source document's part id. Pasting
-    /// gives each box a new story made from these.
+    /// Copies of the text box stories its shapes show and of the footnote and endnote stories its
+    /// references name, by the source document's part id. Pasting gives each box and each note a
+    /// new story made from these.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parts: BTreeMap<u32, Part>,
     /// Media items referenced by objects in this fragment.
@@ -91,6 +92,13 @@ impl Fragment {
             each_para_mut(b, 0, &mut |p| {
                 let mut changed = false;
                 for o in p.objects.iter_mut() {
+                    // A note's reference (and the mark in its own story) follows its story.
+                    if let InlineObject::NoteRef { id, .. } = o
+                        && let Some(new) = ids.get(id)
+                    {
+                        *id = *new;
+                        changed = true;
+                    }
                     for slot in o.text_box_slots() {
                         if let Some(new) = slot.and_then(|old| ids.get(&old)) {
                             *slot = Some(*new);
@@ -565,6 +573,62 @@ fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
     p.objects.iter().flat_map(InlineObject::text_boxes)
 }
 
+/// What happens to a note reference when a copy's notes are carried over.
+enum NoteMove {
+    /// It stays as it is.
+    Keep,
+    /// It names another story.
+    To(u32),
+    /// It leaves the text (its note can't come along).
+    Remove,
+}
+
+/// Apply `f` to every note reference in `b`: point it elsewhere or take it out of the text.
+fn rewrite_note_refs(b: &mut Block, f: &dyn Fn(u32) -> NoteMove) {
+    each_para_mut(b, 0, &mut |p| {
+        // The references to take out, found before any id changes, last first.
+        let mut gone: Vec<usize> = p
+            .objects_with_offsets()
+            .filter(|(_, o)| matches!(o, InlineObject::NoteRef { id, .. } if matches!(f(*id), NoteMove::Remove)))
+            .map(|(off, _)| off)
+            .collect();
+        let mut changed = !gone.is_empty();
+        for o in p.objects.iter_mut() {
+            if let InlineObject::NoteRef { id, .. } = o
+                && let NoteMove::To(new) = f(*id)
+            {
+                *id = new;
+                changed = true;
+            }
+        }
+        while let Some(off) = gone.pop() {
+            let _ = p.delete(off, off.saturating_add(crate::para::OBJ.len_utf8()));
+        }
+        if changed {
+            p.touch();
+        }
+    });
+}
+
+/// [`rewrite_note_refs`] over `blocks` and the stories in `parts` (text boxes, notes).
+fn rewrite_notes_in(blocks: &mut [Block], parts: &mut BTreeMap<u32, Part>, f: &dyn Fn(u32) -> NoteMove) {
+    blocks.iter_mut().for_each(|b| rewrite_note_refs(b, f));
+    for part in parts.values_mut() {
+        part.blocks.iter_mut().for_each(|b| rewrite_note_refs(Arc::make_mut(b), f));
+    }
+}
+
+/// Note the references in `p` name that `found` doesn't have yet: into `found` and `queue`.
+fn note_ids_in(p: &Paragraph, found: &mut std::collections::BTreeSet<u32>, queue: &mut Vec<u32>) {
+    for o in &p.objects {
+        if let InlineObject::NoteRef { id, .. } = o
+            && found.insert(*id)
+        {
+            queue.push(*id);
+        }
+    }
+}
+
 /// Remap media references in an inline object.
 fn remap_media_object(o: &mut InlineObject, map: &BTreeMap<String, String>, depth: usize) {
     match o {
@@ -1013,17 +1077,13 @@ impl Document {
 
     /// Copy `a..b` into a fragment (with copies of the text boxes in it).
     pub fn copy_range(&self, a: &Pos, b: &Pos) -> Fragment {
-        let mut blocks = self.copy_blocks(a, b);
-        // Half a content control (one marker without the other) isn't copied.
-        crate::control::balance_blocks(&mut blocks);
-        let parts = self.text_box_parts(&blocks);
-        let media = self.media_of_blocks(&blocks);
-        Fragment { blocks, parts, media }
+        let blocks = self.copy_blocks(a, b);
+        self.fragment_of(a.story, blocks)
     }
 
     /// A copy of the block at `path` (a whole table, say) as a fragment, with its text boxes.
     pub fn copy_block(&self, story: crate::StoryRef, path: &Path) -> Option<Fragment> {
-        Some(self.fragment_of(vec![self.block(story, path)?.clone()]))
+        Some(self.fragment_of(story, vec![self.block(story, path)?.clone()]))
     }
 
     /// A copy of rows `rows` of the table at `tp`, with the cells of each that reach into grid
@@ -1033,15 +1093,97 @@ impl Document {
         if t.rows.is_empty() {
             return None;
         }
-        Some(self.fragment_of(vec![Block::Table(t)]))
+        Some(self.fragment_of(story, vec![Block::Table(t)]))
     }
 
-    /// `blocks` as a fragment: half content controls dropped, text boxes copied along.
-    fn fragment_of(&self, mut blocks: Vec<Block>) -> Fragment {
+    /// `blocks`, copied from `story`, as a fragment: half content controls dropped, text boxes
+    /// and the footnotes and endnotes they refer to copied along.
+    fn fragment_of(&self, story: crate::StoryRef, mut blocks: Vec<Block>) -> Fragment {
+        // Half a content control (one marker without the other) isn't copied.
         crate::control::balance_blocks(&mut blocks);
-        let parts = self.text_box_parts(&blocks);
-        let media = self.media_of_blocks(&blocks);
+        let mut parts = self.text_box_parts(&blocks);
+        let mut media = self.media_of_blocks(&blocks);
+        if self.is_note_story(story) {
+            // A note's own story holds no notes: its reference mark names the note itself, and
+            // pasting that elsewhere would name the original.
+            rewrite_notes_in(&mut blocks, &mut parts, &|_| NoteMove::Remove);
+        } else {
+            let note_blocks = self.add_note_parts(&blocks, &mut parts);
+            media.extend(self.media_of_blocks(&note_blocks));
+        }
         Fragment { blocks, parts, media }
+    }
+
+    /// Whether `story` is a footnote or endnote.
+    fn is_note_story(&self, story: crate::StoryRef) -> bool {
+        match story {
+            crate::StoryRef::Part(id) => self.parts.get(&id).is_some_and(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote)),
+            crate::StoryRef::Body => false,
+        }
+    }
+
+    /// Add copies of the footnote and endnote stories `blocks` and the text box stories in `parts`
+    /// refer to to `parts`, the notes' own text boxes and the notes those refer to too; returns
+    /// the blocks of the notes added, for their pictures. A reference whose story is missing here
+    /// is left alone. Each note is copied once however many references name it, so the work
+    /// grows with the content, not beyond it.
+    fn add_note_parts(&self, blocks: &[Block], parts: &mut BTreeMap<u32, Part>) -> Vec<Block> {
+        let mut found = std::collections::BTreeSet::new();
+        let mut queue = Vec::new();
+        for b in blocks {
+            each_para(b, 0, &mut |p| note_ids_in(p, &mut found, &mut queue));
+        }
+        for part in parts.values() {
+            for b in &part.blocks {
+                each_para(b, 0, &mut |p| note_ids_in(p, &mut found, &mut queue));
+            }
+        }
+        let mut note_blocks = Vec::new();
+        while let Some(id) = queue.pop() {
+            let Some(part) = self.parts.get(&id).filter(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote)) else { continue };
+            let story: Vec<Block> = part.blocks.iter().map(|b| (**b).clone()).collect();
+            // The note's text boxes come along, and the notes they and the note refer to.
+            for (box_id, boxed) in self.text_box_parts(&story) {
+                if parts.contains_key(&box_id) {
+                    continue;
+                }
+                for b in &boxed.blocks {
+                    each_para(b, 0, &mut |p| note_ids_in(p, &mut found, &mut queue));
+                }
+                parts.insert(box_id, boxed);
+            }
+            for b in &story {
+                each_para(b, 0, &mut |p| note_ids_in(p, &mut found, &mut queue));
+            }
+            note_blocks.extend(story);
+            parts.insert(id, part.clone());
+        }
+        note_blocks
+    }
+
+    /// The footnote and endnote stories something refers to: the body, the text boxes in it, and
+    /// the other stories (a note's own mark, which names itself, doesn't count).
+    fn referenced_notes(&self) -> std::collections::BTreeSet<u32> {
+        let mut out = std::collections::BTreeSet::new();
+        self.objects_in_reading_order(&mut |o| {
+            if let InlineObject::NoteRef { id, .. } = o {
+                out.insert(*id);
+            }
+        });
+        for (own, part) in &self.parts {
+            for b in &part.blocks {
+                each_para(b, 0, &mut |p| {
+                    for o in &p.objects {
+                        if let InlineObject::NoteRef { id, .. } = o
+                            && id != own
+                        {
+                            out.insert(*id);
+                        }
+                    }
+                });
+            }
+        }
+        out
     }
 
     /// The table whose whole text `a..b` covers when the range runs across its cells: from the
@@ -1463,6 +1605,77 @@ impl Document {
         Some(id)
     }
 
+    /// Give every note the paste refers to, and `parts` holds the story of, a story of its own
+    /// here, copied from `parts`, and point the references at it: the references in `blocks`, in
+    /// the text box stories and in the notes themselves (the mark in a note's own story too), all
+    /// in `parts`. A note cut from this document and pasted back finds its story still here,
+    /// unreferenced and unchanged, and keeps it. A note whose story can't be made (the paste's
+    /// budget is spent, or no part id is free) leaves its references out of the text. References
+    /// to notes `parts` has no story for stay as they are. The notes' text boxes get stories of
+    /// their own too.
+    fn adopt_notes(&mut self, blocks: &mut [Block], parts: &mut BTreeMap<u32, Part>, budget: &mut BoxBudget) {
+        let mut found = std::collections::BTreeSet::new();
+        let mut queue = Vec::new();
+        for b in blocks.iter() {
+            each_para(b, 0, &mut |p| note_ids_in(p, &mut found, &mut queue));
+        }
+        for part in parts.values() {
+            for b in &part.blocks {
+                each_para(b, 0, &mut |p| note_ids_in(p, &mut found, &mut queue));
+            }
+        }
+        let wanted: Vec<u32> =
+            found.into_iter().filter(|id| parts.get(id).is_some_and(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote))).collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let referenced = self.referenced_notes();
+        // Each note's story here: its own (kept), or a new one (to be filled), or none.
+        let mut map: BTreeMap<u32, Option<u32>> = BTreeMap::new();
+        let mut fill: Vec<(u32, u32)> = Vec::new();
+        for old in wanted {
+            let Some(part) = parts.get(&old) else { continue };
+            let kept = !referenced.contains(&old) && self.parts.get(&old).is_some_and(|e| e.kind == part.kind && e.blocks == part.blocks);
+            if kept {
+                map.insert(old, Some(old));
+                continue;
+            }
+            // Charged like a text box story: the copy deep-copies every block.
+            let slots = part.blocks.len().saturating_mul(std::mem::size_of::<Arc<Block>>());
+            let cost = part.blocks.iter().fold(slots, |a, b| a.saturating_add(block_cost(b).0));
+            let new = if budget.stories > 0 && budget.bytes >= cost { self.try_add_part(part.kind, Vec::new()).ok() } else { None };
+            match new {
+                Some(new) => {
+                    budget.stories = budget.stories.saturating_sub(1);
+                    budget.bytes = budget.bytes.saturating_sub(cost);
+                    fill.push((old, new));
+                    map.insert(old, Some(new));
+                }
+                None => {
+                    budget.skipped = budget.skipped.saturating_add(1);
+                    map.insert(old, None);
+                }
+            }
+        }
+        let to = |id: u32| match map.get(&id) {
+            Some(Some(new)) if *new != id => NoteMove::To(*new),
+            Some(Some(_)) | None => NoteMove::Keep,
+            Some(None) => NoteMove::Remove,
+        };
+        rewrite_notes_in(blocks, parts, &to);
+        for (old, new) in fill {
+            let Some(part) = parts.get(&old) else { continue };
+            let mut note: Vec<Block> = part.blocks.iter().map(|b| (**b).clone()).collect();
+            if note.is_empty() {
+                continue;
+            }
+            self.adopt_text_boxes(&mut note, parts, 0, budget);
+            if let Some(p) = self.parts.get_mut(&new) {
+                p.blocks = note.into_iter().map(Arc::new).collect();
+            }
+        }
+    }
+
     /// The blocks of `frag`, a fragment of another document, with every text box given a new
     /// story of its own here copied from the fragment's parts (as a paste does), to place them
     /// in this document; a box the fragment has no story for keeps none.
@@ -1518,6 +1731,13 @@ impl Document {
         }
         // Pasted text boxes get stories of their own (never shared with the copy's source).
         let mut budget = BoxBudget::new();
+        // Pasted notes get stories of their own too. A note's story holds no notes: pasting into
+        // one leaves the references out.
+        if self.is_note_story(pos.story) {
+            rewrite_notes_in(&mut blocks, &mut parts, &|_| NoteMove::Remove);
+        } else {
+            self.adopt_notes(&mut blocks, &mut parts, &mut budget);
+        }
         self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         if budget.skipped > 0 {
             // Once per paste, not once per box (review of #3874).
@@ -1599,5 +1819,7 @@ impl Document {
     }
 }
 
+#[cfg(test)]
+mod note_tests;
 #[cfg(test)]
 mod tests;
