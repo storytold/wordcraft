@@ -100,10 +100,15 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
                             (Value::Number(n), _) => formats.get(cell.style as usize).and_then(|f| f.date_kind(*n)),
                             _ => None,
                         };
-                        let s = match (&value, &cell.value) {
+                        let s = match (&value, &cell.value, kind) {
+                            // A `t="d"` cell whose serial has no calendar day, such as 1900-02-29,
+                            // keeps its text.
+                            (Value::Number(n), craft_xlsx::CellValue::Date(text), Some(kind)) => {
+                                serial_date(*n, wb.date_1904, kind).unwrap_or_else(|| clamp_cell(text.clone()))
+                            }
                             // A `t="d"` cell the workbook's date system cannot hold, such as a date
                             // before 1904 in the 1904 system, keeps its text.
-                            (Value::Empty, craft_xlsx::CellValue::Date(text)) if iso_date_text(text) => clamp_cell(text.clone()),
+                            (Value::Empty, craft_xlsx::CellValue::Date(text), _) if iso_date_text(text) => clamp_cell(text.clone()),
                             _ => display(&value, kind, wb.date_1904),
                         };
                         if !s.is_empty() {
@@ -640,9 +645,10 @@ mod tests {
 
     #[test]
     fn a_date_cell_outside_the_date_system_keeps_its_text() {
-        let rows = r#"<row r="1"><c r="A1" t="d"><v>1899-12-31</v></c><c r="B1" s="1" t="d"><v>1899-12-31T08:30:00</v></c></row>"#;
+        // 1900-02-29 has a serial (60) but no calendar day.
+        let rows = r#"<row r="1"><c r="A1" t="d"><v>1899-12-31</v></c><c r="B1" s="1" t="d"><v>1899-12-31T08:30:00</v></c><c r="C1" t="d"><v>1900-02-29</v></c></row>"#;
         let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/><xf numFmtId="14"/>"#);
-        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1899-12-31", "1899-12-31T08:30:00"]]);
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1899-12-31", "1899-12-31T08:30:00", "1900-02-29"]]);
         let rows = r#"<row r="1"><c r="A1" t="d"><v>1903-12-31</v></c><c r="B1" t="d"><v>1904-01-02</v></c></row>"#;
         let book = workbook_with(rows, "", r#"<xf numFmtId="0"/>"#, r#"<workbookPr date1904="1"/>"#);
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1903-12-31", "1904-01-02"]]);
