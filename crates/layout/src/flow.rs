@@ -347,8 +347,12 @@ impl<'a> Flow<'a> {
         }
         let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
-        // With the 0.01 pt of slack the other fit checks take.
-        if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
+        // With the 0.01 pt of slack the other fit checks take. Balancing from Word 2013's layout
+        // keeps the lines and the next paragraph together at the top of a column too (#6821).
+        if pb.y + need > pb.bottom + 0.01
+            && (!pb.fresh() || Self::strict_widow_control(ctx, pb))
+            && need <= pb.next_room(self.body_top)
+        {
             pb.advance(self.block, self.body_top);
             pb.y += rp.space_before.min(0.0);
             return rp.space_before.min(0.0);
@@ -476,7 +480,9 @@ impl<'a> Flow<'a> {
 
     /// The end of the lines on this page after widow/orphan control, and keeping the rows beside
     /// floating objects together.
-    fn settled_end(&self, ctx: &Ctx, pb: &PageBuilder, fit: &Fit) -> usize {
+    /// Also says whether, balancing from Word 2013's layout, widow/orphan control alone moved every
+    /// line back (the next column has them, #6821).
+    fn settled_end(&self, ctx: &Ctx, pb: &PageBuilder, fit: &Fit) -> (usize, bool) {
         let (n, l0, mut l1) = (self.n(), self.l0, fit.l1);
         // Widow/orphan control (2-line minimum at either end). Balancing the columns of a
         // section's last page from Word 2013's layout (compatibility mode 15) applies it at the
@@ -500,11 +506,12 @@ impl<'a> Flow<'a> {
                 l1 = l0;
             }
         }
+        let moved_on = strict && fit.l1 > l0 && l1 == l0;
         // A row (text both sides of a floating object) stays together.
         while l1 > l0 && l1 < n && self.pl.lines.get(l1).is_some_and(|l| l.beside) {
             l1 -= 1;
         }
-        l1
+        (l1, moved_on)
     }
 
     /// Whether the columns of this page are being balanced (`balance_columns`) and the document
@@ -872,15 +879,17 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let lead = if f.l0 == 0 { first.top.max(0.0) + rooms.top } else { 0.0 };
         let notes = para_notes(ctx.doc, p, &f.pl);
         let mut fit = f.fit_lines(ctx, pb, &notes, lead);
-        let fitted = fit.l1;
-        fit.l1 = f.settled_end(ctx, pb, &fit);
+        let (end, widowed) = f.settled_end(ctx, pb, &fit);
+        fit.l1 = end;
         if f.settle_late(pb, fit.l1) {
             continue;
         }
         if fit.l1 == f.l0 {
-            // Balancing: widow/orphan control moved lines that fit on; the next column (or, short
-            // of room, the page after, which fails the try) has them, never an overflowing line.
-            if !pb.fresh() || (fitted > f.l0 && Flow::strict_widow_control(ctx, pb)) {
+            // Balancing: widow/orphan control moved all the lines that fit on to the next column
+            // (or, short of room, the page after, which fails the try), where the lines of a
+            // column's first paragraph would otherwise overflow it. Lines pushed back for a row
+            // beside a floating object keep the overflow as before.
+            if !pb.fresh() || widowed {
                 f.move_on(ctx, pb);
                 continue;
             }
