@@ -5,13 +5,31 @@ use wordcraft_doc::props::CharProps;
 
 use crate::Session;
 
+/// Pin page-boundary fixtures to bundled text and a synthetic page, independent of
+/// host font substitutes. The 27-line sample spills at 12 pt but fits at 11.5 pt;
+/// the 28-line sample spills at 11.4 pt but fits at 11 pt, as the tests require.
+fn fixture_document(text: &str) -> Document {
+    let mut doc = Document::from_text(text);
+    let styles = std::sync::Arc::make_mut(&mut doc.styles);
+    styles.default_chr.font = Some("Source Sans 3".into());
+    styles.default_chr.size = Some(12.0);
+    styles.default_chr.size_cs = Some(12.0);
+    if let Some(normal) = styles.styles.iter_mut().find(|style| style.id == "Normal") {
+        normal.chr.font = Some("Source Sans 3".into());
+        normal.chr.size = Some(12.0);
+        normal.chr.size_cs = Some(12.0);
+    }
+    doc.last_section.page_h = 860.0;
+    doc
+}
+
 /// Creates a document with `lines` lines of text.
 fn create_multiline_doc(lines: usize) -> Session {
     let mut text = String::new();
     for i in 1..=lines {
         text.push_str(&format!("Line {i}: The quick brown fox jumps over the lazy dog.\n"));
     }
-    Session::new(Document::from_text(&text))
+    Session::new(fixture_document(&text))
 }
 
 #[test]
@@ -28,7 +46,7 @@ fn fit_one_page_fails_on_single_page() {
 #[test]
 fn fit_one_page_fails_on_hard_page_break() {
     let text = format!("Page 1 content\n{PAGE_BREAK}Page 2 content\n");
-    let mut s = Session::new(Document::from_text(&text));
+    let mut s = Session::new(fixture_document(&text));
     let before = s.doc.clone();
     let res = s.run("layout.fitOnePage", &json!({}));
     assert!(res.is_err());
@@ -58,7 +76,7 @@ fn fit_one_page_refuses_page_break_before_before_search() {
 
 #[test]
 fn fit_one_page_fails_on_next_page_section_break() {
-    let mut s = Session::new(Document::from_text("First section body text"));
+    let mut s = Session::new(fixture_document("First section body text"));
     s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
     s.run("text.insert", &json!({"text": "Second section text on next page"})).unwrap();
     assert_eq!(s.layout().pages.len(), 2, "break must cause 2 pages");
@@ -121,7 +139,7 @@ fn fit_one_page_respects_step_pt() {
     for i in 1..=28 {
         text.push_str(&format!("Line {i}: The quick brown fox jumps over the lazy dog.\n"));
     }
-    let mut s = Session::new(Document::from_text(&text));
+    let mut s = Session::new(fixture_document(&text));
     for b in &mut s.doc.body {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
             p.mark.size = Some(11.4);
