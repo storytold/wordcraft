@@ -16,7 +16,10 @@ fn create_multiline_doc(lines: usize) -> Session {
 
 /// Fit One Page boundary tests need stable glyph metrics across host font substitutes.
 fn use_pagination_test_font(s: &mut Session) {
-    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.font = Some("Source Sans 3".into());
+    let defaults = &mut std::sync::Arc::make_mut(&mut s.doc.styles).default_chr;
+    defaults.font = Some(wordcraft_fonts::DEFAULT_FAMILY.into());
+    defaults.size = Some(12.0);
+    defaults.kern = Some(1.0);
 }
 
 #[test]
