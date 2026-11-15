@@ -141,14 +141,14 @@ pub fn parse(bytes: &[u8]) -> Result<Document, String> {
         return Err("it is encrypted".into());
     }
     let mut doc = wordcraft_docx::read(bytes).map_err(|e| e.to_string())?;
-    strip_language(&mut doc.styles);
+    strip_language(Arc::make_mut(&mut doc.styles));
     Ok(doc)
 }
 
 /// The bytes of template `doc`, with no text language.
 pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, String> {
     let mut doc = doc.clone();
-    strip_language(&mut doc.styles);
+    strip_language(Arc::make_mut(&mut doc.styles));
     let bytes = crate::io::save_bytes(FILE_NAME, &doc)?;
     if bytes.len() > MAX_TEMPLATE_BYTES {
         return Err(format!("the Normal template would be larger than {} MB", MAX_TEMPLATE_BYTES >> 20));
@@ -229,9 +229,10 @@ pub fn apply_to_import(d: &mut Document, t: &Document) {
 // ponytail: only styles are checked; the template's body is never used, so its paragraphs don't count.
 pub(crate) fn drop_unused_lists(t: &mut Document) {
     let used: std::collections::HashSet<u32> = t.styles.styles.iter().filter_map(|st| st.para.numbering.map(|n| n.num)).collect();
-    t.numbering.nums.retain(|n| used.contains(&n.id));
-    let abstracts: std::collections::HashSet<u32> = t.numbering.nums.iter().map(|n| n.abstract_id).collect();
-    t.numbering.abstracts.retain(|a| abstracts.contains(&a.id));
+    let numbering = Arc::make_mut(&mut t.numbering);
+    numbering.nums.retain(|n| used.contains(&n.id));
+    let abstracts: std::collections::HashSet<u32> = numbering.nums.iter().map(|n| n.abstract_id).collect();
+    numbering.abstracts.retain(|a| abstracts.contains(&a.id));
 }
 
 pub(crate) fn copy_theme(to: &mut wordcraft_doc::Settings, from: &wordcraft_doc::Settings) {
@@ -279,9 +280,9 @@ mod tests {
     #[test]
     fn a_template_round_trips_its_parts_without_language() {
         let mut t = empty();
-        t.styles.default_chr.font = Some("Georgia".into());
-        t.styles.default_chr.size = Some(13.0);
-        t.styles.default_chr.lang = Some("fr-FR".into());
+        Arc::make_mut(&mut t.styles).default_chr.font = Some("Georgia".into());
+        Arc::make_mut(&mut t.styles).default_chr.size = Some(13.0);
+        Arc::make_mut(&mut t.styles).default_chr.lang = Some("fr-FR".into());
         t.last_section.margin_left = 100.0;
         mark(&mut t, Part::Styles);
         mark(&mut t, Part::Page);
@@ -296,12 +297,10 @@ mod tests {
 
     #[test]
     fn the_template_is_saved_as_a_word_template_not_a_document() {
-        use std::io::Read;
         assert_eq!(FILE_NAME, "Normal.dotx");
         let bytes = to_bytes(&empty()).unwrap();
-        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-        let mut types = String::new();
-        zip.by_name("[Content_Types].xml").unwrap().read_to_string(&mut types).unwrap();
+        let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+        let types = String::from_utf8(zip.read("[Content_Types].xml", 16 << 20).unwrap().unwrap()).unwrap();
         assert!(types.contains("wordprocessingml.template.main+xml"), "a .dotx package, which Word opens as a template");
         assert!(!types.contains("wordprocessingml.document.main+xml"));
     }
@@ -320,7 +319,7 @@ mod tests {
     fn a_blank_document_takes_only_the_parts_carried() {
         let mut t = empty();
         t.last_section.page_w = 999.0;
-        t.styles.default_chr.font = Some("Georgia".into());
+        Arc::make_mut(&mut t.styles).default_chr.font = Some("Georgia".into());
         mark(&mut t, Part::Styles);
         let mut d = Document::new();
         d.last_section.page_w = 595.0;

@@ -173,9 +173,9 @@ fn saving_again_does_not_grow_the_lists() {
     let store = MemoryStore::new();
     let mut s = session(&store);
     run(&mut s, "styles.create", json!({"name": "Steps", "basedOn": "Normal"}));
-    let num = s.doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let num = Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     let id = s.doc.styles.styles.iter().find(|st| st.name == "Steps").map(|st| st.id.clone()).unwrap();
-    s.doc.styles.get_mut(&id).unwrap().para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    Arc::make_mut(&mut s.doc.styles).get_mut(&id).unwrap().para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
     let lists = |store: &MemoryStore| {
         let t = crate::normal_template::parse(&store.get().unwrap()).unwrap();
         (t.numbering.nums.len(), t.numbering.abstracts.len())
@@ -488,8 +488,8 @@ fn numbered_styles_keep_their_list_in_new_documents() {
     for command in ["design.setDefault", "styles.setDefault"] {
         let store = MemoryStore::new();
         let mut s = session(&store);
-        let num = s.doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-        s.doc.styles.get_mut("Heading1").unwrap().para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        let num = Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        Arc::make_mut(&mut s.doc.styles).get_mut("Heading1").unwrap().para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
         run(&mut s, command, json!({"style": "Heading1"}));
         let mut fresh = session(&store);
         run(&mut fresh, "file.new", json!({}));
@@ -529,11 +529,11 @@ fn page_defaults_keep_every_page_setup_page_setup_accepts() {
 fn set_as_default_saves_only_what_was_set() {
     let store = MemoryStore::new();
     let mut theirs = Document::from_text("Theirs");
-    if let Some(n) = theirs.styles.get_mut("Normal") {
+    if let Some(n) = Arc::make_mut(&mut theirs.styles).get_mut("Normal") {
         n.para.align = Some(wordcraft_doc::Align::Justify);
         n.chr.italic = Some(true);
     }
-    theirs.styles.default_para.space_before = Some(40.0);
+    Arc::make_mut(&mut theirs.styles).default_para.space_before = Some(40.0);
     let docx = crate::io::save_bytes("x.docx", &theirs).unwrap();
     let mut s = session(&store);
     run(&mut s, "file.open", json!({"path": "theirs.docx", "data": crate::cmd::insert::base64_encode(&docx)}));

@@ -9,6 +9,7 @@
 //! a session without a template store (headless, tests) refuses `"new"`.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::Document;
 use wordcraft_doc::props::{CharProps, ParaProps};
 
@@ -181,7 +182,7 @@ impl Session {
             nt::apply_to_blank(&mut d, &t);
         }
         if let Some(lang) = self.prefs.default_language.as_ref().or(self.editing_lang.as_ref()) {
-            d.styles.default_chr.lang = Some(lang.clone());
+            Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
         }
         d
     }
@@ -193,7 +194,7 @@ impl Session {
             nt::apply_to_import(d, &t);
         }
         if let Some(lang) = self.prefs.default_language.as_ref().or(self.editing_lang.as_ref()) {
-            d.styles.default_chr.lang = Some(lang.clone());
+            Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
         }
     }
 }
@@ -218,8 +219,9 @@ fn char_patch(v: &Value) -> Result<CharProps, CmdError> {
 }
 
 fn apply_char(d: &mut Document, c: &CharProps) {
-    d.styles.default_chr.overlay(c);
-    if let Some(n) = d.styles.get_mut("Normal") {
+    let styles = Arc::make_mut(&mut d.styles);
+    styles.default_chr.overlay(c);
+    if let Some(n) = styles.get_mut("Normal") {
         n.chr.overlay(c);
     }
 }
@@ -251,8 +253,9 @@ fn para_patch(v: &Value) -> Result<ParaProps, CmdError> {
 }
 
 fn apply_para(d: &mut Document, pp: &ParaProps) {
-    d.styles.default_para.overlay(pp);
-    if let Some(n) = d.styles.get_mut("Normal") {
+    let styles = Arc::make_mut(&mut d.styles);
+    styles.default_para.overlay(pp);
+    if let Some(n) = styles.get_mut("Normal") {
         n.para.overlay(pp);
     }
 }
