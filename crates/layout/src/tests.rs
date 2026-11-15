@@ -15444,3 +15444,41 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
     }
 }
+
+/// A header paragraph beside a Square float on its last lines only: those lines are shorter than
+/// the first. A click on the first line past the short last line's end is still on the header's
+/// text, so a Behind Text picture under it is not grabbed there (#5601 review).
+#[test]
+fn header_text_covers_the_whole_width_of_a_wrapped_first_line() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let text = "Header words that wrap across the whole line and carry on over several lines of the header \
+        paragraph so there are three lines here and the last one is cut short by the float beside it";
+    let mut d = Document::new();
+    let id =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    d.last_section.headers.default = Some(id);
+    let at = |off| Pos::new(wordcraft_doc::StoryRef::Part(id), wordcraft_doc::Path(vec![0]), off);
+    // The Square float narrows the lines below the first two, on the right.
+    let square = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 300.0, y: 30.0, ..Default::default() };
+    d.insert_object(&at(0), rect_shape(160.0, 80.0, square), &Default::default()).unwrap();
+    // The Behind Text picture lies under the first line, past where the last line ends.
+    let behind = Float { wrap: Wrap::BehindText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 340.0, y: 0.0, ..Default::default() };
+    d.insert_object(&at(0), rect_shape(120.0, 20.0, behind), &Default::default()).unwrap();
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let lines: Vec<_> = page
+        .header
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { para, l0, l1, x, y, .. } => {
+                Some((*x, *y, (*l0..*l1).filter_map(|i| para.lines.get(i)).map(|l| (l.top, l.height, l.right)).collect::<Vec<_>>()))
+            }
+            _ => None,
+        })
+        .collect();
+    let (x, y, ls) = lines.first().expect("header lines").clone();
+    let (first, last) = (ls.first().expect("first"), ls.last().expect("last"));
+    assert!(last.2 + 40.0 < first.2 - 20.0, "the last line is shorter than the first: {ls:?}");
+    let (px, py) = (x + first.2 - 15.0, y + first.0 + first.1 / 2.0);
+    assert!(l.object_at_in(0, px, py, 0.0, wordcraft_doc::StoryRef::Part(id)).is_none(), "on the first line's text, not the picture: {lines:?}");
+}
