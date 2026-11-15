@@ -219,9 +219,10 @@ fn display(v: &Value, kind: Option<DateKind>, date_1904: bool) -> String {
 
 /// Whether `text` is an ISO 8601 date, with or without a time, in any year: its day exists in its
 /// month and year, or it is 1900-02-29, which Excel counts as a day, and
-/// `craft_xlsx::iso_date_serial` accepts it with its year replaced by 2000.
+/// `craft_xlsx::iso_date_serial` accepts it with its year replaced by 2000. A trailing `Z` is
+/// dropped first, as `craft_xlsx::iso_date_serial` drops it.
 fn iso_date_text(text: &str) -> bool {
-    text.trim().split_once('-').is_some_and(|(year, rest)| {
+    text.trim().trim_end_matches('Z').split_once('-').is_some_and(|(year, rest)| {
         !year.is_empty()
             && year.bytes().all(|b| b.is_ascii_digit())
             && day_in_month(year, rest)
@@ -677,9 +678,10 @@ mod tests {
         let book = workbook_with(rows, "", r#"<xf numFmtId="0"/>"#, r#"<workbookPr date1904="1"/>"#);
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1903-12-31", "1904-01-02"]]);
         // Before 1904, a day the month does not have stays unread; 1900-02-29 is kept, as Excel has it.
-        let rows = r#"<row r="1"><c r="A1" t="d"><v>1900-02-29</v></c><c r="B1" t="d"><v>1896-02-29</v></c><c r="C1" t="d"><v>1903-02-29</v></c><c r="D1" t="d"><v>1903-04-31T08:30:00</v></c></row>"#;
+        // A trailing Z is read as the converter reads it.
+        let rows = r#"<row r="1"><c r="A1" t="d"><v>1900-02-29</v></c><c r="B1" t="d"><v>1896-02-29</v></c><c r="C1" t="d"><v>1896-02-29Z</v></c><c r="D1" t="d"><v>1903-02-29</v></c><c r="E1" t="d"><v>1903-04-31T08:30:00</v></c><c r="F1" t="d"><v>1903-02-29Z</v></c></row>"#;
         let book = workbook_with(rows, "", r#"<xf numFmtId="0"/>"#, r#"<workbookPr date1904="1"/>"#);
-        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1900-02-29", "1896-02-29"]]);
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1900-02-29", "1896-02-29", "1896-02-29Z"]]);
         // Text that is not an ISO date stays unread.
         let rows = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="d"><v>not-a-date</v></c><c r="C1" t="d"><v>1899-13-01</v></c></row>"#;
         let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
