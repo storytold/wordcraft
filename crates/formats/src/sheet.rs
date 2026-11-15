@@ -331,7 +331,7 @@ fn section_condition(section: &str, value: f64) -> Option<bool> {
         if inner.starts_with(['<', '>', '=']) {
             break inner;
         }
-        rest = after;
+        rest = after.trim_start();
     };
     let (op, rest) = ["<=", ">=", "<>", "<", ">", "="].iter().find_map(|op| inner.strip_prefix(op).map(|r| (*op, r)))?;
     let limit: f64 = rest.trim().parse().ok()?;
@@ -666,5 +666,6 @@ mod tests {
         assert_eq!(NumFmt::Code("mm_;ss").date_kind(0.5), Some(DateKind::Time));
         assert_eq!(NumFmt::Code("[>40000]0;[=0]yyyy-mm-dd").date_kind(12.0), None);
         assert_eq!(NumFmt::Code("[>40000]0;[=0]yyyy-mm-dd").date_kind(0.0), Some(DateKind::Date));
+        assert_eq!(NumFmt::Code("[Red] [>=40000]yyyy-mm-dd;0").date_kind(12.0), None);
     }
 }
