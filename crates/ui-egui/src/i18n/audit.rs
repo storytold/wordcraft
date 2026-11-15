@@ -198,6 +198,12 @@ impl<'a> Exempt<'a> {
         if let Some(form) = &app.spelling_review {
             names.extend(form.content_text());
         }
+        // The Library pane's own folder controls (#2868): the shared craft-library-egui draws
+        // them and takes no words from the app for them yet, so they stay English until it does
+        // (`library_pane::SHARED_ENGLISH`). WordCraft's own words in the pane go through `tl!`.
+        if app.session.view.library_pane {
+            names.extend(crate::library_pane::SHARED_ENGLISH.map(str::to_string));
+        }
         Exempt { body: app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), names, math: math_placeholders }
     }
 

@@ -53,6 +53,7 @@ pub mod ink;
 pub mod keys;
 pub mod keytips;
 pub(crate) mod language_packs;
+pub mod library_pane;
 mod local_time;
 pub mod md_source;
 pub mod mini_toolbar;
@@ -666,6 +667,9 @@ pub struct WordApp {
     pub restrict: dialogs_review::RestrictPane,
     /// The language-aware spelling and grammar task pane.
     pub spelling_review: Option<proofing_pane::SpellingForm>,
+    /// The Library pane's tab, folder, search and thumbnails (#2868): one Library for every
+    /// window, so a thumbnail drawn in one shows in the others.
+    pub library: library_pane::State,
     pub status_msg: Option<(String, f64)>,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).

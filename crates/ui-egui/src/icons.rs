@@ -368,6 +368,16 @@ fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
             pen.frect(3.0, 3.0, 14.0, 14.0, a);
             pen.rect(3.0, 3.0, 14.0, 14.0, c);
         }
+        // Insert › Library (#2868): two books upright on a shelf and a third leaning on them.
+        "library" => {
+            pen.line(&[(2.0, 17.5), (18.0, 17.5)]);
+            pen.rect(3.5, 4.5, 7.0, 17.5, c);
+            pen.line(&[(3.5, 7.5), (7.0, 7.5)]);
+            pen.frect(7.5, 3.0, 11.0, 17.5, a.linear_multiply(0.25));
+            pen.rect(7.5, 3.0, 11.0, 17.5, a);
+            pen.line_c(&[(7.5, 6.0), (11.0, 6.0)], a);
+            pen.closed(&[(11.6, 17.5), (14.9, 17.5), (17.9, 5.6), (14.6, 4.8)], green);
+        }
         "icons" => {
             pen.circle(10.0, 10.0, 7.5, c);
             pen.fcircle(7.5, 8.0, 1.0, c);

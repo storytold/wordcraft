@@ -37,7 +37,7 @@ impl WordApp {
     /// desktop app saves them at exit; a change that should survive a crash, like taking a
     /// document off the recent list, needs a save at the moment of the change. `None`: the host
     /// has no hook or wrote nothing; `Some(Err)`: the write failed, and the status line says so.
-    pub(super) fn save_prefs_now(&mut self) -> Option<Result<(), String>> {
+    pub(crate) fn save_prefs_now(&mut self) -> Option<Result<(), String>> {
         let save = self.services.save_prefs.as_ref()?;
         match save(self) {
             Ok(true) => Some(Ok(())),

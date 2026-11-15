@@ -1,8 +1,8 @@
 //! Task panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector,
 //! Accessibility and Alt Text (see `a11y_pane`), Format Shape (see `format_shape`), Restrict Editing
-//! ([`crate::dialogs_review`]), Comments, and the SmartArt Text Pane. `craft_ui::panes` draws them
-//! around the document, with their title bars, menus and resize edges; the session's view flags say
-//! which are open.
+//! ([`crate::dialogs_review`]), Comments, the SmartArt Text Pane and the Library (see
+//! `library_pane`). `craft_ui::panes` draws them around the document, with their title bars, menus
+//! and resize edges; the session's view flags say which are open.
 
 use std::collections::BTreeMap;
 
@@ -62,6 +62,8 @@ pub enum Pane {
     RestrictEditing,
     Proofing,
     Comments,
+    /// Insert › Library (#2868): pictures from the user's own folders.
+    Library,
 }
 
 impl Pane {
@@ -78,6 +80,7 @@ impl Pane {
             Self::RestrictEditing => "Restrict Editing",
             Self::Proofing => "Proofing",
             Self::Comments => "Comments",
+            Self::Library => "Library",
         }
     }
 
@@ -94,6 +97,7 @@ impl Pane {
             Self::RestrictEditing => (Edge::End, 270.0),
             Self::Proofing => (Edge::End, 400.0),
             Self::Comments => (Edge::End, 290.0),
+            Self::Library => (Edge::End, 300.0),
         };
         PaneState::docked(edge, width)
     }
@@ -112,10 +116,11 @@ impl Pane {
             Self::RestrictEditing => "restrictEditing",
             Self::Proofing => "proofing",
             Self::Comments => "comments",
+            Self::Library => "library",
         }
     }
 
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::SmartArtText,
         Self::Navigation,
         Self::Clipboard,
@@ -127,6 +132,7 @@ impl Pane {
         Self::RestrictEditing,
         Self::Proofing,
         Self::Comments,
+        Self::Library,
     ];
 
     fn from_key(key: &str) -> Option<Self> {
@@ -145,6 +151,7 @@ impl Pane {
             Self::AltText => Some("view.altTextPane"),
             Self::FormatShape => Some("view.formatShapePane"),
             Self::Comments => Some("view.commentsPane"),
+            Self::Library => Some("view.libraryPane"),
             Self::RestrictEditing | Self::Proofing => None,
         }
     }
@@ -171,6 +178,7 @@ impl PaneContent<Pane> for Content<'_> {
             Pane::RestrictEditing => crate::dialogs_review::restrict_pane(app, ui),
             Pane::Proofing => crate::proofing_pane::show(app, ui),
             Pane::Comments => comments(app, ui),
+            Pane::Library => crate::library_pane::show(app, ui),
         })
     }
 

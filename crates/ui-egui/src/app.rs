@@ -162,6 +162,7 @@ impl WordApp {
             colors,
             restrict,
             spelling_review,
+            library: Default::default(),
             status_msg,
             previews,
             change_picture_target,

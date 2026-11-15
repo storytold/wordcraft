@@ -251,6 +251,9 @@ pub struct Session {
     order: Vec<u64>,
     /// Untitled documents made so far, for the next one's name (`Document3`).
     untitled_count: u32,
+    /// What Insert ▸ Library has read from its folders (indexes, pictures, thumbnails), within
+    /// fixed budgets; shared by the open documents (#2868).
+    pub(crate) library: crate::library::Cache,
 }
 
 impl Session {

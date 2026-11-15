@@ -87,6 +87,11 @@ craft-ods = { git = "https://github.com/storytold/craft-libs", rev = "41fb227542
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "41fb227542efb8a7748caa1c659f271d8605303c", version = "=0.1.0" }
 craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "41fb227542efb8a7748caa1c659f271d8605303c", version = "=0.1.0" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "41fb227542efb8a7748caa1c659f271d8605303c", version = "=0.1.0" }
+# The Library the Craft apps share (#2868; first asked for in storytold/deckcraft#958): the core
+# (engine) and its egui pane (ui-egui). On their own pin, storytold/craft-libs#1584's head (with its
+# own craft-ui), until that PR merges and the craft-libs pins here move past it.
+craft-library = { git = "https://github.com/storytold/craft-libs", rev = "772e09b5bd6b39c64dce2e0982324e959753ffde", version = "=0.1.0" }
+craft-library-egui = { git = "https://github.com/storytold/craft-libs", rev = "772e09b5bd6b39c64dce2e0982324e959753ffde", version = "=0.1.0" }
 craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "41fb227542efb8a7748caa1c659f271d8605303c", version = "=0.1.0" }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
 miniz_oxide = "0.9"
