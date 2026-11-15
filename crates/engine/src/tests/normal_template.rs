@@ -398,6 +398,30 @@ fn a_panic_while_writing_the_template_is_an_error() {
     assert_eq!(s.doc.styles, before, "the document is rolled back");
 }
 
+/// #4621 review P2: reading the template happens outside `Session::run` (start-up, closing the
+/// last document). A panic in the store or the reader is a damaged template: built-in formatting
+/// and the same status message, never a crash.
+#[test]
+fn a_panic_while_reading_the_template_falls_back_to_built_in() {
+    struct Panics;
+    impl NormalStore for Panics {
+        fn load(&self) -> Result<Option<Vec<u8>>, String> {
+            panic!("damaged template")
+        }
+        fn save(&self, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn reset(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let mut s = Session::new(Document::from_text("Text.\n"));
+    s.normal_store = Some(Arc::new(Panics));
+    let d = s.normal_document();
+    assert_eq!(body_font(&d), body_font(&Session::new(Document::from_text("Text.\n")).normal_document()));
+    assert!(s.status.contains("couldn't be read"), "status: {}", s.status);
+}
+
 /// Re-review P3: a Set As Default inside a macro reaches the template only if the whole macro
 /// succeeds; a later failing step leaves the template as it was.
 #[test]

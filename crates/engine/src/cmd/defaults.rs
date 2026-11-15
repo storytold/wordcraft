@@ -156,11 +156,14 @@ fn update_template(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<(),
 /// The template, if there is one and it reads; a damaged one is reported in the status bar.
 fn load_template(s: &mut Session) -> Option<Document> {
     let store = s.normal_store.clone()?;
-    let read = match store.load() {
-        Ok(None) => return None,
-        Ok(Some(bytes)) => nt::parse(&bytes),
-        Err(e) => Err(e),
-    };
+    // Reading runs outside `Session::run` (start-up, closing the last document), so a panic in the
+    // store or the reader is treated like a damaged template instead of ending the app.
+    let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match store.load() {
+        Ok(None) => None,
+        Ok(Some(bytes)) => Some(nt::parse(&bytes)),
+        Err(e) => Some(Err(e)),
+    }))
+    .unwrap_or_else(|_| Some(Err("reading it panicked".to_string())))?;
     match read {
         Ok(t) => Some(t),
         Err(e) => {
