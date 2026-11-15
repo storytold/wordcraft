@@ -1,8 +1,8 @@
 # Where WordCraft falls short of Word
 
-> **Drawing cursor update:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (#6672: drawing-tool pointers show their tool, ink colour and width; readiness estimates unchanged).
+> **Drawing cursor update:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (#6672: compact drawing pointers preview ink colour and width without floating tool badges; readiness estimates unchanged).
 
-Drawing pointers (#6672): Pen, Pencil, Highlighter and Eraser show their tool beside the drawing hotspot. Pen footprints follow the current ink colour, opacity, width and page scale, including dark-paper colour mapping; a light and dark rim keeps them visible. The whole-stroke eraser identifies its hit point without suggesting a pixel erase radius. Chrome, comments, overlays, lasso and table tools retain their pointers. Geometry is bounded for damaged settings and extreme imported views. These are original code-drawn UI pointers, not document assets; drawing, erasing and export content are unchanged. Synthetic tests cover cursor appearance, settings, zoom, pixel density, pointer exit, dark paper and the drawing/erasing hotspot. No new native Word comparison or readiness estimate change.
+Drawing pointers (#6672): Pen and Pencil use compact ink dots; Highlighter has square nib bounds around the actual round ink footprint. Their colour, opacity, width and page scale follow the selected settings, including dark-paper colour mapping, with a thin light/dark rim for contrast. The whole-stroke eraser uses the existing original eraser icon and a small exact hit-point marker, without suggesting a pixel erase radius. There are no floating tool buttons beside the pointer. Chrome, comments, overlays, lasso and table tools retain their pointers. Geometry is bounded for damaged settings and extreme imported views. Drawing, erasing and export content are unchanged. Synthetic tests cover compact appearance, settings, zoom, pixel density, pointer exit, dark paper and the drawing/erasing hotspot. The reporter's public Word screenshots were observed for the dot, marker and eraser roles; no Microsoft artwork was copied, no new native Word comparison was made and readiness estimates are unchanged.
 
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 
@@ -186,7 +186,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 ## Revision history
 
-> 2026-11-15 · Drawing-tool cursor feedback (#6672); no ranked gap or readiness estimate changed.
+> 2026-11-15 · Drawing-tool cursor feedback (#6672), refined to compact ink dots, marker bounds and an eraser without floating badges; no ranked gap or readiness estimate changed.
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
 

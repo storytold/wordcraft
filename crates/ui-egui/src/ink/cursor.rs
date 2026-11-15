@@ -1,12 +1,12 @@
-//! Drawing-tool pointers, painted from our own icons so colour and width update on every
-//! platform, including the web. The footprint is centred on the actual drawing hotspot.
+//! Compact drawing-tool pointers. Colour and width update on every platform, including
+//! the web. The footprint is centred on the actual drawing hotspot, without a tool badge.
 
 use egui::{Color32, CursorIcon, Id, LayerId, Order, Painter, Pos2, Rect, Response, Stroke, StrokeKind, Ui, vec2};
 use wordcraft_doc::freeform::InkTool;
 use wordcraft_engine::cmd::draw::DrawMode;
 use wordcraft_layout::DocLayout;
 
-use crate::{WordApp, theme::Tokens};
+use crate::WordApp;
 
 /// Replace only the ink tool's winning canvas pointer. Chrome, overlays, scroll gestures,
 /// table tools and the lasso keep their own pointers; no stale pointer survives PointerGone.
@@ -34,38 +34,34 @@ pub fn paint_cursor(app: &WordApp, ui: &Ui, response: &Response, layout: &DocLay
     let Some(rect) = rects.get(page).filter(|r| r.contains(at)) else { return };
     let scale = layout.pages.get(page).map_or(scale, |p| crate::canvas::page_screen_scale(*rect, p, scale));
     let painter = ui.ctx().layer_painter(LayerId::new(Order::Tooltip, Id::unique("wordcraft_ink_cursor"))).with_clip_rect(clip);
-    let t = Tokens::get(ui.ctx());
-    let (radius, icon, accent) = match mode {
+    match mode {
         DrawMode::Pen(tool) => {
             let set = app.session.view.draw.settings(tool);
             let radius = footprint_radius(set.width, scale, tool);
             let color = super::screen_ink(crate::canvas::dark_page(app), set.color, (tool.alpha() * 255.0).round() as u8);
-            // A light and dark rim keeps even black, white and translucent ink visible.
-            painter.circle_stroke(at, radius + 1.5, Stroke::new(3.0, Color32::WHITE));
-            painter.circle_stroke(at, radius + 1.5, Stroke::new(1.0, Color32::BLACK));
+            // A thin light/dark rim keeps black, white and translucent ink visible without
+            // covering nearby text. The square bounds distinguish the marker's nib, but its
+            // coloured centre stays round to preview the existing round-ended ink stroke.
+            for (width, color) in [(2.0, Color32::WHITE), (0.75, Color32::BLACK)] {
+                let stroke = Stroke::new(width, color);
+                if tool == InkTool::Highlighter {
+                    painter.rect_stroke(Rect::from_center_size(at, vec2(radius + 1.0, radius + 1.0) * 2.0), 0.0, stroke, StrokeKind::Middle);
+                } else {
+                    painter.circle_stroke(at, radius + 1.0, stroke);
+                }
+            }
             painter.circle_filled(at, radius, color);
-            let icon = match tool {
-                InkTool::Pen => "pen",
-                InkTool::Pencil => "pencil",
-                InkTool::Highlighter => "highlightNoColor",
-            };
-            (radius, icon, color)
         }
         DrawMode::Eraser => {
             // This eraser deletes whole strokes, not a configurable disk of pixels.
             // Mark its exact hit point without suggesting a nonexistent erase radius.
             hotspot(&painter, at);
-            (0.0, "eraser", t.accent)
+            let icon = Rect::from_min_size(at + vec2(2.0, -18.0), vec2(22.0, 22.0));
+            // Paper colour, rather than interface theme, determines the outline contrast.
+            let outline = super::screen_ink(crate::canvas::dark_page(app), wordcraft_doc::Rgb(0, 0, 0), 255);
+            crate::icons::paint(&painter, icon, "eraser", outline, outline);
         }
         _ => return,
-    };
-    let offset = radius.min(24.0) + 4.0;
-    let badge = Rect::from_min_size(at + vec2(offset, -offset - 22.0), vec2(22.0, 22.0));
-    painter.rect_filled(badge, 3.0, t.panel);
-    painter.rect_stroke(badge, 3.0, Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
-    crate::icons::paint(&painter, badge.shrink(1.0), icon, t.icon, accent);
-    if matches!(mode, DrawMode::Pen(_)) {
-        painter.line_segment([badge.left_bottom() + vec2(3.0, -2.0), badge.right_bottom() + vec2(-3.0, -2.0)], Stroke::new(2.0, accent));
     }
     ui.ctx().set_cursor_icon(CursorIcon::None);
 }
@@ -78,11 +74,8 @@ fn footprint_radius(width: f32, scale: f32, tool: InkTool) -> f32 {
 }
 
 fn hotspot(painter: &Painter, at: Pos2) {
-    for (width, color) in [(3.0, Color32::WHITE), (1.0, Color32::BLACK)] {
-        let stroke = Stroke::new(width, color);
-        painter.line_segment([at - vec2(3.0, 0.0), at + vec2(3.0, 0.0)], stroke);
-        painter.line_segment([at - vec2(0.0, 3.0), at + vec2(0.0, 3.0)], stroke);
-    }
+    painter.circle_filled(at, 2.0, Color32::WHITE);
+    painter.circle_filled(at, 1.0, Color32::BLACK);
 }
 
 #[cfg(test)]

@@ -54,6 +54,32 @@ fn drawing_tools_have_distinct_visible_cursors_without_editing() {
 }
 
 #[test]
+fn drawing_cursors_stay_compact_without_floating_tool_badges() {
+    let mut h = window(1.0);
+    for command in ["draw.pen", "draw.pencil", "draw.highlighter", "draw.eraser"] {
+        h.state_mut().run(command, json!({"color": "CC2244", "width": 6.0})).unwrap();
+        let at = hover_page(&mut h);
+        let near = Rect::from_center_size(at, vec2(120.0, 120.0));
+        let mut bounds = Rect::NOTHING;
+        let mut frames = 0;
+        for shape in &h.output().shapes {
+            let rect = shape.shape.visual_bounding_rect();
+            if near.contains_rect(rect) && rect.is_positive() {
+                bounds = bounds.union(rect);
+                frames += usize::from(matches!(shape.shape, egui::Shape::Rect(_)));
+            }
+        }
+        assert!(bounds.contains(at), "{command} marks the real drawing hotspot");
+        assert!(Rect::from_center_size(at, vec2(48.0, 48.0)).contains_rect(bounds), "{command} stays close to its hotspot: {bounds:?}");
+        if command == "draw.highlighter" {
+            assert_eq!(frames, 2, "a light and dark square nib outline distinguishes the highlighter");
+        } else {
+            assert_eq!(frames, 0, "{command} has no floating button frame");
+        }
+    }
+}
+
+#[test]
 fn cursor_footprint_tracks_colour_width_zoom_and_pixel_density() {
     for ppp in [1.0, 2.0] {
         let mut h = window(ppp);
