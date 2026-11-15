@@ -358,6 +358,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
             continue;
         }
+        let mut langs = FieldLangs::new(p);
         let mut updates: Vec<(usize, String)> = Vec::new();
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
@@ -378,7 +379,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             let name = wordcraft_layout::fields::field_name(instr);
             match name.as_str() {
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
-                    let lang = field_lang(&s.doc, p, k);
+                    let lang = langs.lang(&s.doc, k);
                     let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));
                     updates.push((k, text_result(instr, crate::cmd::insert::format_date_in(&pic, lang.as_deref()))));
                 }
@@ -498,6 +499,7 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
     for story in stories {
         for path in doc.para_paths(story) {
             let Some(p) = doc.para(story, &path) else { continue };
+            let mut langs = FieldLangs::new(p);
             let mut updates: Vec<(usize, String)> = Vec::new();
             for (k, o) in p.objects.iter().enumerate() {
                 let InlineObject::Field { instr, locked: false, .. } = o else { continue };
@@ -506,7 +508,7 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
                     continue;
                 }
                 // Word's default picture when the code carries no `\@` switch.
-                let lang = field_lang(doc, p, k);
+                let lang = langs.lang(doc, k);
                 let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));
                 updates.push((k, text_result(instr, crate::cmd::insert::format_date_in(&pic, lang.as_deref()))));
             }
@@ -524,10 +526,42 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
     }
 }
 
-/// Resolve a field object's language through the paragraph and document defaults.
-fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: usize) -> Option<String> {
-    let off = p.object_offsets().get(k).copied()?;
-    doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off)).lang
+/// The languages of a paragraph's field objects, asked for in object order: the object offsets
+/// are found once and the runs walked forward, so a paragraph of many DATE fields costs its length
+/// once, not once per field (#6318).
+struct FieldLangs<'a> {
+    p: &'a wordcraft_doc::Paragraph,
+    /// Every object's byte offset, found at the first field that needs one.
+    offsets: Option<Vec<usize>>,
+    /// The run reached so far and its first byte.
+    run: usize,
+    run_start: usize,
+}
+
+impl<'a> FieldLangs<'a> {
+    fn new(p: &'a wordcraft_doc::Paragraph) -> Self {
+        Self { p, offsets: None, run: 0, run_start: 0 }
+    }
+
+    /// Object `k`'s language, resolved through the paragraph and document defaults
+    /// ([`wordcraft_doc::Paragraph::props_of_char`] at its offset); `None` for an object with no
+    /// character in the text. `k` must not be smaller than in an earlier call.
+    fn lang(&mut self, doc: &wordcraft_doc::Document, k: usize) -> Option<String> {
+        let p = self.p;
+        let off = self.offsets.get_or_insert_with(|| p.object_offsets()).get(k).copied()?;
+        // The first run that ends after `off`, as `props_of_char` finds it from the start: offsets
+        // only grow with `k`, so a run passed for an earlier object ends before this one too.
+        let mut props = &p.mark;
+        while let Some(r) = p.runs.get(self.run) {
+            if off < self.run_start.saturating_add(r.len) {
+                props = &r.props;
+                break;
+            }
+            self.run_start = self.run_start.saturating_add(r.len);
+            self.run += 1;
+        }
+        doc.styles.resolve_char(p.props.style.as_deref(), props).lang
+    }
 }
 
 /// Word's default date or time picture when a field instruction carries no `\@` picture switch.
