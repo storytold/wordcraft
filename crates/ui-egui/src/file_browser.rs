@@ -89,10 +89,7 @@ pub(crate) fn list_dir(dir: &Path, exts: &[String], cap: usize) -> std::io::Resu
 /// The user's home folder.
 pub(crate) fn home() -> Option<PathBuf> {
     // An empty HOME must not hide a usable Windows profile directory.
-    std::env::var_os("HOME")
-        .filter(|h| !h.is_empty())
-        .or_else(|| std::env::var_os("USERPROFILE").filter(|h| !h.is_empty()))
-        .map(PathBuf::from)
+    std::env::var_os("HOME").filter(|h| !h.is_empty()).or_else(|| std::env::var_os("USERPROFILE").filter(|h| !h.is_empty())).map(PathBuf::from)
 }
 
 /// What the user typed in the file name field, as a path: relative to `dir`, absolute, or under
