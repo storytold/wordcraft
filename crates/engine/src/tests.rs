@@ -3928,6 +3928,10 @@ fn set_author_refuses_blank_names_and_clamps_long_ones() {
     }
     run(&mut s, "file.setAuthor", json!({"name": "Ada\u{0}\u{1b} Lovelace"}));
     assert_eq!(s.author, "Ada Lovelace", "control characters can't reach the saved XML");
+    for name in ["\u{0} Ada  Lovelace", "\u{1b}\t Ada  Lovelace \u{0}"] {
+        run(&mut s, "file.setAuthor", json!({"name": name}));
+        assert_eq!(s.author, "Ada  Lovelace", "whitespace exposed by removing controls is trimmed; internal spaces stay");
+    }
     run(&mut s, "file.setAuthor", json!({"name": "é".repeat(100_000)}));
     assert_eq!(s.author.chars().count(), cmd::file::MAX_AUTHOR_CHARS);
 }
