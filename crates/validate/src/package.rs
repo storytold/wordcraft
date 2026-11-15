@@ -331,10 +331,19 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
             entries.push(blank_entry(name, false));
             continue;
         }
-        let mut buf = Vec::with_capacity(size.min(1 << 20) as usize);
-        match (&mut f).take(limits.part_bytes + 1).read_to_end(&mut buf) {
+        let remaining_total = limits.total_bytes.saturating_sub(total);
+        let read_cap = limits.part_bytes.min(remaining_total);
+        let mut buf = Vec::with_capacity(size.min(read_cap).min(1 << 20) as usize);
+        match (&mut f).take(read_cap.saturating_add(1)).read_to_end(&mut buf) {
             Ok(_) if buf.len() as u64 > limits.part_bytes => {
+                total = total.saturating_add(buf.len() as u64);
                 acc.note(format!("part {name} decompresses past the {}-byte per-part limit and was not checked", limits.part_bytes));
+                acc.set_incomplete();
+                entries.push(blank_entry(name, false));
+            }
+            Ok(_) if total.saturating_add(buf.len() as u64) > limits.total_bytes => {
+                total = total.saturating_add(buf.len() as u64);
+                acc.note(format!("part {name} would take the package past the {}-byte total limit and was not checked", limits.total_bytes));
                 acc.set_incomplete();
                 entries.push(blank_entry(name, false));
             }
@@ -343,6 +352,9 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
                 entries.push(text_entry(name, buf));
             }
             Err(_) => {
+                // Count partially decompressed bytes from corrupt streams against the package
+                // decompression budget so repeated failing entries cannot exceed total_bytes.
+                total = total.saturating_add(buf.len() as u64);
                 // Any part whose content could not be read leaves the run INCOMPLETE: a check that
                 // depended on it could not run. (This subsumes the old main-part special case.)
                 acc.note(format!("part {name} could not be decompressed and was not checked"));
@@ -1201,7 +1213,7 @@ fn find_eocd(bytes: &[u8]) -> Option<EocdSelection> {
 fn check_case_collisions(dir: Option<&CentralDirectory>, entries: &[Entry], acc: &mut Acc) {
     observation_contract! {
         rules: "PKG-CASE-COLLISION";
-        collections: "field.names*1,type.HashMap*4,type.Vec*5";
+        collections: "field.decoded_names*1,field.names*1,type.HashMap*4,type.Vec*4";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1211,20 +1223,20 @@ fn check_case_collisions(dir: Option<&CentralDirectory>, entries: &[Entry], acc:
     acc.ran("PKG-CASE-COLLISION");
     let mut collisions: Vec<Vec<String>> = match dir {
         Some(dir) => {
-            let mut groups: HashMap<Vec<u8>, Vec<&[u8]>> = HashMap::new();
-            for &raw in &dir.names {
-                let trimmed = trim_leading_slash(raw);
-                if trimmed.ends_with(b"/") {
+            let mut groups: HashMap<String, Vec<(&str, &[u8])>> = HashMap::new();
+            for (&raw, decoded) in dir.names.iter().zip(&dir.decoded_names) {
+                let decoded_trimmed = decoded.trim_start_matches('/');
+                if decoded_trimmed.ends_with('/') {
                     continue;
                 }
-                groups.entry(trimmed.to_ascii_lowercase()).or_default().push(trimmed);
+                groups.entry(decoded_trimmed.to_ascii_lowercase()).or_default().push((decoded_trimmed, trim_leading_slash(raw)));
             }
             groups
                 .into_values()
                 .filter_map(|mut v| {
-                    v.sort_unstable();
-                    v.dedup();
-                    (v.len() > 1).then(|| v.into_iter().map(|raw| String::from_utf8_lossy(raw).into_owned()).collect())
+                    v.sort_unstable_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.cmp(b.1)));
+                    v.dedup_by(|a, b| a.0 == b.0);
+                    (v.len() > 1).then(|| v.into_iter().map(|(_, raw)| String::from_utf8_lossy(raw).into_owned()).collect())
                 })
                 .collect()
         }
@@ -1660,7 +1672,10 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
                 depth += 1;
             }
             Ok((ns, Event::Empty(e))) => {
-                if depth == 1 && valid_root && matches!(ns, ResolveResult::Bound(n) if n.as_ref() == namespace) {
+                let in_namespace = matches!(ns, ResolveResult::Bound(n) if n.as_ref() == namespace);
+                if depth == 0 {
+                    valid_root = in_namespace && e.local_name().as_ref() == container;
+                } else if depth == 1 && valid_root && in_namespace {
                     visit(&e);
                 }
             }

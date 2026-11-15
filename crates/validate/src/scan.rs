@@ -3,14 +3,14 @@
 //! reference/id collection, structural checks and the small auxiliary parsers for numbering,
 //! settings and the comment-threading parts.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, NamespaceResolver, QName, ResolveResult};
 use quick_xml::reader::NsReader;
 
-use crate::observed::{CompleteSet, Observed};
+use crate::observed::{CompleteSet, Completeness, Observed};
 use crate::{Acc, NS_DS, NS_M, NS_MC, NS_R, NS_W, NS_W14, NS_W15, NS_W16CID, NS_WP};
 
 /// Parsed numeric value; invalid spellings remain explicitly separate from valid keys.
@@ -381,6 +381,8 @@ pub(crate) struct PartScan {
     pub note_capped: bool,
     /// The generic fact budget dropped at least one fact in this part.
     pub fact_capped: bool,
+    /// The per-part reference budget dropped at least one `r:id`/`r:embed`/`r:link`.
+    pub refs_capped: bool,
     /// All XML events and story facts were examined; absence joins may use this part.
     pub facts_complete: bool,
     /// XML events completed independently of individual fact/reference allocation caps.
@@ -646,6 +648,7 @@ struct State {
     wrapper_depth: i64,
     fld_depth: i64,
     fld_extra_end: usize,
+    fld_state_unknown: bool,
     move_from_start: BTreeSet<DecimalId>,
     move_from_end: BTreeSet<DecimalId>,
     move_to_start: BTreeSet<DecimalId>,
@@ -834,7 +837,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "-";
-        collections: "access.invalidate*1,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*4,field.frames*9,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.refs*2,field.special_notes*2,field.unknown_prefixes*4,type.Vec*9";
+        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*4,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.refs*2,field.special_notes*2,field.unknown_prefixes*4,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -860,12 +863,19 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         note_listings: (Vec::new(), Vec::new()),
         note_capped: false,
         fact_capped: false,
+        refs_capped: false,
         facts_complete: false,
         syntax_complete: false,
     };
     let mut root_count = 0usize;
     let mut events = 0usize;
     let mut budget_stopped = false;
+    let mut doctype_seen = false;
+    let mut complete_entities = Observed::complete(HashSet::new()).into_complete_set();
+    let mut entity_decls = BTreeMap::new();
+    let mut entity_status = HashMap::new();
+    let mut entity_work = acc.limits.events;
+    let mut entity_notes = (false, false);
     loop {
         if events >= acc.limits.events {
             acc.note(format!("{part} has more than {} XML events; the rest of the part was not checked", acc.limits.events));
@@ -1000,13 +1010,27 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     break;
                 }
             }
-            Ok(Event::GeneralRef(e)) => {
-                if state.frames.is_empty() {
-                    let msg = if root_count == 0 { "a reference before the document element" } else { "content after the document element" };
-                    out.malformed = Some(msg.to_string());
+            Ok(Event::DocType(e)) => {
+                if doctype_seen || !state.frames.is_empty() || root_count > 0 {
+                    out.malformed = Some("unexpected DOCTYPE declaration".to_string());
                     break;
                 }
-                scan_general_ref(part, e.as_ref(), acc);
+                doctype_seen = true;
+                let (declared, decl_texts) = parse_doctype_entities(e.as_ref(), acc.limits.facts);
+                complete_entities = declared.into_complete_set();
+                entity_decls = decl_texts;
+            }
+            Ok(Event::GeneralRef(e)) => {
+                let outside_err = if state.frames.is_empty() {
+                    Some(if root_count == 0 { "a reference before the document element" } else { "content after the document element" })
+                } else {
+                    None
+                };
+                if handle_general_ref_event(part, outside_err, &mut entity_notes, &mut state.fld_state_unknown, &mut out, acc, |acc| {
+                    scan_general_ref(part, e.as_ref(), complete_entities.as_ref(), &entity_decls, &mut entity_status, &mut entity_work, acc)
+                }) {
+                    break;
+                }
             }
             Ok(Event::CData(_)) if state.frames.is_empty() => {
                 out.malformed = Some("CDATA outside the document element".to_string());
@@ -1030,35 +1054,89 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     // marked INCOMPLETE at its own site; on the malformed path, a discarded completion-dependent set
     // that would have reported something marks the run INCOMPLETE below (the malformed part itself
     // is Warning-only by calibration).
-    let scan_complete = out.malformed.is_none() && !budget_stopped && !state.fact_capped && !state.refs_capped;
+    let skipped_content = state.alt_noted;
+    let scan_complete = out.malformed.is_none() && !budget_stopped && !state.fact_capped && !state.refs_capped && !skipped_content && !entity_notes.1;
     out.facts_complete = scan_complete;
-    out.syntax_complete = out.malformed.is_none() && !budget_stopped;
+    out.syntax_complete = out.malformed.is_none() && !budget_stopped && !entity_notes.1;
     if !out.syntax_complete || role.conflicting() {
         state.facts.invalidate("XML source or role incomplete");
+    } else if skipped_content {
+        state.facts.invalidate("mc:AlternateContent subtree skipped");
     }
     finish_prefix(&state, part, acc);
-    if scan_complete {
-        finish_completion(&state, part, acc);
-    } else if out.malformed.is_some() && completion_dependent_pending(&state) {
-        // No INCOMPLETE is marked by a malformed part itself, but here a completion-dependent
-        // pairing check could not run and would have reported something: the run could not examine
-        // everything a finding depends on. Name the part and the check that could not complete.
-        acc.note(format!("{part} ends before its field/move/bookmark pairing checks could complete; they were not run"));
-        acc.set_incomplete();
-    }
-    if state.fact_capped || state.refs_capped {
-        acc.note(format!("{part} exceeded the {}-entry fact/reference budget; later facts or references were not recorded", acc.limits.facts));
-        acc.set_incomplete();
-    }
+    note_scan_incomplete(part, &state, &out, scan_complete, skipped_content, acc);
     out.facts = state.facts;
     out.compat_97_2003 = state.compat_97;
     out.special_notes = std::mem::take(&mut state.special_notes);
     out.note_listings = (std::mem::take(&mut state.note_listings_f), std::mem::take(&mut state.note_listings_e));
     out.note_capped = state.note_capped;
     out.fact_capped = state.fact_capped;
+    out.refs_capped = state.refs_capped;
     out.unknown_prefixes.sort_unstable();
     out.unknown_prefixes.dedup();
     out
+}
+
+/// Apply entity reference validation and update malformed/incomplete status; returns `true` to stop scanning.
+fn handle_general_ref_event(
+    part: &str,
+    outside_err: Option<&'static str>,
+    entity_notes: &mut (bool, bool),
+    fld_state_unknown: &mut bool,
+    out: &mut PartScan,
+    acc: &mut Acc,
+    resolve: impl FnOnce(&mut Acc) -> GeneralRefOutcome,
+) -> bool {
+    if let Some(msg) = outside_err {
+        out.malformed = Some(msg.to_string());
+        return true;
+    }
+    match resolve(acc) {
+        GeneralRefOutcome::Ok => false,
+        GeneralRefOutcome::Malformed(msg) => {
+            out.malformed = Some(msg);
+            true
+        }
+        GeneralRefOutcome::UnresolvedSubset => {
+            if !entity_notes.0 {
+                acc.note(format!(
+                    "{part} uses a named entity reference with an unresolvable DOCTYPE subset; entity declarations could not be verified"
+                ));
+                acc.set_incomplete();
+                entity_notes.0 = true;
+            }
+            false
+        }
+        GeneralRefOutcome::UncheckedReplacement => {
+            if !entity_notes.1 {
+                acc.note(format!("{part} uses a named entity reference whose replacement text contains markup or references and was not expanded"));
+                acc.set_incomplete();
+                entity_notes.1 = true;
+            }
+            *fld_state_unknown = true;
+            false
+        }
+    }
+}
+
+/// Emit completion-dependent pairing or budget incompleteness notes once scanning stops.
+fn note_scan_incomplete(part: &str, state: &State, out: &PartScan, scan_complete: bool, skipped_content: bool, acc: &mut Acc) {
+    if scan_complete {
+        finish_completion(state, part, acc);
+    } else if out.malformed.is_some() && completion_dependent_pending(state) {
+        // No INCOMPLETE is marked by a malformed part itself, but here a completion-dependent
+        // pairing check could not run and would have reported something: the run could not examine
+        // everything a finding depends on. Name the part and the check that could not complete.
+        acc.note(format!("{part} ends before its field/move/bookmark pairing checks could complete; they were not run"));
+        acc.set_incomplete();
+    } else if skipped_content && completion_dependent_pending(state) {
+        acc.note(format!("{part} has open field/move/bookmark ranges across skipped mc:AlternateContent; pairing checks were not run"));
+        acc.set_incomplete();
+    }
+    if state.fact_capped || state.refs_capped {
+        acc.note(format!("{part} exceeded the {}-entry fact/reference budget; later facts or references were not recorded", acc.limits.facts));
+        acc.set_incomplete();
+    }
 }
 
 /// Collect an element's attributes, turning an iterator error (a duplicate or malformed attribute)
@@ -1497,10 +1575,17 @@ type ParaPath = Vec<(u32, u32)>;
 /// branch of a block is ever selected. A branch instance of 0 (the
 /// occurrence sits directly under the block) excuses nothing.
 fn paths_conflict(a: &ParaPath, b: &ParaPath) -> bool {
-    for (seq_a, branch_a) in a {
-        for (seq_b, branch_b) in b {
-            if seq_a == seq_b && *branch_a != 0 && *branch_b != 0 && branch_a != branch_b {
-                return false;
+    let (mut i, mut j) = (0usize, 0usize);
+    while let (Some(&(seq_a, branch_a)), Some(&(seq_b, branch_b))) = (a.get(i), b.get(j)) {
+        match seq_a.cmp(&seq_b) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                if branch_a != 0 && branch_b != 0 && branch_a != branch_b {
+                    return false;
+                }
+                i += 1;
+                j += 1;
             }
         }
     }
@@ -2029,7 +2114,9 @@ fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &N
                     "begin" => state.fld_depth += 1,
                     "end" => {
                         if state.fld_depth == 0 {
-                            state.fld_extra_end += 1;
+                            if !state.fld_state_unknown {
+                                state.fld_extra_end += 1;
+                            }
                         } else {
                             state.fld_depth -= 1;
                         }
@@ -2503,25 +2590,329 @@ fn is_whitespace(e: &quick_xml::events::BytesText) -> bool {
     e.as_ref().iter().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
 }
 
-/// `XML-INVALID-CHAR` for a general entity reference: a character reference (`&#…;`) to a
-/// character illegal in XML 1.0. Named entities are ignored.
-fn scan_general_ref(part: &str, content: &[u8], acc: &mut Acc) {
+enum GeneralRefOutcome {
+    Ok,
+    Malformed(String),
+    UnresolvedSubset,
+    UncheckedReplacement,
+}
+
+fn has_unquoted_keyword(text: &str, keyword: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut token = String::new();
+    for ch in text.chars() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+        } else if ch == '"' || ch == '\'' {
+            if token == keyword {
+                return true;
+            }
+            token.clear();
+            quote = Some(ch);
+        } else if ch.is_ascii_whitespace() {
+            if token == keyword {
+                return true;
+            }
+            token.clear();
+        } else {
+            token.push(ch);
+        }
+    }
+    quote.is_none() && token == keyword
+}
+
+fn find_decl_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut quote: Option<u8> = None;
+    let mut i = start;
+    while let Some(&b) = bytes.get(i) {
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+        } else if b == b'"' || b == b'\'' {
+            quote = Some(b);
+        } else if b == b'>' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract declared general entities and their replacement text from a part's DOCTYPE internal subset.
+/// Returns an incomplete `Observed` when an external subset, parameter entity,
+/// external general entity, or declaration budget prevents full resolution.
+fn parse_doctype_entities(raw: &[u8], cap: usize) -> (Observed<HashSet<String>>, BTreeMap<String, String>) {
     observation_contract! {
-        rules: "XML-INVALID-CHAR";
-        collections: "field.first*1";
+        rules: "-";
+        collections: "access.invalidate*2,parser.parse_doctype_entities*1,type.BTreeMap*5,type.HashSet*5,type.Observed*6";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
         package_loss: "independent";
     }
 
-    if content.first() != Some(&b'#') {
-        return;
+    let text = String::from_utf8_lossy(raw);
+    let bytes = text.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut open_bracket = None;
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+        } else if b == b'"' || b == b'\'' {
+            quote = Some(b);
+        } else if b == b'[' {
+            open_bracket = Some(i);
+            break;
+        }
+        i += 1;
     }
+    let header = open_bracket.and_then(|idx| text.get(..idx)).unwrap_or(text.as_ref());
+    if quote.is_some() || has_unquoted_keyword(header, "SYSTEM") || has_unquoted_keyword(header, "PUBLIC") {
+        let mut obs = Observed::complete(HashSet::new());
+        obs.invalidate("external DOCTYPE subset");
+        return (obs, BTreeMap::new());
+    }
+    let Some(open) = open_bracket else {
+        return (Observed::complete(HashSet::new()), BTreeMap::new());
+    };
+    let Some(close) = text.rfind(']').filter(|&c| c > open) else {
+        let mut obs = Observed::complete(HashSet::new());
+        obs.invalidate("unterminated DOCTYPE internal subset");
+        return (obs, BTreeMap::new());
+    };
+    let subset = text.get(open + 1..close).unwrap_or_default();
+    let sb = subset.as_bytes();
+    let mut set = HashSet::new();
+    let mut decl_texts = BTreeMap::new();
+    let mut unresolved = false;
+    let mut pos = 0;
+    while let Some(&b) = sb.get(pos) {
+        if b.is_ascii_whitespace() {
+            pos += 1;
+            continue;
+        }
+        if sb.get(pos..pos + 4) == Some(b"<!--") {
+            let Some(rel_end) = subset.get(pos + 4..).and_then(|s| s.find("-->")) else {
+                unresolved = true;
+                break;
+            };
+            pos += 4 + rel_end + 3;
+            continue;
+        }
+        if sb.get(pos..pos + 2) == Some(b"<?") {
+            let Some(rel_end) = subset.get(pos + 2..).and_then(|s| s.find("?>")) else {
+                unresolved = true;
+                break;
+            };
+            pos += 2 + rel_end + 2;
+            continue;
+        }
+        if b == b'%' {
+            unresolved = true;
+            break;
+        }
+        if sb.get(pos..pos + 2) == Some(b"<!") {
+            let Some(decl_end) = find_decl_end(sb, pos + 2) else {
+                unresolved = true;
+                break;
+            };
+            let decl = subset.get(pos + 2..decl_end).unwrap_or_default();
+            if let Some(rest) = decl.strip_prefix("ENTITY")
+                && rest.starts_with(|c: char| c.is_ascii_whitespace())
+            {
+                let rest = rest.trim_start();
+                if rest.starts_with('%') {
+                    unresolved = true;
+                    break;
+                }
+                let name_end = rest.find(|c: char| c.is_ascii_whitespace()).unwrap_or(rest.len());
+                let name = rest.get(..name_end).unwrap_or_default();
+                let val_part = rest.get(name_end..).unwrap_or_default().trim_start();
+                let Some(replacement) = entity_literal_text(val_part) else {
+                    unresolved = true;
+                    break;
+                };
+                if name.is_empty() || set.len() >= cap {
+                    unresolved = true;
+                    break;
+                }
+                set.insert(name.to_string());
+                decl_texts.entry(name.to_string()).or_insert_with(|| replacement.to_string());
+            }
+            pos = decl_end + 1;
+            continue;
+        }
+        unresolved = true;
+        break;
+    }
+    let declared =
+        if unresolved { Observed::with_status(set, Completeness::Incomplete("unresolvable DOCTYPE subset")) } else { Observed::complete(set) };
+    (declared, decl_texts)
+}
+
+/// Extract the quoted literal of an internal general entity declaration (`"..."` or `'...'`),
+/// rejecting unterminated literals or trailing tokens such as NDATA/external keywords.
+fn entity_literal_text(val_part: &str) -> Option<&str> {
+    let (quote, rest) = if let Some(rest) = val_part.strip_prefix('"') {
+        ('"', rest)
+    } else {
+        let rest = val_part.strip_prefix('\'')?;
+        ('\'', rest)
+    };
+    let end = rest.find(quote)?;
+    if !rest.get(end + 1..)?.trim().is_empty() {
+        return None;
+    }
+    rest.get(..end)
+}
+
+/// Scan the next named general entity reference (`&name;`) starting at or after `offset`, returning
+/// `(name, next_offset)` while skipping numeric character references (`&#...;`) and predefined XML entities.
+fn next_named_entity_ref(text: &str, mut offset: usize) -> Option<(&str, usize)> {
+    while let Some(rel_amp) = text.get(offset..)?.find('&') {
+        let amp = offset + rel_amp;
+        let after_amp = amp + 1;
+        let tail = text.get(after_amp..)?;
+        let token_len = tail.find(|c: char| c == '&' || c == '<' || c.is_ascii_whitespace()).unwrap_or(tail.len());
+        let Some(rel_semi) = tail.get(..token_len)?.find(';') else {
+            offset = after_amp;
+            continue;
+        };
+        let end = after_amp + rel_semi;
+        let candidate = text.get(after_amp..end)?;
+        offset = end + 1;
+        if !candidate.is_empty()
+            && !candidate.starts_with('#')
+            && !candidate.chars().any(|c| c.is_ascii_whitespace() || c == '&' || c == '<')
+            && !matches!(candidate, "lt" | "gt" | "amp" | "apos" | "quot")
+        {
+            return Some((candidate, end + 1));
+        }
+    }
+    None
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EntityValueStatus {
+    Plain,
+    Unchecked,
+    Recursive,
+}
+
+/// Check an entity's replacement text for direct/indirect recursion and unexpanded markup/references,
+/// memoizing verified acyclic nodes and charging a shared per-part work budget.
+fn check_entity_value(
+    start: &str,
+    decl_texts: &BTreeMap<String, String>,
+    entity_status: &mut HashMap<String, EntityValueStatus>,
+    work_remaining: &mut usize,
+) -> EntityValueStatus {
+    observation_contract! {
+        rules: "-";
+        collections: "type.BTreeMap*1,type.HashMap*3,type.Vec*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
+    if let Some(cached) = entity_status.get(start) {
+        return *cached;
+    }
+    let Some((start_key, _)) = decl_texts.get_key_value(start) else {
+        return EntityValueStatus::Unchecked;
+    };
+    let mut stack: Vec<(&str, usize)> = vec![(start_key.as_str(), 0)];
+    let mut visit_state: HashMap<&str, bool> = HashMap::from([(start_key.as_str(), true)]);
+    while let Some((cur, offset)) = stack.last_mut() {
+        let Some(val) = decl_texts.get(*cur) else {
+            visit_state.insert(*cur, false);
+            stack.pop();
+            continue;
+        };
+        if *work_remaining == 0 {
+            return EntityValueStatus::Unchecked;
+        }
+        *work_remaining -= 1;
+        if let Some((next, next_offset)) = next_named_entity_ref(val, *offset) {
+            *offset = next_offset;
+            match visit_state.get(next).copied() {
+                Some(true) => return EntityValueStatus::Recursive,
+                Some(false) => {}
+                None => {
+                    if let Some(cached) = entity_status.get(next) {
+                        if *cached == EntityValueStatus::Recursive {
+                            return EntityValueStatus::Recursive;
+                        }
+                        visit_state.insert(next, false);
+                    } else if let Some((next_key, _)) = decl_texts.get_key_value(next) {
+                        visit_state.insert(next_key.as_str(), true);
+                        stack.push((next_key.as_str(), 0));
+                    }
+                }
+            }
+        } else {
+            let finished = *cur;
+            stack.pop();
+            visit_state.insert(finished, false);
+            let status = if val.find(['<', '&']).is_some() { EntityValueStatus::Unchecked } else { EntityValueStatus::Plain };
+            entity_status.insert(finished.to_string(), status);
+        }
+    }
+    entity_status.get(start).copied().unwrap_or(EntityValueStatus::Unchecked)
+}
+
+/// Check a general entity reference: numeric character references for `XML-INVALID-CHAR`, and named
+/// references against the five predefined XML 1.0 entities and complete DOCTYPE internal subset declarations.
+fn scan_general_ref(
+    part: &str,
+    content: &[u8],
+    entities: Option<&CompleteSet<String>>,
+    decl_texts: &BTreeMap<String, String>,
+    entity_status: &mut HashMap<String, EntityValueStatus>,
+    work_remaining: &mut usize,
+    acc: &mut Acc,
+) -> GeneralRefOutcome {
+    observation_contract! {
+        rules: "XML-INVALID-CHAR";
+        collections: "access.missing*1,field.first*1,type.BTreeMap*1,type.CompleteSet*1,type.HashMap*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
     let body = String::from_utf8_lossy(content);
-    if let Some(desc) = bad_char_ref(&format!("&{body};")) {
-        acc.add("XML-INVALID-CHAR", Some(part.to_string()), format!("{part} contains {desc}, which is illegal in XML 1.0"));
+    if content.first() == Some(&b'#') {
+        if let Some(desc) = bad_char_ref(&format!("&{body};")) {
+            acc.add("XML-INVALID-CHAR", Some(part.to_string()), format!("{part} contains {desc}, which is illegal in XML 1.0"));
+        }
+        return GeneralRefOutcome::Ok;
     }
+    if matches!(body.as_ref(), "lt" | "gt" | "amp" | "apos" | "quot") {
+        return GeneralRefOutcome::Ok;
+    }
+    let name = body.into_owned();
+    if decl_texts.get(&name).is_some() {
+        return match check_entity_value(&name, decl_texts, entity_status, work_remaining) {
+            EntityValueStatus::Plain => GeneralRefOutcome::Ok,
+            EntityValueStatus::Unchecked => GeneralRefOutcome::UncheckedReplacement,
+            EntityValueStatus::Recursive => GeneralRefOutcome::Malformed(format!("recursive entity reference `&{name};`")),
+        };
+    }
+    let Some(declared) = entities else {
+        return GeneralRefOutcome::UnresolvedSubset;
+    };
+    if declared.missing(&name) {
+        return GeneralRefOutcome::Malformed(format!("undefined entity reference `&{name};`"));
+    }
+    GeneralRefOutcome::Ok
 }
 
 /// `XML-INVALID-CHAR` for an illegal character reference inside any attribute value.
@@ -3490,4 +3881,93 @@ fn attrs_of<'a>(e: &'a BytesStart<'_>) -> Option<Vec<Attribute<'a>>> {
         attrs.push(a.ok()?);
     }
     Some(attrs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_conflict_deep_paths_compare_linearly_and_branch_zero_conflicts() {
+        let len = 100_000u32;
+        let a: ParaPath = (0..len).map(|i| (i * 2 + 1, if i + 1 == len { 0 } else { 1 })).collect();
+        let b: ParaPath = (0..len).map(|i| (i * 2 + 2, 2)).collect();
+        let start = std::time::Instant::now();
+        assert!(paths_conflict(&a, &b));
+        let mut disjoint_b = a.clone();
+        disjoint_b[len as usize - 2].1 = 2;
+        assert!(!paths_conflict(&a, &disjoint_b));
+        let mut branch_zero_pair = a.clone();
+        branch_zero_pair[len as usize - 1].1 = 1;
+        assert!(paths_conflict(&a, &branch_zero_pair), "branch 0 in either occurrence does not excuse a collision");
+        assert!(start.elapsed() < std::time::Duration::from_secs(1), "deep path comparison took {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn entity_replacement_with_markup_or_refs_marks_syntax_and_facts_incomplete() {
+        let mut acc = Acc::with_limits(crate::Limits::default());
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY m "<w:p/>">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>&m;</w:t></w:r></w:p></w:body></w:document>"#;
+        let scan = scan_part("word/document.xml", xml, PartRole::Main, &mut acc);
+        assert!(scan.malformed.is_none());
+        assert!(!scan.syntax_complete);
+        assert!(!scan.facts_complete);
+        assert!(!scan.facts.bookmarks.is_complete());
+    }
+
+    #[test]
+    fn unchecked_entity_replacement_suppresses_later_extra_field_end_but_keeps_earlier() {
+        // Entity supplies begin, visible markup supplies end -> no FLD-UNBALANCED, verdict Incomplete.
+        let mut acc = Acc::with_limits(crate::Limits::default());
+        let balanced_via_entity = r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY b "<w:fldChar w:fldCharType='begin'/>">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r>&b;<w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+        let _ = scan_part("word/document.xml", balanced_via_entity, PartRole::Main, &mut acc);
+        let report = acc.finish();
+        assert_eq!(report.verdict, crate::Verdict::Incomplete, "{report:?}");
+        assert!(!report.findings.iter().any(|f| f.rule == "FLD-UNBALANCED"), "{report:?}");
+
+        // Extra end BEFORE unchecked replacement stays proven (1 extra end, not 2).
+        let mut acc2 = Acc::with_limits(crate::Limits::default());
+        let earlier_and_later = r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [<!ENTITY b "<w:fldChar w:fldCharType='begin'/>">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:fldChar w:fldCharType="end"/>&b;<w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+        let _ = scan_part("word/document.xml", earlier_and_later, PartRole::Main, &mut acc2);
+        let report2 = acc2.finish();
+        let f = report2.findings.iter().find(|f| f.rule == "FLD-UNBALANCED").expect("earlier extra end survives");
+        assert!(f.message.contains("1 w:fldChar end(s)"), "unexpected count: {f:?}");
+    }
+
+    #[test]
+    fn entity_chain_memoization_and_work_budget_scale_linearly() {
+        let mut decls = String::new();
+        for i in 0..9_999usize {
+            decls.push_str(&format!(r#"<!ENTITY e{i} "&e{};">"#, i + 1));
+        }
+        decls.push_str(r#"<!ENTITY e9999 "x">"#);
+        let refs = "&e0;".repeat(1_000);
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE w:document [{decls}]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{refs}</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let start = std::time::Instant::now();
+        let mut acc = Acc::with_limits(crate::Limits::default());
+        let scan = scan_part("word/document.xml", &xml, PartRole::Main, &mut acc);
+        assert!(scan.malformed.is_none(), "{:?}", scan.malformed);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "entity traversal took {:?}", start.elapsed());
+
+        // Exhausted work budget yields Unchecked (Incomplete) rather than unbounded work or false pass.
+        let mut tiny_decls = BTreeMap::new();
+        for i in 0..20usize {
+            tiny_decls.insert(format!("k{i}"), format!("&k{};", i + 1));
+        }
+        tiny_decls.insert("k20".to_string(), "ok".to_string());
+        let mut cache = HashMap::new();
+        let mut budget = 5usize;
+        assert!(matches!(check_entity_value("k0", &tiny_decls, &mut cache, &mut budget), EntityValueStatus::Unchecked));
+        assert_eq!(budget, 0);
+    }
+
+    #[test]
+    fn next_named_entity_ref_repeated_ampersand_scales_linearly() {
+        let text = format!("{}&target;", "& ".repeat(50_000));
+        let start = std::time::Instant::now();
+        let found = next_named_entity_ref(&text, 0);
+        assert_eq!(found, Some(("target", text.len())));
+        assert!(start.elapsed() < std::time::Duration::from_millis(200), "scanning took {:?}", start.elapsed());
+    }
 }

@@ -670,6 +670,24 @@ impl Acc {
         self.findings.push(Finding { rule, severity, evidence, part, message });
     }
 
+    /// Record a proven finding, bypassing package-identity absence suppression.
+    pub(crate) fn add_proven(&mut self, rule: &'static str, part: Option<String>, message: String) {
+        observation_contract! {
+            rules: "-";
+            collections: "field.findings*1";
+            scope: "report accumulator and emission budgets; no input definition collection";
+            loss: "per-rule findings, total findings, or coverage-note budget";
+            fallback: "preserve emitted evidence and record truncation/Incomplete; never supplies definition absence";
+            package_loss: "independent";
+        }
+
+        let (severity, evidence) = rule_spec(rule).map_or((Severity::Error, Evidence::Inferred), |r| (r.severity, r.evidence));
+        if !self.allow(rule) {
+            return;
+        }
+        self.findings.push(Finding { rule, severity, evidence, part, message });
+    }
+
     /// Record a coverage note. Exhausting the note budget is itself a budget exhaustion: the run is
     /// marked incomplete so it cannot pass silently, and the last slot is replaced with a
     /// deterministic truncation marker so the INCOMPLETE is always explained (H7).
@@ -1319,7 +1337,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             ));
             acc.set_incomplete();
         }
-        if !scanned.facts_complete {
+        if !scanned.syntax_complete || scanned.fact_capped || scanned.refs_capped {
             // A scan stopped by events/depth cannot establish non-consumption, even when no
             // contentPart id was reached. Fact caps also conservatively invalidate this source.
             content_part_incomplete_owners.insert(e.name.clone());
@@ -1400,7 +1418,11 @@ fn store_relationship_observations(
     }
     for (name, values) in exemptions {
         if let Some(part) = parts.get_mut(&PartId::new(&name)) {
-            part.exemptions = part.exemptions.project(|_| values);
+            part.exemptions = part.exemptions.project(|prev| {
+                let mut merged = prev.clone();
+                merged.extend(values);
+                merged
+            });
         }
     }
     for name in incomplete {
@@ -2039,14 +2061,14 @@ fn check_typed_image_refs(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &
     for (part, values) in refs {
         let Some(rp) = pkg.rels.iter().find(|r| r.name.eq_ignore_ascii_case(&rels_part_name(part))) else { continue };
         let by_id = package::relationship_bindings(rp);
-        let mut reported: HashSet<&str> = HashSet::new();
+        let mut reported: HashSet<(&str, &str)> = HashSet::new();
         for r in values.iter().filter(|r| r.image) {
-            if !reported.insert(r.value.as_str()) {
+            if !reported.insert((r.attr.as_str(), r.value.as_str())) {
                 continue;
             }
             let Resolution::One(rel) = by_id.resolve(r.value.as_str()) else { continue };
             if rel.role.kind() != Some("image") {
-                acc.add(
+                acc.add_proven(
                     "REL-TYPED",
                     Some(part.clone()),
                     format!(
@@ -2067,22 +2089,23 @@ fn check_typed_image_refs(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &
                 }) {
                     let ct = pkg.content_types.of(target);
                     if (!pkg.content_types.incomplete || ct.is_some()) && !ct.is_some_and(|c| c.starts_with("image/")) {
-                        acc.add(
-                            "REL-TYPED",
-                            Some(part.clone()),
-                            format!(
-                                "an image element in {part} references relationship {}, whose target {target} has content type {}",
-                                r.value,
-                                ct.unwrap_or("(none)")
-                            ),
+                        let msg = format!(
+                            "an image element in {part} references relationship {}, whose target {target} has content type {}",
+                            r.value,
+                            ct.unwrap_or("(none)")
                         );
+                        if ct.is_some() {
+                            acc.add_proven("REL-TYPED", Some(part.clone()), msg);
+                        } else {
+                            acc.add("REL-TYPED", Some(part.clone()), msg);
+                        }
                     }
                 }
             } else if r.attr != "link" {
                 // `r:embed` (and `v:imagedata`'s `r:id`) name an embedded image and must resolve to
                 // a part inside the package; only `r:link` may legitimately point at an external
                 // resource (H4).
-                acc.add(
+                acc.add_proven(
                     "REL-TYPED",
                     Some(part.clone()),
                     format!(
@@ -2147,21 +2170,20 @@ fn check_typed_targets(pkg: &Package, acc: &mut Acc) {
         if ct.is_none() && pkg.content_types.incomplete {
             continue;
         }
-        match r.role.kind() {
-            Some("header") if ct != Some(package::HEADER_CONTENT_TYPE) => {
-                acc.add("REL-TYPED", Some(rp.name.clone()), header_footer_message("header", &r.id, target, ct));
-            }
-            Some("footer") if ct != Some(package::FOOTER_CONTENT_TYPE) => {
-                acc.add("REL-TYPED", Some(rp.name.clone()), header_footer_message("footer", &r.id, target, ct));
-            }
+        let (matched, message) = match r.role.kind() {
+            Some("header") if ct != Some(package::HEADER_CONTENT_TYPE) => (true, header_footer_message("header", &r.id, target, ct)),
+            Some("footer") if ct != Some(package::FOOTER_CONTENT_TYPE) => (true, header_footer_message("footer", &r.id, target, ct)),
             Some("image") if !ct.is_some_and(|c| c.starts_with("image/")) => {
-                acc.add(
-                    "REL-TYPED",
-                    Some(rp.name.clone()),
-                    format!("image relationship {} targets {target}, whose content type is {}", r.id, ct.unwrap_or("(none)")),
-                );
+                (true, format!("image relationship {} targets {target}, whose content type is {}", r.id, ct.unwrap_or("(none)")))
             }
-            _ => {}
+            _ => (false, String::new()),
+        };
+        if matched {
+            if ct.is_some() {
+                acc.add_proven("REL-TYPED", Some(rp.name.clone()), message);
+            } else {
+                acc.add("REL-TYPED", Some(rp.name.clone()), message);
+            }
         }
     }
 }
@@ -2633,7 +2655,6 @@ fn check_owned_ids(
         }
         if !refs.is_complete() {
             completion.skipped = true;
-            continue;
         }
         let refs = refs.prefix();
         completion.active |= matches!(source, Resolution::One(_)) || !refs.is_empty();
@@ -4450,6 +4471,56 @@ mod budget_tests {
         let report = validate_bytes_limited(&bytes, Limits { part_bytes: 4096, ..Limits::default() });
         assert!(!report.findings.iter().any(|f| f.rule == "CT-MISMATCH"), "findings: {:?}", report.findings);
         assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    }
+
+    /// CodeRabbit PR#18 (CWE-409): successful reads exceeding `part_bytes` must still charge `total_bytes`.
+    #[test]
+    fn coderabbit_oversized_part_decompression_charges_total_budget() {
+        use std::io::{Cursor, Write};
+        use zip::write::SimpleFileOptions;
+
+        let ct = content_types();
+        let rels = package_rels();
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}"><w:body><w:p/></w:body></w:document>"#).into_bytes();
+        let prefix = (ct.len() + rels.len() + doc.len()) as u64;
+        let part_bytes = 450u64;
+        let over1 = format!(r#"<?xml version="1.0"?><root><!-- {} --></root>"#, "x".repeat(700)).into_bytes();
+        let over2 = format!(r#"<?xml version="1.0"?><root><!-- {} --></root>"#, "y".repeat(170)).into_bytes();
+
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in [
+            ("[Content_Types].xml", &ct),
+            ("_rels/.rels", &rels),
+            ("word/document.xml", &doc),
+            ("word/over1.xml", &over1),
+            ("word/over2.xml", &over2),
+        ] {
+            w.start_file(name, opts).unwrap();
+            w.write_all(data).unwrap();
+        }
+        let mut bytes = w.finish().unwrap().into_inner();
+        // Forge `word/over1.xml`'s declared uncompressed size in both local and central headers so
+        // it bypasses the header pre-check and trips `buf.len() > limits.part_bytes` during inflate.
+        for (sig, usize_at, nlen_at, name_at) in [(b"PK\x03\x04", 22, 26, 30), (b"PK\x01\x02", 24, 28, 46)] {
+            for i in 0..bytes.len().saturating_sub(name_at) {
+                if bytes.get(i..i + 4) != Some(sig) {
+                    continue;
+                }
+                let n = u16::from_le_bytes(bytes[i + nlen_at..i + nlen_at + 2].try_into().unwrap()) as usize;
+                if bytes.get(i + name_at..i + name_at + n) == Some(b"word/over1.xml".as_slice()) {
+                    bytes[i + usize_at..i + usize_at + 4].copy_from_slice(&1u32.to_le_bytes());
+                }
+            }
+        }
+
+        let report = validate_bytes_limited(&bytes, Limits { part_bytes, total_bytes: prefix + 550, ..Limits::default() });
+        assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+        assert!(
+            report.coverage_notes.iter().any(|n| n.contains("word/over1.xml") && n.contains("decompresses past the 450-byte per-part limit")),
+            "{report:?}"
+        );
+        assert!(report.coverage_notes.iter().any(|n| n.contains("word/over2.xml") && n.contains("total limit")), "{report:?}");
     }
 
     /// The byte-limit test's twin at the archive entry limit: the

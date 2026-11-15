@@ -10,7 +10,7 @@ RESULTS=[]
 TMP=Path(tempfile.mkdtemp(prefix='wordcraft-r18-'))
 COPY=TMP/'crates/validate'
 shutil.copytree(ROOT/'crates/validate',COPY,ignore=shutil.ignore_patterns('__pycache__','target'))
-(ROOT/'target/r18-probe-tool').mkdir(exist_ok=True)
+(ROOT/'target/r18-probe-tool').mkdir(parents=True, exist_ok=True)
 (TMP/'target').symlink_to(ROOT/'target/r18-probe-tool',target_is_directory=True)
 # A complete isolated validator crate, retaining all original sources/tests and locked versions.
 manifest=(ROOT/'Cargo.toml').read_text()
@@ -159,12 +159,34 @@ try:
   file,qualified_type=type_id.split('::',1)
   ty=qualified_type.rsplit('::',1)[-1]
   source_ty=re.escape(ty)
-  if not re.search(r'(?:struct|enum)\s+'+source_ty+r'(?=[\s<(;{])',originals[file]): source_ty=r'\$name'
-  def unauthorized(s,ty=source_ty):
-   value,n=re.subn(r'((?:pub(?:\(crate\))?\s+)?(?:struct|enum)\s+'+ty+r'(?=[\s<(;{]))',r'#[derive(serde::Deserialize)] \1',s,count=1)
-   assert n==1,(file,ty)
-   return value
-  probe(41,'unauthorized pair/'+type_id,file,unauthorized,diagnostic='unauthorized reader derive')
+  tpl=re.search(r'<template ([^>]+)>',qualified_type)
+  if tpl:
+   macro_name=tpl.group(1)
+   def unauthorized(s,mac=macro_name):
+    m=re.search(r'macro_rules!\s+'+re.escape(mac)+r'\s*\{',s)
+    assert m,(file,mac)
+    body=s[m.end():]
+    sub,n=re.subn(r'((?:pub(?:\(crate\))?\s+)?(?:struct|enum)\s+\$name(?=[\s<(;{]))',r'#[derive(serde::Deserialize)] \1',body,count=1)
+    assert n==1,(file,mac)
+    return s[:m.end()]+sub
+  elif re.search(r'(?:struct|enum)\s+'+source_ty+r'(?=[\s<(;{])',originals[file]):
+   def unauthorized(s,ty=source_ty):
+    value,n=re.subn(r'((?:pub(?:\(crate\))?\s+)?(?:struct|enum)\s+'+ty+r'(?=[\s<(;{]))',r'#[derive(serde::Deserialize)] \1',s,count=1)
+    assert n==1,(file,ty)
+    return value
+  else:
+   inst=re.search(r'(\w+)\s*!\s*\(\s*'+source_ty+r'\b',originals[file])
+   if not inst:
+    raise AssertionError(f'missing literal or macro declaration for {type_id}')
+   macro_name=inst.group(1)
+   def unauthorized(s,mac=macro_name):
+    m=re.search(r'macro_rules!\s+'+re.escape(mac)+r'\s*\{',s)
+    assert m,(file,mac)
+    body=s[m.end():]
+    sub,n=re.subn(r'((?:pub(?:\(crate\))?\s+)?(?:struct|enum)\s+\$name(?=[\s<(;{]))',r'#[derive(serde::Deserialize)] \1',body,count=1)
+    assert n==1,(file,mac)
+    return s[:m.end()]+sub
+  probe(41,'unauthorized pair/'+type_id,file,unauthorized,diagnostic=type_id)
  def nested_reader(s):
   definition=re.search(r'(pub\(crate\) struct Limits \{.*?\n\})',s,re.S)
   assert definition

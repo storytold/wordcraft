@@ -213,3 +213,121 @@ fn round18_typed_finding_display_polarity() {
         assert_eq!(finding.part.as_deref(), Some(if state == "found" { "word/Mixed.XML" } else { "word/mixed.xml" }), "{state}");
     }
 }
+
+/// CodeRabbit PR#18: proven REL-TYPED mismatches survive unknown_unreadable, while absence stays suppressed.
+#[test]
+fn rel_typed_preserves_proven_mismatches_under_unknown_unreadable() {
+    const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document {NS} xmlns:a="{A_NS}"><w:body><w:p>
+  <a:blip r:embed="rImgNonImage"/>
+  <a:blip r:embed="rImgExternal"/>
+  <a:blip r:embed="rImgWrongCt"/>
+  <a:blip r:embed="rImgNoCt"/>
+</w:p></w:body></w:document>"#
+        ),
+    );
+    d.add_with_override("word/header1.xml", "application/xml", r#"<raw/>"#);
+    d.add_with_override("word/img_wrong.dat", "application/xml", b"raw".to_vec());
+    d.set("word/img_missing.undeclared", b"raw".to_vec());
+    d.set_doc_rels(
+        r#"
+  <Relationship Id="rHdrWrongCt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+  <Relationship Id="rHdrNoCt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="img_missing.undeclared"/>
+  <Relationship Id="rImgNonImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="header1.xml"/>
+  <Relationship Id="rImgExternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.com/a.png" TargetMode="External"/>
+  <Relationship Id="rImgWrongCt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="img_wrong.dat"/>
+  <Relationship Id="rImgNoCt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="img_missing.undeclared"/>
+"#,
+    );
+    let pkg = package::load(&d.build(), &mut Acc::with_limits(Limits::default())).unwrap();
+    let mut scan_acc = Acc::with_limits(Limits::default());
+    let xml = check_xml(&pkg, &mut scan_acc);
+
+    let mut acc = Acc::with_limits(Limits::default());
+    acc.set_unknown_unreadable();
+    check_typed_targets(&pkg, &mut acc);
+    let image_refs: Vec<(String, Vec<RefFact>)> = xml.parts.values().map(|p| (p.name.clone(), p.references.prefix().to_vec())).collect();
+    check_typed_image_refs(&pkg, &image_refs, &mut acc);
+    let report = acc.finish();
+
+    let messages: Vec<&str> = report.findings.iter().filter(|f| f.rule == "REL-TYPED").map(|f| f.message.as_str()).collect();
+    assert!(messages.iter().any(|m| m.contains("rHdrWrongCt")), "expected header ct mismatch: {messages:?}");
+    assert!(!messages.iter().any(|m| m.contains("rHdrNoCt")), "expected absence finding suppressed: {messages:?}");
+    assert!(messages.iter().any(|m| m.contains("rImgNonImage")), "expected non-image role mismatch: {messages:?}");
+    assert!(messages.iter().any(|m| m.contains("rImgExternal")), "expected external r:embed mismatch: {messages:?}");
+    assert!(messages.iter().any(|m| m.contains("rImgWrongCt")), "expected image ct mismatch: {messages:?}");
+    assert!(!messages.iter().any(|m| m.contains("rImgNoCt")), "expected image absence finding suppressed: {messages:?}");
+}
+
+/// CodeRabbit PR#18: capped retained refs still check against complete owned defs and mark skipped.
+#[test]
+fn check_owned_ids_retained_refs_fire_when_refs_capped() {
+    const CT_COMMENTS: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml";
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document {NS}><w:body><w:p>
+  <w:r><w:commentReference w:id="99"/></w:r>
+  <w:r><w:commentReference w:id="1"/></w:r>
+  <w:r><w:commentReference w:id="2"/></w:r>
+</w:p></w:body></w:document>"#
+        ),
+    );
+    d.add_with_override("word/comments.xml", CT_COMMENTS, format!(r#"<w:comments {NS}><w:comment w:id="1"><w:p/></w:comment></w:comments>"#));
+    d.set_doc_rels(
+        r#"<Relationship Id="rCom" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+    );
+
+    let report = validate_bytes_limited(&d.build(), Limits { facts: 2, ..Limits::default() });
+    assert!(
+        report.findings.iter().any(|f| f.rule == "ID-COMMENT-REF" && f.message.contains("99")),
+        "expected ID-COMMENT-REF for retained dangling id 99: {report:?}"
+    );
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    assert!(report.coverage_notes.iter().any(|n| n.contains("fact/reference budget")), "{report:?}");
+
+    // When all retained refs are valid and refs are capped, coverage stays incomplete.
+    d.set(
+        "word/document.xml",
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document {NS}><w:body><w:p>
+  <w:r><w:commentReference w:id="1"/></w:r>
+  <w:r><w:commentReference w:id="1"/></w:r>
+  <w:r><w:commentReference w:id="1"/></w:r>
+</w:p></w:body></w:document>"#
+        ),
+    );
+    let clean_report = validate_bytes_limited(&d.build(), Limits { facts: 2, ..Limits::default() });
+    assert_eq!(clean_report.verdict, Verdict::Incomplete, "{clean_report:?}");
+}
+
+/// CodeRabbit PR#18: failing decompression still charges partially read bytes against total_bytes.
+#[test]
+fn failed_decompression_counts_partial_bytes_against_total_budget() {
+    use std::io::Write;
+    let payload_bad = vec![b'A'; 400];
+    let payload_next = vec![b'B'; 200];
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    w.start_file("word/bad.xml", opts).unwrap();
+    w.write_all(&payload_bad).unwrap();
+    w.start_file("word/next.xml", opts).unwrap();
+    w.write_all(&payload_next).unwrap();
+    let mut raw = w.finish().unwrap().into_inner();
+    let pos = raw.windows(8).position(|s| s == b"AAAAAAAA").expect("stored payload");
+    raw[pos] = b'Z';
+
+    let mut acc = Acc::with_limits(Limits { part_bytes: 500, total_bytes: 500, ..Limits::default() });
+    let _ = package::load(&raw, &mut acc);
+    let report = acc.finish();
+    assert!(report.coverage_notes.iter().any(|n| n.contains("could not be decompressed")), "expected bad entry decompression note: {report:?}");
+    assert!(report.coverage_notes.iter().any(|n| n.contains("total limit")), "expected total budget enforcement after partial read: {report:?}");
+}
