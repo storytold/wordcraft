@@ -80,7 +80,9 @@ fn cell_has_control(c: &Cell, depth: usize) -> bool {
     }
     c.blocks.iter().any(|b| match &**b {
         Block::Para(p) => p.objects.iter().any(|o| matches!(o, InlineObject::ControlStart { .. } | InlineObject::ControlEnd)),
-        Block::Table(t) => !t.controls.is_empty() || t.rows.iter().any(|r| !r.controls.is_empty() || r.cells.iter().any(|c| cell_has_control(c, depth + 1))),
+        Block::Table(t) => {
+            !t.controls.is_empty() || t.rows.iter().any(|r| !r.controls.is_empty() || r.cells.iter().any(|c| cell_has_control(c, depth + 1)))
+        }
     })
 }
 
