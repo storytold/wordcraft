@@ -512,9 +512,7 @@ fn screenshot_png(image: &egui::ColorImage) -> Option<Vec<u8>> {
         }
     }
     let img = image::RgbaImage::from_raw(u32::try_from(width).ok()?, u32::try_from(height).ok()?, rgba)?;
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
-    Some(png)
+    wordcraft_geom::picture::encode_png(&image::DynamicImage::ImageRgba8(img)).ok()
 }
 
 /// The window screenshot: written to `path` when one was given, else base64 PNG in the reply
