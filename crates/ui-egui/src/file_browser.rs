@@ -88,7 +88,11 @@ pub(crate) fn list_dir(dir: &Path, exts: &[String], cap: usize) -> std::io::Resu
 
 /// The user's home folder.
 pub(crate) fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty()).map(PathBuf::from)
+    // An empty HOME must not hide a usable Windows profile directory.
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|h| !h.is_empty()))
+        .map(PathBuf::from)
 }
 
 /// What the user typed in the file name field, as a path: relative to `dir`, absolute, or under
@@ -521,6 +525,34 @@ mod tests {
 
     fn exts(e: &[&str]) -> Vec<String> {
         e.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn home_falls_back_when_home_is_empty() {
+        const EXPECTED: &str = "WORDCRAFT_FILE_BROWSER_HOME_EXPECTED";
+        if let Some(expected) = std::env::var_os(EXPECTED) {
+            assert_eq!(home(), Some(PathBuf::from(expected)));
+            return;
+        }
+        let dir = scratch("home_fallback");
+        let profile = dir.join("profile");
+        let preferred = dir.join("home");
+        std::fs::create_dir(&profile).unwrap();
+        std::fs::create_dir(&preferred).unwrap();
+        for (value, expected) in [(Some(std::ffi::OsStr::new("")), &profile), (None, &profile), (Some(preferred.as_os_str()), &preferred)] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child.args(["--exact", "file_browser::tests::home_falls_back_when_home_is_empty", "--nocapture"]);
+            child.env("USERPROFILE", &profile).env(EXPECTED, expected);
+            if let Some(value) = value {
+                child.env("HOME", value);
+            } else {
+                child.env_remove("HOME");
+            }
+            let output = child.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success() && stdout.contains("1 passed"), "HOME={value:?}: {stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Folders come first, then the files of the chosen type (any case), each by name; hidden
