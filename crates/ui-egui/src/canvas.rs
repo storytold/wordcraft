@@ -1527,6 +1527,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     crate::table_resize::cursor(app, ui, &resp, layout, &rects, geo.scale);
     crate::table_mouse::cursor(app, ui, &resp, layout, &rects, geo.scale);
     crate::table_pen::cursor(app, ui, &resp);
+    crate::ink::paint_cursor(app, ui, &resp, layout, &rects, geo.scale);
     // Windows' I-beam is lost on white paper there: draw one that shows (#1746).
     if app.canvas.drawn_ibeam
         && (resp.hovered() || resp.dragged())

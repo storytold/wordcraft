@@ -17,6 +17,9 @@ use wordcraft_layout::DocLayout;
 use crate::WordApp;
 use crate::canvas::page_at;
 
+mod cursor;
+pub use cursor::paint_cursor;
+
 /// A stroke being drawn: its page and points (page points).
 pub struct InkDrag {
     page: usize,
