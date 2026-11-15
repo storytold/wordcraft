@@ -13610,9 +13610,9 @@ fn a_caret_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
     assert!(at_caret(&s).ins.is_some(), "Paste Formatting kept the insertion mark");
 }
 
-/// #5616: Paste Formatting over a selection keeps the target's hyperlink too.
+/// #5616: Paste Formatting over a selection keeps the target's hyperlink and tracked marks too.
 #[test]
-fn a_range_paste_formatting_keeps_the_targets_link() {
+fn a_range_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "source target"}));
     run(&mut s, "select.text", json!({"text": "source"}));
@@ -13625,5 +13625,20 @@ fn a_range_paste_formatting_keeps_the_targets_link() {
     let (a, _) = s.sel.ordered();
     let c = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
     assert!(c.link.is_some(), "the target kept its hyperlink");
+    assert_eq!(c.bold, Some(true));
+    // A tracked insertion selected as a range stays tracked.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": " added"}));
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    run(&mut s, "select.text", json!({"text": "added"}));
+    let at_start = |s: &Session| {
+        let (a, _) = s.sel.ordered();
+        s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default()
+    };
+    assert!(at_start(&s).ins.is_some(), "the insertion is tracked before");
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let c = at_start(&s);
+    assert!(c.ins.is_some(), "Paste Formatting kept the insertion mark");
     assert_eq!(c.bold, Some(true));
 }
