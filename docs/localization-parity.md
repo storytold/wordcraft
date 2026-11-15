@@ -64,7 +64,7 @@ shared items below.
 | Spanish | es | ~930; 98% / ~95% | most | Latin ✅ | no | partial | 1–2 |
 | Hindi | hi | 0 | ❌ | Devanagari shaping via HarfRust, untested; no hyphenation | no | none | 4–6 |
 | Arabic | ar | ~2,730 entries (craft-i18n `locales/ar/wordcraft.tsv`); 98% / ~95% | most; newer panes English | shaping, joining, lam-alef, bidi ✅ (#207); letters join across a change of formatting and past hidden or deleted text ✅ (#4093); mirrored UI ✅ (#1195; dialogs, tables and galleries read right to left); Arabic UI font fallback; no kashida; no proofing | no | partial | 2–4 (review + kashida/proofing elsewhere) |
-| Hebrew | he | 2,572 rows (craft-i18n `locales/he/wordcraft.tsv`) | most; newer panes English | bidi ✅ (#207); mirrored UI ✅ (same `rtl` layout as Arabic); Hebrew UI font fallback (embedded craft-fonts `Hebr` face, else an installed sans-serif); no proofing | no | partial | 1–2 (second-speaker review + proofing elsewhere) |
+| Hebrew | he | 2,572 rows (craft-i18n `locales/he/wordcraft.tsv`) | most; newer panes English | bidi ✅ (#207); mirrored UI ✅ (same `rtl` layout as Arabic); Hebrew UI font fallback (embedded craft-fonts `Hebr` face, else an installed sans-serif; on macOS SF Hebrew, then Arial Hebrew, Lucida Grande, Arial); no proofing | no | partial | 1–2 (second-speaker review + proofing elsewhere) |
 | French | fr | 2,615 entries (complete catalog) | all | Latin ✅ | no | partial (spelling and suggestions from the French Language pack, elided forms first: `Jadore` → `J'adore`; no grammar marks) | 1–2 (grammar) |
 | Portuguese | pt-br (pt-PT none) | ~930; 98% / ~95% (pt-BR) | most | Latin ✅ | no | partial | 2–4 (pt-BR finish + pt-PT) |
 | Indonesian | id | 0 | ❌ | Latin ✅ | no | none | 3–4 |

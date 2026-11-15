@@ -27,3 +27,21 @@ fn test_initialization_cannot_replace_an_application_database() {
     assert!(!FontDb::init_test_fonts());
     assert!(std::ptr::eq(db, FontDb::global()));
 }
+
+/// macOS ships a Hebrew face (SF Hebrew, Arial Hebrew, Lucida Grande), so a build without
+/// craft-fonts still finds one for a Hebrew interface, and it draws every Hebrew letter. Reads
+/// only the font files; the process-wide database is not touched.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_has_an_installed_hebrew_interface_font() {
+    let found = wordcraft_fonts::system_hebrew_ui_font().expect("an installed Hebrew interface font");
+    eprintln!("Hebrew interface font: {} (face {})", found.family, found.index);
+    if std::path::Path::new("/System/Library/Fonts/SFHebrew.ttf").is_file() {
+        assert!(found.family.contains("SF Hebrew"), "SF Hebrew is installed but {} was chosen", found.family);
+    }
+    let font = skrifa::FontRef::from_index(&found.bytes, found.index).expect("the chosen face");
+    let charmap = skrifa::MetadataProvider::charmap(&font);
+    for c in 'א'..='ת' {
+        assert!(charmap.map(c).is_some(), "{} has no {c}", found.family);
+    }
+}

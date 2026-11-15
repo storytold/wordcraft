@@ -250,12 +250,15 @@ pub fn system_arabic_ui_font() -> Option<SystemUiFont> {
 
 /// Hebrew font files to look for, relative to a font folder, best first. A sans-serif UI face
 /// (Segoe UI, Noto Sans Hebrew, Arial). On Windows, David (`david.ttf`) is the last candidate:
-/// a document serif used only when none of the sans-serif faces is installed.
+/// a document serif used only when none of the sans-serif faces is installed. On macOS, SF Hebrew
+/// (`SFHebrew.ttf`, the system interface's Hebrew, macOS 11 and later) comes first, then Arial
+/// Hebrew, then Lucida Grande (the interface font before macOS 10.10, still installed, with
+/// Hebrew), then Arial. Helvetica has no Hebrew letters and is not listed.
 fn hebrew_candidates() -> &'static [&'static str] {
     if cfg!(windows) {
         &["segoeui.ttf", "arial.ttf", "tahoma.ttf", "david.ttf"]
     } else if cfg!(target_os = "macos") {
-        &["ArialHB.ttc", "Supplemental/ArialHB.ttc", "Supplemental/Arial Unicode.ttf", "Supplemental/Arial.ttf", "Helvetica.ttc"]
+        &["SFHebrew.ttf", "ArialHB.ttc", "Supplemental/ArialHB.ttc", "LucidaGrande.ttc", "Supplemental/Arial Unicode.ttf", "Supplemental/Arial.ttf"]
     } else {
         &[
             "truetype/noto/NotoSansHebrew-Regular.ttf",
@@ -398,7 +401,7 @@ mod tests {
             Some(if cfg!(windows) {
                 "segoeui.ttf"
             } else if cfg!(target_os = "macos") {
-                "ArialHB.ttc"
+                "SFHebrew.ttf"
             } else {
                 "truetype/noto/NotoSansHebrew-Regular.ttf"
             })
