@@ -11989,8 +11989,10 @@ fn cell_widths_override_grid() {
 /// left indent of -21.3 pt starts at the cell's edge in the first cell and in the second, with
 /// borders and without, three of its underscores and part of the fourth gone; a hanging indent
 /// does the same; a line that a right indent of -40 pt lets run past the cell ends at the cell's
-/// edge, in the first cell and in the last; with an indent of -4 pt, within the margin, it is
-/// whole.
+/// edge, in the first cell and in the last; the first letter of a numbered clause that the tab
+/// after its number takes to a stop past the cell's edge is not drawn ("7.1." alone on its
+/// line, then "meny and additions" for "Zmeny and additions"); with an indent of -4 pt, within
+/// the margin, text is whole.
 #[test]
 fn text_set_out_of_its_cell_is_cut_off_at_the_cells_edges() {
     crate::test_fonts();
@@ -12019,6 +12021,26 @@ fn text_set_out_of_its_cell_is_cut_off_at_the_cells_edges() {
     let right: &dyn Fn(&mut ParaProps) = &|p| p.indent_right = Some(-40.0);
     assert_eq!(clipped(0, right), (true, false), "let run past the first cell's right edge");
     assert_eq!(clipped(1, right), (false, true), "let run past the last cell's right edge");
+    // Text a tab stop puts past the cell, the line's own edges staying inside it: a numbered
+    // clause whose number ends past its first stop, so the tab after the number takes the text
+    // to the next one. Word puts the text's first letter at that stop and does not draw it.
+    let numbered = |far: Option<f32>| {
+        use wordcraft_doc::props::{NumRef, TabAlign, TabStop};
+        let mut t = Table::new(1, 2, 400.0);
+        let mut d = Document::from_text("After");
+        let list = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        let mut p = Paragraph::with_text("Changes are made by ending the contract and making a new one.", Default::default());
+        (p.props.indent_left, p.props.indent_first) = (Some(0.0), Some(0.0));
+        p.props.numbering = Some(NumRef { num: list, level: 0 });
+        let stop = |pos: f32, align: TabAlign| TabStop { pos, align, leader: Default::default() };
+        p.props.tabs = Some(std::iter::once(stop(2.0, TabAlign::Left)).chain(far.map(|pos| stop(pos, TabAlign::Center))).collect());
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        lay(&d).pages[0].items.iter().any(|it| matches!(it, Placed::Cell { clip: true, .. }))
+    };
+    assert!(numbered(Some(210.0)), "the text's first letter at a stop 210 pt in, past a cell 200 pt wide");
+    assert!(!numbered(Some(100.0)), "the text at a stop inside the cell");
+    assert!(!numbered(None), "no stop past the number");
     // Within the cell's margin nothing leaves the cell, and nothing is cut.
     assert_eq!(clipped(0, &|p| p.indent_left = Some(-4.0)), (false, false), "set out to the left by less than the margin");
     assert_eq!(clipped(0, &|p| p.indent_right = Some(-4.0)), (false, false), "set out to the right by less than the margin");

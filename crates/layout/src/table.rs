@@ -9,7 +9,7 @@ use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
 use crate::boxes::BoxContext;
-use crate::para::{CellText, ClKind, ParaLayout};
+use crate::para::{CellText, ClKind, Line, ParaLayout};
 use crate::{BoxInput, BoxLayout, Ctx, Placed, layout_box};
 
 /// Largest preferred table width, as a share of the text column, that a file can ask for.
@@ -1505,20 +1505,36 @@ fn para_content(pl: &ParaLayout) -> (f32, f32) {
     (lo.max(word) + indents, hi.max(line) + indents)
 }
 
-/// Whether text among a cell's `items` is set out of the cell, whose edges are at `x0` and `x1`:
-/// a line whose own edges lie outside them, by a negative left, first-line or right indent larger
-/// than the cell's margin. Word cuts such text off at the cell's edges, with borders or without,
-/// in a first column and beside another cell alike (measured in Word for Windows: a line of
-/// underscores set 21.3 pt out of its cell to the left starts at the cell's edge, three of them
-/// and part of the fourth gone, and a line that a right indent of -40 pt lets run 34.6 pt past
-/// the cell ends at its edge; one set out by less than the cell's margin is whole).
+/// Whether text among a cell's `items` reaches out of the cell, whose edges are at `x0` and `x1`:
+/// a line whose own edges lie outside them (a negative left, first-line or right indent larger
+/// than the cell's margin), or whose text does (set at a tab stop past the cell). Word cuts such
+/// text off at the cell's edges, with borders or without, in a first column and beside another
+/// cell alike (measured in Word for Windows: a line of underscores set 21.3 pt out of its cell
+/// to the left starts at the cell's edge, three of them and part of the fourth gone; a line that
+/// a right indent of -40 pt lets run 34.6 pt past the cell ends at its edge; the first letter
+/// of a numbered clause that the tab after its number takes to a stop past the cell is not
+/// drawn; text set out by less than the cell's margin is whole).
 fn hangs_out(items: &[Placed], (x0, x1): (f32, f32)) -> bool {
+    let outside = |a: f32, b: f32| a < x0 - 0.01 || b > x1 + 0.01;
     items.iter().any(|it| match it {
         Placed::Lines { x: at, para, l0, l1, turn: TextDirection::Horizontal, .. } if !para.rp.bidi => {
-            para.lines.get(*l0..*l1).is_some_and(|lines| lines.iter().any(|l| at + l.left < x0 - 0.01 || at + l.right > x1 + 0.01))
+            para.lines.get(*l0..*l1).is_some_and(|lines| {
+                lines.iter().any(|l| outside(at + l.left, at + l.right) || text_reach(para, l).is_some_and(|(a, b)| outside(at + a, at + b)))
+            })
         }
         _ => false,
     })
+}
+
+/// Where a line's text starts and where it ends, without the spaces after its last word (they
+/// hang past the edge of any wrapped line). `None` for a line with nothing but spaces, and for
+/// one in visual order, whose clusters are not where `xs` has them.
+fn text_reach(para: &ParaLayout, l: &Line) -> Option<(f32, f32)> {
+    if !l.vis.is_empty() {
+        return None;
+    }
+    let last = (l.c0..l.c1).rev().find(|c| para.clusters.get(*c).is_some_and(|cl| cl.kind != ClKind::Space))?;
+    Some((*l.xs.first()?, *l.xs.get(last + 1 - l.c0)?))
 }
 
 /// Whether nothing in `t` asks for a width (its own or any cell's): its columns then follow
