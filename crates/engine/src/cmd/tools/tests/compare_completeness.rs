@@ -5,7 +5,6 @@
 //! outside `w:ins`).
 
 use std::collections::HashMap;
-use std::io::Read;
 
 use crate::Session;
 use serde_json::{Value, json};
@@ -19,20 +18,16 @@ fn docx(body: &str) -> Vec<u8> {
     let document =
         format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {NS}><w:body>{body}<w:sectPr/></w:body></w:document>"#);
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, text) in [("_rels/.rels", root), ("word/document.xml", document.as_str())] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+        zw.add(name, text.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn document_xml(package: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(package)).unwrap();
-    let mut f = z.by_name("word/document.xml").unwrap();
-    let mut s = String::new();
-    f.read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(package, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 fn para(inner: &str) -> String {
