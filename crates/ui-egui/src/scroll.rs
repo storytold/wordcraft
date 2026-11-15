@@ -22,6 +22,128 @@ use egui::{Event, InputOptions, Modifiers, MouseWheelUnit, TouchPhase, Vec2};
 /// like other desktop apps (egui's default is 40).
 pub const NOTCH_PX: f32 = 56.0;
 
+/// The user's choice for scrolling speed, relative to the platform's normal speed (#6146).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollSpeed {
+    /// Half the normal scroll speed.
+    Slow,
+    /// Normal scroll speed for the platform.
+    #[default]
+    Normal,
+    /// Twice the normal scroll speed.
+    Fast,
+}
+
+impl ScrollSpeed {
+    /// All speed choices in presentation order: Slow, Normal, Fast.
+    pub const ALL: [Self; 3] = [Self::Slow, Self::Normal, Self::Fast];
+
+    /// The command / JSON code for this speed: `"slow"`, `"normal"`, or `"fast"`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Slow => "slow",
+            Self::Normal => "normal",
+            Self::Fast => "fast",
+        }
+    }
+
+    /// Parses a speed from a string code, case-insensitively.
+    pub fn from_code(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "slow" => Some(Self::Slow),
+            "normal" => Some(Self::Normal),
+            "fast" => Some(Self::Fast),
+            _ => None,
+        }
+    }
+
+    /// User-facing label: `"Slow"`, `"Normal"`, or `"Fast"`.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Slow => "Slow",
+            Self::Normal => "Normal",
+            Self::Fast => "Fast",
+        }
+    }
+
+    /// Speed multiplier relative to normal (1.0).
+    pub const fn factor(self) -> f32 {
+        match self {
+            Self::Slow => 0.5,
+            Self::Normal => 1.0,
+            Self::Fast => 2.0,
+        }
+    }
+
+    /// Points the view moves per point of touchpad travel.
+    ///
+    /// On Wayland (Linux/BSD), touchpads emit point deltas without compositor-side kinetic
+    /// scaling or multiplier, which feels 4× slower than under XWayland / X11 (where winit emits
+    /// fractional lines, ~1 line per 10 points, multiplied by line speed).
+    /// On macOS and web browsers, the host platform already accelerates trackpad deltas and handles
+    /// inertia, so Normal speed is 1.0.
+    pub fn touchpad_factor(self) -> f32 {
+        const NORMAL_TOUCHPAD_FACTOR: f32 = if cfg!(any(target_os = "macos", target_arch = "wasm32")) { 1.0 } else { 4.0 };
+        NORMAL_TOUCHPAD_FACTOR * self.factor()
+    }
+
+    /// Scales point scrolling events in the given slice by [`Self::touchpad_factor`].
+    /// On wasm32, browser mouse wheels and touchpads arrive as [`egui::MouseWheelUnit::Point`],
+    /// so the user-selected `wheel_speed` is applied there directly (#6146).
+    /// Ctrl/⌘-wheel zoom is left alone so it zooms at egui's own rate.
+    pub fn apply_events_scroll(self, events: &mut [egui::Event], wheel_speed: ScrollSpeed) {
+        let factor = if cfg!(target_arch = "wasm32") { wheel_speed.factor() } else { self.touchpad_factor() };
+        if (factor - 1.0).abs() < 1e-4 {
+            return;
+        }
+        for event in events {
+            if let egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, modifiers, .. } = event
+                && !modifiers.command
+                && !modifiers.ctrl
+                && delta.is_finite()
+            {
+                *delta *= factor;
+            }
+        }
+    }
+
+    /// Scales this frame's point scrolling by [`Self::touchpad_factor`].
+    /// On wasm32, browser mouse wheels and touchpads arrive as [`egui::MouseWheelUnit::Point`],
+    /// so the user-selected `wheel_speed` is applied there directly (#6146).
+    /// Call this before egui or canvas reads raw input.
+    /// Ctrl/⌘-wheel zoom is left alone so it zooms at egui's own rate.
+    pub fn apply_input_scroll(self, raw: &mut egui::RawInput, wheel_speed: ScrollSpeed) {
+        self.apply_events_scroll(&mut raw.events, wheel_speed);
+    }
+
+    /// Scales this frame's touchpad (point) scrolling by [`Self::touchpad_factor`].
+    /// Call this before egui or canvas reads raw input.
+    /// Ctrl/⌘-wheel zoom is left alone so it zooms at egui's own rate.
+    pub fn apply_touchpad(self, raw: &mut egui::RawInput) {
+        self.apply_input_scroll(raw, ScrollSpeed::Normal);
+    }
+
+    /// Multiplier for mouse-wheel notch distance.
+    pub fn wheel_factor(self) -> f32 {
+        self.factor()
+    }
+}
+
+impl From<String> for ScrollSpeed {
+    /// Parses a [`ScrollSpeed`] from a string, falling back to default.
+    fn from(s: String) -> Self {
+        ScrollSpeed::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<ScrollSpeed> for String {
+    /// Converts a [`ScrollSpeed`] to its string representation.
+    fn from(s: ScrollSpeed) -> Self {
+        s.code().to_string()
+    }
+}
+
 /// Whether to synthesise kinetic scrolling. macOS and Windows send their own momentum events
 /// (or report touchpads as line deltas), and browsers do their own; only Linux/BSD need it.
 const SYNTH_MOMENTUM: bool = !cfg!(any(target_os = "macos", target_os = "ios", target_os = "windows", target_arch = "wasm32"));
@@ -159,6 +281,9 @@ pub struct CanvasScroll {
     /// input time it last grew. Only used with animation effects off.
     zoom_pending: f32,
     zoom_time: f64,
+    /// Ctrl/⌘+Line-wheel zoom is being eased in over several frames by egui; compensation for
+    /// line scroll speed must persist across empty frames until easing completes.
+    line_zoom_smoothing: bool,
 }
 
 impl CanvasScroll {
@@ -268,17 +393,52 @@ impl CanvasScroll {
     /// pinch the system reports as a pinch still follows the fingers.
     pub fn zoom(&mut self, input: &egui::InputState, opts: &InputOptions, animate: bool) -> f32 {
         // Fingers on a touch screen are measured directly, never eased.
-        if animate || input.multi_touch().is_some() {
+        if input.multi_touch().is_some() {
             self.zoom_pending = 0.0;
+            self.line_zoom_smoothing = false;
             return input.zoom_delta();
         }
+        if animate {
+            self.zoom_pending = 0.0;
+            let pinch: f32 = input.events.iter().filter_map(|e| if let Event::Zoom(factor) = e { Some(*factor) } else { None }).product();
+            let pinch = if pinch.is_finite() && pinch > 0.0 { pinch } else { 1.0 };
+
+            for e in &input.events {
+                if let Event::MouseWheel { unit, modifiers, .. } = e
+                    && modifiers.matches_any(opts.zoom_modifier)
+                {
+                    match unit {
+                        MouseWheelUnit::Line => self.line_zoom_smoothing = true,
+                        MouseWheelUnit::Point | MouseWheelUnit::Page => self.line_zoom_smoothing = false,
+                    }
+                }
+            }
+
+            let total_z = input.zoom_delta();
+            let wheel_z = if pinch != 1.0 && total_z.is_finite() && total_z > 0.0 { total_z / pinch } else { total_z };
+
+            let factor = opts.line_scroll_speed / InputOptions::default().line_scroll_speed;
+            if self.line_zoom_smoothing {
+                if (wheel_z - 1.0).abs() <= 1e-6 {
+                    self.line_zoom_smoothing = false;
+                } else if factor > 0.0 && factor.is_finite() && (factor - 1.0).abs() > 1e-4 && wheel_z.is_finite() && wheel_z > 0.0 {
+                    let comp_wheel_z = (wheel_z.ln() / factor).exp();
+                    return (pinch * comp_wheel_z).clamp(0.01, 100.0);
+                }
+            }
+            return (pinch * wheel_z).clamp(0.01, 100.0);
+        }
+        self.line_zoom_smoothing = false;
         let mut zoom = 1.0_f32;
         let mut turned = 0.0_f32;
         for event in &input.events {
             match event {
                 Event::Zoom(factor) => zoom *= factor,
                 Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, .. } if modifiers.matches_any(opts.zoom_modifier) => {
-                    let d = egui_points(*unit, *delta, input, opts);
+                    let d = match unit {
+                        MouseWheelUnit::Line => *delta * InputOptions::default().line_scroll_speed,
+                        _ => egui_points(*unit, *delta, input, opts),
+                    };
                     turned += opts.scroll_zoom_speed * (d.x + d.y);
                 }
                 _ => {}
@@ -583,5 +743,50 @@ mod tests {
         m.release();
         assert!(m.tick(FRAME).length() <= MAX_SPEED * FRAME);
         assert!(notch_px(f32::NAN).is_finite() && notch_px(-1.0) == NOTCH_PX);
+    }
+
+    /// Tests that touchpad point scaling respects the user's setting while leaving zoom and line events intact.
+    #[test]
+    fn touchpad_points_follow_the_touchpad_choice_and_nothing_else_does() {
+        assert_eq!(ScrollSpeed::Slow.factor(), 0.5);
+        assert_eq!(ScrollSpeed::Normal.factor(), 1.0);
+        assert_eq!(ScrollSpeed::Fast.factor(), 2.0);
+        assert_eq!(ScrollSpeed::from_code("slow"), Some(ScrollSpeed::Slow));
+        assert_eq!(ScrollSpeed::from_code("FAST"), Some(ScrollSpeed::Fast));
+        assert_eq!(ScrollSpeed::from_code("invalid"), None);
+
+        let factor = ScrollSpeed::Normal.touchpad_factor();
+        let mut raw = egui::RawInput {
+            events: vec![
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::NONE),
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::COMMAND),
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::CTRL),
+                wheel(MouseWheelUnit::Line, Vec2::new(0.0, -1.0), Modifiers::NONE),
+            ],
+            ..Default::default()
+        };
+        ScrollSpeed::Normal.apply_touchpad(&mut raw);
+        let dy: Vec<f32> = raw.events.iter().filter_map(|e| if let Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).collect();
+        assert_eq!(dy[0], -10.0 * factor);
+        assert_eq!(dy[1], -10.0, "Command+wheel zoom delta untouched");
+        assert_eq!(dy[2], -10.0, "Ctrl+wheel zoom delta untouched");
+        assert_eq!(dy[3], -1.0, "Line wheel delta untouched");
+    }
+
+    /// Tests that `apply_input_scroll` scales point deltas by the expected factor and leaves Ctrl zoom alone.
+    #[test]
+    fn apply_input_scroll_scales_points_and_leaves_zoom_alone() {
+        let mut raw = egui::RawInput {
+            events: vec![
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::NONE),
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::CTRL),
+            ],
+            ..Default::default()
+        };
+        ScrollSpeed::Fast.apply_input_scroll(&mut raw, ScrollSpeed::Fast);
+        let dy: Vec<f32> = raw.events.iter().filter_map(|e| if let Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).collect();
+        let expected = if cfg!(target_arch = "wasm32") { -10.0 * ScrollSpeed::Fast.factor() } else { -10.0 * ScrollSpeed::Fast.touchpad_factor() };
+        assert_eq!(dy[0], expected);
+        assert_eq!(dy[1], -10.0, "Ctrl zoom untouched");
     }
 }
