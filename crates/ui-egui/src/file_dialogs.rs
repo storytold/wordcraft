@@ -310,7 +310,10 @@ impl WordApp {
                         path.push_str(".xml");
                         // The dialog only confirmed the name it was given, not this one.
                         if std::path::Path::new(&path).exists() {
-                            return Err(format!("{path} already exists; choose another name"));
+                            // Callers drop the result, so say it where the person sees it.
+                            let msg = format!("{path} already exists; choose another name");
+                            self.status(msg.clone());
+                            return Err(msg);
                         }
                     }
                     // Word XML even over a Word 2003 XML file, which a save by path would keep.

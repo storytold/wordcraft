@@ -878,6 +878,8 @@ mod tests {
         // The appended name already exists: the system dialog never confirmed it, so refuse.
         let bare = dir.join("letter").to_string_lossy().into_owned();
         assert!(a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).is_err());
+        let said = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+        assert!(said.contains("letter.xml already exists"), "the refusal is on the status bar: {said:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
