@@ -54,6 +54,7 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     {
         f.off = 0;
     }
+    f.off = para.before_invisible_markers(f.off);
     if f.off > 0 {
         let a = Pos { off: para.backspace_from(f.off), ..f.clone() };
         if let Some(c) = s.autocap.as_mut() {
@@ -157,6 +158,7 @@ fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
     }
     let f = s.sel.focus.clone();
     let Some(para) = s.doc.para_at(&f) else { return sel_result(s) };
+    let f = Pos { off: para.after_invisible_markers(f.off), ..f };
     if f.off < para.len() {
         let b = Pos { off: para.next_boundary(f.off), ..f.clone() };
         s.sel = Selection { anchor: f, focus: b };
@@ -206,18 +208,48 @@ fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// A word command can cross a range marker inside the word or before trailing spaces.
+/// Delete the visible pieces last first, keeping markers without changing range deletion.
+fn delete_word_selection(s: &mut Session) -> Result<(), crate::CmdError> {
+    let (a, b) = s.sel.ordered();
+    if s.doc.para_at(&a).is_none_or(|p| !p.objects.iter().any(wordcraft_doc::InlineObject::is_invisible_marker)) {
+        return delete_selection(s).map(|_| ());
+    }
+    let markers: Vec<_> = s
+        .doc
+        .para_at(&a)
+        .into_iter()
+        .flat_map(|p| {
+            p.objects_with_offsets().filter(|(off, object)| *off >= a.off && *off < b.off && object.is_invisible_marker()).map(|(off, _)| off)
+        })
+        .collect();
+    let mut end = b.off;
+    for offset in markers.into_iter().rev() {
+        let start = offset + OBJ.len_utf8();
+        if start < end {
+            s.sel = Selection { anchor: Pos { off: start, ..a.clone() }, focus: Pos { off: end, ..a.clone() } };
+            delete_selection(s)?;
+        }
+        end = offset;
+    }
+    s.sel = Selection { anchor: a.clone(), focus: Pos { off: end, ..a } };
+    delete_selection(s)?;
+    Ok(())
+}
+
 pub(super) fn delete_word_back(s: &mut Session, v: &Value) -> CmdResult {
     if !s.sel.is_collapsed() {
         return backspace(s, v);
     }
     let f = s.sel.focus.clone();
     let Some(para) = s.doc.para_at(&f) else { return sel_result(s) };
+    let f = Pos { off: para.before_invisible_markers(f.off), ..f };
     if f.off == 0 {
         return backspace(s, v);
     }
     let a = Pos { off: para.word_start(f.off), ..f.clone() };
     s.sel = Selection { anchor: a, focus: f };
-    delete_selection(s)?;
+    delete_word_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;
     sel_result(s)
 }
@@ -228,12 +260,23 @@ pub(super) fn delete_word_fwd(s: &mut Session, v: &Value) -> CmdResult {
     }
     let f = s.sel.focus.clone();
     let Some(para) = s.doc.para_at(&f) else { return sel_result(s) };
+    let f = Pos { off: para.after_invisible_markers(f.off), ..f };
     if f.off >= para.len() {
         return delete(s, v);
     }
-    let b = Pos { off: para.word_end(f.off), ..f.clone() };
+    let mut end = para.word_end(f.off);
+    // Word deletion still consumes trailing spaces across markers, keeping every marker.
+    // Selection movement stops before those markers until range deletion has a pair rule.
+    loop {
+        let after = para.after_invisible_markers(end);
+        match para.text.get(after..).and_then(|text| text.chars().next()) {
+            Some(c) if c == ' ' || c == '\u{a0}' => end = after + c.len_utf8(),
+            _ => break,
+        }
+    }
+    let b = Pos { off: end, ..f.clone() };
     s.sel = Selection { anchor: f, focus: b };
-    delete_selection(s)?;
+    delete_word_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;
     sel_result(s)
 }

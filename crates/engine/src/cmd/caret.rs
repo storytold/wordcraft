@@ -154,7 +154,7 @@ fn visual_lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
 
 fn left(s: &mut Session, p: &Pos) -> Pos {
     if let Some(para) = s.doc.para_at(p)
-        && p.off > 0
+        && para.before_invisible_markers(p.off) > 0
     {
         return Pos { off: para.prev_boundary(p.off), ..p.clone() };
     }
@@ -169,7 +169,7 @@ fn left(s: &mut Session, p: &Pos) -> Pos {
 
 fn right(s: &mut Session, p: &Pos) -> Pos {
     if let Some(para) = s.doc.para_at(p)
-        && p.off < para.len()
+        && para.after_invisible_markers(p.off) < para.len()
     {
         return Pos { off: para.next_boundary(p.off), ..p.clone() };
     }
@@ -181,14 +181,14 @@ fn right(s: &mut Session, p: &Pos) -> Pos {
 
 fn word_left(s: &mut Session, p: &Pos) -> Pos {
     match s.doc.para_at(p) {
-        Some(para) if p.off > 0 => Pos { off: para.word_start(p.off), ..p.clone() },
+        Some(para) if para.before_invisible_markers(p.off) > 0 => Pos { off: para.word_start(p.off), ..p.clone() },
         _ => left(s, p),
     }
 }
 
 fn word_right(s: &mut Session, p: &Pos) -> Pos {
     match s.doc.para_at(p) {
-        Some(para) if p.off < para.len() => Pos { off: para.word_end(p.off), ..p.clone() },
+        Some(para) if para.after_invisible_markers(p.off) < para.len() => Pos { off: para.word_end(p.off), ..p.clone() },
         _ => right(s, p),
     }
 }

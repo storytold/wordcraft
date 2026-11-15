@@ -352,6 +352,19 @@ impl InlineObject {
             _ => None,
         }
     }
+    /// Bookmark, comment and permission markers take no caret stop.
+    pub fn is_invisible_marker(&self) -> bool {
+        matches!(
+            self,
+            Self::BookmarkStart { .. }
+                | Self::BookmarkEnd { .. }
+                | Self::CommentStart { .. }
+                | Self::CommentEnd { .. }
+                | Self::PermStart { .. }
+                | Self::PermEnd { .. }
+        )
+    }
+
     /// Zero-width markers don't take part in layout.
     pub fn is_marker(&self) -> bool {
         matches!(
