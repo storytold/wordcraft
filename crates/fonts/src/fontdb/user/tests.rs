@@ -455,3 +455,50 @@ fn fonts_stored_at_once_under_one_name_each_get_their_own_file() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A WOFF2 collection of `tables` untransformed tables whose fonts list the tables in `fonts`.
+fn woff2_collection(tables: usize, fonts: &[Vec<u16>]) -> Vec<u8> {
+    fn u255(v: u16, out: &mut Vec<u8>) {
+        match v {
+            0..=252 => out.push(v as u8),
+            _ => {
+                out.push(253);
+                out.extend_from_slice(&v.to_be_bytes());
+            }
+        }
+    }
+    let mut dir = Vec::new();
+    for i in 0..tables {
+        dir.push(63);
+        dir.extend_from_slice(&(i as u32).to_be_bytes()); // a made-up tag per table
+        base128(4, &mut dir);
+    }
+    dir.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+    u255(fonts.len() as u16, &mut dir);
+    for font in fonts {
+        u255(font.len() as u16, &mut dir);
+        dir.extend_from_slice(&[0, 1, 0, 0]);
+        for &i in font {
+            u255(i, &mut dir);
+        }
+    }
+    woff2_file(b"ttcf", tables, &dir, &vec![0; 4 * tables], 4 * tables + 1024)
+}
+
+#[test]
+fn a_woff2_collection_rebuilding_huge_directories_is_refused_before_decoding() {
+    // Each font's rebuilt directory takes 16 bytes per table it lists, the file about two: 600
+    // fonts listing 2,000 tables each come to 19 MB of directories from a 2.4 MB file.
+    let all: Vec<u16> = (0..2_000).collect();
+    let file = woff2_collection(2_000, &vec![all; 600]);
+    assert_eq!(decode_font_file(&file), Err(UserFontError::BadWebFont(BAD_COLLECTION.into())));
+}
+
+#[test]
+fn a_woff2_collection_font_listing_a_table_twice_is_refused() {
+    let file = woff2_collection(3, &[vec![0, 1, 2], vec![0, 1, 1]]);
+    assert_eq!(decode_font_file(&file), Err(UserFontError::BadWebFont(BAD_COLLECTION.into())));
+    // Fonts sharing tables are what collections are for: passed on to the decoder.
+    let file = woff2_collection(3, &[vec![0, 1, 2], vec![0, 1, 2]]);
+    assert_ne!(decode_font_file(&file), Err(UserFontError::BadWebFont(BAD_COLLECTION.into())));
+}
