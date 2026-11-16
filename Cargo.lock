@@ -1248,7 +1248,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa
 dependencies = [
  "brotli-decompressor 6.3.1",
  "chrono",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa1c659f271d8605303c)",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -1396,6 +1396,15 @@ source = "git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa
 name = "craft-tiff"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa1c659f271d8605303c#41fb227542efb8a7748caa1c659f271d8605303c"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-tiff"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=6ef2c053dfa758a9e292ff6ce4398bcd84aab1a1#6ef2c053dfa758a9e292ff6ce4398bcd84aab1a1"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -7331,6 +7340,7 @@ dependencies = [
  "chrono",
  "craft-font-catalog",
  "craft-font-store",
+ "craft-mime",
  "craft-proof",
  "craft-zip",
  "encoding_rs",
@@ -7406,6 +7416,7 @@ name = "wordcraft-geom"
 version = "0.18.1"
 dependencies = [
  "craft-image-codecs",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=6ef2c053dfa758a9e292ff6ce4398bcd84aab1a1)",
  "image",
  "serde",
 ]
