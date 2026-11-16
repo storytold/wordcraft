@@ -530,6 +530,24 @@ fn a_deletion_of_your_own_insertion_is_not_listed() {
 }
 
 #[test]
+fn a_deletion_of_your_own_insertion_under_another_revision_is_not_listed() {
+    // As a file can hold it: Alice's insertion (revision 0) and, inside it, her own later
+    // deletion under a separate revision (1).
+    let mut doc = wordcraft_doc::Document::new();
+    for (kind, date) in [(wordcraft_doc::RevisionKind::Insert, "2026-11-01T10:00:00Z"), (wordcraft_doc::RevisionKind::Delete, "2026-11-02T10:00:00Z")]
+    {
+        doc.revisions.push(wordcraft_doc::Revision { kind, author: "Alice".into(), date: date.into(), move_name: None });
+    }
+    let mut p = wordcraft_doc::Paragraph::with_text("Hello world", wordcraft_doc::CharProps { ins: Some(0), ..Default::default() });
+    p.format(5, 11, &|c| c.del = Some(1)).expect("format");
+    doc.body = vec![wordcraft_doc::para_block(p)];
+    let mut s = Session::new(doc);
+    let list = change_list(&mut s);
+    assert!(!list.iter().any(|(kind, ..)| kind == "delete"), "Alice's own deletion isn't listed apart: {list:?}");
+    assert!(list.iter().any(|(kind, who, _)| kind == "insert" && who == "Alice"), "her insertion is listed: {list:?}");
+}
+
+#[test]
 fn a_deletion_inside_another_authors_move_destination_is_listed_as_its_own_change() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     run(&mut s, "document.setText", json!({"text": "First one.\nSecond one.\nThird one."}));

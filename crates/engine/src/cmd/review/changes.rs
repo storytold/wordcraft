@@ -186,14 +186,19 @@ fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Opti
     Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new(), style: None })
 }
 
-/// A deletion inside another revision's insertion (or move destination): a change of its own, by
+/// A deletion inside another author's insertion (or move destination): a change of its own, by
 /// its own author, over the same text (Word's Reviewing Pane lists both). Its revision and kind:
 /// `delete`, or `moveFrom` when that text was moved away. It is listed right after the change it
-/// sits in.
+/// sits in. Authors are compared, not revisions: a file can hold an author's deletion of their own
+/// insertion under two revisions, and that stays one change, as in Word.
 fn nested_deletion(doc: &wordcraft_doc::Document, ins: Option<u32>, del: Option<u32>) -> Option<(u32, &'static str)> {
-    let rev = del?;
+    let (ins, rev) = (ins?, del?);
+    let author = |r: u32| doc.revisions.get(r as usize).map(|r| r.author.as_str());
+    if ins == rev || author(ins) == author(rev) {
+        return None;
+    }
     let kind = if doc.move_name(del).is_some() { "moveFrom" } else { "delete" };
-    (ins.is_some() && del != ins).then_some((rev, kind))
+    Some((rev, kind))
 }
 
 /// The kind of an insertion / deletion change: `insert`, `delete`, or for one end of a move
