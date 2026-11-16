@@ -119,11 +119,12 @@ fn fade(app: &mut WordApp, bar: Rect, pointer: Option<egui::Pos2>) -> f32 {
     };
     let sel = &app.session.sel;
     let d = bar.distance_to_pos(p);
+    // A bar that moved (the document scrolled) measures afresh, so only the pointer fades it.
     let closest = match &app.canvas.mini_closest {
-        Some((s, c)) if s == sel => c.min(d),
+        Some((s, at, c)) if s == sel && *at == bar => c.min(d),
         _ => d,
     };
-    app.canvas.mini_closest = Some((sel.clone(), closest));
+    app.canvas.mini_closest = Some((sel.clone(), bar, closest));
     let opacity = (1.0 - (d - closest - FADE_FROM) / (FADE_TO - FADE_FROM)).clamp(0.0, 1.0);
     if opacity == 0.0 {
         app.canvas.mini_dismissed = Some(sel.clone());
@@ -183,7 +184,8 @@ pub fn track_dismissal(app: &mut WordApp, ctx: &egui::Context, viewport: Rect) {
     }
     app.canvas.mini_dismissed = if viewport.contains(p) {
         // A press in the document starts a new selection, which gets the bar again even when it
-        // covers the same text.
+        // covers the same text, measured afresh.
+        app.canvas.mini_closest = None;
         None
     } else {
         Some(app.session.sel.clone())

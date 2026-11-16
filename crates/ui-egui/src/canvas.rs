@@ -205,9 +205,10 @@ pub struct CanvasState {
     /// The selection the mini toolbar was put away for by a click outside the document (the
     /// ribbon, a pane, the status bar); it comes back when the selection changes.
     pub mini_dismissed: Option<wordcraft_engine::Selection>,
-    /// The selection the mini toolbar is up for, and the pointer's closest distance to the bar
-    /// since: the bar fades as the pointer moves away from there (`mini_toolbar::fade`).
-    pub mini_closest: Option<(wordcraft_engine::Selection, f32)>,
+    /// The selection the mini toolbar is up for, where the bar is, and the pointer's closest
+    /// distance to it since: the bar fades as the pointer moves away from there
+    /// (`mini_toolbar::fade`).
+    pub mini_closest: Option<(wordcraft_engine::Selection, Rect, f32)>,
     /// A picture, shape or text box being dragged by its frame.
     pub(crate) obj_drag: Option<crate::objects::ObjectDrag>,
     /// Crop mode (Picture Format › Crop) is on for the picture here (`crop`).

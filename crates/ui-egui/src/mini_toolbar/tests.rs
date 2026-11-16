@@ -942,3 +942,17 @@ fn the_bar_fades_as_the_pointer_moves_away_and_goes_for_this_selection() {
     steps(&mut h);
     assert!(bar_layer(&h).is_some(), "a new selection shows the bar");
 }
+
+/// The bar moving under a still pointer (the document scrolled) doesn't fade it: only the pointer
+/// moving away does.
+#[test]
+fn a_bar_that_scrolls_away_from_the_pointer_measures_afresh() {
+    let mut h = bar_over("quick");
+    let app = h.state_mut();
+    let bar = Rect::from_min_size(egui::pos2(100.0, 100.0), Vec2::new(200.0, 30.0));
+    let p = bar.center_bottom() + Vec2::new(0.0, 10.0);
+    assert_eq!(fade(app, bar, Some(p)), 1.0);
+    let scrolled = bar.translate(Vec2::new(0.0, -300.0));
+    assert_eq!(fade(app, scrolled, Some(p)), 1.0, "the bar moved, not the pointer");
+    assert!(fade(app, scrolled, Some(p + Vec2::new(0.0, 300.0))) < 1.0, "moving away still fades it");
+}
