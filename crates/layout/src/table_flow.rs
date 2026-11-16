@@ -233,8 +233,21 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     let short_of_min = |ri: usize, room: f32| {
         t.rows.get(ri).is_some_and(|r| r.props.height_rule == HeightRule::AtLeast && r.props.height.is_some_and(|h| h > room + 0.01))
     };
+    // Whether row `ri`, kept with the rows after it (keep with next), moves on with them from a
+    // page with `room` left at its top: the row the kept rows end on can't start below them there,
+    // while all of them would fit on a page of `page_height` (under the repeated header rows).
+    let kept_moves_on = |doc: &wordcraft_doc::Document, ri: usize, room: f32, page_height: f32| {
+        kept.get(ri).is_some_and(|&(end, height)| {
+            if end == ri {
+                return false;
+            }
+            let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
+            height <= page_height + 0.01 && !row_can_start(doc, next, laid, room - height, page_height)
+        })
+    };
     // Like Word, repeated header rows don't stay alone at the bottom of a page: when the first row
-    // after them can't start under them there, the table starts on the next page.
+    // after them can't start under them there, or starts there but moves on with the rows it is
+    // kept with (#6870), the table starts on the next page.
     let first = header_rows.len();
     if !header_rows.is_empty()
         && !pb.at_top()
@@ -242,7 +255,12 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     {
         let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
-        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && split_keeping_nested(ctx.doc, row, room).is_some())) {
+        let alone = if row.height + row.edge > room + 0.01 {
+            short_of_min(first, room) || !(splittable && split_keeping_nested(ctx.doc, row, room).is_some())
+        } else {
+            !pb.web && kept_moves_on(ctx.doc, first, room, pb.bottom - body_top - repeated_height)
+        };
+        if alone {
             pb.advance(block, body_top);
         }
     }
@@ -271,14 +289,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 && !fresh
                 && rest.is_none()
                 && ri.checked_sub(1).and_then(|prev| kept.get(prev)).is_none_or(|&(end, _)| end < ri)
-                && kept.get(ri).is_some_and(|&(end, height)| {
-                    if end == ri {
-                        return false;
-                    }
-                    let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
-                    let page_height = pb.bottom - body_top - repeated_height;
-                    height <= page_height + 0.01 && !row_can_start(ctx.doc, next, laid, pb.bottom - pb.y - height, page_height)
-                });
+                && kept_moves_on(ctx.doc, ri, pb.bottom - pb.y, pb.bottom - body_top - repeated_height);
             // A row another row follows needs room for the border below it too (measured in Word).
             if pb.y + cur.height + cur.edge <= pb.bottom + 0.01 && !defer_kept {
                 break;
