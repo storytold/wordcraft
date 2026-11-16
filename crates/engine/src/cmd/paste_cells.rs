@@ -118,8 +118,8 @@ fn plan(dest: &Table, src: &Table, src_cols: usize, row0: usize, col0: usize) ->
     if dest.rows.len().max(row0.saturating_add(src_rows)) > MAX_ROWS || dest_cols.max(col0.saturating_add(src_cols)) > MAX_COLS {
         return None;
     }
-    // The cells that get overwritten must not hold controls.
-    let hit = |r: usize| dest.rows.get(r).is_some_and(|row| row.cells.iter().skip(col0).take(src_cols).any(has_control));
+    // The cells that get overwritten must not hold controls, nor sit in a row-level control.
+    let hit = |r: usize| dest.rows.get(r).is_some_and(|row| !row.controls.is_empty() || row.cells.iter().skip(col0).take(src_cols).any(has_control));
     (!(row0..row0.saturating_add(src_rows).min(dest.rows.len())).any(hit)).then_some(Plan::Overwrite)
 }
 

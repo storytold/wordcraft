@@ -394,3 +394,22 @@ fn a_locked_control_in_a_text_box_of_an_overwritten_cell_is_kept() {
     assert!(kept(t0(&s)), "the cell anchoring the text box survives");
     assert!(nested(t0(&s)), "the table nests in the cell instead");
 }
+
+/// A row-level content control on a row the copy would overwrite is not bypassed: the paste nests
+/// instead (#6739 review).
+#[test]
+fn a_row_level_control_on_an_overwritten_row_declines_the_overwrite() {
+    use wordcraft_doc::{ContentControl, ControlKind, ControlLock};
+    let mut s = dest(0, 0);
+    let mut ctl = ContentControl::new(ControlKind::RichText);
+    ctl.lock = ControlLock::SdtContentLocked;
+    if let Some(Block::Table(t)) = s.doc.body.get_mut(0).map(Arc::make_mut) {
+        t.rows[1].controls.open.push(ctl);
+        t.rows[1].controls.close = 1;
+    }
+    let before = grid(t0(&s));
+    copy(&mut s, table("s", 2, 1));
+    paste(&mut s);
+    assert_eq!(grid(t0(&s))[1], before[1], "the row under the control is not overwritten");
+    assert!(nested(t0(&s)), "the table nests in the cell instead");
+}
