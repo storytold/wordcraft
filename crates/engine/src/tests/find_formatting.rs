@@ -259,6 +259,7 @@ fn formatting_changes_under_track_changes_replace_no_text() {
     run(&mut s, "review.trackChanges", json!({"value": true}));
     run(&mut s, "edit.replaceAll", json!({"text": "", "format": {"italic": true}, "withFormat": {"italic": false}}));
     assert_eq!(text(&s), before);
+    assert!(!s.doc.revisions.is_empty(), "the formatting change is tracked");
     assert!(s.doc.revisions.iter().all(|r| r.kind == wordcraft_doc::RevisionKind::Format), "only formatting changes are tracked");
     assert_eq!(find_format(&mut s, "", json!({"italic": true})), Vec::<String>::new());
     // Replacing text tracks the replacement as usual, and the new text is formatted.
