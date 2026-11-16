@@ -164,26 +164,13 @@ fn columns(c: &Case) -> (Vec<usize>, Option<usize>, usize) {
     let l = lay(&d);
     let carets: Vec<_> = starts.iter().map(|&o| l.caret(&Pos::body(first, o)).unwrap()).collect();
     let q_caret = q.map(|qi| l.caret(&Pos::body(qi, 0)).unwrap());
-    // The columns' left edges: where the lines on the first page start when that page fills all
-    // the columns, else the left edges of the caret positions seen. A line beside a float starts
-    // right of its column's edge, so a position is in the last edge at or left of it.
-    let mut xs: Vec<f32> = Vec::new();
-    for it in l.pages.first().map_or(&[][..], |p| &p.items[..]) {
-        if let Placed::Lines { story: StoryRef::Body, x, .. } = it
-            && !xs.iter().any(|e| (e - x).abs() < 1.0)
-        {
-            xs.push(*x);
-        }
-    }
-    if xs.len() != c.cols as usize {
-        xs = vec![l.caret(&Pos::body(0, 0)).unwrap().x];
-        for x in carets.iter().map(|c| c.x).chain(q_caret.iter().map(|c| c.x)) {
-            if !xs.iter().any(|e| (e - x).abs() < 1.0) {
-                xs.push(x);
-            }
-        }
-    }
-    xs.sort_by(f32::total_cmp);
+    // The columns' left edges, from the section's declared geometry so that an empty column keeps
+    // its place. A line beside a float starts right of its column's edge, so a position is in the
+    // last edge at or left of it.
+    let sp = SectionProps::default();
+    let n = c.cols.max(1);
+    let width = (sp.page_w - sp.margin_left - sp.margin_right - sp.gutter - sp.columns.space * (n - 1) as f32) / n as f32;
+    let xs: Vec<f32> = (0..n).map(|i| sp.margin_left + i as f32 * (width + sp.columns.space)).collect();
     let col = |x: f32| xs.iter().rposition(|e| *e <= x + 1.0).unwrap_or(usize::MAX);
     (carets.iter().map(|c| col(c.x)).collect(), q_caret.map(|c| col(c.x)), l.pages.len())
 }
