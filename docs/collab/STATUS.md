@@ -1,21 +1,31 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-16 (this page's branch-side measurement is §5.48, the merge of
-  `origin/main` `cc90520b`; the PR facts were read at 2026-11-16T00:35Z with
-  `gh pr view 5834 --json headRefOid,mergeStateStatus,updatedAt`:
-  `headRefOid: 9c6e343ae17ea09c69ac12d72f8bea748c51982b`,
-  `mergeStateStatus: DIRTY`, `mergeable: CONFLICTING`, `updatedAt`
-  2026-11-14T15:12:50Z — the head did not move, `origin/main` did)
+- Date: 2026-11-16 (this page's branch-side measurement is §5.49, the delivery
+  of the merge of `origin/main` `cc90520b`; the PR facts were read at
+  2026-11-16T03:47Z with `gh pr view 5834 --json
+  headRefOid,mergeStateStatus,mergeable,baseRefOid,updatedAt`:
+  `headRefOid: e6f34e8cb0ea22c7ab2727d5771bf26cf5fce9bc`,
+  `mergeStateStatus: BLOCKED`, `mergeable: MERGEABLE`, `baseRefOid`
+  `cc90520b9d8fb0d1e6be2c2688e6f915319e850a`, `updatedAt`
+  2026-11-16T01:14:52Z, and `git ls-remote fork
+  refs/heads/feature/realtime-collaboration` answered the same commit. The
+  2026-11-16T00:35Z reading — `headRefOid: 9c6e343a`, `DIRTY`/`CONFLICTING`,
+  `updatedAt` 2026-11-14T15:12:50Z — was true before that push: the head had
+  not moved and `origin/main` had, so the merge was still local (§5.48))
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft), title "Real-time collaboration:
   authoritative sync server, document adapter, client core"
-- Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4) and
-  the PR's `baseRefOid` is still that commit. Upstream `main` has moved on to
-  `cc90520b` — 56 commits past `b5fa2f9e`, the last upstream commit this branch
-  had merged — and the branch merges it in `61565ab3` (§5.48). That merge is
-  local until the owner pushes, so PR #5834 still answers `CONFLICTING` on the
-  unmoved head `9c6e343a`.
+- Base: upstream `main` `4b0d3995` when the branch was rebased onto it (§5.4);
+  the PR answers `baseRefOid` `cc90520b` since the delivery of §5.49. Upstream
+  `main` had moved on to `cc90520b` — 56 commits past `b5fa2f9e`, the last
+  upstream commit this branch had merged — and the branch merged it in
+  `61565ab3` (§5.48), which went up as `e6f34e8c`, one documentation commit
+  above the merge. Measured at 2026-11-16T03:47Z, the fork branch, the PR's
+  `headRefOid` and the local `HEAD` all answer `e6f34e8c` with a clean tree.
+  (The 2026-11-16T00:35Z statement that the merge was "local until the owner
+  pushes" and that the PR "still answers `CONFLICTING` on the unmoved head
+  `9c6e343a`" was true at that reading, before the 01:14:52Z push.)
 - **The head is read, not memorised.** This page does not crown a commit as
   "the delivered head": every commit — including a documentation sync of this
   very page — moves the tip, so a hash written into the header is one
@@ -106,17 +116,23 @@
   §5.35, §5.36, §5.38, §5.39, §5.40, §5.43, §5.44, §5.46, §5.47).
 - The PR was `MERGEABLE` and `BLOCKED` at the 2026-11-13T14:17Z measurement,
   with an empty `reviewDecision`: the branch merged cleanly then, and `BLOCKED`
-  was the required review plus the unapproved workflows. At 2026-11-16T00:35Z,
-  with the head unmoved, it answers `mergeable: CONFLICTING` and
-  `mergeStateStatus: DIRTY`: upstream `main` moved to `cc90520b` and the merge
-  that resolves it (`61565ab3`, §5.48) is local until the owner pushes. Its
-  rollup on `9c6e343a` holds one check, CodeRabbit's
-  `skipped` (`gh pr view 5834 --json statusCheckRollup`,
-  2026-11-13T14:17Z) — an `action_required` run adds nothing to the rollup, and
-  the five runs on that head (`9c6e343ae17ea09c69ac12d72f8bea748c51982b`) were
-  created at 13:19:59Z and none executed: each is `completed` with
-  `action_required` and no job started (§5.47). The fork git source is gone from
-  the manifest and the lock
+  was the required review plus the unapproved workflows. Measured at
+  2026-11-16T03:47Z it answers the same pair, `mergeable: MERGEABLE` and
+  `mergeStateStatus: BLOCKED`, on the delivered head
+  `e6f34e8cb0ea22c7ab2727d5771bf26cf5fce9bc`, with `baseRefOid` `cc90520b` and
+  `updatedAt` 2026-11-16T01:14:52Z: `BLOCKED` is the required review, and the
+  workflows on this head were created but not executed. (The 2026-11-16T00:35Z
+  reading was `mergeable: CONFLICTING` and `mergeStateStatus: DIRTY` on the
+  then-unmoved head `9c6e343a` — upstream `main` had moved to `cc90520b` and the
+  merge resolving it was still local, §5.48; the push at 01:14:52Z made it
+  moot.) Its rollup on `e6f34e8c` holds one check, CodeRabbit's `skipped` at
+  2026-11-16T01:14:54Z (`gh pr view 5834 --json statusCheckRollup`,
+  2026-11-16T03:47Z) — an `action_required` run adds nothing to the rollup, and
+  the five runs on that head were created at 2026-11-16T01:14:43–44Z and none
+  executed: each is `completed` with `action_required` and no job started
+  (`CI` `43785106954`, `Packaging lint` `43785106844`, `Nix` `43785106813`,
+  `SonarCloud` `43785106816`, `Printing` `43785106722`, §5.49). The fork git
+  source is gone from the manifest and the lock
   (§5.24), and the three `printing.yml` steps are green on the pushed tree at
   the build host (§5.25).
 - CI has still not executed on any pushed head. On the head of §5.47,
@@ -467,7 +483,7 @@ missing, and where the next session should start.
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered, and this pass did not move it — it merged `origin/main` `cc90520b` locally (§5.48) and pushed nothing | PR #5834; its head is read from the PR, not crowned here: the 2026-11-13T14:16Z measurement answered `9c6e343a` (the lock fix of §5.47, one commit above `29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46), with the fork branch and the PR's `headRefOid` agreeing, the local `HEAD` one documentation commit above it and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check at that measurement (`DIRTY`/`CONFLICTING` at 2026-11-16T00:35Z on the same head, because `origin/main` moved to `cc90520b`; §5.48 merges it locally): the five runs on `9c6e343ae17ea09c69ac12d72f8bea748c51982b` were created at 2026-11-13T13:19:59Z and all are `completed`/`action_required` with no job started (`CI` 43432753402, `Nix` 43432753705, `SonarCloud` 43432753423, `Printing` 43432753363, `Packaging lint` 43432753414), so the rollup holds only CodeRabbit's `skipped`, as on the previous head `29afb475`, whose five runs were created at 2026-11-13T10:15:10Z as `action_required` (`Printing` 43407760756, `SonarCloud` 43407761150, `CI` 43407760935, `Packaging lint` 43407761099, `Nix` 43407761233), and as on `ce0bb001` (§5.2, §5.45, §5.46); the gate on the current head ran on the build host (§5.47), and the merge of `cc90520b` on `61565ab3` was gated the same way (§5.48); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); above the measured head the branch now carries the merge `61565ab3` of `cc90520b` and its documentation commits, all local — `9c6e343a` went up in the 13:18Z push made by the cabinet's PR sweep; the branch's only CI change is the declared `git-sources` job (§5.24) |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered — the merge of `origin/main` `cc90520b` went up as `e6f34e8c` at 2026-11-16T01:14:52Z (§5.49), and the fork branch, the PR's `headRefOid` and the local `HEAD` all answer it | PR #5834; its head is read from the PR, not crowned here: the 2026-11-13T14:16Z measurement answered `9c6e343a` (the lock fix of §5.47, one commit above `29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46), with the fork branch and the PR's `headRefOid` agreeing, the local `HEAD` one documentation commit above it and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check at that measurement (`DIRTY`/`CONFLICTING` at 2026-11-16T00:35Z on the then-unmoved `9c6e343a`, because `origin/main` moved to `cc90520b` and the merge of it was still local; `MERGEABLE`/`BLOCKED` again at 2026-11-16T03:47Z on the delivered head `e6f34e8c`, §5.49): the five runs on `9c6e343ae17ea09c69ac12d72f8bea748c51982b` were created at 2026-11-13T13:19:59Z and all are `completed`/`action_required` with no job started (`CI` 43432753402, `Nix` 43432753705, `SonarCloud` 43432753423, `Printing` 43432753363, `Packaging lint` 43432753414), so the rollup holds only CodeRabbit's `skipped`, as on the previous head `29afb475`, whose five runs were created at 2026-11-13T10:15:10Z as `action_required` (`Printing` 43407760756, `SonarCloud` 43407761150, `CI` 43407760935, `Packaging lint` 43407761099, `Nix` 43407761233), and as on `ce0bb001` (§5.2, §5.45, §5.46); the gate on the current head ran on the build host (§5.47), and the merge of `cc90520b` on `61565ab3` was gated the same way (§5.48); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); above the measured head the branch now carries the merge `61565ab3` of `cc90520b` and its documentation commits, delivered as `e6f34e8c` in the 2026-11-16T01:14:52Z push — `9c6e343a` went up in the 13:18Z push made by the cabinet's PR sweep; the branch's only CI change is the declared `git-sources` job (§5.24) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -489,6 +505,18 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 ```
 
 Results at this writing:
+
+- §5.49, the delivered head `e6f34e8c` (one documentation commit above
+  `61565ab3`): on the build host `agents`, `cargo metadata --locked` rc 0 with
+  the lock's sha256 unchanged and a clean tree before, after it and after the
+  whole gate; `cargo fmt --all -- --check` rc 0; `cargo clippy --workspace
+  --all-targets -D warnings` rc 0; `cargo xtask layers` rc 0 (26 crates);
+  `cargo test --workspace --lib --bins --tests --no-fail-fast` over 67 targets —
+  5388 passed, 2 failed (the upstream `fit_one_page` pair), 9 ignored;
+  `cargo test --workspace --doc` rc 0 (22 targets); i18n-report, language,
+  assets (48 files) and wasm (21 crates) rc 0. The `cargo xtask ci` aggregate
+  stops at `test` on those two tests. Details and the rollup on the head: §5.49;
+  log `gate-wordcraft-5834-e6f34e8c.log`.
 
 - §5.48, the merge head `61565ab3` (upstream `main` `cc90520b` merged in, both
   conflicts resolved): on the build host `agents`, `cargo metadata --locked`
@@ -4730,9 +4758,65 @@ the two red tests are main's font-metric dependence, reproduced on clean
 origin/main...HEAD` answers `0 120`, and `git merge-tree --write-tree
 origin/main HEAD` exits 0 (tree `c22c06c6`). The documentation commit that
 carries this section sits one above `61565ab3`, so `0 121` is the same branch.
-Nothing was pushed: the fork branch and the PR still answer `9c6e343a` until the
-owner pushes, which also means the five `action_required` runs of §5.47 still
-wait for a maintainer's approval on that head.
+At this measurement (2026-11-16T00:35Z) nothing had been pushed: the fork
+branch and the PR still answered `9c6e343a`, and the five `action_required`
+runs of §5.47 waited for a maintainer's approval on that head. That held only
+until 2026-11-16T01:14:52Z, when the merge went up as `e6f34e8c`: the delivered
+head, its runs and the gate taken on it are §5.49.
+
+### 5.49 The merge was delivered as `e6f34e8c`, and the host gate on it repeats §5.48 (run 2026-11-16)
+
+**Delivery.** At 2026-11-16T01:14:52Z the merge of §5.48 went up. Measured at
+2026-11-16T03:47Z, `gh pr view 5834 --json
+headRefOid,mergeStateStatus,mergeable,baseRefOid,updatedAt` answers
+`headRefOid: e6f34e8cb0ea22c7ab2727d5771bf26cf5fce9bc`, `mergeable: MERGEABLE`,
+`mergeStateStatus: BLOCKED`, `baseRefOid`
+`cc90520b9d8fb0d1e6be2c2688e6f915319e850a`, `updatedAt`
+2026-11-16T01:14:52Z and an empty `reviewDecision`; `git ls-remote fork
+refs/heads/feature/realtime-collaboration` answers the same commit, and the
+local `HEAD` is it too, with a clean tree. The head is one documentation commit
+above `61565ab3` (`git rev-list --left-right --count 61565ab3...HEAD` = `0 1`),
+it changes `docs/collab/STATUS.md` only (+118/−12), the branch is `0 121` from
+`origin/main` `cc90520b`, and `git merge-tree --write-tree origin/main HEAD`
+exits 0 (tree `1b265ac9`). The `DIRTY`/`CONFLICTING` reading in the header and in
+§5.48 was true when it was taken at 2026-11-16T00:35Z — before this push, while
+the merge was local — and is history now.
+
+**CI on the head.** The rollup holds one check, CodeRabbit's `skipped` at
+2026-11-16T01:14:54Z (`gh pr view 5834 --json statusCheckRollup`). Five workflow
+runs exist on `e6f34e8c`, all created at 2026-11-16T01:14:43–44Z, all
+`completed` with `conclusion: action_required` and no job started — `CI`
+`43785106954`, `Packaging lint` `43785106844`, `Nix` `43785106813`,
+`SonarCloud` `43785106816`, `Printing` `43785106722` — so CI has still not
+executed on any head and this host gate is the evidence instead.
+
+**The gate** (build host `agents`, rustc 1.99.1, 20 cores, 2026-11-16;
+`CRAFT_I18N_DIR=~/craft-i18n`, `CRAFT_FONTS_DIR=~/craft-fonts`; log
+`gate-wordcraft-5834-e6f34e8c.log` in the cabinet workspace's `.craft/logs/`):
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `cargo metadata --locked --format-version 1` | rc 0; `Cargo.lock` sha256 `a1f66a07d64213f19faf8b8e7bdd0d00772ac8db0fde0310442c2aee52b8a140` before and after; `git status --porcelain` empty before, after this step and after the whole gate |
+| 2 | `cargo fmt --all -- --check` | rc 0, no output |
+| 3 | `cargo clippy --workspace --all-targets -- -D warnings` | rc 0 in 18.12 s (warm target); the only warnings are cargo's three unused `[patch]` notes, which `main` carries too |
+| 4 | `cargo xtask layers` | rc 0 — `OK: 26 crates, no layering violations`; the merged `xtask/src/layers.rs` passes with main's `doc`/`docx`/`formats` chain beside the seven collab rows and the five collab chains (§5.48) |
+| 5 | `cargo test --workspace --lib --bins --tests --no-fail-fast` | 67 test targets, **5388 passed, 2 failed, 9 ignored**; both failures are `wordcraft-engine` `tests::fit_one_page::{fit_one_page_preserves_budget_across_document_serialization, fit_one_page_respects_step_pt}`, the pair §5.48 reproduced on clean `origin/main` `cc90520b` |
+| 6 | `cargo test --workspace --doc` | rc 0 over 22 doc-test targets, 0 failed |
+| 7 | `cargo xtask i18n-report`, `language`, `assets`, `wasm` | rc 0 each: 48 asset files attributed, wasm32 check over 21 crates |
+
+The eight collab targets carry the counts of §5.46 and §5.48 — `collab` 61,
+`-app` 47, `-client` 26, `-doc` 116, `-engine` 58, `-server` 78 (+1 ignored: the
+LibreOffice commit gate), `-web` 14, `-ws` 2 — 402 passed, 0 failed.
+
+**Why the steps are listed one by one.** `cargo xtask ci` stops at its first
+failure and the `test` step is red on the two upstream `fit_one_page` tests, so
+the aggregate answers rc 1 with `ok fmt`, `ok clippy`, `FAIL test` and the
+remaining six steps skipped; run separately on the same clean tree, all six are
+rc 0 and `test` fails only on that pair. So the only red on the delivered head is
+the font-metric dependence upstream has, and the layering step resolves the
+conflict of §5.48 green. The tree is clean after the whole gate
+(`git status --porcelain` empty), and nothing was pushed by this pass: the head
+did not move, and the PR waits for a maintainer's approval and review.
 
 ## 6. Where things live
 
