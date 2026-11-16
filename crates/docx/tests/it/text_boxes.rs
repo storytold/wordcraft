@@ -2,26 +2,22 @@
 //! `wps:txbx/@id`, `wps:linkedTxbx`). Fixtures are hand-written from ECMA-376 Part 1 §20.4
 //! (DrawingML WordprocessingML drawing) and §21.1.2.1.1 (`bodyPr`).
 
-use std::io::{Read, Write};
-
 use wordcraft_doc::para::ShapeKind;
 use wordcraft_doc::props::{TextVert, VAlign};
 use wordcraft_doc::{Document, InlineObject, PartKind, TextBody, para_block};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn document_xml(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 /// The text boxes' stories in body order, a group's members among them
@@ -217,7 +213,15 @@ fn picture_in_box_keeps_its_frame() {
     let outer = text_box(&mut d, "Label", body);
     let id = outer.text_box().unwrap();
     let mut bytes = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(10, 4, image::Rgba([20, 40, 60, 255])).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    std::io::Write::write_all(
+        &mut bytes,
+        &wordcraft_geom::picture::encode_format(
+            &image::DynamicImage::from(image::RgbaImage::from_pixel(10, 4, image::Rgba([20, 40, 60, 255])).clone()),
+            image::ImageFormat::Png,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let media = d.add_media(bytes.into_inner(), "png");
     let image = InlineObject::Image {
         media: media.clone(),
