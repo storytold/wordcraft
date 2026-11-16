@@ -9,12 +9,11 @@ const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingm
 const ROOT_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn doc_zip(document_xml: &[u8]) -> Vec<u8> {
@@ -91,15 +90,11 @@ fn a_malformed_main_part_is_an_error_not_a_truncated_document() {
 fn a_part_with_a_bad_checksum_is_left_out_and_reported() {
     let body = format!("<w:document {W_NS}><w:body><w:p><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
     let build = |extra: &[u8]| {
-        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        zw.start_file("_rels/.rels", stored).unwrap();
-        zw.write_all(ROOT_RELS.as_bytes()).unwrap();
-        zw.start_file("word/document.xml", stored).unwrap();
-        zw.write_all(body.as_bytes()).unwrap();
-        zw.start_file("word/media/image1.png", stored).unwrap();
-        zw.write_all(extra).unwrap();
-        zw.finish().unwrap().into_inner()
+        let mut zw = craft_zip::Writer::new();
+        zw.add("_rels/.rels", ROOT_RELS.as_bytes(), craft_zip::Compression::Stored).unwrap();
+        zw.add("word/document.xml", body.as_bytes(), craft_zip::Compression::Stored).unwrap();
+        zw.add("word/media/image1.png", extra, craft_zip::Compression::Stored).unwrap();
+        zw.finish().unwrap()
     };
     let sound = read(&build(b"PICTURE-BYTES-0123456789")).unwrap();
     assert!(sound.skipped_parts.is_empty(), "a sound file reports nothing");

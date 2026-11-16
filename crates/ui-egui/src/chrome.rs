@@ -53,6 +53,8 @@ const QAT_MENU: [&str; 10] =
 /// Match the toolbar's enabled state for keyboard activation too.
 pub(crate) fn qat_enabled(app: &WordApp, id: &str) -> bool {
     match id {
+        // The Markdown Source pane's arrows undo its typing.
+        "edit.undo" | "edit.redo" if app.session.md_source.is_some() => crate::md_source::can_undo(app, id == "edit.redo"),
         "edit.undo" => app.session.can_undo(),
         "edit.redo" => app.session.can_redo(),
         "file.save" => app.has_document(),
@@ -82,6 +84,8 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
         }
         crate::widgets::command_menu(&resp, app, id);
         if id == "edit.undo" {
+            // The list is the document's steps, not the Markdown Source pane's typing.
+            let enabled = enabled && app.session.md_source.is_none();
             undo_list_button(ui, app, enabled);
         }
     }
@@ -962,7 +966,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                     });
                     if let Some((msg, at)) = &app.status_msg
-                        && crate::now_ms() - at < 6000.0
+                        && crate::now_ms() - at < crate::app::STATUS_MS
                     {
                         let font = TypeRung::Caption.regular();
                         let track = TypeRung::Caption.tracking();
