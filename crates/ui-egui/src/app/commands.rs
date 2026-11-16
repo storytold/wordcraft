@@ -121,7 +121,7 @@ impl WordApp {
             let result = self.execute_inner(id, params)?;
             if !self.session.prefs.collab.enabled {
                 crate::collab::disconnect(self);
-            } else if crate::collab::reconnect_wanted(id, self.collab.is_none(), &server_before, &self.session.prefs.collab.server) {
+            } else if crate::collab::reconnect_wanted(id, self.collab.is_some(), &server_before, &self.session.prefs.collab.server) {
                 // Only enabling, or moving to another server, opens a session:
                 // `collab.status` is a pure query, and replacing the session for
                 // it dropped the queue of edits the room had not answered yet.
@@ -1229,4 +1229,47 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
 /// replace only an untouched blank document, which has nothing to lose).
 pub(crate) fn discards_document(id: &str, _params: &Value) -> bool {
     id == "file.close"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `collab.enable` opens a session when none is live and keeps a live one on
+    /// the same server. The predicate had a test of its own; the call site passed
+    /// the opposite flag, so enabling replaced a working session (taking its
+    /// client id and the queue the room had not answered) and opened nothing when
+    /// there was no session and the stored address did not change (CodeRabbit on
+    /// `commands.rs:131`). `connect` reports a missing `WORDCRAFT_COLLAB_TOKEN`
+    /// in the status bar, which is how this test sees whether it ran without
+    /// dialling anything.
+    #[test]
+    fn enabling_collaboration_opens_a_missing_session_and_keeps_the_live_one() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        // The stored address already matches the one the command names: the
+        // predicate then has nothing but `has_session` to decide on, which is the
+        // argument that was inverted.
+        app.session.prefs.collab.server = "ws://127.0.0.1:9".into();
+        let params = serde_json::json!({"server": "ws://127.0.0.1:9"});
+        assert!(app.collab.is_none(), "a fresh window has no session");
+
+        app.execute("collab.enable", params.clone()).unwrap();
+        let message = app.status_msg.as_ref().map(|(text, _)| text.clone()).unwrap_or_default();
+        assert!(message.contains("WORDCRAFT_COLLAB_TOKEN"), "enabling with no session must try to connect, not skip it: {message}");
+        assert!(app.collab.is_none(), "the token is missing, so no session was installed");
+
+        // A live session on that server is kept rather than replaced: `connect`
+        // does not run again, so the status stays the engine's own answer.
+        let live = crate::collab_session::Collab::connect("ws://127.0.0.1:9", "test-token", "writer", "ui-test", &wordcraft_doc::Document::new(), 1)
+            .expect("a session can be built without a socket");
+        let client_id = live.client_id().to_string();
+        app.collab = Some(live);
+        app.execute("collab.enable", params).unwrap();
+        let message = app.status_msg.as_ref().map(|(text, _)| text.clone()).unwrap_or_default();
+        assert!(!message.contains("WORDCRAFT_COLLAB_TOKEN"), "the live session is kept, so nothing reconnects: {message}");
+        assert_eq!(app.collab.as_ref().unwrap().client_id(), client_id, "the session is the same one");
+
+        app.execute("collab.disable", serde_json::json!({})).unwrap();
+        assert!(app.collab.is_none(), "disabling drops the session");
+    }
 }

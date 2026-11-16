@@ -10,8 +10,12 @@ use wordcraft_doc::Document;
 
 use crate::{Client, Event, State, session_client_id};
 
+fn answer(op_id: OpId, version: Version, epoch: u64) -> Applied {
+    Applied { op_id, version, epoch, delta: None, nodes: None, conflict: false, history: None }
+}
+
 fn applied(op_id: OpId, version: Version, epoch: u64) -> ServerMsg {
-    ServerMsg::Applied { applied: Applied { op_id, version, epoch, delta: None, nodes: None, conflict: false, history: None } }
+    ServerMsg::Applied { applied: answer(op_id, version, epoch) }
 }
 
 fn welcome(version: Version, resync: bool) -> ServerMsg {
@@ -262,11 +266,84 @@ fn the_journal_tail_reaches_the_app() {
     ];
     let event = client.on(ServerMsg::Tail { entries: entries.clone() });
     match event {
-        Event::Tail { entries: seen } => assert_eq!(seen, entries, "oldest first, deltas intact"),
+        Event::Tail { entries: seen, version } => {
+            assert_eq!(seen, entries, "oldest first, deltas intact");
+            assert_eq!(version, 5, "the tail ends at the announced head");
+        }
         other => panic!("expected the tail, got {other:?}"),
     }
     assert_eq!(client.version(), 5, "the tail is this replica's base now");
     assert_eq!(client.state(), State::Joined);
+}
+
+/// A reconnect is answered with `welcome` and then the operations this replica
+/// missed. A connection that dies between the two frames must ask again from the
+/// version its **document** has: moving the base to the announced head made the
+/// next `auth` name a version the document never received, the room answered an
+/// empty tail, and the missed edits stayed absent without a version gap
+/// (CodeRabbit on the `welcome` arm).
+#[test]
+fn a_disconnect_after_welcome_and_before_tail_asks_again_from_the_applied_version() {
+    let mut client = Client::new("alice");
+    // This document was applied at version 2 before the reconnect.
+    let _ = client.on(welcome(2, false));
+    assert_eq!(client.version(), 2);
+
+    // The reconnect asks from 2; the room is at 5 and its journal covers the gap,
+    // so a tail follows.
+    let _ = client.auth("token", Some(2), false);
+    let event = client.on(welcome(5, false));
+    assert!(matches!(event, Event::Welcome { version: 5, catching_up: true, .. }), "{event:?}");
+    assert_eq!(client.state(), State::Resyncing, "editing and committing wait for the missed operations");
+    assert_eq!(client.version(), 2, "the document is still at 2, whatever the room announced");
+    assert!(client.undo().is_none(), "an undo has no base to be built on yet");
+
+    // The socket dies before the tail. The next join asks from the version the
+    // document has, not from the head the welcome announced: that is what keeps
+    // the room from answering an empty tail.
+    match client.auth("token", Some(client.version()), false) {
+        ClientMsg::Auth { last_version, .. } => assert_eq!(last_version, Some(2), "the room replays the missed edits"),
+        other => panic!("expected auth, got {other:?}"),
+    }
+    let event = client.on(welcome(5, false));
+    assert!(matches!(event, Event::Welcome { catching_up: true, .. }), "still behind, still catching up");
+
+    // The replay lands, and only now does the base move.
+    let entries = vec![answer(OpId::new("bob", 1), 3, 0), answer(OpId::new("bob", 2), 4, 0), answer(OpId::new("bob", 3), 5, 0)];
+    match client.on(ServerMsg::Tail { entries }) {
+        Event::Tail { version, entries } => {
+            assert_eq!(entries.len(), 3, "every missed edit reaches the app");
+            assert_eq!(version, 5, "the tail ends at the head the welcome announced");
+        }
+        other => panic!("expected the tail, got {other:?}"),
+    }
+    assert_eq!(client.version(), 5);
+    assert_eq!(client.state(), State::Joined, "the catch-up is over");
+}
+
+/// A fresh join whose seed the room took has nothing following the welcome: it
+/// is in sync at that frame, at the head the room answered with.
+#[test]
+fn a_seeded_join_is_in_sync_at_the_welcome() {
+    let mut client = Client::new("alice");
+    let _ = client.auth("token", None, true);
+    let event = client.on(welcome(0, false));
+    assert!(matches!(event, Event::Welcome { version: 0, catching_up: false, .. }), "{event:?}");
+    assert_eq!(client.state(), State::Joined);
+    assert_eq!(client.version(), 0);
+}
+
+/// An empty tail is still the end of a catch-up: it says the room missed
+/// nothing from the version asked, and the document is at the announced head.
+#[test]
+fn an_empty_tail_ends_the_catch_up_at_the_head() {
+    let mut client = Client::new("alice");
+    let _ = client.on(welcome(2, false));
+    let _ = client.auth("token", Some(2), false);
+    let _ = client.on(welcome(2, false));
+    // Nothing to catch up on: the document already has everything.
+    assert_eq!(client.state(), State::Joined);
+    assert_eq!(client.version(), 2);
 }
 
 #[test]
@@ -535,10 +612,14 @@ fn a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops() {
         }
         other => panic!("expected a welcome, got {other:?}"),
     }
-    assert_eq!(client.version(), 3, "the base is the room's head, not a maximum");
+    // The announcement does not move the base: this document still holds the
+    // edits it applied at 7, and only the snapshot below replaces them.
+    assert_eq!(client.version(), 7, "a welcome never moves the base on its own");
     assert!(client.pending().is_empty());
     assert!(client.unconfirmed().is_empty(), "a restore must not replay an edit the document no longer has");
     assert_eq!(client.state(), State::Resyncing, "the snapshot that follows replaces the document");
+    let _ = client.on(ServerMsg::Snapshot { version: 3, bytes: b"{}".to_vec(), last: true });
+    assert_eq!(client.version(), 3, "the snapshot's version is the base the room can address");
 }
 
 /// The acceptance of the rule: after a restore the client's next operation
@@ -566,6 +647,10 @@ fn a_restored_room_does_not_refuse_the_next_operation_stale() {
         Event::Welcome { version: 0, dropped, .. } => assert_eq!(dropped, vec![in_flight.op_id.clone()]),
         other => panic!("expected a welcome, got {other:?}"),
     }
+    // The base waits for the document the room sends: announcing 0 does not put
+    // this replica at 0 while it still holds what it applied at 1.
+    assert_eq!(client.version(), 1, "a welcome never moves the base on its own");
+    let _ = client.on(ServerMsg::Snapshot { version: 0, bytes: b"{}".to_vec(), last: true });
     assert_eq!(client.version(), 0, "the base is the restored head");
 
     // What the old client did on reconnect: resend the queued operation with
@@ -599,6 +684,9 @@ fn a_restore_keeps_the_dedup_window_below_the_head_and_the_id_counter() {
     assert!(client.was_confirmed(&kept.op_id), "an answer the restored room still holds stays deduplicated");
     assert!(!client.was_confirmed(&lost.op_id), "an answer above the head is not in the window the snapshot ships");
     assert_eq!(client.history_depth(), (1, 0), "the step that is gone from the room leaves the stack");
+    // The restore's document is what sets the base; the announcement only named it.
+    let _ = client.on(ServerMsg::Snapshot { version: 1, bytes: b"{}".to_vec(), last: true });
+    assert_eq!(client.version(), 1);
 
     let next = client.op(OpKind::Primitive, Target::new("body", 1, 1), json!({"op": "insert_text", "text": "c"}));
     assert_eq!(next.op_id, OpId::new("alice", 3), "the counter never rewinds: an id names one edit for the session");
@@ -636,7 +724,7 @@ fn a_rollback_without_a_snapshot_asks_for_one() {
         Event::Resync { reason } => assert!(reason.contains("below"), "{reason}"),
         other => panic!("expected a resync, got {other:?}"),
     }
-    assert_eq!(client.version(), 2);
+    assert_eq!(client.version(), 5, "the document stays where it was until the snapshot lands");
     assert!(client.pending().is_empty());
     assert_eq!(client.state(), State::Resyncing);
 }
@@ -680,6 +768,9 @@ fn two_clients_converge_after_the_room_is_restored() {
             Event::Welcome { version: 1, dropped, .. } => assert!(dropped.is_empty(), "nothing was in flight"),
             other => panic!("expected a welcome, got {other:?}"),
         }
+        // The snapshot the welcome announced carries the restored document; the
+        // base follows it, not the announcement.
+        let _ = client.on(ServerMsg::Snapshot { version: 1, bytes: b"{}".to_vec(), last: true });
         assert_eq!(client.version(), 1);
     }
 

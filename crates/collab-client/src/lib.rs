@@ -96,6 +96,12 @@ pub enum Event {
         /// app must show as not replayed; none of them is resent, because the
         /// document they were built on is gone.
         dropped: Vec<OpId>,
+        /// The room is ahead of this document and the frames that bring it there
+        /// (`tail`, or a snapshot's chunks) have not arrived yet. While this is
+        /// true `version` is the room's head, **not** this document's version:
+        /// planning an edit or a commit here would name a base the replica never
+        /// received, so the app reads `Resyncing` until the catch-up lands.
+        catching_up: bool,
     },
     Applied {
         applied: Applied,
@@ -106,6 +112,11 @@ pub enum Event {
     /// [`Event::Applied`]; the room sends no snapshot after them.
     Tail {
         entries: Vec<Applied>,
+        /// The head the welcome announced, and the version the document is at
+        /// once every entry is applied. An **empty** tail still ends here: it is
+        /// the room saying "nothing was missed", and the app's base moves now,
+        /// not at the welcome.
+        version: Version,
     },
     Rejected {
         reject: Reject,
@@ -172,7 +183,21 @@ pub struct Client {
     client_id: String,
     seq: u64,
     state: State,
+    /// The version of the document this replica has **applied**, and the base
+    /// the next operation and the next commit are built on. A `welcome` does not
+    /// move it: only the frames that carry the room's state do (`tail`,
+    /// `snapshot`, `applied`).
     version: Version,
+    /// The head a `welcome` announced while the document is still behind it.
+    /// Kept apart from `version` so a connection that dies between `welcome` and
+    /// `tail` reconnects from what the document really has; asking from the
+    /// announced head would make the room answer an empty tail to a version this
+    /// replica never received, and the missed edits would stay absent without a
+    /// version gap (CodeRabbit on the `welcome` arm).
+    head: Option<Version>,
+    /// Whether the join this connection sent asked the room to replay from
+    /// `lastVersion` (`auth`), so a `tail` or a snapshot follows the welcome.
+    replaying: bool,
     epoch: u64,
     pending: Vec<Pending>,
     /// Operations whose answer arrived, for duplicate detection on reconnect.
@@ -194,6 +219,8 @@ impl Client {
             seq: 0,
             state: State::AwaitingWelcome,
             version: 0,
+            head: None,
+            replaying: false,
             epoch: 0,
             pending: Vec::new(),
             confirmed: HashMap::new(),
@@ -222,7 +249,15 @@ impl Client {
     /// The auth message that opens the session (ADR-0008: token first, never in
     /// the URL). `seed` announces the [`seed_frames`] that follow with the
     /// document this client has open (ADR WC-0004).
-    pub fn auth(&self, token: &str, last_version: Option<Version>, seed: bool) -> ClientMsg {
+    ///
+    /// `last_version` is what the room replays from (ADR-0004): `Some` asks for
+    /// the operations this replica missed (a `tail`, or a snapshot when the
+    /// journal no longer covers it), `None` opens state from scratch. The answer
+    /// is recorded, so the welcome knows whether frames are on their way and does
+    /// not move the document's version before they land.
+    pub fn auth(&mut self, token: &str, last_version: Option<Version>, seed: bool) -> ClientMsg {
+        self.replaying = last_version.is_some();
+        self.head = None;
         ClientMsg::Auth { token: token.to_string(), client_id: self.client_id.clone(), last_version, seed }
     }
 
@@ -313,11 +348,28 @@ impl Client {
                     // The head is below this document and no snapshot follows:
                     // joining it would leave a base the room cannot address.
                     // Ask for the document instead of pretending to be in sync.
+                    self.head = None;
+                    self.replaying = false;
                     self.state = State::Resyncing;
                     return Event::Resync { reason: format!("the room is at version {version}, below this document's base") };
                 }
-                self.state = if resync { State::Resyncing } else { State::Joined };
-                Event::Welcome { version, epoch, resync, role, participants, dropped }
+                // A room ahead of this document sends what it missed as frames
+                // after the welcome (a `tail`, or a snapshot when `resync`). The
+                // document reaches that head only when they are applied, so the
+                // version the next reconnect asks from stays where the document
+                // is. A fresh join whose seed the room took asks for neither and
+                // is in sync at the welcome.
+                let catching_up = resync || (self.replaying && version > self.version);
+                if catching_up {
+                    self.head = Some(version);
+                    self.state = State::Resyncing;
+                } else {
+                    self.version = version;
+                    self.head = None;
+                    self.replaying = false;
+                    self.state = State::Joined;
+                }
+                Event::Welcome { version, epoch, resync, role, participants, dropped, catching_up }
             }
             ServerMsg::Tail { entries } => {
                 // A reconnect the journal still covers is answered with the
@@ -328,8 +380,12 @@ impl Client {
                 for applied in &entries {
                     self.confirm(applied);
                 }
+                // The tail ends at the head the welcome announced. An empty tail
+                // still says the room is there: the base moves now, and only now.
+                self.version = self.head.take().unwrap_or(self.version).max(self.version);
+                self.replaying = false;
                 self.state = State::Joined;
-                Event::Tail { entries }
+                Event::Tail { entries, version: self.version }
             }
             ServerMsg::Applied { applied } => {
                 // A retry of an operation the room already applied comes back
@@ -380,6 +436,8 @@ impl Client {
                     // that welcome, so the drop is reported there.
                     let _ = self.adopt_head(version);
                     self.version = version;
+                    self.head = None;
+                    self.replaying = false;
                     self.state = State::Joined;
                 }
                 Event::Snapshot { version, bytes, last }
@@ -408,20 +466,26 @@ impl Client {
         self.state = State::Closed;
     }
 
-    /// Adopt the room's head as this replica's base (ADR WC-0008).
+    /// Reconcile this replica with a head that is **below** its base — a server
+    /// restored from an older snapshot — and report the queue it cost.
     ///
-    /// The ordinary case only moves the base forward. When the head is
-    /// **below** the base — a server restored from an older snapshot — the
-    /// document that follows the frame is the room's, so the base becomes the
-    /// head, and the queue is reconciled with it instead of being replayed
-    /// against a state it was not built on. Every pending operation is dropped
-    /// and returned, because the document each of them was computed on no
-    /// longer exists: their author applied them optimistically, the snapshot
-    /// replaces that copy, and the author's own answer is skipped as a
-    /// duplicate of an edit that is no longer there. Resending them would
-    /// either be refused `Stale` (a base above the head, the refusal that used
-    /// to freeze this client) or land on the room while the author's document
-    /// has already lost their text.
+    /// The ordinary case only reports: a head at or above this document's version
+    /// is a room ahead of it, and the document reaches that head through the
+    /// frames that follow (`tail`, snapshot), never through the announcement.
+    /// Moving `version` here was the hole: a connection that died between
+    /// `welcome` and `tail` asked from a version the document never received, and
+    /// the room's empty tail left the missed edits absent without a gap.
+    ///
+    /// When the head is **below** the base, the document that follows the
+    /// announcement is the room's, so every pending operation is dropped and
+    /// returned, because the document each of them was computed on no longer
+    /// exists: their author applied them optimistically, the snapshot replaces
+    /// that copy, and the author's own answer is skipped as a duplicate of an
+    /// edit that is no longer there. Resending them would either be refused
+    /// `Stale` (a base above the head, the refusal that used to freeze this
+    /// client) or land on the room while the author's document has already lost
+    /// their text. The version itself stays at the base until the snapshot that
+    /// announced the restore is applied.
     ///
     /// What is **not** touched is the identity of this session: `seq` keeps
     /// counting and the `confirmed` window keeps every answer at or below the
@@ -432,7 +496,6 @@ impl Client {
     /// — so they are pruned, together with the history steps they named.
     fn adopt_head(&mut self, head: Version) -> Vec<OpId> {
         if head >= self.version {
-            self.version = head;
             return Vec::new();
         }
         let dropped: Vec<OpId> = self.pending.iter().map(|pending| pending.op.op_id.clone()).collect();
@@ -444,7 +507,6 @@ impl Client {
         let confirmed = &self.confirmed;
         self.steps.retain(|(op_id, _, _)| confirmed.contains_key(op_id));
         self.undone.retain(|(op_id, _, _)| confirmed.contains_key(op_id));
-        self.version = head;
         dropped
     }
 

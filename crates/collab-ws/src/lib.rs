@@ -198,7 +198,7 @@ async fn session(
     // handshake and add a control frame before the session is usable.
     let mut heartbeat = interval_at(Instant::now() + Duration::from_secs(15), Duration::from_secs(15));
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut resend_after_welcome = false;
+    let mut resent = false;
     let mut waiting: VecDeque<(OpKind, Target, serde_json::Value)> = VecDeque::new();
 
     loop {
@@ -217,15 +217,19 @@ async fn session(
                     Err(_) => continue,
                 };
                 let event = client.on(msg);
-                let welcome = matches!(event, Event::Welcome { .. });
                 let _ = events.send(TransportEvent::Event(event));
-                if welcome && !resend_after_welcome {
-                    resend_after_welcome = true;
-                    for msg in client.unconfirmed() {
-                        if send(&mut sink, &msg).await.is_err() { return !events.is_closed() }
+                // The queue and the unconfirmed retries wait for the document to
+                // be at the room's head: a welcome alone is not enough when it
+                // announces a `tail` (CodeRabbit on the `welcome` arm), so the
+                // flush is keyed on the state the catch-up leaves, not on the
+                // handshake.
+                if client.state() == State::Joined {
+                    if !resent {
+                        resent = true;
+                        for msg in client.unconfirmed() {
+                            if send(&mut sink, &msg).await.is_err() { return !events.is_closed() }
+                        }
                     }
-                }
-                if welcome {
                     while let Some((kind, target, payload)) = waiting.pop_front() {
                         let op = client.op(kind, target, payload);
                         if send(&mut sink, &ClientMsg::Op { op }).await.is_err() {

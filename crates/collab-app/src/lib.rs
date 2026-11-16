@@ -296,11 +296,15 @@ impl WelcomeState {
     /// edit planned now would be taken by that snapshot without a word. A
     /// paused session stays `Diverged`: an edit the room never received is a
     /// stronger reason than a document that is coming (ADR WC-0006).
-    pub fn after_welcome(divergence: Divergence, head: Version, dropped: Vec<OpId>, resync: bool) -> WelcomeState {
+    pub fn after_welcome(divergence: Divergence, head: Version, dropped: Vec<OpId>, resync: bool, catching_up: bool) -> WelcomeState {
         let restore = Restore::from_welcome(head, dropped);
         let status = if divergence.is_paused() {
             divergence.status_after_welcome()
-        } else if resync || restore.is_some() {
+        } else if resync || catching_up || restore.is_some() {
+            // `catching_up` is the room's `tail` on its way: the document is
+            // still at the version it was applied at, so an edit planned here
+            // would name a base the replica never received, and an owner's
+            // commit would build a file from a document the room has moved past.
             Status::Resyncing
         } else {
             Status::InSync
@@ -314,6 +318,12 @@ impl WelcomeState {
 /// the panel and the status bar cannot tell the writer two different stories
 /// about the same window.
 pub const RESYNC_REASON: &str = "The room is sending its document; editing resumes when it lands";
+
+/// Why a session reads `Resyncing` after a welcome whose `tail` has not landed:
+/// the room is ahead and its missed operations are still on their way. Distinct
+/// from [`RESYNC_REASON`] because no document replaces this one — the app waits
+/// for the operations its peers already wrote, not for a snapshot.
+pub const CATCH_UP_REASON: &str = "The room is sending the edits this window missed; editing resumes when they land";
 
 /// Turn a local command into the operations the room expects, mapping a
 /// planning failure to the pause it causes. A diff that cannot address this
@@ -669,12 +679,16 @@ impl Collab {
 
     fn on_event(&mut self, event: Event, session: &mut Session) {
         match event {
-            Event::Welcome { version, resync, role, participants, dropped, .. } => {
-                // The room's head is this base, in both directions (ADR
+            Event::Welcome { version, resync, role, participants, dropped, catching_up, .. } => {
+                // The room's head is this base once the document has it (ADR
                 // WC-0008): a restored room answers below it, and keeping the
                 // higher number would plan the next operation on a document the
-                // room no longer has.
-                self.state.version = version;
+                // room no longer has. While a `tail` is on its way the document
+                // is still at the version it applied, and adopting the head here
+                // would let an edit name a base this replica never received.
+                if !catching_up {
+                    self.state.version = version;
+                }
                 self.state.role = Role::parse(&role).unwrap_or(Role::Editor);
                 self.set_participants(&participants);
                 // A handshake ends any half-received snapshot: a retry at the
@@ -683,12 +697,14 @@ impl Collab {
                 // A handshake is not a snapshot: `Offline` or `Connecting` never
                 // cleared the divergence, so this reads the flag, not the status
                 // (review 5853542478).
-                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped, resync);
+                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped, resync, catching_up);
                 self.status = welcome.status;
                 if self.status == Status::Resyncing {
-                    // The window between the welcome and the snapshot is named:
-                    // an edit here is refused, and the panel says why (ADR-0025).
-                    self.last_error = Some(RESYNC_REASON.to_string());
+                    // The window between the welcome and the frames that follow
+                    // is named: an edit here is refused, and the panel says why
+                    // (ADR-0025).
+                    let reason = if catching_up && !resync { CATCH_UP_REASON } else { RESYNC_REASON };
+                    self.last_error = Some(reason.to_string());
                 }
                 if let Some(restore) = welcome.restore {
                     // A writer whose in-flight edits a restore took must see it:
@@ -766,20 +782,35 @@ impl Collab {
                     self.copy = Some(copy);
                 }
             }
-            Event::Tail { entries } => {
+            Event::Tail { entries, version } => {
                 // The room answered the reconnect with the operations this
                 // replica missed instead of a snapshot: they carry the same
                 // authoritative deltas a live answer does, so each is applied
                 // like one. Skipping them left the document without the peers'
                 // edits while the version said otherwise.
+                self.state.version = version;
+                let mut resync = false;
                 for applied in entries {
                     match self.state.apply(&applied, session) {
                         Ok(Outcome::Quiet) => {}
                         Ok(Outcome::Resync) => {
                             self.status = Status::Resyncing;
                             let _ = self.handle.resync();
+                            resync = true;
                         }
-                        Err(message) => self.status = Status::Failed(message),
+                        Err(message) => {
+                            self.status = Status::Failed(message);
+                            resync = true;
+                        }
+                    }
+                }
+                // The catch-up landed: this document is at the room's head and
+                // editing may resume, unless an entry asked for a snapshot or a
+                // local edit the room never received is still paused (ADR WC-0006).
+                if !resync {
+                    self.status = self.divergence.status_after_welcome();
+                    if self.status == Status::InSync {
+                        self.last_error = None;
                     }
                 }
             }

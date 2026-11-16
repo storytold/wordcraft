@@ -19,8 +19,10 @@ use serde_json::{Value, json};
 
 use wordcraft_collab::room::Role;
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target, Version};
+use wordcraft_collab_app::{
+    CATCH_UP_REASON, CopyBuffer, Divergence, Outcome, RESYNC_REASON, SnapshotBuffer, SyncState, WelcomeState, apply_presence,
+};
 pub use wordcraft_collab_app::{Commit, CommitCopy, Cursor, ParticipantView, Restore, Status};
-use wordcraft_collab_app::{CopyBuffer, Divergence, Outcome, RESYNC_REASON, SnapshotBuffer, SyncState, WelcomeState, apply_presence};
 /// An id for one editing session: two apps on the same document must not share
 /// an operation id space (`wordcraft_collab_client::session_client_id`).
 pub use wordcraft_collab_client::session_client_id;
@@ -311,8 +313,13 @@ pub struct Collab {
     /// the restore cost until the session ends.
     restore: Option<Restore>,
     /// Operations planned before `welcome`; replayed through [`Client::op`] so
-    /// their ids stay ordered.
+    /// their ids stay ordered. They wait for the document to reach the room's
+    /// head: a welcome that announces a `tail` is not that moment.
     waiting: VecDeque<(OpKind, Target, Value)>,
+    /// Whether this connection has already retried its unconfirmed operations.
+    /// One retry per connection: their ids are unchanged, so the room answers a
+    /// duplicate rather than applying it twice (ADR-0003).
+    resent: bool,
     #[cfg(target_arch = "wasm32")]
     transport: socket::Transport,
 }
@@ -352,6 +359,7 @@ impl Collab {
             last_error: None,
             restore: None,
             waiting: VecDeque::new(),
+            resent: false,
             transport,
         })
     }
@@ -445,6 +453,7 @@ impl Collab {
             changed = true;
             match incoming {
                 socket::Incoming::Opened => {
+                    self.resent = false;
                     for frame in self.join_frames() {
                         let _ = self.send(&frame);
                     }
@@ -466,32 +475,47 @@ impl Collab {
     pub fn on_text(&mut self, text: &str, session: &mut Session) -> bool {
         let Ok(message) = serde_json::from_str::<ServerMsg>(text) else { return false };
         let event = self.client.on(message);
-        let welcome = matches!(&event, Event::Welcome { .. });
         let resync = matches!(&event, Event::Resync { .. } | Event::Conflict { .. });
         self.on_event(event, session);
-        if welcome {
-            for message in self.client.unconfirmed() {
-                let _ = self.send(&message);
-            }
-            while let Some((kind, target, payload)) = self.waiting.pop_front() {
-                let op = self.client.op(kind, target, payload);
-                let _ = self.send(&ClientMsg::Op { op });
-            }
-        }
         if resync {
             self.request_snapshot();
         }
+        self.flush_queue();
         true
+    }
+
+    /// Hand the queue and the unconfirmed retries to the room once this
+    /// document is at the room's head. A welcome that announces a `tail` is not
+    /// that moment: an operation planned then would name a base this tab never
+    /// received (CodeRabbit on the `welcome` arm). The retry runs once per
+    /// connection; queued operations leave in order, so their ids stay ordered.
+    fn flush_queue(&mut self) {
+        if self.client.state() != wordcraft_collab_client::State::Joined || self.status != Status::InSync {
+            return;
+        }
+        if !self.resent {
+            self.resent = true;
+            for message in self.client.unconfirmed() {
+                let _ = self.send(&message);
+            }
+        }
+        while let Some((kind, target, payload)) = self.waiting.pop_front() {
+            let op = self.client.op(kind, target, payload);
+            let _ = self.send(&ClientMsg::Op { op });
+        }
     }
 
     fn on_event(&mut self, event: Event, session: &mut Session) {
         match event {
-            Event::Welcome { version, resync, role, participants, dropped, .. } => {
-                // The room's head is this base, in both directions (ADR
+            Event::Welcome { version, resync, role, participants, dropped, catching_up, .. } => {
+                // The room's head is this base once the document has it (ADR
                 // WC-0008): a restored room answers below it, and keeping the
                 // higher number would plan the next operation on a document the
-                // room no longer has.
-                self.state.version = version;
+                // room no longer has. While the missed frames are on their way
+                // the document is still at the version it applied.
+                if !catching_up {
+                    self.state.version = version;
+                }
                 self.state.role = Role::parse(&role).unwrap_or(self.state.role);
                 self.set_participants(&participants);
                 // A handshake ends any half-received snapshot: a retry at the
@@ -500,12 +524,14 @@ impl Collab {
                 // A handshake is not a snapshot: `Offline`, a renewal or a
                 // closed socket never cleared the divergence, so this reads the
                 // flag, not the status (review 5853542478).
-                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped, resync);
+                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped, resync, catching_up);
                 self.status = welcome.status;
                 if self.status == Status::Resyncing {
-                    // The window between the welcome and the snapshot is named:
-                    // an edit here is refused, and the panel says why (ADR-0025).
-                    self.last_error = Some(RESYNC_REASON.to_string());
+                    // The window between the welcome and the frames that follow
+                    // is named: an edit here is refused, and the panel says why
+                    // (ADR-0025).
+                    let reason = if catching_up && !resync { CATCH_UP_REASON } else { RESYNC_REASON };
+                    self.last_error = Some(reason.to_string());
                 }
                 if let Some(restore) = welcome.restore {
                     // The panel draws the count and the ids; the session reads
@@ -585,18 +611,32 @@ impl Collab {
                     self.copy = Some(copy);
                 }
             }
-            Event::Tail { entries } => {
+            Event::Tail { entries, version } => {
                 // The reconnect was answered with the operations this tab
                 // missed, not with a snapshot: each carries an authoritative
                 // delta and has to be applied like a live answer.
+                self.state.version = version;
+                let mut resync = false;
                 for applied in entries {
                     match self.state.apply(&applied, session) {
                         Ok(Outcome::Quiet) => {}
                         Ok(Outcome::Resync) => {
                             self.status = Status::Resyncing;
                             self.request_snapshot();
+                            resync = true;
                         }
-                        Err(message) => self.status = Status::Failed(message),
+                        Err(message) => {
+                            self.status = Status::Failed(message);
+                            resync = true;
+                        }
+                    }
+                }
+                // The catch-up landed: the document is at the room's head, and a
+                // paused session stays paused until a snapshot repairs it.
+                if !resync {
+                    self.status = self.divergence.status_after_welcome();
+                    if self.status == Status::InSync {
+                        self.last_error = None;
                     }
                 }
             }
@@ -789,7 +829,7 @@ impl Collab {
     /// The frames that open a connection: the auth, followed by the document
     /// this tab has open while nothing is accepted yet (ADR WC-0004). A room
     /// that already holds state ignores the seed and answers with its snapshot.
-    fn join_frames(&self) -> Vec<ClientMsg> {
+    fn join_frames(&mut self) -> Vec<ClientMsg> {
         let seeding = self.client.version() == 0;
         let last = if seeding { None } else { Some(self.client.version()) };
         let mut frames = vec![self.client.auth(&self.token, last, seeding)];
@@ -875,6 +915,7 @@ mod tests {
             last_error: None,
             restore: None,
             waiting: VecDeque::new(),
+            resent: false,
         }
     }
 
@@ -1108,8 +1149,15 @@ mod tests {
             })
             .expect("json")
         };
-        // The tab joins at 3 and plans two edits the room has not answered yet.
+        // The tab joins at 3: the welcome announces the room's state and the
+        // snapshot that follows is the document, so the base reaches 3 there.
         collab.on_text(&welcome(3, true), &mut session);
+        let joined = serde_json::to_vec(&wordcraft_doc::Document::new()).expect("model");
+        let joined = serde_json::to_string(&ServerMsg::Snapshot { version: 3, bytes: joined, last: true }).expect("json");
+        collab.on_text(&joined, &mut session);
+        assert_eq!(collab.version(), 3, "the snapshot's version is the base editing starts from");
+
+        // Two edits the room has not answered yet.
         collab.client.op(OpKind::Primitive, Target::new("body", 7, 0), json!({"replaceRange": {"text": "a"}}));
         collab.client.op(OpKind::Primitive, Target::new("body", 7, 0), json!({"replaceRange": {"text": "b"}}));
         assert_eq!(collab.client.pending().len(), 2);
@@ -1118,7 +1166,7 @@ mod tests {
         collab.on_text(&welcome(1, true), &mut session);
         assert_eq!(*collab.status(), Status::Resyncing, "the snapshot that replaces the document has not landed");
         assert!(!collab.can_write(), "an edit would be planned on a document the room no longer has");
-        assert_eq!(collab.version(), 1, "the base follows the head, as the client's did");
+        assert_eq!(collab.version(), 3, "the announcement does not move the base: this document is still the one at 3");
         let restore = collab.restore().cloned().expect("the queue was taken and is reported");
         assert_eq!(restore.head(), 1);
         assert_eq!(restore.count(), 2);
