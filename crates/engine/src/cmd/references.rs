@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::numbering::{Counters, LevelSuffix};
-use wordcraft_doc::para::{InlineObject, NoteKind, OBJ};
+use wordcraft_doc::para::{Anchor, Float, InlineObject, NoteKind, OBJ, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, para_block};
