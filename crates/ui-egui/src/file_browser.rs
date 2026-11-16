@@ -790,7 +790,18 @@ mod tests {
         b.name = "notes.docx".into();
         let Step::Pick(path) = b.accept() else { panic!("picked") };
         assert_eq!(path.file_name().unwrap(), "notes.txt");
-        for (typed, want) in [("a.PDF", "a.txt"), ("a.htm", "a.txt"), ("a", "a.txt"), ("a.TXT", "a.TXT"), ("sub/a.rtf", "sub/a.txt")] {
+        for (typed, want) in [
+            ("a.PDF", "a.txt"),
+            ("a.htm", "a.txt"),
+            ("a", "a.txt"),
+            ("a.TXT", "a.TXT"),
+            ("sub/a.rtf", "sub/a.txt"),
+            (".txt", ".txt"),
+            (".docx", ".txt"),
+            ("sub/.docx", "sub/.txt"),
+            ("a.", "a.txt"),
+            ("a..", "a.txt"),
+        ] {
             assert_eq!(crate::print_page::export_name(typed, "txt"), want);
         }
         a.close_file_browser(Some(path.clone()));

@@ -297,7 +297,11 @@ impl WordApp {
                 Ok(json!({"picked": true}))
             }
             AfterPick::Export { ext } => {
-                let Some(mut path) = picked else { return Ok(json!({"cancelled": true})) };
+                let Some(mut path) = picked else {
+                    // Cancelled: an earlier refusal is not news any more.
+                    self.clear_export_error();
+                    return Ok(json!({"cancelled": true}));
+                };
                 let r = if ext == "png" {
                     self.run("file.exportPng", json!({"path": path}))
                 } else if ext == crate::print_page::EXPORT_WORD_2003 {

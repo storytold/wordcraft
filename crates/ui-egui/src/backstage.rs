@@ -913,11 +913,6 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         return;
     }
     heading(ui, "Export");
-    let error = ui.ctx().data(|d| d.get_temp::<String>(export_error_id())).unwrap_or_default();
-    if !error.is_empty() {
-        ui.label(egui::RichText::new(&error).color(ui.visuals().error_fg_color));
-        ui.add_space(6.0);
-    }
     ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
     ui.add_space(12.0);
     crate::print_page::export_formats(app, ui);

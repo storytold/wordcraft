@@ -1393,3 +1393,44 @@ fn export_refusal_shows_on_the_export_page() {
     assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_print_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-print-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "print"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Print page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A cancelled export dialog drops an earlier refusal: it is not news any more.
+#[test]
+fn cancelling_an_export_clears_its_page_error() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    let ctx = egui::Context::default();
+    a.ctx = Some(ctx.clone());
+    ctx.data_mut(|d| d.insert_temp(super::export_error_id(), "old refusal".to_string()));
+    a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, None).unwrap();
+    assert!(ctx.data(|d| d.get_temp::<String>(super::export_error_id())).is_none());
+}
