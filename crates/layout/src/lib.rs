@@ -64,6 +64,7 @@ mod notes;
 mod page;
 mod pass;
 mod placed;
+mod resume;
 mod strict;
 mod substituted;
 mod table_flow;
@@ -92,6 +93,7 @@ use notes::{MAX_NOTE_PASSES, footnote_pages};
 #[cfg(test)]
 use notes::{NOTE_SEP, note_numbers};
 use page::item_bottom;
+#[cfg(test)]
 use pass::layout_pass;
 pub use pass::now_ms;
 pub use placed::{HfSlot, Placed, turn_point, turn_rect, unturn_point};
@@ -232,6 +234,10 @@ pub struct LayoutOptions {
     pub filename: Option<Arc<str>>,
     /// Document full path for FILENAME \p fields ([`FieldCtx::filepath`]).
     pub filepath: Option<Arc<str>>,
+    /// Lay out again only from the page before the first block edited since the last layout
+    /// with the same cache, when nothing else changed (see `resume`). The pages are the same as
+    /// a full layout's.
+    pub incremental: bool,
 }
 
 /// The word being typed ([`LayoutOptions::typing_word`]): the paragraph by its revision
@@ -342,8 +348,22 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     let mut totals = Totals::first_guess(doc.sections().len());
     let mut passes = 0;
     let (mut early, mut rewraps) = (EarlyFloats::new(), 0);
+    let mut first = true;
     let mut l = loop {
-        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, (&early, rewraps < MAX_REWRAP_PASSES)) {
+        let mut run = resume::Run::new(if first && opts.incremental && !per_page { resume::plan(doc, cache, opts) } else { None });
+        if !first || per_page {
+            run.turn_off();
+        }
+        first = false;
+        let pass =
+            pass::layout_pass_with(doc, cache, opts, (&note_pages, &totals, passes < MAX_TOTAL_PASSES), (&early, rewraps < MAX_REWRAP_PASSES), run);
+        // Only a layout done in one pass can be resumed.
+        let pending = cache.pending.take();
+        cache.resume = match (&pass, passes + rewraps + note_passes) {
+            (Pass::Done(_), 1) => pending.map(Arc::new),
+            _ => None,
+        };
+        match pass {
             Pass::Again(t) => {
                 totals = t;
                 passes += 1;
@@ -367,7 +387,26 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         }
     };
     l.ms = now_ms() - t0;
+    if VERIFY_INCREMENTAL.load(std::sync::atomic::Ordering::Relaxed) && cache.resume.as_ref().is_some_and(|r| r.resumed()) {
+        let full = layout(doc, &mut LayoutCache::new(), &LayoutOptions { incremental: false, ..opts.clone() });
+        assert_eq!(format!("{:?}", l.pages), format!("{:?}", full.pages), "an incremental layout differs from a full one");
+        VERIFIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     l
+}
+
+static VERIFY_INCREMENTAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static VERIFIED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many incremental layouts [`verify_incremental`] has checked.
+pub fn verified_incremental() -> usize {
+    VERIFIED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Check every incremental layout ([`LayoutOptions::incremental`]) against a full one, and panic
+/// if their pages differ. For tests: it makes each layout cost two.
+pub fn verify_incremental(on: bool) {
+    VERIFY_INCREMENTAL.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(test)]

@@ -3,8 +3,8 @@ use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
-use std::sync::Arc;
 use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct PageBuilder {

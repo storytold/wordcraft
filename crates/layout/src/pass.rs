@@ -8,6 +8,7 @@ use super::headers::{HfLinks, bookmark_pages, headers_footers, headers_footers_r
 use super::notes::{MAX_NOTE_PAGES, NoteSeps, note_info, place_endnotes};
 use super::page::{PageBuilder, body_top_for, foot_top_for, item_bottom};
 use super::placed::Placed;
+use super::resume::Run;
 use super::table_flow::place_table;
 use super::{
     Arc, Block, Counters, DocLayout, Document, FieldCtx, HashMap, InlineObject, LayoutOptions, Page, Paragraph, Path, SectionProps, SectionStart,
@@ -384,9 +385,17 @@ fn place_section_blocks<'p>(
     outline: &Option<OutlinePass>,
     (mut block, last): (usize, usize),
     (balance, body_top): (bool, f32),
+    (run, si): (&mut Run, usize),
 ) -> (usize, usize) {
+    if balance {
+        run.turn_off();
+    }
+    block = run.enter(ctx, pb, si, block);
     let mut from = balance.then(|| (block, Snap::take(pb, ctx)));
     while block <= last && ctx.doc.body.get(block).is_some() {
+        if run.at(ctx, pb, block, si) {
+            return (ctx.doc.body.len(), 0);
+        }
         let before = balance.then(|| (pb.pages.len(), Snap::take(pb, ctx)));
         pb.mark_block();
         place_block(ctx, pb, outline, block, body_top);
@@ -518,6 +527,7 @@ fn index_lines(pages: &[Page]) -> HashMap<(StoryRef, Path), Vec<(usize, usize)>>
 /// with `totals` assumed for the page totals in the body. With `may_repeat`, a pass whose body
 /// shows totals that turn out different asks to be done again. Pages start with the wrap areas
 /// of the `early` floats; with `may_rewrap`, a pass that finds others asks to be done again.
+#[cfg(test)]
 pub(crate) fn layout_pass(
     doc: &Document,
     cache: &mut LayoutCache,
@@ -526,6 +536,20 @@ pub(crate) fn layout_pass(
     totals: &Totals,
     may_repeat: bool,
     (early, may_rewrap): (&EarlyFloats, bool),
+) -> Pass {
+    let mut run = Run::new(None);
+    run.turn_off();
+    layout_pass_with(doc, cache, opts, (note_pages, totals, may_repeat), (early, may_rewrap), run)
+}
+
+/// [`layout_pass`], resuming the last layout as `run` plans ([`crate::resume`]).
+pub(crate) fn layout_pass_with(
+    doc: &Document,
+    cache: &mut LayoutCache,
+    opts: &LayoutOptions,
+    (note_pages, totals, may_repeat): (&HashMap<u32, usize>, &Totals, bool),
+    (early, may_rewrap): (&EarlyFloats, bool),
+    mut run: Run,
 ) -> Pass {
     reset_cache(doc, cache, opts);
     let mut ctx = new_ctx(doc, cache, opts, (note_pages, totals));
@@ -541,12 +565,24 @@ pub(crate) fn layout_pass(
     let sect_ref = web_sect.as_ref().unwrap_or(first_sect);
     let mut pb = new_page_builder(sect_ref, first_sect.page_num_format, early, mode.web, !may_rewrap && !mode.reflow);
     let mut endnotes = endnote_queue(&ctx);
+    if !endnotes.is_empty() || !early.is_empty() || outline.is_some() || (opts.comment_balloons && !mode.web) || !note_pages.is_empty() {
+        run.turn_off();
+    }
     // Text boxes laid out in balancing attempts that were thrown away.
     let mut boxes_discarded = 0usize;
     let mut block = 0usize;
     let turned = turned_sections(&mut ctx, sections, mode.web);
     let mut prev_turn = TextDirection::Horizontal;
+    let mut last_si = 0;
     for (si, (end, sect)) in sections.iter().enumerate() {
+        if run.skips(si) {
+            block = (*end).min(doc.body.len().saturating_sub(1)) + 1;
+            continue;
+        }
+        last_si = si;
+        if turned.get(si).is_some_and(Option::is_some) || sect.valign != wordcraft_doc::section::PageVAlign::Top {
+            run.turn_off();
+        }
         let page_format = sect.page_num_format;
         let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };
         let sect: &SectionProps = match turned.get(si) {
@@ -581,16 +617,26 @@ pub(crate) fn layout_pass(
         pb.foot_top = sec.tops.foot;
         let last = (*end).min(doc.body.len().saturating_sub(1));
         let balance = prepare_section_end(&mut pb, sections, (si, mode.web));
-        let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));
+        if pb.cols.len() > 1 {
+            run.turn_off();
+        }
+        let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body), (&mut run, si));
         (block, boxes_discarded) = (next, boxes_discarded + discarded);
+        if run.met {
+            break;
+        }
         section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block));
     }
-    if pb.pages.is_empty() {
-        pb.new_page(0, sect_ref.margin_top);
+    if !run.met {
+        if pb.pages.is_empty() {
+            pb.new_page(0, sect_ref.margin_top);
+        }
+        // The rest of the endnotes after the last paragraph.
+        let rest: Vec<u32> = endnotes.into_iter().map(|(id, _)| id).collect();
+        place_endnotes(&mut ctx, &mut pb, rest, block);
     }
-    // The rest of the endnotes after the last paragraph.
-    let rest: Vec<u32> = endnotes.into_iter().map(|(id, _)| id).collect();
-    place_endnotes(&mut ctx, &mut pb, rest, block);
+    let resumed = run.resumed();
+    ctx.cache.pending = if opts.incremental { run.finish(doc, opts, &mut pb, &ctx, last_si) } else { None };
     let mut pages = finish_pages(pb, doc, sections, mode.web);
     if mode.web {
         fit_web_page(&mut pages);
@@ -607,7 +653,9 @@ pub(crate) fn layout_pass(
     {
         return Pass::Again(found);
     }
-    evict_unused(ctx.cache);
+    if !resumed {
+        evict_unused(ctx.cache);
+    }
     let mut lay = DocLayout { index: index_lines(&pages), pages, ms: 0.0, text_boxes: 0 };
     if opts.comment_balloons && !mode.web {
         balloons::add(&mut ctx, &mut lay);
@@ -618,20 +666,20 @@ pub(crate) fn layout_pass(
 
 /// Pagination state saved before a block, to lay the blocks from there out again (balancing
 /// columns): the builder without its pages, how far its last page had got, and the walk state.
-struct Snap {
-    pb: PageBuilder,
-    pages: usize,
-    items: usize,
-    behind: usize,
-    counters: Counters,
-    eq_count: u32,
+pub(crate) struct Snap {
+    pub(crate) pb: PageBuilder,
+    pub(crate) pages: usize,
+    pub(crate) items: usize,
+    pub(crate) behind: usize,
+    pub(crate) counters: Counters,
+    pub(crate) eq_count: u32,
     page_field: u32,
-    boxes: usize,
-    header_repeats: usize,
+    pub(crate) boxes: usize,
+    pub(crate) header_repeats: usize,
 }
 
 impl Snap {
-    fn take(pb: &mut PageBuilder, ctx: &Ctx) -> Self {
+    pub(crate) fn take(pb: &mut PageBuilder, ctx: &Ctx) -> Self {
         // The pages stay out of the copy: it would cost the whole document per block.
         let (pages, behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
         let copy = pb.clone();

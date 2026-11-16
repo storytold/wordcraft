@@ -284,7 +284,7 @@ impl Numbering {
 }
 
 /// Running list counters while walking a document in order.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct Counters {
     /// Per abstract list: current value per level.
     state: HashMap<u32, [u32; 9]>,
@@ -298,14 +298,14 @@ pub struct Counters {
     labels: HashMap<(u32, u8), CountedLabel>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct CountedLabel {
     label: Option<String>,
     levels: Vec<usize>,
 }
 
 /// Whether a level has counted yet, and the value its next item takes if a start override says so.
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
 struct LevelFlags {
     started: bool,
     first: Option<u32>,
