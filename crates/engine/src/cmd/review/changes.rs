@@ -358,8 +358,13 @@ fn resolve_listed(s: &mut Session, n: usize, accept: bool) -> Result<(), CmdErro
     if n >= list.len() {
         return Err(CmdError::Params(format!("`change` {n}: review.changes lists {} changes", list.len())));
     }
-    let Change { a, b, kind, rev, target, style, .. } = list.swap_remove(n);
-    let rev = rev.ok_or_else(|| CmdError::Params(format!("`change` {n} has no revision")))?;
+    resolve_change(s, list.swap_remove(n), accept)
+}
+
+/// Accept or reject one change of `review.changes`, by its revision, on what it was made to.
+fn resolve_change(s: &mut Session, c: Change, accept: bool) -> Result<(), CmdError> {
+    let Change { a, b, kind, rev, target, style, .. } = c;
+    let rev = rev.ok_or_else(|| CmdError::Params(format!("the {kind} change has no revision")))?;
     match (kind, target) {
         ("moveFrom" | "moveTo", _) => {
             let names = s.doc.move_name(Some(rev)).map(str::to_string).into_iter().collect();
@@ -396,12 +401,12 @@ fn resolve_listed(s: &mut Session, n: usize, accept: bool) -> Result<(), CmdErro
         }
         (_, Target::LastSection) => fmt_revisions::resolve_section(&mut s.doc.last_section, accept),
         (_, Target::Style) => {
-            let style = style.ok_or_else(|| CmdError::Params(format!("`change` {n} names no style")))?;
+            let style = style.ok_or_else(|| CmdError::Params("the style change names no style".into()))?;
             let t = StyleTarget { document: s.document_id(), sel: s.sel.clone(), style, rev };
             resolve_style_change(s, &t, accept);
         }
         (_, Target::Table | Target::Row | Target::Cell) => {
-            let (tp, r, c) = a.path.cell().ok_or_else(|| CmdError::Params(format!("`change` {n} is not in a table")))?;
+            let (tp, r, c) = a.path.cell().ok_or_else(|| CmdError::Params(format!("the {kind} change is not in a table")))?;
             let t = s.doc.table_mut(a.story, &tp)?;
             match target {
                 Target::Table => fmt_revisions::resolve_table(t, accept),
@@ -466,16 +471,30 @@ fn resolve_revision_runs(para: &mut Paragraph, from: usize, to: usize, del: bool
 /// Accept or reject every change by `author`, one at a time from the end so the earlier ones
 /// stay where they are.
 fn resolve_author(s: &mut Session, author: &str, accept: bool) -> CmdResult {
-    let by = |s: &Session, list: &[Change]| {
-        list.iter().rposition(|c| c.rev.and_then(|r| s.doc.revisions.get(r as usize)).is_some_and(|r| r.author == author))
-    };
-    // Each step resolves at least one change (a move resolves two), so this always ends.
-    let mut left = changes(s).len().saturating_add(1);
-    while left > 0 {
+    // The author's changes are resolved from the end of the list, so resolving one never moves one
+    // still to come. A move also changes its other end, which may lie earlier, so after a move the
+    // list is read again. Each reading resolves at least one change, so this ends.
+    let (mut rounds, mut most) = (0usize, None);
+    loop {
         let list = changes(s);
-        let Some(n) = by(s, &list) else { break };
-        resolve_listed(s, n, accept)?;
-        left -= 1;
+        let limit = *most.get_or_insert(list.len());
+        rounds += 1;
+        if rounds > limit {
+            break;
+        }
+        let mine: Vec<Change> =
+            list.into_iter().rev().filter(|c| c.rev.and_then(|r| s.doc.revisions.get(r as usize)).is_some_and(|r| r.author == author)).collect();
+        let mut moved = false;
+        for c in mine {
+            moved = matches!(c.kind, "moveFrom" | "moveTo");
+            resolve_change(s, c, accept)?;
+            if moved {
+                break;
+            }
+        }
+        if !moved {
+            break;
+        }
     }
     s.clamp_selection();
     sel_result(s)
@@ -623,7 +642,15 @@ fn changes(s: &Session) -> Vec<Change> {
         for (r, c) in p.run_ranges() {
             let kind = run_kind(&s.doc, c.ins, c.del);
             if !kind.is_empty() {
-                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new(), style: None, target: Target::Runs });
+                out.push(Change {
+                    a: mk(&path, r.start),
+                    b: mk(&path, r.end),
+                    kind,
+                    rev: c.ins.or(c.del),
+                    props: Vec::new(),
+                    style: None,
+                    target: Target::Runs,
+                });
             }
             if let Some((rev, kind)) = nested_deletion(&s.doc, c.ins, c.del) {
                 out.push(Change {

@@ -669,6 +669,53 @@ fn a_listed_change_out_of_range_is_an_error() {
     let mut s = bob_struck_alices_words();
     assert!(s.run("review.accept", &json!({"change": 99})).is_err());
     assert!(s.run("review.reject", &json!({"change": u64::MAX})).is_err());
+    let before = change_list(&mut s);
+    for bad in [json!(-1), json!(1.5), json!("0"), json!(true), json!([0])] {
+        assert!(s.run("review.accept", &json!({"change": bad})).is_err(), "{bad}");
+        assert!(s.run("review.reject", &json!({"change": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(change_list(&mut s), before, "a bad `change` resolves nothing");
+}
+
+#[test]
+fn an_author_that_is_not_a_string_is_an_error_and_names_match_exactly() {
+    let mut s = bob_struck_alices_words();
+    let before = change_list(&mut s);
+    for bad in [json!(123), json!(true), json!(["Bob"]), json!({"name": "Bob"})] {
+        assert!(s.run("review.acceptAll", &json!({"author": bad})).is_err(), "{bad}");
+        assert!(s.run("review.rejectAll", &json!({"author": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(change_list(&mut s), before, "a bad `author` resolves nothing");
+    run(&mut s, "review.acceptAll", json!({"author": "bob"}));
+    assert_eq!(change_list(&mut s), before, "author names are case-sensitive");
+}
+
+#[test]
+fn rejecting_all_of_one_authors_changes_undoes_a_move_among_them() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "document.setText", json!({"text": "First one.\nSecond one.\nThird one."}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Alice".into();
+    // Alice adds a word to the first and last paragraphs and moves the second to the top.
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "text.insert", json!({"text": "Very "}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " End."}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 2, "off": 0}}));
+    run(&mut s, "edit.cut", json!({}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "edit.paste", json!({}));
+    // Bob adds his own word, which stays.
+    s.author = "Bob".into();
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " Bob."}));
+    let list = change_list(&mut s);
+    assert!(list.iter().any(|(k, w, _)| k == "moveTo" && w == "Alice"), "{list:?}");
+    run(&mut s, "review.rejectAll", json!({"author": "Alice"}));
+    let list = change_list(&mut s);
+    assert_eq!(list, [("insert".to_string(), "Bob".to_string(), " Bob.".to_string())]);
+    let shown: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.shown_text()).collect();
+    assert_eq!(shown, ["First one.", "Second one.", "Third one. Bob."]);
 }
 
 #[test]
@@ -890,4 +937,29 @@ fn rejecting_a_listed_move_of_another_authors_insertion_puts_it_back_as_their_in
     assert!(list.contains(&("insert".into(), "Alice".into(), "Second one.".into())), "Alice's insertion is back where it was: {list:?}");
     let text = |i| s.doc.para_at(&Pos::body(i, 0)).map(|p| p.plain_text()).unwrap_or_default();
     assert_eq!((text(0), text(1), s.doc.body.len()), ("First one.".into(), "Second one.".into(), 2));
+}
+
+#[test]
+fn a_listed_style_change_is_resolved_alone() {
+    for (command, all, accept) in [("review.accept", "review.acceptAll", true), ("review.reject", "review.rejectAll", false)] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "document.setText", json!({"text": "body"}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        s.author = "Ana".into();
+        run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+        s.author = "Bo".into();
+        run(&mut s, "styles.modify", json!({"style": "Heading2", "chr": {"italic": true}}));
+        let changed = |s: &Session, id: &str| s.doc.styles.get(id).is_some_and(|st| st.chr_change.is_some());
+        // Bo's entry, by its place in review.changes: both share the anchor at the document start.
+        let n = listed(&mut s, |c| c["author"] == "Bo");
+        run(&mut s, command, json!({"change": n}));
+        assert!(changed(&s, "Heading1"), "{command} on Bo's listed style change resolved Ana's too");
+        assert!(!changed(&s, "Heading2"), "{command} left the listed change");
+        assert_eq!(s.doc.styles.get("Heading2").and_then(|st| st.chr.italic), accept.then_some(true));
+        // One author's Accept or Reject All reaches style changes too.
+        run(&mut s, all, json!({"author": "Ana"}));
+        assert!(!changed(&s, "Heading1"));
+        assert_eq!(s.doc.styles.get("Heading1").and_then(|st| st.chr.bold), accept.then_some(true));
+        assert!(change_list(&mut s).is_empty());
+    }
 }
