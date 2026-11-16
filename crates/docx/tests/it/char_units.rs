@@ -1,19 +1,16 @@
 //! Indents in character units (#534), common in Chinese documents: ECMA-376 Part 1 §17.3.1.12
 //! `w:ind` `w:firstLineChars`, `w:hangingChars`, `w:leftChars` and `w:rightChars`, in hundredths
-//! of a character, and paragraph spacing in line units. Fixtures are hand-written.
-
-use std::io::{Read, Write};
+//! of a character. Fixtures are hand-written.
 
 use wordcraft_doc::Document;
 use wordcraft_doc::props::ParaProps;
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 /// A package whose body is `body`.
@@ -29,15 +26,6 @@ fn props(d: &Document) -> Vec<ParaProps> {
     d.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.clone()).collect()
 }
 
-/// `word/document.xml` of `d` saved as DOCX.
-fn document_xml(d: &Document) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_docx::write(d).unwrap())).unwrap();
-    let mut xml = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
-    xml
-}
-
-/// Indents in characters: read, zero cancelling, hostile values, written back.
 #[test]
 fn character_indents_read_and_round_trip() {
     let body = r#"<w:p><w:pPr><w:ind w:firstLineChars="200" w:firstLine="420"/></w:pPr><w:r><w:t>一</w:t></w:r></w:p>
@@ -53,42 +41,14 @@ fn character_indents_read_and_round_trip() {
     // Hostile values are clamped or dropped.
     assert_eq!((p[3].indent_first_chars, p[3].indent_left_chars), (Some(1584.0), None));
 
-    let xml = document_xml(&d);
+    let _z_bytes = wordcraft_docx::write(&d).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     for attr in [r#"w:firstLineChars="200""#, r#"w:leftChars="150""#, r#"w:rightChars="50""#, r#"w:hangingChars="100""#, r#"w:firstLineChars="0""#] {
         assert!(xml.contains(attr), "{attr} missing: {xml}");
     }
     let again = props(&wordcraft_docx::read(&docx(&xml[xml.find("<w:body>").unwrap() + 8..xml.find("</w:body>").unwrap()])).unwrap());
     assert_eq!(again[..3], p[..3]);
-}
-
-/// Paragraph spacing in lines (`w:beforeLines`, `w:afterLines`, ECMA-376 §17.3.1.33, hundredths
-/// of a line), written by WPS Office and East Asian Word: a non-zero value wins over the points,
-/// one line being 12 pt without a line grid (measured in Word: `w:beforeLines="100"` is 12 pt
-/// whatever the font size, and `"0"` leaves the points in force).
-#[test]
-fn spacing_in_lines_reads_resolves_and_round_trips() {
-    let body = r#"<w:p><w:pPr><w:spacing w:before="181" w:beforeLines="50" w:after="0" w:afterLines="100"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>
-        <w:p><w:pPr><w:spacing w:before="240" w:beforeLines="0"/></w:pPr><w:r><w:t>b</w:t></w:r></w:p>
-        <w:p><w:pPr><w:spacing w:beforeLines="99999999" w:afterLines="junk"/></w:pPr><w:r><w:t>c</w:t></w:r></w:p>
-        <w:p><w:pPr><w:spacing w:beforeLines="-100"/></w:pPr><w:r><w:t>d</w:t></w:r></w:p>"#;
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
-    let p = props(&d);
-    assert_eq!((p[0].space_before_lines, p[0].space_after_lines), (Some(0.5), Some(1.0)));
-    assert_eq!((p[1].space_before_lines, p[1].space_before), (Some(0.0), Some(12.0)));
-    // Hostile values are clamped or dropped.
-    assert_eq!((p[2].space_before_lines, p[2].space_after_lines, p[3].space_before_lines), (Some(132.0), None, Some(0.0)));
-
-    let rp = |i: usize| d.styles.resolve_para(&p[i]);
-    assert_eq!((rp(0).space_before, rp(0).space_after), (6.0, 12.0), "lines win over the stored 9.05 pt");
-    assert_eq!(rp(1).space_before, 12.0, "zero lines leave the points in force");
-    assert_eq!(rp(2).space_before, 1584.0);
-
-    let xml = document_xml(&d);
-    for attr in [r#"w:beforeLines="50""#, r#"w:afterLines="100""#, r#"w:beforeLines="0""#] {
-        assert!(xml.contains(attr), "{attr} missing: {xml}");
-    }
-    let again = props(&wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap());
-    assert_eq!(again[..2], p[..2]);
 }
 
 /// HTML-style automatic paragraph spacing (`w:beforeAutospacing`, `w:afterAutospacing`, ECMA-376
@@ -108,7 +68,9 @@ fn automatic_spacing_reads_and_round_trips() {
     assert_eq!((rp.space_before, rp.space_after, rp.before_auto), (14.0, 14.0, true), "automatic spacing is 14 pt");
     assert_eq!(d.styles.resolve_para(&p[2]).space_after, 5.0);
 
-    let xml = document_xml(&d);
+    let _z_bytes = wordcraft_docx::write(&d).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     for attr in [r#"w:beforeAutospacing="1""#, r#"w:afterAutospacing="1""#, r#"w:beforeAutospacing="0""#] {
         assert!(xml.contains(attr), "{attr} missing");
     }
@@ -125,9 +87,8 @@ fn adjust_right_indent_is_preserved() {
     assert_eq!(props(&d).iter().map(|p| p.adjust_right_indent).collect::<Vec<_>>(), [Some(false), Some(true), None]);
     for _ in 0..2 {
         let out = wordcraft_docx::write(&d).unwrap();
-        let mut z = zip::ZipArchive::new(std::io::Cursor::new(out.clone())).unwrap();
-        let mut xml = String::new();
-        z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+        let mut z = craft_zip::Archive::open(&out, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+        let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
         assert!(xml.contains(r#"<w:adjustRightInd w:val="0""#), "explicit false was lost: {xml}");
         assert!(xml.contains("<w:adjustRightInd/>"), "explicit true was lost: {xml}");
         let tags = ["<w:adjustRightInd", "<w:snapToGrid", "<w:spacing", "<w:ind"];

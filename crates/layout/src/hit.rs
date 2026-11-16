@@ -292,9 +292,13 @@ fn hf_text_at(p: &Page, id: u32, x: f32, y: f32) -> bool {
             _ => None,
         })
         .any(|(para, l0, l1, lx, ly)| {
-            let (Some(first), Some(last)) = (para.lines.get(*l0), para.lines.get(l1.checked_sub(1).unwrap_or(0))) else { return false };
-            let bottom = ly + last.top + last.height - first.top;
-            y >= *ly - 2.0 && y <= bottom + 2.0 && x >= *lx - 40.0 && x <= lx + last.right + 40.0
+            let Some(first) = para.lines.get(*l0) else { return false };
+            // Each line has its own band and extent: lines beside a float are shorter than the
+            // ones above them, and a click on a long line past a short one's end is still text.
+            (*l0..*l1).filter_map(|li| para.lines.get(li)).any(|l| {
+                let top = ly + l.top - first.top;
+                y >= top - 2.0 && y <= top + l.height + 2.0 && x >= lx + l.left - 40.0 && x <= lx + l.right + 40.0
+            })
         })
 }
 

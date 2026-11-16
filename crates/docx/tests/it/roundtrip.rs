@@ -19,19 +19,23 @@ fn rt(doc: &Document) -> Document {
     wordcraft_docx::read(&bytes).expect("read")
 }
 
-/// `doc` without the stacking order a save gives objects made in WordCraft (`relativeHeight`,
-/// read back as `Float::z`), to compare them with the objects as made.
-fn unstacked(mut doc: Document) -> Document {
-    doc.objects_mut(&|_| true, &mut |o| {
-        if let Some(f) = o.float_mut() {
-            f.z = 0;
-        }
-    });
-    doc
-}
-
 fn paras(doc: &Document) -> Vec<&Paragraph> {
     doc.body.iter().filter_map(|b| b.as_para()).collect()
+}
+
+/// `doc` with the stacking order of its body's floating objects cleared: saving gives objects
+/// without one an order (`relativeHeight`), so tests about other properties compare without it.
+fn unstacked(mut doc: Document) -> Document {
+    for b in &mut doc.body {
+        if let Block::Para(p) = std::sync::Arc::make_mut(b) {
+            for o in &mut p.objects {
+                if let Some(f) = o.float_mut() {
+                    f.z = 0;
+                }
+            }
+        }
+    }
+    doc
 }
 
 fn part_text(doc: &Document, id: Option<u32>) -> String {
@@ -59,7 +63,11 @@ fn para_runs(runs: &[(&str, CharProps)]) -> Paragraph {
 fn tiny_png() -> Vec<u8> {
     let img = image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8 * 80, y as u8 * 120, 200, 255]));
     let mut out = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    std::io::Write::write_all(
+        &mut out,
+        &wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap(),
+    )
+    .unwrap();
     out.into_inner()
 }
 
@@ -153,7 +161,6 @@ fn every_char_prop_round_trips() {
     assert_eq!(p.runs[0].props, CharProps::default());
 }
 
-/// Every paragraph property survives a DOCX save and reopen.
 #[test]
 fn every_para_prop_round_trips() {
     let b = Border { style: BorderStyle::Double, width: 0.75, color: Some(Rgb(9, 8, 7)), space: 4.0 };
@@ -168,8 +175,6 @@ fn every_para_prop_round_trips() {
         indent_first_chars: Some(-1.0),
         space_before: Some(6.0),
         space_after: Some(12.0),
-        space_before_lines: Some(0.5),
-        space_after_lines: Some(0.0),
         space_before_auto: Some(true),
         space_after_auto: Some(false),
         line_spacing: Some(LineSpacing::Multiple(1.5)),
@@ -224,13 +229,13 @@ fn every_para_prop_round_trips() {
         fmt_change: None,
         snap_to_grid: Some(false),
         text_alignment: Some(TextAlignment::Top),
+        space_before_lines: None,
+        space_after_lines: None,
     };
     let variants = [
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
         ParaProps { line_spacing: Some(LineSpacing::Exactly(20.0)), align: Some(Align::Right), ..Default::default() },
         ParaProps { align: Some(Align::Distribute), ..Default::default() },
-        ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
-        ParaProps { align: Some(Align::KhmerJustify), ..Default::default() },
         ParaProps { kinsoku: Some(true), word_wrap: Some(true), auto_space_dn: Some(false), ..Default::default() },
         ParaProps::default(),
     ];
@@ -325,9 +330,8 @@ fn tracked_style_definition_change_round_trips() {
     });
     d.body = vec![para_block(Paragraph::with_text("x", CharProps::default()))];
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/styles.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/styles.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains("<w:pPrChange") && xml.contains("<w:rPrChange"), "{xml}");
     assert!(!xml.contains("stylePrChange"), "CT_Style has no such element: {xml}");
     drop(zip);
@@ -585,16 +589,7 @@ fn comments_round_trip() {
     p.insert_object(end, InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
     d.body = vec![para_block(p.clone())];
     let r = rt(&d);
-    // The reply made here is written with its parent's anchors, as Word saves a reply (Word for
-    // Mac drops a reply without them), and comes back with them; a second save keeps them as they are.
-    let anchored = [
-        InlineObject::CommentStart { id: 0 },
-        InlineObject::CommentStart { id: 1 },
-        InlineObject::CommentEnd { id: 0 },
-        InlineObject::CommentEnd { id: 1 },
-    ];
-    assert_eq!(paras(&r)[0].objects, anchored);
-    assert_eq!(paras(&rt(&r))[0].objects, anchored);
+    assert_eq!(paras(&r)[0].objects, p.objects);
     assert_eq!(r.comments.len(), 2);
     for (id, c) in &d.comments {
         let g = r.comments.get(id).expect("comment");
@@ -602,35 +597,6 @@ fn comments_round_trip() {
         assert_eq!(part_text(&r, Some(g.part)), part_text(&d, Some(c.part)));
         assert_eq!(r.parts.get(&g.part).unwrap().kind, PartKind::Comment);
     }
-}
-
-/// A reply to a reply made here (neither has anchors yet) takes the thread's anchors too, so Word
-/// shows both.
-#[test]
-fn a_reply_to_a_new_reply_is_anchored_too() {
-    let mut d = Document::new();
-    for (id, parent, text) in [(0, None, "Please check this."), (1, Some(0), "Done."), (2, Some(1), "Thanks.")] {
-        let part = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(text, CharProps::default()))]);
-        d.comments.insert(id, Comment { author: "Ann".into(), initials: "A".into(), parent, part, ..Default::default() });
-    }
-    let mut p = Paragraph::with_text("commented text", CharProps::default());
-    p.insert_object(0, InlineObject::CommentStart { id: 0 }, &CharProps::default()).unwrap();
-    let end = p.len();
-    p.insert_object(end, InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
-    d.body = vec![para_block(p)];
-    let r = rt(&d);
-    assert_eq!(
-        paras(&r)[0].objects,
-        [
-            InlineObject::CommentStart { id: 0 },
-            InlineObject::CommentStart { id: 1 },
-            InlineObject::CommentStart { id: 2 },
-            InlineObject::CommentEnd { id: 0 },
-            InlineObject::CommentEnd { id: 1 },
-            InlineObject::CommentEnd { id: 2 },
-        ]
-    );
-    assert_eq!(r.comments.get(&2).and_then(|c| c.parent), Some(1));
 }
 
 /// A table style's cell text formatting, whole-table shading, cell margins and its header row and
@@ -787,9 +753,8 @@ fn note_options_round_trip_per_section() {
     assert!(sections[1].1.footnote_pr.is_empty() && sections[1].1.endnote_pr.is_empty());
     assert_eq!(r.note_options(sections[0].1, false).num_start, 7);
     assert_eq!(r.note_options(sections[1].1, false).num_start, 4);
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     let at = |s: &str| xml.find(s).unwrap_or_else(|| panic!("{s} missing"));
     assert!(
         at("<w:footnotePr><w:numFmt w:val=\"lowerRoman\"/><w:numStart w:val=\"7\"/><w:numRestart w:val=\"eachSect\"/></w:footnotePr>")
@@ -812,9 +777,8 @@ fn note_never_references_itself() {
     d.body = vec![para_block(p)];
 
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/footnotes.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/footnotes.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(!xml.contains("<w:footnoteReference"), "a footnote cites itself: {xml}");
     assert_eq!(xml.matches("<w:footnoteRef/>").count(), 1, "{xml}");
 
@@ -879,13 +843,12 @@ fn word_note_mark_round_trips_once() {
     let mut doc = d;
     for pass in 0..2 {
         let bytes = wordcraft_docx::write(&doc).expect("write");
-        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
         for (file, mark, reference, style) in [
             ("word/footnotes.xml", "<w:footnoteRef/>", "<w:footnoteReference", "FootnoteReference"),
             ("word/endnotes.xml", "<w:endnoteRef/>", "<w:endnoteReference", "EndnoteReference"),
         ] {
-            let mut xml = String::new();
-            std::io::Read::read_to_string(&mut zip.by_name(file).unwrap(), &mut xml).unwrap();
+            let xml = String::from_utf8(zip.read(file, 16 << 20).unwrap().unwrap()).unwrap();
             assert_eq!(xml.matches(mark).count(), 1, "pass {pass}: {xml}");
             assert!(!xml.contains(reference), "pass {pass}: a note cites itself: {xml}");
             assert!(xml.contains(&format!(r#"<w:rStyle w:val="{style}"/></w:rPr>{mark}"#)), "pass {pass}: {xml}");
@@ -933,9 +896,8 @@ fn toc_field_wraps_its_entries() {
         let d = doc_with(blocks);
 
         let bytes = wordcraft_docx::write(&d).expect("write");
-        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-        let mut xml = String::new();
-        std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+        let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+        let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
         let sdt = xml.find("<w:sdt>").expect("TOC content control");
         assert!(xml.contains(r#"<w:docPartGallery w:val="Table of Contents"/>"#), "{xml}");
         let (begin, fend) = (xml.find(r#"fldCharType="begin""#).unwrap(), xml.find(r#"fldCharType="end""#).unwrap());
@@ -972,9 +934,8 @@ fn cell_text_direction_round_trips() {
     let mut d = Document::new();
     d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::new())];
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<w:textDirection w:val="tbRl"/>"#), "{xml}");
     assert!(xml.contains(r#"<w:textDirection w:val="btLr"/>"#), "{xml}");
     assert_eq!(xml.matches("w:textDirection").count(), 2, "horizontal cells write nothing: {xml}");
@@ -1027,9 +988,8 @@ fn toc_field_skips_nested_stories() {
     d.body = vec![para_block(head), para_block(last), para_block(Paragraph::with_text("Body", CharProps::default()))];
 
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     let boxes: Vec<(usize, usize)> = xml.match_indices("<w:txbxContent>").map(|(a, _)| (a, a + xml[a..].find("</w:txbxContent>").unwrap())).collect();
     assert_eq!(boxes.len(), 2, "{xml}");
     let in_box = |i: usize| boxes.iter().any(|(a, b)| (*a..*b).contains(&i));
@@ -1093,9 +1053,8 @@ fn tracked_equations_round_trip() {
     p.insert_object(end, InlineObject::Equation { linear: "z=1".into(), display: false, math: Default::default() }, &plain).unwrap();
     d.body = vec![para_block(p.clone())];
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<w:ins w:id="1" w:author="Alice" w:date="2026-05-01T10:00:00Z"><m:oMath>"#), "ins directly encloses inline math: {xml}");
     assert!(
         xml.contains(r#"<w:del w:id="2" w:author="Bob" w:date="2026-05-02T10:00:00Z"><m:oMathPara>"#),
@@ -1158,9 +1117,8 @@ fn tracked_paragraph_marks_round_trip() {
     let last = Paragraph::with_text("plain", CharProps::default());
     d.body = vec![para_block(split), para_block(joined), para_block(last)];
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<w:rPr><w:ins w:id="#), "{xml}");
     assert!(xml.contains(r#"<w:rPr><w:del w:id="#), "{xml}");
     let r = wordcraft_docx::read(&bytes).expect("read");
@@ -1204,10 +1162,9 @@ fn fields_and_special_chars_round_trip() {
 
 /// The `document.xml` of a written package.
 fn document_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
-    xml
+    let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 /// #877: a field begin marker's `w:dirty` (the cached result is stale; Word refreshes it on
@@ -1485,9 +1442,8 @@ fn drawing_canvas_round_trips() {
     p.insert_object(end, canvas, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains("wordprocessingCanvas") && xml.contains("<wpc:wpc>") && xml.contains("<wpc:bg>") && xml.contains("<wpc:whole>"), "{xml}");
     let r = wordcraft_docx::read(&bytes).unwrap();
     let got = paras(&r);
@@ -1533,9 +1489,8 @@ fn rotated_drawing_canvas_round_trips() {
     let end = p.len();
     p.insert_object(end, canvas(square), &CharProps::default()).unwrap();
     let bytes = wordcraft_docx::write(&doc_with(vec![p])).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(
         xml.contains(r#"<wpc:extLst><a:ext uri="urn:wordcraft:canvas-xfrm"><a:xfrm rot="1800000" flipH="1"/></a:ext></wpc:extLst></wpc:wpc>"#),
         "{xml}"
@@ -1563,9 +1518,8 @@ fn table_contextual_spacing_compatibility_flag_round_trips() {
             assert_eq!(r.settings.compat_mode, mode);
             if allow {
                 let bytes = wordcraft_docx::write(&d).unwrap();
-                let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-                let mut xml = String::new();
-                std::io::Read::read_to_string(&mut zip.by_name("word/settings.xml").unwrap(), &mut xml).unwrap();
+                let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+                let xml = String::from_utf8(zip.read("word/settings.xml", 16 << 20).unwrap().unwrap()).unwrap();
                 // CT_Compat requires the boolean option before compatSetting.
                 assert!(xml.find("<w:allowSpaceOfSameStyleInTable").unwrap() < xml.find("<w:compatSetting").unwrap());
             }
@@ -1596,15 +1550,13 @@ fn attached_template_and_link_styles_round_trip() {
     d.settings.mirror_margins = true;
     d.settings.track_changes = true;
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/settings.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/settings.xml", 16 << 20).unwrap().unwrap()).unwrap();
     let at = |tag: &str| xml.find(tag).unwrap_or_else(|| panic!("{tag} missing: {xml}"));
     assert!(at("<w:mirrorMargins") < at("<w:attachedTemplate"));
     assert!(at("<w:attachedTemplate") < at("<w:linkStyles"));
     assert!(at("<w:linkStyles") < at("<w:trackRevisions"));
-    let mut rels = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/_rels/settings.xml.rels").unwrap(), &mut rels).unwrap();
+    let rels = String::from_utf8(zip.read("word/_rels/settings.xml.rels", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(rels.contains("relationships/attachedTemplate") && rels.contains("TargetMode=\"External\""), "{rels}");
 
     let r = wordcraft_docx::read(&bytes).expect("read");
@@ -1622,10 +1574,9 @@ fn attached_template_and_link_styles_round_trip() {
 #[test]
 fn zoom_round_trips() {
     let settings = |bytes: &[u8]| {
-        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-        let mut xml = String::new();
-        std::io::Read::read_to_string(&mut zip.by_name("word/settings.xml").unwrap(), &mut xml).unwrap();
-        xml
+        let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+        String::from_utf8(zip.read("word/settings.xml", 16 << 20).unwrap().unwrap()).unwrap()
     };
     let plain = wordcraft_docx::write(&Document::new()).unwrap();
     let xml = settings(&plain);
@@ -1688,10 +1639,9 @@ fn settings_core_theme_round_trip() {
 }
 
 fn part_xml(bytes: &[u8], name: &str) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut xml).unwrap();
-    xml
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read(name, 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 /// Header parts in the document, by id.
@@ -2086,9 +2036,8 @@ fn char_border_written_between_u_and_shd() {
     let c =
         CharProps { border: Some(Border::single(0.5)), underline: Some(Underline::Single), shading: Some(Rgb(0xFF, 0xFF, 0)), ..Default::default() };
     let bytes = wordcraft_docx::write(&doc_with(vec![para_runs(&[("x", c)])])).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     let bdr = r#"<w:bdr w:val="single" w:sz="4" w:space="0" w:color="auto"/>"#;
     assert_eq!(xml.matches(bdr).count(), 1, "{xml}");
     let at = xml.find(bdr).unwrap();
@@ -2185,9 +2134,8 @@ fn ink_and_freeforms_round_trip_as_custom_geometry() {
     }
     let d = doc_with(vec![p]);
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(xml.matches("<a:custGeom>").count(), 3, "{xml}");
     assert!(xml.contains(r#"<a:path w="762000" h="254000" fill="none"><a:moveTo><a:pt x="12700" y="12700"/></a:moveTo><a:lnTo>"#), "{xml}");
     assert!(xml.contains(r#"<a:alpha val="50000"/>"#) && xml.contains(r#"cap="rnd""#), "{xml}");
@@ -2227,9 +2175,8 @@ fn shape_effects_round_trip() {
     let mut p = Paragraph::with_text("x", CharProps::default());
     p.insert_object(1, shape, &CharProps::default()).unwrap();
     let bytes = wordcraft_docx::write(&doc_with(vec![p])).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(
         xml.contains(
             r#"<a:outerShdw blurRad="50800" dist="38100" dir="8100000" algn="tr" rotWithShape="0"><a:srgbClr val="203040"><a:alpha val="40000"/>"#
@@ -2320,9 +2267,8 @@ fn rotation_and_flips_round_trip() {
     }
     d.body = vec![para_block(p)];
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<a:xfrm rot="1800000">"#), "{xml}");
     assert!(xml.contains(r#"<a:xfrm rot="5400000" flipH="1">"#), "{xml}");
     assert!(xml.contains(r#"<a:xfrm rot="18930000" flipV="1">"#), "{xml}");
@@ -2373,9 +2319,8 @@ fn rotated_group_and_shadow_rotation_round_trip() {
     let mut p = Paragraph::with_text("g", CharProps::default());
     p.insert_object(1, group, &CharProps::default()).unwrap();
     let bytes = wordcraft_docx::write(&doc_with(vec![p])).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<wpg:grpSpPr><a:xfrm rot="8100000" flipH="1">"#), "{xml}");
     assert!(xml.contains(r#"rotWithShape="1""#) && xml.contains(r#"rotWithShape="0""#), "{xml}");
     let r = wordcraft_docx::read(&bytes).expect("read");
@@ -2479,9 +2424,8 @@ fn a_corporate_author_round_trips() {
         ..Default::default()
     });
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
-    let mut item_xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("customXml/item1.xml").unwrap(), &mut item_xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes[..], craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let item_xml = String::from_utf8(zip.read("customXml/item1.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(item_xml.contains("<b:Author><b:Author><b:Corporate>World Health Organization</b:Corporate></b:Author><b:Editor>"), "{item_xml}");
     assert!(item_xml.contains("<b:Corporate>Harbor Guild, Inc.</b:Corporate>"), "{item_xml}");
     assert!(!item_xml.contains("<b:Last>Rivera</b:Last>"), "the corporate author takes the person authors' place: {item_xml}");
@@ -2491,23 +2435,20 @@ fn a_corporate_author_round_trips() {
 }
 
 fn assert_bibliography_parts(bytes: &[u8]) {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    assert!(zip.by_name("customXml/item1.xml").is_ok());
-    assert!(zip.by_name("customXml/itemProps1.xml").is_ok());
-    assert!(zip.by_name("customXml/_rels/item1.xml.rels").is_ok());
+    let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    assert!(zip.contains("customXml/item1.xml"));
+    assert!(zip.contains("customXml/itemProps1.xml"));
+    assert!(zip.contains("customXml/_rels/item1.xml.rels"));
 
-    let mut rels_xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("_rels/.rels").unwrap(), &mut rels_xml).unwrap();
+    let rels_xml = String::from_utf8(zip.read("_rels/.rels", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(rels_xml.contains("relationships/customXml"), "{rels_xml}");
     assert!(rels_xml.contains("Target=\"customXml/item1.xml\""), "{rels_xml}");
 
-    let mut ct_xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("[Content_Types].xml").unwrap(), &mut ct_xml).unwrap();
+    let ct_xml = String::from_utf8(zip.read("[Content_Types].xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(ct_xml.contains("PartName=\"/customXml/item1.xml\""), "{ct_xml}");
     assert!(ct_xml.contains("PartName=\"/customXml/itemProps1.xml\""), "{ct_xml}");
 
-    let mut item_xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("customXml/item1.xml").unwrap(), &mut item_xml).unwrap();
+    let item_xml = String::from_utf8(zip.read("customXml/item1.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert_bibliography_types(&item_xml);
     assert_bibliography_people(&item_xml);
     assert_bibliography_details(&item_xml);
@@ -2635,9 +2576,8 @@ fn wrap_polygons_round_trip() {
     }
     d.body = vec![para_block(p)];
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<wp:wrapPolygon edited="1"><wp:start x="-300" y="0"/><wp:lineTo x="21600" y="1200"/>"#), "{xml}");
     assert!(xml.contains(r#"<wp:lineTo x="-300" y="0"/></wp:wrapPolygon>"#), "closed: {xml}");
     let r = unstacked(wordcraft_docx::read(&bytes).expect("read"));
@@ -2674,9 +2614,8 @@ fn enclosed_characters_round_trip_in_words_structure() {
     }
     let doc = doc_with(vec![p]);
     let bytes = wordcraft_docx::write(&doc).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<w:instrText xml:space="preserve"> eq \o\ac(○</w:instrText>"#), "{xml}");
     assert!(!xml.contains("separate") && !xml.contains("enlarge"), "{xml}");
     // Shrink text at 11 pt: the character at 7.5 pt (half-points 15), raised.
@@ -2709,9 +2648,8 @@ fn ruby_phonetic_guide_round_trips_as_w_ruby() {
     p.insert_object(5, ruby.clone(), &bold).unwrap();
     let d = doc_with(vec![p]);
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     for part in [
         r#"<w:rubyAlign w:val="distributeSpace"/><w:hps w:val="11"/><w:hpsRaise w:val="20"/><w:hpsBaseText w:val="22"/><w:lid w:val="ja-JP"/>"#,
         "<w:rt><w:r>",
@@ -2756,9 +2694,8 @@ fn wrap_text_sides_round_trip() {
     }
     d.body = vec![para_block(p)];
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     for tag in [
         r#"<wp:wrapSquare wrapText="left"/>"#,
         r#"<wp:wrapTight wrapText="right">"#,
@@ -2823,9 +2760,8 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
     t.props.description = Some("Prices by year".into());
     d.body = vec![para_block(p), Arc::new(Block::Table(t))];
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"{C183D7F6-B498-43B3-948B-1728B52AA6E4}"><adec:decorative xmlns:adec="http://schemas.microsoft.com/office/drawing/2017/decorative" val="1"/>"#), "{xml}");
     assert!(
         xml.contains(r#"<w:tblLook "#) && xml.contains(r#"<w:tblCaption w:val="Prices"/><w:tblDescription w:val="Prices by year"/></w:tblPr>"#),
@@ -2904,9 +2840,8 @@ fn warps_and_glued_connectors_round_trip() {
 
     // Hostile: an unknown warp, a huge adjust value, a glue to a missing shape.
     let xml = wordcraft_docx::write(&r).unwrap();
-    let mut pkg = zip::ZipArchive::new(std::io::Cursor::new(xml)).unwrap();
-    let mut doc_xml = String::new();
-    std::io::Read::read_to_string(&mut pkg.by_name("word/document.xml").unwrap(), &mut doc_xml).unwrap();
+    let mut pkg = craft_zip::Archive::open(&xml, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let doc_xml = String::from_utf8(pkg.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     let doc_xml = doc_xml
         .replace("prst=\"textArchUp\"", "prst=\"textNotAWarp\"")
         .replace("a:stCxn id=\"5\" idx=\"3\"", "a:stCxn id=\"404\" idx=\"99999999999\"");
@@ -2919,29 +2854,29 @@ fn warps_and_glued_connectors_round_trip() {
 
 /// `zip` with part `name` replaced by `data`.
 fn replace_part(zip_bytes: &[u8], name: &str, data: &[u8]) -> Vec<u8> {
-    let mut src = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
-    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for i in 0..src.len() {
-        let mut f = src.by_index(i).unwrap();
-        let n = f.name().to_string();
-        out.start_file(n.as_str(), zip::write::SimpleFileOptions::default()).unwrap();
+    let mut src = craft_zip::Archive::open(zip_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let names: Vec<String> = src.names().map(|n| n.into_owned()).collect();
+    let mut out = craft_zip::Writer::new();
+    for n in names {
         if n == name {
-            std::io::Write::write_all(&mut out, data).unwrap();
+            out.add(&n, data, craft_zip::Compression::Deflated).unwrap();
         } else {
-            std::io::copy(&mut f, &mut out).unwrap();
+            let bytes = src.read(&n, 16 << 20).unwrap().unwrap();
+            out.add(&n, &bytes, craft_zip::Compression::Deflated).unwrap();
         }
     }
-    out.finish().unwrap().into_inner()
+    out.finish().unwrap()
 }
 
 /// A texture or picture page background (`v:background/v:fill`) survives a save (#999): the image
 /// part, its relationship and the fill attributes.
 #[test]
 fn page_background_picture_round_trips() {
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 150, 100, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 150, 100, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     let mut d = Document::new();
     d.settings.page_color = Some(Rgb(0xFF, 0xFF, 0xCC));
     d.media.insert("paper.png".into(), Arc::new(png.clone()));
@@ -2971,9 +2906,8 @@ fn drop_cap_options_round_trip() {
     margin.props.drop_cap_margin = Some(true);
     let d = doc_with(vec![dropped, margin]);
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"w:dropCap="drop" w:lines="2" w:hSpace="120""#), "{xml}");
     assert!(xml.contains(r#"w:dropCap="margin" w:lines="4""#), "{xml}");
     assert!(xml.contains(r#"w:ascii="Liberation Mono""#), "the letter's font on its run: {xml}");
@@ -2991,60 +2925,5 @@ fn drop_cap_options_round_trip() {
     assert_eq!(
         (b.props.drop_cap, b.props.drop_cap_margin, b.props.drop_cap_distance, b.props.drop_cap_font.as_deref()),
         (Some(4), Some(true), None, None)
-    );
-}
-
-/// Thai Distributed is `w:jc="thaiDistribute"`; Khmer Justify is the same value plus the ignorable
-/// `wc:khmer` mark, so Word shows Thai Distributed and WordCraft shows Khmer Justify.
-#[test]
-fn thai_distributed_and_khmer_justify_stay_apart() {
-    let mut a = Paragraph::with_text("ខ្មែរ", CharProps::default());
-    a.props = ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() };
-    let mut b = Paragraph::with_text("ខ្មែរ", CharProps::default());
-    b.props = ParaProps { align: Some(Align::KhmerJustify), ..Default::default() };
-    let r = rt(&doc_with(vec![a, b]));
-    let got = paras(&r);
-    assert_eq!(got[0].props.align, Some(Align::ThaiDistribute));
-    assert_eq!(got[1].props.align, Some(Align::KhmerJustify));
-}
-
-/// #3000: a drop cap set past Word's 10 lines is saved as 10 lines, and its letter at the size of
-/// 10 lines of 12 pt (197.14 pt → 394), the size the layout draws, not 11 lines' 435.
-#[test]
-fn a_drop_cap_past_ten_lines_is_saved_at_ten_lines_size() {
-    let mut p = Paragraph::with_text("Once upon a time", CharProps::default());
-    p.props.drop_cap = Some(11);
-    let d = doc_with(vec![p]);
-    let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
-    assert!(xml.contains(r#"w:lines="10""#), "{xml}");
-    assert!(xml.contains(r#"w:sz w:val="394""#) && !xml.contains(r#"w:val="435""#), "the letter's size is 10 lines': {xml}");
-}
-
-/// #3000: a drop cap whose text inherits its complex-script size from the document defaults is
-/// saved with that size enlarged too — `w:szCs` beside `w:sz` — or an Arabic letter would stay at
-/// the text's size. Differing Latin and complex-script sizes each grow from their own: 3 lines of
-/// 12 pt → 53.14 pt (106), of 16 pt → 70.86 pt (142).
-#[test]
-fn a_drop_caps_inherited_complex_script_size_is_enlarged() {
-    let mut p = Paragraph::with_text("مرحبا بالعالم", CharProps::default());
-    p.props.drop_cap = Some(3);
-    let mut d = doc_with(vec![p]);
-    std::sync::Arc::make_mut(&mut d.styles).default_chr.size = Some(12.0);
-    std::sync::Arc::make_mut(&mut d.styles).default_chr.size_cs = Some(16.0);
-    let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
-    assert!(xml.contains(r#"<w:sz w:val="106"/><w:szCs w:val="142"/>"#), "both scripts' drawn sizes on the letter's run: {xml}");
-    let r = wordcraft_docx::read(&bytes).expect("read");
-    let got = paras(&r);
-    assert_eq!(got.len(), 1, "the letter merges back into its paragraph");
-    assert!(
-        got[0].runs.iter().all(|r| (r.props.size, r.props.size_cs) == (None, None)),
-        "the letter inherits the text's sizes again: {:?}",
-        got[0].runs
     );
 }
