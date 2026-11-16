@@ -387,3 +387,49 @@ fn paragraph_mark_search_by_format_does_work_linear_in_the_paragraphs() {
     let (small, big) = (steps(400), steps(3200));
     assert!(big < small * 16, "{small} steps for 400 paragraphs, {big} for 3200");
 }
+
+/// Bold the bytes `a..b` of the first paragraph.
+fn bold_bytes(s: &mut Session, a: usize, b: usize) {
+    s.sel = crate::Selection { anchor: Pos::body(0, a), focus: Pos::body(0, b) };
+    run(s, "format.bold", json!({"value": true}));
+}
+
+fn spans(s: &Session) -> Vec<(usize, usize)> {
+    s.find.results.iter().map(|(a, b)| (a.off, b.off)).collect()
+}
+
+/// After a candidate is dropped for its formatting, the search goes on one character after its
+/// start, so a match that overlaps the dropped one is still found.
+#[test]
+fn a_candidate_overlapping_a_rejected_one_is_still_found() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "aaa"}));
+    bold_bytes(&mut s, 1, 3);
+    run(&mut s, "edit.find", json!({"text": "aa", "format": {"bold": true}}));
+    assert_eq!(spans(&s), [(1, 3)], "`aa` at 0..2 is not all bold, 1..3 is");
+    // Without a filter the matches stay non-overlapping, as before.
+    run(&mut s, "edit.find", json!({"text": "aa", "format": null}));
+    assert_eq!(spans(&s), [(0, 2)]);
+}
+
+/// An accepted match still ends the search window: Replace All never replaces overlapping text.
+#[test]
+fn replace_all_with_a_format_filter_does_not_overlap_accepted_matches() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "aaaa"}));
+    bold_bytes(&mut s, 0, 4);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "aa", "format": {"bold": true}}))["count"], 2);
+    assert_eq!(spans(&s), [(0, 2), (2, 4)]);
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "aa", "format": {"bold": true}, "with": "b"}))["replaced"], 2);
+    assert_eq!(text(&s), "bb");
+}
+
+/// Multi-byte text: the step after a rejected candidate stays on a character boundary.
+#[test]
+fn a_rejected_candidate_in_multibyte_text_steps_by_a_whole_character() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "äää"}));
+    bold_bytes(&mut s, 2, 6);
+    run(&mut s, "edit.find", json!({"text": "ää", "format": {"bold": true}}));
+    assert_eq!(spans(&s), [(2, 6)], "the step after the rejected 0..4 is one `ä` (2 bytes)");
+}

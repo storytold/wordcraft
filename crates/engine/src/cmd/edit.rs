@@ -640,6 +640,10 @@ fn search_text(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found
                 candidates += 1;
                 if retainer.as_mut().is_none_or(|r| r.accepts(&found)) {
                     out.push(found);
+                } else if let Some(step) = hay.get(m.start()..).and_then(|t| t.chars().next()).map(|c| m.start() + c.len_utf8()) {
+                    // A match the formatting filter drops does not use up its text: the search goes on one
+                    // character after its start, so an overlapping match that has the formatting is found.
+                    input.set_start(step);
                 }
                 if out.len() >= 100_000 || candidates >= MAX_CANDIDATES {
                     return Ok(out);
