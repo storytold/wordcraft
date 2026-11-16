@@ -8,6 +8,7 @@ mod autospace;
 mod bidi;
 mod budget;
 mod cell_floats;
+mod closing_border_room;
 mod complex;
 mod float_top;
 mod grid;
@@ -4651,7 +4652,10 @@ fn exact_rows_move_on_whole() {
 /// A nested table's cell the page bottom cuts through goes on at the top of the next page with
 /// what is left of it, and the paragraph after the nested table below it, while its neighbour's
 /// text runs on too. The cell's shift used to come from that paragraph (below the page bottom),
-/// which squashed the nested cell to 2pt on the next page.
+/// which squashed the nested cell to 2pt on the next page. The cell is 300pt tall by the space
+/// after its second line, which that line needs on its page: the first line stays and the second
+/// goes on with the rest of the cell, as in Word for Windows. A row made that tall by its height,
+/// exact or at least, goes on whole (`tests::closing_border_room`).
 #[test]
 fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
     crate::test_fonts();
@@ -4661,8 +4665,26 @@ fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
         p.props.space_after = Some(0.0);
     }
     let mut inner = Table::new(1, 1, 150.0);
-    inner.rows[0].props.height = Some(300.0);
-    inner.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+    inner.rows[0].cells[0].blocks = ["One", "Two"]
+        .into_iter()
+        .map(|text| {
+            let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    let tall = |inner: &mut Table, lines: f32| {
+        if let Some(wordcraft_doc::Block::Para(p)) = inner.rows[0].cells[0].blocks.last_mut().map(std::sync::Arc::make_mut) {
+            p.props.space_after = Some(300.0 - lines);
+        }
+    };
+    // The two lines' own height, from the cell with no space after them.
+    let lines = {
+        let mut d = Document::from_text("Filler");
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(inner.clone())).unwrap();
+        lay(&d).pages[0].items.iter().find_map(|it| if let Placed::Cell { rect, .. } = it { Some(rect.h) } else { None }).unwrap_or(0.0)
+    };
+    tall(&mut inner, lines);
     let mut t = Table::new(1, 2, 400.0);
     let text = "Dotted leader lines to fill in by hand later on. ".repeat(40);
     t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
@@ -4676,7 +4698,17 @@ fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
     };
     let (Some(a), Some(b)) = (nested(0), nested(1)) else { panic!("the nested cell is on both pages") };
     assert!((a.bottom() - 720.0).abs() < 0.5, "cut at the page bottom: {a:?}");
-    assert!(a.h + b.h >= 300.0 - 0.5 && a.h + b.h <= 300.0 + 2.5, "the nested cell keeps its height: {a:?} + {b:?}");
+    // Line `k` of the nested cell on page `pg`: its top and height.
+    let line = |pg: usize, k: u32| {
+        l.pages[pg].items.iter().find_map(|it| match it {
+            Placed::Lines { path, y, para, .. } if path.0 == vec![1, 0, 1, 0, 0, 0, k] => Some((*y, para.lines.first().map_or(0.0, |l| l.height))),
+            _ => None,
+        })
+    };
+    assert!(line(0, 0).is_some() && line(0, 1).is_none(), "the first line stays, the second doesn't");
+    let Some((y, h)) = line(1, 1) else { panic!("the second line goes on") };
+    assert!((b.y - 0.01..b.y + 2.0).contains(&y), "at the top of what is left of the cell: {y} in {b:?}");
+    assert!((b.bottom() - (y + h + 300.0 - lines)).abs() < 2.0, "the nested cell keeps its rest, the space after that line: {a:?} + {b:?}");
     let after = l.pages[1].items.iter().find_map(|it| match it {
         Placed::Lines { path, y, .. } if path.0 == vec![1, 0, 1, 1] => Some(*y),
         _ => None,
@@ -4741,6 +4773,8 @@ fn split_row_rejects_a_hostile_cut() {
         items: vec![line(0.0), line(150.0)],
         bottom,
         cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0), align: None }],
+        inner: Vec::new(),
+        least: None,
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -8924,6 +8958,8 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
         cells: vec![CellPart { top: 2.0, items: 0..4, end: None, align: None }],
+        inner: Vec::new(),
+        least: None,
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -12585,6 +12621,8 @@ fn split_cell_moves_image_frame() {
             edge: 0.0,
             items: vec![kept, image, frame],
             cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None }],
+            inner: Vec::new(),
+            least: None,
         };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);
@@ -14589,6 +14627,61 @@ fn a_row_leaves_room_for_the_border_below_it() {
                 .filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(rect.bottom()) } else { None })
                 .fold(0.0f32, f32::max);
             assert!(end + border <= bottom + 0.02, "border {border}, {fill} filler lines: the last row ends at {end}, the margin at {bottom}");
+        }
+    }
+}
+
+/// Where a table breaks across pages, Word closes the part on the page with the table's bottom
+/// border (or the cells' own) and needs room for that one; the inside border under the row is
+/// not drawn there and needs none. Measured in Word for Windows on tables of one-line rows after
+/// a filler of every height a twip apart: with 0.5 pt inside borders and a 3 pt border round
+/// the table the last row on a page ends 3 pt above the bottom margin, with 3 pt inside borders
+/// and a 0.5 pt one round the table 0.5 pt above it, and with inside borders alone, 0.5 or 3 pt,
+/// it ends at the margin. WordCraft kept room for the inside border.
+#[test]
+fn the_last_row_on_a_page_leaves_room_for_the_tables_bottom_border() {
+    use wordcraft_doc::props::LineSpacing;
+    crate::test_fonts();
+    let single = |w: f32| (w > 0.0).then(|| Border::single(w));
+    let exact = |text: &str, height: f32| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        p.props.line_spacing = Some(LineSpacing::Exactly(height));
+        wordcraft_doc::para_block(p)
+    };
+    // Three 20 pt rows under a filler `filler` pt tall: the page the second row is on and where
+    // it ends.
+    let second_row = |inside: f32, outer: f32, filler: f32| {
+        let mut t = Table::new(3, 1, 300.0);
+        t.props.style = None;
+        t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+        let (i, o) = (single(inside), single(outer));
+        t.props.borders = Some(Borders { top: o, left: o, bottom: o, right: o, between: i, inside_v: i });
+        for row in &mut t.rows {
+            row.cells[0].blocks = vec![exact("row", 20.0)];
+        }
+        let mut d = Document::from_text("");
+        d.body = vec![exact("filler", filler), Arc::new(Block::Table(t))];
+        let l = lay(&d);
+        let found = l.pages.iter().enumerate().find_map(|(page, p)| {
+            p.items.iter().find_map(|it| if let Placed::Cell { rect, row: 1, .. } = it { Some((page, rect.bottom())) } else { None })
+        });
+        (found.expect("the second row is laid out"), d.last_section.page_h - d.last_section.margin_bottom)
+    };
+    for (inside, outer) in [(0.5f32, 3.0f32), (3.0, 0.5), (0.5, 0.0), (3.0, 0.0), (0.0, 3.0)] {
+        // Where the second row ends under a 100 pt filler, then fillers that leave it a little
+        // more and a little less room than the closing border needs.
+        let ((page, end), bottom) = second_row(inside, outer, 100.0);
+        assert_eq!(page, 0, "inside {inside}, outer {outer}: the table starts on the first page");
+        for (room, stays) in [(outer + 0.2, true), (outer - 0.2, false)] {
+            let ((page, _), _) = second_row(inside, outer, 100.0 + bottom - end - room);
+            assert_eq!(
+                page == 0,
+                stays,
+                "inside {inside} pt, outer {outer} pt: with {room} pt under the second row it {} on the page",
+                if stays { "stays" } else { "does not stay" }
+            );
         }
     }
 }
