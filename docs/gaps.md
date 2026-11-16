@@ -203,6 +203,7 @@ View › Show › Text Boundaries (#6202) adds an optional screen-only outline o
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-15 | minor | View › Show › Text Boundaries: optional screen-only page text-area outlines in Print Layout (#6202); no ranked gap or readiness estimate changes |
+| 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |
 | 2026-11-12 | trivial | Clipboard: a copied picture is published to the system clipboard as PNG, with HTML where the host writes it, and WordCraft's own paste keeps the original fragment; a copy of only shapes stays in WordCraft (#6205). Native external-app paste remains untested. |
 | 2026-11-04 | trivial | #4501 refactor regressions restored: per-section header/footer grid, ODT default font, link tooltip (#4683); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-08 | trivial | #10 narrowed: a turned inline picture with no recorded effect extent keeps its line to its frame (exchanged near a quarter turn in Word 2013+ layout), cut at the line; gap stays open |
