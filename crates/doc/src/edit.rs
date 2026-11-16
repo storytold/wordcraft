@@ -111,6 +111,32 @@ impl Fragment {
                 }
             })
         };
+        // The piece's pictures (also those of its notes and text boxes) join the Spike's. A key
+        // the Spike already uses for other bytes gets a new name in the piece, as a paste does.
+        let incoming = std::mem::take(&mut piece.media);
+        let mut media_remap = BTreeMap::new();
+        for (key, data) in &incoming {
+            match self.media.get(key) {
+                None => {
+                    self.media.insert(key.clone(), data.clone());
+                }
+                Some(have) if have.as_slice() == data.as_slice() => {}
+                Some(_) => {
+                    let ext = key.rsplit_once('.').map_or("png", |(_, ext)| ext);
+                    let free = (1..=u32::MAX).map(|n| format!("spike{n}.{ext}")).find(|k| !self.media.contains_key(k) && !incoming.contains_key(k));
+                    if let Some(new_key) = free {
+                        self.media.insert(new_key.clone(), data.clone());
+                        media_remap.insert(key.clone(), new_key);
+                    }
+                }
+            }
+        }
+        if !media_remap.is_empty() {
+            piece.blocks.iter_mut().for_each(|b| remap_media_block(b, &media_remap));
+            for part in piece.parts.values_mut() {
+                part.blocks.iter_mut().map(Arc::make_mut).for_each(|b| remap_media_block(b, &media_remap));
+            }
+        }
         piece.blocks.iter_mut().for_each(renumber);
         for (old, mut part) in std::mem::take(&mut piece.parts) {
             part.blocks.iter_mut().map(Arc::make_mut).for_each(renumber);

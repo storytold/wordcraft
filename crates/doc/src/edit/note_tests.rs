@@ -355,3 +355,54 @@ fn cut_and_paste_back_reuses_the_notes_story() {
     assert_ne!(pasted[0], a, "the edited story stays as it was");
     assert!(!dst.plain_text(StoryRef::Part(pasted[0])).contains("edited"));
 }
+
+/// An image object naming `key`.
+fn image_ref(key: &str) -> InlineObject {
+    InlineObject::Image {
+        media: key.into(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    }
+}
+
+/// A document whose first paragraph ends in a footnote holding an image `image1.png` of `bytes`.
+fn doc_with_note_image(bytes: u8) -> Document {
+    let mut d = doc(&["Alpha"]);
+    let note = add_note(&mut d, 5, "pictured");
+    let at = d.end_of(StoryRef::Part(note));
+    d.insert_object(&at, image_ref("image1.png"), &CharProps::default()).unwrap();
+    d.media.insert("image1.png".into(), Arc::new(vec![bytes; 3]));
+    d
+}
+
+/// The bytes of the image in the note a body reference of `d` names.
+fn note_image_bytes(d: &Document, note: u32) -> Option<Vec<u8>> {
+    let p = d.para(StoryRef::Part(note), &Path::top(0))?;
+    p.objects.iter().find_map(|o| match o {
+        InlineObject::Image { media, .. } => d.media.get(media).map(|b| b.to_vec()),
+        _ => None,
+    })
+}
+
+/// The Spike keeps the pictures of the notes it collects, also when two pieces come from
+/// documents that both call their picture `image1.png` (review of #6740).
+#[test]
+fn appended_pieces_keep_the_pictures_of_their_notes() {
+    let one = doc_with_note_image(1);
+    let two = doc_with_note_image(2);
+    let mut spike = one.copy_range(&Pos::body(0, 0), &Pos::body(0, 5 + OBJ_LEN));
+    spike.append_piece(two.copy_range(&Pos::body(0, 0), &Pos::body(0, 5 + OBJ_LEN)));
+
+    let mut d = doc(&["Target"]);
+    let at = d.end_of(StoryRef::Body);
+    d.insert_fragment(&at, &spike).unwrap();
+    let refs = body_note_ids(&d);
+    assert_eq!(refs.len(), 2);
+    assert_eq!(note_image_bytes(&d, refs[0]), Some(vec![1; 3]));
+    assert_eq!(note_image_bytes(&d, refs[1]), Some(vec![2; 3]));
+}
