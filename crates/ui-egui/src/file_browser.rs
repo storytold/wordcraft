@@ -141,6 +141,8 @@ pub(crate) struct FileBrowser {
     listing: Result<Listing, String>,
     /// The highlighted entry.
     selected: Option<PathBuf>,
+    /// The highlighted entry was a folder when it was selected.
+    selected_is_dir: bool,
     note: Note,
     focus_name: bool,
 }
@@ -169,6 +171,7 @@ impl FileBrowser {
             filter: 0,
             listing: Ok(Listing::default()),
             selected: None,
+            selected_is_dir: false,
             note: Note::None,
             focus_name: true,
         };
@@ -186,6 +189,7 @@ impl FileBrowser {
         self.location = dir.to_string_lossy().into_owned();
         self.dir = dir;
         self.selected = None;
+        self.selected_is_dir = false;
         self.note = Note::None;
     }
 
@@ -203,7 +207,9 @@ impl FileBrowser {
             self.navigate(dir);
             return Step::Stay;
         }
-        let Some(mut path) = self.selected.clone().or_else(|| resolve(&self.dir, &self.name)) else { return Step::Stay };
+        // A removed folder remains a folder selection, not a proposed file name.
+        let selected_file = self.selected.clone().filter(|_| !self.selected_is_dir);
+        let Some(mut path) = selected_file.or_else(|| resolve(&self.dir, &self.name)) else { return Step::Stay };
         if path.is_dir() {
             self.name.clear();
             self.navigate(path);
@@ -235,6 +241,7 @@ impl FileBrowser {
     /// A click on an entry: highlight it, and a file's name goes into the file name field.
     fn select(&mut self, e: &Entry) {
         self.selected = Some(e.path.clone());
+        self.selected_is_dir = e.dir;
         if !e.dir {
             self.name = e.name.clone();
         }
@@ -454,6 +461,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         }
         if r.changed() {
             b.selected = None;
+            b.selected_is_dir = false;
             b.note = Note::None;
         }
         let before = b.filter;
@@ -590,6 +598,46 @@ mod tests {
             assert_eq!(std::fs::read(&selected).unwrap(), b"selected original");
             assert_eq!(std::fs::read(&sibling).unwrap(), b"sibling original");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder selection keeps its kind even if the folder disappears before Save.
+    #[test]
+    fn a_selected_folder_never_replaces_the_typed_save_name() {
+        for removed in [false, true] {
+            let dir = scratch(if removed { "selected-folder-removed" } else { "selected-folder-live" });
+            let folder = dir.join("Drafts");
+            std::fs::create_dir(&folder).unwrap();
+            let req = FileDialogRequest::Save { name: "chapter.docx".into(), dir: None };
+            let mut browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+            let entry = browser.listing.as_ref().unwrap().entries.iter().find(|entry| entry.path == folder).unwrap().clone();
+            browser.select(&entry);
+            assert_eq!(browser.name, "chapter.docx");
+            if removed {
+                std::fs::remove_dir(&folder).unwrap();
+                assert_eq!(browser.accept(), Step::Pick(dir.join("chapter.docx")));
+                assert!(!dir.join("Drafts.docx").exists());
+            } else {
+                assert_eq!(browser.accept(), Step::Stay);
+                assert_eq!(browser.dir, folder);
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A selected file still names the exact Save target after external deletion.
+    #[test]
+    fn a_removed_selected_file_keeps_its_exact_save_path() {
+        let dir = scratch("removed-selected-file");
+        let selected = dir.join(" report.docx");
+        std::fs::write(&selected, b"original").unwrap();
+        let req = FileDialogRequest::Save { name: "Draft.docx".into(), dir: None };
+        let mut browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        let entry = browser.listing.as_ref().unwrap().entries.iter().find(|entry| entry.path == selected).unwrap().clone();
+        browser.select(&entry);
+        std::fs::remove_file(&selected).unwrap();
+        assert_eq!(browser.accept(), Step::Pick(selected));
+        assert_eq!(browser.note, Note::None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
