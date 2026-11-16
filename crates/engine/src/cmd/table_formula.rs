@@ -75,29 +75,23 @@ pub fn evaluate_field_with(
 ) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
     let value = evaluate_with(t, doc, default_lang, r, c, formula)?;
+    let out_lang = doc
+        .and_then(|d| {
+            t.rows.get(r).and_then(|row| row.cells.get(c)).and_then(|cl| {
+                cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
+            })
+        })
+        .or_else(|| {
+            doc.and_then(|d| {
+                t.rows.iter().flat_map(|row| row.cells.iter()).take(100).find_map(|cl| {
+                    cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
+                })
+            })
+        })
+        .or_else(|| default_lang.map(str::to_string));
     let text = match switch.and_then(picture_of) {
-        Some(picture) => format_picture(value, &picture),
-        None => {
-            let out_lang = doc
-                .and_then(|d| {
-                    t.rows.get(r).and_then(|row| row.cells.get(c)).and_then(|cl| {
-                        cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
-                    })
-                })
-                .or_else(|| {
-                    doc.and_then(|d| {
-                        t.rows.iter().flat_map(|row| row.cells.iter()).take(100).find_map(|cl| {
-                            cl.blocks
-                                .iter()
-                                .filter_map(|b| b.as_para())
-                                .find(|p| !p.plain_text().trim().is_empty())
-                                .and_then(|p| super::para_lang(d, p))
-                        })
-                    })
-                })
-                .or_else(|| default_lang.map(str::to_string));
-            wordcraft_doc::locale_number::format_number(value, out_lang.as_deref())
-        }
+        Some(picture) => format_picture_in(value, &picture, out_lang.as_deref()),
+        None => wordcraft_doc::locale_number::format_number(value, out_lang.as_deref()),
     };
     Ok(match switch {
         Some(switch) => format_switches(switch, value, text),
@@ -168,6 +162,14 @@ fn picture_of(switch: &str) -> Option<String> {
 /// decimals, `%` multiplies by 100, and anything else shows as it is. Sections split by `;` give the
 /// positive, negative and zero forms; with one section a negative value takes a `-` in front.
 pub fn format_picture(value: f64, picture: &str) -> String {
+    format_picture_in(value, picture, None)
+}
+
+/// [`format_picture`] for a field whose text is in language `lang`. The picture's own symbols
+/// decide its decimal and grouping separators, and the result writes them as the picture does:
+/// `#.##0,00` gives `1.234,50` and `#,##0.00` gives `1,234.50` in any language. See
+/// [`picture_separators`] for a picture with only one of the two symbols.
+pub fn format_picture_in(value: f64, picture: &str, lang: Option<&str>) -> String {
     let sections: Vec<&str> = picture.split(';').collect();
     let (section, x, minus) = if value < 0.0 && sections.len() >= 2 {
         (sections[1], -value, false)
@@ -180,9 +182,10 @@ pub fn format_picture(value: f64, picture: &str) -> String {
     let rest = &section[start..];
     let len = rest.find(|c: char| !matches!(c, '#' | '0' | ',' | '.')).unwrap_or(rest.len());
     let (core, suffix) = rest.split_at(len);
+    let (dec, grp) = picture_separators(core, lang);
     let prefix = &section[..start];
     let x = if prefix.contains('%') || suffix.contains('%') { x * 100.0 } else { x };
-    let (int_pic, frac_pic) = match core.split_once('.') {
+    let (int_pic, frac_pic) = match core.split_once(dec) {
         Some((int_pic, frac_pic)) => (int_pic, Some(frac_pic)),
         None => (core, None),
     };
@@ -200,26 +203,51 @@ pub fn format_picture(value: f64, picture: &str) -> String {
         None => (digits.clone(), String::new()),
     };
     let whole = if whole == "0" && min_int == 0 { String::new() } else { format!("{whole:0>min_int$}") };
-    let whole = if int_pic.contains(',') { group_thousands(&whole) } else { whole };
+    let whole = if int_pic.contains(grp) { group_thousands(&whole, grp) } else { whole };
     let mut decimals = decimals;
     while decimals.len() > min_frac && decimals.ends_with('0') {
         decimals.pop();
     }
     let mut body = whole;
     if !decimals.is_empty() {
-        body.push('.');
+        body.push(dec);
         body.push_str(&decimals);
     }
     let sign = if minus && rounded != 0.0 { "-" } else { "" };
     format!("{sign}{prefix}{body}{suffix}")
 }
 
-/// `1234567` → `1,234,567`.
-fn group_thousands(digits: &str) -> String {
+/// The decimal and grouping separators of a picture's digit part `core` (`#`, `0`, `,` and `.`).
+/// With both symbols the later one is the decimal separator (`#.##0,00` is German, `#,##0.00`
+/// English). With one, the English reading holds (`0.00`, `#,##0`) unless `lang` writes a decimal
+/// comma: there the symbol groups thousands when exactly three digit places follow it (`#.##0`,
+/// `#,##0`) and is the decimal separator otherwise (`0,00`, `0.00`).
+fn picture_separators(core: &str, lang: Option<&str>) -> (char, char) {
+    let swap = |sep: char| if sep == '.' { ',' } else { '.' };
+    match (core.rfind('.'), core.rfind(',')) {
+        (Some(dot), Some(comma)) => {
+            if dot > comma {
+                ('.', ',')
+            } else {
+                (',', '.')
+            }
+        }
+        (Some(at), None) | (None, Some(at)) => {
+            let sym = if core.get(at..).is_some_and(|s| s.starts_with('.')) { '.' } else { ',' };
+            let is_dec =
+                if wordcraft_doc::locale_number::decimal_separator(lang) == ',' { core.len().saturating_sub(at + 1) != 3 } else { sym == '.' };
+            if is_dec { (sym, swap(sym)) } else { (swap(sym), sym) }
+        }
+        (None, None) => ('.', ','),
+    }
+}
+
+/// `1234567` → `1,234,567` (with `sep` `,`).
+fn group_thousands(digits: &str, sep: char) -> String {
     let mut out = String::new();
     for (i, ch) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
+            out.push(sep);
         }
         out.push(ch);
     }
@@ -1010,6 +1038,24 @@ mod tests {
         assert_eq!(format_picture(0.0, "0.00;-;zero"), "zero");
         assert_eq!(format_picture(7.0, "000"), "007");
         assert_eq!(format_picture(-0.001, "0.00"), "0.00", "a rounded zero has no sign");
+    }
+
+    #[test]
+    fn a_numeric_picture_keeps_its_own_separators() {
+        let t = table(&[&["1.234,50"], &["2,25"], &[""]]);
+        let de = |instr: &str| evaluate_field_with(&t, None, Some("de-DE"), 2, 0, instr);
+        assert_eq!(de("=SUM(A1:A2) \\# \"#.##0,00 €\"").as_deref(), Ok("1.236,75 €"));
+        assert_eq!(de("=SUM(A1:A2) \\# \"#,##0.00 €\"").as_deref(), Ok("1,236.75 €"), "an English picture stays English");
+        assert_eq!(de("=SUM(A1:A2) \\# \"#.##0\"").as_deref(), Ok("1.237"), "a point before three places groups");
+        assert_eq!(de("=SUM(A1:A2) \\# \"0,00\"").as_deref(), Ok("1236,75"));
+        assert_eq!(de("=SUM(A1:A2) \\# \"0.00\"").as_deref(), Ok("1236.75"), "a lone point before two places is decimal");
+        assert_eq!(de("=SUM(A1:A2) \\# \"#,##0\"").as_deref(), Ok("1,237"), "a lone comma before three places groups");
+        let t = table(&[&["1234.5"], &[""]]);
+        let en = |instr: &str| evaluate_field_with(&t, None, Some("en-US"), 1, 0, instr);
+        assert_eq!(en("=A1 \\# \"#,##0.00\"").as_deref(), Ok("1,234.50"));
+        assert_eq!(en("=A1 \\# \"#,##0\"").as_deref(), Ok("1,235"));
+        assert_eq!(en("=A1 \\# \"0.000\"").as_deref(), Ok("1234.500"), "English never reads a point as grouping");
+        assert_eq!(en("=A1 \\# \"#.##0,00\"").as_deref(), Ok("1.234,50"));
     }
 
     #[test]
