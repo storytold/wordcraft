@@ -7352,6 +7352,7 @@ dependencies = [
  "chrono",
  "craft-font-catalog",
  "craft-font-store",
+ "craft-mime",
  "craft-proof",
  "craft-zip",
  "encoding_rs",

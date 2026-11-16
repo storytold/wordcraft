@@ -125,6 +125,8 @@ arboard = { version = "3.7", default-features = false, features = ["wayland-data
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# cargo llvm-cov sets `--cfg coverage`; timing tests skip themselves under its instrumentation.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
