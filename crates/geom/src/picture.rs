@@ -20,9 +20,9 @@ pub enum Refusal {
     NotAPicture,
     /// A kind of picture that is never decoded, because its decoder can't be held to a budget.
     Unsupported(&'static str),
-    /// Decoding it would take more memory than the budget.
+    /// Decoding would exceed the memory budget or size arithmetic overflowed.
     TooLarge { width: u32, height: u32 },
-    /// The header or the data is damaged.
+    /// The header or data is damaged, or the decoder rejects the input.
     Broken(String),
 }
 
@@ -179,11 +179,19 @@ pub struct Probe<'a> {
 }
 
 /// TIFF compressions decoded within the caller's limits: none, CCITT Group 4, LZW, Deflate (both
-/// codes) and PackBits. The `tiff` crate decodes a JPEG strip (7) with a decoder of its own and
+/// codes) and `PackBits`. The `tiff` crate decodes a JPEG strip (7) with a decoder of its own and
 /// default limits, whatever size the TIFF declares, so such a TIFF is not decoded (#3645).
 const TIFF_COMPRESSIONS: [u16; 6] = [1, 4, 5, 8, 32946, 32773];
 
 /// Read a picture's header: PNG, JPEG, GIF, WebP, BMP or TIFF.
+///
+/// # Errors
+///
+/// Returns `Refusal::NotAPicture` for an unsupported format, `Refusal::Unsupported` for a TIFF
+/// whose compression cannot be read or budgeted (including truncation that prevents reading
+/// its compression metadata), `Refusal::TooLarge`
+/// on size arithmetic overflow, and `Refusal::Broken` for other header or inspection errors,
+/// including TIFF errors after compression metadata is accepted.
 pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
     let codec_fmt = detect(bytes).ok_or(Refusal::NotAPicture)?;
     let format = from_codec_format(codec_fmt).ok_or(Refusal::NotAPicture)?;
@@ -287,6 +295,11 @@ fn dib_to_bmp(dib: &[u8]) -> Vec<u8> {
 /// Read a DIB's header: a BMP without its 14-byte file header, as the Windows clipboard holds
 /// one (`CF_DIB`, `CF_DIBV5`). Its layout is first made the one the decoder reads (see
 /// [`dib_layout`]).
+///
+/// # Errors
+///
+/// Returns `Refusal::Broken` for an invalid DIB header and `Refusal::TooLarge` on size arithmetic
+/// overflow.
 pub fn probe_dib(dib: Vec<u8>) -> Result<Probe<'static>, Refusal> {
     let dib = dib_layout(dib);
     let bmp = dib_to_bmp(&dib);
@@ -349,6 +362,12 @@ impl Probe<'_> {
 
     /// Decode, refused before anything is allocated when the peak would pass `budget` bytes. The
     /// decoder is held to the header's size and to `budget` as well.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Refusal::TooLarge` when the picture does not fit `budget` or the decoder
+    /// exceeds its limits, `Refusal::NotAPicture` for an unsupported format, and
+    /// `Refusal::Broken` for other decoding or pixel-conversion errors.
     pub fn decode(&self, budget: u64) -> Result<DynamicImage, Refusal> {
         if !self.fits(budget) {
             return Err(Refusal::TooLarge { width: self.width, height: self.height });
@@ -364,6 +383,10 @@ impl Probe<'_> {
 }
 
 /// [`probe`], then [`Probe::decode`] within `budget` bytes.
+///
+/// # Errors
+///
+/// Returns the probing or decoding `Refusal`; see [`probe`] and [`Probe::decode`].
 pub fn decode(bytes: &[u8], budget: u64) -> Result<DynamicImage, Refusal> {
     probe(bytes)?.decode(budget)
 }
@@ -722,6 +745,7 @@ mod tests {
             let mut s = vec![8];
             s.extend(h.to_be_bytes());
             s.extend(w.to_be_bytes());
+            #[expect(clippy::cast_possible_truncation, reason = "These fixtures contain at most four three-byte component records.")]
             s.push((comps.len() / 3) as u8);
             s.extend(comps);
             s
@@ -736,6 +760,7 @@ mod tests {
         // A marker walk over SOI, an APP0 segment, SOF2, then the scan.
         let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2];
         let f = sof(64, 64, &[1, 0x11, 0]);
+        #[expect(clippy::cast_possible_truncation, reason = "This fixture's nine-byte frame header and length field fit u16.")]
         jpeg.extend(((f.len() + 2) as u16).to_be_bytes());
         jpeg.extend(&f);
         jpeg.extend([0xFF, 0xDA]);
