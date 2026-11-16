@@ -102,6 +102,35 @@ pub fn shown_id() -> egui::Id {
     egui::Id::unique("wc_mini_toolbar").with("shown")
 }
 
+/// Past this distance from where the pointer came closest to the bar, it starts to fade…
+const FADE_FROM: f32 = 24.0;
+/// …and here it is gone, put away for this selection, as in Word.
+const FADE_TO: f32 = 144.0;
+
+/// The bar's opacity with the pointer at `pointer` (None: outside the window or in one of the
+/// bar's lists). Measured from where the pointer came closest since the selection was made, so a
+/// drag-select that ends far from the bar doesn't put it away before the pointer moves. Zero puts
+/// the bar away until the selection changes, as in Word.
+fn fade(app: &mut WordApp, bar: Rect, pointer: Option<egui::Pos2>) -> f32 {
+    let Some(p) = pointer else {
+        // Back from outside the window or from one of the bar's lists, it measures afresh.
+        app.canvas.mini_closest = None;
+        return 1.0;
+    };
+    let sel = &app.session.sel;
+    let d = bar.distance_to_pos(p);
+    let closest = match &app.canvas.mini_closest {
+        Some((s, c)) if s == sel => c.min(d),
+        _ => d,
+    };
+    app.canvas.mini_closest = Some((sel.clone(), closest));
+    let opacity = (1.0 - (d - closest - FADE_FROM) / (FADE_TO - FADE_FROM)).clamp(0.0, 1.0);
+    if opacity == 0.0 {
+        app.canvas.mini_dismissed = Some(sel.clone());
+    }
+    opacity
+}
+
 /// Whether the bar may be shown for the current app state.
 pub fn visible(app: &WordApp) -> bool {
     // Reading Mode permits text selection and copying, but never formatting controls.
@@ -177,6 +206,13 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, selection: Rect, viewport: R
     if !shown.is_positive() {
         return;
     }
+    // In one of the bar's lists (a popup, above the bar's layer) the pointer is away from the bar.
+    let in_popup = |p: egui::Pos2| ctx.layer_id_at(p).is_some_and(|l| l.order > egui::Order::Middle);
+    let pointer = ctx.pointer_hover_pos().filter(|p| !in_popup(*p));
+    let opacity = fade(app, bar, pointer);
+    if opacity == 0.0 {
+        return;
+    }
     let t = Tokens::get(ctx);
     // The bar sits on the Middle layer: above the document (Background), below every popup and
     // menu (Foreground: the ribbon's drop-downs, the context menu, its own lists) and tooltip, so
@@ -187,6 +223,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, selection: Rect, viewport: R
     let area = egui::Area::new(egui::Id::unique("wc_mini_toolbar")).order(Order::Middle).interactable(true);
     let area = area.constrain_to(viewport).constrain(false).fixed_pos(bar.min);
     area.show(ctx, |ui| {
+        ui.multiply_opacity(opacity);
         ui.set_clip_rect(shown);
         let painter = ui.painter();
         painter.rect_filled(bar.translate(Vec2::new(0.0, 2.0)), CornerRadius::same(6), t.page_shadow);

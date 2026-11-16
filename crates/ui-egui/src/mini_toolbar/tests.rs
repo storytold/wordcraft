@@ -335,7 +335,7 @@ fn hovering_a_bar_button_previews_it_on_the_selection() {
     assert_eq!((&h.state().session.doc, &h.state().session.sel, h.state().session.rev()), (&doc, &sel, rev));
     assert_eq!(format_state(&mut h).get("bold"), Some(&json!(false)));
 
-    h.event(egui::Event::PointerMoved(pos2(5.0, 5.0)));
+    h.event(egui::Event::PointerMoved(just_above_the_bar(&h)));
     steps(&mut h);
     assert_eq!(h.state().canvas.command_previewed, None);
     assert_eq!(crate::canvas::page_doc(h.state()), &doc, "off the bar the page is as it was");
@@ -852,6 +852,12 @@ fn the_alignment_buttons_align_the_paragraph() {
     }
 }
 
+/// Off every button but near enough that the bar stays (moving far away puts it away).
+fn just_above_the_bar(h: &egui_kittest::Harness<'static, WordApp>) -> egui::Pos2 {
+    let [bar, _] = h.ctx.data(|d| d.get_temp::<[Rect; 2]>(shown_id())).expect("the bar is up");
+    pos2(bar.center().x, bar.top() - 8.0)
+}
+
 /// After a click the button's preview stays off while the pointer is on it, so a toggle does not
 /// flash its other state; leaving and coming back previews again.
 #[test]
@@ -868,7 +874,7 @@ fn a_clicked_button_holds_its_preview_until_the_pointer_leaves() {
     steps(&mut h);
     assert_ne!(format_state(&mut h).get("size").cloned(), size, "the click grew the text");
     assert_eq!(h.state().canvas.command_previewed, None, "no preview of the next step under the pointer");
-    h.event(egui::Event::PointerMoved(pos2(5.0, 5.0)));
+    h.event(egui::Event::PointerMoved(just_above_the_bar(&h)));
     steps(&mut h);
     h.event(egui::Event::PointerMoved(grow));
     steps(&mut h);
@@ -887,7 +893,7 @@ fn coming_back_to_a_toggle_previews_its_undo() {
     steps(&mut h);
     assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)));
     assert_eq!(h.state().canvas.command_previewed, None, "the page holds still after the click");
-    h.event(egui::Event::PointerMoved(pos2(5.0, 5.0)));
+    h.event(egui::Event::PointerMoved(just_above_the_bar(&h)));
     steps(&mut h);
     h.event(egui::Event::PointerMoved(bold));
     steps(&mut h);
@@ -913,4 +919,26 @@ fn a_selected_paragraph_shows_its_own_alignment() {
     assert_eq!(focus_align, Some(wordcraft_doc::Align::Left), "the next paragraph is left aligned");
     let r = wordcraft_engine::cmd::para::selection_para(s);
     assert_eq!(r.align, wordcraft_doc::Align::Right, "the buttons read the selected paragraph");
+}
+
+#[test]
+fn the_bar_fades_as_the_pointer_moves_away_and_goes_for_this_selection() {
+    let mut h = bar_over("quick");
+    let bar = h.ctx.memory(|m| m.data.get_temp::<[Rect; 2]>(shown_id())).map(|r| r[0]);
+    let Some(bar) = bar else { panic!("the bar is up") };
+    // Near the bar it stays; the pointer came closest here.
+    h.event(egui::Event::PointerMoved(bar.center_bottom() + Vec2::new(0.0, 10.0)));
+    steps(&mut h);
+    assert!(bar_layer(&h).is_some(), "the bar stays while the pointer is near");
+    // Far away it is put away for this selection, and coming back doesn't bring it back.
+    h.event(egui::Event::PointerMoved(bar.center_bottom() + Vec2::new(0.0, 400.0)));
+    steps(&mut h);
+    assert!(bar_layer(&h).is_none(), "the bar goes once the pointer has moved away");
+    h.event(egui::Event::PointerMoved(bar.center()));
+    steps(&mut h);
+    assert!(bar_layer(&h).is_none(), "it stays away for this selection");
+    // A new selection gets it again.
+    h.state_mut().run("select.text", json!({"text": "brown"})).unwrap();
+    steps(&mut h);
+    assert!(bar_layer(&h).is_some(), "a new selection shows the bar");
 }

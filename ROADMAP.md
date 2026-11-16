@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-16: The mini toolbar fades as the pointer moves away from it, as in Word: past 24 px beyond the closest the pointer came it starts to fade, and at 144 px it is put away until the selection changes. Its own font and size lists don't count as moving away. Readiness estimates unchanged.
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
 
