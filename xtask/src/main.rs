@@ -20,7 +20,8 @@ usage: cargo xtask <command>
 commands:
   assets          check that every icon/image/font/asset is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (plan/architecture.md §3)
-  wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call)
+  wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call),
+                  then the engine alone without its default features
   test            workspace tests (cargo nextest when installed, else cargo test), the interface
                   audit with its missing-translation report, then doctests
   i18n-report     the interface audit: fails on text that skips the catalog, and prints the
@@ -147,21 +148,43 @@ fn wasm_set() -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// One `cargo check` for the whole set: each crate is checked once, and
-/// `--keep-going` still reports every failing crate. Features unify across the
-/// set, so each crate is checked with the union of the features the set enables.
+/// Configurations checked for wasm32 on their own, after the unified pass: the arguments that
+/// select each. Do not fold these into [`wasm_set`]: every crate there that depends on
+/// `wordcraft-engine` turns its default `full` feature on for the whole invocation, so the
+/// engine without its optional parts would never be compiled, and a broken
+/// `#[cfg(not(feature = "..."))]` arm would pass.
+const SLIM_WASM_CHECKS: &[&[&str]] = &[&["-p", "wordcraft-engine", "--no-default-features"]];
+
+/// The `cargo check` argument lists `cargo xtask wasm` runs, in order: one for the whole set
+/// (each crate is checked once, and `--keep-going` still reports every failing crate), then
+/// one per [`SLIM_WASM_CHECKS`] entry. Features unify across the packages of one invocation,
+/// so the first checks each crate with the union of the features the set enables.
+fn wasm_invocations(set: &[String]) -> Vec<Vec<String>> {
+    let mut unified: Vec<String> = ["check", "--target", "wasm32-unknown-unknown", "--keep-going"].map(String::from).to_vec();
+    for pkg in set {
+        unified.extend(["-p".to_string(), pkg.clone()]);
+    }
+    let mut runs = vec![unified];
+    for slim in SLIM_WASM_CHECKS {
+        let mut args: Vec<String> = ["check", "--target", "wasm32-unknown-unknown"].map(String::from).to_vec();
+        args.extend(slim.iter().map(|a| a.to_string()));
+        runs.push(args);
+    }
+    runs
+}
+
 fn cmd_wasm() -> Result<(), String> {
     let set = wasm_set()?;
     if set.is_empty() {
         return Err("no wasm-safe crates found in the workspace metadata".into());
     }
-    let mut c = cargo();
-    c.args(["check", "--target", "wasm32-unknown-unknown", "--keep-going"]);
-    for pkg in &set {
-        c.args(["-p", pkg]);
+    for args in wasm_invocations(&set) {
+        let mut c = cargo();
+        c.args(&args);
+        run(c, &format!("cargo {}", args.join(" ")))?;
     }
-    run(c, &format!("cargo check --target wasm32-unknown-unknown --keep-going -p {}", set.join(" -p ")))?;
-    println!("\nwasm32-unknown-unknown check: ok ({} crates: {})", set.len(), set.join(", "));
+    let slim: Vec<String> = SLIM_WASM_CHECKS.iter().map(|args| args.join(" ")).collect();
+    println!("\nwasm32-unknown-unknown check: ok ({} crates: {}; alone: {})", set.len(), set.join(", "), slim.join("; "));
     Ok(())
 }
 
@@ -299,4 +322,28 @@ Tests that use a corpus skip cleanly when it is absent.
     let n = std::fs::read_dir(&dest).map(|d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "png")).count()).unwrap_or(0);
     println!("PngSuite: {n} PNG files in {}", dest.display());
     if n == 0 { Err("no PNG files extracted".into()) } else { Ok(()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wasm_checks_the_slim_engine_on_its_own() {
+        let set = vec!["wordcraft-engine".to_string(), "wordcraft-layout".to_string()];
+        let runs = wasm_invocations(&set);
+        assert_eq!(runs.len(), 1 + SLIM_WASM_CHECKS.len());
+        let (unified, slim) = runs.split_first().unwrap();
+        for pkg in &set {
+            assert!(unified.contains(pkg), "the unified pass checks {pkg}");
+        }
+        assert!(!unified.iter().any(|a| a == "--no-default-features"), "the unified pass keeps the default features");
+        let engine: Vec<&Vec<String>> = slim.iter().filter(|args| args.iter().any(|a| a == "wordcraft-engine")).collect();
+        assert_eq!(engine.len(), 1, "the engine gets exactly one invocation of its own");
+        for args in slim {
+            assert!(args.windows(2).any(|w| w == ["--target", "wasm32-unknown-unknown"]), "{args:?}");
+            assert_eq!(args.iter().filter(|a| *a == "-p").count(), 1, "one package, so nothing else turns its features on: {args:?}");
+        }
+        assert!(engine[0].iter().any(|a| a == "--no-default-features"), "{:?}", engine[0]);
+    }
 }
