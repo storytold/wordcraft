@@ -1041,6 +1041,275 @@ fn metafile_picture_is_drawn_as_vectors() {
     assert!(left[..3].iter().all(|c| *c > 200), "left half should be paper, not the grey box: {left:?}");
 }
 
+/// #6636: an EMF+ only file (no plain EMF drawing records) whose EmfPlusDrawImage draws a
+/// 32bppPARGB bitmap over the right half: the bitmap's pixels are drawn.
+#[test]
+fn emf_plus_only_bitmap_is_drawn() {
+    // EmfPlusObject 0, an image (type 5): a 2 × 1 bitmap in PixelFormat32bppPARGB, opaque red
+    // and then red at half opacity (premultiplied BGRA 0, 0, 128, 128).
+    let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, 2, 1, 8, 0x000E_200B, 0]);
+    image.extend([0u8, 0, 255, 255, 0, 0, 128, 128]);
+    let object = plus_rec(0x4008, 0x0500, &image);
+    // EmfPlusDrawImage of image 0: the whole bitmap (pixel units) into x 50..100, y 0..100.
+    let mut draw = le32(&[-1, 2]);
+    draw.extend([0.0f32, 0.0, 2.0, 1.0, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+    let emf = emf_plus_file(&[object, plus_rec(0x401A, 0, &draw)]);
+
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let at = |fx: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * 0.5) as u32);
+    let (opaque, half, left) = (at(0.6), at(0.9), at(0.25));
+    assert!(is_red(opaque), "the bitmap's opaque red is drawn on the right half: {opaque:?}");
+    // Premultiplied half-opacity red over white paper is (255, 127, 127); read as straight
+    // color it would be about (191, 127, 127).
+    assert!(half[0] > 235 && (110..145).contains(&half[1]) && (110..145).contains(&half[2]), "half-opacity red: {half:?}");
+    assert!(is_paper(left), "left half should be paper: {left:?}");
+}
+
+/// #6636: EmfPlusDrawImage draws a bitmap in PixelFormat32bppARGB, 24bppRGB and 32bppRGB, and a
+/// compressed PNG or JPEG bitmap, in an EMF+ only file.
+#[test]
+fn emf_plus_only_bitmap_formats_are_drawn() {
+    let encoded = |png: bool| {
+        let red = [255u8, 0, 0].repeat(64);
+        if png {
+            let img = image::RgbImage::from_raw(8, 8, red).unwrap();
+            wordcraft_geom::picture::encode_png(&image::DynamicImage::from(img)).unwrap()
+        } else {
+            wordcraft_geom::picture::encode_jpeg(&red, 8, 8, 100).unwrap()
+        }
+    };
+    // Name, width, height, stride, pixel format, bitmap type (0 pixels, 1 compressed) and data.
+    let cases: [(&str, i32, i32, i32, u32, i32, Vec<u8>); 5] = [
+        ("32bppARGB", 2, 1, 8, 0x0026_200A, 0, [0u8, 0, 255, 255].repeat(2)),
+        ("24bppRGB", 2, 1, 8, 0x0002_1808, 0, vec![0, 0, 255, 0, 0, 255, 0, 0]),
+        ("32bppRGB", 2, 1, 8, 0x0002_2009, 0, [0u8, 0, 255, 0].repeat(2)),
+        ("PNG", 8, 8, 0, 0, 1, encoded(true)),
+        ("JPEG", 8, 8, 0, 0, 1, encoded(false)),
+    ];
+    for (name, w, h, stride, format, kind, data) in cases {
+        let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, w, h, stride, format as i32, kind]);
+        image.extend(data);
+        // Records are a multiple of 4 bytes long.
+        image.resize(image.len().next_multiple_of(4), 0);
+        let mut draw = le32(&[-1, 2]);
+        draw.extend([0.0f32, 0.0, w as f32, h as f32, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+        let emf = emf_plus_file(&[plus_rec(0x4008, 0x0500, &image), plus_rec(0x401A, 0, &draw)]);
+
+        let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+        let at = |fx: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * 0.5) as u32);
+        let (right, left) = (at(0.75), at(0.25));
+        assert!(is_red(right), "{name}: the red bitmap is drawn on the right half: {right:?}");
+        assert!(is_paper(left), "{name}: left half should be paper: {left:?}");
+    }
+}
+
+/// An EMF+ record for [`emf_plus_file`]: type, flags and data.
+fn plus_rec(typ: u16, flags: u16, data: &[u8]) -> Vec<u8> {
+    let mut v = typ.to_le_bytes().to_vec();
+    v.extend(flags.to_le_bytes());
+    v.extend(((12 + data.len()) as u32).to_le_bytes());
+    v.extend((data.len() as u32).to_le_bytes());
+    v.extend(data);
+    v
+}
+
+/// An EMF+ only file with the frame of [`red_right_half_emf`]: an EmfPlusHeader (96 dpi), then
+/// `records`, then EmfPlusEndOfFile, in one comment record.
+fn emf_plus_file(records: &[Vec<u8>]) -> Vec<u8> {
+    let mut comment = 0x2B46_4D45u32.to_le_bytes().to_vec();
+    comment.extend(plus_rec(0x4001, 0, &le32(&[0xDBC0_1002_u32 as i32, 1, 96, 96])));
+    comment.extend(records.concat());
+    comment.extend(plus_rec(0x4002, 0, &[]));
+    let mut payload = (comment.len() as u32).to_le_bytes().to_vec();
+    payload.extend(comment);
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    emf.extend([emf_rec(70, &payload), emf_rec(14, &[0; 12])].concat());
+    emf
+}
+
+/// Renders a document holding one 70 pt metafile picture with `crop` at `scale`: the page and the
+/// picture's frame (points).
+fn emf_on_page(emf: Vec<u8>, crop: [f32; 4], scale: f32) -> (Rendered, wordcraft_geom::Rect) {
+    emf_on_page_sized(emf, (70.0, 70.0), crop, scale)
+}
+
+/// [`emf_on_page`] with the picture `size` (points).
+fn emf_on_page_sized(emf: Vec<u8>, size: (f32, f32), crop: [f32; 4], scale: f32) -> (Rendered, wordcraft_geom::Rect) {
+    let mut d = Document::new();
+    let media = d.add_media(emf, "emf");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: size.0,
+        h: size.1,
+        alt: String::new(),
+        float: Default::default(),
+        crop,
+        fx: Default::default(),
+        ole: None,
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(&d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    (render_page(&d, &l.pages[0], scale, &opts), rect)
+}
+
+/// Whether a pixel is close to pure red.
+fn is_red(p: [u8; 4]) -> bool {
+    p[0] > 200 && p[1] < 60 && p[2] < 60
+}
+
+/// Whether a pixel is paper.
+fn is_paper(p: [u8; 4]) -> bool {
+    p[..3].iter().all(|c| *c > 200)
+}
+
+/// A clip region (INTERSECTCLIPRECT to the left half) keeps a red rectangle over the whole
+/// picture to that half; once RESTOREDC drops it, a second rectangle across the bottom shows on
+/// both halves.
+#[test]
+fn metafile_clip_region_clips_and_ends() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let brush = emf_rec(39, &le32(&[1, 0, 0x0000_00FF, 0]));
+    let recs = [
+        brush,
+        emf_rec(37, &le32(&[1])),
+        emf_rec(33, &[]),
+        emf_rec(30, &le32(&[0, 0, 50, 100])),
+        emf_rec(43, &le32(&[0, 0, 100, 60])),
+        emf_rec(34, &le32(&[-1])),
+        emf_rec(43, &le32(&[0, 80, 100, 100])),
+        emf_rec(14, &[0; 12]),
+    ];
+    emf.extend(recs.concat());
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let at = |fx: f32, fy: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * fy) as u32);
+    assert!(is_red(at(0.25, 0.3)), "inside the clip: {:?}", at(0.25, 0.3));
+    assert!(is_paper(at(0.75, 0.3)), "outside the clip: {:?}", at(0.75, 0.3));
+    assert!(is_red(at(0.75, 0.9)), "after the clip is restored away: {:?}", at(0.75, 0.9));
+}
+
+/// The vector cache counts each item's copy of the clip region: 100 rectangles drawn inside a
+/// clip region hold 100 copies of its rectangle more than without it.
+#[test]
+fn metafile_cache_counts_clip_regions() {
+    let bytes = |clip: bool| {
+        let mut emf = red_right_half_emf()[..88].to_vec();
+        if clip {
+            emf.extend(emf_rec(30, &le32(&[0, 0, 50, 100])));
+        }
+        for i in 0..100 {
+            emf.extend(emf_rec(43, &le32(&[i % 50, 0, i % 50 + 10, 10])));
+        }
+        emf.extend(emf_rec(14, &[0; 12]));
+        media::build_vector(&emf).map(|v| v.bytes())
+    };
+    let (with, without) = (bytes(true).expect("a picture"), bytes(false).expect("a picture"));
+    assert!(with >= without + 100 * 16, "{with} and {without}");
+}
+
+/// A hatch tile squeezed to well under a pixel tall but several pixels wide (the picture is 70 pt
+/// wide and 2 pt tall) keeps its vertical lines: the row crosses red lines and the background
+/// between them, not one blended color.
+#[test]
+fn metafile_narrow_hatch_tile_keeps_its_lines() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let brush = emf_rec(39, &le32(&[1, 2, 0x0000_00FF, 1]));
+    // The stock NULL_PEN leaves the rectangle without an outline.
+    let no_pen = emf_rec(37, &le32(&[0x8000_0008_u32 as i32]));
+    emf.extend([brush, emf_rec(37, &le32(&[1])), no_pen, emf_rec(43, &le32(&[0, 0, 100, 100])), emf_rec(14, &[0; 12])].concat());
+    let (img, rect) = emf_on_page_sized(emf, (70.0, 2.0), [0.0; 4], 1.0);
+    let y = (rect.y + rect.h / 2.0) as u32;
+    let row: Vec<u8> = ((rect.x + 2.0) as u32..(rect.x + rect.w - 2.0) as u32).map(|x| img.pixel(x, y)[1]).collect();
+    assert!(row.iter().any(|g| *g < 160) && row.iter().any(|g| *g > 240), "red lines and background: {row:?}");
+}
+
+/// A clip path (a rectangle path over the left half, SELECTCLIPPATH with RGN_COPY) keeps a red
+/// rectangle over the whole picture to that half.
+#[test]
+fn metafile_clip_path_clips() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let brush = emf_rec(39, &le32(&[1, 0, 0x0000_00FF, 0]));
+    let recs = [
+        brush,
+        emf_rec(37, &le32(&[1])),
+        emf_rec(59, &[]),
+        emf_rec(43, &le32(&[0, 0, 50, 100])),
+        emf_rec(60, &[]),
+        emf_rec(67, &le32(&[5])),
+        emf_rec(43, &le32(&[0, 0, 100, 100])),
+        emf_rec(14, &[0; 12]),
+    ];
+    emf.extend(recs.concat());
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let at = |fx: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * 0.5) as u32);
+    assert!(is_red(at(0.25)), "inside the clip path: {:?}", at(0.25));
+    assert!(is_paper(at(0.75)), "outside the clip path: {:?}", at(0.75));
+}
+
+/// A bitmap under a world transform that turns it a quarter turn clockwise about the picture's
+/// center (EmfPlusSetWorldTransform): its left pixel (red) is drawn at the top and its right pixel
+/// (blue) at the bottom.
+#[test]
+fn emf_plus_turned_bitmap_is_drawn_turned() {
+    let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, 2, 1, 8, 0x000E_200B, 0]);
+    // BGRA: red, then blue.
+    image.extend([0u8, 0, 255, 255, 255, 0, 0, 255]);
+    let turn = plus_rec(0x402A, 0, &[0.0f32, 1.0, -1.0, 0.0, 100.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+    let mut draw = le32(&[-1, 2]);
+    draw.extend([0.0f32, 0.0, 2.0, 1.0, 25.0, 25.0, 50.0, 50.0].iter().flat_map(|v| v.to_le_bytes()));
+    let emf = emf_plus_file(&[plus_rec(0x4008, 0x0500, &image), turn, plus_rec(0x401A, 0, &draw)]);
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let at = |fx: f32, fy: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * fy) as u32);
+    let (top_right, bottom_left) = (at(0.65, 0.37), at(0.35, 0.62));
+    assert!(is_red(top_right), "red at the top: {top_right:?}");
+    assert!(bottom_left[2] > 200 && bottom_left[0] < 60, "blue at the bottom: {bottom_left:?}");
+}
+
+/// A geometric PS_USERSTYLE pen whose dashes and gaps are far below a pixel draws its line solid
+/// instead of splitting it into dashes too small to see.
+#[test]
+fn metafile_sub_pixel_dashes_draw_solid() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    // 10,000 device pixels over 250 mm: a device unit is 0.025 mm. The picture is 1000 units wide.
+    emf[8..24].copy_from_slice(&le32(&[0, 0, 1000, 1000]));
+    emf[72..80].copy_from_slice(&le32(&[10_000, 10_000]));
+    // EXTCREATEPEN 1: PS_GEOMETRIC | PS_ENDCAP_FLAT | PS_USERSTYLE, 80 units wide, black, two
+    // entries of 1 unit.
+    let pen = emf_rec(95, &le32(&[1, 0, 0, 0, 0, 0x0001_0207, 80, 0, 0, 0, 2, 1, 1]));
+    let recs = [pen, emf_rec(37, &le32(&[1])), emf_rec(27, &le32(&[0, 500])), emf_rec(54, &le32(&[1000, 500])), emf_rec(14, &[0; 12])];
+    emf.extend(recs.concat());
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let y = (rect.y + rect.h * 0.5) as u32;
+    let (x0, x1) = ((rect.x + 5.0) as u32, (rect.x + rect.w - 5.0) as u32);
+    let dark = (x0..x1).filter(|&x| img.pixel(x, y)[..3].iter().all(|c| *c < 60)).count();
+    assert_eq!(dark, (x1 - x0) as usize, "the line is solid black");
+}
+
+/// A hatched brush (CREATEBRUSHINDIRECT, BS_HATCHED, HS_VERTICAL) fills with its red lines over
+/// the background, not with a solid red.
+#[test]
+fn metafile_hatch_brush_draws_its_lines() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let brush = emf_rec(39, &le32(&[1, 2, 0x0000_00FF, 1]));
+    emf.extend([brush, emf_rec(37, &le32(&[1])), emf_rec(43, &le32(&[0, 0, 100, 100])), emf_rec(14, &[0; 12])].concat());
+    let scale = 4.0;
+    let (img, rect) = emf_on_page(emf, [0.0; 4], scale);
+    let y = ((rect.y + rect.h / 2.0) * scale) as u32;
+    let (x0, x1) = (((rect.x + 2.0) * scale) as u32, ((rect.x + rect.w - 2.0) * scale) as u32);
+    let red = (x0..x1).filter(|&x| img.pixel(x, y)[1] < 128).count();
+    let n = (x1 - x0) as usize;
+    assert!(red > 0 && red < n * 3 / 4, "the row crosses red lines and the background between them: {red} of {n} red");
+}
+
 /// #1899: a crop that keeps a sliver of the picture (3% here; a header's bar can be 2.7% of a
 /// page-sized metafile) stretches that sliver over the frame, as the file says, for vector and
 /// bitmap pictures alike. Both pictures are paper on the left half and red on the right.
@@ -1081,6 +1350,43 @@ fn a_crop_keeping_a_sliver_fills_the_frame_with_it() {
             let is_paper = px[..3].iter().all(|c| *c > 200);
             assert!(if red { is_red } else { is_paper }, "{ext} crop {crop:?} at {at}: {px:?}");
         }
+    }
+}
+
+/// A negative crop side draws as no crop on that side, for vector and bitmap pictures alike: a
+/// left side of -0.5 does not pad the source, so the frame at 55% shows the source at 55% (red).
+#[test]
+fn a_negative_crop_side_draws_uncropped() {
+    let img = image::RgbaImage::from_fn(100, 100, |x, _| image::Rgba(if x >= 50 { [255, 0, 0, 255] } else { [255; 4] }));
+    let png = wordcraft_geom::picture::encode_png(&image::DynamicImage::from(img)).unwrap();
+    for (bytes, ext) in [(red_right_half_emf(), "emf"), (png, "png")] {
+        let mut d = Document::new();
+        let media = d.add_media(bytes, ext);
+        let mut p = wordcraft_doc::Paragraph::new();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [-0.5, 0.0, 0.0, 0.0],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(0, obj, &Default::default()).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let opts = RenderOptions::default();
+        let rect = page_display(&d, &l.pages[0], &opts.display)
+            .iter()
+            .find_map(|i| match i {
+                Draw::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a picture on the page");
+        let img = render_page(&d, &l.pages[0], 1.0, &opts);
+        let px = img.pixel((rect.x + rect.w * 0.55) as u32, (rect.y + rect.h * 0.5) as u32);
+        assert!(is_red(px), "{ext}: {px:?}");
     }
 }
 
@@ -1166,6 +1472,29 @@ fn metafile_text_records_are_painted() {
     let (x1, y1) = (((rect.x + rect.w) * scale) as u32, ((rect.y + rect.h) * scale) as u32);
     let dark = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| img.pixel(x, y)[0] < 100).count();
     assert!(dark > 50, "the text is painted inside the picture: {dark} dark pixels");
+}
+
+/// With the opaque background mode (the default) and a red background color (SETBKCOLOR), a text
+/// run's character cells are filled red behind the black text.
+#[test]
+fn metafile_text_fills_its_opaque_background() {
+    let mut font = emf_rec(82, &le32(&[1, -20, 0, 0, 0, 400, 0, 0]));
+    let mut name: Vec<u8> = "Arial".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    name.resize(64, 0);
+    font.extend(name);
+    font[4..8].copy_from_slice(&104u32.to_le_bytes());
+    let mut text = emf_rec(84, &le32(&[0, 0, 100, 100, 1, 0, 0, 5, 40, 4, 76, 0, 0, 0, 0, 0, 0]));
+    text.extend("WWWW".encode_utf16().flat_map(|u| u.to_le_bytes()));
+    text[4..8].copy_from_slice(&84u32.to_le_bytes());
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let bk = emf_rec(25, &le32(&[0x0000_00FF]));
+    emf.extend([bk, font, emf_rec(37, &le32(&[1])), emf_rec(24, &le32(&[0])), text, emf_rec(14, &[0; 12])].concat());
+    let scale = 2.0;
+    let (img, rect) = emf_on_page(emf, [0.0; 4], scale);
+    let (x0, y0) = ((rect.x * scale) as u32, (rect.y * scale) as u32);
+    let (x1, y1) = (((rect.x + rect.w) * scale) as u32, ((rect.y + rect.h) * scale) as u32);
+    let red = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| is_red(img.pixel(x, y))).count();
+    assert!(red > 50, "the character cells are filled red: {red} red pixels");
 }
 
 /// An EMF text run whose anchor sits inside the picture but whose font is billions of units
