@@ -9608,6 +9608,39 @@ fn contour_wrap_turns_with_the_object() {
 /// Enclosed characters (#297, an `EQ \o\ac` field): the shape is drawn as a vector around the text,
 /// whatever the font has; "shrink text" draws the text smaller inside a one-em shape, "enlarge
 /// symbol" a bigger shape around text at its own size. Plain `\o` overstrikes its arguments.
+/// An `EQ` field's formula (`\f`, `\r`): Word draws the formula its code describes, and an exam
+/// export's fields store no result, so the field lays out as math rather than as nothing.
+#[test]
+fn eq_field_formulas_lay_out_as_math() {
+    crate::test_fonts();
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    for (instr, want) in [("eq \\f(1,2)", ['1', '2']), ("eq \\r(,2)", ['2', '2'])] {
+        let mut d = Document::from_text("x  y");
+        d.insert_object(&Pos::body(0, 2), field(instr), &Default::default()).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+            panic!("no body lines")
+        };
+        assert_eq!(para.field_maths.len(), 1, "{instr}: the formula is laid out");
+        let (k, ml) = &para.field_maths[0];
+        assert!(ml.width > 0.0 && ml.ascent > 0.0, "{instr}: {ml:?}");
+        assert!(
+            para.clusters.iter().any(|c| c.kind == crate::para::ClKind::Object(*k) && c.adv > 0.0 && c.obj_h > 0.0),
+            "{instr}: a cluster for the field"
+        );
+        let items = display::page_display(&d, &l.pages[0], &Default::default());
+        let text: String = items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }).collect();
+        assert!(text.contains(want[0]) && text.contains(want[1]), "{instr}: {text:?}");
+    }
+}
+
 #[test]
 fn enclosed_characters_draw_a_shape_around_the_text() {
     crate::test_fonts();
