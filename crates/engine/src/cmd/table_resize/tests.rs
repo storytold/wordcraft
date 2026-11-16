@@ -211,6 +211,29 @@ fn ctrl_shares_a_border_drag_among_the_columns_right_of_it() {
     assert_eq!(share_out(&mut w, 3, 1.0, Share::Proportional), None);
 }
 
+/// Columns a file gives narrower than the minimum (3 pt and 4 pt) aren't forced to it by a drag
+/// between them: that took the right one to 1 pt, which the next import read as no width.
+#[test]
+fn a_drag_between_narrow_columns_leaves_them_as_they_are() {
+    for share in [Share::Neighbour, Share::Proportional, Share::LeftOnly] {
+        for dx in [0.0, -2.0, 2.0] {
+            let mut w = [3.0, 4.0, 100.0];
+            share_out(&mut w, 0, dx, share);
+            assert!(w.iter().all(|x| *x > 1.0), "{share:?} by {dx}: {w:?}");
+            if share == Share::Neighbour {
+                assert_eq!(w, [3.0, 4.0, 100.0], "by {dx}: no room on either side");
+            }
+        }
+    }
+    // A narrow column still widens when its neighbour has room.
+    let mut w = [3.0, 100.0];
+    assert_eq!(share_out(&mut w, 0, 10.0, Share::Neighbour), Some(10.0));
+    assert_eq!(w, [13.0, 90.0]);
+    // Nothing moves for no drag.
+    let mut w = [3.0, 100.0];
+    assert_eq!(share_out(&mut w, 0, 0.0, Share::Neighbour), Some(0.0));
+}
+
 /// The table's left edge, grabbed from just outside it, moves the table in or out: its
 /// indent changes and the first column makes up the difference, so the other borders stay.
 /// A centred or right-aligned table keeps its alignment, as in Word: only the first column
