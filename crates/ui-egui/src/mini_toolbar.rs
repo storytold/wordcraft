@@ -196,6 +196,8 @@ pub fn track_dismissal(app: &mut WordApp, ctx: &egui::Context, viewport: Rect) {
 /// canvas area it must stay inside.
 pub fn show(app: &mut WordApp, ctx: &egui::Context, selection: Rect, viewport: Rect) {
     if !visible(app) {
+        // A hidden frame ends the measurement: the bar coming back measures from where the pointer is then.
+        app.canvas.mini_closest = None;
         if app.canvas.command_previewed.is_some() {
             ctx.request_repaint();
         }

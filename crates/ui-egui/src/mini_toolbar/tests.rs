@@ -956,3 +956,13 @@ fn a_bar_that_scrolls_away_from_the_pointer_measures_afresh() {
     assert_eq!(fade(app, scrolled, Some(p)), 1.0, "the bar moved, not the pointer");
     assert!(fade(app, scrolled, Some(p + Vec2::new(0.0, 300.0))) < 1.0, "moving away still fades it");
 }
+
+#[test]
+fn a_hidden_bar_measures_afresh_when_it_comes_back() {
+    let mut h = bar_over("quick");
+    let sel = h.state().session.sel.clone();
+    h.state_mut().canvas.mini_closest = Some((sel, Rect::from_min_size(egui::pos2(100.0, 100.0), Vec2::new(200.0, 30.0)), 0.0));
+    h.state_mut().run("caret.docStart", json!({})).unwrap();
+    steps(&mut h);
+    assert_eq!(h.state().canvas.mini_closest, None, "the caret alone hides the bar and ends the measurement");
+}

@@ -1571,6 +1571,9 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         && app.ui.mini_toolbar
     {
         crate::mini_toolbar::show(app, ui.ctx(), sel, out.inner_rect);
+    } else {
+        // No bar this frame: its fade measures afresh when it comes back.
+        app.canvas.mini_closest = None;
     }
     if app.session.view.read_mode {
         // Fixed navigation chrome, independent of the horizontally moving columns.
