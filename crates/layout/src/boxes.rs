@@ -419,7 +419,7 @@ fn natural_width(pl: &ParaLayout) -> f32 {
 }
 
 /// A text frame's placement as a floating object's (`w:framePr` → anchors, alignment, wrap).
-fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
+pub(crate) fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
     let anchor = |a: &str, text: Anchor| match a {
         "page" => Anchor::Page,
         "margin" => Anchor::Margin,
