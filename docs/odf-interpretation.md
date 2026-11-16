@@ -1,6 +1,6 @@
 # How WordCraft interprets OpenDocument files
 
-> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-04 · **Change:** major (no more settings: one choice for each case the standard leaves open); previously trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-05 · **Change:** trivial (a document's language: kept on any save, and stated when written from the model); previously major (no more settings: one choice for each case the standard leaves open); previously trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
 
 OpenDocument (ODF 1.3, OASIS) leaves some of a document's look to the application. Part 3 §16.2
 says that when no style sets a property and the standard gives no default, "an
@@ -68,6 +68,7 @@ These are documented so they aren't mistaken for law:
 | `style:wrap` unstated on a frame | §20.400: no default | text wraps on both sides (LibreOffice too) |
 | A drawing shape's `draw:fill` / `draw:stroke` unstated | §20.118, §20.167: no default | solid (LibreOffice too); a text frame's are none; the colours are listed above |
 | A document's default font and size when no default style gives them | not defined | WordCraft's defaults |
+| A document's language when neither its default style nor Standard states one | `fo:language`: no default | none: WordCraft proofs it in the editing language and writes none, and each reader uses its own default |
 
 ## How WordCraft writes ODF
 
@@ -106,7 +107,8 @@ states what the standard leaves open instead of relying on any application's def
 - drawings not held in the text's area (`style:flow-with-text="false"`, §20.267 gives no default);
 - tab stops measured as the file it was opened from measured them (`TabsRelativeToIndent` in
   `settings.xml`), from the margin for WordCraft's own documents;
-- widow and orphan control, on or off, in the default paragraph style.
+- widow and orphan control, on or off, in the default paragraph style;
+- the document's language, in the default paragraph style, when it has one.
 
 ## Deviations from the standard, out of necessity
 
@@ -162,6 +164,7 @@ from public bug reports and ONLYOFFICE's converter test snapshots):
 
 | Date | Change |
 |---|---|
+| 2026-11-05 | A document's language is read from its default style or Standard and written back from the model. It was lost when a style or list definition changed (numbering, a new style), and readers then showed the document in their own default language. Styles written from the model no longer say English for a document that isn't. A language's script (`fo:script`) is kept with it, and a style with no parent takes the default style's language when Standard's differs. |
 | 2026-11-04 | The settings removed: File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values. WordCraft makes one choice for each case the standard leaves open, the one the default made, so nothing changes for a document opened with the default. What a file states is still followed, its `TabsRelativeToIndent` and `AddParaTableSpacing` among it. LibreOffice's choices stay listed beside WordCraft's. |
 | 2026-11-04 | How WordCraft writes ODF: unchanged paragraphs and tables with drawings, comments, tracked changes, notes or marks are written as read too (the text said from the model); what is edited, and the cases left in the element audit, from the model. |
 | 2026-11-04 | The two presets are the two styles a document can be shown in: Microsoft Word style (`word`, the default; `wordcraft`, its earlier id, still taken) and LibreOffice style (`libreoffice`). The CLI's values listed one by one. |
