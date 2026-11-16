@@ -339,7 +339,7 @@ fn range_toc_to_field(s: &mut Session) -> Result<(), CmdError> {
         s.doc.remove_block(StoryRef::Body, &at.path)?;
         let heading = Path::top(i - 1);
         let len = s.doc.para(StoryRef::Body, &heading).map_or(0, |p| p.len());
-        at = Pos { story: StoryRef::Body, path: heading, off: len };
+        at = Pos::new(StoryRef::Body, heading, len);
     }
     let field = InlineObject::Field {
         instr: r.instr.trim().to_string(),
@@ -418,7 +418,7 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
             let start = remove_toc(s, start, end)?;
             s.doc.insert_block(StoryRef::Body, &Path::top(start), Block::Para(Paragraph::new()))?;
             placeholder = true;
-            s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(start), off: 0 });
+            s.sel = Selection::caret(Pos::body(start, 0));
             s.sel.focus.clone()
         }
         None => delete_selection(s)?,
@@ -498,7 +498,7 @@ fn bookmark_heading(s: &mut Session, path: &Path, lead: usize) -> Result<String,
     let name = format!("_Toc{next:09}");
     let end = para.len();
     let props = CharProps::default();
-    let pos = |off| Pos { story: StoryRef::Body, path: path.clone(), off };
+    let pos = |off| Pos::new(StoryRef::Body, path.clone(), off);
     s.doc.insert_object(&pos(end), InlineObject::BookmarkEnd { name: name.clone() }, &props)?;
     s.doc.insert_object(&pos(lead), InlineObject::BookmarkStart { name: name.clone() }, &props)?;
     // The caret in that paragraph stays on the same text.
@@ -595,7 +595,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             {
                 *top = top.saturating_add(u32::try_from(shift).unwrap_or(u32::MAX));
             }
-            let page = page_at(&l, &formats, &Pos { story: StoryRef::Body, path: target, off: e.lead })
+            let page = page_at(&l, &formats, &Pos::new(StoryRef::Body, target, e.lead))
                 .map_or_else(|| "1".into(), |(_, n, fmt)| page_text(n, fmt));
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
             let link = links.get(k).cloned().flatten();

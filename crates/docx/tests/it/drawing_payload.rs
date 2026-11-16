@@ -31,7 +31,8 @@ fn model_box() -> Document {
     doc.media.insert("original-blue.png".into(), Arc::new(BLUE_PNG.to_vec()));
     let id = doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Parent", Default::default()))]);
     doc.parts.get_mut(&id).unwrap().body = TextBody { auto_fit: true, inset: Some([0; 4]), ..Default::default() };
-    doc.insert_object(&Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path(vec![0]), off: 0 }, picture(), &Default::default()).unwrap();
+    doc.insert_object(&Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path(vec![0]), off: 0, affinity: None }, picture(), &Default::default())
+        .unwrap();
     let parent = InlineObject::Shape {
         kind: ShapeKind::TextBox,
         w: 180.0,

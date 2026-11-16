@@ -207,7 +207,7 @@ fn section_break_keeps_the_selected_text() {
     assert_eq!(texts(&s.doc), ["", "one", "two"]);
     // A backward selection in the middle of a paragraph keeps its text and direction too.
     let mut s = Session::new(wordcraft_doc::Document::from_text("alpha beta\ngamma"));
-    let p = |off| Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off };
+    let p = |off| Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off, affinity: None };
     s.sel = Selection { anchor: p(10), focus: p(6) };
     s.run("layout.break", &json!({"kind": "continuous"})).unwrap();
     assert_eq!(s.selected_text(), "beta");

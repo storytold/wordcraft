@@ -182,13 +182,15 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
             if *story != StoryRef::Body {
                 continue;
             }
-            let Some(text) = s.doc.para_at(&Pos { story: *story, path: path.clone(), off: 0 }).map(|p| p.text.clone()) else { continue };
+            let Some(text) = s.doc.para_at(&Pos { story: *story, path: path.clone(), off: 0, affinity: None }).map(|p| p.text.clone()) else {
+                continue;
+            };
             for li in (*l0).max(1)..*l1 {
                 let (Some(prev), Some(line)) = (para.lines.get(li - 1), para.lines.get(li)) else { continue };
                 if prev.end != wordcraft_layout::LineEnd::Wrap || prev.hyphen.is_some() {
                     continue;
                 }
-                let at = Pos { story: *story, path: path.clone(), off: line.start };
+                let at = Pos { story: *story, path: path.clone(), off: line.start, affinity: None };
                 if at < from || best.as_ref().is_some_and(|(b, _)| *b <= at) {
                     continue;
                 }

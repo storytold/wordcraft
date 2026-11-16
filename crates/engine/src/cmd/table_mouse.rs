@@ -525,7 +525,7 @@ fn insert_at(s: &mut Session, v: &Value) -> CmdResult {
     let mut path = geom.table.0.clone();
     path.extend([r as u32, c as u32, 0]);
     s.column = None;
-    s.sel = Selection::caret(Pos { story, path: Path(path), off: 0 });
+    s.sel = Selection::caret(Pos { story, path: Path(path), off: 0, affinity: None });
     if rows {
         table::row(s, after)?;
     } else {

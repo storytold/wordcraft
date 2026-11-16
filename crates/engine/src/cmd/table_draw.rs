@@ -145,7 +145,7 @@ fn draw_table(s: &mut Session, v: &Value, l: &DocLayout, page: usize, start: (f3
     s.doc.insert_block(pos.story, &at, Block::Table(t))?;
     let mut first = at.0.clone();
     first.extend([0, 0, 0]);
-    s.sel = Selection::caret(Pos { story: pos.story, path: Path(first), off: 0 });
+    s.sel = Selection::caret(Pos { story: pos.story, path: Path(first), off: 0, affinity: None });
     sel_result(s)
 }
 
@@ -438,7 +438,7 @@ fn finish(s: &mut Session, story: StoryRef, tp: &Path, r: usize, c: usize) -> Cm
     let c = c.min(t.rows.get(r).map_or(0, |x| x.cells.len().saturating_sub(1)));
     let mut path = tp.0.clone();
     path.extend([r as u32, c as u32, 0]);
-    s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: Path(path), off: 0 }));
+    s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: Path(path), off: 0, affinity: None }));
     super::table::touch_cells(s, tp)?;
     sel_result(s)
 }

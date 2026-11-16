@@ -256,7 +256,7 @@ fn headings(app: &mut WordApp, ui: &mut Ui, ctx: &egui::Context) {
         }
     }
     if let Some((path, ..)) = go.and_then(|i| items.get(i)) {
-        let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path: path.clone(), off: 0 }}));
+        let _ = app.run("caret.set", json!({"pos": Pos::new(StoryRef::Body, path.clone(), 0)}));
         // Align the chosen heading's page immediately against this pane, rather
         // than the indeterminate minimum movement from scroll_to_rect.
         app.canvas.nav_to_caret = true;

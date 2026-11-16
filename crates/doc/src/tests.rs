@@ -368,7 +368,7 @@ fn word_count_including_notes_counts_used_boxes_and_notes_only() {
     d.add_part(PartKind::Header, para_of("header words"));
     d.add_part(PartKind::Comment, para_of("comment words"));
     d.insert_object(&Pos::body(0, 3), shape(boxed), &CharProps::default()).unwrap();
-    d.insert_object(&Pos { story: StoryRef::Part(boxed), path: Path::top(0), off: 0 }, shape(nested), &CharProps::default()).unwrap();
+    d.insert_object(&Pos { story: StoryRef::Part(boxed), path: Path::top(0), off: 0, affinity: None }, shape(nested), &CharProps::default()).unwrap();
     d.insert_object(
         &Pos::body(0, 0),
         InlineObject::NoteRef { kind: para::NoteKind::Footnote, id: note, custom: String::new() },
@@ -401,7 +401,7 @@ fn counted_stories_survive_self_nested_boxes() {
         extra: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape.clone(), &CharProps::default()).unwrap();
-    d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }, shape, &CharProps::default()).unwrap();
+    d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None }, shape, &CharProps::default()).unwrap();
     assert_eq!(d.word_count_including_notes(), 2);
 }
 
@@ -430,7 +430,7 @@ fn prune_text_boxes_drops_only_unshown_ones() {
     let hdr = d.add_part(PartKind::Header, para_of("header"));
     let in_header = d.add_part(PartKind::TextBox, para_of("box in the header"));
     d.insert_object(&Pos::body(0, 0), shape(shown), &CharProps::default()).unwrap();
-    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None };
     d.insert_object(&at(shown), shape(nested), &CharProps::default()).unwrap();
     d.insert_object(&at(orphan), shape(orphan_child), &CharProps::default()).unwrap();
     d.insert_object(&at(hdr), shape(in_header), &CharProps::default()).unwrap();
@@ -557,7 +557,7 @@ fn notes_in_text_box_follow_nested_boxes_once() {
     let outer = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::new())]);
     let inner = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::new())]);
     let (n1, n2) = (d.add_part(PartKind::Footnote, Vec::new()), d.add_part(PartKind::Footnote, Vec::new()));
-    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None };
     // outer: [note n1][box inner][box outer (itself)]; inner: [note n2]
     d.insert_object(&at(outer), shape(outer), &CharProps::default()).unwrap();
     d.insert_object(&at(outer), shape(inner), &CharProps::default()).unwrap();

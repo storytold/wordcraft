@@ -679,8 +679,8 @@ mod tests {
         table.rows[0].cells[0].blocks = vec![crate::para_block(Paragraph::with_text("cell", CharProps::default()))];
         doc.body.push(std::sync::Arc::new(crate::Block::Table(table)));
         let path = crate::Path(vec![1, 0, 0, 0]);
-        let cursor = Pos { story: StoryRef::Body, path: path.clone(), off: 4 };
-        let anchor = Pos { story: StoryRef::Body, path, off: 2 };
+        let cursor = Pos { story: StoryRef::Body, path: path.clone(), off: 4, affinity: None };
+        let anchor = Pos { story: StoryRef::Body, path, off: 2, affinity: None };
         let w = doc.ime_surrounding(&cursor, &anchor, MAX_IME_TEXT_BYTES).expect("the cell text");
         assert_eq!(w.text, "cell");
         assert_eq!(w.cursor, 4);

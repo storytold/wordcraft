@@ -238,7 +238,7 @@ fn whole_document_scope_from_a_table_cell_reaches_the_body() {
     s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
     run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
     let table_index = s.doc.body.iter().position(|block| block.as_table().is_some()).expect("the table was inserted") as u32;
-    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: Path(vec![table_index, 0, 0, 0]), off: 0 });
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: Path(vec![table_index, 0, 0, 0]), off: 0, affinity: None });
     run(&mut s, "text.insert", json!({"text": "cell  text"}));
     assert!(s.sel.focus.path.depth() > 0, "the caret is inside the table");
     run(&mut s, "para.removeExtraSpaces", json!({"scope": "all"}));
@@ -403,7 +403,7 @@ fn deletions_are_recorded_under_track_changes() {
 /// Tracked-delete the bytes `a..b` of the first body paragraph (Track Changes must be on).
 fn track_delete_in_first(s: &mut Session, a: usize, b: usize) {
     let path = s.doc.para_paths(StoryRef::Body)[0].clone();
-    let at = |off: usize| Pos { story: StoryRef::Body, path: path.clone(), off };
+    let at = |off: usize| Pos { story: StoryRef::Body, path: path.clone(), off, affinity: None };
     crate::cmd::track_delete(s, &at(a), &at(b)).expect("tracked delete");
 }
 

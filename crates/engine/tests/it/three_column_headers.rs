@@ -50,7 +50,7 @@ fn fill_and_check_undo(session: &mut Session, story: StoryRef) -> Document {
         if cell > 0 {
             session.run("text.tab", &json!({})).unwrap();
         }
-        assert_eq!(session.sel.focus, Pos { story, path: Path(vec![0, 0, cell as u32, 0]), off: 0 });
+        assert_eq!(session.sel.focus, Pos::new(story, Path(vec![0, 0, cell as u32, 0]), 0));
         session.run("text.insert", &json!({"text": text})).unwrap();
     }
     let filled = session.doc.clone();
@@ -98,7 +98,7 @@ fn three_columns_are_borderless_cells_with_the_story_style_and_section_width() {
         let id = s.run(command, &json!({"preset": "blankThree"})).unwrap()["story"].as_u64().unwrap() as u32;
         let story = StoryRef::Part(id);
         assert_empty_three_column_table(&s.doc, story, style, width);
-        assert_eq!(s.sel.focus, Pos { story, path: Path(vec![0, 0, 0, 0]), off: 0 });
+        assert_eq!(s.sel.focus, Pos::new(story, Path(vec![0, 0, 0, 0]), 0));
         let after = s.doc.clone();
         assert_eq!(s.undo_depth(), depth + 1);
         s.run("edit.undo", &json!({})).unwrap();

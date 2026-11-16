@@ -3371,7 +3371,7 @@ fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
     // The chord fires its command in that pass; the app runs it before the next pass (`raw_input_hook`).
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "Ctrl+Shift+= doesn't reset");
-    let pos = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+    let pos = wordcraft_doc::Pos::body(0, 0);
     let props = h.state().session.doc.para_at(&pos).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
     assert_eq!(props.vert_align, Some(wordcraft_doc::props::VertAlign::Superscript), "Ctrl+Shift+= runs Superscript");
 }

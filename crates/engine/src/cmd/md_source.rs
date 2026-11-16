@@ -360,8 +360,8 @@ fn block_of_caret(text: &str, caret: usize, doc: &Document, block_lines: &[usize
     let top = u32::try_from(top).unwrap_or(0);
     let path = doc.para_paths(StoryRef::Body).into_iter().find(|path| path.0.first().is_some_and(|b| *b >= top));
     match path {
-        Some(path) => Pos { story: StoryRef::Body, path, off: 0 },
-        None => Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        Some(path) => Pos { story: StoryRef::Body, path, off: 0, affinity: None },
+        None => Pos { story: StoryRef::Body, path: Path::top(0), off: 0, affinity: None },
     }
 }
 
@@ -605,7 +605,7 @@ mod tests {
             .into_iter()
             .find(|path| s.doc.para(StoryRef::Body, path).is_some_and(|para| para.plain_text().contains("Last")))
             .unwrap();
-        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: target.clone(), off: 2 });
+        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: target.clone(), off: 2, affinity: None });
         s.run(TOGGLE, &json!({})).unwrap();
         let src = s.md_source.as_ref().unwrap();
         let line: String = src.text[src.caret..].chars().take_while(|c| *c != '\n').collect();
@@ -629,7 +629,7 @@ mod tests {
             .into_iter()
             .find(|path| path.0.first() == Some(&1))
             .expect("document ending in a table must have an appended paragraph");
-        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: trailing_para, off: 0 });
+        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: trailing_para, off: 0, affinity: None });
 
         s.run(TOGGLE, &json!({})).unwrap();
         let src = s.md_source.as_ref().unwrap();
@@ -860,7 +860,7 @@ mod tests {
             .into_iter()
             .find(|path| s.doc.para(StoryRef::Body, path).is_some_and(|para| para.plain_text().contains("Last")))
             .unwrap();
-        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: target, off: 0 });
+        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: target, off: 0, affinity: None });
         s.run(TOGGLE, &json!({})).unwrap();
         let src = s.md_source.as_ref().unwrap();
         let line: String = src.text[src.caret..].chars().take_while(|c| *c != '\n').collect();

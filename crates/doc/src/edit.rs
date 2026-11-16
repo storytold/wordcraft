@@ -739,7 +739,7 @@ impl Document {
         }
         let bl = self.container_mut(pos.story, &pos.path)?;
         bl.insert((i + 1).min(bl.len()), para_block(tail));
-        Ok(Pos { story: pos.story, path: pos.path.with_last(i + 1), off: 0 })
+        Ok(Pos::new(pos.story, pos.path.with_last(i + 1), 0))
     }
 
     /// Insert a block before the block at `path` (same container). A table that would nest
@@ -957,11 +957,11 @@ impl Document {
             }
         }
         // The paragraphs left between the ends join, as in a range within one container.
-        let at = if a_covers { Pos { story: a.story, path: block_path(ia), off: 0 } } else { a.clone() };
+        let at = if a_covers { Pos::new(a.story, block_path(ia), 0) } else { a.clone() };
         let end = if b_covers {
-            Pos { story: a.story, path: block_path((ib + 1).saturating_sub(removed)), off: 0 }
+            Pos::new(a.story, block_path((ib + 1).saturating_sub(removed)), 0)
         } else {
-            Pos { story: a.story, path: block_path(ib.saturating_sub(removed)), off: 0 }
+            Pos::new(a.story, block_path(ib.saturating_sub(removed)), 0)
         };
         let paras = |p: &Pos| p.path.0.len() == level + 1 && self.para(p.story, &p.path).is_some();
         if paras(&at) && paras(&end) && at.path <= end.path {
@@ -1585,13 +1585,13 @@ impl Document {
                 let sect = tail.section.clone();
                 r.append(tail);
                 r.section = sect;
-                Ok(Pos { story: pos.story, path: right, off })
+                Ok(Pos::new(pos.story, right, off))
             }
             Some(t @ Block::Table(_)) => {
                 self.insert_block(pos.story, &right, t)?;
-                Ok(Pos { story: pos.story, path: right.with_last(idx + 1), off: 0 })
+                Ok(Pos::new(pos.story, right.with_last(idx + 1), 0))
             }
-            None => Ok(Pos { story: pos.story, path: right, off: 0 }),
+            None => Ok(Pos::new(pos.story, right, 0)),
         }
     }
 

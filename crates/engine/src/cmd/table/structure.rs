@@ -130,7 +130,7 @@ pub(in crate::cmd) fn delete_table_at(s: &mut Session, tp: &Path) -> CmdResult {
         return Ok(done);
     }
     s.doc.remove_block(story, &tp)?;
-    s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: tp, off: 0 }));
+    s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: tp, off: 0, affinity: None }));
     sel_result(s)
 }
 
@@ -237,6 +237,6 @@ pub(super) fn split_table(s: &mut Session, _: &Value) -> CmdResult {
     let after = tp.with_last(tp.last() + 1);
     s.doc.insert_block(story, &after, Block::Para(Paragraph::new()))?;
     s.doc.insert_block(story, &after.with_last(after.last() + 1), Block::Table(tail))?;
-    s.sel = Selection::caret(Pos { story, path: after, off: 0 });
+    s.sel = Selection::caret(Pos { story, path: after, off: 0, affinity: None });
     sel_result(s)
 }

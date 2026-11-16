@@ -19,7 +19,7 @@ fn first_table(s: &Session) -> Table {
 fn cell_pos(s: &Session, r: usize, c: usize) -> Pos {
     let mut path = table_path(s).0;
     path.extend([r as u32, c as u32, 0]);
-    Pos { story: StoryRef::Body, path: Path(path), off: 0 }
+    Pos { story: StoryRef::Body, path: Path(path), off: 0, affinity: None }
 }
 
 /// Type "r{row}c{cell}" into every cell.
