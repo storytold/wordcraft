@@ -1,8 +1,11 @@
 # ADR WC-0009: a room is sealed before it is dropped — seal, retry, persist
 
 - Date: 2026-11-16
-- Status: **draft** — proposed, not implemented. The review thread it answers
-  stays open (deferred with this reason) until the rule below lands.
+- Status: **accepted** (chair, `decisions/0026-room-lifecycle-seal.md`) and
+  implemented in `9cda1c11` — `apps/collab-server/src/lib.rs:363` (the seal),
+  `:1608` (`leave`), `:555` (`room_for`), `:674` (the join that retries). The
+  review thread it answers is rewritten to the fix; `STATUS.md` §5.52 records
+  the gate.
 - Scope: WordCraft implementation, server side: `apps/collab-server/src/lib.rs`
   (`AppState::room_for`, `AppState::open_room`, `AppState::persist`,
   `AppState::build_room`, `leave`). No wire change, no document-model change.
@@ -48,7 +51,7 @@ the same files from a stale version).
 The reviewer's own note is right that a recheck alone is not enough: a recheck
 has the same window one instruction later. The fix is a lifecycle, not a recheck.
 
-## Proposed decision
+## Decision
 
 1. **A room has a lifecycle**: `Open` → `Sealed` → dropped. The state lives in
    the same `RoomState` and is read and written under the room's own mutex — the
@@ -75,16 +78,18 @@ has the same window one instruction later. The fix is a lifecycle, not a recheck
    reachable through it. Anything that removes a room without sealing it first
    is a defect by this ADR.
 
-## Open questions
+## Open questions — answered by the chair
 
 - Whether the seal should also close the room to *reads* (`snapshot`, `tail`):
-  a peer that is still registered is served by its own connection, so the seal is
-  proposed for new joins only.
-- Whether the retry belongs in `room_for` or in the join handler: the first keeps
-  the transport out of it; the second could answer the client with a retryable
-  `welcome` refusal earlier. Proposed: `room_for`.
-- A metric for seal retries and for "join met a sealed room" — useful to prove
-  the window is closed in production, and cheap.
+  no. A peer that is still registered is served by its own connection, so the
+  seal closes new joins only (ADR-0026).
+- Whether the retry belongs in `room_for` or in the join handler: in
+  `room_for` (with the registration's "sealed" answer driving it), so the
+  transport stays out of it. The client meets one retryable refusal only when
+  the attempts are exhausted.
+- A metric for seal retries and for "join met a sealed room": both are in the
+  implementation — `sealed_joins_total` and `seal_retries_total`
+  (`apps/collab-server/src/lib.rs:441`).
 
 ## Consequences
 

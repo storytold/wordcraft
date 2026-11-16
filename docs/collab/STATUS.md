@@ -506,6 +506,20 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 
 Results at this writing:
 
+- §5.52, the code head `9cda1c11` (one commit above `9300ff94`, two files under
+  `apps/collab-server`): on the build host `agents`, `cargo metadata --locked`
+  rc 0 with the lock's sha256 unchanged and a clean tree before, after it and
+  after the whole gate; `cargo fmt --all -- --check` rc 0; `cargo clippy
+  --workspace --all-targets -D warnings` rc 0; `cargo xtask layers` rc 0 (26
+  crates); `cargo test --workspace --lib --bins --tests --no-fail-fast` over 45
+  targets — 5411 passed, 2 failed (the upstream `fit_one_page` pair), 9 ignored;
+  `cargo test --workspace --doc` rc 0; i18n-report, language, assets and wasm
+  rc 0. The aggregate stops at `test` on those two tests. The server crate alone:
+  `cargo test -p wordcraft-collab-server` — 85 passed, 0 failed, 1 ignored. The
+  one proof that the tests catch the defect: with `leave` reverted to the old
+  three-step form (no seal), `a_join_that_races_the_last_leave_never_lands_outside_the_map`
+  fails on `room_count()` 0 with a peer registered in the room it was handed.
+  Details and log name: §5.52.
 - §5.49, the delivered head `e6f34e8c` (one documentation commit above
   `61565ab3`): on the build host `agents`, `cargo metadata --locked` rc 0 with
   the lock's sha256 unchanged and a clean tree before, after it and after the
@@ -4979,6 +4993,98 @@ engine, one in the web session, two in the app's welcome state). The aggregate
 `cargo xtask ci` answers rc 1 and stops at `test` (`ok fmt`, `ok clippy`,
 `FAIL test`, the other six skipped) on the same two `fit_one_page` reds — the
 shape §5.49 and §5.50 recorded, and the reason the gate is read step by step.
+
+### 5.52 A room is sealed before it is dropped — one snapshot inside the seal, one generation, a join that retries (run 2026-11-16)
+
+**What was open.** §5.51 deferred thread `4526700226`
+(`apps/collab-server/src/lib.rs:1380`: "synchronize room lookup and peer
+registration with the last-peer cleanup in `leave`") with a designed fix and no
+code. Chair accepted that design as ADR-0026 on 2026-11-16
+(`.craft/bus/decisions/0026-room-lifecycle-seal.md`, bus message
+`20261116T055746Z-craft-28a7`), following the draft in this tree
+(`docs/collab/adr/WC-0009-seal-retry-persist.md`), so the thread is an answer of
+code now.
+
+**The code.** `9cda1c11`, one commit on top of `9300ff94` (2 files, +556/−67),
+nothing pushed: the PR's head and the fork still answer `e6f34e8c`, and the
+branch is `0 6` from it locally (this page's own commit is the seventh). At
+`9cda1c11` the branch is `0 127` from `origin/main` `cc90520b` and
+`git merge-tree --write-tree origin/main 9cda1c11` exits 0 (tree `7417caf2`).
+The tree is clean before and after the gate.
+
+| ADR-0026 | Where the code answers | Regression test |
+|---|---|---|
+| п.1 — `Open` → `Sealed` → dropped, in the room's mutex | `Lifecycle` `apps/collab-server/src/lib.rs:229`; the field `RoomState::lifecycle` `:241`; `RoomState::seal` `:363`; `is_sealed` `:373` | every test below (`seal()` returns false on a room with a peer) |
+| п.2 — `leave` seals before it decides, one critical section | `leave` `:1608`: peer removal, `peers.is_empty()` and `seal()` in one lock (`:1609–1614`), the `left` frames after it, `drop_sealed` `:1627` | `a_join_that_races_the_last_leave_never_lands_outside_the_map` (`tests.rs:830`) |
+| п.3 — a join into a sealed room retries against the map, bounded, retryable refusal | `register` answers `RegisterError::Sealed` before it touches a peer `:1064`; `room_for` finishes the seal and looks at the map again `:555` (loop `:556`, the sealed arms `:561–569` and `:579–588`); `AppState::join` re-obtains the room and re-registers `:674`, bound `:685`; the refusal `Refusal::Sealed` `:602` → `JoinError::Sealed` `:687` → `RejectCode::Stale` through `refuse_with` `:805` | `two_joins_during_one_seal_leave_one_room_and_one_generation` (`tests.rs:884`), `a_seal_that_cannot_be_written_keeps_the_room_and_answers_the_next_join` (`tests.rs:932`) |
+| п.4 — the snapshot is written once, inside the seal, read back before the room leaves the map | `persist` `:479`: the per-room write gate `:484`, the pair a seal already wrote is reused `:487` (ADR-0024 read-back inside `Store::save`), the record `:503`; `drop_sealed` `:522` writes, then `rooms.retain(...)` | `persist_all_during_a_seal_writes_one_pair` (`tests.rs:979`), `a_seal_that_cannot_be_written_keeps_the_room_and_answers_the_next_join` |
+| п.5 — a second room for one document is a defect | `drop_sealed` is the only path that removes a room `:522`; `room_for` never hands out a sealed one `:561` | `a_join_that_races_the_last_leave_never_lands_outside_the_map` asserts the invariant directly: a registered peer's room is the map's room |
+| the metrics the chair asked for | `sealed_joins_total`, `seal_retries_total` `:441–442`, counted where a join meets a sealed room (`:566`, `:583`, `:682`) | asserted in the two-seal test (`>= 2`) and after the refused joins |
+
+**What changed, step by step.**
+
+- **The lifecycle.** `RoomState` carries `Lifecycle::{Open, Sealed}` — the same
+  mutex every journal append, presence update and peer registration already
+  takes, so there is no second lock and no lock order to get wrong. `seal()`
+  is the transition and its own precondition: no peers, and `Open`.
+- **`leave` seals before it decides.** Before, `peers.is_empty()` and
+  `rooms.retain(...)` were two critical sections, and a join that already held
+  the `Arc` from `room_for` could register between them: the room left the map
+  with a live peer, the snapshot the seal had just written did not contain that
+  peer, its edits went to a room nobody could find again, and the next join
+  built a second room from the stale snapshot. Now the removal, the test and the
+  transition are one lock, so a registration either wins and keeps the room
+  non-empty or gets `Sealed` and registers nothing.
+- **The join retries against the map.** `room_for` never returns a sealed room:
+  it finishes the seal it met (writing the pair if that had not happened),
+  drops the handle and looks again — the next lookup either finds the room that
+  replaced it or builds one from the snapshot the seal wrote. `register`'s
+  "sealed" answer feeds the same loop in `AppState::join`, three attempts; when
+  they run out the client gets `stale` (retryable) instead of a second room or
+  a panic.
+- **The snapshot is written once.** `persist` takes a per-room write gate, so
+  the periodic snapshot, a commit, the seal and `persist_all` take turns; if the
+  room is sealed when the write completes, the pair is recorded in the room and
+  every later caller is answered from it without writing a second generation.
+  `drop_sealed` writes (read-back inside `Store::save`, ADR-0024) and only then
+  removes the room; a failed write leaves the room in the map, sealed, and the
+  next join retries the write from the state the room holds — no second room, no
+  loss.
+- **Metrics.** `sealed_joins_total` counts joins that met a sealed room and
+  `seal_retries_total` the lookups they cost; both are zero on a server nobody
+  races and non-zero exactly when the window is hit.
+
+**The thread answered.** `4526700226` is now `fixed in 9cda1c11` at
+`apps/collab-server/src/lib.rs:1608`; copoka's reply `4582113370` carries that
+text instead of the deferral. The thread stays unresolved: resolving a review
+thread is the maintainer's.
+
+**The gate** (build host `agents`, rustc 1.99.1, 20 cores, 2026-11-16; log
+`gate-wordcraft-5834-9cda1c11.log` in the cabinet workspace's `.craft/logs/`;
+`CRAFT_I18N_DIR=~/craft-i18n`, `CRAFT_FONTS_DIR=~/craft-fonts` as in
+§5.48–§5.51):
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `cargo metadata --locked --format-version 1` | rc 0; `Cargo.lock` sha256 `a1f66a07d64213f1…` unchanged; `git status --porcelain` empty before and after |
+| 2 | `cargo fmt --all -- --check` | rc 0, no output |
+| 3 | `cargo clippy --workspace --all-targets -- -D warnings` | rc 0; cargo's three unused `[patch]` notes only |
+| 4 | `cargo xtask layers` | rc 0 — `OK: 26 crates, no layering violations` |
+| 5 | `cargo test --workspace --lib --bins --tests --no-fail-fast` | 45 targets, **5411 passed, 2 failed, 9 ignored**; both reds are `wordcraft-engine`'s `tests::fit_one_page::fit_one_page_preserves_budget_across_document_serialization` and `…_respects_step_pt` — the font-metric dependence §5.48 reproduced on clean `origin/main` `cc90520b` and §5.49–§5.51 recorded: not touched by this commit, not fixed here |
+| 6 | `cargo test --workspace --doc` | rc 0 |
+| 7 | `cargo xtask i18n-report`, `language`, `assets`, `wasm` | rc 0 each (the step prints its own counts; only the return codes were kept in this log) |
+
+The eight collab targets: `collab` 64, `-app` 51, `-client` 28, `-doc` 116,
+`-engine` 60, `-server` 85 (+1 ignored: the LibreOffice commit gate), `-web` 17,
+`-ws` 3 (integration) — **424 passed, 0 failed**. §5.51 recorded 420; the four
+extra tests are exactly the four ADR-0026 asks for. The aggregate `cargo xtask
+ci` answers rc 1 and stops at `test` on the same two `fit_one_page` reds — the
+shape §5.49–§5.51 recorded, and the reason the gate is read step by step.
+
+**The reds that are not mine.** Both `fit_one_page` tests fail identically on
+clean `origin/main` `cc90520b` (control run in §5.48) and were red in §5.49,
+§5.50 and §5.51. This commit touches two files under `apps/collab-server` and
+nothing the engine's layout code reads.
 
 ## 6. Where things live
 
