@@ -1122,10 +1122,10 @@ fn update_fields_keeps_references_to_bookmarks_spanning_paragraphs() {
         para("alpha", vec![mark("Span", false)], vec![]),
         para("beta", vec![], vec![mark("Span", true)]),
         para("gamma", vec![mark("Own", false)], vec![mark("Own", true)]),
-        para("", vec![field("REF Span \\h"), field("REF Head \\h"), field("REF Own \\h")], vec![]),
+        para("", vec![field("REF Span \\h"), field("REF Head \\h"), field("REF Own \\h"), field("REF Span \\h"), field("REF Own \\h")], vec![]),
     ];
     let mut s = Session::new(d);
     update_fields(&mut s).unwrap();
     let got: Vec<String> = fields(&s).into_iter().map(|(_, r)| r).collect();
-    assert_eq!(got, ["stale", "stale", "gamma"]);
+    assert_eq!(got, ["stale", "stale", "gamma", "stale", "gamma"], "a second REF to each bookmark the same");
 }

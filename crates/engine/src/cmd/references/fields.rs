@@ -350,6 +350,9 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // Build each body lookup once, only when a supported numeric REF needs it.
     let mut numbers = None;
     let mut bookmark_paths = None;
+    // Whether each REF target ends in a later paragraph, looked up once per bookmark: many REFs
+    // to one bookmark would otherwise walk its story each.
+    let mut spans: std::collections::HashMap<String, bool> = Default::default();
     let paths: Vec<(StoryRef, Path)> = stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect();
     // SET <name> "<text>" (ECMA-376 §17.16.5.58): the values it gives, which REF <name> shows; a
     // REF before the SET shows the last value set, as Word's bookmark does after an update.
@@ -401,7 +404,11 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                         } else if let Some(start) = starts.get(target) {
                             // A bookmark ending in a later paragraph keeps the REF's result: Word
                             // shows its paragraphs, which a one-paragraph result can't hold.
-                            if bookmark_spans_paragraphs_at(&s.doc, target, start) { None } else { bookmark_text_at(&s.doc, target, start) }
+                            if *spans.entry(target.to_string()).or_insert_with(|| bookmark_spans_paragraphs_at(&s.doc, target, start)) {
+                                None
+                            } else {
+                                bookmark_text_at(&s.doc, target, start)
+                            }
                         } else {
                             let key = target.to_lowercase();
                             set.get(&key).or_else(|| last_set.get(&key)).cloned()
