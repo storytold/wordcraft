@@ -8,7 +8,7 @@ mod font_panel;
 
 #[cfg(target_os = "macos")]
 fn main() {
-    use font_panel::{FontPanel, Pick};
+    use font_panel::FontPanel;
     // nextest lists the tests first (`--list --format terse`, then with `--ignored`).
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--list") {
@@ -22,9 +22,9 @@ fn main() {
     };
     let panel = FontPanel::new(mtm);
     panel.show("Helvetica", 14.0, true, false);
-    // What the panel sends when the user picks: with nothing changed there, the selection's font.
+    // What the panel sends when the user picks: with nothing changed there, nothing to format.
     panel.change_font_for_test();
-    assert_eq!(panel.picks(), vec![Pick { family: "Helvetica".into(), size: 14.0, bold: true, italic: false }]);
+    assert_eq!(panel.picks(), vec![]);
     println!("mac_font_panel: ok");
 }
 

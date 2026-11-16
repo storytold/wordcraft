@@ -1,7 +1,7 @@
 //! The Font key (⌘D) on macOS: the system font panel (`ui.showFonts` through
 //! `Services::show_fonts`). The panel sends `changeFont:` to the font manager's target, an object
-//! of ours here, which converts the selection's font the way the panel says and hands the family,
-//! size, bold and italic to the app, which formats the selection with them.
+//! of ours here, which converts the selection's font the way the panel says and hands what changed
+//! (family, size, bold, italic) to the app, which formats the selection with it.
 //!
 //! An exception to the workspace's no-`unsafe` rule (AGENTS.md): receiving `changeFont:` needs an
 //! Objective-C class (`define_class!`), and setting the manager's target is marked unsafe.
@@ -15,13 +15,34 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 use objc2_app_kit::{NSFont, NSFontManager, NSFontPanel, NSFontTraitMask};
 use objc2_foundation::NSString;
 
-/// What the user picked in the panel.
-#[derive(Debug, Clone, PartialEq)]
+/// What the user changed in the panel. Only that is applied, so a new size keeps each run's own
+/// family, bold and italic in a mixed selection.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Pick {
-    pub family: String,
-    pub size: f64,
-    pub bold: bool,
-    pub italic: bool,
+    pub family: Option<String>,
+    pub size: Option<f64>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+}
+
+/// A font as the app formats text with it.
+#[derive(Debug, Clone, PartialEq)]
+struct Face {
+    family: String,
+    size: f64,
+    bold: bool,
+    italic: bool,
+}
+
+impl Pick {
+    fn between(before: &Face, after: &Face) -> Self {
+        Pick {
+            family: (after.family != before.family).then(|| after.family.clone()),
+            size: (after.size != before.size).then_some(after.size),
+            bold: (after.bold != before.bold).then_some(after.bold),
+            italic: (after.italic != before.italic).then_some(after.italic),
+        }
+    }
 }
 
 struct Ivars {
@@ -43,8 +64,12 @@ define_class!(
         #[unsafe(method(changeFont:))]
         fn change_font(&self, _sender: Option<&AnyObject>) {
             let manager = NSFontManager::sharedFontManager(self.mtm());
-            let font = manager.convertFont(&self.ivars().current.borrow());
-            let _ = self.ivars().picks.send(pick(&manager, &font));
+            let before = self.ivars().current.borrow().clone();
+            let font = manager.convertFont(&before);
+            let pick = Pick::between(&face(&manager, &before), &face(&manager, &font));
+            if pick != Pick::default() {
+                let _ = self.ivars().picks.send(pick);
+            }
             self.ivars().current.replace(font);
         }
     }
@@ -59,9 +84,9 @@ impl FontTarget {
     }
 }
 
-fn pick(manager: &NSFontManager, font: &NSFont) -> Pick {
+fn face(manager: &NSFontManager, font: &NSFont) -> Face {
     let traits = manager.traitsOfFont(font);
-    Pick {
+    Face {
         family: font.familyName().map(|f| f.to_string()).unwrap_or_default(),
         size: font.pointSize(),
         bold: traits.contains(NSFontTraitMask::BoldFontMask),
@@ -110,15 +135,16 @@ impl FontPanel {
     }
 }
 
-/// Formats the selection with what the user picked, as the ribbon's Font, Size, Bold and Italic do.
+/// Formats the selection with what the user changed, as the ribbon's Font, Size, Bold and Italic do.
 pub fn apply(app: &mut wordcraft_ui_egui::WordApp, pick: &Pick) {
-    let family = app.previews.font_stored(&pick.family);
-    for (id, params) in [
-        ("format.font", serde_json::json!({"name": family})),
-        ("format.size", serde_json::json!({"size": pick.size})),
-        ("format.bold", serde_json::json!({"value": pick.bold})),
-        ("format.italic", serde_json::json!({"value": pick.italic})),
-    ] {
+    let family = pick.family.as_ref().map(|f| app.previews.font_stored(f));
+    let runs = [
+        family.map(|name| ("format.font", serde_json::json!({"name": name}))),
+        pick.size.map(|size| ("format.size", serde_json::json!({"size": size}))),
+        pick.bold.map(|value| ("format.bold", serde_json::json!({"value": value}))),
+        pick.italic.map(|value| ("format.italic", serde_json::json!({"value": value}))),
+    ];
+    for (id, params) in runs.into_iter().flatten() {
         if let Err(e) = app.run(id, params) {
             log::warn!("font panel: {id}: {e}");
         }
@@ -130,4 +156,19 @@ fn set_target(manager: &NSFontManager, target: &FontTarget) {
     // SAFETY: the target responds to the manager's action (`changeFont:`), and `FontPanel` keeps it
     // alive for as long as the app runs, so the manager's unretained reference stays valid.
     unsafe { manager.setTarget(Some(target)) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_what_changed_is_picked() {
+        let before = Face { family: "Helvetica".into(), size: 12.0, bold: true, italic: false };
+        let bigger = Face { size: 18.0, ..before.clone() };
+        assert_eq!(Pick::between(&before, &bigger), Pick { size: Some(18.0), ..Pick::default() }, "bold stays each run's own");
+        let plain = Face { bold: false, ..before.clone() };
+        assert_eq!(Pick::between(&before, &plain), Pick { bold: Some(false), ..Pick::default() });
+        assert_eq!(Pick::between(&before, &before), Pick::default());
+    }
 }

@@ -151,7 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-16: macOS: ⌘D opens the system font panel on the selection's font, and what is picked there (family, size, bold, italic) formats the selection; the ribbon's Font launcher keeps the Font dialog. Opening the panel puts the mini toolbar away for that selection. The workspace's `unsafe_code` goes from `forbid` to `deny`, with one macOS-only file allowed in AGENTS.md. Readiness estimates unchanged.
+- 2026-11-16: macOS: ⌘D opens the system font panel on the selection's font, and what is changed there (family, size, bold or italic) formats the selection; the ribbon's Font launcher keeps the Font dialog. Opening the panel puts the mini toolbar away for that selection. The workspace's `unsafe_code` goes from `forbid` to `deny`, with one macOS-only file allowed in AGENTS.md. Readiness estimates unchanged.
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
 
