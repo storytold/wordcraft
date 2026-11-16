@@ -38,7 +38,10 @@ pub(crate) struct WindowUi {
     pub(crate) sent_full_screen: bool,
     pub(crate) seen_full_screen: Option<bool>,
     pub(crate) escape_free: bool,
-    pub(crate) word_count: (u64, usize),
+    pub(crate) status_counts: (u64, crate::StatusCounts),
+    /// Per window, as each window shows its own layout: one shared list would be read again
+    /// on every frame of every window.
+    pub(crate) missing_fonts: crate::chrome::MissingFontsMemo,
     pub(crate) last_autosave: f64,
     pub(crate) equation_prev_tab: Option<String>,
     pub(crate) smart_art_item: Option<usize>,
@@ -66,8 +69,8 @@ pub(crate) struct WindowUi {
     pub(crate) alt_modifier_seen: bool,
 }
 
-/// A word count that matches no document revision, so the next frame counts.
-pub(crate) const NOT_COUNTED: (u64, usize) = (u64::MAX, 0);
+/// Status-bar counts that match no document revision, so the next frame counts.
+pub(crate) const NOT_COUNTED: (u64, crate::StatusCounts) = (u64::MAX, crate::StatusCounts { words: 0, chars: 0, chars_no_spaces: 0 });
 
 impl WindowUi {
     /// A new window showing open document `document`: nothing open over the page, Home tab.
@@ -108,7 +111,8 @@ impl WindowUi {
             sent_full_screen: false,
             seen_full_screen: None,
             escape_free: false,
-            word_count: NOT_COUNTED,
+            status_counts: NOT_COUNTED,
+            missing_fonts: Default::default(),
             last_autosave: 0.0,
             equation_prev_tab: None,
             smart_art_item: None,
@@ -174,6 +178,8 @@ impl WordApp {
             synthetic: _,
             synthetic_pending: _,
             synthetic_injected: _,
+            raw_scroll_events_scaled: _,
+            last_scaled_scroll_events: _,
             // The current command's origin, set and cleared around it.
             ime_origin: _,
             styled: _,
@@ -190,6 +196,8 @@ impl WordApp {
             fonts_frames: _,
             applied_theme: _,
             native_scale: _,
+            auto_scale_limit: _,
+            monitor_zoom: _,
             legacy_interface_size: _,
             desktop_theme: _,
             desktop_dark: _,
@@ -234,7 +242,8 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
+            missing_fonts,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -248,6 +257,7 @@ impl WordApp {
             file_browser,
             info_editing,
             shown_document,
+            clipboard_published: _,
         } = self;
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while
@@ -256,6 +266,9 @@ impl WordApp {
             quick_access_toolbar: _,
             recent: _,
             recent_symbols: _,
+            date_time_format: _,
+            date_time_language: _,
+            date_time_update: _,
             recent_colors: _,
             recent_fonts: _,
             theme: _,
@@ -264,6 +277,10 @@ impl WordApp {
             animations: _,
             legacy_dark: _,
             nav_tab: _,
+            display_server: _,
+            status_count: _,
+            scroll_speed: _,
+            touchpad_scroll_speed: _,
             nav_pane: _,
             show_discord: _,
             author: _,
@@ -331,7 +348,8 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
+            missing_fonts,
             last_autosave,
             equation_prev_tab,
             smart_art_item,

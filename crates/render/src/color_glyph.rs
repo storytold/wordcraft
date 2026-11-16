@@ -103,28 +103,17 @@ fn decode_png(png: &[u8], w: u32, h: u32) -> Option<Pixmap> {
         return None;
     }
     let fits = |(iw, ih): (u32, u32)| iw > 0 && ih > 0 && iw <= w && ih <= h;
-    if !fits(glyph_png_reader(png, w, h).into_dimensions().ok()?) {
+    let p = wordcraft_geom::picture::probe(png).ok()?;
+    if p.format != image::ImageFormat::Png || !fits((p.width, p.height)) {
         return None;
     }
-    let img = glyph_png_reader(png, w, h).decode().ok()?.to_rgba8();
+    let budget = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(8).saturating_add(64 * 1024);
+    let img = wordcraft_geom::picture::decode_for_drawing(png, budget, w.max(h)).ok()?.to_rgba8();
     let (iw, ih) = img.dimensions();
     if !fits((iw, ih)) {
         return None;
     }
     crate::premul_pixmap(iw, ih, img.as_raw())
-}
-
-/// A reader for a bitmap glyph's PNG with the glyph's budget: at most `w`×`h` and about two RGBA
-/// buffers of it. Every read goes through it, the header probe too: reading the header inflates
-/// metadata such as an ICC profile, which the default budget would let run to hundreds of MB.
-fn glyph_png_reader(png: &[u8], w: u32, h: u32) -> image::ImageReader<std::io::Cursor<&[u8]>> {
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(w);
-    limits.max_image_height = Some(h);
-    limits.max_alloc = Some(u64::from(w).saturating_mul(u64::from(h)).saturating_mul(8).saturating_add(64 * 1024));
-    let mut r = image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
-    r.limits(limits);
-    r
 }
 
 /// A pixmap from premultiplied BGRA rows.
@@ -422,11 +411,8 @@ mod tests {
     }
 
     fn png(w: u32, h: u32) -> Vec<u8> {
-        let mut out = vec![];
-        image::RgbaImage::from_pixel(w, h, image::Rgba([200, 0, 0, 255]))
-            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-            .unwrap();
-        out
+        let img = image::RgbaImage::from_pixel(w, h, image::Rgba([200, 0, 0, 255]));
+        wordcraft_geom::picture::encode_png(&image::DynamicImage::ImageRgba8(img)).unwrap()
     }
 
     /// A bitmap glyph's PNG may not be bigger than its strike claims: a bigger one is refused before
@@ -443,23 +429,13 @@ mod tests {
         assert!(decode_png(&png(4, 4), side + 1, 4).is_none(), "past the cap");
     }
 
-    /// A tiny bitmap glyph whose PNG carries a big ICC profile (it compresses to almost nothing):
-    /// the header probe already inflates it, so the probe is held to the glyph's budget too, not
-    /// the decoder's default hundreds of MB. Past the budget the profile is dropped (the glyph is
-    /// still drawn, without it).
+    /// A tiny bitmap glyph whose PNG header is probed before decoding: `picture::probe` reads IHDR
+    /// without inflating metadata chunks such as `iCCP`.
     #[test]
     fn bitmap_png_header_probe_keeps_the_glyph_budget() {
-        use image::ImageDecoder;
-        let mut out = vec![];
-        let mut enc = image::codecs::png::PngEncoder::new(&mut out);
-        image::ImageEncoder::set_icc_profile(&mut enc, vec![0u8; 4 << 20]).unwrap();
-        image::ImageEncoder::write_image(enc, &[200, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8).unwrap();
-        assert!(out.len() < 64 * 1024, "the profile compresses: {} bytes", out.len());
-        let profile = |r: image::ImageReader<std::io::Cursor<&[u8]>>| r.into_decoder().unwrap().icc_profile().unwrap().map(|p| p.len());
-        let unbounded = image::ImageReader::with_format(std::io::Cursor::new(out.as_slice()), image::ImageFormat::Png);
-        assert_eq!(profile(unbounded), Some(4 << 20), "the default budget inflates the 4 MB profile");
-        assert_eq!(profile(glyph_png_reader(&out, 1, 1)), None, "the glyph budget stops it at the header");
-        assert_eq!(decode_png(&out, 1, 1).map(|p| (p.width(), p.height())), Some((1, 1)));
-        assert_eq!(glyph_png_reader(&png(4, 4), 4, 4).into_dimensions().ok(), Some((4, 4)), "a plain glyph reads");
+        let bytes = png(4, 4);
+        let p = wordcraft_geom::picture::probe(&bytes).unwrap();
+        assert_eq!((p.width, p.height), (4, 4), "a plain glyph reads");
+        assert_eq!(decode_png(&png(1, 1), 1, 1).map(|p| (p.width(), p.height())), Some((1, 1)));
     }
 }

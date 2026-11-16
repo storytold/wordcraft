@@ -204,6 +204,7 @@ pub(crate) fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let fields = ctx.fields.clone();
     let grid = std::mem::take(&mut ctx.grid);
     let track = std::mem::replace(&mut ctx.track_totals, false);
+    ctx.fields.page_format = sect.page_num_format;
     ctx.fields.page = page.number;
     let mut areas = again(ctx, 0, |ctx| {
         with_pct_base(ctx, base, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame)))).table_areas

@@ -208,8 +208,8 @@ pub(super) fn macros(app: &mut WordApp, ui: &mut Ui, name: &mut String) -> bool 
     let recording = app.session.recording.as_ref().map(|(n, _)| n.clone());
     let t = Tokens::get(ui.ctx());
     let (mut run, mut delete, mut record) = (false, false, false);
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| {
             let name_label = ui.label(tl!("Macro name:"));
             ui.add(egui::TextEdit::singleline(name).desired_width(240.0)).labelled_by(name_label.id);
             egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.border)).inner_margin(4).show(ui, |ui| {
@@ -227,7 +227,7 @@ pub(super) fn macros(app: &mut WordApp, ui: &mut Ui, name: &mut String) -> bool 
                 });
             });
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.add_space(18.0);
             let listed = names.contains(name);
             let w = vec2(110.0, 0.0);
