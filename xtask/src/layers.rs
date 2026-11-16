@@ -70,6 +70,7 @@ pub const TABLE: &[(&str, Class)] = &[
 /// reuses the CPU reference (`compose`) for LUTs and parity tests.
 pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["doc", "fonts"],
+    &["docx", "formats"],
     &["collab-doc", "collab-client"],
     &["collab-engine", "collab-app"],
     &["collab-ws", "collab-app"],
