@@ -208,11 +208,33 @@ const WORD_ARABIC_PITCH: &[(&str, f64)] = &[
 /// Microsoft Sans Serif's 1.219. (Word draws Arabic text in a font without Arabic letters, such
 /// as Verdana, Georgia, Aptos or Sylfaen, in Times New Roman, 1.240.)
 fn has_arabic_line_of_its_own(lower: &str) -> bool {
-    let segoe = lower.starts_with("segoe ui") && !["symbol", "emoji", "historic"].iter().any(|w| lower.contains(w));
-    segoe
-        || ["microsoft sans serif", "tahoma", "arial", "times", "courier", "consolas", "calibri", "symbol", "wingdings", "webdings"]
-            .iter()
-            .any(|p| lower.starts_with(p))
+    const FAMILIES: &[&str] = &[
+        "microsoft sans serif",
+        "tahoma",
+        "segoe ui",
+        "arial",
+        "times",
+        "times new roman",
+        "courier",
+        "courier new",
+        "consolas",
+        "calibri",
+        "symbol",
+        "wingdings",
+        "wingdings 2",
+        "wingdings 3",
+        "webdings",
+    ];
+    // Weight and width variants of those families. A name with any other word after the family
+    // ("Arial Custom Naskh") is another font: a family name is not a prefix test.
+    const VARIANTS: &[&str] =
+        &["narrow", "black", "light", "semilight", "semibold", "bold", "italic", "oblique", "regular", "cyr", "ce", "greek", "tur", "baltic"];
+    FAMILIES.iter().any(|f| {
+        lower.strip_prefix(f).is_some_and(|rest| {
+            let mut words = rest.split_whitespace();
+            rest.is_empty() || (rest.starts_with(' ') && words.all(|w| VARIANTS.contains(&w)))
+        })
+    })
 }
 
 /// Is `c` an Arabic-script letter, mark or digit (Arabic, Supplement, Extended-A, presentation forms)?
@@ -939,6 +961,11 @@ mod tests {
             "B Lotus",
             "IRZar",
             "Zz Invented Naskh 6803",
+            "Arial Custom Naskh 6803",
+            "Times Custom Naskh 6803",
+            "Tahoma Custom Naskh 6803",
+            "Segoe UI Custom Naskh 6803",
+            "Calibri Custom Naskh 6803",
             "IranNastaliq",
             "KFGQPC Uthman Taha Naskh",
             "CTraditional Arabic",
@@ -981,6 +1008,8 @@ mod tests {
             "Tahoma",
             "Segoe UI",
             "Segoe UI Light",
+            "Segoe UI Semibold",
+            "Calibri Light",
             "Microsoft Sans Serif",
             "Courier New",
         ] {

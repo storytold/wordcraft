@@ -821,6 +821,11 @@ fn line_em_per_cluster(text: &str, font: &str, font_cs: &str) -> Vec<f64> {
 /// [`line_em_per_cluster`] in a document whose font table classes the `roman` fonts as roman (a
 /// missing one is then looked up as another font, as Word draws it).
 fn line_em_in(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> Vec<f64> {
+    line_styles_in(text, font, font_cs, roman).into_iter().map(|(em, _)| em).collect()
+}
+
+/// Each cluster's line (ascent + descent in em) and whether it is the Arabic missing-font line.
+fn line_styles_in(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> Vec<(f64, bool)> {
     crate::test_fonts();
     let mut d = Document::from_text(text);
     d.settings.roman_fonts = roman.iter().map(|f| f.to_string()).collect();
@@ -837,7 +842,7 @@ fn line_em_in(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> Vec<f64>
         .iter()
         .filter(|c| matches!(c.kind, crate::para::ClKind::Text | crate::para::ClKind::Space))
         .filter_map(|c| pl.styles.get(c.style as usize))
-        .map(|st| f64::from(st.ascent + st.descent) / 12.0)
+        .map(|st| (f64::from(st.ascent + st.descent) / 12.0, st.arabic_line))
         .collect()
 }
 
@@ -846,6 +851,12 @@ fn arabic_text_in_a_missing_font_has_times_new_romans_line_height() {
     // Neither font is installed anywhere: the Arabic letters are drawn in some substitute, and the
     // line is as tall as Times New Roman's, as in Word (#6803).
     let em = line_em_per_cluster("ببب", "Zz Invented Naskh 6803", "Zz Invented Naskh 6803");
+    assert!(!em.is_empty());
+    for e in &em {
+        assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{em:?}");
+    }
+    // A missing font that merely starts with the name of a font Word has is another font.
+    let em = line_em_per_cluster("ببب", "Arial Custom Naskh 6803", "Arial Custom Naskh 6803");
     assert!(!em.is_empty());
     for e in &em {
         assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{em:?}");
@@ -886,15 +897,19 @@ fn latin_text_and_installed_fonts_keep_their_own_line_height() {
     for e in &latin {
         assert!((e - own("Zz Invented Naskh 6803")).abs() < 1e-3, "{latin:?}");
     }
-    // Arabic letters in an installed font: that font's own line.
-    let installed = line_em_per_cluster("ببب", "Source Serif 4", "Source Serif 4");
-    for e in &installed {
-        assert!((e - own("Source Serif 4")).abs() < 1e-3, "{installed:?}");
+    // Arabic letters in an installed font: the Times line isn't applied. Letters the font lacks are
+    // drawn in whatever fallback face the host has, so the height itself depends on the host's
+    // fonts; the flag doesn't.
+    let installed = line_styles_in("ببب", "Source Serif 4", "Source Serif 4", &[]);
+    assert!(!installed.is_empty());
+    for (_, times) in &installed {
+        assert!(!times, "{installed:?}");
     }
     // A font Windows has keeps its own line too, in the substitute.
-    let tahoma = line_em_per_cluster("ببب", "Tahoma", "Tahoma");
-    for e in &tahoma {
-        assert!((e - own("Tahoma")).abs() < 1e-3, "{tahoma:?}");
+    let tahoma = line_styles_in("ببب", "Tahoma", "Tahoma", &[]);
+    assert!(!tahoma.is_empty());
+    for (_, times) in &tahoma {
+        assert!(!times, "{tahoma:?}");
     }
     // A run with Arabic letters is one height throughout, its Latin letters included.
     let mixed = line_em_per_cluster("abc ببب", "Zz Invented Naskh 6803", "Zz Invented Naskh 6803");
