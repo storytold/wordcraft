@@ -85,6 +85,8 @@ struct Scan {
     last_plain: Option<(usize, f32)>,
     /// Where the space before the current word starts.
     word_from: f32,
+    /// How wide that space is: nothing where the word follows a hyphen or starts the line.
+    word_space: f32,
     /// After `hyph_limit` hyphenated lines in a row this one may not end with a hyphen.
     hyph_ok: bool,
     end: LineEnd,
@@ -275,6 +277,7 @@ impl<'e> Breaker<'e> {
             last_break: None,
             last_plain: None,
             word_from: left,
+            word_space: 0.0,
             hyph_ok: self.hyph_limit == 0 || self.lines.iter().rev().take_while(|l| l.hyphen.is_some()).count() < self.hyph_limit,
             end: LineEnd::Para,
             j: self.i,
@@ -889,7 +892,7 @@ impl Scan {
         let advance = pl.atomic_advance(j);
         let absorbs = self.absorbs(pl, advance);
         let shrink = if bk.shrink_spaces && !self.has_tab {
-            space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from)
+            space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from, self.word_space)
         } else {
             0.0
         };
@@ -984,7 +987,7 @@ impl Scan {
         if pl.hyph_after.binary_search(&(j as u32)).is_err() {
             self.last_break = Some(j);
             self.last_plain = Some((j, self.x));
-            self.word_from = if c.kind == ClKind::Space { self.x - c.adv } else { self.x };
+            (self.word_from, self.word_space) = if c.kind == ClKind::Space { (self.x - c.adv, c.adv) } else { (self.x, 0.0) };
         } else if self.hyph_ok
             && !pl.clusters.get(j + 1).is_some_and(|n| n.kind == ClKind::Text && n.g1 <= n.g0)
             && self.x + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + 0.01
