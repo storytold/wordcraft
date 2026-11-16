@@ -1294,3 +1294,49 @@ fn the_anchor_mark_on_a_page_a_paragraph_continues_onto_is_beside_its_top_line()
     let (at, _) = h.state().canvas.obj_drag.as_ref().and_then(|d| d.anchor_at.clone()).expect("dragging");
     assert!(at.off > top, "the drop anchors it at the line by the shape, further down");
 }
+
+/// #4195: dragging a member inside a floating Drawing Canvas leaves the anchor mark beside the
+/// canvas's paragraph: the member moves inside the canvas, which keeps its anchor.
+#[test]
+fn dragging_a_canvas_member_leaves_the_anchor_mark_beside_the_canvas() {
+    use crate::table_resize::tests::{H, button, steps};
+    use wordcraft_engine::cmd::canvas::selected_member;
+    let text = (1..=20).map(|n| format!("Line {n}.")).collect::<Vec<_>>().join("\n");
+    let mut a = WordApp::new(wordcraft_engine::Session::new(Document::from_text(&text)), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("insert.canvas", json!({"width": 400, "height": 300})).unwrap();
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 40})).unwrap();
+    a.run("canvas.member", json!({"index": 0, "x": 40, "y": 30})).unwrap();
+    a.run("select.objects", json!({"index": 0})).unwrap();
+    a.run("arrange.wrap", json!({"wrap": "inFrontOfText"})).unwrap();
+    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let layout = h.state_mut().session.layout();
+    let frame = layout.object(&Pos::body(0, 0), 0).expect("the canvas is laid out").rect;
+    let at = |h: &mut H, x: f32, y: f32| crate::canvas::page_to_screen(h.state_mut(), 0, frame.x + x, frame.y + y).unwrap();
+    let on_rect = at(&mut h, 90.0, 50.0);
+    h.event(egui::Event::PointerMoved(on_rect));
+    button(&h, on_rect, true);
+    h.step();
+    button(&h, on_rect, false);
+    steps(&mut h, 3);
+    assert_eq!(selected_member(&h.state().session).map(|(_, i, _)| i), Some(0), "the rectangle is picked");
+    assert_eq!(anchor_mark(h.state(), &layout), Some((Pos::body(0, 0), 0)));
+    // Drag it 200 pt down inside the canvas, past several paragraphs.
+    let to = at(&mut h, 90.0, 250.0);
+    button(&h, on_rect, true);
+    h.step();
+    for k in 1..=5 {
+        h.event(egui::Event::PointerMoved(on_rect + (to - on_rect) * (k as f32 / 5.0)));
+        h.step();
+    }
+    assert!(h.state().canvas.obj_drag.as_ref().is_some_and(|d| d.drag.moved), "dragging");
+    assert_eq!(anchor_mark(h.state(), &layout), Some((Pos::body(0, 0), 0)), "still beside the canvas's paragraph");
+}

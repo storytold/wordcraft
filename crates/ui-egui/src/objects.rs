@@ -511,6 +511,7 @@ fn press_member(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f3
         preview: None,
         copy: false,
         drop_at: None,
+        anchor_at: None,
     });
     true
 }
@@ -911,7 +912,8 @@ fn drop_anchor(app: &WordApp, layout: &DocLayout, d: &ObjectDrag) -> Option<(Pos
         Grab::Resize(_) if movable(app, &d.object) && !size_only(app, &d.object) => d.drag.page,
         _ => return None,
     };
-    if !d.object.floating() || !d.drag.moved {
+    // A drawing canvas member moves inside the canvas, which keeps its anchor.
+    if !d.object.floating() || !d.drag.moved || d.object.member.is_some() {
         return None;
     }
     let r = d.drag.rect;
