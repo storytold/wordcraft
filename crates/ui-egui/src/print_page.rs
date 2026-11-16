@@ -170,6 +170,18 @@ fn return_prints(ctx: &egui::Context) -> bool {
         })
 }
 
+/// Per window: what the Print page needs to know about the last job's message.
+#[derive(Default)]
+pub struct Memo {
+    /// The viewport and pass the page was last drawn in: a gap means it was just opened.
+    pass: Option<(egui::ViewportId, u64)>,
+    /// The generation (`WordApp::print_gen`) of the job result this window has already said, in
+    /// its status bar or on this page: a result of the same text from a later job is another one.
+    pub(crate) said: Option<u64>,
+    /// The generation of the result held back on this opening of the page.
+    hidden: Option<u64>,
+}
+
 /// The Print page: settings on the left, the preview on the right.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -178,6 +190,30 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let total = lay.pages.len();
     let current = app.session.current_pages(&lay);
     app.ui.print.preview = app.ui.print.preview.min(total.saturating_sub(1));
+    // Opened afresh, the page doesn't repeat how the last job went when this window already said
+    // it (its status bar, or this page): `printing.message` itself stays, as `ui.printSettings`
+    // and other windows still report it. What the printers are doing (finding them, none found)
+    // always shows. Passes are counted per viewport, so the marker is per window.
+    let here = (ctx.viewport_id(), ctx.cumulative_pass_nr());
+    let opened = app.print_memo.pass.is_none_or(|(viewport, last)| viewport != here.0 || last.saturating_add(1) < here.1);
+    app.print_memo.pass = Some(here);
+    let result = |m: &Option<crate::printing::Feedback>| {
+        matches!(m, Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped))
+    };
+    let message = app.printing.message.clone();
+    let generation = app.print_gen;
+    if opened {
+        app.print_memo.hidden = (result(&message) && app.print_memo.said == Some(generation)).then_some(generation);
+    }
+    // A later message (a job started again, then failed the same way) is shown afresh.
+    if app.print_memo.hidden != Some(generation) {
+        app.print_memo.hidden = None;
+    }
+    let hide_message = app.print_memo.hidden.is_some();
+    if !hide_message {
+        // Shown here, so the next opening needn't repeat it.
+        app.print_memo.said = result(&message).then_some(generation);
+    }
 
     let settings = |app: &mut WordApp, ui: &mut Ui| {
         {
@@ -206,7 +242,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 if native {
                     if let Some(discover) = &app.services.printers {
-                        crate::printing::show(&mut app.printing, ui, discover, |label| crate::i18n::t(label).to_owned());
+                        crate::printing::show(&mut app.printing, ui, discover, hide_message, |label| crate::i18n::t(label).to_owned());
                     }
                     // A job can wait long on a sleeping printer's driver; Cancel frees the page.
                     if app.printing.busy() && app.services.cancel_print.is_some() && ui.button(tl!("Cancel printing")).clicked() {
@@ -454,27 +490,70 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout) {
 /// The export "format" of a Word 2003 XML Document: an `.xml` file saved with `format: "wordml2003"`.
 pub(crate) const EXPORT_WORD_2003: &str = "wordml2003";
 
+/// The "save a copy" formats as (label, format), also the built-in browser's types when exporting.
+pub(crate) const EXPORT_FORMATS: &[(&str, &str)] = &[
+    ("PDF document (*.pdf)", "pdf"),
+    ("Word document (*.docx)", "docx"),
+    ("Word XML Document (*.xml)", "xml"),
+    ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
+    ("OpenDocument Text (*.odt)", "odt"),
+    ("OpenDocument Text Template (*.ott)", "ott"),
+    ("Flat OpenDocument Text (*.fodt)", "fodt"),
+    ("Rich Text Format (*.rtf)", "rtf"),
+    ("Web page (*.html)", "html"),
+    ("Markdown (*.md)", "md"),
+    ("LaTeX (*.tex)", "tex"),
+    ("Plain text (*.txt)", "txt"),
+    ("Page image (*.png)", "png"),
+];
+
+/// The file extension an export format writes.
+pub(crate) fn export_file_ext(format: &str) -> &str {
+    if format == EXPORT_WORD_2003 { "xml" } else { format }
+}
+
+/// Is `ext` an extension of a document or export type (the Export types, plus the older `.doc`
+/// and `.htm`)? Such an extension on a typed name gives way to the chosen type's; any other
+/// (`notes.v2`) is part of the name.
+pub(crate) fn is_document_ext(ext: &str) -> bool {
+    ["doc", "htm"].iter().any(|e| e.eq_ignore_ascii_case(ext)) || EXPORT_FORMATS.iter().any(|&(_, f)| export_file_ext(f).eq_ignore_ascii_case(ext))
+}
+
+/// The name an export to `format` is saved under: the chosen type's extension replaces a known
+/// document extension (`notes.docx` as plain text is `notes.txt`) and is added to any other name.
+pub(crate) fn export_name(name: &str, format: &str) -> String {
+    let want = export_file_ext(format);
+    let path = std::path::Path::new(name);
+    // A dotfile name (`.docx`) has no extension for `Path::extension`, which the engine's save also
+    // reads, so it is a stem and gets one (`.docx.xml`); a bare extension would be refused.
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(e) if e.eq_ignore_ascii_case(want) => name.to_string(),
+        Some(e) if is_document_ext(e) => path.with_extension(want).to_string_lossy().into_owned(),
+        // `a.` has an empty extension: its dot is dropped before the type's is added.
+        _ => format!("{}.{want}", name.trim_end_matches('.')),
+    }
+}
+
 /// The "save a copy" formats (File › Export, and below the settings on the Print page).
 pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
-    for (label, ext) in [
-        ("PDF document (*.pdf)", "pdf"),
-        ("Word document (*.docx)", "docx"),
-        ("Word XML Document (*.xml)", "xml"),
-        ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
-        ("OpenDocument Text (*.odt)", "odt"),
-        ("OpenDocument Text Template (*.ott)", "ott"),
-        ("Flat OpenDocument Text (*.fodt)", "fodt"),
-        ("Rich Text Format (*.rtf)", "rtf"),
-        ("Web page (*.html)", "html"),
-        ("Markdown (*.md)", "md"),
-        ("LaTeX (*.tex)", "tex"),
-        ("Plain text (*.txt)", "txt"),
-        ("Page image (*.png)", "png"),
-    ] {
+    // A refused or failed export, said here because Backstage hides the status bar (Export and Print pages both draw this).
+    if !app.export_error.is_empty() {
+        ui.label(egui::RichText::new(&app.export_error).color(ui.visuals().error_fg_color));
+        ui.add_space(6.0);
+    }
+    for &(label, ext) in EXPORT_FORMATS {
         if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             app.export_dialog(ext);
         }
         ui.add_space(4.0);
+    }
+    // Linux and the BSDs (#3535): WordCraft's own browser when the system dialog doesn't appear.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    {
+        ui.add_space(8.0);
+        if ui.add(egui::Button::new(egui::RichText::new(tl!("Browse in WordCraft…")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+            let _ = app.run("ui.fileBrowser", json!({"purpose": "export"}));
+        }
     }
 }
 
