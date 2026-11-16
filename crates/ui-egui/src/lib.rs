@@ -783,6 +783,8 @@ pub struct WordApp {
     /// The document's fonts that aren't installed, for the status bar and the font box, and the
     /// layout they were read from.
     pub missing_fonts: crate::chrome::MissingFontsMemo,
+    /// This window's refused or failed export, shown on its Export and Print pages; see [`WordApp::fail_export`].
+    pub export_error: String,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
     last_autosave: f64,
