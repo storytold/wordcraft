@@ -4085,6 +4085,24 @@ fn new_comments_and_replies_carry_their_utc_time() {
     }
 }
 
+/// A tracked change made here is stamped with the local wall-clock time, as Word writes `w:date`
+/// and reads it back (#6851); a UTC time showed in Word shifted by the user's offset.
+#[test]
+fn tracked_changes_carry_the_local_time() {
+    let local = || {
+        let now = crate::cmd::now_unix();
+        crate::cmd::revision_date_at(now, crate::cmd::local_offset_secs(now))
+    };
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Some text"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    let before = local();
+    run(&mut s, "text.insert", json!({"text": " more"}));
+    let after = local();
+    let rev = s.doc.revisions.iter().find(|r| r.kind == wordcraft_doc::RevisionKind::Insert).expect("a tracked insertion");
+    assert!(rev.date == before || rev.date == after, "{} is not the local time {before} or {after}", rev.date);
+}
+
 /// Update Table with nothing to change lays the document out at the revisions it touches, then
 /// puts the revision back. The next edits reach those numbers again with a different document, so
 /// the layout must be the new one.
