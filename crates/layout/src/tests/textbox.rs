@@ -418,3 +418,147 @@ fn a_clipped_line_in_a_turned_box_is_drawn_once_turned_and_clipped() {
         .sum();
     assert_eq!((upright_clips, turned_clips), (0, 1));
 }
+
+/// A `kind` shape `w` × `h` holding `lines` one-word paragraphs, inline in body paragraph 0; its
+/// story id. `corner` is a rounded rectangle's (`roundRect`'s `adj`).
+fn shape_with_text(
+    d: &mut Document,
+    kind: wordcraft_doc::para::ShapeKind,
+    corner: Option<u32>,
+    (w, h): (f32, f32),
+    lines: usize,
+    body: TextBody,
+) -> u32 {
+    let id = text_box(d, 0, "", w, h, body);
+    d.parts.get_mut(&id).unwrap().blocks = (0..lines).map(|k| para_block(Paragraph::with_text(&format!("Line{k}"), Default::default()))).collect();
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for o in &mut p.objects {
+        if let InlineObject::Shape { kind: k, extra, .. } = o {
+            *k = kind;
+            extra.corner = corner;
+        }
+    }
+    p.touch();
+    id
+}
+
+/// Text in a shape is set in the shape's text rectangle, not its whole frame. Measured in Word
+/// for Windows (16.0.20625) with a 300 × 100 pt inline shape, no margins, one line of text: in a
+/// rounded rectangle it starts 1.46, 4.1, 7.3 and 14.6 pt in from the left and the top for `adj`
+/// 5000, 13965, 25000 and 50000 (the corner radius × (1 - cos 45°); 70000 counts as 50000), in an
+/// ellipse 43.9 and 14.6 pt, in a diamond 75 and 25 pt; right-aligned and bottom-anchored text
+/// keeps the same distance from the right and the bottom, the box's own margins come on top, and
+/// lines are that much shorter. A rounded rectangle that resizes to fit its text ends up as tall
+/// as its text plus what the rectangle left above and below in the box as saved: saved 100 pt
+/// tall with `adj` 50000 around three lines it is their height and 29.3 pt. WordCraft set the
+/// text in the whole frame.
+#[test]
+fn text_in_a_shape_is_set_in_the_shapes_text_rectangle() {
+    use wordcraft_doc::para::ShapeKind;
+    crate::test_fonts();
+    let zero = TextBody { inset: Some([0; 4]), ..Default::default() };
+    // Where the first line starts in the frame, the frame, and how many lines show.
+    let first = |kind: ShapeKind, corner: Option<u32>, size: (f32, f32), lines: usize, body: TextBody| {
+        let mut d = Document::from_text("x");
+        let id = shape_with_text(&mut d, kind, corner, size, lines, body);
+        let l = lay(&d);
+        let r = frame_of(&l, id);
+        let all = self::lines(&l, id);
+        let (x, y, ..) = *all.first().expect("the shape shows its text");
+        ((x - r.x, y - r.y), r, all.iter().map(|(.., l0, l1)| l1 - l0).sum::<usize>())
+    };
+    let near = |got: (f32, f32), want: (f32, f32)| (got.0 - want.0).abs() < 0.02 && (got.1 - want.1).abs() < 0.02;
+    let inset = 0.292_893_2f32;
+    for (what, kind, corner, want) in [
+        ("a rectangle", ShapeKind::Rectangle, None, (0.0, 0.0)),
+        ("a text box", ShapeKind::TextBox, None, (0.0, 0.0)),
+        ("a rounded rectangle, adj 5000", ShapeKind::RoundedRectangle, Some(5_000), (5.0 * inset, 5.0 * inset)),
+        ("a rounded rectangle, adj 13965", ShapeKind::RoundedRectangle, Some(13_965), (13.965 * inset, 13.965 * inset)),
+        ("a rounded rectangle, adj 50000", ShapeKind::RoundedRectangle, Some(50_000), (50.0 * inset, 50.0 * inset)),
+        ("a rounded rectangle, adj 70000", ShapeKind::RoundedRectangle, Some(70_000), (50.0 * inset, 50.0 * inset)),
+        ("an ellipse", ShapeKind::Ellipse, None, (150.0 * inset, 50.0 * inset)),
+        ("a diamond", ShapeKind::Diamond, None, (75.0, 25.0)),
+    ] {
+        let (at, ..) = first(kind, corner, (300.0, 100.0), 1, zero);
+        assert!(near(at, want), "{what}: the text starts {at:?} into the frame, expected {want:?}");
+    }
+    // The shorter side sets a rounded rectangle's corner, and the box's own margins come on top.
+    let (at, ..) = first(ShapeKind::RoundedRectangle, Some(50_000), (60.0, 150.0), 1, zero);
+    assert!(near(at, (30.0 * inset, 30.0 * inset)), "60 x 150: {at:?}");
+    let margins = TextBody { inset: Some([91_440, 45_720, 91_440, 45_720]), ..Default::default() };
+    let (at, ..) = first(ShapeKind::RoundedRectangle, Some(50_000), (300.0, 100.0), 1, margins);
+    assert!(near(at, (50.0 * inset + 7.2, 50.0 * inset + 3.6)), "with the default margins: {at:?}");
+    // Middle and bottom: aligned in the text rectangle, the same distance from the bottom.
+    let (top, ..) = first(ShapeKind::Rectangle, None, (300.0, 100.0), 1, TextBody { anchor: VAlign::Bottom, ..zero });
+    let (low, ..) = first(ShapeKind::RoundedRectangle, Some(50_000), (300.0, 100.0), 1, TextBody { anchor: VAlign::Bottom, ..zero });
+    assert!((top.1 - low.1 - 50.0 * inset).abs() < 0.02, "bottom-anchored: {low:?} in the rounded rectangle, {top:?} in the rectangle");
+    let (mid, ..) = first(ShapeKind::Rectangle, None, (300.0, 100.0), 1, TextBody { anchor: VAlign::Center, ..zero });
+    let (round, ..) = first(ShapeKind::RoundedRectangle, Some(50_000), (300.0, 100.0), 1, TextBody { anchor: VAlign::Center, ..zero });
+    assert!((mid.1 - round.1).abs() < 0.02, "centred: {round:?} in the rounded rectangle, {mid:?} in the rectangle");
+    // Text taller than the text rectangle starts at its top, and no line that showed in the
+    // whole frame is hidden: the cut stays as deep as the frame allows.
+    let (_, _, plain) = first(ShapeKind::Rectangle, None, (300.0, 100.0), 30, TextBody { anchor: VAlign::Center, ..zero });
+    let (at, _, shown) = first(ShapeKind::RoundedRectangle, Some(50_000), (300.0, 100.0), 30, TextBody { anchor: VAlign::Center, ..zero });
+    assert!(plain > 2 && plain < 30, "some of the 30 lines fit the rectangle: {plain}");
+    assert!(near(at, (50.0 * inset, 50.0 * inset)), "text taller than the text rectangle starts at its top: {at:?}");
+    assert_eq!(shown, plain, "as many lines show as in the rectangle");
+    // Resize to fit: the text's height and the room the rectangle left in the box as saved.
+    let fit = TextBody { auto_fit: true, ..zero };
+    let (_, plain, _) = first(ShapeKind::Rectangle, None, (300.0, 100.0), 3, fit);
+    for (saved, corner) in [(100.0f32, 50_000u32), (20.0, 50_000), (100.0, 13_965)] {
+        let ((_, top), round, shown) = first(ShapeKind::RoundedRectangle, Some(corner), (300.0, saved), 3, fit);
+        let room = 2.0 * saved * corner as f32 / 100_000.0 * inset;
+        assert_eq!(shown, 3, "saved {saved} pt tall, adj {corner}: all three lines show");
+        assert!(
+            (round.h - plain.h - room).abs() < 0.02,
+            "saved {saved} pt tall, adj {corner}: {} pt tall, the text needs {}, expected {room} more",
+            round.h,
+            plain.h
+        );
+        // In the fitted box the text starts where its new size puts the text rectangle.
+        let want = round.h.min(300.0) * corner as f32 / 100_000.0 * inset;
+        assert!((top - want).abs() < 0.02, "saved {saved} pt tall, adj {corner}: the text starts {top} pt down, expected {want}");
+    }
+}
+
+/// A shape that resizes to fit its text is as tall as the text plus the room its text rectangle
+/// left above and below it in the box as saved, and the text then starts where the fitted box's
+/// own text rectangle does: the two are not the same rectangle. Measured in Word for Windows
+/// (16.0.20625) with 300 pt wide shapes without margins around three 11.5 pt lines: a diamond
+/// saved 20 pt tall comes out 44.5 pt tall (the text and twice 20 / 4) with its text 11.1 pt down
+/// (44.5 / 4), saved 100 pt tall 84.5 pt and 21.1 pt; an ellipse saved 20 pt tall 40.4 pt and 5.9
+/// pt. Stacked text is set in the whole frame, so its box is fitted without the rectangle too.
+#[test]
+fn a_fitted_shape_keeps_the_room_its_saved_text_rectangle_left() {
+    use wordcraft_doc::para::ShapeKind;
+    crate::test_fonts();
+    let fit = TextBody { inset: Some([0; 4]), auto_fit: true, ..Default::default() };
+    // The fitted frame and how far down it the first line starts.
+    let fitted = |kind: ShapeKind, corner: Option<u32>, saved: f32, body: TextBody| {
+        let mut d = Document::from_text("x");
+        let id = shape_with_text(&mut d, kind, corner, (300.0, saved), 3, body);
+        let l = lay(&d);
+        let r = frame_of(&l, id);
+        let top = self::lines(&l, id).first().map(|(_, y, ..)| y - r.y).expect("the shape shows its text");
+        (r.h, top)
+    };
+    let inset = 0.292_893_2f32;
+    let (text, _) = fitted(ShapeKind::Rectangle, None, 100.0, fit);
+    for (what, kind, saved, room, share) in [
+        ("a diamond saved 20 pt tall", ShapeKind::Diamond, 20.0f32, 2.0 * 20.0 / 4.0, 0.25),
+        ("a diamond saved 100 pt tall", ShapeKind::Diamond, 100.0, 2.0 * 100.0 / 4.0, 0.25),
+        ("an ellipse saved 20 pt tall", ShapeKind::Ellipse, 20.0, 20.0 * inset, inset / 2.0),
+        ("an ellipse saved 100 pt tall", ShapeKind::Ellipse, 100.0, 100.0 * inset, inset / 2.0),
+    ] {
+        let (h, top) = fitted(kind, None, saved, fit);
+        assert!((h - text - room).abs() < 0.02, "{what}: {h} pt tall, the text needs {text}, expected {room} more");
+        assert!((top - h * share).abs() < 0.02, "{what}: the text starts {top} pt down the fitted box, expected {}", h * share);
+    }
+    // Stacked text: no shape's rectangle where it is placed, so none in the fitted height.
+    let stacked = TextBody { vert: TextVert::Stacked, ..fit };
+    let (plain, _) = fitted(ShapeKind::Rectangle, None, 100.0, stacked);
+    let (round, top) = fitted(ShapeKind::RoundedRectangle, Some(50_000), 100.0, stacked);
+    let (_, plain_top) = fitted(ShapeKind::Rectangle, None, 100.0, stacked);
+    assert!((round - plain).abs() < 0.02, "stacked text: a rounded rectangle is fitted {round} pt tall, a rectangle {plain}");
+    assert!((top - plain_top).abs() < 0.02, "stacked text starts {top} pt down the rounded rectangle, {plain_top} down the rectangle");
+}
