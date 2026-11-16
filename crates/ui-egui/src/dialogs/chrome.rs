@@ -168,9 +168,11 @@ fn native_save_prompt(app: &mut WordApp, d: &Dialog) -> bool {
         }
         app.native_prompt = Some((*document, hook(app.sent_title.clone(), question, detail)));
     }
-    let answer = match app.native_prompt.as_ref().map(|(_, rx)| rx.try_recv()) {
-        Some(Ok(answer)) => answer,
-        Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => "cancel".into(),
+    let answer = match app.native_prompt.as_ref().map(|(_, rx)| rx.as_ref().map(|rx| rx.try_recv())) {
+        // The host couldn't place a sheet: the built-in prompt asks.
+        Some(None) => return false,
+        Some(Some(Ok(answer))) => answer,
+        Some(Some(Err(std::sync::mpsc::TryRecvError::Disconnected))) => "cancel".into(),
         // Still asking: the prompt stays open, out of sight.
         _ => {
             app.dialog = Some(d.clone());

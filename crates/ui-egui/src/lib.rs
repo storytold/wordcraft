@@ -649,7 +649,7 @@ fn migrate_units(v: &mut Value) {
 
 /// A Save Changes prompt the host shows natively: the document it asked about, and where the
 /// answer (`save`, `dontSave`, `cancel`) arrives.
-pub(crate) type NativePrompt = (u64, std::sync::mpsc::Receiver<String>);
+pub(crate) type NativePrompt = (u64, Option<std::sync::mpsc::Receiver<String>>);
 
 /// The application.
 pub struct WordApp {

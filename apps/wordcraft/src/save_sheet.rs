@@ -8,15 +8,16 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use block2::RcBlock;
 use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertThirdButtonReturn, NSApplication, NSModalResponse, NSWindow};
 use objc2_foundation::NSString;
 use wordcraft_ui_egui::i18n::t;
 
-/// The window's title, the question, the detail and where the answer goes.
-type Request = (String, String, String, Sender<String>);
+/// The document's window, the question, the detail and where the answer goes.
+type Request = (Retained<NSWindow>, String, String, Sender<String>);
 
 /// The hook for `Services::save_prompt`.
-pub type Hook = Box<dyn Fn(String, String, String) -> Receiver<String>>;
+pub type Hook = Box<dyn Fn(String, String, String) -> Option<Receiver<String>>>;
 
 /// Shows the prompts the app queued; lives in the eframe app.
 pub struct Launcher {
@@ -26,11 +27,13 @@ pub struct Launcher {
 
 pub fn hook(ctx: &egui::Context) -> (Hook, Launcher) {
     let (queue_tx, queue) = channel::<Request>();
-    let hook: Hook = Box::new(move |window, question, detail| {
+    let hook: Hook = Box::new(move |title, question, detail| {
+        // No window that is surely the document's: the app asks in its own prompt instead.
+        let window = window_titled(MainThreadMarker::new()?, &title)?;
         let (answer, rx) = channel();
         // If the launcher is gone, the dropped answer reads as Cancel in the app.
         let _ = queue_tx.send((window, question, detail, answer));
-        rx
+        Some(rx)
     });
     (hook, Launcher { queue, ctx: ctx.clone() })
 }
@@ -39,12 +42,11 @@ impl Launcher {
     /// Shows the queued prompts as sheets, each on its document's window. Call after every pass
     /// that may ask one.
     pub fn show(&self, mtm: MainThreadMarker) {
-        while let Ok((window, question, detail, answer)) = self.queue.try_recv() {
-            let Some(parent) = window_titled(mtm, &window) else {
-                // No window to hold it: answered as Cancel, so nothing is lost.
-                log::warn!("save sheet: no window titled {window:?}");
-                continue;
-            };
+        while let Ok((parent, question, detail, answer)) = self.queue.try_recv() {
+            // A sheet on a window in the Dock would ask out of sight.
+            if parent.isMiniaturized() {
+                parent.deminiaturize(None);
+            }
             let alert = NSAlert::new(mtm);
             alert.setMessageText(&NSString::from_str(&question));
             alert.setInformativeText(&NSString::from_str(&detail));
@@ -70,14 +72,15 @@ impl Launcher {
     }
 }
 
-/// The document window titled `title`: the app gives each window its document's name.
-/// shortcut: two windows on one document with the same title get the first; upgrade to the
-/// viewport's own window handle if that shows up.
-fn window_titled(mtm: MainThreadMarker, title: &str) -> Option<objc2::rc::Retained<NSWindow>> {
-    let app = NSApplication::sharedApplication(mtm);
-    let windows = app.windows();
-    let found = windows.iter().find(|w| w.isVisible() && w.title().to_string() == title);
-    found.or_else(|| app.mainWindow())
+/// The one window titled `title`, shown or in the Dock: the app gives each window its document's
+/// name. Two documents with the same name are left to the built-in prompt, so Don't Save never
+/// answers for the wrong one.
+/// shortcut: matches by title; upgrade to the viewport's own window handle if egui exposes it.
+fn window_titled(mtm: MainThreadMarker, title: &str) -> Option<Retained<NSWindow>> {
+    let windows = NSApplication::sharedApplication(mtm).windows();
+    let mut found = windows.iter().filter(|w| (w.isVisible() || w.isMiniaturized()) && w.title().to_string() == title);
+    let window = found.next()?;
+    found.next().is_none().then_some(window)
 }
 
 #[cfg(test)]
@@ -85,10 +88,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_launcher_that_is_gone_reads_as_cancel() {
-        let (hook, launcher) = hook(&egui::Context::default());
-        let rx = hook("Document1 - WordCraft".into(), "Do you want to save changes?".into(), String::new());
-        drop(launcher);
-        assert!(rx.recv().is_err(), "the app answers a dropped sender with Cancel");
+    fn without_the_documents_window_the_app_asks_itself() {
+        let (hook, _launcher) = hook(&egui::Context::default());
+        // Off the main thread, as here, or with no such window, no sheet can be placed.
+        assert!(hook("Document1 - WordCraft".into(), "Do you want to save changes?".into(), String::new()).is_none());
     }
 }

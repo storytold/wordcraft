@@ -3198,7 +3198,7 @@ fn a_native_save_prompt_asks_once_and_its_answer_closes_the_document() {
     let log = asked.clone();
     a.services.save_prompt = Some(Box::new(move |_, question, _| {
         log.borrow_mut().push(question);
-        rx.take().unwrap_or_else(|| std::sync::mpsc::channel().1)
+        Some(rx.take().unwrap_or_else(|| std::sync::mpsc::channel().1))
     }));
     let mut d = FrameDriver { ctx: egui::Context::default(), t: 0.0 };
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
@@ -3214,6 +3214,29 @@ fn a_native_save_prompt_asks_once_and_its_answer_closes_the_document() {
     d.frame(&mut a, vec![], screen);
     assert_eq!(prompt(&a), None);
     assert!(!a.has_document(), "Don't Save closed the document");
+}
+
+/// A host that can't tell which window is the document's (two documents named alike) is asked
+/// once, and the built-in prompt takes over.
+#[test]
+fn a_host_without_the_window_leaves_the_question_to_the_built_in_prompt() {
+    let mut a = typed();
+    let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = asked.clone();
+    a.services.save_prompt = Some(Box::new(move |_, _, _| {
+        count.set(count.get() + 1);
+        None
+    }));
+    let mut d = FrameDriver { ctx: egui::Context::default(), t: 0.0 };
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    a.run("file.close", json!({})).unwrap();
+    for _ in 0..4 {
+        d.frame(&mut a, vec![], screen);
+    }
+    assert_eq!(asked.get(), 1, "asked once, not every frame");
+    assert_eq!(prompt(&a), Some("saveChanges"), "the built-in prompt is up");
+    a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+    assert!(!a.has_document(), "its Don't Save closed the document");
 }
 
 /// Find and Replace in a window of its own (`Services::find_window`) stays open while the user

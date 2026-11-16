@@ -90,8 +90,9 @@ pub struct Services {
     /// Desktop: ask "Save changes?" with the system's own prompt (a sheet on the document's
     /// window on macOS), given that window's title, the question and the detail, instead of the
     /// built-in one. The host sends `save`, `dontSave` or `cancel` through the returned channel;
-    /// a dropped sender is `cancel`.
-    pub save_prompt: Option<Box<dyn Fn(String, String, String) -> std::sync::mpsc::Receiver<String>>>,
+    /// a dropped sender is `cancel`. `None`: the host can't tell which window is the document's,
+    /// so the built-in prompt asks there instead.
+    pub save_prompt: Option<Box<dyn Fn(String, String, String) -> Option<std::sync::mpsc::Receiver<String>>>>,
     /// Desktop: show Find and Replace in a window of its own, which the host keeps above the
     /// document's window as a utility panel (macOS), instead of inside the document's window.
     pub find_window: bool,

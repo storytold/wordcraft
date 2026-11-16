@@ -809,7 +809,7 @@ fn quitting_with_sheets_asks_in_every_unsaved_window_at_once() {
         let (tx, rx) = std::sync::mpsc::channel();
         answers.borrow_mut().push(tx);
         log.borrow_mut().push(window);
-        rx
+        Some(rx)
     }));
 
     assert!(!a.quit());
