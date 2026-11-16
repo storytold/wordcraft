@@ -323,6 +323,11 @@ impl SessionModel {
                 "op": "command",
                 "command": command,
                 "params": params,
+                // The author travels with the delta: a replica replays the
+                // command to build the same revisions and comments, and it must
+                // record them under the peer who edited, not under its local
+                // user (ADR-0001).
+                "author": actor,
                 "story": op.target.story,
                 "nodeId": op.target.node_id,
                 "off": op.target.off,
@@ -1079,7 +1084,16 @@ pub fn apply_delta(session: &mut Session, ids: &mut NodeIds, delta: &Value) -> R
             _ => None,
         };
         let params = delta.get("params").cloned().unwrap_or(Value::Null);
-        session.run_remote(command, &params).map_err(|err| err.to_string())?;
+        // The delta names the operation's author: the command may record a
+        // tracked revision or a comment, and every replica has to name the same
+        // peer the server recorded. The replica's own author is restored after
+        // the replay, including when it fails.
+        let own = delta.get("author").and_then(Value::as_str).map(|author| std::mem::replace(&mut session.author, author.to_string()));
+        let result = session.run_remote(command, &params).map_err(|err| err.to_string());
+        if let Some(own) = own {
+            session.author = own;
+        }
+        result?;
         return Ok(());
     }
     wordcraft_collab_doc::apply_delta(&mut session.doc, ids, delta)?;

@@ -126,6 +126,16 @@ pub(crate) fn is_settings(id: &str) -> bool {
     id.starts_with("collab.")
 }
 
+/// Whether a settings command has to open a collaboration session. Only
+/// `collab.enable` does, and only when no session is live or it was pointed at
+/// another server: every other `collab.*` command — `collab.status` is a pure
+/// query — must keep the session, its client id and the operations the room has
+/// not answered yet. Reconnecting there dropped that queue and left the local
+/// document without edits the room never received.
+pub(crate) fn reconnect_wanted(id: &str, has_session: bool, server_before: &str, server_after: &str) -> bool {
+    id == "collab.enable" && (!has_session || server_before != server_after)
+}
+
 /// Poll the transport, apply answers and publish this window's caret. Called
 /// once per frame before layout, so a remote edit is laid out in this frame.
 pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
@@ -410,6 +420,18 @@ mod tests {
 
         let one = restore_line(7, &["c2:4".to_string()]);
         assert!(one.contains("1 unconfirmed edit was dropped"), "{one}");
+    }
+
+    /// A settings command reconnects only when it can change the session:
+    /// `collab.status` used to replace the session (new client id, dropped
+    /// unconfirmed queue) on every poll, and a query must not do that.
+    #[test]
+    fn only_enabling_or_moving_the_server_reopens_the_session() {
+        assert!(reconnect_wanted("collab.enable", false, "ws://a", "ws://a"), "no session yet: open one");
+        assert!(reconnect_wanted("collab.enable", true, "ws://a", "ws://b"), "another server: replace the session");
+        assert!(!reconnect_wanted("collab.enable", true, "ws://a", "ws://a"), "the session already talks to that server");
+        assert!(!reconnect_wanted("collab.status", false, "ws://a", "ws://a"), "a query keeps the session it asks about");
+        assert!(!reconnect_wanted("collab.status", true, "ws://a", "ws://b"), "a query does not connect either");
     }
 
     /// An `editor` writes but cannot commit: the refusal must name the real

@@ -150,3 +150,49 @@ async fn the_first_connection_offers_the_open_document() {
     assert!(matches!(event, TransportEvent::Event(Event::Welcome { version: 0, .. })), "{event:?}");
     server.await.expect("the fake server finished");
 }
+
+/// A refusal that makes the client ask for a snapshot sets its own state to
+/// `Resyncing`, and the app calls `resync` from that handler. The intent used to
+/// be sent only from `Joined`, so the request was dropped and the session stayed
+/// `Resyncing` — editing and undo blocked — until the socket happened to drop.
+#[tokio::test]
+async fn a_resync_intent_is_sent_while_the_client_is_resyncing() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("address");
+
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("connection");
+        let mut socket = tokio_tungstenite::accept_async(stream).await.expect("handshake");
+        welcome(&mut socket, None).await;
+        // A lease refusal was never looked at: it is retryable, so the client
+        // asks for a snapshot instead of holding a document the room lacks.
+        let op = match next_client_msg(&mut socket, "an operation").await {
+            ClientMsg::Op { op } => op,
+            other => panic!("expected op, got {other:?}"),
+        };
+        send_server_msg(
+            &mut socket,
+            &ServerMsg::Rejected {
+                reject: wordcraft_collab::wire::Reject::new(op.op_id, wordcraft_collab::wire::RejectCode::Lease, "another session holds the file"),
+            },
+        )
+        .await;
+        // The app's handler then asks for the snapshot, from `Resyncing`.
+        match next_client_msg(&mut socket, "resync").await {
+            ClientMsg::Resync { last_version } => assert_eq!(last_version, 0),
+            other => panic!("expected a resync request, got {other:?}"),
+        }
+        let _ = timeout(Duration::from_secs(1), socket.next()).await;
+    });
+
+    let mut handle = spawn(format!("ws://{addr}"), "test-token", "alice", None);
+    let event = timeout(WAIT, handle.events.recv()).await.expect("welcome").expect("event");
+    assert!(matches!(event, TransportEvent::Event(Event::Welcome { .. })), "{event:?}");
+
+    handle.submit(OpKind::Primitive, Target::new("body", 7, 0), json!({"op": "insert_text", "text": "Hi"})).expect("submit");
+    let event = timeout(WAIT, handle.events.recv()).await.expect("refusal").expect("event");
+    assert!(matches!(event, TransportEvent::Event(Event::Resync { .. })), "the client asks for a snapshot, {event:?}");
+
+    handle.resync().expect("the app asks for the snapshot from the resync handler");
+    server.await.expect("the fake server finished");
+}

@@ -23,6 +23,24 @@ fn touches_node_text(delta: &Value, node: u32) -> bool {
     delta.get("nodeId").and_then(Value::as_u64) == Some(u64::from(node)) && delta.get("op").and_then(Value::as_str).is_some_and(positions_text)
 }
 
+/// Whether an operation is an annotation: the only kind of change a commenter
+/// may make (ADR-0008). A comment command, a comment primitive, or a `merge`
+/// that names a comment edit — a merge of any property is the document's, not a
+/// commenter's.
+fn annotates(op: &Op) -> bool {
+    let command = op.payload.get("command").and_then(Value::as_str);
+    match op.kind {
+        OpKind::Command => command.is_some_and(is_comment_command),
+        OpKind::Merge => command.is_some_and(is_comment_command),
+        OpKind::Primitive => matches!(op.payload.get("op").and_then(Value::as_str), Some("add_comment" | "resolve_comment")),
+        OpKind::Structural => false,
+    }
+}
+
+fn is_comment_command(command: &str) -> bool {
+    matches!(command, "review.newComment" | "review.reply" | "review.editComment" | "review.resolveComment" | "review.deleteComment")
+}
+
 /// Whether an accepted operation changed the text of `node` (ADR WC-0001).
 fn changes_text_of(entry: &Entry, node: u32) -> bool {
     let in_delta = |delta: &Value| {
@@ -264,20 +282,9 @@ impl<M: Model> Room<M> {
         if !role.can_write() {
             return Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, "the role may not edit this document"));
         }
-        if role == Role::Commenter {
+        if role == Role::Commenter && !annotates(&op) {
             // A commenter annotates; the document itself is not theirs (ADR-0008).
-            let comment_command = op.kind == crate::wire::OpKind::Command
-                && matches!(
-                    op.payload.get("command").and_then(Value::as_str),
-                    Some("review.newComment" | "review.reply" | "review.editComment" | "review.resolveComment" | "review.deleteComment")
-                );
-            let annotation = op.kind == crate::wire::OpKind::Merge
-                || comment_command
-                || (op.kind == crate::wire::OpKind::Primitive
-                    && matches!(op.payload.get("op").and_then(Value::as_str), Some("add_comment" | "resolve_comment")));
-            if !annotation {
-                return Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, "a commenter may only add or resolve comments"));
-            }
+            return Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, "a commenter may only add or resolve comments"));
         }
         self.nodes_changed = false;
         if let Some(cached) = self.journal.cached(&op.op_id) {
@@ -285,7 +292,7 @@ impl<M: Model> Room<M> {
         }
         self.journal.check(&op)?;
         if let Some(history) = op.history.clone() {
-            return self.submit_history(actor, &op, history);
+            return self.submit_history(actor, role, &op, history);
         }
         if let Some(reject) = self.stale_positional(&op) {
             return Err(reject);
@@ -357,7 +364,11 @@ impl<M: Model> Room<M> {
     /// Undo or redo one step of `actor` (ADR-0010). The caller's operation is
     /// the unit that gets a version; the step's operations run behind it and
     /// are never journaled separately, so the document moves once.
-    fn submit_history(&mut self, actor: &str, op: &Op, history: HistoryAction) -> Result<Applied, Reject> {
+    ///
+    /// The step is replayed under the *current* role: a peer that edited with a
+    /// writer token and reconnects as a commenter must not take text back
+    /// through its own history (ADR-0008).
+    fn submit_history(&mut self, actor: &str, role: Role, op: &Op, history: HistoryAction) -> Result<Applied, Reject> {
         self.nodes_changed = false;
         let (step, step_op_id, undo) = match &history {
             HistoryAction::Undo { op_id } => (self.undo.peek_undo(actor), op_id, true),
@@ -380,6 +391,13 @@ impl<M: Model> Room<M> {
         }
         if self.step_conflicts(&step) {
             return Err(Reject::new(op.op_id.clone(), RejectCode::UndoConflict, "the step's targets changed after it landed"));
+        }
+        // The step was recorded under the role its author had then. Replaying it
+        // now is the same question as submitting those operations: a commenter
+        // may take back comment edits and nothing else, and the whole step is
+        // checked before any of it lands.
+        if role == Role::Commenter && !operations.iter().all(annotates) {
+            return Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, "a commenter may only replay comment edits"));
         }
 
         // A step may hold several operations (a replaced range, a block swap, a
@@ -484,6 +502,13 @@ impl<M: Model> Room<M> {
     }
 
     fn note_touch(&mut self, op: &Op, version: Version) {
+        // A `merge` names the property it changes, and the document adapter
+        // applies none of them yet: it is a no-op that changes no paragraph, so
+        // recording its target as edited would let an empty operation claim a
+        // paragraph and refuse its author's undo (`undoConflict`, ADR-0010).
+        if op.kind == OpKind::Merge {
+            return;
+        }
         if op.target.node_id != 0 {
             self.last_touch.insert(op.target.node_id, version);
         }

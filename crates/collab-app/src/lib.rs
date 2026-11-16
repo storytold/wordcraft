@@ -114,16 +114,54 @@ impl CopyBuffer {
     }
 }
 
+/// Accumulates the chunks of a snapshot. A room sends a large document in
+/// several frames, so a snapshot is only whole on `last`; a chunk of an older
+/// transfer, or of one that never finished, is dropped instead of being joined
+/// to the next one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SnapshotBuffer {
+    version: Version,
+    bytes: Vec<u8>,
+    started: bool,
+}
+
+impl SnapshotBuffer {
+    /// Add one chunk; `Some` with the whole document when `last` completes it.
+    pub fn push(&mut self, version: Version, chunk: &[u8], last: bool) -> Option<Vec<u8>> {
+        if !self.started || self.version != version {
+            self.version = version;
+            self.bytes.clear();
+            self.started = true;
+        }
+        self.bytes.extend_from_slice(chunk);
+        if !last {
+            return None;
+        }
+        self.started = false;
+        Some(std::mem::take(&mut self.bytes))
+    }
+
+    /// Drop what a new handshake interrupted (a half-received snapshot cannot be
+    /// completed by a later answer at the same version).
+    pub fn clear(&mut self) {
+        *self = SnapshotBuffer::default();
+    }
+}
+
 /// What a refusal means for the session. The room refuses before changing the
 /// document, so a refused undo (`undo-conflict`) is not a broken session: it is
 /// shown as an error and editing continues with its stack intact (ADR-0010). A
 /// refusal that asks for a snapshot (`stale`, `gone`, an expired lease or
 /// token) resyncs instead.
+///
+/// Every other refusal (`conflict`, `invalid`, `forbidden`, `tooLarge`) refused
+/// an edit this replica had already applied locally: leaving it in place would
+/// keep a document the room does not have, so the replica takes the room's.
 pub fn refusal_status(reject: &Reject) -> (Status, bool) {
     match reject.code {
         RejectCode::Stale | RejectCode::Lease | RejectCode::TokenExpired | RejectCode::Gone => (Status::Resyncing, true),
         RejectCode::UndoConflict | RejectCode::Unsupported => (Status::InSync, false),
-        _ => (Status::Failed(reject.message.clone()), false),
+        _ => (Status::Resyncing, true),
     }
 }
 
@@ -458,8 +496,7 @@ pub struct Collab {
     /// The last refused file the owner asked for (TASK.md §6).
     copy: Option<CommitCopy>,
     copy_buffer: CopyBuffer,
-    snapshot: Vec<u8>,
-    snapshot_version: Version,
+    snapshots: SnapshotBuffer,
     last_presence: Option<Instant>,
     last_error: Option<String>,
     /// The queue a restored room took from this session (ADR WC-0008). The
@@ -498,8 +535,7 @@ impl Collab {
             conflict: None,
             copy: None,
             copy_buffer: CopyBuffer::default(),
-            snapshot: Vec::new(),
-            snapshot_version: 0,
+            snapshots: SnapshotBuffer::default(),
             last_presence: None,
             last_error: None,
             restore: None,
@@ -600,6 +636,9 @@ impl Collab {
                 self.state.version = version;
                 self.state.role = Role::parse(&role).unwrap_or(Role::Editor);
                 self.set_participants(&participants);
+                // A handshake ends any half-received snapshot: a retry at the
+                // same version must not append to its bytes.
+                self.snapshots.clear();
                 // A handshake is not a snapshot: `Offline` or `Connecting` never
                 // cleared the divergence, so this reads the flag, not the status
                 // (review 5853542478).
@@ -642,13 +681,24 @@ impl Collab {
             Event::Presence { client_id, role, state } => self.presence_of(&client_id, &role, &state),
             Event::Left { client_id } => self.participants.retain(|participant| participant.client_id != client_id),
             Event::Snapshot { version, bytes, last } => {
-                if last && let Ok(version) = self.take_snapshot(version, &bytes, session) {
-                    self.state.version = version;
-                    // The document is the room's now: no local edit is missing
-                    // from it anymore.
-                    self.divergence.snapshot();
-                    self.status = Status::InSync;
-                    self.last_error = None;
+                if let Some(document) = self.snapshots.push(version, &bytes, last) {
+                    match self.apply_snapshot(version, &document, session) {
+                        Ok(version) => {
+                            self.state.version = version;
+                            // The document is the room's now: no local edit is
+                            // missing from it anymore.
+                            self.divergence.snapshot();
+                            self.status = Status::InSync;
+                            self.last_error = None;
+                        }
+                        // A snapshot that cannot be opened leaves this replica
+                        // without the room's state; reporting `InSync` would
+                        // hide that behind an editable document.
+                        Err(message) => {
+                            self.last_error = Some(message.clone());
+                            self.status = Status::Failed(message);
+                        }
+                    }
                 }
             }
             Event::Committed { version, sha256, warnings, cabinet } => {
@@ -670,6 +720,23 @@ impl Collab {
                     self.copy = Some(copy);
                 }
             }
+            Event::Tail { entries } => {
+                // The room answered the reconnect with the operations this
+                // replica missed instead of a snapshot: they carry the same
+                // authoritative deltas a live answer does, so each is applied
+                // like one. Skipping them left the document without the peers'
+                // edits while the version said otherwise.
+                for applied in entries {
+                    match self.state.apply(&applied, session) {
+                        Ok(Outcome::Quiet) => {}
+                        Ok(Outcome::Resync) => {
+                            self.status = Status::Resyncing;
+                            let _ = self.handle.resync();
+                        }
+                        Err(message) => self.status = Status::Failed(message),
+                    }
+                }
+            }
             Event::Resync { reason } => {
                 self.status = Status::Resyncing;
                 self.last_error = Some(reason);
@@ -680,15 +747,11 @@ impl Collab {
     }
 
     /// Accumulate snapshot chunks; the last one replaces the document.
-    fn take_snapshot(&mut self, version: Version, bytes: &[u8], session: &mut Session) -> Result<Version, String> {
-        if self.snapshot_version != version {
-            self.snapshot_version = version;
-            self.snapshot.clear();
-        }
-        self.snapshot.extend_from_slice(bytes);
-        let doc: Document = serde_json::from_slice(&self.snapshot).map_err(|err| format!("bad snapshot: {err}"))?;
+    /// Replace the document with the room's, from a snapshot the buffer has
+    /// completed.
+    fn apply_snapshot(&mut self, version: Version, document: &[u8], session: &mut Session) -> Result<Version, String> {
+        let doc: Document = serde_json::from_slice(document).map_err(|err| format!("bad snapshot: {err}"))?;
         session.set_document(doc);
-        self.snapshot.clear();
         Ok(version)
     }
 

@@ -12,7 +12,7 @@ use wordcraft_collab_engine::SessionModel;
 use wordcraft_doc::{Block, Cell, CharProps, Document, Paragraph, Path, Pos, StoryRef, Table};
 use wordcraft_engine::Session;
 
-use crate::{CopyBuffer, Divergence, Outcome, Outgoing, Status, SyncState};
+use crate::{CopyBuffer, Divergence, Outcome, Outgoing, SnapshotBuffer, Status, SyncState};
 
 fn server() -> (Room<DocModel>, Vec<NodeRef>) {
     let mut room = Room::new(DocModel::new(Document::new()));
@@ -1576,4 +1576,42 @@ fn a_restore_does_not_clear_a_paused_session() {
     let welcome = crate::WelcomeState::after_welcome(divergence, 2, vec![OpId::new("alice", 3)]);
     assert_eq!(welcome.status, Status::Diverged);
     assert!(welcome.restore.is_some(), "the restore's ids are shown alongside the pause");
+}
+
+/// A snapshot of a large document arrives in several frames: the chunks are one
+/// document at one version, so they are all kept and only `last` completes it.
+/// Keeping the last chunk alone left the document unparsed and the session
+/// stuck in `Resyncing` on every document over the frame-sized chunk.
+#[test]
+fn snapshot_chunks_join_until_last_and_an_interrupted_transfer_is_dropped() {
+    let mut buffer = SnapshotBuffer::default();
+    assert!(buffer.push(4, b"{\"body\":", false).is_none());
+    assert!(buffer.push(4, b"[]}", false).is_none());
+    assert_eq!(buffer.push(4, b"", true).as_deref(), Some(&b"{\"body\":[]}"[..]), "the whole document, in order");
+
+    // A handshake ends a transfer that was cut in half: the retry at the same
+    // version must not append to its bytes.
+    assert!(buffer.push(5, b"{\"bo", false).is_none());
+    buffer.clear();
+    assert_eq!(buffer.push(5, b"{\"body\":[]}", true).as_deref(), Some(&b"{\"body\":[]}"[..]));
+
+    // A chunk of an older answer never joins a newer version.
+    assert!(buffer.push(6, b"old", false).is_none());
+    assert_eq!(buffer.push(7, b"new", true).as_deref(), Some(&b"new"[..]));
+}
+
+/// Every refusal of an edit this replica applied locally takes the room's
+/// document back: the edit is in this document and not in the room, so reporting
+/// `Failed` and staying put kept the two apart. A refused history request is the
+/// exception — it was never applied optimistically (ADR-0010).
+#[test]
+fn a_refusal_of_an_applied_edit_resyncs_and_a_refused_history_step_does_not() {
+    for code in [RejectCode::Conflict, RejectCode::Invalid, RejectCode::Forbidden, RejectCode::TooLarge] {
+        let reject = Reject::new(OpId::new("alice", 1), code, "the edit cannot land");
+        assert_eq!(crate::refusal_status(&reject), (Status::Resyncing, true), "{code:?}");
+    }
+    for code in [RejectCode::UndoConflict, RejectCode::Unsupported] {
+        let reject = Reject::new(OpId::new("alice", 1), code, "the step cannot be replayed");
+        assert_eq!(crate::refusal_status(&reject), (Status::InSync, false), "{code:?}");
+    }
 }

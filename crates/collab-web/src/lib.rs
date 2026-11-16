@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use wordcraft_collab::room::Role;
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target, Version};
 pub use wordcraft_collab_app::{Commit, CommitCopy, Cursor, ParticipantView, Restore, Status};
-use wordcraft_collab_app::{CopyBuffer, Divergence, Outcome, SyncState, WelcomeState, apply_presence};
+use wordcraft_collab_app::{CopyBuffer, Divergence, Outcome, SnapshotBuffer, SyncState, WelcomeState, apply_presence};
 /// An id for one editing session: two apps on the same document must not share
 /// an operation id space (`wordcraft_collab_client::session_client_id`).
 pub use wordcraft_collab_client::session_client_id;
@@ -209,8 +209,7 @@ pub struct Collab {
     conflict: Option<String>,
     copy: Option<CommitCopy>,
     copy_buffer: CopyBuffer,
-    snapshot: Vec<u8>,
-    snapshot_version: Version,
+    snapshots: SnapshotBuffer,
     /// The document this tab has open, serialized the way the server snapshots
     /// a room. Offered while nothing is accepted yet, so a room the server has
     /// never snapshotted starts from it instead of blank (ADR WC-0004).
@@ -253,8 +252,7 @@ impl Collab {
             conflict: None,
             copy: None,
             copy_buffer: CopyBuffer::default(),
-            snapshot: Vec::new(),
-            snapshot_version: 0,
+            snapshots: SnapshotBuffer::default(),
             seed,
             last_presence_ms: 0.0,
             last_error: None,
@@ -389,6 +387,9 @@ impl Collab {
                 self.state.version = version;
                 self.state.role = Role::parse(&role).unwrap_or(self.state.role);
                 self.set_participants(&participants);
+                // A handshake ends any half-received snapshot: a retry at the
+                // same version must not append to its bytes.
+                self.snapshots.clear();
                 // A handshake is not a snapshot: `Offline`, a renewal or a
                 // closed socket never cleared the divergence, so this reads the
                 // flag, not the status (review 5853542478).
@@ -430,13 +431,28 @@ impl Collab {
             Event::Presence { client_id, role, state } => self.presence_of(&client_id, &role, &state),
             Event::Left { client_id } => self.participants.retain(|participant| participant.client_id != client_id),
             Event::Snapshot { version, bytes, last } => {
-                if last && let Ok(version) = self.take_snapshot(version, &bytes, session) {
-                    self.state.version = version;
-                    // The document is the room's now: the local edit that never
-                    // reached it is gone with the document it was in.
-                    self.divergence.snapshot();
-                    self.status = Status::InSync;
-                    self.last_error = None;
+                // A document over the frame-sized chunk arrives in several
+                // frames; only the one marked `last` completes the snapshot, and
+                // the earlier chunks are the same document, not stale answers.
+                if let Some(document) = self.snapshots.push(version, &bytes, last) {
+                    match self.apply_snapshot(version, &document, session) {
+                        Ok(version) => {
+                            self.state.version = version;
+                            // The document is the room's now: the local edit
+                            // that never reached it is gone with the document it
+                            // was in.
+                            self.divergence.snapshot();
+                            self.status = Status::InSync;
+                            self.last_error = None;
+                        }
+                        // A snapshot that cannot be opened leaves this tab
+                        // without the room's state; `InSync` would enable
+                        // editing a document the room does not have.
+                        Err(message) => {
+                            self.last_error = Some(message.clone());
+                            self.status = Status::Failed(message);
+                        }
+                    }
                 }
             }
             Event::Committed { version, sha256, warnings, cabinet } => {
@@ -457,6 +473,21 @@ impl Collab {
                     self.copy = Some(copy);
                 }
             }
+            Event::Tail { entries } => {
+                // The reconnect was answered with the operations this tab
+                // missed, not with a snapshot: each carries an authoritative
+                // delta and has to be applied like a live answer.
+                for applied in entries {
+                    match self.state.apply(&applied, session) {
+                        Ok(Outcome::Quiet) => {}
+                        Ok(Outcome::Resync) => {
+                            self.status = Status::Resyncing;
+                            self.request_snapshot();
+                        }
+                        Err(message) => self.status = Status::Failed(message),
+                    }
+                }
+            }
             Event::Resync { reason } => {
                 self.status = Status::Resyncing;
                 self.last_error = Some(reason);
@@ -465,16 +496,11 @@ impl Collab {
         }
     }
 
-    /// Accumulate snapshot chunks; the last one replaces the document.
-    fn take_snapshot(&mut self, version: Version, bytes: &[u8], session: &mut Session) -> Result<Version, String> {
-        if self.snapshot_version != version {
-            self.snapshot_version = version;
-            self.snapshot.clear();
-        }
-        self.snapshot.extend_from_slice(bytes);
-        let doc: wordcraft_doc::Document = serde_json::from_slice(&self.snapshot).map_err(|err| format!("bad snapshot: {err}"))?;
+    /// Replace the document with the room's, from a snapshot the buffer has
+    /// completed.
+    fn apply_snapshot(&mut self, version: Version, document: &[u8], session: &mut Session) -> Result<Version, String> {
+        let doc: wordcraft_doc::Document = serde_json::from_slice(document).map_err(|err| format!("bad snapshot: {err}"))?;
         session.set_document(doc);
-        self.snapshot.clear();
         Ok(version)
     }
 
@@ -721,8 +747,7 @@ mod tests {
             conflict: None,
             copy: None,
             copy_buffer: CopyBuffer::default(),
-            snapshot: Vec::new(),
-            snapshot_version: 0,
+            snapshots: SnapshotBuffer::default(),
             seed: Vec::new(),
             last_presence_ms: 0.0,
             last_error: None,
@@ -1029,5 +1054,76 @@ mod tests {
         collab.on_text(&text, &mut session);
         assert_eq!(*collab.status(), Status::InSync);
         assert!(collab.can_write() && collab.can_commit(), "the snapshot is what reopens the session");
+    }
+    /// A document over the frame-sized chunk arrives in several `snapshot`
+    /// frames. Only the chunk marked `last` was parsed, so every larger document
+    /// failed to open and the tab waited in `Resyncing` forever; the chunks
+    /// belong to one snapshot and are joined in order.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn snapshot_frames_join_until_last_and_replace_the_document() {
+        use wordcraft_doc::Document;
+        use wordcraft_engine::Session;
+
+        let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "editor");
+        let mut collab = test_collab(&opened, "c1");
+        let mut session = Session::new(Document::new());
+        session.run("text.insert", &json!({"text": "chunked"})).expect("the room's document has text");
+        let model = serde_json::to_vec(&session.doc).expect("model");
+        let (first, second) = model.split_at(model.len() / 2);
+        assert!(!first.is_empty() && !second.is_empty(), "the test needs two frames");
+
+        let mut mine = Session::new(Document::new());
+        for (bytes, last) in [(first, false), (second, true)] {
+            let frame = ServerMsg::Snapshot { version: 3, bytes: bytes.to_vec(), last };
+            let text = serde_json::to_string(&frame).expect("json");
+            collab.on_text(&text, &mut mine);
+        }
+        let text = mine.doc.body.first().and_then(|block| block.as_para()).map(|para| para.text.clone()).unwrap_or_default();
+        assert_eq!(text, "chunked", "the whole snapshot opened");
+        assert_eq!(*collab.status(), Status::InSync);
+    }
+
+    /// A reconnect inside the journal window is answered with the operations
+    /// this tab missed, not with a snapshot. Confirming them without applying
+    /// them left the document behind the version it reported, and no later
+    /// answer exposed the gap.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_journal_tail_is_applied_like_a_live_answer() {
+        use wordcraft_collab::wire::{Applied, NodeDelta, NodeRef};
+        use wordcraft_doc::Document;
+        use wordcraft_engine::Session;
+
+        let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "editor");
+        let mut collab = test_collab(&opened, "c1");
+        let mut mine = Session::new(Document::new());
+
+        let welcome =
+            ServerMsg::Welcome { session_id: "s1".into(), role: "editor".into(), version: 1, epoch: 0, participants: Vec::new(), resync: false };
+        let text = serde_json::to_string(&welcome).expect("json");
+        collab.on_text(&text, &mut mine);
+
+        let nodes = ServerMsg::Nodes { nodes: vec![NodeRef { id: 7, story: "body".into(), path: vec![0] }] };
+        let text = serde_json::to_string(&nodes).expect("json");
+        collab.on_text(&text, &mut mine);
+
+        let tail = ServerMsg::Tail {
+            entries: vec![Applied {
+                op_id: OpId::new("bob", 1),
+                version: 2,
+                epoch: 0,
+                delta: Some(json!({"op": "insert_text", "nodeId": 7, "off": 0, "text": "from bob"})),
+                nodes: Some(NodeDelta::default()),
+                conflict: false,
+                history: None,
+            }],
+        };
+        let text = serde_json::to_string(&tail).expect("json");
+        collab.on_text(&text, &mut mine);
+
+        let text = mine.doc.body.first().and_then(|block| block.as_para()).map(|para| para.text.clone()).unwrap_or_default();
+        assert_eq!(text, "from bob", "the missed edit is in the document");
+        assert_eq!(*collab.status(), Status::InSync);
     }
 }

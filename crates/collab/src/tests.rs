@@ -565,3 +565,62 @@ fn a_command_that_grows_an_existing_story_keeps_the_snapshot_path() {
     assert!(applied.nodes.is_none(), "a shifted story cannot be described by new ids alone");
     assert!(room.take_nodes_changed(), "the full map is still broadcast for it");
 }
+
+// --- what a commenter may submit, and what a no-op merge claims ------------
+
+/// A merge names a property of the document, not a comment: a commenter's
+/// `kind:"merge"` used to pass the annotation check as-is, so a role that may
+/// only annotate could take part in the document's edits (ADR-0008).
+#[test]
+fn a_commenter_may_not_send_a_merge_that_is_not_a_comment_edit() {
+    let mut room = Room::new(TextModel::default());
+    room.submit("alice", Role::Editor, insert("a", 1, 0, 0, "Hi")).expect("alice types");
+
+    let mut merge = insert("ann", 1, 1, 1, "");
+    merge.kind = OpKind::Merge;
+    merge.payload = json!({"op": "set_props", "bold": true});
+    let err = room.submit("ann", Role::Commenter, merge).expect_err("a property merge is not an annotation");
+    assert_eq!(err.code, RejectCode::Forbidden);
+    assert_eq!(room.version(), 1, "the refusal changed nothing");
+
+    // A merge that names a comment edit is an annotation and passes the check;
+    // the fake model applies merges as no-ops, so the document does not move.
+    let mut comment = insert("ann", 2, 1, 0, "");
+    comment.kind = OpKind::Merge;
+    comment.payload = json!({"command": "review.resolveComment"});
+    room.submit("ann", Role::Commenter, comment).expect("a comment merge is an annotation");
+}
+
+/// A merge is a no-op in the document adapter, so it must not claim the node it
+/// names: recording the touch made an editor's undo fail with `undoConflict`
+/// because an empty operation had "edited" the same paragraph (ADR-0010).
+#[test]
+fn a_no_op_merge_does_not_block_the_authors_undo() {
+    let mut room = Room::new(TextModel::default());
+    room.submit("alice", Role::Editor, insert("a", 1, 0, 0, "Hi")).expect("alice types");
+
+    let mut merge = insert("bob", 1, 1, 0, "");
+    merge.kind = OpKind::Merge;
+    merge.payload = json!({"op": "set_props", "bold": true});
+    room.submit("bob", Role::Editor, merge).expect("a merge lands");
+
+    let applied = room.submit("alice", Role::Editor, undo_op("a", 2, 2, "a", 1)).expect("the merge did not claim the paragraph");
+    assert_eq!(applied.version, 3);
+    assert_eq!(room.model().text, "", "alice's step came back");
+}
+
+/// The step a peer recorded as an editor is replayed under the role it holds
+/// now: a commenter token cannot take text back through its own history, even
+/// when the undo is wrapped in a permitted comment command (ADR-0008).
+#[test]
+fn a_commenter_cannot_replay_an_editors_step_through_a_comment_command() {
+    let mut room = Room::new(TextModel::default());
+    room.submit("ann", Role::Editor, insert("ann", 1, 0, 0, "Hi")).expect("ann types as an editor");
+
+    let mut undo = command("ann", 2, 1, "review.newComment");
+    undo.history = Some(HistoryAction::Undo { op_id: OpId::new("ann", 1) });
+    let err = room.submit("ann", Role::Commenter, undo).expect_err("the text step is not a commenter's to take back");
+    assert_eq!(err.code, RejectCode::Forbidden);
+    assert_eq!(room.model().text, "Hi", "nothing was replayed");
+    assert_eq!(room.version(), 1);
+}

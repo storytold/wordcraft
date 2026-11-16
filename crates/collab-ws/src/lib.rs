@@ -314,7 +314,13 @@ async fn handle_intent(client: &mut Client, sink: &mut Sink, intent: Intent, wai
             }
         }
         Intent::Resync => {
-            if joined && send(sink, &ClientMsg::Resync { last_version: client.version() }).await.is_err() {
+            // The client sets `Resyncing` itself when it needs a snapshot (a
+            // retryable or `gone` refusal, a version gap), and the app asks for
+            // one from that handler: gating on `Joined` dropped exactly the
+            // request that repairs the session, which then stayed `Resyncing`
+            // with editing blocked until the socket dropped.
+            let can_ask = matches!(client.state(), State::Joined | State::Resyncing);
+            if can_ask && send(sink, &ClientMsg::Resync { last_version: client.version() }).await.is_err() {
                 return Flow::Reconnect;
             }
         }

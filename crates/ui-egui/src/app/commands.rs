@@ -117,11 +117,15 @@ impl WordApp {
             return Err(refusal);
         }
         if crate::collab::is_settings(id) {
+            let server_before = self.session.prefs.collab.server.clone();
             let result = self.execute_inner(id, params)?;
-            if self.session.prefs.collab.enabled {
-                crate::collab::connect(self);
-            } else {
+            if !self.session.prefs.collab.enabled {
                 crate::collab::disconnect(self);
+            } else if crate::collab::reconnect_wanted(id, self.collab.is_none(), &server_before, &self.session.prefs.collab.server) {
+                // Only enabling, or moving to another server, opens a session:
+                // `collab.status` is a pure query, and replacing the session for
+                // it dropped the queue of edits the room had not answered yet.
+                crate::collab::connect(self);
             }
             return Ok(result);
         }

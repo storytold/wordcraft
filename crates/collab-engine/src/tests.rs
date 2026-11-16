@@ -101,6 +101,29 @@ fn the_actor_is_the_tracked_change_author() {
     assert!(session.doc.revisions.iter().any(|revision| revision.author == "alice"), "{:?}", session.doc.revisions);
 }
 
+/// A command's delta names the operation's author. A replica that replays it
+/// records the tracked revision (or comment) under the peer who edited; using
+/// its own local author made the two documents disagree on every revision when
+/// track changes was on.
+#[test]
+fn a_replica_replays_a_command_under_the_peers_author() {
+    let mut document = Document::new();
+    document.settings.track_changes = true;
+    let mut room = Room::new(SessionModel::from_document(document.clone()));
+    let node = node(&mut room);
+    let answer = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, node, 0, json!({"command": "text.insert", "params": {"text": "Hi"}})))
+        .expect("the command applies");
+    let delta = answer.delta.as_ref().expect("a command delta");
+    assert_eq!(delta.get("author").and_then(serde_json::Value::as_str), Some("alice"), "the delta carries the actor");
+
+    let (_, mut bobs, mut ids, _) = replica_of("bob", &document);
+    bobs.author = "bob".to_string();
+    crate::apply_delta(&mut bobs, &mut ids, delta).expect("bob's replica replays the command");
+    assert!(bobs.doc.revisions.iter().any(|revision| revision.author == "alice"), "{:?}", bobs.doc.revisions);
+    assert_eq!(bobs.author, "bob", "the replay does not adopt the peer's identity");
+}
+
 #[test]
 fn pending_formatting_travels_with_the_command() {
     let mut room = room();

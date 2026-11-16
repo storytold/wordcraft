@@ -178,7 +178,7 @@ fn a_refused_stale_edit_is_not_resent_after_the_resync() {
 }
 
 #[test]
-fn a_non_retryable_rejection_is_reported_and_keeps_the_queue() {
+fn a_non_retryable_rejection_is_reported_and_leaves_the_queue() {
     let mut client = Client::new("alice");
     let _ = client.on(ServerMsg::Welcome {
         session_id: "s".into(),
@@ -192,7 +192,81 @@ fn a_non_retryable_rejection_is_reported_and_keeps_the_queue() {
     let reject = Reject::new(op.op_id, RejectCode::Forbidden, "viewer");
     let event = client.on(ServerMsg::Rejected { reject });
     assert!(matches!(event, Event::Rejected { .. }));
-    assert_eq!(client.pending().len(), 1, "the app decides what to do with an unconfirmed operation");
+    // The room would answer the same way after a reconnect, so the operation is
+    // not queued for one; a refused operation that stayed queued could even land
+    // later, when the role changes.
+    assert_eq!(client.pending().len(), 0, "the refusal is final");
+    assert!(client.unconfirmed().is_empty(), "a reconnect must not replay it");
+}
+
+#[test]
+fn a_retryable_rejection_keeps_the_history_entry_until_the_resend_is_confirmed() {
+    let mut client = Client::new("alice");
+    let _ = client.on(ServerMsg::Welcome {
+        session_id: "s".into(),
+        role: "editor".into(),
+        version: 0,
+        epoch: 0,
+        participants: Vec::new(),
+        resync: false,
+    });
+    let first = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "a"}));
+    let _ = client.on(applied(first.op_id.clone(), 1, 0));
+    let undo = client.undo().expect("a step");
+
+    // A lease refusal never looked at the undo: it stays queued, and the stack
+    // must stay where the server's stack still is until the resend is answered.
+    let reject = Reject::new(undo.op_id.clone(), RejectCode::Lease, "another session holds the file");
+    assert!(matches!(client.on(ServerMsg::Rejected { reject }), Event::Resync { .. }));
+    assert_eq!(client.history_depth(), (1, 0), "the step is still the newest one");
+    assert_eq!(client.pending().len(), 1, "the reconnect resends it");
+
+    // The resend lands: now the stack follows the server's.
+    let _ = client.on(applied(undo.op_id, 2, 0));
+    assert_eq!(client.history_depth(), (0, 1), "the confirmed undo moved the step to redo");
+}
+
+#[test]
+fn the_journal_tail_reaches_the_app() {
+    let mut client = Client::new("alice");
+    let _ = client.on(ServerMsg::Welcome {
+        session_id: "s".into(),
+        role: "editor".into(),
+        version: 3,
+        epoch: 0,
+        participants: Vec::new(),
+        resync: false,
+    });
+    // A reconnect inside the journal window is answered with what was missed.
+    // Confirming the entries without returning them left the replica holding a
+    // document without the peers' edits and no version gap to ask about.
+    let entries = vec![
+        Applied {
+            op_id: OpId::new("bob", 1),
+            version: 4,
+            epoch: 0,
+            delta: Some(json!({"op": "insert_text", "text": "b"})),
+            nodes: None,
+            conflict: false,
+            history: None,
+        },
+        Applied {
+            op_id: OpId::new("bob", 2),
+            version: 5,
+            epoch: 0,
+            delta: Some(json!({"op": "insert_text", "text": "c"})),
+            nodes: None,
+            conflict: false,
+            history: None,
+        },
+    ];
+    let event = client.on(ServerMsg::Tail { entries: entries.clone() });
+    match event {
+        Event::Tail { entries: seen } => assert_eq!(seen, entries, "oldest first, deltas intact"),
+        other => panic!("expected the tail, got {other:?}"),
+    }
+    assert_eq!(client.version(), 5, "the tail is this replica's base now");
+    assert_eq!(client.state(), State::Joined);
 }
 
 #[test]

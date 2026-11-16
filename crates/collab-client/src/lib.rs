@@ -100,6 +100,13 @@ pub enum Event {
     Applied {
         applied: Applied,
     },
+    /// The operations this replica missed, oldest first, answered to a reconnect
+    /// whose `lastVersion` the journal still covers (ADR-0004). Each carries the
+    /// authoritative delta a live answer does, so the app applies them like
+    /// [`Event::Applied`]; the room sends no snapshot after them.
+    Tail {
+        entries: Vec<Applied>,
+    },
     Rejected {
         reject: Reject,
     },
@@ -313,11 +320,16 @@ impl Client {
                 Event::Welcome { version, epoch, resync, role, participants, dropped }
             }
             ServerMsg::Tail { entries } => {
-                for applied in entries {
-                    self.confirm(&applied);
+                // A reconnect the journal still covers is answered with the
+                // operations this replica missed, not with a snapshot (ADR-0004).
+                // Confirming them advances the version past edits the document
+                // never received, and the next live answer then shows no gap, so
+                // the app has to apply every entry (`Event::Tail`).
+                for applied in &entries {
+                    self.confirm(applied);
                 }
                 self.state = State::Joined;
-                Event::None
+                Event::Tail { entries }
             }
             ServerMsg::Applied { applied } => {
                 // A retry of an operation the room already applied comes back
@@ -336,15 +348,19 @@ impl Client {
                 Event::Applied { applied }
             }
             ServerMsg::Rejected { reject } => {
-                // A refused undo/redo leaves its stack where it was.
-                self.history_pending.remove(&reject.op_id);
-                // An operation refused `stale` or `gone` is not resent: the
-                // offsets or the node it names are exactly what the refusal is
-                // about, so replaying it after the resync would recreate the
-                // divergence (ADR WC-0001). A `lease` or `tokenExpired` refusal
-                // was never looked at and stays queued for the reconnect.
-                if matches!(reject.code, RejectCode::Stale | RejectCode::Gone) {
+                // Only a refusal that never looked at the operation is resent: a
+                // `lease` or a `tokenExpired` answer is about the connection, so
+                // the operation waits for the reconnect (ADR-0004). Everything
+                // else — including `stale`, whose offsets are exactly what went
+                // stale (ADR WC-0001) — is an answer the room would repeat, and a
+                // queued operation could even land later when the role changes.
+                let retry = matches!(reject.code, RejectCode::Lease | RejectCode::TokenExpired);
+                if !retry {
                     self.pending.retain(|pending| pending.op.op_id != reject.op_id);
+                    // A refused undo/redo leaves its stack where it was. One that
+                    // is resent keeps its entry, so the answer the retry produces
+                    // moves the stack the server moved (`confirm`).
+                    self.history_pending.remove(&reject.op_id);
                 }
                 if reject.retryable || reject.code == RejectCode::Gone {
                     self.state = State::Resyncing;
