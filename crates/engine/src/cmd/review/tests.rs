@@ -779,7 +779,8 @@ fn deleting_a_comment_deletes_replies_to_replies() {
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!(s.doc.comments.keys().map(|k| u64::from(*k)).collect::<Vec<_>>(), vec![root, reply, nested]);
     assert_eq!(parts(&s), before);
-    assert_eq!(anchors(&s).len(), 2);
+    // Each reply shares its parent's range, as Word writes it: two anchors each.
+    assert_eq!(anchors(&s).len(), 6);
 }
 
 /// A parent cycle (possible in a hostile file) doesn't hang Delete; both comments go.
