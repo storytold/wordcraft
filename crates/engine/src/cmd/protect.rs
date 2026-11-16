@@ -431,7 +431,8 @@ enum HoleMode {
 /// run formatting and paragraph formatting outside the ranges `author` may edit, in every story,
 /// and the formatting of every table, row and cell that holds any of that protected content, and what
 /// reaches the whole document: page setup, the document defaults and the existing styles
-/// (applying a style may add one), the document's settings and its metadata.
+/// (applying a style may add one), the glossary's building blocks, the document's settings and
+/// its metadata.
 pub(crate) fn outside_unchanged(before: &Document, after: &Document, author: &str) -> bool {
     // Protection can't change mid-command (`protection_lifted` guards undo and redo).
     let mode = if Some("forms") == before.settings.protection.as_deref() { HoleMode::Controls } else { HoleMode::Perms(author.into()) };
@@ -444,6 +445,7 @@ pub(crate) fn outside_unchanged(before: &Document, after: &Document, author: &st
         && before.settings == after.settings
         && before.core == after.core
         && before.custom_props == after.custom_props
+        && before.glossary == after.glossary
         && comments_unchanged(before, after)
         && lists_unchanged(before, after)
         && sources_unchanged(before, after)
