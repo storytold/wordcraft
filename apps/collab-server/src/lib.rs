@@ -55,6 +55,10 @@ pub const PRESENCE_TTL: Duration = Duration::from_secs(30);
 /// Frames a peer's connection may hold before the peer counts as not reading
 /// (ADR WC-0002).
 pub const PEER_QUEUE: usize = 512;
+/// Attempts a join makes when it meets a room that is sealing (ADR-0026 п.3).
+/// Two suffice in practice — the seal is the only writer that removes a room —
+/// and the third covers a seal whose write had to be retried.
+const SEALED_ATTEMPTS: usize = 3;
 
 /// Server configuration from the environment.
 #[derive(Clone, Debug)]
@@ -219,10 +223,32 @@ fn next_connection() -> u64 {
     CONNECTIONS.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Where a room is in its life: `Open` takes peers, `Sealed` takes none and is
+/// on its way out of the map (ADR-0026).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lifecycle {
+    Open,
+    Sealed,
+}
+
 /// A document room and its connected peers.
 struct RoomState {
     room: Room<SessionModel>,
     peers: HashMap<String, Peer>,
+    /// `Open` until the last peer leaves; a sealed room refuses every join, so
+    /// the room that leaves the map is the one that stopped taking peers first
+    /// (ADR-0026 п.1/п.2).
+    lifecycle: Lifecycle,
+    /// The pair the seal wrote, read back by the store before it counted
+    /// (ADR-0024 п.2). A second writer of a sealed room — `persist_all`, a
+    /// retrying join — is answered from here instead of writing a second
+    /// generation (ADR-0026 п.4).
+    sealed: Option<Committed>,
+    /// One writer per room: the periodic snapshot, a commit, the seal and
+    /// `persist_all` can all be in flight, and the room they write must be one
+    /// state, not one per caller (ADR-0024 п.2, ADR-0026 п.4). A leaf lock:
+    /// no caller holds the room mutex while waiting for it.
+    writes: Arc<Mutex<()>>,
     /// Cabinet session that holds the lease; a different session may join only
     /// as `owner` or after the lease went silent (ADR-0008).
     session: String,
@@ -263,6 +289,46 @@ enum Refusal {
     Unseeded,
     /// The document the client offered is not a model this server can hold.
     BadSeed(String),
+    /// A room was sealing on every attempt: it is on its way out of the map and
+    /// its snapshot could not be finished (ADR-0026 п.3/п.4). Retryable: the
+    /// next join either finishes the seal or finds the room built from it.
+    Sealed,
+}
+
+/// Why a peer did not get a place in the room it was handed (ADR-0026).
+#[derive(Debug)]
+enum RegisterError {
+    /// The room is sealed: it takes no peer and is leaving the map. The caller
+    /// retries against the map instead of registering here (ADR-0026 п.3).
+    Sealed,
+    /// The join is refused by the role, the lease, the room's size or the
+    /// `client_id` (ADR WC-0005, ADR-0008).
+    Refused(Reject),
+}
+
+/// What a join asks for: the document, the copy the client offered, its role and
+/// identity, and where the frames for it go (ADR-0026 п.3).
+struct JoinRequest<'a> {
+    doc: &'a str,
+    seed: Option<&'a [u8]>,
+    role: Role,
+    client_id: &'a str,
+    claims: &'a Claims,
+    tx: &'a mpsc::Sender<ServerMsg>,
+    wants_version: Option<Version>,
+}
+
+/// Why a connection did not get a room with a place in it.
+#[derive(Debug)]
+enum JoinError {
+    /// The room could not be opened at all.
+    Refused(Refusal),
+    /// The room opened but this peer is not admitted to it.
+    Rejected(Reject),
+    /// Every attempt met a room that was sealing and could not be finished:
+    /// the client is asked to reconnect, which lands it on the finished seal or
+    /// on the room the seal left behind (ADR-0026 п.3).
+    Sealed,
 }
 
 /// Read a document from the model JSON a snapshot or a joining client holds.
@@ -277,6 +343,9 @@ impl RoomState {
         RoomState {
             room,
             peers: HashMap::new(),
+            lifecycle: Lifecycle::Open,
+            sealed: None,
+            writes: Arc::new(Mutex::new(())),
             session: String::new(),
             lease_seen: std::time::Instant::now(),
             lease_ttl_secs,
@@ -286,6 +355,23 @@ impl RoomState {
             refused: None,
         }
     }
+
+    /// Seal the room if it is open and has no peers: the last-peer test and the
+    /// transition are one critical section, so a registration that wins the
+    /// room mutex before it is part of the room and one that arrives after is
+    /// refused (ADR-0026 п.2). Returns whether this call sealed the room.
+    fn seal(&mut self) -> bool {
+        if !self.peers.is_empty() || self.lifecycle == Lifecycle::Sealed {
+            return false;
+        }
+        self.lifecycle = Lifecycle::Sealed;
+        true
+    }
+}
+
+/// Whether a room stopped taking peers (ADR-0026 п.1).
+fn is_sealed(room: &Arc<Mutex<RoomState>>) -> bool {
+    room.lock().unwrap_or_else(|poison| poison.into_inner()).lifecycle == Lifecycle::Sealed
 }
 
 /// Counters for `/metrics`.
@@ -320,6 +406,14 @@ pub struct Metrics {
     /// participant (ADR WC-0005). Non-zero means a client is using an id that is
     /// not its own.
     client_ids: AtomicU64,
+    /// Joins that met a room in the sealed state (ADR-0026). Non-zero means the
+    /// join-vs-last-leave window is being hit in production, and every one of
+    /// those joins had to retry against the map instead of registering.
+    sealed_joins: AtomicU64,
+    /// Lookups retried because a room was sealing (ADR-0026 п.3). The price of
+    /// the lifecycle: a join that races the last leave costs one map lookup
+    /// more, and this counter is where that price is visible.
+    seal_retries: AtomicU64,
 }
 
 impl Metrics {
@@ -344,6 +438,8 @@ impl Metrics {
             ("corrupt_snapshots_total", self.corrupt.load(Ordering::Relaxed)),
             ("unseeded_joins_total", self.unseeded.load(Ordering::Relaxed)),
             ("client_id_conflicts_total", self.client_ids.load(Ordering::Relaxed)),
+            ("sealed_joins_total", self.sealed_joins.load(Ordering::Relaxed)),
+            ("seal_retries_total", self.seal_retries.load(Ordering::Relaxed)),
         ] {
             out.push_str(&format!("# TYPE wordcraft_collab_{name} counter\nwordcraft_collab_{name} {value}\n"));
         }
@@ -381,6 +477,18 @@ impl AppState {
     /// only after that (ADR-0024 п.2/п.5): an operation dropped before its
     /// snapshot is durable is an edit nobody can replay.
     fn persist(&self, doc: &str, room: &Arc<Mutex<RoomState>>, source: Option<Vec<u8>>) -> Result<Committed, String> {
+        // One writer per room (ADR-0024 п.2, ADR-0026 п.4): a periodic snapshot,
+        // a commit, the seal and `persist_all` can all be in flight, and the
+        // pair a sealed room needs must be written once, not once per caller.
+        // The gate is a leaf lock, and no caller of `persist` holds the room
+        // mutex, so the ordering writes-then-room cannot deadlock.
+        let writes = room.lock().unwrap_or_else(|poison| poison.into_inner()).writes.clone();
+        let _gate = writes.lock().unwrap_or_else(|poison| poison.into_inner());
+        // A seal may have written the pair while this call waited for the gate.
+        // The room has no peers once sealed, so that state is still current.
+        if let Some(committed) = room.lock().unwrap_or_else(|poison| poison.into_inner()).sealed {
+            return Ok(committed);
+        }
         let (version, epoch, model, dedup, cabinet) = {
             let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
             (guard.room.version(), guard.room.epoch(), guard.room.model().snapshot(), guard.room.dedup(), guard.published.clone())
@@ -392,8 +500,37 @@ impl AppState {
             // the snapshot (ADR-0024 п.5/п.6).
             let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
             guard.room.compact(committed.version);
+            if guard.lifecycle == Lifecycle::Sealed {
+                // The write the seal was waiting for. Every later caller —
+                // `persist_all` that cloned the room before the seal, a join
+                // retrying the seal — is answered from it and writes nothing
+                // (ADR-0026 п.4).
+                guard.sealed = Some(committed);
+            }
         }
         Ok(committed)
+    }
+
+    /// Write the sealed room's last snapshot and take it out of the map — the
+    /// one path that removes a room (ADR-0026 п.4/п.5).
+    ///
+    /// The pair is written once, read back by the store before it counts
+    /// (ADR-0024 п.2) and only then may the room leave the map. A failed write
+    /// leaves the room in place, sealed and retryable: the next join retries it
+    /// from the state it holds, so no second room is built beside it and nothing
+    /// the room had is lost. Returns whether the room left the map.
+    fn drop_sealed(&self, doc: &str, room: &Arc<Mutex<RoomState>>) -> bool {
+        match self.persist(doc, room, None) {
+            Ok(_) => {
+                let mut rooms = self.rooms.lock().unwrap_or_else(|poison| poison.into_inner());
+                rooms.retain(|_, existing| !Arc::ptr_eq(existing, room));
+                true
+            }
+            Err(message) => {
+                log::warn!("snapshot on seal failed for {doc}: {message}; the room stays sealed in the map");
+                false
+            }
+        }
     }
 
     /// The room of `doc`, restored from its stored snapshot when one exists, or
@@ -410,25 +547,59 @@ impl AppState {
     ///
     /// The flag says the room was built from this client's seed; it answers the
     /// join without a snapshot, because the client already holds that state.
-    fn room_for(&self, doc: &str, seed: Option<Vec<u8>>, role: Role) -> Result<(Arc<Mutex<RoomState>>, bool), Refusal> {
-        // A room that is already open costs one lock and no disk work.
-        if let Some(room) = self.open_room(doc) {
-            return Ok((room, false));
+    ///
+    /// A sealed room is never handed out: it takes no peer and is leaving the
+    /// map (ADR-0026 п.3). The caller of this function is the place that retries
+    /// against the map, so every attempt here either returns an open room, a
+    /// room built after the seal finished, or a retryable refusal.
+    fn room_for(&self, doc: &str, seed: Option<&[u8]>, role: Role) -> Result<(Arc<Mutex<RoomState>>, bool), Refusal> {
+        for _ in 0..SEALED_ATTEMPTS {
+            // A room that is already open costs one lock and no disk work.
+            if let Some(room) = self.open_room(doc) {
+                if !is_sealed(&room) {
+                    return Ok((room, false));
+                }
+                // The room is sealing: finish the write it is waiting on and
+                // look at the map again. The seal is the only writer that
+                // removes a room, so this makes progress; the attempt bound
+                // below turns a seal that cannot be finished into a refusal
+                // instead of a loop.
+                Metrics::inc(&self.metrics.sealed_joins);
+                Metrics::inc(&self.metrics.seal_retries);
+                self.drop_sealed(doc, &room);
+                continue;
+            }
+            // Loading and parsing happen with no lock of the room map held: the
+            // model is read under a 64 MiB bound and parsed, and doing that inside
+            // the map would stall every other join, `/metrics` and `persist_all`
+            // (CodeRabbit 4533747484). The map is taken again only to publish the
+            // room, and a join that won the race is reused instead of replaced.
+            let built = self.build_room(doc, seed, role);
+            let mut rooms = self.rooms.lock().unwrap_or_else(|poison| poison.into_inner());
+            if let Some(room) = rooms.get(doc) {
+                if !is_sealed(room) {
+                    return Ok((room.clone(), false));
+                }
+                // A room was sealed between our lookup and this lock: it is on
+                // its way out, so finish it and try again.
+                let room = room.clone();
+                drop(rooms);
+                Metrics::inc(&self.metrics.sealed_joins);
+                Metrics::inc(&self.metrics.seal_retries);
+                self.drop_sealed(doc, &room);
+                continue;
+            }
+            let (state, seeded) = built?;
+            let room = Arc::new(Mutex::new(state));
+            rooms.insert(doc.to_string(), room.clone());
+            return Ok((room, seeded));
         }
-        // Loading and parsing happen with no lock of the room map held: the
-        // model is read under a 64 MiB bound and parsed, and doing that inside
-        // the map would stall every other join, `/metrics` and `persist_all`
-        // (CodeRabbit 4533747484). The map is taken again only to publish the
-        // room, and a join that won the race is reused instead of replaced.
-        let built = self.build_room(doc, seed, role);
-        let mut rooms = self.rooms.lock().unwrap_or_else(|poison| poison.into_inner());
-        if let Some(room) = rooms.get(doc) {
-            return Ok((room.clone(), false));
-        }
-        let (state, seeded) = built?;
-        let room = Arc::new(Mutex::new(state));
-        rooms.insert(doc.to_string(), room.clone());
-        Ok((room, seeded))
+        // Every attempt met a room that was sealing and stayed in the map: its
+        // pair could not be written, so no room may be built beside it
+        // (ADR-0026 п.4/п.5). The refusal is retryable — the client reconnects
+        // and either the write lands or an operator looks at the store.
+        log::warn!("every join attempt for {doc} met a room that is sealing; asking the client to reconnect");
+        Err(Refusal::Sealed)
     }
 
     /// The room of `doc` if one is open already.
@@ -443,7 +614,7 @@ impl AppState {
     /// whether the result is published. Two joins of a never-opened document
     /// can therefore both build it; the loser's copy is dropped and the room
     /// that is already in the map is the one they share.
-    fn build_room(&self, doc: &str, seed: Option<Vec<u8>>, role: Role) -> Result<(RoomState, bool), Refusal> {
+    fn build_room(&self, doc: &str, seed: Option<&[u8]>, role: Role) -> Result<(RoomState, bool), Refusal> {
         let (state, seeded) = match self.store.load(doc) {
             Ok(Some(snapshot)) => {
                 let mut document =
@@ -472,7 +643,7 @@ impl AppState {
                 // Only a client that may write can create the room: a read-only
                 // session arriving first waits for one that may edit.
                 let Some(model) = seed.filter(|_| role.can_write()) else { return Err(Refusal::Unseeded) };
-                let document = read_model(&model).map_err(Refusal::BadSeed)?;
+                let document = read_model(model).map_err(Refusal::BadSeed)?;
                 log::info!("opening the room for {doc} from a joining client's copy ({} bytes of model)", model.len());
                 (RoomState::new(Room::new(SessionModel::from_document(document)), self.cfg.lease_ttl_secs, None), true)
             }
@@ -488,6 +659,40 @@ impl AppState {
 
     pub fn room_count(&self) -> usize {
         self.rooms.lock().unwrap_or_else(|poison| poison.into_inner()).len()
+    }
+
+    /// Obtain the room of `doc` and a place in it, retrying a join that met a
+    /// room being sealed (ADR-0026 п.3).
+    ///
+    /// `room_for` never hands out a sealed room, but a room can be sealed
+    /// between that lookup and this registration: the registration then answers
+    /// "sealed" and registers nothing. The handle is dropped, the map is read
+    /// again, and the join either lands in the room that replaced the sealed one
+    /// or builds a room from the snapshot the seal wrote. The attempts are
+    /// bounded; running out is `JoinError::Sealed`, which the caller answers
+    /// with a retryable refusal rather than a second room.
+    fn join(&self, request: JoinRequest<'_>) -> Result<(Arc<Mutex<RoomState>>, bool, Registration), JoinError> {
+        let JoinRequest { doc, seed, role, client_id, claims, tx, wants_version } = request;
+        let mut attempt = 1;
+        loop {
+            let (room, seeded) = self.room_for(doc, seed, role).map_err(JoinError::Refused)?;
+            match register(self, &room, client_id, claims, role, tx, wants_version) {
+                Ok(registration) => return Ok((room, seeded, registration)),
+                Err(RegisterError::Refused(reject)) => return Err(JoinError::Rejected(reject)),
+                Err(RegisterError::Sealed) => {
+                    Metrics::inc(&self.metrics.sealed_joins);
+                    Metrics::inc(&self.metrics.seal_retries);
+                    if attempt >= SEALED_ATTEMPTS {
+                        log::warn!("every attempt to join {doc} met a room that is sealing; asking the client to reconnect");
+                        return Err(JoinError::Sealed);
+                    }
+                    attempt += 1;
+                    // The handle is dropped here, so the next attempt cannot
+                    // register into this room: `room_for` finishes the seal and
+                    // looks at the map again.
+                }
+            }
+        }
     }
 
     /// Write every open room before the process exits. A container gets
@@ -579,6 +784,13 @@ async fn refuse_join(sink: &mut futures_util::stream::SplitSink<WebSocket, Messa
             log::warn!("refusing a join for {doc}: the document it offered cannot be used ({reason})");
             refuse(sink, state, "the document this client offered could not be read").await
         }
+        Refusal::Sealed => {
+            // Retryable, unlike the three above: the room is not broken, it is
+            // on its way out of the map, and a reconnect lands in the room the
+            // seal left behind (ADR-0026 п.3).
+            log::warn!("refusing a join for {doc}: the room kept sealing; the client is asked to retry");
+            refuse_with(sink, state, RejectCode::Stale, "this document's room is being sealed; reconnect to join it").await
+        }
     }
 }
 
@@ -586,7 +798,12 @@ async fn refuse_join(sink: &mut futures_util::stream::SplitSink<WebSocket, Messa
 /// and not retryable: the client cannot fix what the server or an operator has
 /// to.
 async fn refuse(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, message: &str) {
-    let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, message);
+    refuse_with(sink, state, RejectCode::Invalid, message).await;
+}
+
+/// Answer a join with a refusal of an explicit code and end the connection.
+async fn refuse_with(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, code: RejectCode, message: &str) {
+    let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), code, message);
     let _ = send(sink, &ServerMsg::Rejected { reject }, state.cfg.heartbeat).await;
     let _ = sink.close().await;
 }
@@ -598,35 +815,44 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let Some(Handshake { client_id, claims, role, wants_version, seed }) = authenticate(&mut sink, &mut stream, &state).await else {
         return;
     };
-    let opened = {
-        // Building a room reads and parses the snapshot: blocking file work on a
-        // 64 MiB bound that must not run on an async worker either
-        // (CodeRabbit 4533747484).
-        let state = state.clone();
-        let doc = claims.doc.clone();
-        tokio::task::spawn_blocking(move || state.room_for(&doc, seed, role)).await
-    };
-    let (room, seeded) = match opened {
-        Ok(Ok(parts)) => parts,
-        // Joining would open an empty room whose snapshot overwrites the stored
-        // file (ADR WC-0003) or replaces the document the client has open
-        // (ADR WC-0004).
-        Ok(Err(refusal)) => return refuse_join(&mut sink, &state, &claims.doc, refusal).await,
-        Err(_) => {
-            log::error!("the room of {} could not be opened: the task ended unexpectedly", claims.doc);
-            return;
-        }
-    };
     // Every write to this peer is bounded by one heartbeat period: a peer that
     // stopped reading is closed instead of holding the connection open with a
     // document the room no longer has (ADR WC-0002).
     let limit = state.cfg.heartbeat;
     let (tx, rx) = mpsc::channel::<ServerMsg>(state.cfg.peer_queue.max(1));
-    let registration = match register(&state, &room, &client_id, &claims, role, &tx, wants_version) {
-        Ok(registration) => registration,
-        Err(reject) => {
+    let joined = {
+        // Building a room reads and parses the snapshot, and a join that met a
+        // room being sealed builds the next one: blocking file work on a 64 MiB
+        // bound that must not run on an async worker either
+        // (CodeRabbit 4533747484).
+        let state = state.clone();
+        let doc = claims.doc.clone();
+        let client_id = client_id.clone();
+        let claims = claims.clone();
+        tokio::task::spawn_blocking(move || {
+            state.join(JoinRequest { doc: &doc, seed: seed.as_deref(), role, client_id: &client_id, claims: &claims, tx: &tx, wants_version })
+        })
+        .await
+    };
+    let (room, seeded, registration) = match joined {
+        Ok(Ok(parts)) => parts,
+        // Joining would open an empty room whose snapshot overwrites the stored
+        // file (ADR WC-0003) or replaces the document the client has open
+        // (ADR WC-0004), or the room kept sealing (ADR-0026 п.3).
+        Ok(Err(JoinError::Refused(refusal))) => return refuse_join(&mut sink, &state, &claims.doc, refusal).await,
+        Ok(Err(JoinError::Rejected(reject))) => {
             let _ = send(&mut sink, &ServerMsg::Rejected { reject }, limit).await;
             let _ = sink.close().await;
+            return;
+        }
+        Ok(Err(JoinError::Sealed)) => {
+            // Retryable, and the transport answers it: the client reconnects and
+            // lands on the finished seal or on the room the seal left behind.
+            let _ = refuse_with(&mut sink, &state, RejectCode::Stale, "this document's room is being sealed; reconnect to join it").await;
+            return;
+        }
+        Err(_) => {
+            log::error!("the room of {} could not be opened: the task ended unexpectedly", claims.doc);
             return;
         }
     };
@@ -830,8 +1056,14 @@ fn register(
     role: Role,
     tx: &mpsc::Sender<ServerMsg>,
     wants_version: Option<Version>,
-) -> Result<Registration, Reject> {
+) -> Result<Registration, RegisterError> {
     let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+    // A sealed room takes no peer: it is on its way out of the map and the
+    // snapshot it writes is the state it leaves (ADR-0026 п.3). Nothing is
+    // registered; the caller retries against the map.
+    if guard.lifecycle == Lifecycle::Sealed {
+        return Err(RegisterError::Sealed);
+    }
     const MAX_PARTICIPANTS: usize = 8;
     if let Some(existing) = guard.peers.get(client_id) {
         // The id is taken. Only the same account in the same cabinet session may
@@ -845,11 +1077,11 @@ fn register(
             log::warn!("refusing a join: the client id it registered belongs to another participant");
             let reject =
                 Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "this client id belongs to another participant");
-            return Err(reject);
+            return Err(RegisterError::Refused(reject));
         }
     } else if guard.peers.len() >= MAX_PARTICIPANTS {
         let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::TooLarge, "the room is full");
-        return Err(reject);
+        return Err(RegisterError::Refused(reject));
     }
     // The lease protects the document from a *writer* whose session was
     // superseded. A role that cannot write takes nothing and can damage
@@ -867,7 +1099,7 @@ fn register(
         let stale = guard.lease_seen.elapsed().as_secs() >= guard.lease_ttl_secs;
         if role.can_write() && role != Role::Owner && (lease_alive || !stale) {
             let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Lease, "another session holds this document");
-            return Err(reject);
+            return Err(RegisterError::Refused(reject));
         }
         if role.can_write() {
             guard.session = claims.sid.clone();
@@ -1367,13 +1599,21 @@ where
 /// another connection with the same `client_id` replaced this one, the entry is
 /// not ours and stays — no `left` is broadcast and the room is not treated as
 /// empty (ADR WC-0005).
+///
+/// Removing the peer, the last-peer test and the transition to `Sealed` are one
+/// critical section (ADR-0026 п.2): a registration that wins the room mutex
+/// before it is part of the room and keeps it non-empty, and one that arrives
+/// after it is refused and retried against the map. The snapshot is written
+/// inside that seal, before the room leaves the map (ADR-0026 п.4).
 fn leave(state: &AppState, doc: &str, room: &Arc<Mutex<RoomState>>, client_id: &str, conn: u64) {
-    let gone = {
+    let (gone, sealed) = {
         let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
         let ours = guard.peers.get(client_id).is_some_and(|peer| peer.conn == conn);
-        if ours { guard.peers.remove(client_id) } else { None }
+        let gone = ours && guard.peers.remove(client_id).is_some();
+        let sealed = guard.peers.is_empty() && guard.seal();
+        (gone, sealed)
     };
-    if gone.is_some() {
+    if gone {
         let targets: Vec<Peer> = {
             let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
             guard.peers.values().cloned().collect()
@@ -1382,17 +1622,11 @@ fn leave(state: &AppState, doc: &str, room: &Arc<Mutex<RoomState>>, client_id: &
             queue_ephemeral(peer, &ServerMsg::Left { client_id: client_id.to_string() });
         }
     }
-    let empty = {
-        let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-        guard.peers.is_empty()
-    };
-    if empty {
-        // The last peer left: keep the room's state on disk before dropping it.
-        if let Err(message) = state.persist(doc, room, None) {
-            log::warn!("snapshot on leave failed for {doc}: {message}");
-        }
-        let mut rooms = state.rooms.lock().unwrap_or_else(|poison| poison.into_inner());
-        rooms.retain(|_, existing| !Arc::ptr_eq(existing, room));
+    if sealed && !state.drop_sealed(doc, room) {
+        // The room keeps its place in the map, sealed: the next join retries the
+        // write from the state the room holds, so no second room is built beside
+        // it and nothing in it is lost (ADR-0026 п.4).
+        log::warn!("the room for {doc} stays sealed in the map for the next join");
     }
 }
 

@@ -203,7 +203,8 @@ fn blank_model() -> Vec<u8> {
 /// nothing is stored for is built from it, a room that has a snapshot ignores it
 /// (ADR WC-0004).
 fn open_room(state: &AppState, doc: &str) -> std::sync::Arc<std::sync::Mutex<crate::RoomState>> {
-    state.room_for(doc, Some(blank_model()), wordcraft_collab::room::Role::Editor).expect("a room").0
+    let model = blank_model();
+    state.room_for(doc, Some(&model), wordcraft_collab::room::Role::Editor).expect("a room").0
 }
 
 async fn connect(
@@ -679,11 +680,12 @@ fn a_taken_client_id_is_only_removed_by_the_connection_that_registered_it() {
     // Another account in the same cabinet session may not claim the id.
     let refused = super::register(&state, &room, "alice", &claims("bob", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None);
     match refused {
-        Err(reject) => {
+        Err(crate::RegisterError::Refused(reject)) => {
             assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Invalid);
             assert!(!reject.retryable, "a claim on a taken id is not for the client to retry");
         }
         Ok(_) => panic!("a second account registered someone else's client id"),
+        Err(crate::RegisterError::Sealed) => panic!("an open room answered a registration with sealed"),
     }
     assert_eq!(state.metrics.client_ids.load(std::sync::atomic::Ordering::Relaxed), 1, "the refused claim is counted");
     assert_eq!(room.lock().expect("room lock").peers["alice"].sub, "alice", "the refused claim left the peer alone");
@@ -722,7 +724,13 @@ fn a_takeover_the_lease_refuses_leaves_the_old_connection_alone() {
     // Alice's reconnect carries her own `sid`, so the client-id check lets it
     // through, and the lease check is what refuses it.
     let refused = super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None);
-    assert_eq!(refused.err().expect("the lease is held by another session").code, wordcraft_collab::wire::RejectCode::Lease);
+    match refused {
+        Err(crate::RegisterError::Refused(reject)) => {
+            assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Lease);
+        }
+        Ok(_) => panic!("a takeover the lease refuses is not registered"),
+        Err(crate::RegisterError::Sealed) => panic!("an open room answered a registration with sealed"),
+    }
     assert!(!alice.superseded.is_set(), "a refused takeover must not retire the connection that still works");
     assert_eq!(room.lock().expect("room lock").peers["alice"].conn, alice.conn, "the room keeps the old connection");
 }
@@ -740,7 +748,8 @@ fn two_first_joins_share_the_room_that_was_published() {
         .map(|_| {
             let state = state.clone();
             std::thread::spawn(move || {
-                state.room_for("doc-first-joins", Some(blank_model()), wordcraft_collab::room::Role::Editor).map(|(room, seeded)| {
+                let model = blank_model();
+                state.room_for("doc-first-joins", Some(&model), wordcraft_collab::room::Role::Editor).map(|(room, seeded)| {
                     // What `register` does next: the join plan of the room the
                     // caller got, asked the way a first join asks (no version).
                     let snapshot = room.lock().expect("room lock").room.join(None, false).snapshot.is_some();
@@ -756,6 +765,243 @@ fn two_first_joins_share_the_room_that_was_published() {
     assert!(opened.iter().filter(|(_, seeded, _)| *seeded).count() <= 1, "at most the published room was built from the client's copy");
     assert!(opened.iter().all(|(_, _, snapshot)| *snapshot), "a losing join is answered with the published room's snapshot");
     let _ = std::fs::remove_dir_all(state.store.doc_dir("doc-first-joins"));
+}
+
+/// Put one paragraph of text in the room; answers the version the operation
+/// left, so a test can name the state a seal has to carry. `seq` names the
+/// operation, so two writes in one test are two operations and not a retry.
+fn write_one(room: &std::sync::Arc<std::sync::Mutex<crate::RoomState>>, seq: u64, text: &str) -> u64 {
+    let (node, base) = {
+        let mut guard = room.lock().expect("room lock");
+        let node = guard.room.join(None, false).nodes.first().expect("a node").id;
+        (node, guard.room.version())
+    };
+    let op = insert("alice", seq, base, node, 0, text);
+    room.lock().expect("room lock").room.submit("alice", wordcraft_collab::room::Role::Editor, op).expect("apply").version
+}
+
+/// One counter of `/metrics`, by the name it renders under.
+fn counter(metrics: &str, name: &str) -> u64 {
+    metrics.lines().find_map(|line| line.strip_prefix(&format!("wordcraft_collab_{name} ")).and_then(|value| value.trim().parse().ok())).unwrap_or(0)
+}
+
+/// The text of the room's first paragraph: what a rebuild from a snapshot must
+/// carry.
+fn first_paragraph(room: &std::sync::Arc<std::sync::Mutex<crate::RoomState>>) -> String {
+    room.lock()
+        .expect("room lock")
+        .room
+        .model()
+        .session()
+        .doc
+        .body
+        .first()
+        .and_then(|block| block.as_para())
+        .map(|para| para.text.clone())
+        .unwrap_or_default()
+}
+
+/// Join the room of `doc` the way a socket does: obtain the room and take a
+/// place in it, retrying a room that is sealing (ADR-0026 п.3). The join is an
+/// owner in another cabinet session, so the lease is not what these tests
+/// measure.
+fn join_as(
+    state: &AppState,
+    doc: &str,
+    client: &str,
+) -> Result<(std::sync::Arc<std::sync::Mutex<crate::RoomState>>, bool, crate::Registration), crate::JoinError> {
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let claims = claims(client, "sid-2");
+    state.join(crate::JoinRequest {
+        doc,
+        seed: None,
+        role: wordcraft_collab::room::Role::Owner,
+        client_id: client,
+        claims: &claims,
+        tx: &tx,
+        wants_version: None,
+    })
+}
+
+/// A join that races the last peer's leave lands in the room that is still in
+/// the map or in the one built from the sealed snapshot — never in a room that
+/// is neither (ADR-0026, the invariant `TASK.md` §7 states).
+#[test]
+fn a_join_that_races_the_last_leave_never_lands_outside_the_map() {
+    let state = AppState::new(config_for("seal-race"));
+    for pass in 0..12 {
+        let doc = format!("doc-seal-race-{pass}");
+        let room = open_room(&state, &doc);
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let alice =
+            super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None).expect("alice joins");
+        assert_eq!(write_one(&room, 1, "Hi"), 1, "pass {pass}: one paragraph in the room");
+
+        // The two events the ADR is about, released together: the last peer
+        // leaves (which seals and drops the room) and a join asks for the room.
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let leaver = {
+            let state = state.clone();
+            let room = room.clone();
+            let doc = doc.clone();
+            let gate = gate.clone();
+            std::thread::spawn(move || {
+                gate.wait();
+                super::leave(&state, &doc, &room, "alice", alice.conn);
+            })
+        };
+        let joiner = {
+            let state = state.clone();
+            let doc = doc.clone();
+            let gate = gate.clone();
+            std::thread::spawn(move || {
+                gate.wait();
+                join_as(&state, &doc, "bob")
+            })
+        };
+        leaver.join().expect("the leaving thread");
+        let (joined, _, _) = joiner.join().expect("the joining thread").expect("the join lands in a room");
+
+        // A peer is registered in the room, so no seal may have taken it out of
+        // the map: the room a join got is the room the document has.
+        assert_eq!(state.room_count(), 1, "pass {pass}: one room for the document, not a second beside it");
+        let in_map = state.open_room(&doc).expect("pass {pass}: the document's room is in the map");
+        assert!(std::sync::Arc::ptr_eq(&in_map, &joined), "pass {pass}: the join landed in a room nobody can find");
+        assert!(in_map.lock().expect("room lock").peers.contains_key("bob"), "pass {pass}: the peer is in the room it landed in");
+        assert_eq!(first_paragraph(&in_map), "Hi", "pass {pass}: the text the seal carried survives the race");
+
+        // The join's own leave ends the pass; the document's room goes away.
+        let bob = in_map.lock().expect("room lock").peers["bob"].conn;
+        super::leave(&state, &doc, &in_map, "bob", bob);
+        assert_eq!(state.room_count(), 0, "pass {pass}: the last leave drops the room again");
+        let _ = std::fs::remove_dir_all(state.store.doc_dir(&doc));
+    }
+}
+
+/// Two joins that land between the seal decision and its write leave one room,
+/// one snapshot and one generation (ADR-0026, ADR-0024).
+#[test]
+fn two_joins_during_one_seal_leave_one_room_and_one_generation() {
+    let state = AppState::new(config_for("seal-two-joins"));
+    let doc = "doc-seal-two-joins";
+    let room = open_room(&state, doc);
+    assert_eq!(write_one(&room, 1, "Hi"), 1);
+    {
+        // The last peer has left and the seal is decided; the write it waits
+        // for has not happened yet. Held open on purpose: this is the window
+        // ADR-0026 п.3 is about.
+        let mut guard = room.lock().expect("room lock");
+        assert!(guard.seal(), "an empty open room seals");
+    }
+
+    let handles: Vec<_> = ["bob", "carol"]
+        .into_iter()
+        .map(|client| {
+            let state = state.clone();
+            std::thread::spawn(move || join_as(&state, doc, client))
+        })
+        .collect();
+    let joined: Vec<_> =
+        handles.into_iter().map(|handle| handle.join().expect("thread").expect("the join lands in the room built after the seal")).collect();
+
+    assert!(std::sync::Arc::ptr_eq(&joined[0].0, &joined[1].0), "both joins share one room");
+    assert_eq!(state.room_count(), 1, "one room for the document, not one per join");
+    let in_map = state.open_room(doc).expect("the room is in the map");
+    assert!(std::sync::Arc::ptr_eq(&in_map, &joined[0].0));
+    assert_eq!(first_paragraph(&in_map), "Hi", "the room the joins landed in is the state the seal wrote");
+
+    // The seal wrote once: the generation is the first the document has, and
+    // the retrying joins wrote nothing beside it.
+    let pair = room.lock().expect("room lock").sealed.expect("the seal wrote a pair");
+    assert_eq!(pair.version, 1);
+    assert_eq!(pair.generation, 1, "one generation, one pair");
+    let meta = std::fs::read_to_string(state.store.doc_dir(doc).join("meta")).expect("meta");
+    assert!(meta.contains("generation=1\n"), "{meta}");
+    assert!(!meta.contains("generation=2"), "the seal wrote one pair, not two: {meta}");
+    let metrics = state.metrics.render(0);
+    assert!(counter(&metrics, "sealed_joins_total") >= 2, "both joins met the sealed room: {metrics}");
+
+    let _ = std::fs::remove_dir_all(state.store.doc_dir(doc));
+}
+
+/// A seal whose snapshot cannot be written leaves the room in the map, sealed
+/// and retryable: the joins against it are refused for a retry instead of
+/// building a second room, and the first join after the store recovers is
+/// answered from the room's own state with nothing lost (ADR-0026 п.4).
+#[test]
+fn a_seal_that_cannot_be_written_keeps_the_room_and_answers_the_next_join() {
+    let state = AppState::new(config_for("seal-failed-write"));
+    let doc = "doc-seal-failed-write";
+    let room = open_room(&state, doc);
+    assert_eq!(write_one(&room, 1, "Hi"), 1);
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let alice =
+        super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None).expect("alice joins");
+
+    // The store cannot be written: the document's directory is a file. Nothing
+    // about the room changed, only the place its snapshot has to go.
+    let dir = state.store.doc_dir(doc);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(state.store.dir()).expect("the store's root exists");
+    std::fs::write(&dir, b"not a directory").expect("block the store");
+
+    super::leave(&state, doc, &room, "alice", alice.conn);
+    assert_eq!(state.room_count(), 1, "the seal that could not be written keeps the room in the map");
+    assert!(crate::is_sealed(&room), "the room stays sealed, not open to peers");
+    assert!(state.open_room(doc).is_some_and(|existing| std::sync::Arc::ptr_eq(&existing, &room)));
+
+    // Every attempt meets the same room and cannot finish it: the refusal is a
+    // retry, not a second room and not a panic.
+    match join_as(&state, doc, "bob") {
+        Err(crate::JoinError::Refused(crate::Refusal::Sealed)) => {}
+        Ok(_) => panic!("a join into a room that cannot be sealed must not land"),
+        Err(other) => panic!("expected a retryable sealed refusal, got {other:?}"),
+    }
+    assert_eq!(state.room_count(), 1, "the refused joins built no room beside it");
+    assert!(state.metrics.render(0).contains("seal_retries_total"), "the retries are visible: {}", state.metrics.render(0));
+
+    // The store is writable again: the seal finishes from the state the room
+    // holds and the join is answered from that snapshot, with no loss.
+    std::fs::remove_file(&dir).expect("unblock the store");
+    let (joined, _, _) = join_as(&state, doc, "bob").expect("the join finishes the seal and lands in the room it leaves");
+    assert!(!std::sync::Arc::ptr_eq(&joined, &room), "the room the join lands in is built from the sealed snapshot");
+    assert_eq!(joined.lock().expect("room lock").room.version(), 1, "the version the seal carried");
+    assert_eq!(first_paragraph(&joined), "Hi", "the text the seal carried");
+    assert_eq!(state.room_count(), 1, "one room for the document");
+
+    let _ = std::fs::remove_dir_all(state.store.doc_dir(doc));
+}
+
+/// `persist_all` that cloned the room before the seal writes the pair the seal
+/// was going to write — and then the seal writes nothing: one pair, one
+/// generation (ADR-0026 п.4).
+#[test]
+fn persist_all_during_a_seal_writes_one_pair() {
+    let state = AppState::new(config_for("seal-persist-all"));
+    let doc = "doc-seal-persist-all";
+    let room = open_room(&state, doc);
+    assert_eq!(write_one(&room, 1, "Hi"), 1);
+    let base = state.persist(doc, &room, None).expect("the first pair");
+    assert_eq!(write_one(&room, 2, " there"), 2);
+
+    {
+        // The seal is decided while `persist_all` has the room on its list.
+        let mut guard = room.lock().expect("room lock");
+        assert!(guard.seal());
+    }
+    state.persist_all().expect("persist_all writes the sealed room");
+    assert!(state.drop_sealed(doc, &room), "the seal takes the room out of the map");
+
+    // The second writer is answered from the pair, not from a new generation.
+    let after = state.persist(doc, &room, None).expect("the sealed pair");
+    assert_eq!(after.generation, base.generation + 1, "one generation for the seal, not two");
+    assert_eq!(after.version, 2);
+    assert_eq!(state.room_count(), 0);
+    let meta = std::fs::read_to_string(state.store.doc_dir(doc).join("meta")).expect("meta");
+    assert!(meta.contains(&format!("generation={}\n", base.generation + 1)), "{meta}");
+    assert!(!meta.contains(&format!("generation={}\n", base.generation + 2)), "one pair: {meta}");
+
+    let _ = std::fs::remove_dir_all(state.store.doc_dir(doc));
 }
 
 /// A sink whose every write fails, standing in for the author's connection when
@@ -1131,9 +1377,12 @@ async fn a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten() {
 
     // Absence is not damage: a document nothing was stored for opens from the
     // copy a joining client brings (ADR WC-0004).
-    let (absent, seeded) = state
-        .room_for("doc-absent", Some(blank_model()), wordcraft_collab::room::Role::Editor)
-        .expect("an absent snapshot opens a room from the client's copy");
+    let (absent, seeded) = {
+        let model = blank_model();
+        state
+            .room_for("doc-absent", Some(&model), wordcraft_collab::room::Role::Editor)
+            .expect("an absent snapshot opens a room from the client's copy")
+    };
     assert!(seeded, "the room is built from the copy, not from an empty document");
     assert_eq!(absent.lock().expect("room lock").room.version(), 0, "a new document starts at version 0");
     assert_eq!(state.room_count(), 1);
@@ -1240,7 +1489,13 @@ fn a_second_session_needs_the_owner_role() {
     assert!(super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
 
     let denied = super::register(&state, &room, "bob", &claims("bob", "sid-2"), wordcraft_collab::room::Role::Editor, &tx, None);
-    assert_eq!(denied.err().expect("a foreign session needs the owner").code, wordcraft_collab::wire::RejectCode::Lease);
+    match denied {
+        Err(crate::RegisterError::Refused(reject)) => {
+            assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Lease, "a foreign session needs the owner");
+        }
+        Ok(_) => panic!("a second cabinet session joined without the owner role"),
+        Err(crate::RegisterError::Sealed) => panic!("an open room answered a registration with sealed"),
+    }
 
     assert!(super::register(&state, &room, "carol", &claims("carol", "sid-3"), wordcraft_collab::room::Role::Owner, &tx, None).is_ok());
 }
