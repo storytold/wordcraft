@@ -180,18 +180,75 @@ fn date_time_dialog_uses_saved_pt_br_language() {
     assert_eq!(f.params()["update"], false);
 }
 
-/// Language tags with primary subtag `pt` (such as `pt_BR` or `pt-PT`) are normalized to `pt-BR`.
+/// A saved Portuguese language keeps its country: a `pt` tag naming Portugal (`pt-PT`, `pt_PT.UTF-8`,
+/// `pt-Latn-PT`) or a region that writes like it (`pt-AO`, `pt_MZ`) opens as `pt-PT`, `pt` alone or
+/// Brazil as `pt-BR`, also when an extension names Portugal (`pt-BR-t-pt-PT`). Portugal used to be
+/// turned into Brazil.
 #[test]
 fn date_time_dialog_normalizes_portuguese_language_tags() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-    a.ui.date_time_language = "pt_BR".into();
-    let InsertDialog::DateTime(f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
-    assert_eq!(f.language, "pt-BR");
-    assert_eq!(f.format, "dd/MM/yyyy");
+    for (saved, language) in [
+        ("pt_BR", "pt-BR"),
+        ("pt", "pt-BR"),
+        ("pt-x-pt", "pt-BR"),
+        ("pt-BR-t-pt-PT", "pt-BR"),
+        ("pt-BR-u-rg-ptzzzz", "pt-BR"),
+        ("pt-US", "pt-BR"),
+        ("pt-AO", "pt-PT"),
+        ("pt_MZ.UTF-8", "pt-PT"),
+        ("pt-PT", "pt-PT"),
+        ("pt_PT.UTF-8", "pt-PT"),
+        ("pt_PT@euro", "pt-PT"),
+        ("pt-Latn-PT", "pt-PT"),
+        ("PT-pt", "pt-PT"),
+        ("en-GB", "en-US"),
+    ] {
+        a.ui.date_time_language = saved.into();
+        let InsertDialog::DateTime(f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
+        assert_eq!(f.language, language, "{saved}");
+        let pictures = if language == "en-US" { "M/d/yyyy" } else { "dd/MM/yyyy" };
+        assert_eq!(f.format, pictures, "{saved}");
+    }
+}
 
-    a.ui.date_time_language = "pt-PT".into();
-    let InsertDialog::DateTime(f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
-    assert_eq!(f.language, "pt-BR");
+/// Choosing Portuguese (Portugal) in the dialog's own Language list inserts the date tagged `pt-PT`,
+/// and a Portuguese picture chosen first stays chosen.
+#[test]
+fn date_time_dialog_inserts_european_portuguese() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.ui.language = "en".into();
+    app.ui.date_time_language = "pt-BR".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("ui.dialog", json!({"name": "dateTime"})).unwrap();
+    h.run_steps(4);
+    let sample = wordcraft_engine::cmd::insert::format_date_in("d 'de' MMMM 'de' yyyy", Some("pt-PT"));
+    h.get_by_label(&sample).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Window, "Date and Time").get_by_role(Role::ComboBox).click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Portuguese (Portugal)").click();
+    h.run_steps(3);
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.language == "pt-PT" && f.format == "d 'de' MMMM 'de' yyyy")
+    ));
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "successful insertion closes the dialog");
+    let doc = &h.state().session.doc;
+    assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), sample);
+    let para = doc.para_at(&doc.start_of(wordcraft_doc::StoryRef::Body)).expect("inserted paragraph");
+    assert_eq!(para.props_of_char(0).lang.as_deref(), Some("pt-PT"));
 }
 
 /// Click the real egui language menu, date picture, checkbox and OK; ensure the resulting
