@@ -66,6 +66,55 @@ fn a_read_only_command_is_refused() {
     assert_eq!(err.code, RejectCode::Invalid);
 }
 
+/// ADR-0023: a parameter that names a file is untrusted. `insert.picture` with a
+/// server path is refused as `forbidden` **before** the command runs, so the
+/// document, the node map and the journal are exactly what they were, and the
+/// same refusal reaches every replica of the same room.
+#[test]
+fn insert_picture_with_a_server_path_is_refused_before_the_document_changes() {
+    // Two replicas of the same room: the same document, the same version.
+    let mut first = room();
+    let mut second = room();
+    let first_node = node(&mut first);
+    let second_node = node(&mut second);
+    assert_eq!(first_node, second_node, "both replicas address the same node");
+    let before = first.model().snapshot();
+    assert_eq!(second.model().snapshot(), before, "the two replicas start on the same document");
+
+    for replica in [&mut first, &mut second] {
+        let err = replica
+            .submit(
+                "alice",
+                Role::Editor,
+                op("a", 1, 0, OpKind::Command, first_node, 0, json!({"command": "insert.picture", "params": {"path": "/etc/hostname"}})),
+            )
+            .expect_err("a server path is refused");
+        assert_eq!(err.code, RejectCode::Forbidden, "{}", err.message);
+        assert_eq!(replica.version(), 0, "the refused operation was not appended to the journal");
+        assert_eq!(replica.model().snapshot(), before, "the document is byte-for-byte unchanged");
+    }
+
+    // The way out the refusal names: the bytes inline. With `data` in the same
+    // operation the path is only a label, so the policy lets it through and the
+    // engine refuses the bytes (they are not an image), not the parameter.
+    for params in [json!({"data": "bm90IGFuIGltYWdl"}), json!({"path": "/tmp/label.png", "data": "bm90IGFuIGltYWdl"})] {
+        let err = first
+            .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, first_node, 0, json!({"command": "insert.picture", "params": params})))
+            .expect_err("not an image");
+        assert_ne!(err.code, RejectCode::Forbidden, "inline bytes are not what the path rule refuses: {}", err.message);
+    }
+
+    // A command with no inline form is refused whenever it names a file, even
+    // though its parameter is a bare path.
+    for (command, params) in [("insert.textFromFile", json!({"path": "/etc/hostname"})), ("references.sources", json!({"import": "~/Sources.xml"}))] {
+        let err = first
+            .submit("alice", Role::Editor, op("a", 2, 0, OpKind::Command, first_node, 0, json!({"command": command, "params": params})))
+            .expect_err("refused");
+        assert_eq!(err.code, RejectCode::Forbidden, "{command}: {}", err.message);
+        assert_eq!(first.model().snapshot(), before, "{command} did not change the document");
+    }
+}
+
 #[test]
 fn primitives_still_work_behind_the_session() {
     let mut room = room();

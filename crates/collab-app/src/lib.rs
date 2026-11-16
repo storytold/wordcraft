@@ -288,12 +288,32 @@ pub struct WelcomeState {
 }
 
 impl WelcomeState {
-    pub fn after_welcome(divergence: Divergence, head: Version, dropped: Vec<OpId>) -> WelcomeState {
+    /// What a `welcome` leaves the session in.
+    ///
+    /// `resync` is the room's own word that its document is on its way and will
+    /// replace this one (ADR-0025): the session reads `Resyncing` from the
+    /// moment the welcome is applied, whatever emptied the queue, because an
+    /// edit planned now would be taken by that snapshot without a word. A
+    /// paused session stays `Diverged`: an edit the room never received is a
+    /// stronger reason than a document that is coming (ADR WC-0006).
+    pub fn after_welcome(divergence: Divergence, head: Version, dropped: Vec<OpId>, resync: bool) -> WelcomeState {
         let restore = Restore::from_welcome(head, dropped);
-        let status = if restore.is_some() && !divergence.is_paused() { Status::Resyncing } else { divergence.status_after_welcome() };
+        let status = if divergence.is_paused() {
+            divergence.status_after_welcome()
+        } else if resync || restore.is_some() {
+            Status::Resyncing
+        } else {
+            Status::InSync
+        };
         WelcomeState { status, restore }
     }
 }
+
+/// Why a session reads `Resyncing` after a welcome: the room's document is on
+/// its way and will replace this one (ADR-0025). One wording for both hosts, so
+/// the panel and the status bar cannot tell the writer two different stories
+/// about the same window.
+pub const RESYNC_REASON: &str = "The room is sending its document; editing resumes when it lands";
 
 /// Turn a local command into the operations the room expects, mapping a
 /// planning failure to the pause it causes. A diff that cannot address this
@@ -628,7 +648,7 @@ impl Collab {
 
     fn on_event(&mut self, event: Event, session: &mut Session) {
         match event {
-            Event::Welcome { version, role, participants, dropped, .. } => {
+            Event::Welcome { version, resync, role, participants, dropped, .. } => {
                 // The room's head is this base, in both directions (ADR
                 // WC-0008): a restored room answers below it, and keeping the
                 // higher number would plan the next operation on a document the
@@ -642,8 +662,13 @@ impl Collab {
                 // A handshake is not a snapshot: `Offline` or `Connecting` never
                 // cleared the divergence, so this reads the flag, not the status
                 // (review 5853542478).
-                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped);
+                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped, resync);
                 self.status = welcome.status;
+                if self.status == Status::Resyncing {
+                    // The window between the welcome and the snapshot is named:
+                    // an edit here is refused, and the panel says why (ADR-0025).
+                    self.last_error = Some(RESYNC_REASON.to_string());
+                }
                 if let Some(restore) = welcome.restore {
                     // A writer whose in-flight edits a restore took must see it:
                     // the panel draws the count and the ids, and the session

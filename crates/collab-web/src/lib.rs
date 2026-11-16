@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use wordcraft_collab::room::Role;
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target, Version};
 pub use wordcraft_collab_app::{Commit, CommitCopy, Cursor, ParticipantView, Restore, Status};
-use wordcraft_collab_app::{CopyBuffer, Divergence, Outcome, SnapshotBuffer, SyncState, WelcomeState, apply_presence};
+use wordcraft_collab_app::{CopyBuffer, Divergence, Outcome, RESYNC_REASON, SnapshotBuffer, SyncState, WelcomeState, apply_presence};
 /// An id for one editing session: two apps on the same document must not share
 /// an operation id space (`wordcraft_collab_client::session_client_id`).
 pub use wordcraft_collab_client::session_client_id;
@@ -379,7 +379,7 @@ impl Collab {
 
     fn on_event(&mut self, event: Event, session: &mut Session) {
         match event {
-            Event::Welcome { version, role, participants, dropped, .. } => {
+            Event::Welcome { version, resync, role, participants, dropped, .. } => {
                 // The room's head is this base, in both directions (ADR
                 // WC-0008): a restored room answers below it, and keeping the
                 // higher number would plan the next operation on a document the
@@ -393,8 +393,13 @@ impl Collab {
                 // A handshake is not a snapshot: `Offline`, a renewal or a
                 // closed socket never cleared the divergence, so this reads the
                 // flag, not the status (review 5853542478).
-                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped);
+                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped, resync);
                 self.status = welcome.status;
+                if self.status == Status::Resyncing {
+                    // The window between the welcome and the snapshot is named:
+                    // an edit here is refused, and the panel says why (ADR-0025).
+                    self.last_error = Some(RESYNC_REASON.to_string());
+                }
                 if let Some(restore) = welcome.restore {
                     // The panel draws the count and the ids; the session reads
                     // `Resyncing` until the snapshot lands (ADR WC-0008).
@@ -987,6 +992,49 @@ mod tests {
         assert!(collab.restore().is_none(), "nothing was taken");
         assert_eq!(*collab.status(), Status::InSync);
         assert_eq!(collab.last_error(), None, "an ordinary handshake is not an error");
+    }
+
+    /// ADR-0025: a welcome with `resync: true` is the room's word that its
+    /// document is coming and will replace this one — whether or not a restore
+    /// emptied the queue. The tab reads `Resyncing` from that moment, so the host
+    /// gate refuses the edit before the engine runs, the document stays
+    /// byte-for-byte the author's, and a commit is refused too. The last chunk of
+    /// the snapshot is what reopens both gates.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_welcome_with_resync_holds_the_document_until_the_snapshot() {
+        let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "owner");
+        let mut collab = test_collab(&opened, "c1");
+        collab.state.role = Role::Owner;
+        let mut session = Session::new(wordcraft_doc::Document::new());
+        session.run("text.insert", &json!({"text": "Kept"})).expect("type");
+        let before = serde_json::to_vec(&session.doc).expect("model");
+
+        // The room answers a join at 4 and will send its document; nothing was
+        // taken off the queue.
+        let welcome =
+            ServerMsg::Welcome { session_id: "s1".into(), role: "owner".into(), version: 4, epoch: 0, participants: Vec::new(), resync: true };
+        collab.on_text(&serde_json::to_string(&welcome).expect("json"), &mut session);
+        assert_eq!(*collab.status(), Status::Resyncing, "the document is on its way and this one will be replaced");
+        assert!(collab.restore().is_none(), "no queue was taken: the state is the snapshot, not a restore");
+        assert_eq!(collab.last_error(), Some(RESYNC_REASON), "the panel names the reason");
+
+        // Both gates read the status: the host refuses the edit before the engine
+        // runs, and the room would refuse a commit of the document the snapshot
+        // is replacing. The document is untouched and nothing was queued.
+        assert!(!collab.can_write(), "an edit planned now would be dropped by the snapshot");
+        assert!(!collab.can_commit(), "a commit would build the document the snapshot replaces");
+        assert_eq!(serde_json::to_vec(&session.doc).expect("model"), before, "the document is byte-for-byte the author's");
+        assert!(collab.client.pending().is_empty(), "nothing was queued for a base the room is replacing");
+
+        // The snapshot lands: one base, and both gates are open again on it.
+        let bytes = serde_json::to_vec(&wordcraft_doc::Document::new()).expect("model");
+        let snapshot = serde_json::to_string(&ServerMsg::Snapshot { version: 4, bytes, last: true }).expect("json");
+        collab.on_text(&snapshot, &mut session);
+        assert_eq!(*collab.status(), Status::InSync);
+        assert!(collab.can_write() && collab.can_commit(), "the snapshot is what reopens the session");
+        assert_eq!(collab.last_error(), None, "the reason goes with the window it described");
+        assert_eq!(collab.version(), 4, "the base is the snapshot's version, the one editing continues at");
     }
 
     /// A head below the base with no snapshot promised cannot be joined: the

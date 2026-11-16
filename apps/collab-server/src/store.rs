@@ -13,15 +13,38 @@
 //! it over the stored file on the first operation or on shutdown and destroy
 //! the only copy (ADR WC-0003).
 
-use std::fs;
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use sha2::Digest;
 use wordcraft_collab::journal::DedupWindow;
 
 use crate::cabinet::Published;
 use crate::hex;
+
+/// The files a snapshot is made of. `PAYLOAD` and `META` are the pair ADR-0024
+/// is about: they belong to one generation, and the metadata is renamed last.
+const PAYLOAD: &str = "model.json";
+const META: &str = "meta";
+const SOURCE: &str = "source.docx";
+const DEDUP: &str = "dedup.json";
+/// The previous generation, kept for a crash between the two renames.
+const PREV: &str = "prev";
+
+/// What one `save` left on disk, after it was read back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Committed {
+    /// The room's version this generation holds.
+    pub version: u64,
+    /// The generation stamp both files of the pair carry.
+    pub generation: u64,
+}
 
 /// One stored snapshot.
 #[derive(Clone, Debug, PartialEq)]
@@ -43,9 +66,59 @@ pub struct Snapshot {
 }
 
 /// A directory of per-document snapshots.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Store {
     dir: PathBuf,
+    /// One writer per document directory (ADR-0024 п.2). Two persists of the
+    /// same room must not interleave their temporary files and renames; a
+    /// unique temporary name alone does not make the pair they leave whole.
+    /// Shared by every clone, so a second `AppState` on the same directory
+    /// serializes too.
+    writers: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+}
+
+impl Clone for Store {
+    fn clone(&self) -> Store {
+        Store { dir: self.dir.clone(), writers: Arc::clone(&self.writers) }
+    }
+}
+
+/// The shape of the payload file: the document's own bytes plus the generation
+/// they belong to (ADR-0024 п.1). A payload written before generations existed
+/// is a bare document and is still read as one (generation 0).
+#[derive(Serialize)]
+struct PayloadFile<'a> {
+    /// Marks the envelope. A document never has this key, so a bare model is
+    /// not mistaken for one.
+    collab_snapshot: u32,
+    generation: u64,
+    /// The document bytes exactly as the room serialised them: read back
+    /// unchanged, so a snapshot round-trips byte-for-byte.
+    model: &'a RawValue,
+}
+
+#[derive(Deserialize)]
+struct StoredPayload<'a> {
+    collab_snapshot: u32,
+    generation: u64,
+    #[serde(borrow)]
+    model: &'a RawValue,
+}
+
+/// A pair whose files agree.
+struct Pair {
+    generation: u64,
+    snapshot: Snapshot,
+}
+
+/// What is on disk under one directory.
+enum PairRead {
+    /// No payload: nothing was ever written for this document.
+    Absent,
+    /// A payload and its metadata agree on generation, digest and version.
+    Valid(Pair),
+    /// A file is there and the pair does not hold (ADR-0024 п.4).
+    Broken(Corrupt),
 }
 
 /// Largest model the store will hand out. The server holds and commits
@@ -80,11 +153,21 @@ impl std::fmt::Display for Corrupt {
 
 impl Store {
     pub fn new(dir: impl Into<PathBuf>) -> Store {
-        Store { dir: dir.into() }
+        Store { dir: dir.into(), writers: Arc::new(Mutex::new(HashMap::new())) }
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The one writer of a document directory, for this process.
+    fn writer(&self, doc: &str) -> Arc<Mutex<()>> {
+        let key = sanitize(doc);
+        let mut writers = self.writers.lock().unwrap_or_else(|poison| poison.into_inner());
+        // A server sees many ids in its life: a lock nobody holds (only this map
+        // does) is dropped instead of growing the map with them.
+        writers.retain(|_, writer| Arc::strong_count(writer) > 1);
+        Arc::clone(writers.entry(key).or_default())
     }
 
     /// Load the snapshot of `doc`.
@@ -93,99 +176,62 @@ impl Store {
     /// caller may open a blank room. `Err` means a snapshot is there and cannot
     /// be opened — the caller must refuse the document instead of starting an
     /// empty room, which would be persisted over the stored file (ADR WC-0003).
+    ///
+    /// A pair whose files disagree on generation or digest is not read and not
+    /// repaired: the previous generation in `prev/` is served when it is still
+    /// whole (ADR-0024 п.4), and otherwise the join is refused.
     pub fn load(&self, doc: &str) -> Result<Option<Snapshot>, Corrupt> {
         let dir = self.doc_dir(doc);
         self.adopt_legacy(doc, &dir);
-        let path = dir.join("model.json");
-        // A bounded read: the file is rejected before it is in memory, which is
-        // the whole point of `MAX_MODEL` (CodeRabbit 4533747500).
-        let model = match fs::File::open(&path) {
-            Ok(file) => {
-                use std::io::Read as _;
-                let mut bytes = Vec::new();
-                file.take(MAX_MODEL as u64 + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|err| Corrupt::new("model.json", format!("cannot be read: {err}")))?;
-                bytes
-            }
-            // The model is written before the metadata, so its absence is the
-            // one state that means "never snapshotted".
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(Corrupt::new("model.json", format!("cannot be read: {err}"))),
-        };
-        if model.len() > MAX_MODEL {
-            return Err(Corrupt::new("model.json", format!("is {} bytes, over the {MAX_MODEL}-byte model bound", model.len())));
+        match read_pair(&dir) {
+            PairRead::Absent => Ok(None),
+            PairRead::Valid(pair) => Ok(Some(pair.snapshot)),
+            PairRead::Broken(why) => match read_pair(&dir.join(PREV)) {
+                PairRead::Valid(pair) => Ok(Some(pair.snapshot)),
+                _ => Err(why),
+            },
         }
-        // `save` writes the metadata last, after every rename: without it the
-        // pair is a write that never committed.
-        let meta = match fs::read_to_string(dir.join("meta")) {
-            Ok(text) => text,
-            Err(err) => return Err(Corrupt::new("meta", format!("is missing or unreadable: {err}"))),
-        };
-        let mut version = None;
-        let mut epoch = 0u64;
-        let mut cabinet_version = None;
-        let mut cabinet_etag = None;
-        for line in meta.lines() {
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            match key {
-                "version" => version = Some(parse_number("version", value)?),
-                "epoch" => epoch = parse_number("epoch", value)?,
-                "cabinet_version" => cabinet_version = Some(parse_number("cabinet_version", value)?),
-                "cabinet_etag" => cabinet_etag = Some(value.to_string()),
-                // Unknown keys are ignored: a newer server may write more.
-                _ => {}
-            }
-        }
-        // The head version is what the room restores; without it there is
-        // nothing to join. An absent `epoch` is an older snapshot and starts at
-        // 0, as it did before the epoch was written.
-        let Some(version) = version else {
-            return Err(Corrupt::new("meta", "has no version line"));
-        };
-        // Half a cabinet marker is a torn write. Dropping it would also drop the
-        // conflict check and let the next commit overwrite an external edit.
-        let cabinet = match (cabinet_version, cabinet_etag) {
-            (Some(version), Some(etag)) => Some(Published { version, etag }),
-            (None, None) => None,
-            _ => return Err(Corrupt::new("meta", "has a cabinet version or an etag without the other")),
-        };
-        // The model has to be a document, not merely JSON: a truncated or
-        // foreign file under this name is exactly what a blank room would
-        // overwrite.
-        if let Err(err) = serde_json::from_slice::<wordcraft_doc::Document>(&model) {
-            return Err(Corrupt::new("model.json", format!("is not a document: {err}")));
-        }
-        let source = fs::read(dir.join("source.docx")).ok();
-        // A snapshot written before the window was stored has no `dedup.json`:
-        // the room still opens, only without deduplication across the restart.
-        // A window that cannot be tied to **this** snapshot is not read either:
-        // an answer it holds may name an edit this model never had, and
-        // acknowledging that retry would drop the edit (review 5855379673).
-        let dedup = read_window(&dir.join("dedup.json"), version, &model);
-        Ok(Some(Snapshot { version, epoch, model, source, dedup, cabinet }))
     }
 
-    /// Write a snapshot and rotate the previous one to `prev/`.
-    pub fn save(&self, doc: &str, snapshot: &Snapshot) -> Result<(), String> {
+    /// Write a snapshot, rotate the previous pair to `prev/`, and read the new
+    /// pair back.
+    ///
+    /// One generation is written (ADR-0024): the payload carries it, the
+    /// metadata carries it and the digest of the payload, the payload is
+    /// synced and renamed first and the metadata last, so a crash leaves a pair
+    /// that does not hold and `prev/` answers. Two persists of one document are
+    /// serialized; the caller is told the pair is durable only after it was read
+    /// back. The journal is the caller's to truncate, and only then.
+    pub fn save(&self, doc: &str, snapshot: &Snapshot) -> Result<Committed, String> {
+        let lock = self.writer(doc);
+        let _writing = lock.lock().unwrap_or_else(|poison| poison.into_inner());
         let dir = self.doc_dir(doc);
         fs::create_dir_all(&dir).map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
-        // Keep one previous pair: a snapshot written over a broken one is still
-        // recoverable until the next rotation.
-        let prev = dir.join("prev");
-        if dir.join("model.json").exists() {
-            let _ = fs::create_dir_all(&prev);
-            let _ = fs::copy(dir.join("model.json"), prev.join("model.json"));
-            let _ = fs::copy(dir.join("meta"), prev.join("meta"));
-            let _ = fs::copy(dir.join("source.docx"), prev.join("source.docx"));
-            let _ = fs::copy(dir.join("dedup.json"), prev.join("dedup.json"));
+
+        // The generation to write: one above the pair on disk. A current pair
+        // that does not hold is not a base and is not rotated — overwriting the
+        // last good copy with a broken one would leave nothing to fall back on
+        // (ADR-0024 п.4) — so the previous generation sets the number instead.
+        let current = match read_pair(&dir) {
+            PairRead::Valid(pair) => Some(pair),
+            _ => None,
+        };
+        let base = match &current {
+            Some(pair) => Some(pair.generation),
+            None => match read_pair(&dir.join(PREV)) {
+                PairRead::Valid(pair) => Some(pair.generation),
+                _ => None,
+            },
+        };
+        let generation = base.map_or(1, |generation| generation.saturating_add(1));
+        if current.is_some() {
+            rotate(&dir);
         }
 
-        write_atomic(&dir.join("model.json"), &snapshot.model)?;
+        let payload = payload_bytes(generation, &snapshot.model)?;
+        write_synced(&dir.join(PAYLOAD), &payload)?;
         if let Some(source) = &snapshot.source {
-            write_atomic(&dir.join("source.docx"), source)?;
+            write_synced(&dir.join(SOURCE), source)?;
         }
         // The window travels with the snapshot it belongs to: the version and
         // the digest of the model it was written beside are its stamp, so a
@@ -193,13 +239,25 @@ impl Store {
         // 5855379673).
         let window = WindowStamp { version: snapshot.version, model: digest(&snapshot.model), window: &snapshot.dedup };
         let dedup = serde_json::to_vec(&window).map_err(|err| format!("cannot encode the opId window: {err}"))?;
-        write_atomic(&dir.join("dedup.json"), &dedup)?;
-        // Metadata last: its presence means the pair is complete.
-        let mut meta = format!("version={}\nepoch={}\ndoc_sha256={}\n", snapshot.version, snapshot.epoch, digest(doc.as_bytes()));
-        if let Some(cabinet) = &snapshot.cabinet {
-            meta.push_str(&format!("cabinet_version={}\ncabinet_etag={}\n", cabinet.version, cabinet.etag));
+        write_synced(&dir.join(DEDUP), &dedup)?;
+        // Metadata last: its rename is the marker that commits the pair.
+        write_synced(&dir.join(META), meta_text(snapshot, doc, generation, &payload).as_bytes())?;
+
+        // Read back what is on disk (ADR-0024 п.5). A pair that cannot be read
+        // is not reported as written: the caller must not truncate its journal
+        // for a snapshot that is not there.
+        let committed = match read_pair(&dir) {
+            PairRead::Valid(pair) => pair,
+            PairRead::Absent => return Err(format!("{PAYLOAD} disappeared after it was written")),
+            PairRead::Broken(why) => return Err(format!("the written snapshot does not read back: {why}")),
+        };
+        if committed.generation != generation || committed.snapshot.version != snapshot.version || committed.snapshot.model != snapshot.model {
+            return Err(format!(
+                "the written snapshot reads back as generation {} version {}, not {generation} version {}",
+                committed.generation, committed.snapshot.version, snapshot.version
+            ));
         }
-        write_atomic(&dir.join("meta"), meta.as_bytes())
+        Ok(Committed { version: snapshot.version, generation })
     }
 
     pub fn doc_dir(&self, doc: &str) -> PathBuf {
@@ -322,13 +380,184 @@ fn read_window(path: &Path, version: u64, model: &[u8]) -> DedupWindow {
     }
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    fs::write(&tmp, bytes).map_err(|err| format!("cannot write {}: {err}", tmp.display()))?;
+/// Read the pair in `dir` and decide whether it holds (ADR-0024 п.3/п.4).
+fn read_pair(dir: &Path) -> PairRead {
+    match read_pair_inner(dir) {
+        Ok(Some(pair)) => PairRead::Valid(pair),
+        Ok(None) => PairRead::Absent,
+        Err(corrupt) => PairRead::Broken(corrupt),
+    }
+}
+
+fn read_pair_inner(dir: &Path) -> Result<Option<Pair>, Corrupt> {
+    let path = dir.join(PAYLOAD);
+    // A bounded read: the file is rejected before it is in memory, which is
+    // the whole point of `MAX_MODEL` (CodeRabbit 4533747500).
+    let payload = match File::open(&path) {
+        Ok(file) => {
+            use std::io::Read as _;
+            let mut bytes = Vec::new();
+            file.take(MAX_MODEL as u64 + 1).read_to_end(&mut bytes).map_err(|err| Corrupt::new(PAYLOAD, format!("cannot be read: {err}")))?;
+            bytes
+        }
+        // The payload is written before the metadata, so its absence is the one
+        // state that means "never snapshotted".
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(Corrupt::new(PAYLOAD, format!("cannot be read: {err}"))),
+    };
+    if payload.len() > MAX_MODEL {
+        return Err(Corrupt::new(PAYLOAD, format!("is {} bytes, over the {MAX_MODEL}-byte model bound", payload.len())));
+    }
+    // `save` renames the metadata last, after every other rename: without it
+    // the pair is a write that never committed.
+    let meta = fs::read_to_string(dir.join(META)).map_err(|err| Corrupt::new(META, format!("is missing or unreadable: {err}")))?;
+    let mut version = None;
+    let mut epoch = 0u64;
+    let mut generation = None;
+    let mut payload_sha256 = None;
+    let mut cabinet_version = None;
+    let mut cabinet_etag = None;
+    for line in meta.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key {
+            "version" => version = Some(parse_number("version", value)?),
+            "epoch" => epoch = parse_number("epoch", value)?,
+            "generation" => generation = Some(parse_number("generation", value)?),
+            "payload_sha256" => payload_sha256 = Some(value.trim().to_ascii_lowercase()),
+            "cabinet_version" => cabinet_version = Some(parse_number("cabinet_version", value)?),
+            "cabinet_etag" => cabinet_etag = Some(value.to_string()),
+            // Unknown keys are ignored: a newer server may write more.
+            _ => {}
+        }
+    }
+    // The head version is what the room restores; without it there is nothing
+    // to join. An absent `epoch` is an older snapshot and starts at 0, as it did
+    // before the epoch was written.
+    let Some(version) = version else {
+        return Err(Corrupt::new(META, "has no version line"));
+    };
+    // Half a cabinet marker is a torn write. Dropping it would also drop the
+    // conflict check and let the next commit overwrite an external edit.
+    let cabinet = match (cabinet_version, cabinet_etag) {
+        (Some(version), Some(etag)) => Some(Published { version, etag }),
+        (None, None) => None,
+        _ => return Err(Corrupt::new(META, "has a cabinet version or an etag without the other")),
+    };
+    let (payload_generation, model) = unpack(&payload)?;
+    // The pair belongs to one generation: a payload from a newer write beside an
+    // older metadata is exactly the crash between the two renames, and reading
+    // either half would serve a state neither file describes (ADR-0024 п.3).
+    match (generation, payload_generation) {
+        (Some(meta_generation), Some(payload_generation)) if meta_generation != payload_generation => {
+            return Err(Corrupt::new(PAYLOAD, format!("belongs to generation {payload_generation}, the metadata says {meta_generation}")));
+        }
+        (Some(_), None) => return Err(Corrupt::new(PAYLOAD, "carries no generation while the metadata does")),
+        // A pair written before generations existed carries neither and is read
+        // as generation 0.
+        _ => {}
+    }
+    let generation = generation.or(payload_generation).unwrap_or(0);
+    if let Some(expected) = &payload_sha256
+        && *expected != digest(&payload)
+    {
+        return Err(Corrupt::new(PAYLOAD, "does not match the digest the metadata records"));
+    }
+    // The model has to be a document, not merely JSON: a truncated or foreign
+    // file under this name is exactly what a blank room would overwrite.
+    if let Err(err) = serde_json::from_slice::<wordcraft_doc::Document>(model) {
+        return Err(Corrupt::new(PAYLOAD, format!("is not a document: {err}")));
+    }
+    let source = fs::read(dir.join(SOURCE)).ok();
+    // A snapshot written before the window was stored has no `dedup.json`: the
+    // room still opens, only without deduplication across the restart. A window
+    // that cannot be tied to **this** snapshot is not read either: an answer it
+    // holds may name an edit this model never had, and acknowledging that retry
+    // would drop the edit (review 5855379673).
+    let dedup = read_window(&dir.join(DEDUP), version, model);
+    Ok(Some(Pair { generation, snapshot: Snapshot { version, epoch, model: model.to_vec(), source, dedup, cabinet } }))
+}
+
+/// The payload bytes for one generation: the document's own bytes inside an
+/// envelope that names the generation (ADR-0024 п.1).
+fn payload_bytes(generation: u64, model: &[u8]) -> Result<Vec<u8>, String> {
+    let model = serde_json::from_slice::<&RawValue>(model).map_err(|err| format!("the model is not JSON: {err}"))?;
+    serde_json::to_vec(&PayloadFile { collab_snapshot: 1, generation, model }).map_err(|err| format!("cannot encode the payload: {err}"))
+}
+
+/// Split a payload into the generation it names, `None` for a bare model, and
+/// the document bytes themselves (borrowed from the payload, so they round-trip
+/// unchanged).
+fn unpack(payload: &[u8]) -> Result<(Option<u64>, &[u8]), Corrupt> {
+    match serde_json::from_slice::<StoredPayload>(payload) {
+        Ok(envelope) if envelope.collab_snapshot == 1 => Ok((Some(envelope.generation), envelope.model.get().as_bytes())),
+        Ok(envelope) => Err(Corrupt::new(PAYLOAD, format!("has an unknown snapshot format {}", envelope.collab_snapshot))),
+        // No envelope: a payload written before this format, read as the model
+        // it is (generation 0).
+        Err(_) => Ok((None, payload)),
+    }
+}
+
+/// The metadata of one generation: the version to join at, the generation both
+/// files carry and the digest of the payload beside it.
+fn meta_text(snapshot: &Snapshot, doc: &str, generation: u64, payload: &[u8]) -> String {
+    let mut meta = format!(
+        "version={}\nepoch={}\ngeneration={}\npayload_sha256={}\ndoc_sha256={}\n",
+        snapshot.version,
+        snapshot.epoch,
+        generation,
+        digest(payload),
+        digest(doc.as_bytes())
+    );
+    if let Some(cabinet) = &snapshot.cabinet {
+        meta.push_str(&format!("cabinet_version={}\ncabinet_etag={}\n", cabinet.version, cabinet.etag));
+    }
+    meta
+}
+
+/// Keep one previous pair: a crash between the two renames of the next write
+/// finds the last whole generation here (ADR-0024 п.3). Rotated only from a
+/// pair that holds.
+fn rotate(dir: &Path) {
+    let prev = dir.join(PREV);
+    let _ = fs::create_dir_all(&prev);
+    for name in [PAYLOAD, META, SOURCE, DEDUP] {
+        let _ = fs::copy(dir.join(name), prev.join(name));
+    }
+}
+
+/// Write a file so that a crash leaves either the old bytes or the new ones: a
+/// temporary name no other attempt shares, `sync_all`, rename, then a synced
+/// directory so the rename itself is durable (ADR-0024 п.3).
+fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    static ATTEMPT: AtomicU64 = AtomicU64::new(0);
+    let attempt = ATTEMPT.fetch_add(1, Ordering::Relaxed);
+    let mut name = path.file_name().map(|name| name.to_os_string()).unwrap_or_default();
+    name.push(format!(".tmp.{}.{attempt}", std::process::id()));
+    let tmp = path.with_file_name(name);
+    let write = || -> std::io::Result<()> {
+        let mut file = File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        Ok(())
+    };
+    write().map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        format!("cannot write {}: {err}", tmp.display())
+    })?;
     fs::rename(&tmp, path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
         format!("cannot replace {}: {err}", path.display())
-    })
+    })?;
+    // Best effort: not every file system lets a directory be synced, and the
+    // pair is read back before it is called durable anyway.
+    if let Some(dir) = path.parent()
+        && let Ok(handle) = File::open(dir)
+    {
+        let _ = handle.sync_all();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -455,7 +684,7 @@ mod tests {
         fs::write(store.doc_dir("doc-1").join("model.json"), b"{\"body\":[").expect("truncate");
         let err = store.load("doc-1").expect_err("a truncated model is not an empty document");
         assert_eq!(err.file, "model.json");
-        assert!(err.reason.contains("not a document"), "{}", err.reason);
+        assert!(err.reason.contains("generation"), "a torn payload is caught by the generation it does not carry: {}", err.reason);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -528,7 +757,9 @@ mod tests {
             .expect("second");
         assert_eq!(store.load("doc-1").expect("load").map(|s| s.version), Some(2));
         let prev = fs::read(store.doc_dir("doc-1").join("prev/model.json")).expect("previous model");
-        assert_eq!(prev, b"{}");
+        let (generation, model) = unpack(&prev).expect("the previous payload holds");
+        assert_eq!(generation, Some(1), "the previous pair is one generation");
+        assert_eq!(model, b"{}");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -650,6 +881,95 @@ mod tests {
         let snapshot = store.load("doc-1").expect("load").expect("the document still opens");
         assert_eq!(snapshot.version, 2);
         assert!(snapshot.dedup.is_empty(), "the window belongs to a model this snapshot is not");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn plain(version: u64, model: &[u8]) -> Snapshot {
+        Snapshot { version, epoch: 0, model: model.to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None }
+    }
+
+    /// ADR-0024 п.3: a crash after the payload is renamed and before the
+    /// metadata is leaves two files of different generations. The pair does not
+    /// hold, so the previous generation in `prev/` answers — not an empty
+    /// document, and not the half-written state.
+    #[test]
+    fn a_crash_between_the_two_renames_serves_the_previous_generation() {
+        let dir = temp_dir("crash-between-renames");
+        let store = Store::new(&dir);
+        store.save("doc-1", &plain(1, b"{\"body\":[]}")).expect("first generation");
+        let doc_dir = store.doc_dir("doc-1");
+
+        // The next persist as the crash leaves it: the previous pair is rotated,
+        // the new payload is renamed into place, and the process dies before the
+        // metadata rename that commits the pair.
+        rotate(&doc_dir);
+        let payload = payload_bytes(2, b"{}").expect("payload");
+        write_synced(&doc_dir.join(PAYLOAD), &payload).expect("payload");
+
+        let loaded = store.load("doc-1").expect("the previous generation answers, not an empty document").expect("a snapshot");
+        assert_eq!(loaded.version, 1, "the generation that was whole");
+        assert_eq!(loaded.model, b"{\"body\":[]}", "not the payload of the write that never committed");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// ADR-0024 п.4, ADR WC-0003: a payload that does not parse beside a
+    /// metadata that does is damage, not an empty document. The join is refused
+    /// and neither file is rewritten: an operator can still repair it.
+    #[test]
+    fn a_corrupt_payload_with_a_valid_meta_refuses_the_join() {
+        let dir = temp_dir("corrupt-payload");
+        let store = Store::new(&dir);
+        store.save("doc-1", &plain(3, b"{}")).expect("save");
+        let doc_dir = store.doc_dir("doc-1");
+        let damaged = b"{\"collab_snapshot\":1,".to_vec();
+        fs::write(doc_dir.join(PAYLOAD), &damaged).expect("damage");
+
+        let err = store.load("doc-1").expect_err("a payload that does not parse is not an empty document");
+        assert_eq!(err.file, PAYLOAD);
+        assert_eq!(fs::read(doc_dir.join(PAYLOAD)).expect("still there"), damaged, "the file is left for an operator to repair");
+        assert_eq!(fs::read_to_string(doc_dir.join(META)).expect("meta").lines().next(), Some("version=3"), "nor is the metadata rewritten");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// ADR-0024 п.2: two persists of one document are serialized. Each writes its
+    /// own generation, the pair that stands is one generation, the metadata and
+    /// the payload agree, and neither attempt leaves a temporary file behind.
+    #[test]
+    fn two_concurrent_persists_leave_one_generation() {
+        let dir = temp_dir("two-writers");
+        let store = Store::new(&dir);
+        let persist = |version: u64, model: &'static [u8]| {
+            let store = store.clone();
+            std::thread::spawn(move || store.save("doc-1", &plain(version, model)).map(|committed| (committed, model)))
+        };
+        let first = persist(1, b"{}");
+        let second = persist(2, b"{\"body\":[]}");
+        let first = first.join().expect("thread").expect("first save");
+        let second = second.join().expect("thread").expect("second save");
+        let mut generations = [first.0.generation, second.0.generation];
+        generations.sort_unstable();
+        assert_eq!(generations, [1, 2], "one writer at a time: two generations, not one write over the other");
+
+        let doc_dir = store.doc_dir("doc-1");
+        let bytes = fs::read(doc_dir.join(PAYLOAD)).expect("payload");
+        let (payload_generation, _) = unpack(&bytes).expect("the payload holds");
+        let meta = fs::read_to_string(doc_dir.join(META)).expect("meta");
+        let meta_generation = meta.lines().find_map(|line| line.strip_prefix("generation=")).and_then(|value| value.parse::<u64>().ok());
+        assert_eq!(meta_generation, payload_generation, "the pair on disk belongs to one generation");
+        assert_eq!(payload_generation, Some(2), "the write that took the lock second is the one that stands");
+
+        let standing = if first.0.generation == 2 { first } else { second };
+        let loaded = store.load("doc-1").expect("load").expect("a snapshot");
+        assert_eq!(loaded.version, standing.0.version);
+        assert_eq!(loaded.model, standing.1, "the document of the generation that stands");
+
+        let leftovers: Vec<String> = fs::read_dir(&doc_dir)
+            .expect("dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "no temporary file survives an attempt: {leftovers:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 }

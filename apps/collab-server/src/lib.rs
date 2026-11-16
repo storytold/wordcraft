@@ -40,7 +40,7 @@ use wordcraft_collab_engine::SessionModel;
 pub mod cabinet;
 pub mod store;
 
-use store::{Corrupt, MAX_MODEL, Snapshot, Store};
+use store::{Committed, Corrupt, MAX_MODEL, Snapshot, Store};
 
 /// Largest WebSocket frame the server accepts (RFC §9).
 pub const MAX_FRAME: usize = 1 << 20;
@@ -369,15 +369,31 @@ impl AppState {
         AppState { cfg: Arc::new(cfg), rooms: Arc::new(Mutex::new(HashMap::new())), metrics: Arc::new(Metrics::default()), store, cabinet }
     }
 
-    /// Write the room's snapshot (ADR-0005): model JSON plus the source `.docx`
-    /// when one is known, plus the `opId` window so retries survive a restart,
-    /// plus the cabinet etag when the room published a commit (M87).
-    fn persist(&self, doc: &str, room: &Arc<Mutex<RoomState>>, source: Option<Vec<u8>>) -> Result<(), String> {
+    /// Write the room's snapshot (ADR-0005, ADR-0024): model JSON plus the
+    /// source `.docx` when one is known, plus the `opId` window so retries
+    /// survive a restart, plus the cabinet etag when the room published a
+    /// commit (M87).
+    ///
+    /// The state is cut under the room's own mutex — the one every journal
+    /// append takes — so a snapshot cannot name a version whose operation is
+    /// not in the model it writes. The write itself is serialized per document
+    /// by the store and read back before it counts, and the journal is truncated
+    /// only after that (ADR-0024 п.2/п.5): an operation dropped before its
+    /// snapshot is durable is an edit nobody can replay.
+    fn persist(&self, doc: &str, room: &Arc<Mutex<RoomState>>, source: Option<Vec<u8>>) -> Result<Committed, String> {
         let (version, epoch, model, dedup, cabinet) = {
             let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
             (guard.room.version(), guard.room.epoch(), guard.room.model().snapshot(), guard.room.dedup(), guard.published.clone())
         };
-        self.store.save(doc, &Snapshot { version, epoch, model, source, dedup, cabinet })
+        let committed = self.store.save(doc, &Snapshot { version, epoch, model, source, dedup, cabinet })?;
+        {
+            // The pair is on disk and read back: the journal up to its version
+            // is a checkpoint, and everything at or below it is replayable from
+            // the snapshot (ADR-0024 п.5/п.6).
+            let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+            guard.room.compact(committed.version);
+        }
+        Ok(committed)
     }
 
     /// The room of `doc`, restored from its stored snapshot when one exists, or
@@ -483,7 +499,7 @@ impl AppState {
             guard.iter().map(|(doc, room)| (doc.clone(), room.clone())).collect()
         };
         for (doc, room) in rooms {
-            self.persist(&doc, &room, None)?;
+            self.persist(&doc, &room, None).map(|_| ())?;
         }
         Ok(())
     }

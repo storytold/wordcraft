@@ -191,6 +191,12 @@ impl SessionModel {
         if !allowed_command(command) {
             return Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, format!("command {command} is not available over the network")));
         }
+        // A parameter that names a file is untrusted input (ADR-0023): this
+        // server never opens, stats or resolves it. The bytes arrive inline
+        // (`data`), and a command that cannot be satisfied that way is refused
+        // here — before the caret moves and before any part of the document
+        // changes.
+        refuse_a_file_parameter(command, op)?;
         let spec = self.session.registry.get(command).ok_or_else(|| invalid(op, format!("unknown command {command}")))?;
         if !spec.mutates {
             return Err(invalid(op, format!("command {command} does not change the document")));
@@ -1142,6 +1148,56 @@ impl Model for SessionModel {
 
 fn allowed_command(command: &str) -> bool {
     !DENIED_PREFIXES.iter().any(|prefix| command.starts_with(prefix))
+}
+
+/// The commands whose parameters can name a file on the machine the command
+/// runs on, and the parameter that does it (ADR-0023).
+///
+/// A named file is never opened here: the value the client sends is a label for
+/// the commit and is carried into the document as written. The bytes must come
+/// inline as `data` in the same operation, so `inline` says whether the command
+/// has that form at all: `mailings.finish` only *writes* the path it is given
+/// and `references.sources` only *reads* one, so neither can be satisfied
+/// without touching the server's file system and both are refused whenever they
+/// name a file.
+///
+/// This list is the inventory ADR-0023 п.5 asks for. The deny-list above is not
+/// a security boundary: a command that grows a file-shaped parameter without an
+/// entry here and a test is an open finding, not a silent pass.
+const FILE_PARAM_COMMANDS: &[(&str, &str, bool)] = &[
+    ("insert.picture", "path", true),
+    ("insert.textFromFile", "path", false),
+    ("font.add", "path", true),
+    ("mailings.recipients", "path", true),
+    ("mailings.finish", "path", false),
+    ("picture.change", "path", true),
+    ("references.sources", "import", false),
+];
+
+/// Refuse a file-shaped parameter before the command runs (ADR-0023).
+///
+/// A refusal names the parameter and the way out (inline `data`), never the
+/// value: the path is the caller's data and does not belong in a rejection that
+/// a log may keep.
+fn refuse_a_file_parameter(command: &str, op: &Op) -> Result<(), Reject> {
+    let Some((_, key, inline)) = FILE_PARAM_COMMANDS.iter().copied().find(|(id, _, _)| *id == command) else { return Ok(()) };
+    let Some(params) = op.payload.get("params").and_then(Value::as_object) else { return Ok(()) };
+    let names_a_file = params.get(key).and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty());
+    if !names_a_file {
+        return Ok(());
+    }
+    // `data` is the bytes themselves: with it in the operation, the path is only
+    // a label and the server never reads anything for it.
+    let inline = inline && params.get("data").and_then(Value::as_str).is_some_and(|data| !data.trim().is_empty());
+    if inline {
+        return Ok(());
+    }
+    let message = if inline {
+        format!("command {command}: `{key}` names a file, which this server never opens; send its bytes inline as `data` (ADR-0023)")
+    } else {
+        format!("command {command}: `{key}` names a file, which this server never opens, and this command has no inline form (ADR-0023)")
+    };
+    Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, message))
 }
 
 /// Resolve `{nodeId, off}` (or the operation's target when absent) to a

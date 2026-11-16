@@ -1546,8 +1546,36 @@ fn a_refusal_that_reads_in_sync_does_not_clear_the_pause() {
 /// session is `InSync` unless it was already paused (ADR WC-0008).
 #[test]
 fn a_welcome_without_dropped_operations_reports_nothing() {
-    let welcome = crate::WelcomeState::after_welcome(Divergence::default(), 5, Vec::new());
-    assert_eq!(welcome.status, Status::InSync, "an empty dropped vector is the ordinary handshake");
+    let welcome = crate::WelcomeState::after_welcome(Divergence::default(), 5, Vec::new(), false);
+    assert_eq!(welcome.status, Status::InSync, "an empty dropped vector and no resync is the ordinary handshake");
+    assert!(welcome.restore.is_none());
+}
+
+/// ADR-0025: a `welcome` that says `resync` is a promise that the room's
+/// document is on its way and will replace this one. The session reads
+/// `Resyncing` from the moment the welcome is applied — not only when a restore
+/// dropped the queue — so the author's next edit is refused instead of being
+/// taken by that snapshot without a word.
+#[test]
+fn a_welcome_with_resync_reads_resyncing_before_the_snapshot() {
+    let welcome = crate::WelcomeState::after_welcome(Divergence::default(), 7, Vec::new(), true);
+    assert_eq!(welcome.status, Status::Resyncing, "the document is coming and this one will be replaced");
+    assert!(welcome.restore.is_none(), "nothing was taken off the queue: the state is the snapshot, not the restore");
+
+    // The two gates read the status, so an edit and a commit are refused in this
+    // window and the snapshot is what reopens them.
+    let open = |status: Status| status == Status::InSync;
+    assert!(!open(welcome.status.clone()), "an edit planned now would be dropped by the snapshot");
+}
+
+/// The stronger reason still wins: a session paused by ADR WC-0006 holds an edit
+/// the room never received, and `Resyncing` would hide it behind a reconnect.
+#[test]
+fn a_resync_welcome_does_not_clear_a_paused_session() {
+    let mut divergence = Divergence::default();
+    divergence.pause();
+    let welcome = crate::WelcomeState::after_welcome(divergence, 4, Vec::new(), true);
+    assert_eq!(welcome.status, Status::Diverged);
     assert!(welcome.restore.is_none());
 }
 
@@ -1558,7 +1586,7 @@ fn a_welcome_without_dropped_operations_reports_nothing() {
 #[test]
 fn a_welcome_with_dropped_operations_names_them_and_leaves_in_sync() {
     let dropped = vec![OpId::new("alice", 1), OpId::new("alice", 2)];
-    let welcome = crate::WelcomeState::after_welcome(Divergence::default(), 3, dropped);
+    let welcome = crate::WelcomeState::after_welcome(Divergence::default(), 3, dropped, true);
     assert_eq!(welcome.status, Status::Resyncing, "the document those edits were in is about to be replaced");
     let restore = welcome.restore.expect("the queue was taken");
     assert_eq!(restore.head(), 3, "the line names the room's head");
@@ -1573,7 +1601,7 @@ fn a_welcome_with_dropped_operations_names_them_and_leaves_in_sync() {
 fn a_restore_does_not_clear_a_paused_session() {
     let mut divergence = Divergence::default();
     divergence.pause();
-    let welcome = crate::WelcomeState::after_welcome(divergence, 2, vec![OpId::new("alice", 3)]);
+    let welcome = crate::WelcomeState::after_welcome(divergence, 2, vec![OpId::new("alice", 3)], true);
     assert_eq!(welcome.status, Status::Diverged);
     assert!(welcome.restore.is_some(), "the restore's ids are shown alongside the pause");
 }
