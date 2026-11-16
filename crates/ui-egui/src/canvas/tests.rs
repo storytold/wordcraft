@@ -2846,6 +2846,10 @@ fn context_menu_offers_the_ribbons_paste_items() {
 fn context_menu_clears_all_formatting() {
     use egui_kittest::kittest::Queryable;
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Bold\nTarget")), Default::default());
+    // The popup can also draw the mini toolbar, whose own Clear All Formatting button runs the same
+    // command: with it off, the label below the viewport can only be the menu item (`mini_toolbar`'s
+    // test covers the bar's button).
+    a.ui.mini_toolbar = false;
     a.session
         .doc
         .format_range(&Pos::body(0, 0), &Pos::body(0, 4), &|c| {
