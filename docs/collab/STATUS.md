@@ -1,15 +1,21 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-13 (PR facts measured at 2026-11-13T14:16Z: the head of the
-  branch, the tree, the state of PR #5834, and the runs on it at 14:41Z)
+- Date: 2026-11-16 (this page's branch-side measurement is §5.48, the merge of
+  `origin/main` `cc90520b`; the PR facts were read at 2026-11-16T00:35Z with
+  `gh pr view 5834 --json headRefOid,mergeStateStatus,updatedAt`:
+  `headRefOid: 9c6e343ae17ea09c69ac12d72f8bea748c51982b`,
+  `mergeStateStatus: DIRTY`, `mergeable: CONFLICTING`, `updatedAt`
+  2026-11-14T15:12:50Z — the head did not move, `origin/main` did)
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft), title "Real-time collaboration:
   authoritative sync server, document adapter, client core"
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4) and
-  the PR's `baseRefOid` is still that commit. Upstream `main` was `6bf96e65`
-  (87 commits past the base) when this page was updated, and the branch was not
-  rebased again.
+  the PR's `baseRefOid` is still that commit. Upstream `main` has moved on to
+  `cc90520b` — 56 commits past `b5fa2f9e`, the last upstream commit this branch
+  had merged — and the branch merges it in `61565ab3` (§5.48). That merge is
+  local until the owner pushes, so PR #5834 still answers `CONFLICTING` on the
+  unmoved head `9c6e343a`.
 - **The head is read, not memorised.** This page does not crown a commit as
   "the delivered head": every commit — including a documentation sync of this
   very page — moves the tip, so a hash written into the header is one
@@ -50,9 +56,16 @@
   documentation head of §5.45): 227 files, +18464/−852, no collab file among
   them, and `Cargo.lock` moves `craft-libs` from `c5a1cbfb` to `6e03f65b`
   (`craft-update` gains `rustix 1.1.5`). §5.46 records what that merge does to
-  the build. Against `origin/main` `b5fa2f9e` the branch is 0 behind and 114
-  commits ahead (251 commits from the PR's base `4b0d3995`), and the branch's
-  own diff, first parent to first parent, is still 70 files, +32890/−22.
+  the build. Against `origin/main` `b5fa2f9e` the branch was 0 behind and 114
+  commits ahead at that measurement (251 commits from the PR's base
+  `4b0d3995`), and the branch's own diff, first parent to first parent, was
+  still 70 files, +32890/−22. Measured at 2026-11-16T00:35Z, after `origin/main`
+  moved on to `cc90520b` and the branch merged it (§5.48):
+  `git rev-list --left-right --count origin/main...HEAD` answers `0 120` and
+  `git merge-tree --write-tree origin/main HEAD` exits 0. The merge resolved
+  exactly two files — `Cargo.lock` and `xtask/src/layers.rs` — and its commit
+  `61565ab3` is the measurement point; the documentation commit that carries
+  this section sits one above it, so a reader's `0 121` is the same branch.
 - Earlier measurement, 2026-11-12T23:37Z: `git ls-remote fork`, the
   `headRefOid` of PR #5834 and the local `HEAD` all answered
   `ce0bb001d6317b43c799f59b6b477482372cc74e`, the tree was clean and
@@ -91,9 +104,13 @@
   documentation commits of this page — the §5.46 sync and the §5.47 sync — and
   never a code change (§5.21, §5.24, §5.26, §5.27,
   §5.35, §5.36, §5.38, §5.39, §5.40, §5.43, §5.44, §5.46, §5.47).
-- The PR is `MERGEABLE` and `BLOCKED`, and its `reviewDecision` is empty: the
-  branch merges cleanly, and `BLOCKED` is the required review plus the
-  unapproved workflows. Its rollup on `9c6e343a` holds one check, CodeRabbit's
+- The PR was `MERGEABLE` and `BLOCKED` at the 2026-11-13T14:17Z measurement,
+  with an empty `reviewDecision`: the branch merged cleanly then, and `BLOCKED`
+  was the required review plus the unapproved workflows. At 2026-11-16T00:35Z,
+  with the head unmoved, it answers `mergeable: CONFLICTING` and
+  `mergeStateStatus: DIRTY`: upstream `main` moved to `cc90520b` and the merge
+  that resolves it (`61565ab3`, §5.48) is local until the owner pushes. Its
+  rollup on `9c6e343a` holds one check, CodeRabbit's
   `skipped` (`gh pr view 5834 --json statusCheckRollup`,
   2026-11-13T14:17Z) — an `action_required` run adds nothing to the rollup, and
   the five runs on that head (`9c6e343ae17ea09c69ac12d72f8bea748c51982b`) were
@@ -450,7 +467,7 @@ missing, and where the next session should start.
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered, and this pass did not move it | PR #5834; its head is read from the PR, not crowned here: the 2026-11-13T14:16Z measurement answered `9c6e343a` (the lock fix of §5.47, one commit above `29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46), with the fork branch and the PR's `headRefOid` agreeing, the local `HEAD` one documentation commit above it and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: the five runs on `9c6e343ae17ea09c69ac12d72f8bea748c51982b` were created at 2026-11-13T13:19:59Z and all are `completed`/`action_required` with no job started (`CI` 43432753402, `Nix` 43432753705, `SonarCloud` 43432753423, `Printing` 43432753363, `Packaging lint` 43432753414), so the rollup holds only CodeRabbit's `skipped`, as on the previous head `29afb475`, whose five runs were created at 2026-11-13T10:15:10Z as `action_required` (`Printing` 43407760756, `SonarCloud` 43407761150, `CI` 43407760935, `Packaging lint` 43407761099, `Nix` 43407761233), and as on `ce0bb001` (§5.2, §5.45, §5.46); the gate on the current head ran on the build host (§5.47); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); nothing is left above the measured head — `9c6e343a` went up in the 13:18Z push made by the cabinet's PR sweep; the branch's only CI change is the declared `git-sources` job (§5.24) |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered, and this pass did not move it — it merged `origin/main` `cc90520b` locally (§5.48) and pushed nothing | PR #5834; its head is read from the PR, not crowned here: the 2026-11-13T14:16Z measurement answered `9c6e343a` (the lock fix of §5.47, one commit above `29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46), with the fork branch and the PR's `headRefOid` agreeing, the local `HEAD` one documentation commit above it and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check at that measurement (`DIRTY`/`CONFLICTING` at 2026-11-16T00:35Z on the same head, because `origin/main` moved to `cc90520b`; §5.48 merges it locally): the five runs on `9c6e343ae17ea09c69ac12d72f8bea748c51982b` were created at 2026-11-13T13:19:59Z and all are `completed`/`action_required` with no job started (`CI` 43432753402, `Nix` 43432753705, `SonarCloud` 43432753423, `Printing` 43432753363, `Packaging lint` 43432753414), so the rollup holds only CodeRabbit's `skipped`, as on the previous head `29afb475`, whose five runs were created at 2026-11-13T10:15:10Z as `action_required` (`Printing` 43407760756, `SonarCloud` 43407761150, `CI` 43407760935, `Packaging lint` 43407761099, `Nix` 43407761233), and as on `ce0bb001` (§5.2, §5.45, §5.46); the gate on the current head ran on the build host (§5.47), and the merge of `cc90520b` on `61565ab3` was gated the same way (§5.48); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); above the measured head the branch now carries the merge `61565ab3` of `cc90520b` and its documentation commits, all local — `9c6e343a` went up in the 13:18Z push made by the cabinet's PR sweep; the branch's only CI change is the declared `git-sources` job (§5.24) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -472,6 +489,15 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 ```
 
 Results at this writing:
+
+- §5.48, the merge head `61565ab3` (upstream `main` `cc90520b` merged in, both
+  conflicts resolved): on the build host `agents`, `cargo metadata --locked`
+  rc 0 with the lock's sha256 unchanged, `cargo fmt --all -- --check` rc 0,
+  `cargo clippy --workspace --all-targets -D warnings` rc 0, `cargo xtask
+  layers` rc 0 (26 crates), and `cargo test --workspace --lib --bins --tests`
+  over 45 targets — 5388 passed, 2 failed (both the upstream `fit_one_page`
+  tests), 9 ignored. The same two fail identically on clean `origin/main`
+  `cc90520b` (control run, §5.48).
 
 - §5.47, the lock head `9c6e343a` (one commit above `29afb475`, `Cargo.lock`
   only): on the build host `agents`, `cargo metadata --locked` rc 0 with the
@@ -4627,6 +4653,86 @@ has not executed on it and this gate is the evidence instead. Nothing was
 pushed and the head did not move: the documentation commit that records this
 section stays local, and the PR still waits for a maintainer's approval and
 review.
+
+### 5.48 The merge of `origin/main` `cc90520b`: two files resolved, the lock and the layering (run 2026-11-16)
+
+**Why the head moved.** PR #5834's head is still
+`9c6e343ae17ea09c69ac12d72f8bea748c51982b` (updated 2026-11-14T15:12:50Z), but
+`mergeStateStatus` turned from `MERGEABLE`/`UNSTABLE` to `DIRTY` while the head
+stood still: upstream `main` moved from `b5fa2f9e` to `cc90520b`
+(`cc90520b9d8fb0d1e6be2c2688e6f915319e850a`, 2026-11-15T16:49:58-05:00, "Merge
+pull request #5073 from AxylumRust/refactor/geom-clippy-pedantic"), 56 commits
+past the base this branch last merged. `git merge-tree --write-tree origin/main
+9c6e343a` exits 1 and names exactly two conflicted paths — `Cargo.lock` and
+`xtask/src/layers.rs`. The tree id `--write-tree` prints is a property of the
+conflict style, not of the repository (`7a7f6998` with the default style,
+`6ca88b71` with `diff3`, `9fed104b` with `zdiff3`, git 2.53.0), so the file list
+is the measurement, not the hash.
+
+**What main brings.** Against `95fe2038`: 447 files, +4778/−126648. The OOXML
+readers and writers left `crates/docx`, `crates/docbin` and `crates/formats` for
+`storytold/craft-libs` (`craft-docx`, `craft-wordmodel`, `craft-xml`,
+`craft-zip`, `craft-opc`, `craft-offcrypto` and their siblings, pinned at
+`41fb2275`); `crates/metafile` became `craft-metafile`; the image codecs moved
+to `craft-image-codecs`. **No collab file is among the 447**:
+`git diff --name-only 95fe2038 61565ab3 | grep -ci collab` answers `0`, and the
+gap between the main side's 271 deletions and the merge's 219 is exactly the 52
+collab files upstream does not have.
+
+**The merge.** `61565ab3` (first parent `95fe2038`, the documentation tip of
+§5.47; second parent `cc90520b`) brings 385 files, +4753/−93535 against the
+first parent. Both conflicts are resolved as unions:
+
+- `Cargo.lock` — 793 packages: main's 740 plus the 60 blocks only the branch
+  has, minus the 5 that left the graph with `crates/metafile` (`arbitrary`,
+  `derive_arbitrary`, `wordcraft-metafile`, `zip 3.0.0`, `zopfli`). Against
+  main that is +55 packages — the eight `wordcraft-collab` crates at the
+  workspace's `0.18.1` and their closure (`axum 0.8.9`, `jsonwebtoken 11.1.0`,
+  `ed25519-dalek 2.2.0`, `tokio-tungstenite 0.29`/`0.30`, `craft-web-host` at
+  ADR-0016's `7666e2b1`) — and −2: main's `fd5e2fe` pin of `craft-web-host` and
+  `tokio 1.53.2`, both superseded by what this branch declares (the collab
+  crates name `tokio = "1.54.1"` as their floor, so the two `1.x` versions
+  cannot coexist). `cargo metadata` on the build host completed the resolution
+  and wrote the file; the alternative reading of the union — a hand-merged lock
+  holding both `tokio` 1.53.2 and 1.54.1 — is refused by the resolver, which
+  was the first thing the gate proved.
+- `xtask/src/layers.rs` — main's `&["docx", "formats"]` chain in
+  `INTRA_LAYER_ORDER` beside the seven collab rows (`collab` L3,
+  `collab-doc`/`collab-client` L4, `collab-engine`/`collab-ws`/`collab-app`/
+  `collab-web` L5, `collab-server` exempt) and the five collab chains.
+
+**The gate** (build host `agents`, rustc 1.99.1, 20 cores, 2026-11-16;
+`CRAFT_I18N_DIR=~/craft-i18n`, `CRAFT_FONTS_DIR=~/craft-fonts`):
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `cargo metadata --locked --format-version 1` | rc 0; `Cargo.lock` sha256 `a1f66a07d64213f19faf8b8e7bdd0d00772ac8db0fde0310442c2aee52b8a140` before and after; `git status --porcelain Cargo.lock` empty |
+| 2 | `cargo fmt --all -- --check` | rc 0, no output |
+| 3 | `cargo clippy --workspace --all-targets -j 12 -- -D warnings` | rc 0, finished in 1m19s; the only warnings are cargo's three unused `[patch]` notes, which `main` carries too |
+| 4 | `cargo xtask layers` | rc 0 — `OK: 26 crates, no layering violations` |
+| 5 | `cargo test --workspace --lib --bins --tests -j 12 --no-fail-fast` | 45 targets, **5388 passed, 2 failed, 9 ignored**; both failures are `wordcraft-engine` `tests::fit_one_page::{fit_one_page_preserves_budget_across_document_serialization, fit_one_page_respects_step_pt}` |
+| 6 | control: `git checkout cc90520b` (clean `origin/main`) and `cargo test -p wordcraft-engine --lib -- tests::fit_one_page` | 41 passed, **2 failed** — the same two names |
+
+Logs, in the cabinet workspace under `.craft/logs/`:
+`gate-wordcraft-5834-61565ab3-{metadata,clippy,layers,test,control}.log`; the
+`fmt` step wrote nothing.
+
+All eight collab targets passed and carry the counts §5.46 recorded: `collab`
+61, `-app` 47, `-client` 26, `-doc` 116, `-engine` 58, `-server` 78 (+1
+ignored: the LibreOffice commit gate), `-web` 14, `-ws` 2 — 402 in total, 0
+failed. `crates/engine/src/tests/fit_one_page.rs` is byte-identical to main's
+(`a7458bf8`), and the only engine files this branch differs in are the four
+collab slices — `cmd.rs`, `cmd/collab.rs`, `prefs.rs` and `session/run.rs` — so
+the two red tests are main's font-metric dependence, reproduced on clean
+`cc90520b` in the same environment.
+
+**Measurement after the merge.** `git rev-list --left-right --count
+origin/main...HEAD` answers `0 120`, and `git merge-tree --write-tree
+origin/main HEAD` exits 0 (tree `c22c06c6`). The documentation commit that
+carries this section sits one above `61565ab3`, so `0 121` is the same branch.
+Nothing was pushed: the fork branch and the PR still answer `9c6e343a` until the
+owner pushes, which also means the five `action_required` runs of §5.47 still
+wait for a maintainer's approval on that head.
 
 ## 6. Where things live
 
