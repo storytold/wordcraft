@@ -429,22 +429,10 @@ fn without_launch_args(args: Vec<String>) -> Vec<String> {
     kept
 }
 
-/// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
-/// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
-/// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB. A Word
-/// template starts a new document instead ([`WordApp::open_from_platform`]), which has no path.
+/// Open a file whose name isn't valid Unicode (#1440) and that the platform hands the app
+/// ([`WordApp::open_non_unicode`]): a Word template starts a new document.
 fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
-    let name = path.to_string_lossy();
-    let opened = wordcraft_engine::io::read_document(path)
-        .and_then(|bytes| app.open_from_platform(&name, Some(&wordcraft_engine::cmd::insert::base64_encode(&bytes))));
-    match opened {
-        // Not when it waits for a password: that open names the document itself.
-        Ok(r) if r.get("pending").is_none() && !wordcraft_ui_egui::documents::is_word_template(&name) => app.session.path = Some(path.into()),
-        Ok(_) => {}
-        Err(e) => {
-            app.report_open_failure(&name, &e);
-        }
-    }
+    app.open_non_unicode(path, true);
 }
 
 /// Parses the command line, installs logging and the panic hook, restores preferences and window

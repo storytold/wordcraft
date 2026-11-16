@@ -150,7 +150,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-05: Update and restart brings back the documents that were open. The app writes their paths as it quits for the update and the new copy opens them, each in its own window with the one in front last; the list is used once and ignored after 15 minutes. Unsaved work in any window, not only the one in front, now holds the update back, and the update quits every window instead of closing one
+- 2026-11-05: Update and restart brings back the documents that were open. The app writes their paths as it quits for the update and the new copy opens them, each in its own window with the one in front last. Every saved document comes back, a name that isn't valid Unicode included; the list is used once and ignored after 15 minutes. Unsaved work in any window, not only the one in front, now holds the update back, and the update quits every window instead of closing one
 - 2026-11-05: ODT tables with a usable width keep their column proportions when the file gives only shares (gap 19): LibreOffice's CV template opened and saved with equal columns.
 - 2026-11-05: ODT font sizes reach Asian and complex-script text (gap 19): Chinese text set to 24 pt stayed at the default size in LibreOffice.
 - 2026-11-05: ODT text can turn off what its style turns on (gap 19): a word not bold in a bold heading showed bold, and came back bold in LibreOffice after a save.

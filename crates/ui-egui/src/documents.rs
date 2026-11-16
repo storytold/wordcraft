@@ -24,15 +24,16 @@ pub(crate) struct Parked {
 impl WordApp {
     /// Open `paths` in order, each after the dialog the one before it left open (a password box,
     /// which the next open would replace, or drop by replacing the window's document) has closed.
-    pub fn open_in_turn(&mut self, paths: impl IntoIterator<Item = String>) {
-        self.open_queue.extend(paths.into_iter().map(|p| (p, false)));
+    /// A name that isn't valid Unicode opens too ([`WordApp::open_non_unicode`]).
+    pub fn open_in_turn<P: Into<std::path::PathBuf>>(&mut self, paths: impl IntoIterator<Item = P>) {
+        self.open_queue.extend(paths.into_iter().map(|p| (p.into(), false)));
         self.open_next_in_turn();
     }
 
     /// [`WordApp::open_in_turn`] for files the platform hands the app, each opened as
     /// [`WordApp::open_from_platform`] opens it: a Word template starts a new document.
-    pub fn open_from_platform_in_turn(&mut self, paths: impl IntoIterator<Item = String>) {
-        self.open_queue.extend(paths.into_iter().map(|p| (p, true)));
+    pub fn open_from_platform_in_turn<P: Into<std::path::PathBuf>>(&mut self, paths: impl IntoIterator<Item = P>) {
+        self.open_queue.extend(paths.into_iter().map(|p| (p.into(), true)));
         self.open_next_in_turn();
     }
 
@@ -41,11 +42,43 @@ impl WordApp {
         while self.dialog.is_none()
             && let Some((path, from_platform)) = self.open_queue.pop_front()
         {
-            let opened = if from_platform { self.open_from_platform(&path, None) } else { self.run("file.open", json!({"path": path})) };
+            let Some(text) = path.to_str() else {
+                self.open_non_unicode(&path, from_platform);
+                continue;
+            };
+            let opened = if from_platform { self.open_from_platform(text, None) } else { self.run("file.open", json!({"path": text})) };
             if let Err(e) = opened {
-                self.report_open_failure(&path, &e);
+                self.report_open_failure(text, &e);
             }
         }
+    }
+
+    /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so
+    /// it gets the file's bytes under the lossy name, and the document then keeps the real path to
+    /// save to. The bytes are read as `file.open` reads a path: only a regular file, and at most
+    /// 2 GB. `from_platform` opens it as [`WordApp::open_from_platform`] does: a Word template
+    /// starts a new document, which has no path; otherwise it opens as itself.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_non_unicode(&mut self, path: &std::path::Path, from_platform: bool) {
+        let name = path.to_string_lossy();
+        let opened = wordcraft_engine::io::read_document(path).and_then(|bytes| {
+            let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
+            if from_platform { self.open_from_platform(&name, Some(&data)) } else { self.run("file.open", json!({"path": name, "data": data})) }
+        });
+        match opened {
+            // Not when it waits for a password: that open names the document itself.
+            Ok(r) if r.get("pending").is_none() && !(from_platform && is_word_template(&name)) => self.session.path = Some(path.into()),
+            Ok(_) => {}
+            Err(e) => {
+                self.report_open_failure(&name, &e);
+            }
+        }
+    }
+
+    /// The web app has no file names that aren't Unicode: say the file can't be opened.
+    #[cfg(target_arch = "wasm32")]
+    pub fn open_non_unicode(&mut self, path: &std::path::Path, _from_platform: bool) {
+        let _ = self.report_open_failure(&path.to_string_lossy(), "this file name can't be opened here");
     }
 
     /// Replace the document the window opened with before anything else happens (the first blank

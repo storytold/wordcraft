@@ -1,7 +1,9 @@
 //! The documents to open again after Update and restart. The update helper starts the new copy
 //! without them, so the app writes their paths to `reopen-after-update.json` in the settings
 //! folder as it quits for the update, and the next start reads that list once and removes it.
-//! A list older than [`MAX_AGE_SECS`] is from a start that never came, and is ignored.
+//! A list older than [`MAX_AGE_SECS`] is from a start that never came, and is ignored. Every
+//! saved document comes back, the one in front last, and a name that isn't valid Unicode is
+//! kept as the platform stores it ([`encode`]).
 
 use std::path::{Path, PathBuf};
 
@@ -11,15 +13,17 @@ const FILE: &str = "reopen-after-update.json";
 /// How long the new copy has to start: the helper waits up to a minute for the old one to exit,
 /// then an installer may run.
 const MAX_AGE_SECS: u64 = 15 * 60;
-/// At most this many documents come back.
-const MAX_PATHS: usize = 64;
-/// A longer file isn't one this app wrote.
-const MAX_BYTES: u64 = 256 * 1024;
+/// A longer file isn't one this app wrote: a document's entry takes at most a few kilobytes, so
+/// this holds thousands of documents.
+const MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Seconds since the Unix epoch, or 0 when the clock is set before it.
 fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// The settings folder the list lives in, or `None` when preferences are off
+/// (`WORDCRAFT_NO_PREFS`) or there is no settings folder.
 fn dir() -> Option<PathBuf> {
     if !crate::prefs_enabled() {
         return None;
@@ -38,17 +42,63 @@ pub(crate) fn save(paths: &[PathBuf]) {
 }
 
 /// The documents the last run left to reopen, once: the list is removed whatever it holds.
-pub(crate) fn take() -> Vec<String> {
+pub(crate) fn take() -> Vec<PathBuf> {
     dir().map(|dir| take_from(&dir, now())).unwrap_or_default()
 }
 
+/// A path as the list stores it: as text when it is valid Unicode, otherwise as the platform's
+/// own units (bytes on Unix, UTF-16 units on Windows), so the name comes back exactly.
+fn encode(path: &Path) -> Value {
+    if let Some(text) = path.to_str() {
+        return json!(text);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        json!({"unix": path.as_os_str().as_bytes()})
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        json!({"windows": path.as_os_str().encode_wide().collect::<Vec<u16>>()})
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        json!(path.to_string_lossy())
+    }
+}
+
+/// A path [`encode`] stored, or `None` for an entry this platform can't hold (another platform's
+/// units, a number out of range, anything else).
+fn decode(entry: &Value) -> Option<PathBuf> {
+    if let Some(text) = entry.as_str() {
+        return Some(PathBuf::from(text));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let units = entry.get("unix")?.as_array()?;
+        let bytes: Option<Vec<u8>> = units.iter().map(|u| u.as_u64().and_then(|u| u8::try_from(u).ok())).collect();
+        Some(PathBuf::from(std::ffi::OsString::from_vec(bytes?)))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        let units = entry.get("windows")?.as_array()?;
+        let wide: Option<Vec<u16>> = units.iter().map(|u| u.as_u64().and_then(|u| u16::try_from(u).ok())).collect();
+        Some(PathBuf::from(std::ffi::OsString::from_wide(&wide?)))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
+}
+
+/// Writes the list of `paths` into `dir`, stamped `written` (seconds since the epoch). Each path
+/// is made absolute (the new copy may start in another folder); the order is kept, so the one in
+/// front, last, comes back in front.
 fn save_in(dir: &Path, paths: &[PathBuf], written: u64) {
-    // Absolute: the new copy may start in another folder. `file.open` takes its path as text; a
-    // name that isn't valid Unicode stays in Recent.
-    let paths: Vec<PathBuf> = paths.iter().filter_map(|p| std::path::absolute(p).ok()).collect();
-    let paths: Vec<&str> = paths.iter().filter_map(|p| p.to_str()).collect();
-    // The one in front is last: keep the last ones.
-    let paths = paths.get(paths.len().saturating_sub(MAX_PATHS)..).unwrap_or_default();
+    let paths: Vec<Value> = paths.iter().filter_map(|p| std::path::absolute(p).ok()).map(|p| encode(&p)).collect();
     if paths.is_empty() {
         return;
     }
@@ -66,7 +116,10 @@ fn save_in(dir: &Path, paths: &[PathBuf], written: u64) {
     }
 }
 
-fn take_from(dir: &Path, now: u64) -> Vec<String> {
+/// Reads and removes the list in `dir` at time `now`, returning the files it names that still
+/// exist, in its order. A list that is too old, from the future, too long or not this app's
+/// gives nothing, and is removed too.
+fn take_from(dir: &Path, now: u64) -> Vec<PathBuf> {
     let path = dir.join(FILE);
     let Ok(meta) = std::fs::metadata(&path) else { return Vec::new() };
     let bytes = if meta.is_file() && meta.len() <= MAX_BYTES { std::fs::read(&path).ok() } else { None };
@@ -84,15 +137,14 @@ fn take_from(dir: &Path, now: u64) -> Vec<String> {
         return Vec::new();
     }
     let Some(paths) = list.get("paths").and_then(Value::as_array) else { return Vec::new() };
-    // The last ones, as `save_in` keeps them: the one in front is last.
-    let paths = paths.get(paths.len().saturating_sub(MAX_PATHS)..).unwrap_or_default();
-    paths.iter().filter_map(Value::as_str).filter(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file())).map(str::to_owned).collect()
+    paths.iter().filter_map(decode).filter(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file())).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A fresh, empty folder for one test.
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("wordcraft-reopen-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -100,6 +152,8 @@ mod tests {
         dir
     }
 
+    /// The list comes back once, in the order it was written (names with a space and an
+    /// apostrophe included).
     #[test]
     fn the_saved_documents_come_back_once_in_order() {
         let dir = temp("roundtrip");
@@ -108,12 +162,13 @@ mod tests {
         std::fs::write(&b, b"b").unwrap();
         save_in(&dir, &[a.clone(), b.clone()], 1000);
         let back = take_from(&dir, 1060);
-        assert_eq!(back, [a.to_str().unwrap(), b.to_str().unwrap()]);
+        assert_eq!(back, [a, b]);
         assert!(!dir.join(FILE).exists(), "the list is used once");
         assert!(take_from(&dir, 1060).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A relative path is written absolute: the new copy may start in another folder.
     #[test]
     fn a_relative_path_is_recorded_absolute() {
         let dir = temp("relative");
@@ -124,6 +179,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A list older than [`MAX_AGE_SECS`], or one stamped after now, is dropped and removed.
     #[test]
     fn an_old_list_or_one_from_the_future_is_dropped() {
         let dir = temp("age");
@@ -137,14 +193,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Missing files, folders, junk JSON and an oversized file give nothing and never panic.
     #[test]
     fn missing_files_folders_and_junk_are_skipped_without_panicking() {
         let dir = temp("junk");
         let kept = dir.join("kept.docx");
         std::fs::write(&kept, b"k").unwrap();
         save_in(&dir, &[dir.join("gone.docx"), dir.clone(), kept.clone()], 10);
-        assert_eq!(take_from(&dir, 10), [kept.to_str().unwrap()]);
-        for junk in [&b"not json"[..], b"{}", b"[1,2]", br#"{"written":"x","paths":"y"}"#, br#"{"written":10,"paths":[1,null,{}]}"#] {
+        assert_eq!(take_from(&dir, 10), [kept]);
+        for junk in [
+            &b"not json"[..],
+            b"{}",
+            b"[1,2]",
+            br#"{"written":"x","paths":"y"}"#,
+            br#"{"written":10,"paths":[1,null,{}]}"#,
+            br#"{"written":10,"paths":[{"unix":[300]},{"unix":"x"},{"windows":[70000]},{"windows":[-1]}]}"#,
+        ] {
             std::fs::write(dir.join(FILE), junk).unwrap();
             assert!(take_from(&dir, 10).is_empty(), "{junk:?}");
             assert!(!dir.join(FILE).exists());
@@ -152,31 +216,54 @@ mod tests {
         std::fs::write(dir.join(FILE), vec![b' '; MAX_BYTES as usize + 1]).unwrap();
         assert!(take_from(&dir, 10).is_empty());
         assert!(!dir.join(FILE).exists(), "an oversized list is removed unread");
+        save_in(&dir, &[], 10);
+        assert!(!dir.join(FILE).exists(), "no documents write no list");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Far more than 64 documents all come back, in order, with the one in front last.
     #[test]
-    fn at_most_max_paths_come_back_and_none_writes_nothing() {
-        let dir = temp("cap");
-        let file = dir.join("same.docx");
-        std::fs::write(&file, b"x").unwrap();
-        save_in(&dir, &vec![file.clone(); MAX_PATHS + 10], 10);
-        assert_eq!(take_from(&dir, 10).len(), MAX_PATHS);
-        // Past the cap, the first ones are dropped and the one in front (last) comes back last.
-        let docs: Vec<PathBuf> = (0..MAX_PATHS + 3).map(|i| dir.join(format!("{i}.docx"))).collect();
+    fn every_document_comes_back_with_the_one_in_front_last() {
+        let dir = temp("many");
+        let docs: Vec<PathBuf> = (0..300).map(|i| dir.join(format!("{i}.docx"))).collect();
         for d in &docs {
             std::fs::write(d, b"x").unwrap();
         }
         save_in(&dir, &docs, 10);
         let back = take_from(&dir, 10);
-        let want: Vec<&str> = docs[3..].iter().map(|d| d.to_str().unwrap()).collect();
-        assert_eq!(back, want);
-        // A list longer than the cap (not one this app wrote) keeps its last ones too.
-        let long: Vec<&str> = docs.iter().map(|d| d.to_str().unwrap()).collect();
-        std::fs::write(dir.join(FILE), serde_json::to_vec(&json!({"written": 10, "paths": long})).unwrap()).unwrap();
-        assert_eq!(take_from(&dir, 10), want);
-        save_in(&dir, &[], 10);
-        assert!(!dir.join(FILE).exists());
+        assert_eq!(back.len(), docs.len(), "no document is dropped");
+        assert_eq!(back, docs);
+        assert_eq!(back.last(), docs.last(), "the one in front comes back last");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A name that isn't valid Unicode comes back exactly, among other documents, in its place in
+    /// the order; one in front is still last.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_name_that_isnt_unicode_comes_back_exactly() {
+        let dir = temp("non-unicode");
+        #[cfg(unix)]
+        let odd = {
+            use std::os::unix::ffi::OsStringExt;
+            std::ffi::OsString::from_vec(b"caf\xe9.docx".to_vec())
+        };
+        #[cfg(windows)]
+        let odd = {
+            use std::os::windows::ffi::OsStringExt;
+            // An unpaired surrogate: valid in a Windows name, not in Unicode text.
+            std::ffi::OsString::from_wide(&[0x63, 0xD800, 0x2E, 0x64, 0x6F, 0x63, 0x78])
+        };
+        let odd = dir.join(odd);
+        assert!(odd.to_str().is_none());
+        let (first, front) = (dir.join("first.docx"), dir.join("front.docx"));
+        let docs = [first, odd, front];
+        for d in &docs {
+            std::fs::write(d, b"x").unwrap();
+        }
+        save_in(&dir, &docs, 10);
+        let back = take_from(&dir, 10);
+        assert_eq!(back, docs, "every document, the odd name exact and the one in front last");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -3191,6 +3191,26 @@ fn a_reopened_template_opens_itself_and_one_from_the_platform_starts_a_new_docum
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A reopened file whose name isn't valid Unicode opens in its turn as itself, keeps its real
+/// name to save to, and the file after it still comes in front.
+#[cfg(unix)]
+#[test]
+fn a_reopened_file_whose_name_isnt_unicode_opens_in_turn_as_itself() {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = scratch("queued-non-unicode");
+    let odd = dir.join(std::ffi::OsString::from_vec(b"caf\xe9.txt".to_vec()));
+    std::fs::write(&odd, "Bonjour").unwrap();
+    let front = dir.join("front.txt");
+    std::fs::write(&front, "In front").unwrap();
+
+    let mut a = app();
+    a.open_in_turn([odd.clone(), front.clone()]);
+    let paths: Vec<_> = a.session.documents().into_iter().map(|d| d.path).collect();
+    assert!(paths.contains(&Some(odd.clone())), "the odd name is kept exactly: {paths:?}");
+    assert_eq!(a.session.path, Some(front), "the last one is in front");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn word_templates_are_told_by_their_extension() {
     use crate::documents::is_word_template;

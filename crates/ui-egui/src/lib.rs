@@ -768,7 +768,7 @@ pub struct WordApp {
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// The files waiting their turn to open ([`WordApp::open_in_turn`]).
     /// Each with whether the platform handed it over ([`WordApp::open_from_platform_in_turn`]).
-    open_queue: std::collections::VecDeque<(String, bool)>,
+    open_queue: std::collections::VecDeque<(std::path::PathBuf, bool)>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,
