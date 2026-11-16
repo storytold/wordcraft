@@ -15504,20 +15504,26 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         let behind = Float { wrap: Wrap::BehindText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, ..Default::default() };
         d.insert_object(&at, rect_shape(460.0, 20.0, behind), &Default::default()).unwrap();
         let l = lay(&d);
-        let (x, y, left, right, height) = l.pages[0]
+        let (x, y, left, right, height, ink0) = l.pages[0]
             .header
             .iter()
             .find_map(|it| match it {
-                Placed::Lines { para, l0, x, y, .. } => para.lines.get(*l0).map(|ln| (*x, *y, ln.left, ln.right, ln.height)),
+                Placed::Lines { para, l0, x, y, .. } => {
+                    para.lines.get(*l0).and_then(|ln| Some((*x, *y, ln.left, ln.right, ln.height, *ln.xs.first()?)))
+                }
                 _ => None,
             })
             .expect("header line");
-        assert!(left > 100.0, "{align:?}: the line's band starts at the indent: {left}");
+        // `left`/`right` are the band edges available to the line, not the ink extent.
+        assert!((left - 150.0).abs() < 0.5, "{align:?}: the band's left edge is the indent: {left}");
+        assert!(ink0 > left + 100.0, "{align:?}: the ink starts well inside the band: ink {ink0}, band left {left}");
         let ym = y + height / 2.0;
         let hit = |px: f32| l.object_at_in(0, px, ym, 0.0, story).is_some();
         // Inside the band, wherever the centred or right-aligned ink sits: header text.
         assert!(!hit(x + left + 5.0), "{align:?}: the band's left end is text");
         assert!(!hit(x + (left + right) / 2.0), "{align:?}: the band's middle is text");
+        // Between the indent and the ink is still the text band, not the picture.
+        assert!(!hit(x + left + 160.0), "{align:?}: between the indent and the ink is text");
         // Within 40pt of the band's left end is still text; further left the picture is hit.
         assert!(!hit(x + left - 30.0), "{align:?}: within 40pt left of the band is text");
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
