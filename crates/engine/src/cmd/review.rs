@@ -52,13 +52,13 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"value"?: bool (omit to toggle)}"#)
         .key("Mod+Shift+E"),
         CommandSpec::new("review.acceptAll", "Accept All Changes", "Review › Changes", |s, v| resolve_all_then(s, v, true))
-            .params(r#"{"stopTracking"?: bool (also turn Track Changes off)}"#),
+            .params(r#"{"stopTracking"?: bool (also turn Track Changes off), "author"?: string (only that author's changes; matched exactly, case-sensitive; an author with no changes changes nothing; not a string is an error)}"#),
         CommandSpec::new("review.rejectAll", "Reject All Changes", "Review › Changes", |s, v| resolve_all_then(s, v, false))
-            .params(r#"{"stopTracking"?: bool (also turn Track Changes off)}"#),
+            .params(r#"{"stopTracking"?: bool (also turn Track Changes off), "author"?: string (only that author's changes; matched exactly, case-sensitive; an author with no changes changes nothing; not a string is an error)}"#),
         CommandSpec::new("review.accept", "Accept", "Review › Changes", |s, v| resolve_sel_then(s, v, true))
-            .params(r#"{"next"?: bool (then select the next change)}"#),
+            .params(r#"{"next"?: bool (then select the next change), "change"?: non-negative JSON integer (that entry of review.changes alone, even where it shares its text with another author's change; entries are in document order and renumber after every accept or reject, so list again before using another; null is the same as leaving it out; out of range, negative, fractional or not a number is an error; with next, the next unresolved change is selected afterwards)}"#),
         CommandSpec::new("review.reject", "Reject", "Review › Changes", |s, v| resolve_sel_then(s, v, false))
-            .params(r#"{"next"?: bool (then select the next change)}"#),
+            .params(r#"{"next"?: bool (then select the next change), "change"?: non-negative JSON integer (that entry of review.changes alone, even where it shares its text with another author's change; entries are in document order and renumber after every accept or reject, so list again before using another; null is the same as leaving it out; out of range, negative, fractional or not a number is an error; with next, the next unresolved change is selected afterwards)}"#),
         CommandSpec::new("review.nextChange", "Next Change", "Review › Changes", |s, _| nav_change(s, 1)).pure(),
         CommandSpec::new("review.previousChange", "Previous Change", "Review › Changes", |s, _| nav_change(s, -1)).pure(),
         CommandSpec::new("review.markup", "Display for Review", "Review › Tracking", |s, v| {
@@ -78,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // ⌘⇧G is Find Previous on macOS.
             .key(super::non_mac("Mod+Shift+G"))
             .pure(),
-        CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
+        CommandSpec::new("review.changes", "List Tracked Changes", "Review › Tracking", list_changes).pure(),
         CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue)
             .key(super::mac_or("F7 / Alt+F7 / Mod+Alt+L", "F7 / Alt+F7"))
             .params(r#"{"wrap"?: bool (default true; false stops at the end of the current story)}"#)

@@ -229,6 +229,7 @@ pub fn command_icon(id: &str) -> &str {
         ("para.numbering", "numbering"),
         ("table.insertRowAbove", "insertAbove"),
         ("view.commentsPane", "showComments"),
+        ("view.reviewingPane", "reviewingPane"),
         ("view.marks", "pilcrow"),
         ("edit.repeat", "redo"),
         ("file.new", "blankPage"),

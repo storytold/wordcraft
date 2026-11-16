@@ -77,7 +77,11 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
                 "reviewingPane",
                 Some("Reviewing Pane"),
                 "Reviewing Pane",
-                crate::widgets::ButtonAction::new("review.changes", json!({}), false),
+                crate::widgets::ButtonAction::new(
+                    "view.reviewingPane",
+                    json!({"value": !app.session.view.reviewing_pane}),
+                    app.session.view.reviewing_pane,
+                ),
             );
         });
     });
