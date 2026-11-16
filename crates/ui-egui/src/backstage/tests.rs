@@ -1428,9 +1428,41 @@ fn export_refusal_shows_on_the_print_page() {
 #[test]
 fn cancelling_an_export_clears_its_page_error() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    let ctx = egui::Context::default();
-    a.ctx = Some(ctx.clone());
-    ctx.data_mut(|d| d.insert_temp(super::export_error_id(), "old refusal".to_string()));
+    a.export_error = "old refusal".into();
     a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, None).unwrap();
-    assert!(ctx.data(|d| d.get_temp::<String>(super::export_error_id())).is_none());
+    assert!(a.export_error.is_empty());
+}
+
+/// The export error belongs to the window that refused the export: another window running a
+/// frame outside Backstage must not erase it while this one still shows the Export page.
+#[test]
+fn export_error_belongs_to_its_window() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-two-windows-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    // Window A (this one) is refused; window B is another window's state, outside Backstage.
+    let mut b = crate::window_ui::WindowUi::new(a.session.document_id());
+    let err = a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    assert_eq!(a.export_error, err);
+    // B's frame: swap its state in, run frames outside Backstage, swap back.
+    a.swap_window(&mut b);
+    assert!(!a.ui.backstage && a.export_error.is_empty(), "B has its own, empty, error");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.state_mut().swap_window(&mut b);
+    assert!(h.state().ui.backstage, "A is still on the Export page");
+    assert_eq!(h.state().export_error, err, "B's frames left A's message alone");
+    let _ = std::fs::remove_dir_all(&dir);
 }

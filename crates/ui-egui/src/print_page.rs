@@ -488,14 +488,11 @@ pub(crate) fn is_document_ext(ext: &str) -> bool {
 pub(crate) fn export_name(name: &str, format: &str) -> String {
     let want = export_file_ext(format);
     let path = std::path::Path::new(name);
-    // A name that is only a known extension (`.txt`) is that extension, not a hidden file's name.
-    let leading = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix('.')).filter(|e| is_document_ext(e));
-    match path.extension().and_then(|e| e.to_str()).or(leading) {
+    // A dotfile name (`.docx`) has no extension for `Path::extension`, which the engine's save also
+    // reads, so it is a stem and gets one (`.docx.xml`); a bare extension would be refused.
+    match path.extension().and_then(|e| e.to_str()) {
         Some(e) if e.eq_ignore_ascii_case(want) => name.to_string(),
-        Some(e) if is_document_ext(e) => match leading {
-            Some(_) => format!("{}.{want}", name.get(..name.len().saturating_sub(e.len() + 1)).unwrap_or_default()),
-            None => path.with_extension(want).to_string_lossy().into_owned(),
-        },
+        Some(e) if is_document_ext(e) => path.with_extension(want).to_string_lossy().into_owned(),
         // `a.` has an empty extension: its dot is dropped before the type's is added.
         _ => format!("{}.{want}", name.trim_end_matches('.')),
     }
@@ -504,9 +501,8 @@ pub(crate) fn export_name(name: &str, format: &str) -> String {
 /// The "save a copy" formats (File › Export, and below the settings on the Print page).
 pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
     // A refused or failed export, said here because Backstage hides the status bar (Export and Print pages both draw this).
-    let error = ui.ctx().data(|d| d.get_temp::<String>(crate::backstage::export_error_id())).unwrap_or_default();
-    if !error.is_empty() {
-        ui.label(egui::RichText::new(&error).color(ui.visuals().error_fg_color));
+    if !app.export_error.is_empty() {
+        ui.label(egui::RichText::new(&app.export_error).color(ui.visuals().error_fg_color));
         ui.add_space(6.0);
     }
     for &(label, ext) in EXPORT_FORMATS {

@@ -304,9 +304,7 @@ impl WordApp {
                 };
                 let r = if ext == "png" {
                     self.run("file.exportPng", json!({"path": path}))
-                } else if ext == crate::print_page::EXPORT_WORD_2003 {
-                    self.run("file.saveAs", json!({"path": path, "format": ext}))
-                } else if ext == "xml" {
+                } else if ext == "xml" || ext == crate::print_page::EXPORT_WORD_2003 {
                     // The engine takes an explicit format only for an .xml path, and a system Save
                     // dialog lets the user type any name: give it the extension, as the built-in
                     // browser does (`notes.docx` becomes `notes.xml`, `notes.v2` `notes.v2.xml`).
@@ -320,7 +318,8 @@ impl WordApp {
                         }
                     }
                     // Word XML even over a Word 2003 XML file, which a save by path would keep.
-                    self.run("file.saveAs", json!({"path": path, "format": wordcraft_engine::cmd::file::FORMAT_FLAT_OPC}))
+                    let format = if ext == "xml" { wordcraft_engine::cmd::file::FORMAT_FLAT_OPC } else { crate::print_page::EXPORT_WORD_2003 };
+                    self.run("file.saveAs", json!({"path": path, "format": format}))
                 } else {
                     self.run("file.saveAs", json!({"path": path}))
                 };
@@ -414,16 +413,12 @@ impl WordApp {
     /// there too, since Backstage's render loop skips the status bar (callers drop the result).
     fn fail_export(&mut self, error: String) -> String {
         self.status(error.clone());
-        if let Some(ctx) = self.ctx.clone() {
-            ctx.data_mut(|d| d.insert_temp(crate::backstage::export_error_id(), error.clone()));
-        }
+        self.export_error = error.clone();
         error
     }
 
     fn clear_export_error(&mut self) {
-        if let Some(ctx) = self.ctx.clone() {
-            crate::backstage::forget_export_error(&ctx);
-        }
+        self.export_error.clear();
     }
 
     /// Drop a Save As page error once a later attempt has actually saved.

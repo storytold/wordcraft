@@ -796,9 +796,9 @@ mod tests {
             ("a", "a.txt"),
             ("a.TXT", "a.TXT"),
             ("sub/a.rtf", "sub/a.txt"),
-            (".txt", ".txt"),
-            (".docx", ".txt"),
-            ("sub/.docx", "sub/.txt"),
+            (".txt", ".txt.txt"),
+            (".docx", ".docx.txt"),
+            ("sub/.docx", "sub/.docx.txt"),
             ("a.", "a.txt"),
             ("a..", "a.txt"),
         ] {
@@ -896,6 +896,24 @@ mod tests {
         // The resulting name already exists: the system dialog never confirmed it, so refuse.
         let bare = dir.join("letter").to_string_lossy().into_owned();
         assert!(a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A name that is only a known extension (`.docx`) is a stem for `Path::extension`, which the
+    /// engine's explicit-format guard reads too: exporting Word XML to it must name a real
+    /// `.xml` file and write it (a bare `.xml` would be refused, writing nothing).
+    #[test]
+    fn exporting_word_xml_to_a_dotfile_name_writes_the_file() {
+        let dir = scratch("export_xml_dotfile");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+        for format in ["xml", crate::print_page::EXPORT_WORD_2003] {
+            let typed = dir.join(".docx").to_string_lossy().into_owned();
+            a.finish_pick(AfterPick::Export { ext: format.into() }, Some(typed)).unwrap();
+            let written = dir.join(".docx.xml");
+            assert!(std::fs::read_to_string(&written).unwrap().contains(if format == "xml" { "pkg:package" } else { "w:wordDocument" }));
+            let _ = std::fs::remove_file(&written);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

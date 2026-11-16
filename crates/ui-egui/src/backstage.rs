@@ -719,17 +719,6 @@ pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove::<String>(save_as_error_id()));
 }
 
-/// The Export page's refusal or write-failure message ([`WordApp::fail_export`]), shown on the
-/// page for the same reason as the Save As one: Backstage hides the status bar.
-pub(crate) fn export_error_id() -> egui::Id {
-    egui::Id::unique("backstage_export_error")
-}
-
-/// Drop the Export page's error once File is closed or a later export succeeds.
-pub(crate) fn forget_export_error(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<String>(export_error_id()));
-}
-
 /// Open a file from the Recent list. A file that can't be opened (deleted, moved, unreadable)
 /// leaves File open so the list can say why, rather than closing it on a greyed-out window.
 pub(crate) fn open_recent(app: &mut WordApp, path: &str) -> Result<(), String> {
