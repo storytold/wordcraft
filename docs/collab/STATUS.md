@@ -5355,6 +5355,37 @@ gap is named in the answers: `Intent::Resync` in `crates/collab-ws` has no
 test of its own because the crate owns a real socket; lifting the guard into a
 predicate with a unit test is the smallest way to close that.
 
+### 5.56 Two CodeRabbit threads are fixed in the branch (2026-11-16 21:1xZ)
+
+**`collab.enable` passed the wrong flag.** `crates/ui-egui/src/app/commands.rs:124`
+gave `reconnect_wanted` `self.collab.is_none()` for a parameter that is
+`has_session`: it replaced a live session (its client id and unanswered queue) and
+opened nothing when there was none and the stored address stayed the same. The
+call site passes `is_some()`, and
+`enabling_collaboration_opens_a_missing_session_and_keeps_the_live_one` drives
+`WordApp::execute` twice — the missing-token status proves `connect` ran with no
+session, a live session on that server is kept — failing with the old flag.
+
+**The version moved before the catch-up.** `Client::on(Welcome)` set `version` to
+the room's head, so a connection that died between `welcome` and `tail` asked from
+a version the document never received, the room answered an empty tail, and the
+missed edits stayed absent without a version gap. The applied version and the
+announced head are kept apart now; `Event::Tail` carries the version it ends at,
+`Event::Welcome` says `catching_up`, both hosts read `Resyncing`
+(`CATCH_UP_REASON`, edits and commits refused), and both transports hand their
+queue over when the client is joined, not welcomed. The regression test
+`a_disconnect_after_welcome_and_before_tail_asks_again_from_the_applied_version`
+fails with the old code; the restore tests now deliver their announced snapshot.
+
+**The gate on `cd4cb417`** (host `agents`, `.craft/logs/gate-wordcraft-cr2-20261117.log`):
+`metadata --locked`, `fmt --check`, `clippy --all-targets -- -D warnings` over the
+five touched packages, `test --lib --tests` **1429 passed, 0 failed, 3 ignored**,
+`check --target wasm32-unknown-unknown` for the two web crates — all rc 0. **Left**: the push is the owner's, so neither thread is answered or resolved
+here (a reply naming an unpushed commit is what CodeRabbit rejected in §5.55). Two
+other threads with CodeRabbit's last word stay open: `crates/collab/src/room.rs`
+asks a commenter's undo/redo be authorised against the stored step (`Client::undo`
+sends a null payload, `Room::submit` refuses it before `submit_history` reads it).
+
 ## 6. Where things live
 
 | Concern | File |
