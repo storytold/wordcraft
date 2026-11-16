@@ -656,6 +656,9 @@ pub struct WordApp {
     pub clipboard_published: bool,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
+    /// Which job message is current: bumped when a job starts and whenever the message changes,
+    /// so a window can tell a new result from one it already said even when the text is the same.
+    print_gen: u64,
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
@@ -785,8 +788,8 @@ pub struct WordApp {
     pub missing_fonts: crate::chrome::MissingFontsMemo,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
-    /// The window's viewport and the pass its Print page was last drawn in: a gap means the
-    /// page has just been opened. Per window, as each window counts its own passes.
+    /// What this window's Print page knows of the last job's message (the viewport and pass it was
+    /// last drawn in, and the generations of the result it said and holds back); per window.
     print_memo: crate::print_page::Memo,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).

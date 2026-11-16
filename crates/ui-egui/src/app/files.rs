@@ -320,8 +320,8 @@ impl WordApp {
             return;
         }
         self.print_feedback_seen = self.printing.message.clone();
-        // A new message: what this window said before no longer stands for it.
-        self.print_memo.said = None;
+        // A new message: what any window said before no longer stands for it.
+        self.print_gen = self.print_gen.wrapping_add(1);
         let Some(message @ (printing::Feedback::Submitted(_) | printing::Feedback::Failed(_) | printing::Feedback::WorkerStopped)) =
             self.printing.message.clone()
         else {
@@ -339,7 +339,7 @@ impl WordApp {
         // Said only where the status bar is drawn: not under File's other pages, and a failure on
         // the Print page is the page's to show.
         if !self.ui.backstage {
-            self.print_memo.said = Some(message);
+            self.print_memo.said = Some(self.print_gen);
         }
     }
 

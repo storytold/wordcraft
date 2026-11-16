@@ -175,10 +175,11 @@ fn return_prints(ctx: &egui::Context) -> bool {
 pub struct Memo {
     /// The viewport and pass the page was last drawn in: a gap means it was just opened.
     pass: Option<(egui::ViewportId, u64)>,
-    /// The job result this window has already said, in its status bar or on this page.
-    pub(crate) said: Option<crate::printing::Feedback>,
-    /// The result held back on this opening of the page.
-    hidden: Option<crate::printing::Feedback>,
+    /// The generation (`WordApp::print_gen`) of the job result this window has already said, in
+    /// its status bar or on this page: a result of the same text from a later job is another one.
+    pub(crate) said: Option<u64>,
+    /// The generation of the result held back on this opening of the page.
+    hidden: Option<u64>,
 }
 
 /// The Print page: settings on the left, the preview on the right.
@@ -200,20 +201,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         matches!(m, Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped))
     };
     let message = app.printing.message.clone();
+    let generation = app.print_gen;
     if opened {
-        app.print_memo.hidden = if result(&message) && app.print_memo.said == message { message.clone() } else { None };
+        app.print_memo.hidden = (result(&message) && app.print_memo.said == Some(generation)).then_some(generation);
     }
-    // A different message (a job started again, then failed the same way) is shown afresh.
-    if app.print_memo.hidden != message {
+    // A later message (a job started again, then failed the same way) is shown afresh.
+    if app.print_memo.hidden != Some(generation) {
         app.print_memo.hidden = None;
     }
     let hide_message = app.print_memo.hidden.is_some();
-    if hide_message {
-    } else if result(&message) {
+    if !hide_message {
         // Shown here, so the next opening needn't repeat it.
-        app.print_memo.said = message;
-    } else {
-        app.print_memo.said = None;
+        app.print_memo.said = result(&message).then_some(generation);
     }
 
     let settings = |app: &mut WordApp, ui: &mut Ui| {

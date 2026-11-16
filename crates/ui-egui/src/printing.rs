@@ -243,6 +243,7 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
             }
             app.printing.begin(submit(bytes, settings, collate, print_options)).map_err(|_| "A print job is already being submitted.".to_owned())?;
             app.print_feedback_seen = None;
+            app.print_gen = app.print_gen.wrapping_add(1);
         } else if let Some(print) = &app.services.print {
             print(&bytes)?;
         }

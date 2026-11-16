@@ -166,6 +166,7 @@ impl WordApp {
             services: _,
             printing: _,
             print_feedback_seen: _,
+            print_gen: _,
             font_generation: _,
             integrated_titlebar: _,
             mac_titlebar: _,

@@ -3801,6 +3801,7 @@ fn print_page_harness(message: Option<crate::printing::Feedback>) -> egui_kittes
 fn set_print_message(h: &mut egui_kittest::Harness<'_, WordApp>, message: Option<crate::printing::Feedback>) {
     h.state_mut().printing.message = message.clone();
     h.state_mut().print_feedback_seen = message;
+    h.state_mut().print_gen += 1;
 }
 
 fn leave_and_reopen_print(h: &mut egui_kittest::Harness<'_, WordApp>) {
@@ -3820,7 +3821,7 @@ fn the_print_page_opens_without_the_last_jobs_message() {
     use egui_kittest::kittest::Queryable;
     let mut h = print_page_harness(Some(Feedback::Submitted("job 7".into())));
     // A job went away earlier: its message was said in this window's status bar, and the page closed.
-    h.state_mut().print_memo.said = h.state().printing.message.clone();
+    h.state_mut().print_memo.said = Some(h.state().print_gen);
     let _ = h.state_mut().run("file.print", json!({}));
     h.run_steps(4);
     assert!(h.query_by_label_contains("job 7").is_none(), "the last job's message isn't repeated");
@@ -3829,7 +3830,7 @@ fn the_print_page_opens_without_the_last_jobs_message() {
     // only the page being open keeps it showing: wrong reopen detection would hide it.
     let failure = Some(Feedback::Failed("no paper".into()));
     set_print_message(&mut h, failure.clone());
-    h.state_mut().print_memo.said = failure.clone();
+    h.state_mut().print_memo.said = Some(h.state().print_gen);
     h.run_steps(3);
     assert!(h.query_by_label_contains("no paper").is_some(), "a failure on the open page stays");
     leave_and_reopen_print(&mut h);
@@ -3838,6 +3839,33 @@ fn the_print_page_opens_without_the_last_jobs_message() {
     set_print_message(&mut h, Some(Feedback::NoPrinters));
     leave_and_reopen_print(&mut h);
     assert!(h.query_by_label_contains("No printers found").is_some(), "no printers still shows");
+}
+
+/// A retry that fails again with the very same text is a new result: it shows, though the window
+/// said the same words for the job before.
+#[test]
+fn a_retry_that_fails_the_same_way_shows_again() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(None);
+    // Every job is refused at once, with the same words.
+    h.state_mut().services.print_native = Some(Box::new(|_, _, _, _| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(Err("no paper".to_owned()));
+        receiver
+    }));
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(3);
+    h.state_mut().run("ui.print", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())));
+    assert!(h.query_by_label_contains("no paper").is_some(), "the first failure shows");
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("no paper").is_none(), "reopened, it isn't repeated");
+    h.state_mut().run("ui.print", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())));
+    assert!(h.query_by_label_contains("no paper").is_some(), "the same failure of a new job shows");
 }
 
 /// A result nobody has said yet isn't dropped: a failure that arrived while File showed another
@@ -3870,13 +3898,14 @@ fn the_print_pages_of_two_windows_decide_separately() {
     let mut a = app();
     a.printing.message = failure.clone();
     let first = a.windows.shown();
-    a.print_memo.said = failure.clone();
+    a.print_gen = 1;
+    a.print_memo.said = Some(a.print_gen);
     a.new_window();
     assert_ne!(first, a.windows.shown());
     assert_eq!(a.print_memo.said, None, "the second window never said it, so its page shows it");
     assert_eq!(a.printing.message, failure, "the message is shared, and still there");
     assert!(a.enter_window(first));
-    assert_eq!(a.print_memo.said, failure, "the first window said it, so its page doesn't repeat it");
+    assert_eq!(a.print_memo.said, Some(1), "the first window said it, so its page doesn't repeat it");
     assert_eq!(a.printing.message, failure);
 }
 
