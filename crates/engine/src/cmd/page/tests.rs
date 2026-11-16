@@ -465,6 +465,75 @@ c1",
     assert_eq!(landscape_flags(&s.doc), vec![false, false, false]);
 }
 
+/// #6421 (review): a selection that ends at the start of the next section does not include it.
+/// Landscape section, then a portrait one: selecting from inside the first to the start of the
+/// second and asking for landscape changes nothing (no section break, no undo step), and turning
+/// without a value flips the selected landscape text, not the portrait section the end sits in.
+#[test]
+fn orientation_ignores_the_section_a_selection_only_touches_at_its_start() {
+    let two = || {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(
+            "a1
+a2
+b1
+b2",
+        ));
+        select(&mut s, (2, 0), (2, 0));
+        s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+        select(&mut s, (0, 0), (0, 0));
+        s.run("layout.orientation", &json!({"value": "landscape", "apply": "section"})).unwrap();
+        assert_eq!(landscape_flags(&s.doc), vec![true, false]);
+        s
+    };
+    let mut s = two();
+    let next = s.doc.sections().first().map_or(0, |(e, _)| e + 1);
+    select(&mut s, (0, 1), (next, 0));
+    let (sections, depth) = (s.doc.sections().len(), s.undo_depth());
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!((s.doc.sections().len(), s.undo_depth()), (sections, depth), "already landscape: nothing changes");
+    assert_eq!(landscape_flags(&s.doc), vec![true, false]);
+
+    // Toggling reads the selected text (landscape), so it turns portrait and leaves the next
+    // section alone.
+    let mut s = two();
+    select(&mut s, (0, 1), (next, 0));
+    s.run("layout.orientation", &json!({})).unwrap();
+    assert_eq!(landscape_flags(&s.doc), vec![true, false, false]);
+    assert_eq!(s.doc.sections().len(), 3, "the text from the selection start turned portrait");
+}
+
+/// #6421 (review): the sections made at the selection's edges carry on the page numbers; only the
+/// part before keeps an explicit start, so the numbering does not restart inside or after the
+/// turned text.
+#[test]
+fn orientation_of_selected_text_does_not_restart_page_numbers() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(
+        "p1
+p2
+alpha beta gamma
+p4
+p5",
+    ));
+    s.run("layout.pageNumberFormat", &json!({"start": 5})).unwrap();
+    select(&mut s, (2, 0), (3, 0));
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    let starts: Vec<Option<u32>> = s.doc.sections().iter().map(|(_, x)| x.page_num_start).collect();
+    assert_eq!(starts, vec![Some(5), None, None]);
+    // The text from the document's start keeps the section's own start.
+    let mut s = Session::new(wordcraft_doc::Document::from_text(
+        "p1
+p2
+alpha beta gamma
+p4
+p5",
+    ));
+    s.run("layout.pageNumberFormat", &json!({"start": 5})).unwrap();
+    select(&mut s, (0, 0), (1, 2));
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    let starts: Vec<Option<u32>> = s.doc.sections().iter().map(|(_, x)| x.page_num_start).collect();
+    assert_eq!(starts, vec![Some(5), None]);
+}
+
 /// #6421: a selection across sections turns each of them; a caret alone, `apply: "section"` and a
 /// selection outside the main text's top level keep turning the section as before. Junk is
 /// refused or ignored, never a panic.
