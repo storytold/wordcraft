@@ -5,7 +5,6 @@
 //! the menus, ribbon, shortcuts, control channel and MCP all reach the same behaviour.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-pub mod builtin_tours;
 
 /// WordCraft as craft-update knows it, with its 128 px icon and accent colour: the update
 /// prompt shows both, and an AppImage's menu entry gets the icon.
