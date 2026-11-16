@@ -49,6 +49,10 @@ pub struct DisplayOptions {
     /// Leave this object out of the page: while it is dragged, the preview under the pointer
     /// stands in for it, so the page must not also show it where it was.
     pub hide_object: Option<wordcraft_doc::Pos>,
+    /// Review › Show Markup › Specific People: the reviewers whose markup isn't shown. Their
+    /// insertions and deletions are drawn as plain text, their changed lines get no bar and their
+    /// comments no highlight, as in Word. Empty: every reviewer's markup shows.
+    pub hidden_reviewers: Vec<String>,
 }
 
 impl Default for DisplayOptions {
@@ -63,7 +67,27 @@ impl Default for DisplayOptions {
             hide_ink: false,
             revisions: MarkupOptions::default(),
             hide_object: None,
+            hidden_reviewers: Vec::new(),
         }
+    }
+}
+
+impl DisplayOptions {
+    /// Whether `author`'s markup is shown ([`DisplayOptions::hidden_reviewers`]).
+    pub fn shows_reviewer(&self, author: &str) -> bool {
+        !self.hidden_reviewers.iter().any(|h| h == author)
+    }
+
+    /// Revision `r` (an index into the document's revisions), kept only when its author's markup is
+    /// shown; a revision missing from the table counts as shown.
+    pub fn shown_revision(&self, doc: &Document, r: Option<u32>) -> Option<u32> {
+        r.filter(|&i| self.hidden_reviewers.is_empty() || doc.revisions.get(i as usize).is_none_or(|v| self.shows_reviewer(&v.author)))
+    }
+
+    /// Whether the comment `id` is shown: its author's markup is (a comment not in the document
+    /// counts as shown).
+    pub fn shows_comment(&self, doc: &Document, id: u32) -> bool {
+        self.hidden_reviewers.is_empty() || doc.comments.get(&id).is_none_or(|c| self.shows_reviewer(&c.author))
     }
 }
 

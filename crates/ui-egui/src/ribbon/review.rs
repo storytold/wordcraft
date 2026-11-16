@@ -1,5 +1,5 @@
 use super::common::{mi, stack};
-use super::language::language_menu;
+use super::language::{language_menu, mi_check, mi_check_text};
 use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small};
 
 pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
@@ -71,6 +71,12 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "No Markup", "review.markup", json!({"value": "noMarkup"}));
                 },
             );
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("markup", Some("Show Markup"), "Show Markup", false, "review.showMarkup"),
+                show_markup_menu,
+            );
             small(
                 ui,
                 app,
@@ -117,6 +123,67 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
         let hidden = app.session.view.hide_ink;
         big_toggle(ui, app, "hideInk", "Hide\nInk", "review.hideInk", hidden);
     });
+}
+
+/// The most reviewers Show Markup › Specific People lists by name.
+pub(super) const MENU_REVIEWERS: usize = 50;
+
+/// Review › Tracking › Show Markup: which kinds of markup show (the Track Changes Options
+/// settings), the balloons, and whose markup (Specific People).
+pub(super) fn show_markup_menu(ui: &mut Ui, app: &mut WordApp) {
+    use wordcraft_layout::display::BalloonMode;
+    let m = app.session.prefs.markup.clone();
+    mi_check(ui, app, "Comments", m.comments, "review.trackingOptions", json!({"comments": !m.comments}));
+    mi_check(
+        ui,
+        app,
+        "Insertions and Deletions",
+        m.insertions_deletions,
+        "review.trackingOptions",
+        json!({"insertionsDeletions": !m.insertions_deletions}),
+    );
+    mi_check(ui, app, "Formatting", m.formatting, "review.trackingOptions", json!({"formatting": !m.formatting}));
+    ui.separator();
+    ui.menu_button(tl!("Balloons"), |ui| {
+        for (mode, label) in [
+            (BalloonMode::Revisions, "Show Revisions in Balloons"),
+            (BalloonMode::Inline, "Show All Revisions Inline"),
+            (BalloonMode::CommentsAndFormatting, "Show Only Comments and Formatting in Balloons"),
+        ] {
+            mi_check(ui, app, label, m.balloons == mode, "review.trackingOptions", json!({"balloons": mode.name()}));
+        }
+    });
+    ui.menu_button(tl!("Specific People"), |ui| specific_people_items(ui, app));
+}
+
+/// Show Markup › Specific People: All Reviewers, then each of the document's reviewers, checked
+/// while their markup shows.
+pub(super) fn specific_people_items(ui: &mut Ui, app: &mut WordApp) {
+    let names = wordcraft_engine::cmd::review::reviewers(&app.session.doc);
+    let all = names.iter().all(|n| app.session.view.shows_reviewer(n));
+    mi_check(ui, app, "All Reviewers", all, "review.showReviewer", json!({"all": !all}));
+    if !names.is_empty() {
+        ui.separator();
+    }
+    for name in names.iter().take(MENU_REVIEWERS) {
+        let shown = app.session.view.shows_reviewer(name);
+        mi_check_text(ui, app, &reviewer_label(name), shown, "review.showReviewer", json!({"author": name, "value": !shown}));
+    }
+    if names.len() > MENU_REVIEWERS {
+        ui.add_enabled(false, egui::Label::new(tl!("More reviewers not listed")));
+    }
+}
+
+/// A reviewer's name as a menu item: on one line and shortened (a file can name anyone, at any
+/// length); an unnamed reviewer is "Author", as in the balloons.
+pub(super) fn reviewer_label(name: &str) -> String {
+    const MAX: usize = 60;
+    let one_line: String = name.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let one_line = one_line.trim();
+    if one_line.is_empty() {
+        return tl!("Author").to_string();
+    }
+    if one_line.chars().count() > MAX { format!("{}…", one_line.chars().take(MAX).collect::<String>()) } else { one_line.to_string() }
 }
 
 /// Developer › Controls: content controls.

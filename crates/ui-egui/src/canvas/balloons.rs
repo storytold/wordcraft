@@ -210,29 +210,35 @@ fn collect_items(app: &WordApp, layout: &DocLayout, only_shown: bool, shown: Opt
     }
     let mut by_page: HashMap<usize, Vec<(f32, f32, Balloon, Pos)>> = HashMap::new();
     let markup = &app.session.prefs.markup;
+    // Show Markup › Specific People: a hidden reviewer's comments and changes get no balloons.
+    let view = &app.session.view;
     let comments = if markup.comments { wordcraft_engine::cmd::review::comment_list(&app.session) } else { Vec::new() };
     for (id, pos) in comments {
         let Some(pos) = pos else { continue };
-        if comments_by_id.get(&id).is_some_and(is_reply) || (only_shown && shown != Some(id)) {
+        if comments_by_id.get(&id).is_some_and(|c| is_reply(c) || !view.shows_reviewer(&c.author)) || (only_shown && shown != Some(id)) {
             continue;
         }
         add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Comment(id));
     }
     if markup.formatting {
-        for (pos, author, props) in wordcraft_engine::cmd::review::format_changes(&app.session).into_iter().take(500) {
+        for (pos, author, props) in
+            wordcraft_engine::cmd::review::format_changes(&app.session).into_iter().filter(|c| view.shows_reviewer(&c.1)).take(500)
+        {
             let what = crate::panes::describe_props(&props).join(", ");
             let text = if what.is_empty() { tl!("Formatted").to_string() } else { format!("{}: {what}", tl!("Formatted")) };
             add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Format(author, text));
         }
     }
     if markup.insertions_deletions {
-        for (pos, author, from) in wordcraft_engine::cmd::review::move_changes(&app.session).into_iter().take(500) {
+        for (pos, author, from) in
+            wordcraft_engine::cmd::review::move_changes(&app.session).into_iter().filter(|c| view.shows_reviewer(&c.1)).take(500)
+        {
             let text = if from { tl!("Moved from") } else { tl!("Moved to") }.to_string();
             add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Format(author, text));
         }
     }
     if app.session.revisions_in_balloons() {
-        for deletion in wordcraft_engine::cmd::review::deletion_balloons(&app.session) {
+        for deletion in wordcraft_engine::cmd::review::deletion_balloons(&app.session).into_iter().filter(|d| view.shows_reviewer(&d.author)) {
             let text = format!("{}: {}", tl!("Deleted"), deletion.text);
             add_balloon_anchor(&mut by_page, layout, app.session.page_hint, deletion.at, Balloon::Format(deletion.author, text));
         }
