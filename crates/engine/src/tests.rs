@@ -4100,7 +4100,10 @@ fn tracked_changes_carry_the_local_time() {
     run(&mut s, "text.insert", json!({"text": " more"}));
     let after = local();
     let rev = s.doc.revisions.iter().find(|r| r.kind == wordcraft_doc::RevisionKind::Insert).expect("a tracked insertion");
-    assert!(rev.date == before || rev.date == after, "{} is not the local time {before} or {after}", rev.date);
+    // Same-width ISO times sort as they read, so any second between the two samples is right. A
+    // clock change between them (daylight saving) can put `after` first: take them in order.
+    let (lo, hi) = if before <= after { (&before, &after) } else { (&after, &before) };
+    assert!(*lo <= rev.date && rev.date <= *hi, "{} is not a local time from {lo} to {hi}", rev.date);
 }
 
 /// Update Table with nothing to change lays the document out at the revisions it touches, then
