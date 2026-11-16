@@ -415,13 +415,14 @@ fn clicking_the_autosave_label_toggles_autosave() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// #6734: with AutoSave off the title bar's label is drawn in the disabled colour, so the switch
-/// does not read as active; on, it keeps the dim text colour.
+/// #6734: with AutoSave off the title bar's label is drawn in the greyer `autosave_off` colour, so
+/// the switch does not read as active; on, it keeps the dim text colour. Both colours are checked
+/// at 4.5:1 on the title bar in the theme tests, where `contrast` lives.
 #[test]
 fn the_autosave_label_greys_while_the_switch_is_off() {
     for t in [Tokens::light(), Tokens::dark()] {
         assert_eq!(autosave_label_color(&t, false, true), t.text_dim, "on: the dim label colour");
-        assert_eq!(autosave_label_color(&t, false, false), t.text_disabled, "off: the disabled colour");
+        assert_eq!(autosave_label_color(&t, false, false), t.autosave_off, "off: the greyer off colour");
         assert_ne!(autosave_label_color(&t, false, false), autosave_label_color(&t, false, true), "on and off look different");
     }
 }

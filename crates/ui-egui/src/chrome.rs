@@ -305,13 +305,15 @@ pub(crate) fn title_drag_rect(ctx: &egui::Context) -> Option<Rect> {
 
 /// The AutoSave label's colour: the title bar greys the switch's text while AutoSave is off, so
 /// the control doesn't read as active (#6734); a document AutoSave can't cover greys it further.
+/// The off colour is the greyer `autosave_off` rather than `text_disabled`: the label is part of
+/// the switch, so it still has to read at 4.5:1.
 fn autosave_label_color(t: &Tokens, blocked: bool, on: bool) -> egui::Color32 {
     if blocked {
         t.text_dim.gamma_multiply(0.6)
     } else if on {
         t.text_dim
     } else {
-        t.text_disabled
+        t.autosave_off
     }
 }
 
