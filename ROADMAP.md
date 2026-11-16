@@ -892,6 +892,7 @@ Quoted field escapes are interpreted like Word, and body `PAGE` fields use their
 
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
+- 2026-11-16: Layout: in a run of Keep with next paragraphs, a kept paragraph that does not fit in the room left on the page breaks as usual, with the paragraphs kept with it staying on the page, instead of the whole run moving to the next page (#6852). Readiness estimates unchanged.
 
 ## Revision history
 

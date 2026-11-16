@@ -10774,53 +10774,101 @@ fn keep_with_next_chain_carries_over_when_the_last_paragraph_cannot_start() {
     assert_eq!(pages(fit, false), [0, 0, 0, 1], "without the control one line stays: {fit}");
 }
 
+/// Pages of A, of B's first and last line, of C's first and last line, and of D for the run of
+/// the synthetic documents measured in Word for Windows 16.0 (Letter, 1 inch margins, lines of
+/// exactly 20 pt, widow control on): `fillers` one-line paragraphs, then A (1 line), B (8 lines),
+/// C (8 lines) and D (1 line). A, B and C are kept with the next when `kept`; B also keeps its
+/// lines together when `b_lines`.
+fn kept_run_pages(fillers: usize, kept: bool, b_lines: bool) -> Vec<usize> {
+    let mut d = Document::new();
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+        widow_control: Some(true),
+        ..Default::default()
+    };
+    let para = |text: &str, p: &ParaProps| {
+        let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        x.props = p.clone();
+        wordcraft_doc::para_block(x)
+    };
+    d.body = (0..fillers).map(|i| para(&format!("F{i}"), &plain)).collect();
+    let k = ParaProps { keep_next: Some(kept), ..plain.clone() };
+    let kb = ParaProps { keep_lines: Some(b_lines), ..k.clone() };
+    let eight = |label: &str| {
+        (1..=8).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join(
+            "
+",
+        )
+    };
+    d.body.push(para("A1", &k));
+    d.body.push(para(&eight("B"), &kb));
+    d.body.push(para(&eight("C"), &k));
+    d.body.push(para("D1", &plain));
+    let l = lay(&d);
+    let page = |block: usize, offset: usize| l.caret(&Pos::body(fillers + block, offset)).unwrap().page;
+    // Eight lines of two characters and a break: the last line starts at offset 21.
+    vec![page(0, 0), page(1, 0), page(1, 21), page(2, 0), page(2, 21), page(3, 0)]
+}
+
 /// A run of kept paragraphs whose last kept one is too long for the room left breaks there, as
 /// one kept paragraph that does not fit breaks as usual, instead of moving over whole. Measured
-/// in Word for Windows 16.0 on synthetic documents (Letter, 1 inch margins, lines of exactly
-/// 20 pt, widow control on): one-line fillers, A (1 line, kept), B (8 lines, kept), C (8 lines,
-/// kept) and D (1 line). With 16 to 21 fillers A and B stay on the first page and C splits
-/// (six lines and two); with 24 or 25 A stays and B splits; with 15, 22 and 23 the run moves over
-/// whole, because the last kept paragraph fits in the room as a whole and then cannot be followed by D.
+/// in Word (see [`kept_run_pages`]): with 16 to 21 fillers A and B stay on the first page and C
+/// splits; with 24 or 25 A stays and B splits.
 #[test]
 fn keep_with_next_run_breaks_at_the_kept_paragraph_that_does_not_fit() {
     crate::test_fonts();
-    // Pages of A, of B's first and last line, of C's first and last line, and of D.
-    let pages = |fillers: usize, kept: bool| -> Vec<usize> {
-        let mut d = Document::new();
-        let plain = ParaProps {
-            space_before: Some(0.0),
-            space_after: Some(0.0),
-            line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
-            widow_control: Some(true),
-            ..Default::default()
-        };
-        let para = |text: &str, p: &ParaProps| {
-            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
-            x.props = p.clone();
-            wordcraft_doc::para_block(x)
-        };
-        d.body = (0..fillers).map(|i| para(&format!("F{i}"), &plain)).collect();
-        let k = ParaProps { keep_next: Some(kept), ..plain.clone() };
-        let eight = |label: &str| (1..=8).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join("
-");
-        d.body.push(para("A1", &k));
-        d.body.push(para(&eight("B"), &k));
-        d.body.push(para(&eight("C"), &k));
-        d.body.push(para("D1", &plain));
-        let l = lay(&d);
-        let page = |block: usize, offset: usize| l.caret(&Pos::body(fillers + block, offset)).unwrap().page;
-        // Eight lines of two characters and a break: the last line starts at offset 21.
-        vec![page(0, 0), page(1, 0), page(1, 21), page(2, 0), page(2, 21), page(3, 0)]
-    };
-    // C splits: A and B and C's first lines on the first page, its last line on the second.
-    let split_c = (10..100).find(|n| pages(*n, false) == [0, 0, 0, 0, 1, 1]).expect("a filler count that splits the last paragraph");
-    assert_eq!(pages(split_c, true), [0, 0, 0, 0, 1, 1], "C splits and the run stays: {split_c}");
+    // C splits: A and B and C's first lines on the first page, its last lines on the second.
+    let split_c = (10..100).find(|n| kept_run_pages(*n, false, false) == [0, 0, 0, 0, 1, 1]).expect("a count that splits the last paragraph");
+    assert_eq!(kept_run_pages(split_c, true, false), [0, 0, 0, 0, 1, 1], "C splits and the run stays: {split_c}");
     // B splits: A and B's first line on the first page, B's last line on the second.
-    let split_b = (10..100).find(|n| pages(*n, false)[..3] == [0, 0, 1]).expect("a filler count that splits the middle paragraph");
-    assert_eq!(pages(split_b, true), pages(split_b, false), "B splits and A stays: {split_b}");
-    // Room for A, B and C whole but not for D after them: the run moves over together.
-    let whole = (10..100).rev().find(|n| pages(*n, false)[..5] == [0, 0, 0, 0, 0]).expect("a filler count that holds all three");
-    assert_eq!(pages(whole, true)[..5], [1, 1, 1, 1, 1], "the run that fits whole moves together: {whole}");
+    let split_b = (10..100).find(|n| kept_run_pages(*n, false, false)[..3] == [0, 0, 1]).expect("a count that splits the middle paragraph");
+    assert_eq!(kept_run_pages(split_b, true, false), kept_run_pages(split_b, false, false), "B splits and A stays: {split_b}");
+}
+
+/// Guards, the same before the fix: when the room holds the kept paragraphs whole but then
+/// cannot start the one after them, or holds all but the last kept paragraph's first lines, the
+/// run moves over together (Word, 15 and 22 to 23 fillers).
+#[test]
+fn keep_with_next_run_that_cannot_be_followed_moves_together() {
+    crate::test_fonts();
+    // Room for A, B and C whole but not for D after them.
+    let whole = (10..100).rev().find(|n| kept_run_pages(*n, false, false)[..5] == [0, 0, 0, 0, 0]).expect("a count that holds all three");
+    assert_eq!(kept_run_pages(whole, true, false)[..5], [1, 1, 1, 1, 1], "the run that fits whole moves together: {whole}");
+    // Room for A and B whole, C cannot even start there.
+    let tight = (10..100).find(|n| kept_run_pages(*n, false, false)[..4] == [0, 0, 0, 1]).expect("a count where C starts on the next page");
+    assert_eq!(kept_run_pages(tight, true, false)[..5], [1, 1, 1, 1, 1], "A and B move with C: {tight}");
+}
+
+/// Guard, the same before the fix: keep lines together on a kept paragraph in the middle of the
+/// run moves it, and the kept paragraph before it, when it does not fit in the room left.
+#[test]
+fn keep_with_next_run_moves_with_a_middle_paragraph_that_keeps_its_lines() {
+    crate::test_fonts();
+    let split_b = (10..100).find(|n| kept_run_pages(*n, false, false)[..3] == [0, 0, 1]).expect("a count that splits the middle paragraph");
+    let pages = kept_run_pages(split_b, true, true);
+    assert_eq!(pages[..3], [1, 1, 1], "A moves with B, which does not split: {split_b} {pages:?}");
+}
+
+/// Guard, the same before the fix: balanced columns still count a run of kept paragraphs whole
+/// (they grow to hold it) instead of cutting it at the trial height.
+#[test]
+fn balanced_columns_hold_a_run_of_kept_paragraphs() {
+    crate::test_fonts();
+    use wordcraft_doc::section::SectionStart;
+    let mut d = two_column_section(SectionStart::Continuous, vec![]);
+    for i in [3, 4, 5] {
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(i)) {
+            p.props.keep_next = Some(true);
+        }
+    }
+    let (nl, bl, nr, br, (page, after)) = column_bottoms(&lay(&d));
+    assert!(nl == 5 || nl == 6, "{nl} left, {nr} right");
+    // Pinned as before the fix (the kept paragraphs make the balance uneven, as they did).
+    assert!((bl - 221.79).abs() < 0.5 && (br - 169.2).abs() < 0.5, "columns end at {bl} and {br}");
+    assert_eq!(page, 0);
+    assert!(after >= bl - 0.5 && after < bl + 30.0, "next section at {after}, columns end at {bl}");
 }
 
 /// Keep lines together on the paragraph after a kept heading: when the whole paragraph does

@@ -346,7 +346,10 @@ impl<'a> Flow<'a> {
             return before;
         }
         // The room left on the page below this paragraph (with the 0.01 pt of slack below).
+        // Unlimited where this paragraph does not fit here itself: it moves anyway, and the run
+        // is counted whole as before.
         let room = pb.bottom + 0.01 - pb.y - height;
+        let room = if room < 0.0 { f32::INFINITY } else { room };
         let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, room, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
@@ -1042,8 +1045,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, room: 
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
             let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
             let whole = pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after;
-            // Keep lines together cannot split it: it moves whole, so it counts whole.
-            if pl.rp.keep_next && depth < 8 && (pl.rp.keep_lines || whole <= room) {
+            if pl.rp.keep_next && depth < 8 && whole <= room {
                 whole + next_first_line(ctx, block + 1, width, depth + 1, room - whole, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
