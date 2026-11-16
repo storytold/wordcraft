@@ -345,7 +345,9 @@ impl<'a> Flow<'a> {
         if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        // The room left on the page below this paragraph (with the 0.01 pt of slack below).
+        let room = pb.bottom + 0.01 - pb.y - height;
+        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, room, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
@@ -999,8 +1001,11 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// of a three-line one under that control (two would leave a widow), or all
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
-/// when the paragraph after it cannot start on the page (#966).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
+/// when the paragraph after it cannot start on the page (#966). A kept paragraph that does not
+/// fit in the `room` left on the page after the paragraphs before it breaks as usual, like a
+/// single kept paragraph that does not fit (measured in Word for Windows): the chain ends there
+/// and only its first lines count, so the paragraphs before it stay on the page.
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, room: f32, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
@@ -1035,9 +1040,11 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
-            if pl.rp.keep_next && depth < 8 {
-                let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
+            let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
+            let whole = pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after;
+            // Keep lines together cannot split it: it moves whole, so it counts whole.
+            if pl.rp.keep_next && depth < 8 && (pl.rp.keep_lines || whole <= room) {
+                whole + next_first_line(ctx, block + 1, width, depth + 1, room - whole, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
