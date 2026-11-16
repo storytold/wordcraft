@@ -162,7 +162,8 @@ fn bitmap_bytes(p: &Pixmap) -> usize {
     usize::from(p.width()) * usize::from(p.height()) * 4 + std::mem::size_of::<Pixmap>() + 2 * std::mem::size_of::<usize>()
 }
 
-/// Approximate memory held by a picture's items: path segments and text, the item itself (a bitmap
+/// Approximate memory held by a picture's items: path segments and text (charged by capacity, as a
+/// parsed vector keeps its growth slack), the item itself (a bitmap
 /// item stays in the list after its pixels move out), a path's dash array, a text's boxed record and
 /// font name, the pixmap slot kept for it, a pattern's path
 /// and tile, and every item's clip rectangles and clip paths. Tiles and clip paths are shared between
@@ -179,11 +180,11 @@ pub(crate) fn geometry_bytes(pic: &Picture) -> usize {
             Item::Text(t) => (&t.region, &t.clips),
         };
         let own = match it {
-            Item::Path { segs, line, .. } => (segs.len() * seg).saturating_add(line.dash.len() * std::mem::size_of::<f32>()),
+            Item::Path { segs, line, .. } => (segs.capacity() * seg).saturating_add(line.dash.capacity() * std::mem::size_of::<f32>()),
             Item::Bitmap { .. } => 0,
             Item::Pattern { segs, tile, .. } => {
                 let tile_bytes = if tiles.insert(Arc::as_ptr(tile)) { tile.rgba.len().saturating_add(std::mem::size_of::<Tile>()) } else { 0 };
-                (segs.len() * seg).saturating_add(tile_bytes)
+                (segs.capacity() * seg).saturating_add(tile_bytes)
             }
             Item::Text(t) => {
                 std::mem::size_of::<craft_metafile::Text>() + t.text.len() + t.dx.len() * std::mem::size_of::<f32>() + t.font.family.len()
@@ -194,7 +195,7 @@ pub(crate) fn geometry_bytes(pic: &Picture) -> usize {
             .iter()
             .map(|c| {
                 let arc = std::mem::size_of::<usize>() * 2 + std::mem::size_of::<Arc<ClipPath>>();
-                if clip_paths.insert(Arc::as_ptr(c)) { arc + std::mem::size_of::<ClipPath>() + c.segs.len() * seg } else { arc }
+                if clip_paths.insert(Arc::as_ptr(c)) { arc + std::mem::size_of::<ClipPath>() + c.segs.capacity() * seg } else { arc }
             })
             .sum();
         total = total.saturating_add(slot + std::mem::size_of::<Item>()).saturating_add(own).saturating_add(region_bytes).saturating_add(clip_bytes);

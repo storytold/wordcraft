@@ -1683,6 +1683,30 @@ fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
     assert!(region - plain >= 1000 * 16, "{} bytes", region - plain);
 }
 
+/// The parser collects segments and dashes without shrinking them, so the charge follows the
+/// capacity a vector keeps, not only its length.
+#[test]
+fn geometry_bytes_charges_the_capacity_of_segment_and_dash_vectors() {
+    use craft_metafile::LineStyle;
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let path = |segs: Vec<Seg>, dash: Vec<f32>| Item::Path {
+        segs,
+        fill: None,
+        stroke: Some(([0, 0, 0, 255], 1.0)),
+        line: LineStyle { dash, ..LineStyle::default() },
+        even_odd: false,
+        region: None,
+        clips: vec![],
+    };
+    let tight = crate::media::geometry_bytes(&pic(vec![path(vec![Seg::Line(0.0, 0.0); 2], vec![1.0; 2])]));
+    let mut segs = Vec::with_capacity(10_000);
+    segs.extend([Seg::Line(0.0, 0.0); 2]);
+    let mut dash = Vec::with_capacity(1_000);
+    dash.extend([1.0f32; 2]);
+    let slack = crate::media::geometry_bytes(&pic(vec![path(segs, dash)]));
+    assert!(slack - tight >= 9_000 * std::mem::size_of::<Seg>(), "{} bytes more", slack - tight);
+}
+
 /// A stroked path keeps its dash array on the heap, and a text item keeps its boxed record and font
 /// name; the cache charge counts both, so many dashed paths or text records are not under-counted.
 #[test]
