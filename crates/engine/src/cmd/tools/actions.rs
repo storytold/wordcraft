@@ -66,11 +66,14 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
         }
     };
     let result = if whole_document {
-        set_document_props(s, &change)?;
+        let glossary_skipped = set_document_props(s, &change)?;
         // The same caret/selection result as the selection path (the selection is untouched).
         let mut r = sel_result(s)?;
         if let Some(m) = r.as_object_mut() {
             m.insert("scope".into(), json!("document"));
+            if glossary_skipped {
+                m.insert("glossarySkipped".into(), json!(true));
+            }
         }
         r
     } else {
@@ -89,8 +92,9 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
 ///
 /// Glossary blocks are left alone while Track Changes and Track Formatting are both on: tracked
 /// formatting (`fmt_revisions::record`) compares only the body and the parts, so a glossary change
-/// would be an untracked edit. Like every other command, tracked edits never reach the glossary.
-fn set_document_props(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> Result<(), CmdError> {
+/// would be an untracked edit. So those blocks keep their old language while tracking; the caller
+/// reports it (`glossarySkipped`). Returns whether the glossary was skipped.
+fn set_document_props(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> Result<bool, CmdError> {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for story in stories {
         for path in s.doc.para_paths(story) {
@@ -101,7 +105,8 @@ fn set_document_props(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> Result<(),
             para.touch();
         }
     }
-    if !(s.doc.settings.track_changes && s.prefs.markup.track_formatting) {
+    let skipped = s.doc.settings.track_changes && s.prefs.markup.track_formatting;
+    if !skipped {
         for block in &mut s.doc.glossary {
             format_blocks(&mut block.blocks, f, 0);
         }
@@ -109,7 +114,7 @@ fn set_document_props(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> Result<(),
     if let Some(pend) = s.pending.as_mut() {
         f(pend);
     }
-    Ok(())
+    Ok(skipped)
 }
 
 /// [`set_document_props`] for a block list outside any story (depth-limited like `para_paths`).

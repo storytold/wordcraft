@@ -325,6 +325,11 @@ pub struct LanguageForm {
     /// The language and Do-not-check state the dialog opened with, to tell what the user changed.
     #[serde(skip)]
     pub initial: (String, bool),
+    /// The Do-not-check box was clicked (even back to where it started). A whole-document OK sends
+    /// `noProof` only then: the caret's value alone says nothing about runs that differ elsewhere,
+    /// but a click is a request to mark the whole document that way (#3518).
+    #[serde(skip)]
+    pub proof_touched: bool,
 }
 
 impl LanguageForm {
@@ -333,7 +338,14 @@ impl LanguageForm {
         let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.as_deref());
         let here = s.doc.styles.resolve_char(style, &s.typing_props());
         let lang = here.lang.unwrap_or_else(|| "en-US".into());
-        LanguageForm { initial: (lang.clone(), here.no_proof), lang, no_proof: here.no_proof, detect: s.prefs.detect_language, whole_document: false }
+        LanguageForm {
+            initial: (lang.clone(), here.no_proof),
+            lang,
+            no_proof: here.no_proof,
+            detect: s.prefs.detect_language,
+            whole_document: false,
+            proof_touched: false,
+        }
     }
 
     /// `review.language` parameters for OK.
@@ -343,15 +355,15 @@ impl LanguageForm {
         }
         // Whole document: the caret's values must not flatten what differs elsewhere, so send only
         // what was changed. With no edits at all the language goes (never the engine's en-US default).
-        let (lang_changed, proof_changed) = (self.lang != self.initial.0, self.no_proof != self.initial.1);
+        let (lang_changed, proof_touched) = (self.lang != self.initial.0, self.proof_touched);
         let mut v = json!({"scope": "document", "detect": self.detect});
         if let Some(m) = v.as_object_mut() {
-            if lang_changed || !proof_changed {
+            if lang_changed || !proof_touched {
                 m.insert("lang".into(), json!(self.lang));
             }
-            // Only a changed box is sent: the caret's value (ticked or not) says nothing about
-            // runs that differ elsewhere, and resending it would flatten them.
-            if proof_changed {
+            // Only a clicked box is sent: the caret's value untouched says nothing about runs that
+            // differ elsewhere, and resending it would flatten them.
+            if proof_touched {
                 m.insert("noProof".into(), json!(self.no_proof));
             }
         }
@@ -380,7 +392,9 @@ pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) 
         });
     });
     ui.add_space(4.0);
-    ui.checkbox(&mut f.no_proof, tl!("Do not check spelling or grammar"));
+    if ui.checkbox(&mut f.no_proof, tl!("Do not check spelling or grammar")).clicked() {
+        f.proof_touched = true;
+    }
     ui.checkbox(&mut f.detect, tl!("Detect language automatically"));
     ui.checkbox(&mut f.whole_document, tl!("Apply to the whole document"));
     ui.add_space(4.0);

@@ -998,14 +998,16 @@ fn language_scope_document_skips_glossary_while_tracking_formatting() {
     let mut s = multi_story_doc();
     s.run("review.trackChanges", &json!({"value": true})).unwrap();
     s.run("review.trackingOptions", &json!({"trackFormatting": true})).unwrap();
-    s.run("review.language", &json!({"lang": "fr-FR", "scope": "document"})).unwrap();
+    let out = s.run("review.language", &json!({"lang": "fr-FR", "scope": "document"})).unwrap();
+    assert_eq!(out["glossarySkipped"], true, "{out}");
     assert_eq!(gloss(&s), Some((Some("de-DE".into()), Some("de-DE".into()))));
     assert!(proofing_rows(&s).iter().all(|r| r.1.as_deref() == Some("fr-FR")));
     assert!(s.doc.revisions.iter().any(|r| r.kind == wordcraft_doc::RevisionKind::Format), "the body change is tracked");
     let mut s = multi_story_doc();
     s.run("review.trackChanges", &json!({"value": true})).unwrap();
     s.run("review.trackingOptions", &json!({"trackFormatting": false})).unwrap();
-    s.run("review.language", &json!({"lang": "fr-FR", "scope": "document"})).unwrap();
+    let out = s.run("review.language", &json!({"lang": "fr-FR", "scope": "document"})).unwrap();
+    assert!(out.get("glossarySkipped").is_none(), "{out}");
     assert_eq!(gloss(&s), Some((Some("fr-FR".into()), Some("fr-FR".into()))));
 }
 

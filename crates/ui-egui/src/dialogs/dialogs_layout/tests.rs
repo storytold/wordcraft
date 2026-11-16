@@ -214,6 +214,7 @@ fn language_dialog_default_survives_a_restart() {
         detect: false,
         whole_document: false,
         initial: ("fr-FR".into(), false),
+        proof_touched: false,
     }))));
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
@@ -242,7 +243,14 @@ fn language_dialog_default_survives_a_restart() {
 #[test]
 fn language_dialog_whole_document_checkbox_sends_scope() {
     use egui_kittest::kittest::Queryable;
-    let f = LanguageForm { lang: "fr-FR".into(), no_proof: false, detect: false, whole_document: false, initial: ("fr-FR".into(), false) };
+    let f = LanguageForm {
+        lang: "fr-FR".into(),
+        no_proof: false,
+        detect: false,
+        whole_document: false,
+        initial: ("fr-FR".into(), false),
+        proof_touched: false,
+    };
     assert!(f.params().get("scope").is_none());
     assert_eq!(LanguageForm { whole_document: true, ..f.clone() }.params()["scope"], "document");
     let mut a = app();
@@ -305,6 +313,7 @@ fn language_dialog_whole_document_sends_only_changes() {
     let mut f = LanguageForm::read(&a);
     f.whole_document = true;
     f.no_proof = true;
+    f.proof_touched = true;
     let p = f.params();
     assert!(p.get("lang").is_none());
     a.run("review.language", p).unwrap();
@@ -343,6 +352,28 @@ fn language_dialog_whole_document_unchanged_no_proof_is_not_sent() {
     a.run("review.language", p).unwrap();
     assert_eq!(run_proofing(&mut a, "code"), (Some("en-GB".into()), Some(true)));
     assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-GB".into()), Some(false)));
+}
+
+/// #3518: with the caret in a no-proof run, ticking the whole-document box and clicking Do not
+/// check off and on again (ending ticked) still marks the whole document no-proof.
+#[test]
+fn language_dialog_whole_document_retoggled_no_proof_is_sent() {
+    let mut a = proofing_mix_app();
+    a.run("select.text", json!({"text": "code"})).unwrap();
+    let mut f = LanguageForm::read(&a);
+    assert!(f.no_proof && f.initial.1 && !f.proof_touched);
+    f.whole_document = true;
+    for _ in 0..2 {
+        f.no_proof = !f.no_proof;
+        f.proof_touched = true;
+    }
+    assert!(f.no_proof);
+    let p = f.params();
+    assert_eq!(p["noProof"], true, "{p}");
+    assert!(p.get("lang").is_none(), "{p}");
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-US".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "code"), (Some("de-DE".into()), Some(true)));
 }
 
 /// #407: Envelopes starts from the selected address; Add to Document puts an envelope
