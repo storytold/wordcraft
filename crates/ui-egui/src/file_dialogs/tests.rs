@@ -465,6 +465,39 @@ fn export_pdf_without_a_path_asks_where_to_save() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An explicit web PDF export keeps an existing PDF suffix regardless of ASCII case.
+#[test]
+fn web_pdf_export_keeps_an_existing_suffix_in_any_case() {
+    let downloaded = Rc::new(RefCell::new(Vec::new()));
+    let captured = downloaded.clone();
+    let services = Services {
+        download: Some(Box::new(move |name, bytes| {
+            captured.borrow_mut().push((name.to_string(), bytes.starts_with(b"%PDF")));
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    for (name, expected) in [
+        ("Report.pdf", "Report.pdf"),
+        ("Report.PDF", "Report.PDF"),
+        ("Résumé.PdF", "Résumé.PdF"),
+        ("😀.PDF", "😀.PDF"),
+        (".hidden.PDF", ".hidden.PDF"),
+        ("Report..PDF", "Report..PDF"),
+        ("é", "é.pdf"),
+        ("😀", "😀.pdf"),
+        ("Report.pdf.exe", "Report.pdf.exe.pdf"),
+        ("Report.ＰＤＦ", "Report.ＰＤＦ.pdf"),
+        ("Report.pdf.", "Report.pdf..pdf"),
+        ("Report", "Report.pdf"),
+    ] {
+        let result = a.execute("file.exportPdf", json!({"path": name})).unwrap();
+        assert_eq!(result["downloaded"], expected, "{name}");
+        assert_eq!(downloaded.borrow().last().cloned(), Some((expected.to_string(), true)), "{name}");
+    }
+}
+
 /// Open, Save As and Export PNG from the command search (no path) ask for a file the same way.
 #[test]
 fn file_commands_without_a_path_ask_for_one() {
