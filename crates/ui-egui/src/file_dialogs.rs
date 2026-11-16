@@ -146,22 +146,19 @@ impl AfterPick {
     }
 
     /// The path a save or export writes for the `path` picked (#5368): Save As adds the format's
-    /// extension to a name with none it saves, an export to a name without its own format's, and
-    /// Print's Save as PDF `.pdf` to a name without it, as `file.printPdf` does. Applied before
-    /// asking to replace a file too, so the file asked about is the one written.
+    /// extension to a name with none it saves; an export names the file as the built-in browser
+    /// does (`print_page::export_name`: its format's extension replaces a known document one and
+    /// is added to any other); Print's Save as PDF adds `.pdf` to a name without it, as
+    /// `file.printPdf` does. Applied before asking to replace a file too, so the file asked about
+    /// is the one written.
     pub(crate) fn written_path(&self, path: &str) -> String {
         match self {
             AfterPick::SaveAs { ext, .. } => wordcraft_engine::io::with_save_ext(path, ext),
-            AfterPick::Export { ext } => wordcraft_engine::io::with_export_ext(path, export_file_ext(ext)),
+            AfterPick::Export { ext } => crate::print_page::export_name(path, ext),
             AfterPick::PrintPdf { .. } => wordcraft_engine::io::with_export_ext(path, "pdf"),
             _ => path.to_string(),
         }
     }
-}
-
-/// The file extension an export in format `ext` writes (Word 2003 XML is an `.xml` file).
-fn export_file_ext(ext: &str) -> &str {
-    if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext }
 }
 
 /// What to do once Save As has written the document.
@@ -253,15 +250,17 @@ impl WordApp {
         }
     }
 
-    /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up.
+    /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up;
+    /// returns the format of the export it was for, if any.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn give_up_file_dialog(&mut self) {
+    pub(crate) fn give_up_file_dialog(&mut self) -> Option<String> {
         if let Some(cancel) = &self.services.cancel_file_dialog {
             cancel();
         }
-        if let Some(d) = self.file_dialog.take() {
-            let _ = self.finish_pick(d.after, None);
-        }
+        let d = self.file_dialog.take()?;
+        let export = if let AfterPick::Export { ext } = &d.after { Some(ext.clone()) } else { None };
+        let _ = self.finish_pick(d.after, None);
+        export
     }
 
     /// The host couldn't show a system dialog (#576): ask in the built-in browser instead, which
@@ -345,7 +344,8 @@ impl WordApp {
 
     /// Do what the dialog was for with the picked path (`None`: the user cancelled).
     pub(crate) fn finish_pick(&mut self, after: AfterPick, picked: Option<String>) -> Result<Value, String> {
-        let picked = picked.map(|p| after.written_path(&p));
+        // An export names its file itself, below, and won't replace a file under a new name.
+        let picked = if matches!(after, AfterPick::Export { .. }) { picked } else { picked.map(|p| after.written_path(&p)) };
         match after {
             AfterPick::OpenDocument { document } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
@@ -396,16 +396,41 @@ impl WordApp {
                 Ok(json!({"picked": true}))
             }
             AfterPick::Export { ext } => {
-                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let Some(mut path) = picked else {
+                    // Cancelled: an earlier refusal is not news any more.
+                    self.clear_export_error();
+                    return Ok(json!({"cancelled": true}));
+                };
+                // A system Save dialog lets the user type any name, and the engine picks the format
+                // by the extension (an explicit format only for an .xml path): the file is named as
+                // the built-in browser names it (`notes.docx` as PDF is `notes.pdf`, `notes.v2`
+                // `notes.v2.pdf`, #5368). A file of that name the dialog never confirmed isn't
+                // replaced (the system dialog's answer asks first, `finish_system_pick`).
+                let named = crate::print_page::export_name(&path, &ext);
+                if named != path {
+                    path = named;
+                    if std::path::Path::new(&path).exists() {
+                        // Callers drop the result, so say it where the person sees it.
+                        return Err(self.fail_export(format!("{path} already exists; choose another name")));
+                    }
+                }
                 let r = if ext == "png" {
                     self.run("file.exportPng", json!({"path": path}))
-                } else if ext == crate::print_page::EXPORT_WORD_2003 {
-                    self.run("file.saveAs", json!({"path": path, "format": ext}))
+                } else if ext == "xml" || ext == crate::print_page::EXPORT_WORD_2003 {
+                    // Word XML even over a Word 2003 XML file, which a save by path would keep.
+                    let format = if ext == "xml" { wordcraft_engine::cmd::file::FORMAT_FLAT_OPC } else { crate::print_page::EXPORT_WORD_2003 };
+                    self.run("file.saveAs", json!({"path": path, "format": format}))
                 } else {
                     self.run("file.saveAs", json!({"path": path}))
                 };
-                if r.is_ok() {
-                    self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
+                match &r {
+                    Ok(_) => {
+                        self.clear_export_error();
+                        self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
+                    }
+                    Err(e) => {
+                        self.fail_export(e.clone());
+                    }
                 }
                 r
             }
@@ -484,6 +509,18 @@ impl WordApp {
         }
     }
 
+    /// An export failed or was refused: say so on the status bar and, for the Export page,
+    /// there too, since Backstage's render loop skips the status bar (callers drop the result).
+    fn fail_export(&mut self, error: String) -> String {
+        self.status(error.clone());
+        self.export_error = error.clone();
+        error
+    }
+
+    fn clear_export_error(&mut self) {
+        self.export_error.clear();
+    }
+
     /// Drop a Save As page error once a later attempt has actually saved.
     fn clear_save_as_error(&mut self) {
         if let Some(ctx) = self.ctx.clone() {
@@ -538,7 +575,8 @@ impl WordApp {
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
-        let name = format!("{}.{}", self.title_stem(), export_file_ext(ext));
+        let name = format!("{}.{}", self.title_stem(), crate::print_page::export_file_ext(ext));
+        // A refusal or failure is reported by `finish_pick` itself (Export page and status bar).
         let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext: ext.to_string() });
     }
 

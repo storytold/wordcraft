@@ -465,6 +465,39 @@ fn export_pdf_without_a_path_asks_where_to_save() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An explicit web PDF export keeps an existing PDF suffix regardless of ASCII case.
+#[test]
+fn web_pdf_export_keeps_an_existing_suffix_in_any_case() {
+    let downloaded = Rc::new(RefCell::new(Vec::new()));
+    let captured = downloaded.clone();
+    let services = Services {
+        download: Some(Box::new(move |name, bytes| {
+            captured.borrow_mut().push((name.to_string(), bytes.starts_with(b"%PDF")));
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    for (name, expected) in [
+        ("Report.pdf", "Report.pdf"),
+        ("Report.PDF", "Report.PDF"),
+        ("Résumé.PdF", "Résumé.PdF"),
+        ("😀.PDF", "😀.PDF"),
+        (".hidden.PDF", ".hidden.PDF"),
+        ("Report..PDF", "Report..PDF"),
+        ("é", "é.pdf"),
+        ("😀", "😀.pdf"),
+        ("Report.pdf.exe", "Report.pdf.exe.pdf"),
+        ("Report.ＰＤＦ", "Report.ＰＤＦ.pdf"),
+        ("Report.pdf.", "Report.pdf..pdf"),
+        ("Report", "Report.pdf"),
+    ] {
+        let result = a.execute("file.exportPdf", json!({"path": name})).unwrap();
+        assert_eq!(result["downloaded"], expected, "{name}");
+        assert_eq!(downloaded.borrow().last().cloned(), Some((expected.to_string(), true)), "{name}");
+    }
+}
+
 /// Open, Save As and Export PNG from the command search (no path) ask for a file the same way.
 #[test]
 fn file_commands_without_a_path_ask_for_one() {
@@ -757,12 +790,13 @@ fn save_as_adds_the_format_to_a_name_without_one() {
     answer(&shown, Some(&dir.join("Handout").to_string_lossy()));
     assert!(a.poll_file_dialog().unwrap().is_ok());
     assert!(std::fs::read(dir.join("Handout.pdf")).unwrap().starts_with(b"%PDF"), "an export keeps its format");
-    // A name with another format's extension is still a PDF.
+    // A name with another document format's extension is still a PDF, named as the built-in
+    // browser names it (`print_page::export_name`).
     a.export_dialog("pdf");
-    answer(&shown, Some(&dir.join("Handout.docx").to_string_lossy()));
+    answer(&shown, Some(&dir.join("Flyer.docx").to_string_lossy()));
     assert!(a.poll_file_dialog().unwrap().is_ok());
-    assert!(std::fs::read(dir.join("Handout.docx.pdf")).unwrap().starts_with(b"%PDF"));
-    assert!(!dir.join("Handout.docx").exists(), "no Word file written for a PDF export");
+    assert!(std::fs::read(dir.join("Flyer.pdf")).unwrap().starts_with(b"%PDF"));
+    assert!(!dir.join("Flyer.docx").exists(), "no Word file written for a PDF export");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -775,7 +809,7 @@ fn a_name_the_save_extends_asks_before_replacing_its_file() {
     let dir = scratch("save-as-ext-replace");
     let (mut a, shown) = async_app();
     typed(&mut a);
-    let target = dir.join("Handout.docx.pdf");
+    let target = dir.join("Handout.pdf");
     std::fs::write(&target, b"old").unwrap();
     let export = |a: &mut WordApp| {
         a.export_dialog("pdf");
@@ -796,7 +830,7 @@ fn a_name_the_save_extends_asks_before_replacing_its_file() {
     a.export_dialog("pdf");
     answer(&shown, Some(&dir.join("Fresh.docx").to_string_lossy()));
     assert!(a.poll_file_dialog().is_some_and(|r| r.is_ok()));
-    assert!(std::fs::read(dir.join("Fresh.docx.pdf")).unwrap().starts_with(b"%PDF"));
+    assert!(std::fs::read(dir.join("Fresh.pdf")).unwrap().starts_with(b"%PDF"));
     assert!(a.file_browser.open.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
