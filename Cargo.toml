@@ -24,10 +24,10 @@ wordcraft-pdf = { path = "crates/pdf" }
 # Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
-# craft-proof is storytold/craft-libs main at 3af2280ee3, after #590 (ca-ES-valencia reads the ca-valencia
-# pack), #589 (French elision suggestions first) and #497 (flag-based compounding), which also
-# has #496 (review follow-ups, en-AU) and the merged #482–#490/#495 stack; the font store's
-# `language-pack` kind is #486 (CP4.1).
+# craft-proof is storytold/craft-libs main at 3af2280ee3. That commit has #590 (ca-ES-valencia
+# reads the ca-valencia pack), #589 (French elision suggestions first), #497 (flag-based
+# compounding), #496 (review follow-ups, en-AU) and the merged #482–#490/#495 stack; the font
+# store's `language-pack` kind is #486 (CP4.1).
 wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "3af2280ee3434a2c860012df2f440652621c2c81", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "3af2280ee3434a2c860012df2f440652621c2c81", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "3af2280ee3434a2c860012df2f440652621c2c81", version = "=0.1.0" }
