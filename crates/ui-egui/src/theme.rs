@@ -681,20 +681,17 @@ pub fn font_definitions_language_arabic(
         data.index = f.index;
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
-    let arabic = wordcraft_fonts::ui_arabic_fonts();
-    for f in &arabic {
-        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
-    }
-    // Hebrew system font fallback
+
+    // Hebrew system font fallback (מטפל בדרישת CodeRabbit לפונט מערכת עברי)
     #[cfg(not(target_arch = "wasm32"))]
     if system_arabic
-        && arabic.is_empty()
         && let Some(f) = system_hebrew_font()
     {
         let mut data = FontData::from_static(&f.bytes);
         data.index = f.index;
-        add_cjk(&mut fonts, format!("system {}", f.family), data);
+        add_cjk(&mut fonts, format!("system hebrew {}", f.family), data);
     }
+
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
 }
@@ -703,7 +700,8 @@ pub fn font_definitions_language_arabic(
 #[cfg(not(target_arch = "wasm32"))]
 fn system_hebrew_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
     static HEBREW: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
-    HEBREW.get_or_init(|| {wordcraft_fonts::system_cjk_ui_font_for(false, false, &['א', 'ב', 'ג', 'ד'])
+    HEBREW.get_or_init(|| {
+        wordcraft_fonts::system_cjk_ui_font_for(false, false, &['א', 'ב', 'ג', 'ד'])
     }).as_ref()
 }
 
