@@ -4089,21 +4089,17 @@ fn new_comments_and_replies_carry_their_utc_time() {
 /// and reads it back (#6851); a UTC time showed in Word shifted by the user's offset.
 #[test]
 fn tracked_changes_carry_the_local_time() {
-    let local = || {
-        let now = crate::cmd::now_unix();
-        crate::cmd::revision_date_at(now, crate::cmd::local_offset_secs(now))
-    };
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Some text"}));
     run(&mut s, "review.trackChanges", json!({"value": true}));
-    let before = local();
+    let before = crate::cmd::now_unix();
     run(&mut s, "text.insert", json!({"text": " more"}));
-    let after = local();
+    let after = crate::cmd::now_unix();
     let rev = s.doc.revisions.iter().find(|r| r.kind == wordcraft_doc::RevisionKind::Insert).expect("a tracked insertion");
-    // Same-width ISO times sort as they read, so any second between the two samples is right. A
-    // clock change between them (daylight saving) can put `after` first: take them in order.
-    let (lo, hi) = if before <= after { (&before, &after) } else { (&after, &before) };
-    assert!(*lo <= rev.date && rev.date <= *hi, "{} is not a local time from {lo} to {hi}", rev.date);
+    // Any second between the two UTC samples, as local time at that second: a daylight-saving
+    // change between them moves the local time back or forward, not the UTC clock.
+    let local: Vec<String> = (before..=after).map(|t| crate::cmd::revision_date_at(t, crate::cmd::local_offset_secs(t))).collect();
+    assert!(local.contains(&rev.date), "{} is not the local time of a second in {local:?}", rev.date);
 }
 
 /// Update Table with nothing to change lays the document out at the revisions it touches, then
