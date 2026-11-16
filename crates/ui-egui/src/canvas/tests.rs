@@ -3495,6 +3495,30 @@ fn pages_flow_into_rows_when_they_fit() {
     }
 }
 
+/// A host's `max_fit_zoom` stops Page Width, One Page and Multiple Pages at that zoom in a window
+/// with room for more; a smaller window still fits the page, and a zoom picked by hand goes past it.
+#[test]
+fn a_fit_zooms_no_further_than_max_fit_zoom() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    let l = shown_layout(&mut app);
+    let (big, small) = (vec2(4000.0, 6000.0), vec2(400.0, 600.0));
+    for fit in ["view.pageWidth", "view.onePage", "view.multiplePages"] {
+        app.session.run(fit, &json!({})).unwrap();
+        app.max_fit_zoom = f32::INFINITY;
+        assert!(geometry(&app, &l, big).scale > 2.0 * PX_PER_PT, "{fit}: unlimited, the page fills a big window");
+        app.max_fit_zoom = 1.0;
+        assert_eq!(geometry(&app, &l, big).scale, PX_PER_PT, "{fit}: capped at 100%");
+        assert!(geometry(&app, &l, small).scale < PX_PER_PT, "{fit}: a small window still shrinks the page to fit");
+        for cap in [0.0, -1.0, f32::NAN] {
+            app.max_fit_zoom = cap;
+            let scale = geometry(&app, &l, big).scale;
+            assert!(scale.is_finite() && scale >= 0.1 * PX_PER_PT, "{fit}: a cap of {cap} still shows the page, at {scale}");
+        }
+    }
+    app.session.run("view.zoom", &json!({"value": 200})).unwrap();
+    assert_eq!(geometry(&app, &l, big).scale, 2.0 * PX_PER_PT, "a zoom picked by hand is not capped");
+}
+
 #[test]
 fn long_web_page_uses_only_visible_native_resolution_tiles() {
     // A 17,843 pt Web Layout page at 100% on a 2x display would need ~47k raster

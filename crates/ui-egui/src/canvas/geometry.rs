@@ -184,6 +184,9 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
         "multiplePages" => scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 3.0 * GAP) / (2.0 * maxw)).clamp(0.05, 6.0),
         _ => {}
     }
+    if matches!(v.fit.as_str(), "pageWidth" | "onePage" | "multiplePages") {
+        scale = scale.min(app.max_fit_zoom.max(0.1) * PX_PER_PT);
+    }
     if web {
         scale = PX_PER_PT * v.zoom.clamp(0.1, 5.0);
     }
