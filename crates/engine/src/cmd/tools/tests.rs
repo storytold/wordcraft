@@ -904,7 +904,6 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(text.contains("Visible text."), "{text}");
 }
 
- fix/5861-compare-paragraph-pairing
 /// #5861: When an edit run contains inserted or deleted paragraphs, blocks are aligned by
 /// text similarity rather than naive positional zipping, so edited paragraphs retain their
 /// partner and are diffed within rather than restructured wholesale.
@@ -1918,6 +1917,7 @@ fn compare_inserted_paragraph_clears_foreign_paragraph_and_section_fmt_change() 
         assert_eq!(sec.fmt_change, None, "foreign section fmt_change must be cleared on inserted paragraphs");
     }
     assert!(p.mark.ins.is_some(), "inserted paragraph mark must have comparison insertion marker");
+}
 
 /// #3518: every run and paragraph mark of a story, as (story, path, lang, noProof) rows.
 fn proofing_rows(s: &Session) -> Vec<(StoryRef, Option<String>, Option<bool>)> {
@@ -2064,5 +2064,4 @@ fn language_document_scope_is_refused_under_protection() {
         assert!(s.doc == before, "{mode}: nothing changed");
         assert!(s.prefs.detect_language, "{mode}: the detect preference is untouched");
     }
- main
 }
