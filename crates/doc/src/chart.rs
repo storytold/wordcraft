@@ -237,7 +237,7 @@ pub fn clean_fmt(s: &str) -> String {
 }
 
 /// A chart WordCraft can edit.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartSpec {
     #[serde(rename = "type")]
@@ -261,6 +261,55 @@ pub struct ChartSpec {
     /// The value axis (scatter charts: the y axis); gridlines on and no axis line in a new chart.
     #[serde(default = "value_axis")]
     pub val_axis: ChartAxis,
+}
+
+/// A [`ChartSpec`] as stored. A scatter series saved without `noLine` (by a version without
+/// series formatting) is drawn as markers without a line, as that version drew it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSpec {
+    #[serde(rename = "type")]
+    kind: ChartType,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    series: Vec<StoredSeries>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    legend: Option<LegendPos>,
+    #[serde(default)]
+    data_labels: bool,
+    #[serde(default)]
+    cat_axis: ChartAxis,
+    #[serde(default = "value_axis")]
+    val_axis: ChartAxis,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSeries {
+    #[serde(default)]
+    no_line: Option<bool>,
+    #[serde(flatten)]
+    series: ChartSeries,
+}
+
+impl<'de> Deserialize<'de> for ChartSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = StoredSpec::deserialize(deserializer)?;
+        let scatter = s.kind == ChartType::Scatter;
+        Ok(ChartSpec {
+            kind: s.kind,
+            categories: s.categories,
+            series: s.series.into_iter().map(|x| ChartSeries { no_line: x.no_line.unwrap_or(scatter), ..x.series }).collect(),
+            title: s.title,
+            legend: s.legend,
+            data_labels: s.data_labels,
+            cat_axis: s.cat_axis,
+            val_axis: s.val_axis,
+        })
+    }
 }
 
 impl Default for ChartSpec {
@@ -396,6 +445,23 @@ mod tests {
         assert_eq!(c.categories, vec!["a".to_string(), String::new()]);
         assert_eq!(ChartType::from_id("BARSTACKED"), Some(ChartType::BarStacked));
         assert_eq!(LegendPos::from_id("top"), Some(LegendPos::Top));
+    }
+
+    /// A scatter series stored without `noLine` reads as markers without a line; a stored value
+    /// and the other chart types keep theirs.
+    #[test]
+    fn stored_scatter_series_without_a_line_setting_draw_no_line() {
+        let read = |json: &str| -> Vec<bool> { serde_json::from_str::<ChartSpec>(json).unwrap().series.iter().map(|s| s.no_line).collect() };
+        let series = r#"[{"name":"a","values":[1,null,2.5]},{"name":"b","values":[3],"noLine":false}]"#;
+        assert_eq!(read(&format!(r#"{{"type":"scatter","series":{series}}}"#)), [true, false]);
+        assert_eq!(read(&format!(r#"{{"type":"line","series":{series}}}"#)), [false, false]);
+        let c: ChartSpec = serde_json::from_str(&format!(r#"{{"type":"scatter","series":{series}}}"#)).unwrap();
+        assert_eq!(c.series[0].values, [Some(1.0), None, Some(2.5)]);
+        // What this version writes reads back as itself.
+        for kind in ChartType::ALL {
+            let spec = ChartSpec::sample(kind);
+            assert_eq!(serde_json::from_str::<ChartSpec>(&serde_json::to_string(&spec).unwrap()).unwrap(), spec, "{kind:?}");
+        }
     }
 
     #[test]
