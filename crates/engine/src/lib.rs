@@ -25,6 +25,7 @@ pub mod sample;
 mod session;
 pub(crate) mod snapshot;
 pub mod speech;
+pub mod strict;
 pub(crate) mod view;
 
 use std::collections::HashMap;

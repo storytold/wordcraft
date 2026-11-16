@@ -118,33 +118,48 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     }
     heading(ui, "Format");
     let k = usize::from(f.endnote);
-    crate::rtl::grid(ui, egui::Grid::new("notes_format").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-        ui.label(tl!("Number format"));
-        if let Some(v) = f.fmt.get_mut(k) {
-            choice(ui, "notes_fmt", v, &FORMATS, false);
-        }
-        ui.end_row();
-        ui.label(tl!("Custom mark:"));
-        ui.add(egui::TextEdit::singleline(&mut f.mark).desired_width(60.0).char_limit(10));
-        ui.end_row();
-        ui.label(tl!("Start at:"));
-        if let Some(v) = f.start.get_mut(k) {
-            ui.add(egui::DragValue::new(v).range(1..=32_767).speed(0.2));
-        }
-        ui.end_row();
-        ui.label(tl!("Numbering"));
-        if let Some(v) = f.restart.get_mut(k) {
-            let each_page: &[(&str, &str)] = if f.endnote { &[] } else { &[("eachPage", "Restart Each Page")] };
-            let options: Vec<(&str, &str)> =
-                [("continuous", "Continuous numbering"), ("eachSect", "Restart Each Section")].into_iter().chain(each_page.iter().copied()).collect();
-            choice(ui, "notes_restart", v, &options, true);
-        }
-        ui.end_row();
-        ui.label(tl!("Apply to:"));
-        let mut scope = if f.whole { "document" } else { "section" }.to_string();
-        choice(ui, "notes_scope", &mut scope, &[("document", "Whole document"), ("section", "This section")], true);
-        f.whole = scope == "document";
-        ui.end_row();
+    crate::rtl::Table::new("notes_format").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Number format")));
+            r.cell(|ui| {
+                if let Some(v) = f.fmt.get_mut(k) {
+                    choice(ui, "notes_fmt", v, &FORMATS, false);
+                }
+            });
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Custom mark:")));
+            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.mark).desired_width(60.0).char_limit(10)));
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Start at:")));
+            r.cell(|ui| {
+                if let Some(v) = f.start.get_mut(k) {
+                    ui.add(egui::DragValue::new(v).range(1..=32_767).speed(0.2));
+                }
+            });
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Numbering")));
+            r.cell(|ui| {
+                if let Some(v) = f.restart.get_mut(k) {
+                    let each_page: &[(&str, &str)] = if f.endnote { &[] } else { &[("eachPage", "Restart Each Page")] };
+                    let options: Vec<(&str, &str)> = [("continuous", "Continuous numbering"), ("eachSect", "Restart Each Section")]
+                        .into_iter()
+                        .chain(each_page.iter().copied())
+                        .collect();
+                    choice(ui, "notes_restart", v, &options, true);
+                }
+            });
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Apply to:")));
+            r.cell(|ui| {
+                let mut scope = if f.whole { "document" } else { "section" }.to_string();
+                choice(ui, "notes_scope", &mut scope, &[("document", "Whole document"), ("section", "This section")], true);
+                f.whole = scope == "document";
+            });
+        });
     });
     // Insert / Apply / Cancel.
     let (mut insert, mut apply, mut cancel) = (false, false, false);

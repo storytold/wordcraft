@@ -26,6 +26,11 @@ impl Session {
         true
     }
 
+    /// Take back the newest undo step: a command that joins an earlier step of its own.
+    pub(crate) fn drop_last_undo_step(&mut self) {
+        self.history.pop();
+    }
+
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
     /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
     pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
