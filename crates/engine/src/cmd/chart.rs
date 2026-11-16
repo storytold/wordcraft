@@ -33,6 +33,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("chart.type", "Change Chart Type", "Chart Design › Type", |s, v| {
             let kind = chart_type(v)?.ok_or_else(|| CmdError::Params(format!("`type` is required: {TYPES}")))?;
             edit(s, |c| {
+                // A scatter series is drawn as markers without a line; the other types draw it.
+                if (c.kind == ChartType::Scatter) != (kind == ChartType::Scatter) {
+                    for series in &mut c.series {
+                        series.no_line = kind == ChartType::Scatter;
+                        if series.no_line && series.markers == Some(false) {
+                            series.markers = None;
+                        }
+                    }
+                }
                 c.kind = kind;
                 Ok(())
             })
@@ -52,7 +61,15 @@ pub fn specs() -> Vec<CommandSpec> {
                     c.categories = cats.clone();
                 }
                 if let Some(series) = &series {
-                    c.series = series.clone();
+                    // Each series keeps the formatting of the one it replaces.
+                    c.series = series
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (name, values))| match c.series.get(i) {
+                            Some(old) => ChartSeries { name: name.clone(), values: values.clone(), ..old.clone() },
+                            None => ChartSeries::new(c.kind, name.clone(), values.clone()),
+                        })
+                        .collect();
                 }
                 Ok(())
             })
@@ -99,6 +116,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let on = p::bool(v, "on").or_else(|| p::bool(v, "value"));
             edit(s, move |c| {
                 c.data_labels = on.unwrap_or(!c.data_labels);
+                // The chart's setting replaces each series' own.
+                for series in &mut c.series {
+                    series.labels = None;
+                }
                 Ok(())
             })
         })
@@ -152,7 +173,14 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let mut spec = ChartSpec::sample(kind);
     if let Some(d) = v.get("data") {
         spec.categories = d.get("categories").map(categories).transpose()?.unwrap_or_default();
-        spec.series = d.get("series").map(series_list).transpose()?.unwrap_or_default();
+        spec.series = d
+            .get("series")
+            .map(series_list)
+            .transpose()?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, values)| ChartSeries::new(kind, name, values))
+            .collect();
         if spec.series.is_empty() {
             return Err(CmdError::Params(format!("`data.series` needs at least one series: {DATA}")));
         }
@@ -220,8 +248,8 @@ fn cell_text(v: &Value) -> String {
     }
 }
 
-/// Series from JSON: `[{"name", "values": [number|null|numeric string]}]`.
-fn series_list(v: &Value) -> Result<Vec<ChartSeries>, CmdError> {
+/// Series names and values from JSON: `[{"name", "values": [number|null|numeric string]}]`.
+fn series_list(v: &Value) -> Result<Vec<(String, Vec<Option<f64>>)>, CmdError> {
     let a = v.as_array().ok_or_else(|| CmdError::Params(format!("`series`: {DATA}")))?;
     a.iter()
         .take(MAX_SERIES)
@@ -232,7 +260,7 @@ fn series_list(v: &Value) -> Result<Vec<ChartSeries>, CmdError> {
                 None | Some(Value::Null) => Vec::new(),
                 Some(_) => return Err(CmdError::Params("`values`: an array of numbers (null for none)".into())),
             };
-            Ok(ChartSeries { name, values })
+            Ok((name, values))
         })
         .collect()
 }

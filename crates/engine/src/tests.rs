@@ -7674,6 +7674,52 @@ fn chart_edits_are_one_undo_step_each() {
     assert_eq!((*w, graphic.w, graphic.h), (300.0, 300.0, 150.0));
 }
 
+/// Scatter series are drawn as markers without a line: inserted with data, changed to scatter
+/// and back, and added by Edit Data. Edit Data keeps each replaced series' formatting.
+#[test]
+fn scatter_chart_series_have_no_line_and_edit_data_keeps_formatting() {
+    let no_lines = |s: &Session| first_chart(&s.doc).unwrap().series.iter().map(|x| x.no_line).collect::<Vec<_>>();
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "scatter", "data": {"categories": [1, 2], "series": [{"name": "A", "values": [1, 2]}]}}));
+    assert_eq!(no_lines(&s), [true]);
+    run(&mut s, "chart.type", json!({"type": "line"}));
+    assert_eq!(no_lines(&s), [false]);
+    run(&mut s, "chart.type", json!({"type": "scatter"}));
+    assert_eq!(no_lines(&s), [true]);
+
+    // Formatting read from a file, set on the chart's model.
+    let set = |s: &mut Session, f: &dyn Fn(&mut wordcraft_doc::chart::ChartSpec)| {
+        let mut spec = first_chart(&s.doc).unwrap();
+        f(&mut spec);
+        let pos = Pos::body(0, 0);
+        let p = s.doc.para_mut(pos.story, &pos.path).unwrap();
+        let off = p.object_offsets()[0];
+        if let Some(wordcraft_doc::para::InlineObject::Graphic { graphic, .. }) = p.object_at_mut(off) {
+            std::sync::Arc::make_mut(graphic).chart = Some(std::sync::Arc::new(spec));
+        }
+    };
+
+    // A series' formatting stays through Edit Data; a new series gets the type's default.
+    set(&mut s, &|c| c.series[0].fill = Some(wordcraft_doc::props::Rgb(0x12, 0x34, 0x56)));
+    run(&mut s, "chart.editData", json!({"data": {"series": [{"name": "B", "values": [3, 4]}, {"name": "C", "values": [5, 6]}]}}));
+    let c = first_chart(&s.doc).unwrap();
+    assert_eq!(c.series[0].fill, Some(wordcraft_doc::props::Rgb(0x12, 0x34, 0x56)));
+    assert_eq!((c.series[0].name.as_str(), c.series[1].name.as_str()), ("B", "C"));
+    assert_eq!(no_lines(&s), [true, true]);
+
+    // A line-only series made a scatter series again gets its markers back, so it stays visible.
+    set(&mut s, &|c| c.series[0].markers = Some(false));
+    run(&mut s, "chart.type", json!({"type": "line"}));
+    run(&mut s, "chart.type", json!({"type": "scatter"}));
+    assert_eq!(first_chart(&s.doc).unwrap().series[0].markers, None);
+
+    // The chart's Data Labels setting replaces a series' own.
+    set(&mut s, &|c| c.series[1].labels = Some(true));
+    run(&mut s, "chart.dataLabels", json!({"on": false}));
+    let c = first_chart(&s.doc).unwrap();
+    assert!(!c.data_labels && c.series.iter().all(|x| x.labels.is_none()));
+}
+
 #[test]
 fn hostile_chart_data_is_capped() {
     use wordcraft_doc::chart::{MAX_CELLS, MAX_POINTS, MAX_SERIES, MAX_TEXT};
