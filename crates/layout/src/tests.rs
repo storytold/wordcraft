@@ -14445,6 +14445,60 @@ fn a_hyphen_before_a_slash_is_a_break_opportunity_like_word() {
     panic!("no width in the sweep wrapped the paragraph");
 }
 
+/// A row of hyphens wraps at any hyphen in Word: after a gap, the row first fills the line and
+/// its rest goes on the next, where UAX #14 (LB21) keeps the hyphens together and the whole row
+/// moved to the next line. The first width that wraps must leave `Deed ` and part of the row on
+/// the first line. A row of non-breaking hyphens (U+2011) stays whole, so the first wrap moves it
+/// whole, breaking at the space.
+#[test]
+fn a_row_of_hyphens_wraps_at_any_hyphen_like_word() {
+    let lines_of = |text: &str, margin_right: f32| -> Vec<String> {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = margin_right;
+        let l = lay(&d);
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect()
+    };
+
+    let text = format!("Deed {}", "-".repeat(16));
+    let mut wrapped = false;
+    for m in 100..=540 {
+        let lines = lines_of(&text, m as f32);
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert!(lines[0].starts_with("Deed -"), "the first line takes part of the row: {lines:?}");
+        assert!(lines[1].starts_with('-'), "the rest of the row follows: {lines:?}");
+        assert_eq!(lines.concat(), text, "no hyphen is lost or added: {lines:?}");
+        wrapped = true;
+        break;
+    }
+    assert!(wrapped, "no width in the sweep wrapped the row of hyphens");
+
+    let row = "\u{2011}".repeat(16);
+    let text = format!("Deed {row}");
+    for m in 100..=540 {
+        let lines = lines_of(&text, m as f32);
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines[0], "Deed ", "the only break is at the space: {lines:?}");
+        assert_eq!(lines[1], row, "the row of non-breaking hyphens stays whole: {lines:?}");
+        return;
+    }
+    panic!("no width in the sweep wrapped the non-breaking row");
+}
+
 /// docxide-pdf `dot-open-token*`: UAX #14 allows a break between a full stop and an opening
 /// parenthesis, Word doesn't. The first width that wraps `Deed 2023.(Example` breaks at the space.
 #[test]
