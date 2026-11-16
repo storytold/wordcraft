@@ -51,7 +51,7 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         },
     };
     if url.is_empty() || url.len() > 4096 {
-        return Err(CmdError::Params("bad url".into()));
+        return Err(CmdError::Params("`url` must be non-empty and at most 4096 UTF-8 bytes".into()));
     }
     let style = Some("Hyperlink".to_string());
     if s.sel.is_collapsed() {
