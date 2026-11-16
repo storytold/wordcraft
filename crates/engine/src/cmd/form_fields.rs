@@ -96,16 +96,22 @@ fn story_fields(doc: &Document, story: StoryRef) -> Vec<FormField> {
 }
 
 /// Does `o`'s own definition let it be filled in: a legacy form field, enabled, and not one Word
-/// computes? Where it sits matters too ([`fillable_at`]); forms protection's walk
-/// ([`crate::cmd::protect`]) knows that from the controls it is inside.
+/// computes? Where it sits matters too (`fillable_at`, `open_to_filling`).
 pub fn fillable_field(o: &InlineObject) -> bool {
     matches!(o, InlineObject::Field { form, .. } if legacy_form::fillable(form)) && o.legacy_form().is_some()
 }
 
-/// Can the legacy form field at `at` be filled in: its definition allows it, and no content
-/// control around it locks its contents?
+/// Can the legacy form field at `at` be filled in: its definition allows it, and where it sits
+/// lets it ([`open_to_filling`])?
 fn fillable_at(doc: &Document, at: &Pos, ff_data: &str) -> bool {
-    legacy_form::fillable(ff_data) && doc.control_at(at).is_none_or(|r| r.control.lock.can_edit())
+    legacy_form::fillable(ff_data) && open_to_filling(doc, at)
+}
+
+/// Does the content control nearest `at` let its contents be edited (or is there none)? That's
+/// the innermost of every control around it, including those kept on a table, row or cell
+/// around it, which [`Document::control_at`] doesn't see.
+pub(crate) fn open_to_filling(doc: &Document, at: &Pos) -> bool {
+    doc.controls_around(at).last().is_none_or(|(c, _)| c.lock.can_edit())
 }
 
 /// Does the document hold a legacy form field that can be filled in? Stops at the first.
@@ -113,11 +119,9 @@ pub fn any_fillable(doc: &Document) -> bool {
     doc.control_stories().into_iter().any(|st| {
         doc.para_paths(st).into_iter().any(|path| {
             doc.para(st, &path).is_some_and(|p| {
-                p.object_offsets().into_iter().any(|off| {
-                    p.object_at(off).is_some_and(|o| {
-                        fillable_field(o) && doc.control_at(&Pos::new(st, path.clone(), off)).is_none_or(|r| r.control.lock.can_edit())
-                    })
-                })
+                p.object_offsets()
+                    .into_iter()
+                    .any(|off| p.object_at(off).is_some_and(|o| fillable_field(o) && open_to_filling(doc, &Pos::new(st, path.clone(), off))))
             })
         })
     })

@@ -520,6 +520,9 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
         let mut fillable: Vec<bool> = Vec::new();
         // In forms mode, only markers that pair open and close holes (orphans stay content).
         let paired = if matches!(mode, HoleMode::Controls) { paired_control_markers(doc, story) } else { HashSet::new() };
+        // Controls kept on a table, row or cell aren't markers in the text, so the walk asks where
+        // they are, but only in a story that has them (#3603).
+        let wraps = matches!(mode, HoleMode::Controls) && doc.story_has_wraps(story);
         // The perm range or fillable control the walk is inside, innermost last.
         let in_hole = |open: &[u32], fillable: &[bool]| match mode {
             HoleMode::Perms(_) => !open.is_empty(),
@@ -531,6 +534,13 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
         for path in doc.para_paths(story) {
             let Some(p) = doc.para(story, &path) else { continue };
             let pieces = out.len();
+            // A paragraph whose nearest control is a locked one kept on its table, row or cell is
+            // protected like one in a locked control's markers, up to any control opening in it.
+            let base = fillable.len();
+            let wrapped = wraps && doc.controls_around(&Pos::new(story, path.clone(), 0)).last().is_some_and(|(c, kept)| *kept && !c.lock.can_edit());
+            if wrapped {
+                fillable.push(false);
+            }
             let mut k = 0;
             for (r, props) in p.run_ranges() {
                 let Some(text) = p.text.get(r.clone()) else { continue };
@@ -573,9 +583,16 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
                         }
                         if !boundary && !in_hole(&open, &fillable) {
                             flush(&mut out, &mut piece, props, false);
-                            // A legacy form field outside any control, or in one that allows editing, may
-                            // have its value filled in (#3603).
-                            let fill = matches!(mode, HoleMode::Controls) && fillable.last() != Some(&false);
+                            // A legacy form field outside any control, or whose nearest control allows
+                            // editing, may have its value filled in (#3603). The nearest may be kept on
+                            // a table, row or cell around it, which this walk's markers don't show.
+                            let fill = matches!(mode, HoleMode::Controls)
+                                && obj.is_some_and(crate::cmd::form_fields::fillable_field)
+                                && if wraps {
+                                    crate::cmd::form_fields::open_to_filling(doc, &Pos::new(story, path.clone(), r.start + i))
+                                } else {
+                                    fillable.last() != Some(&false)
+                                };
                             out.push(Piece::Object(Box::new((obj.map(|o| fixed_part(o, fill)), props.clone()))));
                         }
                         continue;
@@ -588,6 +605,11 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
             }
             if !in_hole(&open, &fillable) {
                 out.push(Piece::Mark(Box::new(p.props.clone()), p.mark.clone()));
+            }
+            // No marker in the paragraph closes a control opened outside the wrap (pairs nest), so
+            // the entry is still where it was pushed.
+            if wrapped && fillable.get(base) == Some(&false) {
+                fillable.remove(base);
             }
             let ancestors = (1..path.0.len()).filter_map(|n| path.0.get(..n));
             if out.len() > pieces {
