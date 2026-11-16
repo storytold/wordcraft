@@ -188,6 +188,53 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     true
 }
 
+/// The floating objects of a header whose place on the page doesn't depend on their paragraph's
+/// (set down from the page or from its top or bottom margin's area, and across from anything
+/// but a character): their wrap areas go into `excl` before any text is laid out, and their
+/// paragraph and object indexes are returned. Word wraps a header's text around such an object
+/// wherever its anchor is: the paragraphs before the anchor's go round it or below it too
+/// (measured in Word for Windows; the body does it with `EarlyFloats`). Only a header's own
+/// paragraphs: a footer is measured without its place on the page, and a cell's objects are
+/// placed by the cell. Not an object set down from the margin (`Anchor::Margin`): the header is
+/// measured from the section's top margin and drawn from where the body starts below it, so
+/// its place is not the same in both. Nor one in a text frame's paragraph, which is laid out
+/// apart and draws no objects.
+fn early_floats(
+    ctx: &mut Ctx,
+    story: StoryRef,
+    blocks: &Blocks,
+    (frame, width): (Option<PageFrame>, f32),
+    excl: &mut Vec<WrapArea>,
+) -> std::collections::HashSet<(usize, usize)> {
+    let mut early = std::collections::HashSet::new();
+    let header = matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Header));
+    let Some(frame) = frame.filter(|_| header) else { return early };
+    for (i, b) in blocks.iter().enumerate() {
+        let Block::Para(p) = &**b else { continue };
+        if p.objects.is_empty() || ctx.doc.styles.resolve_para(&p.props).frame.is_some() {
+            continue;
+        }
+        let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
+        for (oi, o) in p.objects.iter().enumerate() {
+            let Some((w, h, float)) = floating(o) else { continue };
+            let on_page =
+                matches!(float.v_rel, Anchor::Page | Anchor::TopMargin | Anchor::BottomMargin | Anchor::InsideMargin | Anchor::OutsideMargin)
+                    && float.h_rel != Anchor::Character;
+            if !on_page || left_out(oi) {
+                continue;
+            }
+            let h = ctx.float_height(o, w, h);
+            let r = float_rect(Some(frame), (0.0, width), 0.0, w, h, float);
+            let outline = ctx.wrap_outline(o);
+            if let Some(area) = wrap_area(r, float, outline.as_deref().map(Vec::as_slice)) {
+                excl.push(area);
+                early.insert((i, oi));
+            }
+        }
+    }
+    early
+}
+
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
 /// headers, footers, notes, text boxes. Returns items relative to (0, 0) and the height. `frame`
 /// says where the box sits on its page, for floating objects positioned relative to the page or
@@ -230,6 +277,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
     // The bottom of the last paragraph's lines.
     let mut prev_end = 0.0f32;
+    let early = early_floats(ctx, story, blocks, (frame, width), &mut excl);
     for (i, b) in blocks.iter().enumerate() {
         last_top = y;
         let mut path = prefix.to_vec();
@@ -307,8 +355,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     {
                         r.x = keep_in_cell(r.x, r.w, left, right);
                     }
-                    let outline = ctx.wrap_outline(o);
-                    excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                    // One placed before the text (`early_floats`) is in the wrap areas already.
+                    if !early.contains(&(i, oi)) {
+                        let outline = ctx.wrap_outline(o);
+                        excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                    }
                     floats.insert(oi, r);
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
