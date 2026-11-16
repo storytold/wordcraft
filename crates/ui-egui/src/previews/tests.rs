@@ -523,3 +523,43 @@ fn font_sample_shows_small_caps_and_the_script_mark() {
     assert_ne!(draw(&plain, None, false), draw(&plain, sup, false), "the mark is drawn");
     assert_ne!(draw(&plain, None, false), draw(&plain, None, true), "Switch Modes transforms the preview");
 }
+
+/// Raster previews must start on physical pixel boundaries at fractional display scales.
+#[test]
+fn font_and_style_previews_are_pixel_aligned() {
+    for ppp in [1.0, 1.5, 2.0] {
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(ppp);
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), Default::default());
+        let font = app.previews.font_preview_fn();
+        let mut found = [false; 2];
+        for frame in 0..4 {
+            let input = egui::RawInput { time: Some(frame as f64), ..Default::default() };
+            let out = ctx.run_ui(input, |ui| {
+                ui.add_space(0.3);
+                font(ui, "Arial");
+                style_gallery(&mut app, ui, &json!({}));
+            });
+            for shape in &out.shapes {
+                if let egui::Shape::Mesh(mesh) = &shape.shape {
+                    let bounds = mesh.calc_bounds();
+                    let kind = if bounds.width() > 200.0 {
+                        Some(0)
+                    } else if (60.0..70.0).contains(&bounds.width()) {
+                        Some(1)
+                    } else {
+                        None
+                    };
+                    if let Some(kind) = kind {
+                        found[kind] = true;
+                        for v in [bounds.min.x, bounds.min.y] {
+                            assert!((v * ppp - (v * ppp).round()).abs() < 0.001, "preview {kind}, scale {ppp}, coordinate {v}");
+                        }
+                    }
+                }
+            }
+            out.drop_without_applying_deltas();
+        }
+        assert_eq!(found, [true, true], "both previews are painted at {ppp}");
+    }
+}

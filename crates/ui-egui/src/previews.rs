@@ -174,6 +174,11 @@ impl PreviewAtlas {
     }
 }
 
+/// Avoid filtering a raster between physical pixels when painting at its native size.
+fn preview_rect(origin: egui::Pos2, size: egui::Vec2, ppp: f32) -> Rect {
+    Rect::from_min_size(pos2((origin.x * ppp).round() / ppp, (origin.y * ppp).round() / ppp), size)
+}
+
 /// A font menu entry's key in the fonts' atlas: its display scale and family.
 fn font_key(name: &str, ppp: f32) -> String {
     format!("{ppp}:{name}")
@@ -289,7 +294,7 @@ impl Previews {
             match hit {
                 Some((id, uv)) => {
                     let sz = uv.size() * ATLAS as f32 / ppp;
-                    ui.painter().image(id, Rect::from_min_size(pos2(r.min.x + 6.0, r.center().y - sz.y / 2.0), sz), uv, t.text);
+                    ui.painter().image(id, preview_rect(pos2(r.min.x + 6.0, r.center().y - sz.y / 2.0), sz, ppp), uv, t.text);
                 }
                 None => {
                     ui.painter().text(pos2(r.min.x + 8.0, r.center().y), egui::Align2::LEFT_CENTER, name, regular(12.0), t.text);
@@ -641,7 +646,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         });
         if let Some(h) = tex {
             let sz = h.size_vec2() / ppp;
-            let ir = Rect::from_min_size(pos2(r.min.x + 3.0, r.min.y + 4.0), sz.min(vec2(68.0, 32.0)));
+            let ir = preview_rect(pos2(r.min.x + 3.0, r.min.y + 4.0), sz.min(vec2(68.0, 32.0)), ppp);
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
             ui.painter().with_clip_rect(r).image(h.id(), ir, uv, preview_tint(&t, dark_page));
         }
