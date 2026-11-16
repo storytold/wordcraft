@@ -99,28 +99,55 @@ fn face(manager: &NSFontManager, font: &NSFont) -> Face {
 pub struct FontPanel {
     target: Retained<FontTarget>,
     picks: Receiver<Pick>,
+    /// The font the panel shows, so it changes only when the selection's does.
+    shown: RefCell<Option<Face>>,
 }
 
 impl FontPanel {
     pub fn new(mtm: MainThreadMarker) -> Self {
         let (tx, picks) = channel();
-        FontPanel { target: FontTarget::new(mtm, tx), picks }
+        FontPanel { target: FontTarget::new(mtm, tx), picks, shown: RefCell::new(None) }
     }
 
     /// Shows the panel on the selection's font (`family`, `size` points, bold, italic).
     pub fn show(&self, family: &str, size: f64, bold: bool, italic: bool) {
         let mtm = self.target.mtm();
-        let manager = NSFontManager::sharedFontManager(mtm);
+        self.select(Face { family: family.into(), size, bold, italic });
+        set_target(&NSFontManager::sharedFontManager(mtm), &self.target);
+        NSFontPanel::sharedFontPanel(mtm).orderFront(None);
+    }
+
+    /// While the panel is open, it shows the font of the selection as that changes (another
+    /// selection, or formatting from the ribbon), so a pick converts the selection's own font.
+    pub fn follow(&self, app: &mut wordcraft_ui_egui::WordApp) {
+        let mtm = self.target.mtm();
+        if !NSFontPanel::sharedFontPanelExists(mtm) || !NSFontPanel::sharedFontPanel(mtm).isVisible() {
+            return;
+        }
+        let st = app.session.run("format.state", &serde_json::json!({})).unwrap_or_default();
+        let face = Face {
+            family: st["font"].as_str().unwrap_or("").into(),
+            size: st["size"].as_f64().unwrap_or(12.0),
+            bold: st["bold"] == true,
+            italic: st["italic"] == true,
+        };
+        if self.shown.borrow().as_ref() != Some(&face) {
+            self.select(face);
+        }
+    }
+
+    fn select(&self, face: Face) {
+        let manager = NSFontManager::sharedFontManager(self.target.mtm());
         let mut traits = NSFontTraitMask::empty();
-        traits.set(NSFontTraitMask::BoldFontMask, bold);
-        traits.set(NSFontTraitMask::ItalicFontMask, italic);
+        traits.set(NSFontTraitMask::BoldFontMask, face.bold);
+        traits.set(NSFontTraitMask::ItalicFontMask, face.italic);
         // A family the system doesn't have (a document's, a font WordCraft carries) shows the system font.
-        let font =
-            manager.fontWithFamily_traits_weight_size(&NSString::from_str(family), traits, 5, size).unwrap_or_else(|| NSFont::systemFontOfSize(size));
+        let font = manager
+            .fontWithFamily_traits_weight_size(&NSString::from_str(&face.family), traits, 5, face.size)
+            .unwrap_or_else(|| NSFont::systemFontOfSize(face.size));
         self.target.ivars().current.replace(font.clone());
         manager.setSelectedFont_isMultiple(&font, false);
-        set_target(&manager, &self.target);
-        NSFontPanel::sharedFontPanel(mtm).orderFront(None);
+        self.shown.replace(Some(face));
     }
 
     /// What the panel does when the user picks a font, for `tests/mac_font_panel.rs`.

@@ -64,6 +64,7 @@ impl eframe::App for App {
             for pick in panel.picks() {
                 font_panel::apply(&mut self.0, &pick);
             }
+            panel.follow(&mut self.0);
         }
         self.0.logic(ctx);
         self.3.show(frame);
