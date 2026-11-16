@@ -25,7 +25,11 @@
   `headRefOid` and the local `HEAD` all answer `e6f34e8c` with a clean tree.
   (The 2026-11-16T00:35Z statement that the merge was "local until the owner
   pushes" and that the PR "still answers `CONFLICTING` on the unmoved head
-  `9c6e343a`" was true at that reading, before the 01:14:52Z push.)
+  `9c6e343a`" was true at that reading, before the 01:14:52Z push.) Upstream
+  `main` then moved on to `fe8a8a83`, 15 commits further, and the branch merged
+  it in `257c5a2c` (§5.53) on 2026-11-16, so
+  `git rev-list --left-right --count origin/main...HEAD` reads `0 131` with this
+  documentation commit on top (`0 130` at the merge itself).
 - **The head is read, not memorised.** This page does not crown a commit as
   "the delivered head": every commit — including a documentation sync of this
   very page — moves the tip, so a hash written into the header is one
@@ -5116,6 +5120,96 @@ run now reproduces them on a docs-only commit above the same code.
 clean `origin/main` `cc90520b` (control run in §5.48) and were red in §5.49,
 §5.50 and §5.51. This commit touches two files under `apps/collab-server` and
 nothing the engine's layout code reads.
+
+### 5.53 The merge of `origin/main` `fe8a8a83` takes no conflict, and the host gate on it is rc 0 / rc 0 / rc 0 / rc 101 on main's two `fit_one_page` reds (run 2026-11-16)
+
+**The move.** Measured in the clone at 2026-11-16T10:05Z: `git fetch origin`
+brought upstream `main` to `fe8a8a838cde68b272ac68429e53049347feab40` (15 commits
+past `cc90520b`, the base §5.48 merged), and
+`git rev-list --left-right --count origin/main...HEAD` answered `15 129` — the
+branch was 15 behind and 129 ahead, the head standing still at `f32a0d3b`.
+
+**What main brings.** Against `cc90520b`: 59 files, +2885/−762. The features are
+header pictures selected by a click (#5601), File › Print reopening without the
+last job's message (#5597), Save As/Export browsing inside the app when the
+system dialog is missing (#3535, #3801, #5790), Review › Language setting the
+whole document's proofing language (#3518, #5810), Ctrl/Cmd+Shift+V pasting text
+only when no formatting was copied (#1537, #5616), soft panels grouping dialog
+settings (#4038), the shared Base64 encoder reused for engine payloads (#6818),
+a reset control connection counted as closed (#6448) and the font combo
+selecting without opening its dropdown (#6722). **No collab file is among the
+59**: `git diff --name-only cc90520b origin/main | grep -ci collab` answers `0`.
+
+**The merge.** `257c5a2cb4a904fae3d6c8af522cbddcaecd034b` (first parent
+`f32a0d3b`, the documentation tip of §5.52; second parent `fe8a8a83`) is one
+`git merge --no-ff origin/main`. Nothing conflicted: `git merge-tree --write-tree
+origin/main HEAD` exited 0 with tree `1dca04ca` before the merge and 0 with the
+same tree after it. The merge brings exactly main's 59 files against the first
+parent. `Cargo.lock` keeps what §5.48 resolved — the eight `wordcraft-collab`
+crates at the workspace's `0.18.1` and `tokio 1.54.1`, main's new lock content
+merged in — and reads `f03a3508…` against `fe8a8a83`'s `+673/−8`, i.e. the
+collab additions and nothing else.
+
+**The gate** (build host `agents`, 20 cores, rustc 1.99.1, 2026-11-16;
+`CRAFT_I18N_DIR=~/craft-i18n`, `CRAFT_FONTS_DIR=~/craft-fonts`), one remote
+session, `git rev-parse HEAD` printed by the log's own header as
+`257c5a2c…`:
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `cargo metadata --locked --format-version 1` | rc 0; `Cargo.lock` sha256 `f03a350800d4e90e49f09f96faa4959dee951a473e6c15c53fc50972bd2861c7` before and after |
+| 2 | `cargo fmt --all -- --check` | rc 0, no output |
+| 3 | `cargo clippy --workspace --all-targets -j 4 -- -D warnings` | rc 0; the only output is cargo's three unused `[patch]` notes, which `main` carries too |
+| 4 | `cargo test --workspace --lib --bins --tests --no-fail-fast -j 4` | **45 targets, 5471 passed, 2 failed, 9 ignored**; rc 101 with `error: 1 target failed: -p wordcraft-engine --lib`; both reds are `tests::fit_one_page::{fit_one_page_preserves_budget_across_document_serialization, fit_one_page_respects_step_pt}` |
+
+`EXIT rc1=0 rc2=0 rc3=0 rc4=101` — the whole of step 4's failure is the two
+names above. The log is `.craft/logs/gate-wordcraft-257c5a2c.log` in the cabinet
+workspace (417 950 bytes, 5 846 lines); it can be read without trusting this
+page: the header line `== gate wordcraft merge 257c5a2c… 2026-11-16T10:13:57Z`,
+the four `== stepN rc=` lines, 45 `test result:` lines, the two failure names,
+`== totals: 45 targets, 5471 passed, 2 failed, 9 ignored` (counted by `awk` over
+those `test result:` lines in the same run) and the closing
+`== EXIT rc1=0 rc2=0 rc3=0 rc4=101`.
+
+**One run before this one.** A first attempt started at 10:12Z and was killed
+from the client side 30 s in (a local command timeout, not a host fault); the
+local capture of it is 46 lines and stops inside clippy, so it is not cited. The
+run above is a fresh one on the same tree, and its clippy step finished in 2.01 s
+because the interrupted attempt had already built the workspace — the rc it
+reports is the complete `--workspace --all-targets` check of the same sources,
+which cargo keys by content.
+
+In the same log the collab targets: `collab` 64, `-app` 51, `-client` 28, `-doc`
+116, `-engine` 60, `-server` 85 (+1 ignored: the LibreOffice commit gate),
+`-server` bin 0, `-web` 17, `-ws` lib 0 and `-ws` `tests/reconnect.rs` 3 —
+**424 passed, 0 failed**, the same 424 §5.52 recorded. The whole-workspace total
+rose from 5411 to 5471 by main's own new tests, since no collab test was touched.
+
+**The reds that are not mine.** Both failures are `crates/engine/src/tests/fit_one_page.rs`
+(`:881`, "second fit within remaining budget must succeed"; `:144`, "stepPt=0.1
+must generate fine-grained candidates under maxDelta 0.4"), the font-metric
+dependence §5.48 reproduced in a control run on clean `origin/main` `cc90520b`
+and §5.49–§5.52 recorded red. The file's blob is `a7458bf8` at `fe8a8a83` and at
+this head — byte-identical, `git diff --stat fe8a8a83 HEAD -- crates/engine/src/tests/fit_one_page.rs`
+answers nothing — and the only `crates/engine` files this branch differs from
+main in are the four collab slices (`src/cmd.rs`, `src/cmd/collab.rs`,
+`src/prefs.rs`, `src/session/run.rs`). They are not fixed here and are not this
+merge's to fix.
+
+**State after the run.** `git rev-list --left-right --count origin/main...HEAD`
+answers `0 130`, so the branch is level with upstream `main` again, and
+`git merge-tree --write-tree origin/main HEAD` exits 0. The documentation commit
+that carries this section sits one above `257c5a2c`, so `0 131` is the same
+branch. Nothing was pushed in
+this run and no review thread was answered or resolved: the fork branch and PR
+#5834 still answer the commit §5.49 delivered, and this section plus this
+documentation commit are local. The local tree was clean before the merge and is
+clean at the time of writing; on the host copy the end-of-run
+`git status --porcelain` answers `?? .craft/` alone, which is the previous
+session's archived log (`gate-wordcraft-5834-50d4b4ec-full.log`, the §5.52
+evidence, also held in the cabinet workspace) — the sync's `--exclude='*.log'`
+also protects it from `--delete`, so it is a host-side archive and not a
+repository change.
 
 ## 6. Where things live
 
