@@ -194,8 +194,7 @@ pub(super) fn adjust_media(
         e => CmdError::Failed(format!("can't decode the picture: {e}")),
     })?;
     let out = f(img)?;
-    let mut png = Vec::new();
-    out.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| CmdError::Failed(e.to_string()))?;
+    let png = wordcraft_geom::picture::encode_png(&out).map_err(CmdError::Failed)?;
     let key = s.doc.add_media(png, "png");
     // Chain onto the ultimate original (the base's, or the current picture's when the base
     // is itself derived), so Reset Picture always finds it.

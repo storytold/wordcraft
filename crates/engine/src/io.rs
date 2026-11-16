@@ -468,7 +468,7 @@ pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Resu
 pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<Vec<u8>, String> {
     let bytes = save_bytes_opts(name, doc, opts)?;
     match password {
-        Some(pw) if matches!(ext_of(name).as_str(), "odt" | "ott") => wordcraft_formats::odt::encrypt(&bytes, pw),
+        Some(pw) if matches!(ext_of(name).as_str(), "odt" | "ott") => wordcraft_formats::odt::encrypt(&bytes, pw).map_err(|e| e.to_string()),
         Some(pw) if can_encrypt(name) => wordcraft_docx::encrypt(&bytes, pw).map_err(|e| e.to_string()),
         _ => Ok(bytes),
     }
