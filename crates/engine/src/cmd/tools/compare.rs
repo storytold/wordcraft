@@ -313,34 +313,46 @@ fn map_result_sections_to_snapshots(
     mapping
 }
 
+/// Section resolution context used during header and footer slot assignment.
+struct SectionContext<'a> {
+    res_ends: &'a [usize],
+    res_si: usize,
+    orig_title_page: bool,
+    orig_even_odd: bool,
+}
+
 /// Assigns a header or footer part ID to a specific section index in the session's document,
 /// optionally enabling section or document flags (such as `title_page` or `even_odd_headers`)
 /// so inserted First or Even stories remain selectable under layout. Precomputed `res_ends`
 /// avoids rescanning document sections on every slot assignment.
-fn assign_section_slot(s: &mut Session, res_ends: &[usize], res_si: usize, footer: bool, slot: HfSlot, id: u32, enable_flag: bool) {
-    let mut title_page_before = None;
-    if res_si + 1 < res_ends.len()
-        && let Some(&end) = res_ends.get(res_si)
-    {
+fn assign_section_slot(s: &mut Session, ctx: &SectionContext<'_>, footer: bool, slot: HfSlot, id: u32, enable_flag: bool) {
+    let end_opt = if ctx.res_si + 1 < ctx.res_ends.len() { ctx.res_ends.get(ctx.res_si).copied() } else { None };
+
+    if let Some(end) = end_opt {
         let sect = s.doc.section_mut(end);
         set_hf_slot(sect, footer, slot, Some(id));
-        if enable_flag && slot == HfSlot::First && !sect.title_page {
+        if enable_flag && slot == HfSlot::First {
             sect.title_page = true;
-            title_page_before = Some((Some(end), false));
         }
     } else {
         set_hf_slot(&mut s.doc.last_section, footer, slot, Some(id));
-        if enable_flag && slot == HfSlot::First && !s.doc.last_section.title_page {
+        if enable_flag && slot == HfSlot::First {
             s.doc.last_section.title_page = true;
-            title_page_before = Some((None, false));
         }
     }
-    if let Some(entry) = title_page_before {
-        s.doc.compare_hf.get_or_insert_with(Default::default).title_page.push(entry);
+
+    if enable_flag && slot == HfSlot::First && !ctx.orig_title_page {
+        let flags = s.doc.compare_hf.get_or_insert_with(Default::default);
+        if !flags.title_page.iter().any(|(e, _)| *e == end_opt) {
+            flags.title_page.push((end_opt, false));
+        }
     }
-    if enable_flag && slot == HfSlot::Even && !s.doc.settings.even_odd_headers {
+
+    if enable_flag && slot == HfSlot::Even {
         s.doc.settings.even_odd_headers = true;
-        s.doc.compare_hf.get_or_insert_with(Default::default).even_odd.get_or_insert(false);
+        if !ctx.orig_even_odd {
+            s.doc.compare_hf.get_or_insert_with(Default::default).even_odd.get_or_insert(false);
+        }
     }
 }
 
@@ -502,6 +514,7 @@ fn compare_headers_and_footers(
     let res_sections = s.doc.sections();
     let res_ends: Vec<usize> = res_sections.iter().map(|(e, _)| *e).collect();
     let mapping = map_result_sections_to_snapshots(&res_sections, snaps.orig_ends, snaps.rev_ends, sources);
+    let orig_even_odd = s.doc.settings.even_odd_headers;
 
     let mut mapped_orig = std::collections::HashSet::new();
 
@@ -512,6 +525,8 @@ fn compare_headers_and_footers(
 
         let orig_sec = orig_si.and_then(|si| snaps.orig_sections.get(si));
         let rev_sec = rev_si.and_then(|si| snaps.rev_sections.get(si));
+        let orig_title_page = orig_sec.map(|sec| sec.title_page).unwrap_or(false);
+        let sec_ctx = SectionContext { res_ends: &res_ends, res_si, orig_title_page, orig_even_odd };
 
         for footer in [false, true] {
             for slot in [HfSlot::Default, HfSlot::First, HfSlot::Even] {
@@ -566,7 +581,7 @@ fn compare_headers_and_footers(
                             }
                             target
                         };
-                        assign_section_slot(s, &res_ends, res_si, footer, slot, target, false);
+                        assign_section_slot(s, &sec_ctx, footer, slot, target, false);
                     }
                     (None, Some(r)) => {
                         let enable_flag = (slot == HfSlot::First && rev_sec.is_some_and(|sec| sec.title_page))
@@ -587,11 +602,11 @@ fn compare_headers_and_footers(
                             }
                             new_id
                         };
-                        assign_section_slot(s, &res_ends, res_si, footer, slot, doc_id, enable_flag);
+                        assign_section_slot(s, &sec_ctx, footer, slot, doc_id, enable_flag);
                     }
                     (Some(o), None) => {
                         if seen_deleted.contains(&o) {
-                            assign_section_slot(s, &res_ends, res_si, footer, slot, o, false);
+                            assign_section_slot(s, &sec_ctx, footer, slot, o, false);
                         } else if matched_orig_parts.contains(&o) {
                             let target = if let Some(&existing) = deleted_clones.get(&o) {
                                 existing
@@ -605,14 +620,14 @@ fn compare_headers_and_footers(
                                 deleted_clones.insert(o, id);
                                 id
                             };
-                            assign_section_slot(s, &res_ends, res_si, footer, slot, target, false);
+                            assign_section_slot(s, &sec_ctx, footer, slot, target, false);
                         } else {
                             seen_deleted.insert(o);
                             if let Some(part) = s.doc.parts.get_mut(&o) {
                                 part.blocks = part.blocks.iter().map(|b| Arc::new(mark_block(b, &|c| c.del = Some(run.del), 0))).collect();
                             }
                             changes += s.doc.parts.get(&o).map(|p| p.blocks.len().max(1)).unwrap_or(1);
-                            assign_section_slot(s, &res_ends, res_si, footer, slot, o, false);
+                            assign_section_slot(s, &sec_ctx, footer, slot, o, false);
                         }
                     }
                     (None, None) => {}
@@ -666,6 +681,7 @@ fn sanitize_section_hf(
         if let Some(sa) = orig_sec {
             res_sec.headers = sa.headers;
             res_sec.footers = sa.footers;
+            res_sec.title_page = sa.title_page;
         } else {
             let (eff_h, eff_f) = effective_orig_hf(run, orig_idx);
             res_sec.headers = eff_h;
@@ -674,6 +690,7 @@ fn sanitize_section_hf(
     } else if let Some(sa) = orig_sec {
         res_sec.headers = sa.headers;
         res_sec.footers = sa.footers;
+        res_sec.title_page = sa.title_page;
     }
 }
 
@@ -1020,21 +1037,68 @@ enum Tok<'a> {
     Obj(&'a InlineObject),
 }
 
-/// What a comparison sees of a token: the text as the options say, an object with the text of
+/// Normalized content of a text box part used to detect modifications to text, formatting, or media.
+#[derive(Clone, PartialEq)]
+struct TextBoxKey {
+    text: String,
+    blocks: Vec<Block>,
+    media: Vec<std::sync::Arc<Vec<u8>>>,
+}
+
+/// Recursively clears text box story assignments in `b` so text boxes with identical content
+/// compare equal regardless of their document-local part IDs.
+fn strip_box_block(b: &Block, depth: usize) -> Block {
+    match b {
+        Block::Para(p) => {
+            let mut p = p.clone();
+            for o in &mut p.objects {
+                for story in o.text_box_slots() {
+                    *story = None;
+                }
+            }
+            Block::Para(p)
+        }
+        Block::Table(t) => {
+            let mut t = t.clone();
+            if depth < 4 {
+                for r in &mut t.rows {
+                    for c in &mut r.cells {
+                        c.blocks = c.blocks.iter().map(|b| std::sync::Arc::new(strip_box_block(b, depth + 1))).collect();
+                    }
+                }
+            }
+            Block::Table(t)
+        }
+    }
+}
+
+/// Computes the [`TextBoxKey`] for a given text box part ID in `doc`.
+fn text_box_key(doc: &Document, id: u32) -> TextBoxKey {
+    let text = doc.plain_text(StoryRef::Part(id));
+    let Some(part) = doc.parts.get(&id) else {
+        return TextBoxKey { text, blocks: Vec::new(), media: Vec::new() };
+    };
+    let owned: Vec<Block> = part.blocks.iter().map(|b| (**b).clone()).collect();
+    let media: Vec<std::sync::Arc<Vec<u8>>> = doc.media_of_blocks(&owned).into_values().collect();
+    let blocks: Vec<Block> = part.blocks.iter().map(|b| strip_box_block(b, 0)).collect();
+    TextBoxKey { text, blocks, media }
+}
+
+/// What a comparison sees of a token: the text as the options say, an object with the content of
 /// the text boxes it shows instead of their story ids (each document numbers its own stories).
 #[derive(PartialEq)]
 enum Key {
     Text(String),
-    Obj(Box<InlineObject>, Vec<String>),
+    Obj(Box<InlineObject>, Vec<TextBoxKey>),
 }
 
 fn obj_key(doc: &Document, o: &InlineObject) -> Key {
-    let texts = o.text_boxes().into_iter().map(|id| doc.plain_text(StoryRef::Part(id))).collect();
+    let boxes = o.text_boxes().into_iter().map(|id| text_box_key(doc, id)).collect();
     let mut o = o.clone();
     for story in o.text_box_slots() {
         *story = None;
     }
-    Key::Obj(Box::new(o), texts)
+    Key::Obj(Box::new(o), boxes)
 }
 
 /// Whether two paragraphs hold the same objects, as compared.

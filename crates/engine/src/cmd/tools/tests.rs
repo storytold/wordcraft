@@ -2723,6 +2723,221 @@ fn compare_adopts_a_revised_header_image_whose_bytes_differ_under_the_same_key()
     assert_eq!(s.doc.media.get(&key).map(|b| b.as_slice()), Some(revised.as_slice()), "accepting keeps the revised picture's bytes");
 }
 
+/// #6122 review: non-final section that changes title_page false -> true with an inserted First
+/// header preserves the original false flag in compare_hf and restores it on Reject All, selecting
+/// the original Default header again.
+#[test]
+fn compare_rejecting_non_final_section_restores_title_page_flag_and_header() {
+    let mut orig = Session::new(Document::from_text("Section 1 body.\nSection 2 body."));
+    let h_def_sec1 = orig
+        .doc
+        .add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original Sec 1 Default Header", CharProps::default()))]);
+    let h_def_sec2 = orig
+        .doc
+        .add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original Sec 2 Default Header", CharProps::default()))]);
+    let sec1 = wordcraft_doc::section::SectionProps {
+        title_page: false,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(h_def_sec1), ..Default::default() },
+        ..Default::default()
+    };
+    orig.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(sec1));
+    orig.doc.last_section.title_page = false;
+    orig.doc.last_section.headers.default = Some(h_def_sec2);
+
+    let mut rev = Session::new(Document::from_text("Section 1 body.\nSection 2 body."));
+    let h_first_sec1 = rev
+        .doc
+        .add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Inserted Sec 1 First Header", CharProps::default()))]);
+    let h_def_sec1_rev = rev
+        .doc
+        .add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original Sec 1 Default Header", CharProps::default()))]);
+    let h_def_sec2_rev = rev
+        .doc
+        .add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original Sec 2 Default Header", CharProps::default()))]);
+    let rev_sec1 = wordcraft_doc::section::SectionProps {
+        title_page: true,
+        headers: wordcraft_doc::section::HeaderSet { first: Some(h_first_sec1), default: Some(h_def_sec1_rev), ..Default::default() },
+        ..Default::default()
+    };
+    rev.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(rev_sec1));
+    rev.doc.last_section.title_page = false;
+    rev.doc.last_section.headers.default = Some(h_def_sec2_rev);
+
+    let rev_file = TempDocx::new("rev-two-sec-reopen");
+    rev_file.save(&rev.doc);
+
+    let mut s = orig;
+    s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+
+    let result = TempDocx::new("two-sec-compare-result");
+    result.save(&s.doc);
+
+    let reopened = crate::io::open_path(std::path::Path::new(&result.path_str())).expect("reopen the comparison result");
+    assert!(reopened.compare_hf.is_some(), "the flag record is saved with the result");
+    let mut s = Session::new(reopened);
+    assert!(s.doc.sections()[0].1.title_page, "opened with title_page enabled on section 1");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert!(!s.doc.sections()[0].1.title_page, "rejecting after reopen restores title_page = false on section 1");
+    let def_id = s.doc.sections()[0].1.headers.default.expect("the section retains its default header");
+    assert_eq!(
+        s.doc.parts.get(&def_id).and_then(|p| p.blocks.first()).and_then(|b| b.as_para()).map(|p| p.plain_text()),
+        Some("Original Sec 1 Default Header".to_string()),
+        "the first section selects the original Default header again"
+    );
+}
+
+/// #6122 review: changing only an image inside a header text box is detected by compare,
+/// emitting a tracked revision so acceptAll keeps the revised image and rejectAll restores the original.
+#[test]
+fn compare_tracks_image_change_inside_header_text_box() {
+    let original_bytes: Vec<u8> = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xfc, 0xcf,
+        0xc0, 0x50, 0x0f, 0x00, 0x04, 0x85, 0x01, 0x80, 0x84, 0xa9, 0x8c, 0x21, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60,
+        0x82,
+    ];
+    let revised_bytes: Vec<u8> = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf,
+        0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    let make_session = |img: Vec<u8>| {
+        let mut s = Session::new(Document::from_text("Body text."));
+        let key = s.doc.add_media(img, "png");
+        let mut box_p = Paragraph::with_text("Box Note", CharProps::default());
+        let at = box_p.len();
+        let image = InlineObject::Image {
+            media: key,
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        box_p.insert_object(at, image, &CharProps::default()).unwrap();
+        let box_id = s.doc.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(box_p)]);
+        let mut hdr_p = Paragraph::with_text("Header ", CharProps::default());
+        let box_obj = InlineObject::Shape {
+            kind: wordcraft_doc::para::ShapeKind::TextBox,
+            w: 50.0,
+            h: 50.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float: Default::default(),
+            story: Some(box_id),
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let hdr_at = hdr_p.len();
+        hdr_p.insert_object(hdr_at, box_obj, &CharProps::default()).unwrap();
+        let hdr_id = s.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(hdr_p)]);
+        s.doc.last_section.headers.default = Some(hdr_id);
+        s
+    };
+
+    let mut orig = make_session(original_bytes.clone());
+    let rev = make_session(revised_bytes.clone());
+    let rev_file = TempDocx::new("rev-header-textbox-image");
+    rev_file.save(&rev.doc);
+
+    let r = orig.run("review.compare", &json!({"path": rev_file.path_str()})).unwrap();
+    assert_eq!(r["changes"], 1, "changing the image inside the header text box must count as 1 change: {r}");
+
+    // Test acceptAll: keeps revised image bytes
+    let mut accept_s = Session::new(orig.doc.clone());
+    accept_s.run("review.acceptAll", &json!({})).unwrap();
+    let hdr_id = accept_s.doc.last_section.headers.default.unwrap();
+    let hdr_part = accept_s.doc.parts.get(&hdr_id).unwrap();
+    let box_story_id = hdr_part.blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| match o {
+            InlineObject::Shape { story, .. } => *story,
+            _ => None,
+        })
+        .expect("text box in header");
+    let box_part = accept_s.doc.parts.get(&box_story_id).unwrap();
+    let accepted_key = box_part.blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| match o {
+            InlineObject::Image { media, .. } => Some(media.clone()),
+            _ => None,
+        })
+        .expect("image inside accepted text box");
+    assert_eq!(
+        accept_s.doc.media.get(&accepted_key).map(|b| b.as_slice()),
+        Some(revised_bytes.as_slice()),
+        "acceptAll keeps the revised image bytes inside the text box"
+    );
+
+    // Test rejectAll: restores original image bytes
+    let mut reject_s = orig;
+    reject_s.run("review.rejectAll", &json!({})).unwrap();
+    let hdr_id = reject_s.doc.last_section.headers.default.unwrap();
+    let hdr_part = reject_s.doc.parts.get(&hdr_id).unwrap();
+    let box_story_id = hdr_part.blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| match o {
+            InlineObject::Shape { story, .. } => *story,
+            _ => None,
+        })
+        .expect("text box in header");
+    let box_part = reject_s.doc.parts.get(&box_story_id).unwrap();
+    let rejected_key = box_part.blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| match o {
+            InlineObject::Image { media, .. } => Some(media.clone()),
+            _ => None,
+        })
+        .expect("image inside rejected text box");
+    assert_eq!(
+        reject_s.doc.media.get(&rejected_key).map(|b| b.as_slice()),
+        Some(original_bytes.as_slice()),
+        "rejectAll restores the original image bytes inside the text box"
+    );
+}
+
+/// #6122 review: wholly_revised must not treat a table as wholly inserted/deleted if it contains
+/// untracked text runs, even if a paragraph mark was inserted. Reject All preserves the table.
+#[test]
+fn reject_all_preserves_table_with_untracked_text_and_inserted_mark() {
+    let mut s = Session::new(Document::new());
+    let mut p = Paragraph::with_text("Preserved Untracked Cell Text", CharProps::default());
+    s.doc.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Insert,
+        author: "Author".into(),
+        date: "2026-11-16T00:00:00Z".into(),
+        move_name: None,
+    });
+    p.mark.ins = Some(0);
+    let cell = wordcraft_doc::table::Cell { blocks: vec![para_block(p)], props: Default::default(), controls: Default::default() };
+    let row = wordcraft_doc::table::Row { cells: vec![cell], props: Default::default(), controls: Default::default() };
+    let table = wordcraft_doc::table::Table { rows: vec![row], grid: vec![100.0], props: Default::default(), controls: Default::default() };
+    s.doc.body = vec![std::sync::Arc::new(Block::Table(table))];
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let text = s.doc.plain_text(StoryRef::Body);
+    assert!(text.contains("Preserved Untracked Cell Text"), "the table and its untracked text must not be dropped on reject: {text}");
+    assert!(s.doc.body.iter().any(|b| matches!(&**b, Block::Table(_))), "table structure is preserved");
+}
+
 /// #3518: every run and paragraph mark of a story, as (story, path, lang, noProof) rows.
 fn proofing_rows(s: &Session) -> Vec<(StoryRef, Option<String>, Option<bool>)> {
     let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));

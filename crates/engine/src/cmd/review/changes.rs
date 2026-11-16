@@ -253,11 +253,11 @@ const MAX_TABLE_DEPTH: usize = 16;
 fn wholly_revised(b: &wordcraft_doc::Block, del: bool, depth: usize) -> bool {
     match b {
         wordcraft_doc::Block::Para(p) => {
-            if del {
-                p.mark.del.is_some()
-            } else {
-                p.mark.ins.is_some()
+            let mark_revised = if del { p.mark.del.is_some() } else { p.mark.ins.is_some() };
+            if !mark_revised {
+                return false;
             }
+            !p.runs.iter().any(|r| if del { r.props.del.is_none() } else { r.props.ins.is_none() })
         }
         wordcraft_doc::Block::Table(t) if depth < MAX_TABLE_DEPTH => {
             !t.rows.is_empty()
