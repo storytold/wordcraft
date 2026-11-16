@@ -25,6 +25,9 @@ pub fn deliver(inbox: &HostInbox, event: HostEvent) {
 mod tests {
     use super::*;
 
+    /// The document these tests have open; a session is scoped to it.
+    const DOC: u64 = 7;
+
     /// A `wordcraft:session` opens a session only when the bridge delivers it:
     /// nothing else in the app dials a socket.
     #[test]
@@ -36,7 +39,7 @@ mod tests {
         let mut state = HostState::default();
         let mut actions = Vec::new();
         for event in inbox.borrow_mut().drain(..) {
-            actions.push(state.on_event(event));
+            actions.push(state.on_event(event, DOC));
         }
         assert_eq!(actions, vec![HostAction::Connect(session.clone())]);
         assert!(state.has_session());
@@ -57,7 +60,7 @@ mod tests {
         let mut state = HostState::default();
         let mut actions = Vec::new();
         for event in inbox.borrow_mut().drain(..) {
-            actions.push(state.on_event(event));
+            actions.push(state.on_event(event, DOC));
         }
         assert_eq!(actions, vec![HostAction::Committed { version: 12, etag: "\"sha12\"".into() }]);
         assert_eq!(state.committed, Some((12, "\"sha12\"".into())));
@@ -72,5 +75,32 @@ mod tests {
         let state = HostState::default();
         assert!(!state.has_session());
         assert!(state.committed.is_none());
+    }
+
+    /// A tab that opens a second document closes the session of the first: a
+    /// connection answers for one document (§5.26 finding 9), and the host's
+    /// next `session` is the only way to share the new one. A late renewal for
+    /// the closed session is refused instead of joining the new document into
+    /// the old room.
+    #[test]
+    fn a_second_document_in_the_same_tab_closes_the_firsts_session() {
+        let inbox: HostInbox = HostInbox::default();
+        let first = HostSession::new("session-7", "wss://collab.example/ws?room=7", "jwt", "editor");
+        deliver(&inbox, HostEvent::Session(first.clone()));
+        let mut state = HostState::default();
+        let mut actions = Vec::new();
+        for event in inbox.borrow_mut().drain(..) {
+            actions.push(state.on_event(event, DOC));
+        }
+        assert_eq!(actions, vec![HostAction::Connect(first.clone())]);
+        // The tab opens another document: the shell closes the connection.
+        let closed = state.document_changed(DOC + 1).expect("the session of the first document is closed");
+        assert_eq!(closed.session_id(), "session-7");
+        assert!(!state.has_session(), "no session answers for the new document");
+        // The cabinet's renewal for the closed session does not reach it.
+        deliver(&inbox, HostEvent::Session(HostSession::new("session-7", "wss://collab.example/ws?room=7", "jwt-2", "editor")));
+        let action = state.on_event(inbox.borrow_mut().drain(..).next().expect("the delivered event"), DOC + 1);
+        assert_eq!(action, HostAction::Refused { session_id: "session-7".into(), document: DOC });
+        assert!(!state.has_session());
     }
 }

@@ -102,38 +102,77 @@ pub enum HostAction {
     Renew(HostSession),
     /// The cabinet stored the commit; show its version and etag.
     Committed { version: u64, etag: String },
+    /// The `session_id` was opened for another document than the one this tab
+    /// shows. Joining it would carry the open document's edits into that
+    /// document's room (§5.26 finding 9), so the message is not stored and
+    /// nothing dials. The shell says so; the host sends a `session` for the
+    /// document it opened when this one is to be shared.
+    Refused { session_id: String, document: u64 },
 }
 
 /// The host-side collaboration state the shell keeps between frames.
 ///
 /// It is deliberately transport-free, so the `wordcraft:session` /
 /// `wordcraft:committed` handling is tested headlessly without a browser.
+///
+/// A connection belongs to one document (§5.26 finding 9): it joined a room
+/// with that document as its seed and sends that document's operations. The
+/// state therefore remembers which document every `session_id` was opened for,
+/// and answers [`HostAction::Refused`] when a message tries to move one to
+/// another document, so a socket opened for a window's first document never
+/// carries a second one's edits.
 #[derive(Default, Debug)]
 pub struct HostState {
-    /// The session the host opened, if any. Without it the app stays
-    /// single-user and makes no network call.
+    /// The session the host opened for the document this tab shows, if any.
+    /// Without it the app stays single-user and makes no network call.
     pub session: Option<HostSession>,
     /// The last commit the cabinet confirmed.
     pub committed: Option<(u64, String)>,
     /// Whether the socket has joined the room at least once.
     pub connected: bool,
+    /// The document this tab shows, and the one [`Self::session`] answers for.
+    document: Option<u64>,
+    /// Which document each `session_id` was opened for, oldest first.
+    owners: Vec<(String, u64)>,
 }
 
+/// Most `session_id → document` bindings one tab remembers. A document switch
+/// costs one; a host that sends more sessions than this falls back to refusing
+/// the forgotten ones, which is the safe side.
+const MAX_SESSION_OWNERS: usize = 64;
+
 impl HostState {
-    /// Apply one host message. Anything else leaves the app single-user.
+    /// Apply one host message for `document`, the document this tab shows.
+    /// Anything else leaves the app single-user.
     ///
     /// A `session` message for the connection this shell already holds — the
-    /// same `session_id` at the same `ws_url` — is a credential renewal, not a
-    /// new session: it answers [`HostAction::Renew`] and leaves `connected`
-    /// alone, so the shell hands the token to the live client instead of
-    /// replacing it and losing its unconfirmed edits (ADR WC-0007). The token is
-    /// what rotates, so it is not part of the identity; a different URL is a
-    /// different room and a different session.
-    pub fn on_event(&mut self, event: HostEvent) -> HostAction {
+    /// same `session_id` at the same `ws_url` for the same document — is a
+    /// credential renewal, not a new session: it answers [`HostAction::Renew`]
+    /// and leaves `connected` alone, so the shell hands the token to the live
+    /// client instead of replacing it and losing its unconfirmed edits (ADR
+    /// WC-0007). The token is what rotates, so it is not part of the identity;
+    /// a different URL is a different room and a different session. A different
+    /// `session_id` for a document the tab has already briefly shown is a new
+    /// room too, and opens a connection.
+    pub fn on_event(&mut self, event: HostEvent, document: u64) -> HostAction {
         match event {
             HostEvent::Session(session) => {
-                let same_connection =
-                    self.session.as_ref().is_some_and(|current| current.session_id() == session.session_id() && current.ws_url() == session.ws_url());
+                // A session id belongs to the document it was opened for. A
+                // repeat for another document is not this tab's to join: the
+                // room would receive this document's edits under that
+                // document's name (§5.26 finding 9).
+                if let Some(owner) = self.owner_of(session.session_id())
+                    && owner != document
+                {
+                    return HostAction::Refused { session_id: session.session_id().to_string(), document: owner };
+                }
+                let same_connection = self.document == Some(document)
+                    && self
+                        .session
+                        .as_ref()
+                        .is_some_and(|current| current.session_id() == session.session_id() && current.ws_url() == session.ws_url());
+                self.remember(session.session_id(), document);
+                self.document = Some(document);
                 self.session = Some(session.clone());
                 if same_connection {
                     HostAction::Renew(session)
@@ -147,6 +186,48 @@ impl HostState {
                 HostAction::Committed { version, etag }
             }
         }
+    }
+
+    /// The tab now shows `document`. `Some` is the session that must be closed:
+    /// it answered for the document that was open before, and a socket that
+    /// stayed would carry this document's edits into the room it joined
+    /// (§5.26 finding 9). Its binding stays remembered, so a late renewal for
+    /// it is refused rather than joined here. `None` means nothing is live.
+    ///
+    /// The shell opens a connection for the new document when the host sends a
+    /// `session` for it — the contract's order is document first, then session
+    /// (ADR WC-0004), which a switch repeats.
+    pub fn document_changed(&mut self, document: u64) -> Option<HostSession> {
+        if self.document == Some(document) {
+            return None;
+        }
+        self.document = Some(document);
+        let left = self.session.take();
+        if left.is_some() {
+            self.connected = false;
+        }
+        left
+    }
+
+    /// The document the live session answers for, once the shell has said
+    /// which one it shows.
+    pub fn document(&self) -> Option<u64> {
+        self.document
+    }
+
+    fn owner_of(&self, session_id: &str) -> Option<u64> {
+        self.owners.iter().find(|(id, _)| id == session_id).map(|(_, document)| *document)
+    }
+
+    fn remember(&mut self, session_id: &str, document: u64) {
+        if let Some(entry) = self.owners.iter_mut().find(|(id, _)| id == session_id) {
+            entry.1 = document;
+            return;
+        }
+        if self.owners.len() >= MAX_SESSION_OWNERS {
+            self.owners.remove(0);
+        }
+        self.owners.push((session_id.to_string(), document));
     }
 
     pub fn mark_connected(&mut self) {
@@ -196,6 +277,11 @@ pub struct Collab {
     client: Client,
     state: SyncState,
     session_id: String,
+    /// The document this connection answers for (§5.26 finding 9): the tab's
+    /// document at the moment the host's `session` opened it. Its seed, its
+    /// presence and its operations are that document's, so the shell closes it
+    /// rather than let another document's edits into the room.
+    document_id: u64,
     server: String,
     token: String,
     status: Status,
@@ -233,9 +319,16 @@ pub struct Collab {
 
 impl Collab {
     /// Dial the session the host sent. The token goes in the first frame, never
-    /// in the URL.
+    /// in the URL. `document_id` is the document the seed came from: the
+    /// connection answers for it and for no other (§5.26 finding 9).
     #[cfg(target_arch = "wasm32")]
-    pub fn connect(session: &HostSession, actor: &str, client_id: &str, document: &wordcraft_doc::Document) -> Result<Collab, String> {
+    pub fn connect(
+        session: &HostSession,
+        actor: &str,
+        client_id: &str,
+        document: &wordcraft_doc::Document,
+        document_id: u64,
+    ) -> Result<Collab, String> {
         let role = Role::parse(session.role()).ok_or_else(|| format!("unknown collaboration role {:?}", session.role()))?;
         let seed = serde_json::to_vec(document).map_err(|err| format!("cannot encode the open document: {err}"))?;
         let transport = socket::Transport::open(session.ws_url())?;
@@ -243,6 +336,7 @@ impl Collab {
             client: Client::new(client_id),
             state: SyncState::new(client_id, actor, role),
             session_id: session.session_id().to_string(),
+            document_id,
             server: session.ws_url().to_string(),
             token: session.token().to_string(),
             status: Status::Connecting,
@@ -268,6 +362,19 @@ impl Collab {
 
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// The document this connection answers for.
+    pub fn document_id(&self) -> u64 {
+        self.document_id
+    }
+
+    /// Whether this connection belongs to `document` (§5.26 finding 9). The
+    /// shell asks before it polls or sends: a connection that answers for a
+    /// document no longer open must be closed, not reused, or that document's
+    /// room would receive the newly open one's edits.
+    pub fn carries(&self, document: u64) -> bool {
+        self.document_id == document
     }
 
     pub fn role(&self) -> Role {
@@ -722,12 +829,15 @@ mod tests {
     use super::*;
     use wordcraft_collab::wire::OpId;
 
+    /// The document these tests have open; the session is scoped to it.
+    const DOC: u64 = 7;
+
     #[test]
     fn a_session_message_starts_a_connection_and_keeps_the_token_out_of_debug() {
         let mut state = HostState::default();
         assert!(!state.has_session());
         let session = HostSession::new("s1", "wss://collab.example/ws", "jwt-secret", "editor");
-        assert_eq!(state.on_event(HostEvent::Session(session.clone())), HostAction::Connect(session));
+        assert_eq!(state.on_event(HostEvent::Session(session.clone()), DOC), HostAction::Connect(session));
         assert!(state.has_session());
         let debug = format!("{:?}", state.session.as_ref().expect("the session is stored"));
         assert!(debug.contains("s1"), "{debug}");
@@ -739,10 +849,17 @@ mod tests {
     /// build has no transport, and these tests drive the state machine.
     #[cfg(not(target_arch = "wasm32"))]
     fn test_collab(session: &HostSession, client_id: &str) -> Collab {
+        test_collab_for(session, client_id, DOC)
+    }
+
+    /// The same, for a connection opened with `document` as its seed.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_collab_for(session: &HostSession, client_id: &str, document: u64) -> Collab {
         Collab {
             client: Client::new(client_id),
             state: SyncState::new(client_id, "writer", Role::Editor),
             session_id: session.session_id().to_string(),
+            document_id: document,
             server: session.ws_url().to_string(),
             token: session.token().to_string(),
             status: Status::InSync,
@@ -767,7 +884,7 @@ mod tests {
         const URL: &str = "wss://collab.example/ws";
         let mut host = HostState::default();
         let opened = HostSession::new("s1", URL, "jwt-1", "editor");
-        assert_eq!(host.on_event(HostEvent::Session(opened.clone())), HostAction::Connect(opened.clone()));
+        assert_eq!(host.on_event(HostEvent::Session(opened.clone()), DOC), HostAction::Connect(opened.clone()));
         let mut live = Some(test_collab(&opened, "c1"));
         if let Some(collab) = live.as_mut() {
             // The writer's edit, planned and sent, not answered yet.
@@ -784,7 +901,7 @@ mod tests {
         }
         // The cabinet pushes a fresh JWT before the old one expires.
         let renewed = HostSession::new("s1", URL, "jwt-2", "editor");
-        let action = host.on_event(HostEvent::Session(renewed.clone()));
+        let action = host.on_event(HostEvent::Session(renewed.clone()), DOC);
         assert_eq!(action, HostAction::Renew(renewed.clone()));
         let mut dials = 0;
         if let HostAction::Renew(session) = action {
@@ -812,11 +929,11 @@ mod tests {
         const URL: &str = "wss://collab.example/ws";
         let mut host = HostState::default();
         let opened = HostSession::new("s1", URL, "jwt-1", "editor");
-        let _ = host.on_event(HostEvent::Session(opened.clone()));
+        let _ = host.on_event(HostEvent::Session(opened.clone()), DOC);
         let mut collab = test_collab(&opened, "c1");
         // The same message again, unchanged: nothing to renew, nothing to drop.
         let repeat = HostSession::new("s1", URL, "jwt-1", "editor");
-        let action = host.on_event(HostEvent::Session(repeat.clone()));
+        let action = host.on_event(HostEvent::Session(repeat.clone()), DOC);
         assert_eq!(action, HostAction::Renew(repeat.clone()));
         if let HostAction::Renew(session) = action {
             assert!(collab.renew(&session));
@@ -831,10 +948,10 @@ mod tests {
         const URL: &str = "wss://collab.example/ws";
         let mut host = HostState::default();
         let opened = HostSession::new("s1", URL, "jwt-1", "editor");
-        let _ = host.on_event(HostEvent::Session(opened.clone()));
+        let _ = host.on_event(HostEvent::Session(opened.clone()), DOC);
         host.mark_connected();
         let other = HostSession::new("s2", URL, "jwt-2", "editor");
-        assert_eq!(host.on_event(HostEvent::Session(other.clone())), HostAction::Connect(other.clone()));
+        assert_eq!(host.on_event(HostEvent::Session(other.clone()), DOC), HostAction::Connect(other.clone()));
         assert!(!host.connected, "a new session has not joined yet");
         // And the live client does not take another session's message in place.
         let mut collab = test_collab(&opened, "c1");
@@ -847,18 +964,62 @@ mod tests {
     fn a_session_for_another_url_is_a_new_connection() {
         let mut host = HostState::default();
         let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "editor");
-        let _ = host.on_event(HostEvent::Session(opened.clone()));
+        let _ = host.on_event(HostEvent::Session(opened.clone()), DOC);
         assert!(!host.connected);
         host.mark_connected();
         let moved = HostSession::new("s1", "wss://collab.example/other", "jwt-2", "editor");
-        assert_eq!(host.on_event(HostEvent::Session(moved.clone())), HostAction::Connect(moved.clone()));
+        assert_eq!(host.on_event(HostEvent::Session(moved.clone()), DOC), HostAction::Connect(moved.clone()));
         assert!(!host.connected, "another room is another connection");
+    }
+
+    /// Two documents in one tab do not share a connection (§5.26 finding 9).
+    /// Document 7's session is closed when document 8 becomes active, its
+    /// unconfirmed edit stays in its own queue and never reaches document 8's
+    /// connection, and a late renewal for it is refused instead of joining
+    /// document 8 into document 7's room.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn two_documents_in_one_tab_neither_carry_each_others_edits_nor_share_the_queue() {
+        const URL: &str = "wss://collab.example/ws";
+        let mut host = HostState::default();
+        let first = HostSession::new("s-7", URL, "jwt-7", "editor");
+        assert_eq!(host.on_event(HostEvent::Session(first.clone()), 7), HostAction::Connect(first.clone()));
+        // Document 7's connection plans an edit the room has not answered.
+        let mut live = Some(test_collab_for(&first, "tab-7", 7));
+        if let Some(collab) = live.as_mut() {
+            collab.client.op(OpKind::Primitive, Target::new("body", 3, 0), json!({"replaceRange": {"text": "seven"}}));
+            assert_eq!(collab.client.pending().len(), 1);
+            assert!(collab.carries(7), "the connection answers for the document it joined with");
+        }
+        // The tab opens document 8: the shell closes document 7's connection.
+        let left = host.document_changed(8).expect("the connection that answered for document 7 must be closed");
+        assert_eq!(left.session_id(), "s-7");
+        assert!(!host.has_session(), "no session answers for document 8");
+        live = None;
+        assert!(live.is_none(), "the socket and its queue go with the closed connection");
+        // A late renewal for document 7's session, while document 8 is open, is
+        // refused: joining it here would send document 8's edits into room s-7.
+        let late = HostSession::new("s-7", URL, "jwt-7b", "editor");
+        assert_eq!(host.on_event(HostEvent::Session(late), 8), HostAction::Refused { session_id: "s-7".into(), document: 7 });
+        assert!(!host.has_session(), "a refused session is not stored");
+        // Document 8's own session connects with an empty queue, and its
+        // connection does not answer for document 7 either.
+        let second = HostSession::new("s-8", URL, "jwt-8", "editor");
+        assert_eq!(host.on_event(HostEvent::Session(second.clone()), 8), HostAction::Connect(second.clone()));
+        let fresh = test_collab_for(&second, "tab-8", 8);
+        assert!(fresh.client.pending().is_empty(), "document 8 starts with no edit of document 7's");
+        assert!(fresh.carries(8));
+        assert!(!fresh.carries(7));
+        // Switching back to document 7 waits for the host to say so again: its
+        // own session is still refused while another document is shown.
+        assert_eq!(host.on_event(HostEvent::Session(first.clone()), 8), HostAction::Refused { session_id: "s-7".into(), document: 7 });
+        assert_eq!(host.on_event(HostEvent::Session(first.clone()), 7), HostAction::Connect(first), "document 7's session is its own again");
     }
 
     #[test]
     fn a_commit_message_is_recorded_for_the_ui() {
         let mut state = HostState::default();
-        let action = state.on_event(HostEvent::Committed { version: 7, etag: "\"e7\"".into() });
+        let action = state.on_event(HostEvent::Committed { version: 7, etag: "\"e7\"".into() }, DOC);
         assert_eq!(action, HostAction::Committed { version: 7, etag: "\"e7\"".into() });
         assert_eq!(state.committed, Some((7, "\"e7\"".to_string())));
     }

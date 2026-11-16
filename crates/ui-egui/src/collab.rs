@@ -26,6 +26,29 @@ fn is_editing(app: &WordApp, id: &str) -> bool {
     app.session.registry.get(id).is_some_and(|spec: &CommandSpec| spec.mutates)
 }
 
+/// Close a connection that belongs to a document the window no longer shows
+/// (§5.26 finding 9). A socket joined a room with one document as its seed and
+/// sends that document's operations; keeping it across a document switch would
+/// carry the new document's edits into the old one's room. The web shell opens
+/// a new connection when the host sends a `session` for the document it opens,
+/// and the desktop reopens one with `collab.enable`.
+///
+/// What the closed connection never got confirmed goes with it, and the local
+/// document keeps what was typed. Called before this frame polls or sends
+/// anything, so no edit of the new document can reach the old room.
+fn close_if_another_document(app: &mut WordApp) {
+    let Some(collab) = app.collab.as_ref() else { return };
+    if collab.carries(app.session.document_id()) {
+        return;
+    }
+    app.collab = None;
+    #[cfg(target_arch = "wasm32")]
+    {
+        app.host_session = None;
+    }
+    app.status("Left the collaboration session: the open document changed");
+}
+
 /// The document before a user command, when a room is live and the command is
 /// one we replicate. `None` keeps the call cheap in single-user mode.
 pub(crate) fn before_command(app: &WordApp, id: &str) -> Option<Document> {
@@ -37,6 +60,7 @@ pub(crate) fn before_command(app: &WordApp, id: &str) -> Option<Document> {
 
 /// Send the difference a local command made.
 pub(crate) fn after_command(app: &mut WordApp, before: &Document, id: &str, params: &serde_json::Value) {
+    close_if_another_document(app);
     let result = {
         let Some(collab) = app.collab.as_mut() else { return };
         collab.after_command(before, &app.session, id, params)
@@ -81,6 +105,11 @@ fn commit_blocked_message(status: &crate::collab_session::Status) -> &'static st
 /// Refuse a document edit on a read-only session before the engine runs it.
 pub(crate) fn viewer_refusal(app: &WordApp, id: &str) -> Option<String> {
     let collab = app.collab.as_ref()?;
+    // A connection that belongs to another document says nothing about this
+    // one's edits (§5.26 finding 9); `tick` closes it.
+    if !collab.carries(app.session.document_id()) {
+        return None;
+    }
     if !is_editing(app, id) {
         return None;
     }
@@ -103,7 +132,7 @@ pub(crate) fn connect(app: &mut WordApp) {
         return;
     };
     let client_id = crate::collab_session::session_client_id("ui", app.session.document_id());
-    match crate::collab_session::Collab::connect(&server, &token, &app.session.author, &client_id, &app.session.doc) {
+    match crate::collab_session::Collab::connect(&server, &token, &app.session.author, &client_id, &app.session.doc, app.session.document_id()) {
         Ok(collab) => app.collab = Some(collab),
         Err(message) => app.status(message),
     }
@@ -139,6 +168,7 @@ pub(crate) fn reconnect_wanted(id: &str, has_session: bool, server_before: &str,
 /// Poll the transport, apply answers and publish this window's caret. Called
 /// once per frame before layout, so a remote edit is laid out in this frame.
 pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
+    close_if_another_document(app);
     let copy = {
         let Some(collab) = app.collab.as_mut() else { return };
         let changed = collab.poll(&mut app.session);

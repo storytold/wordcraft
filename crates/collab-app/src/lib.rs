@@ -503,6 +503,11 @@ pub struct Collab {
     _runtime: tokio::runtime::Runtime,
     handle: Handle,
     state: SyncState,
+    /// The document this connection answers for (§5.26 finding 9): the window's
+    /// document when `collab.enable` opened it. Its seed, presence and
+    /// operations are that document's, so the UI closes it rather than let
+    /// another document's edits into the room.
+    document_id: u64,
     server: String,
     status: Status,
     /// An edit the room never received: tracked apart from `status`, which a
@@ -529,7 +534,9 @@ pub struct Collab {
 impl Collab {
     /// Connect to `server` with a cabinet JWT. The token is kept by the
     /// transport and never logged, stored in preferences or put in the URL.
-    pub fn connect(server: &str, token: &str, actor: &str, client_id: &str, document: &Document) -> Result<Collab, String> {
+    /// `document_id` is the window's document when the connection is opened:
+    /// the connection answers for it and for no other (§5.26 finding 9).
+    pub fn connect(server: &str, token: &str, actor: &str, client_id: &str, document: &Document, document_id: u64) -> Result<Collab, String> {
         // The document this window has open is what the server builds a room it
         // has never snapshotted from (ADR WC-0004); a room that exists ignores
         // it and answers with its snapshot instead.
@@ -547,6 +554,7 @@ impl Collab {
             _runtime: runtime,
             handle,
             state: SyncState::new(client_id, actor, Role::Editor),
+            document_id,
             server: server.to_string(),
             status: Status::Connecting,
             divergence: Divergence::default(),
@@ -564,6 +572,19 @@ impl Collab {
 
     pub fn status(&self) -> &Status {
         &self.status
+    }
+
+    /// The document this connection answers for.
+    pub fn document_id(&self) -> u64 {
+        self.document_id
+    }
+
+    /// Whether this connection belongs to `document` (§5.26 finding 9). The UI
+    /// asks before it polls or sends: a connection that answers for a document
+    /// the window no longer shows must be closed, not reused, or that
+    /// document's room would receive the newly shown one's edits.
+    pub fn carries(&self, document: u64) -> bool {
+        self.document_id == document
     }
 
     pub fn role(&self) -> Role {

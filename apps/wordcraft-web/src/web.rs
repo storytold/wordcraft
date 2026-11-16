@@ -182,16 +182,21 @@ fn stored_prefs() -> Option<String> {
 }
 
 impl eframe::App for WebShell {
-    /// Runs one browser frame: forwards queued host messages to the status bar, advances the app,
-    /// then writes changed preferences to browser storage immediately, because a reload or closed
-    /// tab never runs the exit path.
+    /// Runs one browser frame: advances the app, forwards queued host messages to the status bar,
+    /// keeps the collaboration session on the document that is open, then writes changed
+    /// preferences to browser storage immediately, because a reload or closed tab never runs the
+    /// exit path.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // The app first: opening a document (a dropped file, the host's `open`, File › Open)
+        // moves `document_id`, and the session routing below must see the document this frame
+        // ends on, not the one it started with (§5.26 finding 9).
+        self.app.logic(ctx);
+        self.sync_document();
         self.apply_host_events();
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
             self.app.status(msg);
         }
-        self.app.logic(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
         if let Some(json) = self.prefs.changed(&self.app) {
             match local_storage() {
@@ -213,6 +218,10 @@ impl eframe::App for WebShell {
     /// Draws the app. On the first pass of a visible frame it takes the browser's dropped files and
     /// spawns asynchronous byte reads into the inbox; later passes only draw.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // A document the app opened inside `ui` (a command, the Open dialog) closes the session
+        // that answered for the previous one before that session's next poll or send (§5.26
+        // finding 9).
+        self.sync_document();
         // Browser drops are input: take them only in the first real UI pass, never in a hidden
         // `run_logic` tick that still sees the previous shown frame's RawInput.
         if ui.ctx().current_pass_index() == 0 {
@@ -243,23 +252,35 @@ impl eframe::App for WebShell {
 impl WebShell {
     /// `wordcraft:session` opens the session; `wordcraft:committed` is the
     /// cabinet's commit result. Nothing here runs without a session message.
+    /// Each message is read for the document that is open now: a session opened
+    /// for another one is refused, not joined (§5.26 finding 9).
     fn apply_host_events(&mut self) {
         let events = std::mem::take(&mut *self.host_events.borrow_mut());
+        let document = self.app.session.document_id();
         for event in events {
-            match self.host_state.on_event(event) {
+            match self.host_state.on_event(event, document) {
                 HostAction::Connect(session) => self.connect(session),
                 // The cabinet pushes a fresh JWT for the session this shell already
                 // holds (ADR WC-0007): the token changes on the live client, and its
                 // unconfirmed edit and the participant list stay. A first dial that
                 // never finished has no client to renew, so that one is dialled.
                 HostAction::Renew(session) => {
-                    self.app.host_session = Some(session.clone());
-                    let renewed = self.app.collab.as_mut().is_some_and(|collab| collab.renew(&session));
+                    let document = self.app.session.document_id();
+                    // Only a connection that belongs to this document is renewed in
+                    // place; any other is dialled fresh (the state above refused the
+                    // sessions that belong elsewhere).
+                    let renewed = self.app.collab.as_mut().is_some_and(|collab| collab.carries(document) && collab.renew(&session));
                     if renewed {
+                        self.app.host_session = Some(session.clone());
                         self.app.status(format!("Renewed collaboration session {}", session.session_id()));
                     } else {
                         self.connect(session);
                     }
+                }
+                // The id was opened for a document this tab no longer shows. Joining it
+                // would send the open document's edits into that room.
+                HostAction::Refused { session_id, document } => {
+                    self.app.status(format!("Not joining collaboration session {session_id}: it belongs to another document ({document})"));
                 }
                 HostAction::Committed { version, etag } => {
                     self.app.host_committed = Some((version, etag.clone()));
@@ -269,14 +290,31 @@ impl WebShell {
         }
     }
 
+    /// The document decides which session this tab may hold (§5.26 finding 9):
+    /// when another becomes active, the connection that answered for the
+    /// previous one is closed — the `Collab` owns the socket, so dropping it
+    /// closes it — and the host sends a `session` again for the document it
+    /// opens. What the closed connection never got confirmed goes with it; the
+    /// room is never written with this document's edits in its place.
+    fn sync_document(&mut self) {
+        let document = self.app.session.document_id();
+        let Some(left) = self.host_state.document_changed(document) else { return };
+        let name = left.session_id().to_string();
+        self.app.collab = None;
+        self.app.host_session = None;
+        self.last_host_state = None;
+        self.app.status(format!("Left collaboration session {name}: the open document changed"));
+    }
+
     /// Open the session the host sent. The session is stored first, then dialled:
     /// an app without it makes no network call.
     fn connect(&mut self, session: HostSession) {
-        let client_id = wordcraft_collab_web::session_client_id("web", self.app.session.document_id());
+        let document = self.app.session.document_id();
+        let client_id = wordcraft_collab_web::session_client_id("web", document);
         let actor = self.app.session.author.clone();
         let name = session.session_id().to_string();
         self.app.host_session = Some(session.clone());
-        match wordcraft_collab_web::Collab::connect(&session, &actor, &client_id, &self.app.session.doc) {
+        match wordcraft_collab_web::Collab::connect(&session, &actor, &client_id, &self.app.session.doc, document) {
             Ok(collab) => {
                 self.app.collab = Some(collab);
                 self.app.status(format!("Joined collaboration session {name}"));
@@ -289,10 +327,12 @@ impl WebShell {
     }
 
     /// `session-state` on a status or participant change (join, leave,
-    /// reconnect), `presence` at the sync server's 5–10 Hz.
+    /// reconnect), `presence` at the sync server's 5–10 Hz. Only a connection
+    /// that answers for the open document reports (§5.26 finding 9).
     fn publish_host_state(&mut self) {
         let Some(bridge) = self.bridge.clone() else { return };
-        let Some(collab) = self.app.collab.as_ref() else { return };
+        let document = self.app.session.document_id();
+        let Some(collab) = self.app.collab.as_ref().filter(|collab| collab.carries(document)) else { return };
         let status = wordcraft_collab_web::host_status(collab.status());
         let participants = wordcraft_collab_web::host_participants(collab.participants());
         let signature = (status.to_string(), participants.clone());
