@@ -979,6 +979,36 @@ fn language_scope_document_no_proof_and_pending() {
     assert_eq!(s.pending.as_ref().and_then(|p| p.lang.as_deref()), Some("pl-PL"));
 }
 
+/// Document scope returns the caret/selection like the selection path, plus the scope.
+#[test]
+fn language_scope_document_returns_the_selection_result() {
+    let mut s = multi_story_doc();
+    s.run("select.text", &json!({"text": "Guten"})).unwrap();
+    let out = s.run("review.language", &json!({"lang": "fr-FR", "scope": "document"})).unwrap();
+    assert_eq!(out["scope"], "document");
+    assert_eq!(out["anchor"], crate::cmd::pos_json(&s.sel.anchor), "{out}");
+    assert_eq!(out["focus"], crate::cmd::pos_json(&s.sel.focus), "{out}");
+}
+
+/// Tracked formatting records only the body and parts, so while it is on the glossary (outside
+/// any story) is left alone instead of changing untracked; with tracking off it changes.
+#[test]
+fn language_scope_document_skips_glossary_while_tracking_formatting() {
+    let gloss = |s: &Session| s.doc.glossary[0].blocks[0].as_para().map(|p| (p.runs[0].props.lang.clone(), p.mark.lang.clone()));
+    let mut s = multi_story_doc();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("review.trackingOptions", &json!({"trackFormatting": true})).unwrap();
+    s.run("review.language", &json!({"lang": "fr-FR", "scope": "document"})).unwrap();
+    assert_eq!(gloss(&s), Some((Some("de-DE".into()), Some("de-DE".into()))));
+    assert!(proofing_rows(&s).iter().all(|r| r.1.as_deref() == Some("fr-FR")));
+    assert!(s.doc.revisions.iter().any(|r| r.kind == wordcraft_doc::RevisionKind::Format), "the body change is tracked");
+    let mut s = multi_story_doc();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("review.trackingOptions", &json!({"trackFormatting": false})).unwrap();
+    s.run("review.language", &json!({"lang": "fr-FR", "scope": "document"})).unwrap();
+    assert_eq!(gloss(&s), Some((Some("fr-FR".into()), Some("fr-FR".into()))));
+}
+
 #[test]
 fn language_default_scope_is_selection_only() {
     let mut s = multi_story_doc();

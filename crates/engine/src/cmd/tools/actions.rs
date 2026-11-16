@@ -67,7 +67,12 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
     };
     let result = if whole_document {
         set_document_props(s, &change)?;
-        json!({"scope": "document"})
+        // The same caret/selection result as the selection path (the selection is untouched).
+        let mut r = sel_result(s)?;
+        if let Some(m) = r.as_object_mut() {
+            m.insert("scope".into(), json!("document"));
+        }
+        r
     } else {
         crate::cmd::format::apply(s, &change)?
     };
@@ -81,6 +86,10 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
 /// to the whole document"): text and paragraph marks of the body, headers, footers, notes,
 /// comments, text boxes (all `Document::parts`), table cells, and the glossary's building blocks.
 /// The selection is untouched; formatting waiting for typing follows.
+///
+/// Glossary blocks are left alone while Track Changes and Track Formatting are both on: tracked
+/// formatting (`fmt_revisions::record`) compares only the body and the parts, so a glossary change
+/// would be an untracked edit. Like every other command, tracked edits never reach the glossary.
 fn set_document_props(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> Result<(), CmdError> {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for story in stories {
@@ -92,8 +101,10 @@ fn set_document_props(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> Result<(),
             para.touch();
         }
     }
-    for block in &mut s.doc.glossary {
-        format_blocks(&mut block.blocks, f, 0);
+    if !(s.doc.settings.track_changes && s.prefs.markup.track_formatting) {
+        for block in &mut s.doc.glossary {
+            format_blocks(&mut block.blocks, f, 0);
+        }
     }
     if let Some(pend) = s.pending.as_mut() {
         f(pend);
