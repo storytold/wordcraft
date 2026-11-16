@@ -58,7 +58,9 @@ impl WordApp {
             seen_full_screen,
             escape_free,
             status_counts,
+            print_memo,
             missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -104,6 +106,7 @@ impl WordApp {
             clipboard_published: false,
             printing: Default::default(),
             print_feedback_seen: None,
+            print_gen: 0,
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
@@ -180,7 +183,9 @@ impl WordApp {
             seen_full_screen,
             escape_free,
             status_counts,
+            print_memo,
             missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -505,6 +510,7 @@ impl WordApp {
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);
             backstage::forget_save_as_error(&ctx);
+            self.export_error.clear();
         }
         self.paint_window(ui, &ctx, t);
         if !moved(self) {
