@@ -274,10 +274,10 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
 /// Set up the walk state for a section before its header and footer room is measured: no grid yet
 /// (the previous section's must not leak into headers, footers and separators), the field values
 /// and the footnote separators.
-fn begin_section_state<'p>(
+fn begin_section_state(
     ctx: &mut Ctx,
     pb: &mut PageBuilder,
-    (si, sect, page_format): (usize, &'p SectionProps, wordcraft_doc::section::NumFormat),
+    (si, sect, page_format): (usize, &SectionProps, wordcraft_doc::section::NumFormat),
     totals: &Totals,
     web: bool,
 ) {
@@ -379,7 +379,7 @@ fn place_block(ctx: &mut Ctx, pb: &mut PageBuilder, outline: &Option<OutlinePass
 
 /// Place the blocks from `block` to `last`, balancing the columns of the last page if asked.
 /// Returns the block after them and the text boxes laid out in the balancing attempts thrown away.
-fn place_section_blocks<'p>(
+fn place_section_blocks(
     ctx: &mut Ctx,
     pb: &mut PageBuilder,
     outline: &Option<OutlinePass>,
@@ -722,7 +722,7 @@ impl Snap {
 
 /// One balancing pass: blocks `first..end` laid out again from `snap` with the columns on `page`
 /// ending `h` below `top`; true if the page's text fits them.
-fn balance_pass<'a>(
+fn balance_pass(
     ctx: &mut Ctx,
     pb: &mut PageBuilder,
     snap: &Snap,
@@ -764,7 +764,7 @@ const BALANCE_PASSES: usize = 12;
 /// apply as usual, so the columns may come out a little uneven. Not balanced: a page with an
 /// explicit column break, which says where the columns end. Returns the text boxes laid out in the
 /// passes thrown away.
-fn balance_columns<'a>(ctx: &mut Ctx, pb: &mut PageBuilder, blocks: (usize, usize), snap: &Snap, body_top: f32) -> usize {
+fn balance_columns(ctx: &mut Ctx, pb: &mut PageBuilder, blocks: (usize, usize), snap: &Snap, body_top: f32) -> usize {
     let page = pb.pages.len().saturating_sub(1);
     let ncols = pb.cols.len().max(1) as f32;
     let top = pb.top;

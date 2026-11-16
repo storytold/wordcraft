@@ -389,24 +389,28 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     l.ms = now_ms() - t0;
     if VERIFY_INCREMENTAL.load(std::sync::atomic::Ordering::Relaxed) && cache.resume.as_ref().is_some_and(|r| r.resumed()) {
         let full = layout(doc, &mut LayoutCache::new(), &LayoutOptions { incremental: false, ..opts.clone() });
-        assert_eq!(format!("{:?}", l.pages), format!("{:?}", full.pages), "an incremental layout differs from a full one");
         VERIFIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if format!("{:?}", l.pages) != format!("{:?}", full.pages) {
+            DIFFERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     l
 }
 
 static VERIFY_INCREMENTAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static VERIFIED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static DIFFERED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// How many incremental layouts [`verify_incremental`] has checked.
-pub fn verified_incremental() -> usize {
-    VERIFIED.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Check every incremental layout ([`LayoutOptions::incremental`]) against a full one, and panic
-/// if their pages differ. For tests: it makes each layout cost two.
+/// Check every incremental layout ([`LayoutOptions::incremental`]) against a full one. For
+/// tests: it makes each layout cost two. [`incremental_checks`] counts the results.
 pub fn verify_incremental(on: bool) {
     VERIFY_INCREMENTAL.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many incremental layouts [`verify_incremental`] has checked, and how many of them had
+/// pages different from a full layout's.
+pub fn incremental_checks() -> (usize, usize) {
+    (VERIFIED.load(std::sync::atomic::Ordering::Relaxed), DIFFERED.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[cfg(test)]

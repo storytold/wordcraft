@@ -192,6 +192,14 @@ impl Run {
         if self.off || ctx.uses_totals || ctx.boxes.total() > 0 || pb.pages.iter().any(|p| !p.float_tables.is_empty()) {
             return None;
         }
+        // What resuming and taking the rest index by.
+        let fits = |m: &Mark| m.snap.pages <= pb.pages.len();
+        if pb.behind.len() != pb.pages.len()
+            || pb.behind.iter().zip(&pb.pages).any(|(b, p)| *b > p.items.len())
+            || !self.marks.iter().all(|(_, m)| fits(m))
+        {
+            return None;
+        }
         let in_a_row = self.plan.as_ref().map_or(0, |p| p.old.in_a_row + 1);
         let end = match (&self.plan, self.met) {
             (Some(p), true) => Arc::clone(&p.old.end),
@@ -471,7 +479,7 @@ impl Page {
             body: self.body,
             header_story: self.header_story,
             footer_story: self.footer_story,
-            hf_slot: self.hf_slot.clone(),
+            hf_slot: self.hf_slot,
             first_block: self.first_block,
             markup: self.markup,
             float_tables: self.float_tables.clone(),
