@@ -3432,16 +3432,12 @@ fn opening_a_document_with_fields_marked_out_of_date_asks_to_update_them() {
             _ => None,
         })
     };
-    let mut a = app();
-    a.execute("file.open", json!({"path": path.to_string_lossy()})).unwrap();
-    assert_eq!((prompt(&a), author(&a)), (None, Some(("stale".to_string(), true))), "a script isn't asked");
-    for (button, want) in [("Don't Update", ("stale", true)), ("Update", ("Ada", false))] {
-        let mut a = app();
-        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
-        assert_eq!(prompt(&a), Some("updateFields"));
-        // The dialog's theme fonts are installed on the first frame and usable from the next.
+    // The dialogs alone; their theme fonts are installed on the first frame and usable from the
+    // next. `accessible`: whether every widget must have an accessible name (the Password box's
+    // field has none yet, which isn't what this test is about).
+    let dialogs_of = |a: WordApp, accessible: bool| {
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(accessible).build_ui_state(
             move |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 if fonts {
@@ -3456,6 +3452,19 @@ fn opening_a_document_with_fields_marked_out_of_date_asks_to_update_them() {
         for _ in 0..3 {
             h.step();
         }
+        h
+    };
+    let mut a = app();
+    a.execute("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!((prompt(&a), author(&a)), (None, Some(("stale".to_string(), true))), "a script isn't asked");
+    // An Open that only starts choosing a file asks nothing about the document still shown.
+    let _ = a.run("file.open", json!({}));
+    assert_ne!(prompt(&a), Some("updateFields"), "nothing was opened yet");
+    for (button, want) in [("Don't Update", ("stale", true)), ("Update", ("Ada", false))] {
+        let mut a = app();
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(prompt(&a), Some("updateFields"));
+        let mut h = dialogs_of(a, true);
         h.get_by_label(button).click();
         for _ in 0..3 {
             h.step();
@@ -3463,6 +3472,22 @@ fn opening_a_document_with_fields_marked_out_of_date_asks_to_update_them() {
         assert_eq!(prompt(h.state()), None, "{button} closes it");
         assert_eq!(author(h.state()), Some((want.0.to_string(), want.1)), "{button}");
     }
+    // A password-protected one asks once its password has opened it.
+    let locked = dir.join("locked.docx");
+    let mut s = Session::new(wordcraft_engine::io::open_path(&path).unwrap());
+    s.run("file.save", &json!({"path": locked.to_string_lossy(), "password": "sesame"})).unwrap();
+    let mut a = app();
+    a.run("file.open", json!({"path": locked.to_string_lossy()})).unwrap();
+    assert_eq!(prompt(&a), Some("password"));
+    if let Some(dialogs::Dialog::Password { password, .. }) = &mut a.dialog {
+        password.as_mut_string().push_str("sesame");
+    }
+    let mut h = dialogs_of(a, false);
+    h.get_by_label("OK").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(prompt(h.state()), Some("updateFields"), "asked after the password");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

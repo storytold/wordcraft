@@ -334,6 +334,7 @@ impl WordApp {
         // Opening a file, or a new document from a template, reads a file that may be protected.
         let retry = matches!(id, "file.open" | "file.newFromTemplate").then(|| params.clone());
         let retry_path = retry.clone();
+        let shown = self.session.document_id();
         let r = self.execute(id, params);
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
@@ -349,13 +350,21 @@ impl WordApp {
             let path = params.get("path").and_then(Value::as_str).unwrap_or("");
             self.report_open_failure(path, e);
         }
-        // Fields marked as out of date (`w:dirty`, as pandoc's `--toc` writes its empty table of
-        // contents) are to be updated before they are shown: Word asks when it opens such a
-        // document, and so does the user's Open here (#6771). Scripts (`execute`) never are.
-        if id == "file.open" && r.is_ok() && self.dialog.is_none() && wordcraft_engine::cmd::references::has_dirty_fields(&self.session.doc) {
-            self.dialog = Some(dialogs::Dialog::UpdateFields);
+        if id == "file.open" && r.is_ok() {
+            self.ask_to_update_stale_fields(shown);
         }
         r
+    }
+
+    /// After the user's Open: fields marked as out of date (`w:dirty`, as pandoc's `--toc` writes
+    /// its empty table of contents) are to be updated before they are shown, and Word asks to
+    /// when it opens such a document, so the app asks too (#6771). Only when a document did open,
+    /// replacing `shown` (the id of the one shown before): an Open that only started a file picker
+    /// asks nothing about the document still shown. Scripts' opens (`execute`) never ask.
+    pub(crate) fn ask_to_update_stale_fields(&mut self, shown: u64) {
+        if self.session.document_id() != shown && self.dialog.is_none() && wordcraft_engine::cmd::references::has_dirty_fields(&self.session.doc) {
+            self.dialog = Some(dialogs::Dialog::UpdateFields);
+        }
     }
 
     /// [`WordApp::execute_user`] for a command a prompt or a finished save held back. A failed
