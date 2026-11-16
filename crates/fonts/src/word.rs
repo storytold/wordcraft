@@ -239,7 +239,7 @@ fn has_arabic_line_of_its_own(lower: &str) -> bool {
 
 /// Is `c` an Arabic-script letter, mark or digit (Arabic, Supplement, Extended-B and -A, presentation forms)?
 pub fn is_arabic_script(c: char) -> bool {
-    matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
+    matches!(u32::from(c), 0x0600..=0x060B | 0x060D..=0x061A | 0x061C..=0x061E | 0x0620..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
 }
 
 /// The (ascent, descent) in em Word gives a line of Arabic-script text in the font `family` when
@@ -1025,6 +1025,9 @@ mod tests {
         assert!(!is_arabic_script('\u{FEFF}') && is_arabic_script('\u{FEFC}'));
         // Arabic Extended-B (U+0870..U+089F) letters are Arabic too.
         assert!(is_arabic_script('\u{0870}') && is_arabic_script('\u{089F}'));
+        // The Arabic comma, semicolon and question mark are Common-script punctuation, so a Latin run holding one stays Latin.
+        assert!(!is_arabic_script('\u{060C}') && !is_arabic_script('\u{061B}') && !is_arabic_script('\u{061F}'));
+        assert!(is_arabic_script('\u{0621}') && is_arabic_script('\u{060D}'));
     }
 
     #[test]
