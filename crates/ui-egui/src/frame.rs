@@ -22,7 +22,7 @@ const ROTATE_GAP: f32 = 22.0;
 const SNAP_DEG: f32 = 15.0;
 
 /// Screen point `p` turned `deg` degrees clockwise about `c`.
-fn turn(p: Pos2, c: Pos2, deg: f32) -> Pos2 {
+pub(crate) fn turn(p: Pos2, c: Pos2, deg: f32) -> Pos2 {
     let (s, k) = wordcraft_geom::normalize_degrees(deg).to_radians().sin_cos();
     let (u, v) = (p.x - c.x, p.y - c.y);
     pos2(c.x + u * k - v * s, c.y + u * s + v * k)

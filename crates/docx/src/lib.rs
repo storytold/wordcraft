@@ -134,6 +134,20 @@ pub fn smart_art_items(
     model_bridge::convert(shared_items).unwrap_or_default()
 }
 
+/// The item of `spec` drawn `w` × `h` points whose shape is at (`x`, `y`), points from the
+/// graphic's top-left corner (an item listed in its parent's shape gives the parent).
+pub fn smart_art_item_at(spec: &wordcraft_doc::smart_art::SmartArtSpec, w: f32, h: f32, x: f32, y: f32) -> Option<usize> {
+    let shared_spec = model_bridge::convert_ref::<_, craft_wordmodel::smart_art::SmartArtSpec>(spec).ok()?;
+    craft_docx::smart_art_item_at(&shared_spec, w, h, x, y)
+}
+
+/// The box (x, y, width, height in points from the graphic's top-left corner) of the shape that
+/// shows item `i` of `spec` drawn `w` × `h`.
+pub fn smart_art_item_box(spec: &wordcraft_doc::smart_art::SmartArtSpec, w: f32, h: f32, i: usize) -> Option<[f32; 4]> {
+    let shared_spec = model_bridge::convert_ref::<_, craft_wordmodel::smart_art::SmartArtSpec>(spec).ok()?;
+    craft_docx::smart_art_item_box(&shared_spec, w, h, i)
+}
+
 /// Read bibliography sources from a `b:Sources` file.
 pub fn read_sources(bytes: &[u8]) -> Result<Sources, DocxError> {
     let shared = craft_docx::read_sources(bytes)?;
