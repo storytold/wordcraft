@@ -338,7 +338,7 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
     let w = tl.width.clamp(1.0, 100_000.0);
     let [dl, dt, dr, db] = f.dist_from_text();
     for attempt in 0..2 {
-        let s = pb.sect;
+        let s = Arc::clone(&pb.sect);
         let h_area = float_table_h_area(pb, f, ctx.mirror);
         // The text a table anchored to it stands in: where the next paragraph starts.
         let v_area = match f.v_rel {
@@ -425,7 +425,7 @@ fn placed_intersects(item: &Placed, rect: &Rect) -> bool {
 /// The area a floating table's `x` is measured in: its start and width on the page, as laid out
 /// before an even page is mirrored (see [`float_rect`]).
 fn float_table_h_area(pb: &PageBuilder, f: &TableFloat, mirror: bool) -> (f32, f32) {
-    let s = pb.sect;
+    let s = Arc::clone(&pb.sect);
     let (left, _, shift) = page_frame(pb, mirror).sides();
     match f.h_rel {
         Anchor::Page => (-shift, s.page_w),

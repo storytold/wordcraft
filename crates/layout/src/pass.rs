@@ -183,10 +183,10 @@ fn new_page_builder<'p>(
     early: &'p EarlyFloats,
     web: bool,
     settle: bool,
-) -> PageBuilder<'p> {
+) -> PageBuilder {
     PageBuilder {
         pages: Vec::new(),
-        sect,
+        sect: Arc::new(sect.clone()),
         page_format,
         sect_idx: 0,
         col: 0,
@@ -220,7 +220,7 @@ fn new_page_builder<'p>(
         sect_beneath: false,
         beneath: false,
         foot_top: f32::MAX,
-        early,
+        early: Arc::new(early.clone()),
         seeded: 0,
         settle,
         column_lines: None,
@@ -275,14 +275,14 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
 /// and the footnote separators.
 fn begin_section_state<'p>(
     ctx: &mut Ctx,
-    pb: &mut PageBuilder<'p>,
+    pb: &mut PageBuilder,
     (si, sect, page_format): (usize, &'p SectionProps, wordcraft_doc::section::NumFormat),
     totals: &Totals,
     web: bool,
 ) {
     let doc = ctx.doc;
     ctx.grid = para::Grid::default();
-    pb.sect = sect;
+    pb.sect = Arc::new(SectionProps::clone(sect));
     pb.page_format = page_format;
     ctx.fields.page_format = page_format;
     pb.sect_idx = si;
@@ -295,7 +295,7 @@ fn begin_section_state<'p>(
 }
 
 /// The section's own grid and line numbering, once its header and footer room is known.
-fn apply_section_grid(ctx: &mut Ctx, pb: &mut PageBuilder<'_>, sect: &SectionProps) {
+fn apply_section_grid(ctx: &mut Ctx, pb: &mut PageBuilder, sect: &SectionProps) {
     ctx.grid = para::Grid::of(ctx.doc, sect);
     if sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Section) {
         pb.line_no = 0;
@@ -303,9 +303,9 @@ fn apply_section_grid(ctx: &mut Ctx, pb: &mut PageBuilder<'_>, sect: &SectionPro
 }
 
 /// The blank page that puts a section on the right side ends the previous section.
-fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, si: usize, block: usize) {
+fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder, hf: &HfLinks<'p>, si: usize, block: usize) {
     let Some((_, prev)) = si.checked_sub(1).and_then(|k| hf.sections.get(k)) else { return };
-    pb.sect = prev;
+    pb.sect = Arc::new(SectionProps::clone(prev));
     pb.page_format = prev.page_num_format;
     ctx.fields.page_format = prev.page_num_format;
     pb.sect_idx = si - 1;
@@ -316,7 +316,7 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
 }
 
 /// Start the section on a new page, after the blank one that puts it on the right side if any.
-fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, sec: &Sec<'p>, (mode, block): (Mode, usize)) {
+fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder, hf: &HfLinks<'p>, sec: &Sec<'p>, (mode, block): (Mode, usize)) {
     // A page holds text running one way: a section turning the other way starts a page.
     if !mode.web {
         pb.take_back_break_page();
@@ -325,7 +325,7 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
     let (filler, restart) = section_side(sec.start, sec.sect.page_num_start, pb.number, pb.pages.len(), s.even_odd_headers, s.mirror_margins);
     if filler && !mode.web {
         end_previous_section(ctx, pb, hf, sec.si, block);
-        pb.sect = sec.sect;
+        pb.sect = Arc::new(SectionProps::clone(sec.sect));
         pb.page_format = sec.page_format;
         ctx.fields.page_format = sec.page_format;
         pb.sect_idx = sec.si;
@@ -380,7 +380,7 @@ fn place_block(ctx: &mut Ctx, pb: &mut PageBuilder, outline: &Option<OutlinePass
 /// Returns the block after them and the text boxes laid out in the balancing attempts thrown away.
 fn place_section_blocks<'p>(
     ctx: &mut Ctx,
-    pb: &mut PageBuilder<'p>,
+    pb: &mut PageBuilder,
     outline: &Option<OutlinePass>,
     (mut block, last): (usize, usize),
     (balance, body_top): (bool, f32),
@@ -618,8 +618,8 @@ pub(crate) fn layout_pass(
 
 /// Pagination state saved before a block, to lay the blocks from there out again (balancing
 /// columns): the builder without its pages, how far its last page had got, and the walk state.
-struct Snap<'a> {
-    pb: PageBuilder<'a>,
+struct Snap {
+    pb: PageBuilder,
     pages: usize,
     items: usize,
     behind: usize,
@@ -630,8 +630,8 @@ struct Snap<'a> {
     header_repeats: usize,
 }
 
-impl<'a> Snap<'a> {
-    fn take(pb: &mut PageBuilder<'a>, ctx: &Ctx) -> Self {
+impl Snap {
+    fn take(pb: &mut PageBuilder, ctx: &Ctx) -> Self {
         // The pages stay out of the copy: it would cost the whole document per block.
         let (pages, behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
         let copy = pb.clone();
@@ -651,7 +651,7 @@ impl<'a> Snap<'a> {
 
     /// Go back to this state: drop the pages added since and what was added to the last one
     /// (appended, or inserted at the front behind the text).
-    fn restore(&self, pb: &mut PageBuilder<'a>, ctx: &mut Ctx) {
+    fn restore(&self, pb: &mut PageBuilder, ctx: &mut Ctx) {
         let (mut pages, mut behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
         pages.truncate(self.pages);
         behind.truncate(self.pages);
@@ -676,8 +676,8 @@ impl<'a> Snap<'a> {
 /// ending `h` below `top`; true if the page's text fits them.
 fn balance_pass<'a>(
     ctx: &mut Ctx,
-    pb: &mut PageBuilder<'a>,
-    snap: &Snap<'a>,
+    pb: &mut PageBuilder,
+    snap: &Snap,
     (first, end): (usize, usize),
     (page, top, h): (usize, f32, f32),
     body_top: f32,
@@ -716,7 +716,7 @@ const BALANCE_PASSES: usize = 12;
 /// apply as usual, so the columns may come out a little uneven. Not balanced: a page with an
 /// explicit column break, which says where the columns end. Returns the text boxes laid out in the
 /// passes thrown away.
-fn balance_columns<'a>(ctx: &mut Ctx, pb: &mut PageBuilder<'a>, blocks: (usize, usize), snap: &Snap<'a>, body_top: f32) -> usize {
+fn balance_columns<'a>(ctx: &mut Ctx, pb: &mut PageBuilder, blocks: (usize, usize), snap: &Snap, body_top: f32) -> usize {
     let page = pb.pages.len().saturating_sub(1);
     let ncols = pb.cols.len().max(1) as f32;
     let top = pb.top;
@@ -731,7 +731,7 @@ fn balance_columns<'a>(ctx: &mut Ctx, pb: &mut PageBuilder<'a>, blocks: (usize, 
     {
         return 0;
     }
-    let pass = |ctx: &mut Ctx, pb: &mut PageBuilder<'a>, h: f32| balance_pass(ctx, pb, snap, blocks, (page, top, h), body_top);
+    let pass = |ctx: &mut Ctx, pb: &mut PageBuilder, h: f32| balance_pass(ctx, pb, snap, blocks, (page, top, h), body_top);
     // The text on the page fills `ncols` columns at least `used / ncols` high; the original layout
     // (`full`) fits, and so, nearly always, do columns as high as its tallest one.
     let mut lo = (used / ncols - 1.0).max(0.0);

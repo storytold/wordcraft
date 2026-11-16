@@ -3,12 +3,13 @@ use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
+use std::sync::Arc;
 use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
 
 #[derive(Clone)]
-pub(crate) struct PageBuilder<'a> {
+pub(crate) struct PageBuilder {
     pub(crate) pages: Vec<Page>,
-    pub(crate) sect: &'a SectionProps,
+    pub(crate) sect: Arc<SectionProps>,
     /// The current document section's numbering format, even when reflow uses first-section page geometry.
     pub(crate) page_format: wordcraft_doc::section::NumFormat,
     pub(crate) sect_idx: usize,
@@ -81,7 +82,7 @@ pub(crate) struct PageBuilder<'a> {
     /// pushes the body up (`f32::MAX`: no footer).
     pub(crate) foot_top: f32,
     /// The wrap areas pages start with ([`EarlyFloats`]) ...
-    pub(crate) early: &'a EarlyFloats,
+    pub(crate) early: Arc<EarlyFloats>,
     /// ... and how many of the current page's `excl` they are (its first ones).
     pub(crate) seeded: usize,
     /// No layout pass follows for floats found above their anchors: each is kept clear of the
@@ -121,7 +122,7 @@ pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
     v
 }
 
-impl PageBuilder<'_> {
+impl PageBuilder {
     /// Space footnotes take at the bottom of the page.
     pub(crate) fn notes_h(&self) -> f32 {
         self.stack_h(&self.notes)
@@ -313,21 +314,21 @@ impl PageBuilder<'_> {
         self.beneath = self.sect_beneath;
         self.excl.clear();
         // Floats placed above their anchors further down this page are known from its start.
-        let early = self.early;
+        let early = Arc::clone(&self.early);
         self.excl.extend(early.get(&self.pages.len()).into_iter().flatten().map(|(_, _, a)| a.clone()));
         self.seeded = self.excl.len();
         self.float_tables.clear();
         if self.sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Page) {
             self.line_no = 0;
         }
-        let s = self.sect;
+        let s = Arc::clone(&self.sect);
         self.number = self.restart_at.take().unwrap_or_else(|| self.number.saturating_add(1));
         let (w, h) = if self.web { (s.page_w, f32::MAX / 4.0) } else { (s.page_w, s.page_h) };
         let bottom = self.body_bottom(body_top);
         let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (bottom - body_top).max(36.0));
         let mut decor = Vec::new();
         if !self.web {
-            decor = page_border_rules(s);
+            decor = page_border_rules(&s);
         }
         self.page_items_start = decor.len();
         self.block_marks.clear();
@@ -354,7 +355,7 @@ impl PageBuilder<'_> {
     /// Start the lines between the current section's columns at `top` on this page, when it has
     /// them (Line between, `w:sep`).
     pub(crate) fn open_column_lines(&mut self, first_block: usize) {
-        let s = self.sect;
+        let s = Arc::clone(&self.sect);
         if self.web || !s.columns.separator || s.columns.count < 2 || self.pages.is_empty() {
             self.column_lines = None;
             return;
@@ -588,6 +589,6 @@ impl PageFrame<'_> {
 }
 
 /// The page `pb` is filling, for placing floating objects on it (`mirror`: [`Ctx::mirror`]).
-pub(crate) fn page_frame<'a>(pb: &PageBuilder<'a>, mirror: bool) -> PageFrame<'a> {
-    PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror }
+pub(crate) fn page_frame(pb: &PageBuilder, mirror: bool) -> PageFrame<'_> {
+    PageFrame { sect: &pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror }
 }
