@@ -3902,6 +3902,127 @@ fn hidden_drawings_are_neither_drawn_nor_take_room() {
     assert_eq!(draws.iter().filter(|x| matches!(x, display::Draw::Shape { .. })).count(), 1, "{draws:?}");
 }
 
+/// #6027: a text box inside a group (Word's cards of a coloured bar and a text box) is text to
+/// a click, as a text box on its own is: the click edits its text instead of grabbing the
+/// group. The group's other members still grab the group.
+#[test]
+fn a_grouped_text_box_is_text_to_a_click() {
+    crate::test_fonts();
+    let mut d = Document::from_text("body text");
+    let id = d.add_part(
+        wordcraft_doc::PartKind::TextBox,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("inside", Default::default()))],
+    );
+    let shape = |kind, w, h, story| InlineObject::Shape {
+        kind,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+        h_rel: wordcraft_doc::para::Anchor::Page,
+        v_rel: wordcraft_doc::para::Anchor::Page,
+        x: 100.0,
+        y: 300.0,
+        ..Default::default()
+    };
+    let group = InlineObject::Group {
+        w: 200.0,
+        h: 100.0,
+        float,
+        ch_w: 200.0,
+        ch_h: 100.0,
+        children: vec![
+            wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(wordcraft_doc::para::ShapeKind::Rectangle, 200.0, 30.0, None) },
+            wordcraft_doc::para::GroupChild { x: 0.0, y: 40.0, obj: shape(wordcraft_doc::para::ShapeKind::TextBox, 200.0, 60.0, Some(id)) },
+        ],
+        canvas: None,
+    };
+    d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
+    let l = lay(&d);
+    // Inside the text box: its story, and no object to grab.
+    assert_eq!(l.story_at(0, 200.0, 370.0), Some(StoryRef::Part(id)));
+    assert_eq!(l.object_at(0, 200.0, 370.0, 4.0), None);
+    assert_eq!(l.text_box_story(id, 0), Some(StoryRef::Body), "the box's text sits in the body");
+    // On the bar, and on the text box's border: the group.
+    for (x, y) in [(200.0, 315.0), (200.0, 340.5)] {
+        let hit = l.object_at(0, x, y, 4.0).unwrap_or_else(|| panic!("the group at {x}, {y}"));
+        assert_eq!((hit.path.clone(), hit.text_box), (Path::top(0), None));
+    }
+    assert_ne!(l.story_at(0, 200.0, 315.0), Some(StoryRef::Part(id)));
+    // The group keeps its text box's area relative to itself, so the area moves with it.
+    let Some(Placed::Object { rect, group_boxes, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Object { .. })) else { panic!() };
+    assert_eq!((rect.x, rect.y), (100.0, 300.0));
+    assert_eq!(group_boxes.as_slice(), [(wordcraft_geom::Rect::new(0.0, 40.0, 200.0, 60.0), id)]);
+}
+
+/// #6027: a group's text box areas turn with the group (a group in a cell or text box whose
+/// text runs down the page) and are found in headers and footers too.
+#[test]
+fn grouped_text_box_areas_turn_with_the_group_and_work_in_headers() {
+    let id = 7;
+    let group = |rect| Placed::Object {
+        rect,
+        spin: Default::default(),
+        story: StoryRef::Part(1),
+        path: Path::top(0),
+        off: 0,
+        text_box: None,
+        wrap: Default::default(),
+        origin: Default::default(),
+        group_boxes: vec![(wordcraft_geom::Rect::new(0.0, 40.0, 200.0, 60.0), id)],
+    };
+    let mut g = group(wordcraft_geom::Rect::new(0.0, 0.0, 200.0, 100.0));
+    g.turn(TextDirection::Down, 300.0, 50.0);
+    let Placed::Object { rect, group_boxes, .. } = &g else { panic!() };
+    let want = crate::placed::turn_rect(TextDirection::Down, 300.0, 50.0, wordcraft_geom::Rect::new(0.0, 40.0, 200.0, 60.0));
+    let (r, _) = group_boxes[0];
+    assert_eq!(wordcraft_geom::Rect::new(rect.x + r.x, rect.y + r.y, r.w, r.h), want);
+    // A header's group: its box is where a click in the header edits text.
+    let page = Page { header: vec![group(wordcraft_geom::Rect::new(100.0, 30.0, 200.0, 100.0))], ..Default::default() };
+    let l = DocLayout { pages: vec![page], ..Default::default() };
+    assert_eq!(l.header_footer_text_box_at(0, 150.0, 100.0), Some(id));
+    assert_eq!(l.header_footer_text_box_at(0, 150.0, 40.0), None, "the group's bar is not text");
+}
+
+/// #6027: where two text boxes of one group overlap, a click enters the one painted on top (the
+/// last member), in the body and in a header alike.
+#[test]
+fn click_in_overlapping_grouped_text_boxes_enters_the_top_one() {
+    let (low, top) = (3, 4);
+    let group = |rect| Placed::Object {
+        rect,
+        spin: Default::default(),
+        story: StoryRef::Part(1),
+        path: Path::top(0),
+        off: 0,
+        text_box: None,
+        wrap: Default::default(),
+        origin: Default::default(),
+        group_boxes: vec![(wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 100.0), low), (wordcraft_geom::Rect::new(50.0, 50.0, 100.0, 100.0), top)],
+    };
+    let page = Page {
+        items: vec![group(wordcraft_geom::Rect::new(100.0, 100.0, 150.0, 150.0))],
+        header: vec![group(wordcraft_geom::Rect::new(100.0, 100.0, 150.0, 150.0))],
+        ..Default::default()
+    };
+    let l = DocLayout { pages: vec![page], ..Default::default() };
+    // Overlap (page 175, 175 is inside both boxes): the top box takes the click, and typing.
+    assert_eq!(l.story_at(0, 175.0, 175.0), Some(StoryRef::Part(top)));
+    assert_eq!(l.header_footer_text_box_at(0, 175.0, 175.0), Some(top));
+    // Outside the overlap each box still answers for itself.
+    assert_eq!(l.story_at(0, 110.0, 110.0), Some(StoryRef::Part(low)));
+    assert_eq!(l.story_at(0, 240.0, 240.0), Some(StoryRef::Part(top)));
+}
+
 #[test]
 fn deleted_float_leaves_no_wrap_area_without_markup() {
     crate::test_fonts();
@@ -4053,6 +4174,76 @@ fn line_numbers_follow_the_line_number_style() {
     });
     let styled = number_runs(&d);
     assert!(styled.iter().all(|(size, color)| *size == 8.0 && *color == red), "{styled:?}");
+}
+
+/// #6018: German Word saves the "line number" style as `Zeilennummer`; the numbers still take
+/// its formatting, found by the built-in name.
+#[test]
+fn line_numbers_follow_a_localised_line_number_style() {
+    let mut d = Document::from_text("one\ntwo\nthree");
+    d.last_section.line_numbers = Some(Default::default());
+    let red = wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0xC0, 0, 0));
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "Zeilennummer".into(),
+        name: "Line Number".into(),
+        kind: wordcraft_doc::StyleKind::Character,
+        chr: CharProps { size: Some(8.0), color: Some(red), ..Default::default() },
+        ..Default::default()
+    });
+    let l = lay(&d);
+    let runs: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story, para, .. } if *story == DECOR_STORY => para.styles.first().map(|s| (s.size, s.rc.color)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(runs.len(), 3);
+    assert!(runs.iter().all(|(size, color)| *size == 8.0 && *color == red), "{runs:?}");
+}
+
+/// #6018: in two columns each column has its numbers at its own left edge, as in Word; the
+/// second column's used to be drawn in the page margin over the first column's.
+#[test]
+fn line_numbers_stand_beside_each_column() {
+    crate::test_fonts();
+    let text = (1..=120).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    let mut d = Document::from_text(&text);
+    d.last_section.line_numbers = Some(Default::default());
+    d.last_section.columns = wordcraft_doc::section::Columns { count: 2, space: 36.0, separator: false, widths: Vec::new() };
+    let s = d.last_section.clone();
+    let col2 = s.margin_left + s.gutter + (s.text_width() - 36.0) / 2.0 + 36.0;
+    let l = lay(&d);
+    let p = &l.pages[0];
+    // Right edge and top of every number.
+    let numbers: Vec<(f32, f32)> = p
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story, para, x, y, .. } if *story == DECOR_STORY => {
+                Some((x + para.lines.first().and_then(|l| l.xs.last().copied()).unwrap_or(0.0), *y))
+            }
+            _ => None,
+        })
+        .collect();
+    let body_xs: Vec<f32> = p
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, x, .. } => Some(*x),
+            _ => None,
+        })
+        .collect();
+    assert!(body_xs.iter().any(|x| (x - col2).abs() < 0.5), "the text runs into the second column: {body_xs:?}");
+    let in_col2 = body_xs.iter().filter(|x| (*x - col2).abs() < 0.5).count();
+    let right: Vec<_> = numbers.iter().filter(|(r, _)| *r > s.margin_left + 1.0).collect();
+    assert_eq!(right.len(), in_col2, "one number per second-column line");
+    // Numbers end 18 pt (auto distance) left of their column.
+    assert!(right.iter().all(|(r, _)| (r - (col2 - 18.0)).abs() < 0.5), "{right:?}");
+    let left = numbers.len() - right.len();
+    assert!(numbers.iter().filter(|(r, _)| *r <= s.margin_left + 1.0).all(|(r, _)| (r - (s.margin_left - 18.0)).abs() < 0.5));
+    assert!(left > 0);
 }
 
 #[test]
@@ -8570,8 +8761,8 @@ fn picture_row(room: f32, min: f32, pic_h: f32, lines: usize) -> (DocLayout, Vec
         t.rows[1].props.height = Some(min);
         t.rows[1].props.height_rule = HeightRule::AtLeast;
     }
-    for c in 1..3 {
-        t.rows[1].cells[c].blocks = lines_in_cell(lines, "N/A");
+    for cell in &mut t.rows[1].cells[1..3] {
+        cell.blocks = lines_in_cell(lines, "N/A");
     }
     set_at_least_row_spacing(&mut t);
     let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
@@ -10257,8 +10448,8 @@ fn a_hidden_cell_mark_takes_no_room() {
         let mut d = Document::from_text("Above");
         let mut t = Table::new(3, 2, 300.0);
         for (r, text) in [(0, "R1"), (2, "R3")] {
-            for c in 0..2 {
-                t.rows[r].cells[c].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+            for cell in &mut t.rows[r].cells {
+                cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
             }
         }
         for (cell, hide) in t.rows[1].cells.iter_mut().zip(hide) {
@@ -12381,6 +12572,7 @@ fn split_cell_moves_image_frame() {
             text_box: None,
             wrap: Wrap::Square,
             origin: wordcraft_geom::Point::new(3.0, 145.0),
+            group_boxes: Vec::new(),
         };
         let mut kept = image.clone();
         kept.translate(0.0, top - 150.0);
