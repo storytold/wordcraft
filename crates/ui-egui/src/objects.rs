@@ -407,17 +407,13 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let _ = app.run("select.addObject", json!({"pos": object.pos()}));
         return true;
     }
-    // Where text covers a Behind Text picture, a click edits the text and a drag moves the
-    // picture. An uncovered part must select the picture immediately, so its frame and Layout
-    // Options remain reachable after the user has clicked into the text (#6064).
-    if pressed
-        && grab == Grab::Move
-        && object.behind()
-        && behind_draggable(app, &object)
-        && crate::canvas::page_at(pages, layout, scale, at)
-            .and_then(|(page, x, y)| layout.object_at_in(page, x, y, EDGE / scale.max(0.01), object.story))
-            .is_none_or(|hit| hit.pos() != object.pos())
-    {
+    // Over text, a click edits that text and a drag moves the Behind Text picture.
+    // An uncovered part selects it immediately in the body or an active header/footer,
+    // keeping its frame and Layout Options reachable after clicking into text (#6064).
+    let clear_of_text = crate::canvas::page_at(pages, layout, scale, at)
+        .and_then(|(page, x, y)| layout.object_at_in(page, x, y, EDGE / scale.max(0.01), object.story))
+        .is_some_and(|o| o.pos() == object.pos());
+    if pressed && grab == Grab::Move && object.behind() && !clear_of_text && behind_draggable(app, &object) {
         let (min, picture) = match app.session.doc.para_at(&object.pos()).and_then(|p| p.object_at(object.pos().off)) {
             Some(o) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return false,
@@ -441,6 +437,8 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let pos = object.pos();
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
         let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+        // A header/footer picture repeats on every page: select the copy clicked, as `select_at` does.
+        app.session.page_hint = object.page;
         let (min, picture) = match selected(app) {
             Some((_, o)) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return true,
@@ -611,9 +609,8 @@ fn link_click(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
 /// Right-click at `at`: the picture, shape or text box under it becomes the selection (as a click
 /// would, without a drag), so the context menu acts on it. Returns whether there was one.
 pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> bool {
-    if crate::canvas::editing_header_footer(app, layout) {
-        return false;
-    }
+    // While editing a header/footer, `grab_at` looks at its own objects, so its picture is picked
+    // too and the menu's Reset Picture or Wrap Text acts on it.
     let Some((object, _)) = grab_at(app, layout, pages, scale, at) else { return false };
     let pos = object.pos();
     // Already selected (alone or among several picked for Group): keep the selection.
@@ -621,6 +618,9 @@ pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
         let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
     }
+    // A header/footer picture repeats on every page: its frame belongs on the page clicked, not
+    // the one last edited.
+    app.session.page_hint = object.page;
     true
 }
 
