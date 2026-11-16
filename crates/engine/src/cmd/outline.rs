@@ -26,6 +26,11 @@ pub struct OutlineState {
     /// edits like `collapsed`). Expand reveals headings level by level and body text last, as
     /// Word does.
     pub text_hidden: Vec<(usize, u64)>,
+    /// How many body blocks the document had when `collapsed`/`text_hidden` were last set or
+    /// matched again: an unchanged count means a heading's text changed in place rather than
+    /// headings being deleted.
+    #[serde(skip)]
+    pub blocks: usize,
     /// Show Level: 1–9, or 0 for all levels.
     pub show_level: u8,
     /// Show First Line Only (body text).
@@ -237,6 +242,7 @@ fn text_hash(doc: &Document, i: usize) -> Option<u64> {
 fn set_collapsed(s: &mut Session, set: &BTreeSet<usize>, text: &BTreeSet<usize>) {
     s.view.outline.collapsed = set.iter().filter_map(|i| text_hash(&s.doc, *i).map(|h| (*i, h))).collect();
     s.view.outline.text_hidden = text.iter().filter_map(|i| text_hash(&s.doc, *i).map(|h| (*i, h))).collect();
+    s.view.outline.blocks = s.doc.body.len();
 }
 
 /// The headings in `from..to` that have body text right after them.
@@ -365,8 +371,11 @@ fn collapse(s: &mut Session, v: &Value, all: bool) -> CmdResult {
         let view = OutlineView { collapsed: set.clone(), text_hidden: text.clone(), ..Default::default() };
         let hidden = ol::hidden(&levels, &view);
         let shown = |j: usize| !hidden.get(j).copied().unwrap_or(true);
-        // Body text under headings that have sub-headings closes first.
-        if has_sub_headings(&levels, h) && headings_with_text(&levels, h, end).any(|j| !text.contains(&j) && shown(j)) {
+        // Body text under headings that have sub-headings closes first. `headings_with_text`
+        // guarantees a body block right after `j`; that block must be showing, or hiding the
+        // text would change nothing on screen and waste the step (it is already hidden when an
+        // inner heading is collapsed).
+        if has_sub_headings(&levels, h) && headings_with_text(&levels, h, end).any(|j| !text.contains(&j) && shown(j.saturating_add(1))) {
             text.extend(headings_with_text(&levels, h, end));
             continue;
         }
@@ -542,12 +551,25 @@ fn remap_collapsed_headings(s: &mut Session) {
     }
     let collapsed = std::mem::take(&mut s.view.outline.collapsed);
     let text_hidden = std::mem::take(&mut s.view.outline.text_hidden);
-    s.view.outline.collapsed = remap_list(collapsed, &hashes, &levels, by_hash.clone());
-    s.view.outline.text_hidden = remap_list(text_hidden, &hashes, &levels, by_hash);
+    s.view.outline.collapsed = remap_list(collapsed, &hashes, &levels, by_hash.clone(), true);
+    // Hidden text is state of one heading: when blocks were added or removed, a heading with
+    // changed text is more likely another heading that shifted into the index of a deleted one
+    // than an edit in place, so the index fallback applies only to an unchanged block count.
+    let edited_in_place = s.view.outline.blocks == hashes.len();
+    s.view.outline.text_hidden = remap_list(text_hidden, &hashes, &levels, by_hash, edited_in_place);
+    s.view.outline.blocks = hashes.len();
 }
 
 /// Each heading in `list` moves to the nearest heading with the same text that is still free.
-fn remap_list(list: Vec<(usize, u64)>, hashes: &[Option<u64>], levels: &[u8], mut by_hash: HashMap<u64, BTreeSet<usize>>) -> Vec<(usize, u64)> {
+/// With `keep_index`, one whose text is gone stays at its index if a heading is there (an edit in
+/// place); without it, it is dropped.
+fn remap_list(
+    list: Vec<(usize, u64)>,
+    hashes: &[Option<u64>],
+    levels: &[u8],
+    mut by_hash: HashMap<u64, BTreeSet<usize>>,
+    keep_index: bool,
+) -> Vec<(usize, u64)> {
     let mut used = BTreeSet::new();
     let mut out = Vec::new();
     for (i, h) in list {
@@ -565,7 +587,7 @@ fn remap_list(list: Vec<(usize, u64)>, hashes: &[Option<u64>], levels: &[u8], mu
                     (b, a) => b.or(a),
                 }
             });
-            nearest.or_else(|| free(i, &used).then_some(i))
+            nearest.or_else(|| (keep_index && free(i, &used)).then_some(i))
         };
         if let Some(j) = found {
             used.insert(j);

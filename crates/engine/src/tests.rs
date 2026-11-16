@@ -10719,6 +10719,49 @@ fn outline_hidden_text_survives_editing_the_heading() {
     assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 8, 9]);
 }
 
+/// #6200: Collapse on a heading whose sub-heading is already collapsed does not spend a step on
+/// body text that is already out of sight: H1 A, H2 B, b, H1 D, d. B collapsed first, then one
+/// Collapse on A closes A.
+#[test]
+fn outline_collapse_skips_text_hidden_under_an_already_collapsed_sub_heading() {
+    let mut s = s();
+    run(
+        &mut s,
+        "document.setText",
+        json!({"text": "A
+B
+b
+D
+d"}),
+    );
+    for (i, style) in [(0, "Heading1"), (1, "Heading2"), (3, "Heading1")] {
+        s.sel = crate::Selection::caret(Pos::body(i, 0));
+        run(&mut s, "para.style", json!({"style": style}));
+    }
+    run(&mut s, "view.outline", json!({}));
+    s.sel = crate::Selection::caret(Pos::body(1, 0));
+    run(&mut s, "outline.collapse", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 3, 4]);
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "outline.collapse", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 3, 4]);
+}
+
+/// #6200: deleting a heading whose text was hidden does not hand that state to the heading that
+/// moves into its place: D keeps showing its body text.
+#[test]
+fn outline_hidden_text_is_not_given_to_the_heading_that_replaces_a_deleted_one() {
+    let mut s = outline_levels_doc();
+    run(&mut s, "outline.collapse", json!({}));
+    assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 8, 9]);
+    // Delete A through b2: D (with A's paragraph) moves to block 0.
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(8, 0) };
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(s.doc.body[0].as_para().unwrap().text, "D");
+    assert_eq!(outline_shown(&mut s), vec![0, 1]);
+}
+
 /// #3621: with thousands of collapsed headings, an Enter above them (which shifts every index)
 /// finds them again without scanning the document once per heading, and a caret move doesn't
 /// redo the matching.
