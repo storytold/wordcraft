@@ -246,6 +246,15 @@ fn a_page_number_goes_into_the_footer_the_page_shows() {
 }
 
 #[test]
+fn inserting_header_or_footer_sets_page_hint_to_the_body_page() {
+    let mut s = two_pages();
+    s.run("select.text", &json!({"text": "Two"})).unwrap();
+    assert_eq!(s.layout().page_of(&s.sel.focus), Some(1));
+    s.run("insert.header", &json!({"text": "Head"})).unwrap();
+    assert_eq!(s.page_hint, 1, "page_hint updated to page 2 when inserting header");
+}
+
+#[test]
 fn base64_round_trip() {
     let data = b"hello world!?";
     assert_eq!(base64_decode(&base64_encode(data)).unwrap(), data);

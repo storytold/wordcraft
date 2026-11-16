@@ -1117,6 +1117,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
     let mut visible_tile_keys = HashSet::new();
     let mut rendered = 0;
     let mut rects = Vec::with_capacity(geo.rects.len());
+    let multi_section = app.session.doc.sections().len() > 1;
     for (i, pr) in geo.rects.iter().enumerate() {
         let sr = pr.translate(content_origin.to_vec2());
         let Some(page) = layout.pages.get(i) else { continue };
@@ -1257,7 +1258,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                     let tr = Rect::from_min_size(pos2(visual_sr.min.x + 2.0, if label == "Header" { y } else { y - 18.0 }), vec2(52.0, 18.0));
                     painter.rect_filled(tr, 2.0, t.checked);
                     painter.text(tr.center(), egui::Align2::CENTER_CENTER, tl!(label), regular(11.0), t.accent_text);
-                    if app.session.doc.sections().len() > 1 {
+                    if multi_section {
                         let section = crate::i18n::fmt(tl!("Section {n}"), &[("n", &page.section.saturating_add(1).to_string())]);
                         let text = painter.layout_no_wrap(section, regular(11.0), t.accent_text);
                         let width = text.size().x + 12.0;

@@ -64,6 +64,12 @@ fn three_column_hf(s: &Session, style: &str) -> wordcraft_doc::Blocks {
 }
 
 pub(super) fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResult {
+    let page = if s.sel.focus.story == StoryRef::Body {
+        let focus = s.sel.focus.clone();
+        s.layout().page_of(&focus)
+    } else {
+        None
+    };
     let id = hf_part(s, header);
     let style = if header { "Header" } else { "Footer" };
     if let Some(text) = p::str(v, "text") {
@@ -92,6 +98,9 @@ pub(super) fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResu
             }
         }
         s.doc.set_story(StoryRef::Part(id), vec![para_block(para)])?;
+    }
+    if let Some(page) = page {
+        s.page_hint = page;
     }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Part(id)));
     Ok(json!({"story": id}))
@@ -145,6 +154,15 @@ pub(super) fn create_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
             page_hf_part(s, page, header)?
         }
         None => {
+            let page = if s.sel.focus.story == StoryRef::Body {
+                let focus = s.sel.focus.clone();
+                s.layout().page_of(&focus)
+            } else {
+                None
+            };
+            if let Some(page) = page {
+                s.page_hint = page;
+            }
             let before = s.doc.parts.len();
             let id = hf_part(s, header);
             if s.doc.parts.len() > before {
