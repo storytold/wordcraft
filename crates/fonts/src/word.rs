@@ -237,9 +237,9 @@ fn has_arabic_line_of_its_own(lower: &str) -> bool {
     })
 }
 
-/// Is `c` an Arabic-script letter, mark or digit (Arabic, Supplement, Extended-A, presentation forms)?
+/// Is `c` an Arabic-script letter, mark or digit (Arabic, Supplement, Extended-B and -A, presentation forms)?
 pub fn is_arabic_script(c: char) -> bool {
-    matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
+    matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
 }
 
 /// The (ascent, descent) in em Word gives a line of Arabic-script text in the font `family` when
@@ -1023,6 +1023,8 @@ mod tests {
         assert!(!is_arabic_script('a') && !is_arabic_script('א') && !is_arabic_script('1'));
         // U+FEFF (byte order mark / zero width no-break space) ends the block but isn't Arabic.
         assert!(!is_arabic_script('\u{FEFF}') && is_arabic_script('\u{FEFC}'));
+        // Arabic Extended-B (U+0870..U+089F) letters are Arabic too.
+        assert!(is_arabic_script('\u{0870}') && is_arabic_script('\u{089F}'));
     }
 
     #[test]
