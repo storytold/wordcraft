@@ -590,17 +590,33 @@ pub(crate) fn open_english_screen(open: impl FnOnce(&mut crate::WordApp, &mut eg
 /// installed. Panics when craft-fonts was embedded and it has no Hebrew face.
 #[cfg(test)]
 pub(crate) fn assert_interface_covers_hebrew(ctx: &egui::Context) {
-    let embedded = wordcraft_fonts::ui_hebrew_fonts();
-    if embedded.is_empty() {
+    if !hebrew_glyphs_checkable() {
+        return;
+    }
+    ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+    assert_fonts_in_effect_cover_hebrew(ctx);
+}
+
+/// Whether a Hebrew glyph check means anything here: an embedded Hebrew face, or none embedded
+/// and an installed one. Panics when craft-fonts was embedded and it has no Hebrew face.
+#[cfg(test)]
+pub(crate) fn hebrew_glyphs_checkable() -> bool {
+    if wordcraft_fonts::ui_hebrew_fonts().is_empty() {
         if !wordcraft_fonts::CRAFT_FONTS.is_empty() && !cfg!(target_arch = "wasm32") {
             panic!("craft-fonts is embedded but has no Hebrew face");
         }
         if wordcraft_fonts::system_hebrew_ui_font().is_none() {
             eprintln!("skipped glyph check: built without craft-fonts and no installed Hebrew face");
-            return;
+            return false;
         }
     }
-    ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+    true
+}
+
+/// [`assert_interface_covers_hebrew`] on the fonts the context has now, without running another
+/// pass: after a pass, the fonts that pass drew with.
+#[cfg(test)]
+pub(crate) fn assert_fonts_in_effect_cover_hebrew(ctx: &egui::Context) {
     let sample = "עבריתךםןףץ0123456789״";
     let font = crate::theme::regular(14.0);
     let missing: String = ctx.fonts_mut(|f| sample.chars().filter(|c| !f.has_glyph(&font, *c)).collect());

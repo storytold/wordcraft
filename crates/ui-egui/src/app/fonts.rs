@@ -169,15 +169,7 @@ impl WordApp {
             || system_arabic != self.fonts_system_arabic
             || system_hebrew != self.fonts_system_hebrew
         {
-            // Every window's borrowed faces: the fonts are the app's.
-            let mut faces = self.canvas.ime_faces.clone();
-            for w in self.other_windows() {
-                for face in &w.canvas.ime_faces {
-                    if !faces.iter().any(|f| f.id() == face.id()) {
-                        faces.push(face.clone());
-                    }
-                }
-            }
+            let faces = self.every_windows_ime_faces();
             theme::install_fonts_language_arabic(
                 ctx,
                 lang.prefers_hans(),
@@ -208,10 +200,25 @@ impl WordApp {
         }
     }
 
-    /// Install the interface fonts again with this window's IME fallback faces (a composition has
-    /// just borrowed one), keeping every choice of the last [`WordApp::install_ui_fonts`]: its CJK
-    /// order and the installed Arabic and Hebrew faces. Those flags stay set, so a dropped face
-    /// would not come back until the language changed.
+    /// Every window's borrowed fallback faces, this window's first, each once: the fonts are the
+    /// app's, shared by all its windows.
+    fn every_windows_ime_faces(&self) -> Vec<std::sync::Arc<wordcraft_fonts::FontFace>> {
+        let mut faces = self.canvas.ime_faces.clone();
+        for w in self.other_windows() {
+            for face in &w.canvas.ime_faces {
+                if !faces.iter().any(|f| f.id() == face.id()) {
+                    faces.push(face.clone());
+                }
+            }
+        }
+        faces
+    }
+
+    /// Install the interface fonts again with the IME fallback faces (a composition has just
+    /// borrowed one), keeping every choice of the last [`WordApp::install_ui_fonts`]: its CJK
+    /// order, the installed Arabic and Hebrew faces, and the faces the other windows borrowed.
+    /// Those are not asked for again, so a dropped one would stay missing until the next full
+    /// install.
     pub(crate) fn install_ui_fonts_with_ime_faces(&self, ctx: &egui::Context) {
         theme::install_fonts_language_arabic(
             ctx,
@@ -220,7 +227,7 @@ impl WordApp {
             self.fonts_hant,
             self.fonts_system_cjk,
             theme::InstalledScripts { arabic: self.fonts_system_arabic, hebrew: self.fonts_system_hebrew },
-            &self.canvas.ime_faces,
+            &self.every_windows_ime_faces(),
         );
     }
 }

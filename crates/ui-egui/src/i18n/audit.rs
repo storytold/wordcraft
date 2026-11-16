@@ -1033,8 +1033,11 @@ fn switching_away_from_hebrew_clears_rtl_and_the_hebrew_font() {
 }
 
 /// A `ui.language` command is applied in the same `logic` pass that then draws. That one pass
-/// draws the Hebrew labels and asks for the Hebrew faces; egui applies fonts set during a pass
-/// from the next pass on, so the glyph check runs on the pass after it, not after several.
+/// draws the Hebrew labels with Hebrew faces: the fonts are set in `logic`, before any text of
+/// the pass is laid out, so egui applies them at once rather than from the next pass. The glyph
+/// check reads the fonts that pass drew with, without running another one. (A build with
+/// craft-fonts embeds a Hebrew face in every interface; without it the face is the installed
+/// one, which only the Hebrew request adds.)
 #[test]
 fn hebrew_selected_through_the_control_channel_is_drawn_with_hebrew_faces() {
     let Some(_) = super::require_hebrew() else { return };
@@ -1043,6 +1046,11 @@ fn hebrew_selected_through_the_control_channel_is_drawn_with_hebrew_faces() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut app = fresh_app(&ctx).with_control(rx);
     frame(&ctx, &mut app);
+    // Without an embedded Hebrew face, the English interface has no Hebrew letters until the switch.
+    if wordcraft_fonts::ui_hebrew_fonts().is_empty() && super::hebrew_glyphs_checkable() {
+        let font = crate::theme::regular(14.0);
+        assert!(!ctx.fonts_mut(|f| f.has_glyph(&font, 'א')), "English installs no Hebrew face");
+    }
     let (req, reply) = crate::control::ControlRequest::new("engine.execute", json!({"command": "ui.language", "params": {"value": "he"}}));
     tx.send(req).unwrap();
     let drawn = pass(&ctx, &mut app, screen(), Vec::new());
@@ -1050,6 +1058,8 @@ fn hebrew_selected_through_the_control_channel_is_drawn_with_hebrew_faces() {
     assert!(!app.fonts_system_arabic);
     assert!(crate::rtl::on());
     assert!(drawn.iter().any(|t| t.contains("קובץ")), "File is drawn in Hebrew");
-    super::assert_interface_covers_hebrew(&ctx);
+    if super::hebrew_glyphs_checkable() {
+        super::assert_fonts_in_effect_cover_hebrew(&ctx);
+    }
     let _ = reply.try_recv();
 }
