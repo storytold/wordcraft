@@ -672,10 +672,13 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     for (i, (icon, delta)) in [("chevronUp", -1i32), ("chevronDown", 1), ("more", 0)].iter().enumerate() {
         let br = Rect::from_min_size(pos2(ar.min.x, ar.min.y + thirds * i as f32), vec2(ar.width(), thirds));
         let resp = ui.interact(br, ui.scope_id().with(("gal_arrow", i)), Sense::click());
-        if *delta == 0 {
-            // "More" opens the Styles pane: named for it, for screen readers.
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Styles Pane")));
-        }
+        // Named for screen readers: the arrows scroll the gallery, "More" opens the Styles pane.
+        let name = match delta.signum() {
+            -1 => tl!("Previous Styles"),
+            0 => tl!("Styles Pane"),
+            _ => tl!("Next Styles"),
+        };
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
         if resp.hovered() {
             ui.painter().rect_filled(br, 2.0, t.hover);
         }

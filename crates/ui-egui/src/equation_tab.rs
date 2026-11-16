@@ -235,6 +235,11 @@ pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
         t.accent,
     );
     crate::widgets::label_line(ui, r.center().x, r.min.y + BIG_LABEL_Y, label, regular(11.5), t.text, true);
+    // Both halves are named for screen readers like a split button's: the button by its label,
+    // the half that opens the ready-made equations as its options.
+    rt.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+    let options = crate::i18n::fmt(tl!("{name} options"), &[("name", label)]);
+    rb.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &options));
     if rt.on_hover_text(tl!("Insert a new equation (Alt+=)")).clicked() {
         let _ = app.run("insert.equation", json!({}));
         app.canvas.want_focus = true;

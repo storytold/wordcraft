@@ -69,12 +69,12 @@ pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
 
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
-    big_button(ui, app, icon, label, id, params, BigState { menu, checked: false })
+    big_button(ui, app, icon, label, id, params, BigState { menu, checked: false, toggle: false })
 }
 
 /// A large ribbon button for a mode that stays on (`checked` draws it pressed), run without params.
 pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, checked: bool) -> Response {
-    big_button(ui, app, icon, label, id, Value::Object(Default::default()), BigState { menu: false, checked })
+    big_button(ui, app, icon, label, id, Value::Object(Default::default()), BigState { menu: false, checked, toggle: true })
 }
 
 /// Size of the drop-down marker drawn after a label or beside a split button (#659: one marker,
@@ -95,22 +95,26 @@ pub fn label_line(ui: &Ui, cx: f32, y: f32, text: &str, font: egui::FontId, colo
     }
 }
 
-/// How a large ribbon button behaves: `menu` adds a drop-down marker, `checked` draws it toggled.
+/// How a large ribbon button behaves: `menu` adds a drop-down marker, `checked` draws it toggled,
+/// and `toggle` tells screen readers it is an on/off button.
 #[derive(Clone, Copy)]
 struct BigState {
     menu: bool,
     checked: bool,
+    toggle: bool,
 }
 
 fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, state: BigState) -> Response {
-    let BigState { menu, checked } = state;
+    let BigState { menu, checked, toggle } = state;
     let label = tl!(label);
+    // The label on one line: the name the tooltip, keytips and screen readers use.
+    let name = label.replace('\n', " ");
     let t = Tokens::get(ui.ctx());
     let galley_w =
         label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
     let w = (galley_w + 12.0).max(44.0);
     let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
-    keytip_badge(ui, r, id, &label.replace('\n', " "));
+    keytip_badge(ui, r, id, &name);
     let on = enabled(app, id);
     bg_if(ui, r, &resp, checked, &t, on);
     let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0));
@@ -122,11 +126,20 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
         label_line(ui, r.center().x, y, l, regular(11.5), if on { t.text } else { t.text_disabled }, menu && i + 1 == lines.len());
         y += LABEL_PITCH;
     }
-    let resp = tooltip(app, resp, &label.replace('\n', " "), id);
+    let resp = tooltip(app, resp, &name, id);
     command_menu(&resp, app, id);
     if resp.clicked() && on && !menu {
         run_from_ribbon(app, id, params);
     }
+    // Named like the small and menu buttons beside it, so a screen reader (and a test) finds it by
+    // its label; a mode it switches also says whether it is on.
+    resp.widget_info(|| {
+        if toggle {
+            egui::WidgetInfo::selected(egui::Role::Button, on, checked, &name)
+        } else {
+            egui::WidgetInfo::labeled(egui::Role::Button, on, &name)
+        }
+    });
     resp
 }
 

@@ -739,6 +739,38 @@ fn dialog_tabs_expose_the_selected_state_and_report_clicks() {
     assert_eq!(h.state().1, Some(1));
 }
 
+/// A large ribbon button is a named button (its label on one line), disabled when its command
+/// is; a large toggle also says whether it is on, and a plain one says nothing about it.
+#[test]
+fn big_buttons_expose_their_name_enabled_and_pressed_state() {
+    use egui::accesskit::{Role, Toggled};
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 120.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            ui.horizontal(|ui| {
+                big_toggle(ui, app, "hideInk", "Hide\nInk", "review.hideInk", true);
+                big_toggle(ui, app, "inkToShape", "Ink to\nShape", "draw.inkToShape", false);
+                big(ui, app, "pageBreak", "Page\nBreak", "insert.pageBreak", serde_json::json!({}), false);
+                // A command nobody registered is off, as one the document refuses would be.
+                big(ui, app, "blankPage", "Blank\nPage", "test.noSuchCommand", serde_json::json!({}), false);
+            });
+        },
+        app,
+    );
+    h.run_steps(2);
+    // (pressed state, disabled) of the button named `label`.
+    let state = |label: &str| {
+        let node = h.get_by_role_and_label(Role::Button, label);
+        let node = node.accesskit_node();
+        (node.toggled(), node.is_disabled())
+    };
+    assert_eq!(state("Hide Ink"), (Some(Toggled::True), false), "a pressed toggle says it is on");
+    assert_eq!(state("Ink to Shape"), (Some(Toggled::False), false), "a toggle not pressed says it is off");
+    assert_eq!(state("Page Break"), (None, false), "a plain button is no toggle");
+    assert_eq!(state("Blank Page"), (None, true), "a button whose command is off is announced as disabled");
+}
+
 /// Fit One Page button renders in the Layout ribbon across light and dark themes.
 #[test]
 fn layout_fit_one_page_button_renders_in_light_and_dark_themes() {
@@ -760,4 +792,62 @@ fn layout_fit_one_page_button_renders_in_light_and_dark_themes() {
         assert!(button.rect().width() >= 40.0, "button must have allocated width in {theme:?}");
         assert!(button.rect().height() >= 40.0, "button must have allocated height in {theme:?}");
     }
+}
+
+/// Every clickable control in the ribbon has an accessible name, on every tab and on the
+/// contextual tabs the interface audit opens, laid out in full and folded for a narrow window, so
+/// a screen reader can announce it and a test can find it by its label. A label is named by its
+/// text; a scroll bar needs no name.
+#[test]
+fn every_ribbon_control_has_an_accessible_name() {
+    use egui::accesskit::{Action, Role};
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let tabs: Vec<&str> = crate::ribbon::TABS.iter().copied().filter(|t| *t != "File").collect();
+    let contextual = ["Table Design", "Table Layout", "Equation", "Chart Design", "SmartArt Design"];
+    let mut unnamed = Vec::new();
+    for width in [2560.0, 1024.0] {
+        for tab in tabs.iter().chain(&contextual) {
+            let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run_steps(2);
+            let setup = match *tab {
+                "Table Design" | "Table Layout" => Some(("insert.table", serde_json::json!({"rows": 2, "cols": 2}))),
+                "Equation" => Some(("insert.equation", serde_json::json!({}))),
+                "Chart Design" => Some(("insert.chart", serde_json::json!({"type": "column"}))),
+                "SmartArt Design" => Some(("insert.smartArt", serde_json::json!({"layout": "process"}))),
+                _ => None,
+            };
+            if let Some((id, params)) = setup {
+                h.state_mut().run(id, params).unwrap();
+            }
+            h.state_mut().run("ui.tab", serde_json::json!({"tab": tab})).unwrap();
+            h.run_steps(4);
+            assert_eq!(h.state().ui.tab, *tab, "the {tab} tab is showing");
+            // The ribbon is the band of fixed height under the tab strip (the File tab's bottom).
+            let file = h.query_all_by_label("File").map(|n| n.rect()).min_by(|a, b| a.top().total_cmp(&b.top())).expect("the File tab");
+            let ribbon = egui::Rangef::new(file.bottom(), file.bottom() + crate::ribbon::RIBBON_H);
+            for node in h.root().children_recursive() {
+                let a = node.accesskit_node();
+                if a.is_hidden() || !a.data().supports_action(Action::Click) || !ribbon.contains(node.rect().center().y) {
+                    continue;
+                }
+                let named = match a.role() {
+                    Role::ScrollBar => true,
+                    Role::Label => a.value().is_some_and(|v| !v.trim().is_empty()),
+                    _ => a.label().is_some_and(|l| !l.trim().is_empty()),
+                };
+                if !named {
+                    unnamed.push(format!("{tab} at {width} pt: {:?} at {:?}", a.role(), node.rect()));
+                }
+            }
+        }
+    }
+    assert!(unnamed.is_empty(), "{} ribbon controls have no accessible name:\n{}", unnamed.len(), unnamed.join("\n"));
 }
