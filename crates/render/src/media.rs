@@ -140,28 +140,50 @@ pub fn metafile_size(bytes: &[u8]) -> Option<(f32, f32, &'static str)> {
     Some((w * k, h * k, ext))
 }
 
-/// A metafile (WMF/EMF) picture, parsed once. The geometry comes placed by the metafile crate; the
-/// bitmaps are pixmaps, one per picture item (None for paths and undecodable bitmaps).
+/// A metafile (WMF/EMF/EMF+) picture, parsed once. The geometry comes placed by the metafile crate;
+/// the bitmaps and pattern tiles are pixmaps, one per picture item (None for paths, text and
+/// undecodable bitmaps). Fills that share a tile share its pixmap. `averages` holds each pattern
+/// fill's tile average color (transparent for other items), computed once a tile.
 pub(crate) struct Vector {
     pic: Picture,
     pixmaps: Vec<Option<Arc<Pixmap>>>,
+    averages: Vec<[u8; 4]>,
 }
 
 impl Vector {
-    /// Approximate memory held: pixels and path segments.
-    fn bytes(&self) -> usize {
-        let px: usize = self.pixmaps.iter().flatten().map(|p| p.width() as usize * p.height() as usize * 4).sum();
-        let segs: usize = self
-            .pic
-            .items
-            .iter()
-            .map(|it| match it {
-                Item::Path { segs, .. } => segs.len() * std::mem::size_of::<Seg>(),
-                Item::Bitmap { .. } | Item::Pattern { .. } => 0,
-                Item::Text(t) => t.text.len() + t.dx.len() * 4,
-            })
-            .sum();
-        px + segs
+    /// Approximate memory held: pixmaps, the pattern tiles' own pixels, path segments, dash
+    /// patterns, clip regions, clip lists, clip paths and text, each shared allocation once.
+    pub(crate) fn bytes(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        let mut total = self.averages.len() * 4;
+        for p in self.pixmaps.iter().flatten() {
+            if seen.insert(Arc::as_ptr(p) as usize) {
+                total = total.saturating_add(p.width() as usize * p.height() as usize * 4);
+            }
+        }
+        let seg = std::mem::size_of::<Seg>();
+        for it in &self.pic.items {
+            let (own, region, clips) = match it {
+                Item::Path { segs, line, region, clips, .. } => ((segs.len() * seg).saturating_add(line.dash.len() * 4), region, clips),
+                Item::Pattern { segs, tile, region, clips, .. } => {
+                    let tile_bytes = if seen.insert(Arc::as_ptr(tile) as usize) { tile.rgba.len() } else { 0 };
+                    ((segs.len() * seg).saturating_add(tile_bytes), region, clips)
+                }
+                Item::Bitmap { region, clips, .. } => (0, region, clips),
+                Item::Text(t) => (t.text.len() + t.dx.len() * 4, &t.region, &t.clips),
+            };
+            // Each item holds its own copy of the clip region's rectangles and its own list of the
+            // clip paths it shares.
+            let region = region.as_ref().map_or(0, |r| r.len() * std::mem::size_of::<[f32; 4]>());
+            let list = clips.len() * std::mem::size_of::<Arc<craft_metafile::ClipPath>>();
+            total = total.saturating_add(own).saturating_add(region).saturating_add(list);
+            for c in clips {
+                if seen.insert(Arc::as_ptr(c) as usize) {
+                    total = total.saturating_add(c.segs.len() * seg);
+                }
+            }
+        }
+        total
     }
 }
 
@@ -184,25 +206,45 @@ pub(crate) fn vector_for(doc: &Document, key: &str) -> Option<Arc<Vector>> {
     v
 }
 
-/// Parses a metafile and decodes its bitmaps. None when the picture has no usable size.
-fn build_vector(bytes: &[u8]) -> Option<Vector> {
+/// Parses a metafile and decodes its bitmaps and pattern tiles. None when the picture has no
+/// usable size.
+pub(crate) fn build_vector(bytes: &[u8]) -> Option<Vector> {
     let mut pic = craft_metafile::parse(bytes).ok()?;
     if !pic.has_size() {
         return None;
     }
-    // The pixels move into the pixmaps; the picture keeps only the geometry.
-    let pixmaps = pic.items.iter_mut().map(|it| it.take_pixels().and_then(|(w, h, px)| premul_pixmap(w, h, &px)).map(Arc::new)).collect();
-    Some(Vector { pic, pixmaps })
+    // The pixels move into the pixmaps; the picture keeps only the geometry. A tile shared by
+    // several fills is converted and averaged once.
+    let mut tiles: HashMap<usize, (Option<Arc<Pixmap>>, [u8; 4])> = HashMap::new();
+    let (pixmaps, averages) = pic
+        .items
+        .iter_mut()
+        .map(|it| match it {
+            Item::Pattern { tile, .. } => tiles
+                .entry(Arc::as_ptr(tile) as usize)
+                .or_insert_with(|| {
+                    (premul_pixmap(tile.width, tile.height, &tile.rgba).map(Arc::new), wordcraft_layout::metafile_average_color(&tile.rgba))
+                })
+                .clone(),
+            _ => (it.take_pixels().and_then(|(w, h, px)| premul_pixmap(w, h, &px)).map(Arc::new), [0; 4]),
+        })
+        .unzip();
+    Some(Vector { pic, pixmaps, averages })
 }
 
 fn rgba_color(c: [u8; 4]) -> peniko::Color {
     peniko::Color::from_rgba8(c[0], c[1], c[2], c[3])
 }
 
+/// Pattern tiles smaller than this (device pixels on both sides) are drawn as the tile's average
+/// color: a sub-pixel pattern would only alias.
+const MIN_TILE_PX: f64 = 1.5;
+
 /// Draws a metafile picture into `r` (page points): fills and strokes in page space (so strokes keep
-/// their width under non-uniform scaling), bitmaps stretched, all clipped to `r` and faded by `alpha`.
-/// Strokes have round caps and joins, as GDI draws them, and are at least one device pixel wide, so
-/// cosmetic (width 0) pens show as hairlines at any zoom.
+/// their width under non-uniform scaling), bitmaps stretched (or turned by their transform),
+/// pattern fills tiled, each item inside its clip region and clip paths, all clipped to `r` and
+/// faded by `alpha`. Strokes take the pen's caps, joins and dashes and are at least one device
+/// pixel wide, so cosmetic (width 0) pens show as hairlines at any zoom.
 pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, crop: &[f32; 4], alpha: f32, view: Affine) {
     ctx.set_transform(view);
     let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
@@ -212,9 +254,9 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
     }
     ctx.push_clip_layer(&r.to_path(0.1));
     let pixel = device_pixel(view);
-    for it in v.pic.place(*r, *crop) {
+    for it in v.pic.place(*r, wordcraft_layout::crop_sides(*crop)) {
         match it {
-            PlacedItem::Path { path, fill, stroke, even_odd, .. } => {
+            PlacedItem::Path { path, fill, stroke, line, even_odd, region, clips } => clipped(ctx, region.as_deref(), &clips, |ctx| {
                 if let Some(f) = fill {
                     ctx.set_paint(rgba_color(f));
                     ctx.set_fill_rule(if even_odd { peniko::Fill::EvenOdd } else { peniko::Fill::NonZero });
@@ -222,26 +264,71 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
                 }
                 if let Some((s, w)) = stroke {
                     ctx.set_paint(rgba_color(s));
-                    ctx.set_stroke(kurbo::Stroke::new(w.max(pixel)).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
+                    ctx.set_stroke(pen(w, pixel, &line, &path));
                     ctx.stroke_path(&path);
                 }
-            }
-            PlacedItem::Bitmap { index, rect, .. } => {
-                let Some(Some(pm)) = v.pixmaps.get(index) else { continue };
+            }),
+            PlacedItem::Bitmap { index, rect, transform, region, clips } => clipped(ctx, region.as_deref(), &clips, |ctx| {
+                let Some(Some(pm)) = v.pixmaps.get(index) else { return };
                 let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
                 ctx.set_paint(vello_cpu::Image {
                     image: vello_cpu::ImageSource::Pixmap(pm.clone()),
                     sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
                 });
-                ctx.set_paint_transform(Affine::translate((rect.x0, rect.y0)) * Affine::scale_non_uniform(rect.width() / pw, rect.height() / ph));
-                ctx.fill_rect(&rect);
-                ctx.reset_paint_transform();
-            }
-            PlacedItem::Pattern { .. } => {}
-            PlacedItem::Text { index, transform, .. } => {
-                if let Some(Item::Text(t)) = v.pic.items.get(index) {
-                    draw_vector_text(ctx, t, view * transform);
+                let c = transform.as_coeffs();
+                // Upright and not mirrored: the bitmap fills `rect`.
+                if c[1] == 0.0 && c[2] == 0.0 && c[0] > 0.0 && c[3] > 0.0 {
+                    ctx.set_paint_transform(Affine::translate((rect.x0, rect.y0)) * Affine::scale_non_uniform(rect.width() / pw, rect.height() / ph));
+                    ctx.fill_rect(&rect);
+                } else {
+                    // A turned, skewed or mirrored bitmap: `transform` maps the unit square onto its place.
+                    ctx.set_paint_transform(transform * Affine::scale_non_uniform(1.0 / pw, 1.0 / ph));
+                    ctx.fill_path(&(transform * kurbo::Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1)));
                 }
+                ctx.reset_paint_transform();
+            }),
+            PlacedItem::Pattern { index, path, even_odd, tile, region, clips } => clipped(ctx, region.as_deref(), &clips, |ctx| {
+                let Some(Item::Pattern { tile: t, .. }) = v.pic.items.get(index) else { return };
+                ctx.set_fill_rule(if even_odd { peniko::Fill::EvenOdd } else { peniko::Fill::NonZero });
+                // `tile` maps one tile pixel to page points: the tile's sides are its columns and
+                // its rows under that, in device pixels. The tile is drawn when either side is at
+                // least `MIN_TILE_PX`.
+                let c = (view * tile).as_coeffs();
+                let across = c[0].hypot(c[1]) * f64::from(t.width);
+                let down = c[2].hypot(c[3]) * f64::from(t.height);
+                match v.pixmaps.get(index) {
+                    Some(Some(pm)) if across.max(down) >= MIN_TILE_PX => {
+                        ctx.set_paint(vello_cpu::Image {
+                            image: vello_cpu::ImageSource::Pixmap(pm.clone()),
+                            sampler: peniko::ImageSampler {
+                                x_extend: peniko::Extend::Repeat,
+                                y_extend: peniko::Extend::Repeat,
+                                quality: peniko::ImageQuality::Low,
+                                alpha: 1.0,
+                            },
+                        });
+                        ctx.set_paint_transform(tile);
+                        ctx.fill_path(&path);
+                        ctx.reset_paint_transform();
+                    }
+                    _ => {
+                        ctx.set_paint(rgba_color(v.averages.get(index).copied().unwrap_or([0; 4])));
+                        ctx.fill_path(&path);
+                    }
+                }
+            }),
+            PlacedItem::Text { index, transform, clip, region, clips } => {
+                clipped(ctx, region.as_deref(), &clips, |ctx| {
+                    let Some(Item::Text(t)) = v.pic.items.get(index) else { return };
+                    if let Some(c) = clip {
+                        ctx.push_clip_layer(&c.to_path(0.1));
+                    }
+                    draw_vector_text(ctx, t, view * transform);
+                    ctx.set_transform(view);
+                    if clip.is_some() {
+                        ctx.pop_layer();
+                    }
+                });
                 ctx.set_transform(view);
             }
         }
@@ -253,15 +340,76 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
     }
 }
 
-/// Draws a metafile text run: `tf` maps the run's own space (see [`PlacedItem::Text`]) to the device.
+/// Draws `draw` inside a metafile item's clip region and every one of its clip paths (page
+/// points, under the current transform). No region is the default clip.
+fn clipped(
+    ctx: &mut RenderContext,
+    region: Option<&kurbo::BezPath>,
+    clips: &[Arc<craft_metafile::PlacedClip>],
+    draw: impl FnOnce(&mut RenderContext),
+) {
+    if let Some(region) = region {
+        ctx.set_fill_rule(peniko::Fill::NonZero);
+        ctx.push_clip_layer(region);
+    }
+    for c in clips {
+        ctx.set_fill_rule(if c.even_odd { peniko::Fill::EvenOdd } else { peniko::Fill::NonZero });
+        ctx.push_clip_layer(&c.path);
+    }
+    ctx.set_fill_rule(peniko::Fill::NonZero);
+    draw(ctx);
+    for _ in 0..clips.len() + usize::from(region.is_some()) {
+        ctx.pop_layer();
+    }
+}
+
+/// A metafile pen for `path` as a stroke `width` wide (page points, at least one device `pixel`):
+/// its caps, joins, miter limit and dashes (`wordcraft_layout::metafile_dashes`).
+fn pen(width: f64, pixel: f64, line: &craft_metafile::LineStyle, path: &kurbo::BezPath) -> kurbo::Stroke {
+    let cap = match line.cap {
+        craft_metafile::Cap::Round => kurbo::Cap::Round,
+        craft_metafile::Cap::Square => kurbo::Cap::Square,
+        craft_metafile::Cap::Flat => kurbo::Cap::Butt,
+    };
+    let join = match line.join {
+        craft_metafile::Join::Round => kurbo::Join::Round,
+        craft_metafile::Join::Bevel => kurbo::Join::Bevel,
+        craft_metafile::Join::Miter => kurbo::Join::Miter,
+    };
+    let stroke = kurbo::Stroke::new(width.max(pixel))
+        .with_caps(cap)
+        .with_join(join)
+        .with_miter_limit(f64::from(wordcraft_layout::metafile_miter_limit(line.miter_limit)));
+    if line.dash.is_empty() {
+        return stroke;
+    }
+    match wordcraft_layout::metafile_dashes(&line.dash, width == 0.0, pixel, path.perimeter(1.0)) {
+        Some(dash) => stroke.with_dashes(0.0, dash),
+        None => stroke,
+    }
+}
+
+/// Draws a metafile text run: `tf` maps its text space (`craft_metafile::Text::transform`) to the
+/// device.
 fn draw_vector_text(ctx: &mut RenderContext, t: &craft_metafile::Text, tf: Affine) {
     let (face, shaped) = wordcraft_layout::metafile_text_run(t);
     let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
     let Some(lay) = wordcraft_layout::layout_metafile_text(t, face.upem, face.ascent, face.descent, &glyphs) else { return };
     let k = lay.em / face.upem.max(1.0);
+    let canvas = kurbo::Rect::new(0.0, 0.0, f64::from(ctx.width()), f64::from(ctx.height()));
+    // An opaque background mode fills the character cells first.
+    if let Some(bg) = t.background {
+        let [x0, y0, x1, y1] = lay.cell;
+        let cell = tf * kurbo::Rect::new(x0, y0, x1, y1).to_path(0.1);
+        let b = cell.bounding_box();
+        if x1 > x0 && [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= MAX_GLYPH_PIXELS * 16.0) && b.overlaps(canvas) {
+            ctx.set_transform(Affine::IDENTITY);
+            ctx.set_paint(rgba_color(bg));
+            ctx.fill_path(&cell);
+        }
+    }
     ctx.set_paint(rgba_color(t.color));
     let db = FontDb::global();
-    let canvas = kurbo::Rect::new(0.0, 0.0, f64::from(ctx.width()), f64::from(ctx.height()));
     let mut oversized = 0usize;
     for (g, (x, y)) in shaped.iter().zip(&lay.glyphs) {
         let o = db.outline(&face, g.gid);
