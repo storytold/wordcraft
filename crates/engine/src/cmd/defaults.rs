@@ -174,6 +174,21 @@ fn load_template(s: &mut Session) -> Option<Document> {
     }
 }
 
+/// Run `apply` (a template's formatting onto `d`). Like [`load_template`] it runs outside
+/// `Session::run` (start-up, closing the last document), and the template is file content, so a
+/// panic in it must not end the app or lose the document: `d` goes back as it was (the plain
+/// blank document, or the unmodified import) and the status bar says why. False when it did.
+fn apply_guarded(s: &mut Session, d: &mut Document, apply: impl FnOnce(&mut Document)) -> bool {
+    let backup = d.clone();
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply(d))).is_ok() {
+        return true;
+    }
+    *d = backup;
+    log::warn!("Normal template couldn't be applied (it panicked); using the document without it");
+    s.status = "The Normal template couldn't be applied, so this document uses WordCraft's built-in formatting.".into();
+    false
+}
+
 impl Session {
     /// A new blank document: the built-in one on the region's paper (#838), with the Normal
     /// template's saved formatting on it, written in the saved proofing language (else the
@@ -182,7 +197,7 @@ impl Session {
     pub fn normal_document(&mut self) -> Document {
         let mut d = self.blank_document();
         if let Some(t) = load_template(self) {
-            nt::apply_to_blank(&mut d, &t);
+            apply_guarded(self, &mut d, |d| nt::apply_to_blank(d, &t));
         }
         if let Some(lang) = self.prefs.default_language.as_ref().or(self.editing_lang.as_ref()) {
             Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
@@ -194,7 +209,7 @@ impl Session {
     /// (they carry none of their own) and the saved proofing language.
     pub(crate) fn apply_normal_to_import(&mut self, d: &mut Document) {
         if let Some(t) = load_template(self) {
-            nt::apply_to_import(d, &t);
+            apply_guarded(self, d, |d| nt::apply_to_import(d, &t));
         }
         if let Some(lang) = self.prefs.default_language.as_ref().or(self.editing_lang.as_ref()) {
             Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
@@ -318,4 +333,36 @@ fn reset(s: &mut Session, _: &Value) -> CmdResult {
     s.pending_template.push(TemplateEdit::Reset);
     s.status = "New documents will use WordCraft's built-in formatting.".into();
     Ok(json!({"reset": true}))
+}
+
+#[cfg(test)]
+mod apply_guard_tests {
+    use super::*;
+
+    /// Applying a template can't panic that we know of (every step is bounded, `get`-based or
+    /// plain assignment), so this guard is defence in depth: the test forces a panic part-way
+    /// through and checks the document comes back untouched and the user is told.
+    #[test]
+    fn a_panic_applying_the_template_leaves_the_document_as_it_was() {
+        let mut s = Session::new(Document::new());
+        let mut d = s.blank_document();
+        let before = d.clone();
+        let ok = apply_guarded(&mut s, &mut d, |d| {
+            d.last_section.margin_left = 1.0;
+            Arc::make_mut(&mut d.styles).default_chr.size = Some(99.0);
+            panic!("hostile template");
+        });
+        assert!(!ok);
+        assert_eq!(d.last_section.margin_left, before.last_section.margin_left);
+        assert_eq!(d.styles.default_chr.size, before.styles.default_chr.size);
+        assert!(s.status.contains("Normal template couldn't be applied"), "{}", s.status);
+    }
+
+    #[test]
+    fn a_template_that_applies_cleanly_is_kept() {
+        let mut s = Session::new(Document::new());
+        let mut d = s.blank_document();
+        assert!(apply_guarded(&mut s, &mut d, |d| d.last_section.margin_left = 1.0));
+        assert_eq!(d.last_section.margin_left, 1.0);
+    }
 }

@@ -511,7 +511,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-28 | trivial | Gap 19 narrowed: RTF reads and writes WMF and EMF pictures, chosen by their bytes (#4259); ranking unchanged |
 | 2026-10-27 | trivial | 2026-10-27 · #4533 review: numeric REF updates lazily index body bookmarks once per update, retaining the first body bookmark for duplicate names. Unsupported switches and ordinary REF/PAGEREF behavior are unchanged; a synthetic 64-reference regression covers repeated updates and duplicate names. Estimates unchanged. |
 | 2026-10-27 | trivial | 2026-10-27 · #4533: numeric REF fields use paragraph list numbers for no/full/relative context, reusing bounded numbering. Shared context already embedded in a level label is removed; merged-away cells do not count. Unsupported separator/text/position switches and ambiguous contexts or delimiter-free joins retain cached results. Synthetic OOXML regressions; no native Word or real-document validation, estimates unchanged. |
-| 2026-11-15 | trivial | Normal template: Set As Default for new documents and Reset (#4237); readiness estimates unchanged |
+| 2026-11-15 | trivial | Normal template: Set As Default for new documents and Reset (#4237); applying a saved Normal template to a new or imported document falls back to the plain document if it panics; readiness estimates unchanged |
 
 ## Layout validation fonts
 
