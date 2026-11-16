@@ -12,6 +12,10 @@ pub(super) fn has_object(s: &Session) -> Option<&'static str> {
 }
 
 pub(super) fn has_floating(s: &Session) -> Option<&'static str> {
+    // A canvas member moves inside its canvas.
+    if crate::cmd::canvas::selected_member(s).is_some() {
+        return None;
+    }
     match selected(s) {
         Some((_, InlineObject::Graphic { .. })) => Some(FROZEN),
         Some((_, o)) if o.is_floating() => None,
@@ -49,6 +53,15 @@ pub(super) fn has_movable(s: &Session) -> Option<&'static str> {
         Some((_, InlineObject::Graphic { .. })) => Some(FROZEN),
         _ => has_object(s),
     }
+}
+
+/// `has_movable` for what places an object in the text (wrapping, position, alignment, Move with
+/// Text): not for a member picked inside a drawing canvas, which the canvas places.
+pub(super) fn has_placeable(s: &Session) -> Option<&'static str> {
+    if crate::cmd::canvas::selected_member(s).is_some() {
+        return Some("a shape inside a drawing canvas is placed by the canvas");
+    }
+    has_movable(s)
 }
 
 /// Word's own ink in a group is kept in the form a group member takes; it can't stand on its own
@@ -99,7 +112,9 @@ pub fn object_selection(s: &Session) -> Option<(Pos, &InlineObject)> {
     o.is_drawing().then_some((a, o))
 }
 
-/// The first picture/shape in the selection, or just before a collapsed caret.
+/// The first picture/shape in the selection, or just before a collapsed caret. With a canvas
+/// member picked ([`crate::cmd::canvas::selected_member`]), that member, at its canvas's position:
+/// the commands that change it go through [`edit_obj`], which changes the member.
 pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
     selected_all(s, 1).into_iter().next()
 }
@@ -107,6 +122,9 @@ pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
 /// The pictures and shapes in the selection (at most `max`), or the one just before a collapsed
 /// caret.
 pub fn selected_all(s: &Session, max: usize) -> Vec<(Pos, InlineObject)> {
+    if let Some((pos, _, member)) = crate::cmd::canvas::selected_member(s) {
+        return vec![(pos, member.clone())];
+    }
     let mut out = Vec::new();
     let (a, b) = s.sel.ordered();
     let max = if a == b { 1 } else { max };
@@ -175,8 +193,12 @@ pub(super) fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdRes
     Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null)}))
 }
 
-/// Change the object at `pos`; returns it afterwards.
+/// Change the object at `pos`; returns it afterwards. With a member of the canvas at `pos`
+/// picked, the member changes.
 pub(crate) fn edit_obj(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Result<InlineObject, CmdError> {
+    if let Some(r) = crate::cmd::canvas::edit_member_object(s, pos, &f) {
+        return r;
+    }
     let para = s.doc.para_mut(pos.story, &pos.path)?;
     let o = para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     f(o);
