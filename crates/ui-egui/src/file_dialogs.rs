@@ -38,7 +38,8 @@ pub type FileDialogAnswer = Result<Vec<String>, String>;
 /// Most font files one Add Font pick tries; the rest of a bigger selection is skipped.
 const MAX_FONTS_PER_PICK: usize = 2000;
 
-const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "wmf", "emf"];
+/// Picture suffixes shared by native/web choosers, drop/inbox dispatch and copied-file paste.
+pub const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "wmf", "emf"];
 const DOCUMENTS: &[&str] =
     &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 
@@ -53,6 +54,11 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
+}
+
+/// Whether a file name has a picture suffix offered by the Insert/Change Picture chooser.
+pub(crate) fn is_picture_name(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, ext)| PICTURES.iter().any(|known| known.eq_ignore_ascii_case(ext)))
 }
 
 /// What to do with the path picked in a dialog.
@@ -525,3 +531,27 @@ impl WordApp {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod picture_dispatch_tests {
+    use super::*;
+
+    /// A web picker/drop name must reach picture insertion, not document opening.
+    #[test]
+    fn tiff_suffixes_dispatch_inbox_images_and_copied_paths_as_pictures() {
+        for ext in ["tif", "tiff", "TIF", "TIFF"] {
+            let inbox = crate::Inbox::default();
+            // Routing depends on the supplied name; the insertion decoder probes these PNG bytes.
+            let bytes = crate::paste_picture::png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap();
+            inbox.lock().unwrap().push((format!("scan.{ext}"), bytes));
+            let services = crate::Services { inbox: Some(inbox), ..Default::default() };
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+            let document = app.session.document_id();
+            app.drain_inbox();
+            assert_eq!(app.session.document_id(), document, "inserts into the current document: {ext}");
+            let pictures = app.session.run("arrange.selectionPane", &json!({})).unwrap();
+            assert_eq!(pictures.as_array().unwrap().len(), 1, "inbox inserts a picture: {ext}");
+            assert!(crate::paste_picture::names_picture_files(&format!("file:///tmp/scan.{ext}")));
+        }
+    }
+}
