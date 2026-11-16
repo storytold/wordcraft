@@ -715,10 +715,18 @@ fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
 /// spacing, 11 and 20 pt): Times lines lie exactly as far apart as Times New Roman's (hhea 1825 /
 /// -443, gap 87 per 2048), Courier's as Courier New's (1705 / -615, no gap). On Windows, Word
 /// draws a "Times" document in Times New Roman anyway.
+///
+/// Caladea stands in for Cambria and takes Cambria's line (hhea 1946 / -455 per 2048, no gap):
+/// its 1.001 release, the one Debian and Ubuntu package, is 900 / -250 per 1000 instead, so a
+/// Cambria line came out 1.15 em tall with its baseline 0.05 em too high, and a line of another
+/// font with one Cambria character on it grew downwards. Measured in Word for Windows at 8, 11
+/// and 14 pt: lines of Cambria, of Cambria Math and of Caladea 1.002 (950 / -222) all lie
+/// 1.172 em apart.
 fn borrowed_line(family: &str, upem: f64) -> Option<(f64, f64)> {
     let (a, d) = match family.trim().to_ascii_lowercase().as_str() {
         "times" => hhea_line(1825, -443, 87),
         "courier" => hhea_line(1705, -615, 0),
+        "caladea" => hhea_line(1946, -455, 0),
         _ => return None,
     };
     Some((a * upem / 2048.0, d * upem / 2048.0))
@@ -727,8 +735,8 @@ fn borrowed_line(family: &str, upem: f64) -> Option<(f64, f64)> {
 /// Line metrics for a face in font units: (ascent, descent), both positive, the way word
 /// processors measure single line spacing: the hhea values with the line gap above the ascent
 /// (Word puts the first baseline that far below the line top), falling back to OS/2
-/// usWinAscent/usWinDescent; Times and Courier borrow their Windows counterparts' (see
-/// [`borrowed_line`]).
+/// usWinAscent/usWinDescent; Times and Courier borrow their Windows counterparts', Caladea
+/// Cambria's (see [`borrowed_line`]).
 pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     static CACHE: OnceLock<Mutex<HashMap<u32, (f64, f64)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -775,8 +783,23 @@ mod tests {
         assert_eq!(borrowed_line("Times", 2048.0), Some((1912.0, 443.0)));
         assert_eq!(borrowed_line(" times ", 1000.0), Some((1912.0 / 2.048, 443.0 / 2.048)));
         assert_eq!(borrowed_line("Courier", 2048.0), Some((1705.0, 615.0)));
-        // Only those two: the Windows fonts themselves, and other Mac fonts, keep their own.
+        // The Windows fonts themselves, and other Mac fonts, keep their own.
         for family in ["Times New Roman", "Courier New", "Helvetica", "Hoefler Text", "Palatino", ""] {
+            assert_eq!(borrowed_line(family, 2048.0), None, "{family}");
+        }
+    }
+
+    #[test]
+    fn caladea_takes_cambrias_line() {
+        // Cambria: hhea 1946 / -455 per 2048, no gap; its lines lie 1.172 em apart in Word.
+        let (a, d) = borrowed_line("Caladea", 1000.0).expect("Caladea takes Cambria's line");
+        assert!((a - 950.2).abs() < 0.05 && (d - 222.2).abs() < 0.05, "{a} {d}");
+        assert_eq!(borrowed_line(" CALADEA ", 2048.0), Some((1946.0, 455.0)));
+        // Its 1.001 release's own values would make the line 1.15 em, the baseline 0.05 em higher.
+        let own = hhea_line(900, -250, 0);
+        assert!((a - own.0 - 50.2).abs() < 0.05 && ((a + d) - (own.0 + own.1) - 22.4).abs() < 0.05, "{own:?}");
+        // The fonts it and the other substitutes stand in for, and those substitutes, keep theirs.
+        for family in ["Cambria", "Cambria Math", "Carlito", "Liberation Serif", "Caladea Pro"] {
             assert_eq!(borrowed_line(family, 2048.0), None, "{family}");
         }
     }
