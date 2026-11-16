@@ -2258,3 +2258,27 @@ fn font_dialog_opens_at_its_final_size() {
     }
     assert!(widths[2..].windows(2).all(|w| w[0] == w[1]), "the dialog keeps growing: {widths:?}");
 }
+
+/// Compare's Browse… asks for a "compare" pick, so the macOS host keeps it a sheet on this
+/// document; only File › Open's "document" pick gets a panel of its own.
+#[test]
+fn compare_browse_asks_for_a_compare_pick() {
+    use egui_kittest::kittest::Queryable;
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = asked.clone();
+    let services = crate::Services {
+        file_dialog: Some(Box::new(move |req| {
+            log.borrow_mut().push(req);
+            std::sync::mpsc::channel().1
+        })),
+        ..Default::default()
+    };
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    let _ = app.run("document.setText", json!({"text": "text"}));
+    let mut h = app_harness(app);
+    h.state_mut().run("ui.dialog", json!({"name": "compare"})).unwrap();
+    h.run_steps(2);
+    h.query_all_by_label("Browse…").next().expect("Browse…").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(asked.borrow().as_slice(), [crate::file_dialogs::FileDialogRequest::Open { purpose: "compare".into() }]);
+}

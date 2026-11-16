@@ -288,7 +288,7 @@ fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
             }
         } else {
             let _ = app.ask_file(
-                crate::file_dialogs::FileDialogRequest::Open { purpose: "document".into() },
+                crate::file_dialogs::FileDialogRequest::Open { purpose: "compare".into() },
                 crate::file_dialogs::AfterPick::ComparePath { revised },
             );
         }

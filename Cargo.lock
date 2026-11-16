@@ -7231,6 +7231,7 @@ name = "wordcraft"
 version = "0.18.1"
 dependencies = [
  "arboard",
+ "block2 0.6.2",
  "chrono",
  "clipboard-win",
  "craft-print",

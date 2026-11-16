@@ -120,6 +120,16 @@ impl Launcher {
     /// keeps them on top of it. Call after every pass that may ask for one.
     pub fn show(&self, parent: &eframe::Frame) {
         while let Ok((req, answer)) = self.queue.try_recv() {
+            // File › Open belongs to no document: a panel of its own, not a sheet on the front window.
+            #[cfg(target_os = "macos")]
+            if let FileDialogRequest::Open { purpose } = &req
+                && purpose == "document"
+                && no_system_dialog().is_none()
+                && let Some(mtm) = objc2::MainThreadMarker::new()
+            {
+                crate::open_panel::show(mtm, purpose, answer, self.ctx.clone());
+                continue;
+            }
             // Built here, on the UI thread: macOS shows the panel as a sheet on the window now.
             let picking = picker(rfd::AsyncFileDialog::new().set_parent(parent), &req);
             #[cfg(all(unix, not(target_os = "macos")))]
