@@ -21,6 +21,8 @@ USAGE:
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving
                                               (if protection blocks updates, they are skipped with a warning);
+                                              a document with fields marked for updating (w:dirty, as
+                                              pandoc --toc writes) has all its fields refreshed without it;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
@@ -461,12 +463,13 @@ fn report_lines(json: &Value) -> Vec<String> {
 /// # Arguments
 ///
 /// * `s` - The active document [`Session`] whose unlocked fields should be refreshed.
+/// * `all` - Every story (headers, footers, notes, text boxes), not just the body.
 ///
 /// # Errors
 ///
 /// Returns `Err(Failure)` if the command fails with an error other than `CmdError::Disabled`.
-fn update_fields(s: &mut Session) -> Result<(), Failure> {
-    if let Err(e) = s.run("references.updateFields", &json!({})) {
+fn update_fields(s: &mut Session, all: bool) -> Result<(), Failure> {
+    if let Err(e) = s.run("references.updateFields", &json!({"all": all})) {
         if matches!(e, CmdError::Disabled(_)) {
             eprintln!("wordcraft-cli: warning: {e}");
         } else {
@@ -498,7 +501,12 @@ fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Sess
     let password = password_from(rest)?;
     let mut s = open(&i, password.as_deref())?;
     if rest.iter().any(|a| a == "--update-fields") {
-        update_fields(&mut s)?;
+        update_fields(&mut s, false)?;
+    } else if wordcraft_engine::cmd::references::has_dirty_fields(&s.doc) {
+        // A field marked as stale (`w:dirty`) is to be updated before it is shown, and Word asks
+        // to update the fields when it opens such a file: pandoc's `--toc` writes an empty table
+        // of contents that way (#6771). The whole document, as Word's update does.
+        update_fields(&mut s, true)?;
     }
     let r = if to_png {
         s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup, "strict": strict}))

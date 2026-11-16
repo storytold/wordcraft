@@ -524,6 +524,19 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
     }
 }
 
+/// Whether `doc` has an unlocked field marked `w:dirty` (ECMA-376 §17.16.5.35) in any story: its
+/// stored result is stale and should be updated before it is shown. Word asks to update the fields
+/// when it opens such a document, as pandoc's `--toc` writes its empty table of contents (#6771).
+pub fn has_dirty_fields(doc: &wordcraft_doc::Document) -> bool {
+    std::iter::once(StoryRef::Body).chain(doc.parts.keys().copied().map(StoryRef::Part)).any(|story| {
+        doc.para_paths(story).iter().filter_map(|path| doc.para(story, path)).any(|p| {
+            p.objects.iter().any(|o| {
+                matches!(o, InlineObject::Field { dirty: true, locked: false, .. } | InlineObject::FieldStart { dirty: true, locked: false, .. })
+            })
+        })
+    })
+}
+
 /// Resolve a field object's language through the paragraph and document defaults.
 fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: usize) -> Option<String> {
     let off = p.object_offsets().get(k).copied()?;

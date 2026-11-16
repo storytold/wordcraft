@@ -42,6 +42,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::About { .. } => about_dialog(ui, d),
         Dialog::DiscardRecovery { .. } => discard_recovery_dialog(app, ui, d),
         Dialog::SaveChanges { .. } => save_changes_dialog(app, ui, d),
+        Dialog::UpdateFields => update_fields_dialog(app, ui),
         Dialog::RecipientList { fields, rows, message, filter } => recipient_list(app, ui, fields, rows, message, filter),
         Dialog::InsertMergeField { .. } => insert_merge_field_dialog(app, ui, d),
         Dialog::Password { .. } => password_dialog(app, ui, d),
@@ -1265,6 +1266,39 @@ fn save_changes_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     app.dialog = Some(d.clone());
     let _ = app.run("ui.saveChanges", json!({"answer": answer}));
     true
+}
+
+/// Asked when the user opens a document whose fields are marked as out of date (#6771). Update
+/// runs Update Fields on every story (one undo step); Don't Update, or Escape, keeps the stored
+/// results. Update has the focus, so Enter updates.
+fn update_fields_dialog(app: &mut WordApp, ui: &mut Ui) -> bool {
+    ui.label(egui::RichText::new(tl!("Some fields in this document are marked as out of date.")).font(semibold(15.0)));
+    ui.label(tl!("Update all fields now? Their results can change, and so can the page count."));
+    ui.add_space(8.0);
+    let (keep, update) = ui
+        .horizontal(|ui| {
+            ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                let keep = ui.button(tl!("Don't Update"));
+                let update = ui.add(crate::widgets::primary_button(ui, tl!("Update")));
+                (keep, update)
+            })
+            .inner
+        })
+        .inner;
+    if !keep.has_focus() && !update.has_focus() {
+        update.request_focus();
+    }
+    let focused = keep.has_focus() || update.has_focus();
+    if keep.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        return true;
+    }
+    if update.clicked() || (!focused && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+        if let Err(e) = app.run("references.updateFields", json!({"all": true})) {
+            app.status(e);
+        }
+        return true;
+    }
+    false
 }
 
 fn insert_merge_field_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {

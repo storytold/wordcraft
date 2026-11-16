@@ -494,6 +494,29 @@ fn update_fields_all_covers_every_story() {
     s.run("references.updateFields", &json!({"all": "yes"})).unwrap();
 }
 
+/// #6771: an unlocked field marked `w:dirty` asks for an update, in a header as in the body; a
+/// locked one keeps its result and doesn't. Updating every story clears the mark.
+#[test]
+fn dirty_fields_ask_for_an_update_until_it_runs() {
+    let mark = |s: &mut Session, story: StoryRef, k: usize, lock: bool| {
+        let path = s.doc.para_paths(story).remove(0);
+        let Some(InlineObject::Field { dirty, locked, .. }) = s.doc.para_mut(story, &path).unwrap().objects.get_mut(k) else { panic!("a field") };
+        (*dirty, *locked) = (true, lock);
+    };
+    let (doc, hdr) = doc_with_header_fields();
+    let mut s = Session::new(doc);
+    assert!(!has_dirty_fields(&s.doc), "nothing is marked");
+    mark(&mut s, StoryRef::Part(hdr), 2, true);
+    assert!(!has_dirty_fields(&s.doc), "a locked field keeps its result");
+    mark(&mut s, StoryRef::Part(hdr), 0, false);
+    assert!(has_dirty_fields(&s.doc), "in a header");
+    s.run("references.updateFields", &json!({"all": true})).unwrap();
+    assert_eq!(story_fields(&s, StoryRef::Part(hdr))[0].1, "Ada");
+    assert!(!has_dirty_fields(&s.doc), "updated, so no longer stale");
+    mark(&mut s, StoryRef::Body, 0, false);
+    assert!(has_dirty_fields(&s.doc), "in the body");
+}
+
 #[test]
 fn toc_tabs_ignore_nonentries() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Before\nContents\nOld\t9\nAfter"));

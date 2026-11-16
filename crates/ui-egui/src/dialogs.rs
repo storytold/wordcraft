@@ -339,6 +339,10 @@ pub enum Dialog {
         #[serde(default)]
         message: String,
     },
+    /// Whether to update the fields of a document the user just opened whose fields are marked
+    /// as out of date (`w:dirty`), as Word asks when it opens one (#6771): Yes updates every
+    /// story's fields, No keeps their stored results. Scripts opening it are never asked.
+    UpdateFields,
     /// Mailings › Select Recipients / Edit Recipient List: a table of recipients to type or
     /// edit (field names on top), or a file to load instead (#240).
     RecipientList {
@@ -532,6 +536,7 @@ impl Dialog {
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
+            Dialog::UpdateFields => "updateFields",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",

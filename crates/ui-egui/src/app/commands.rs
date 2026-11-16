@@ -349,6 +349,12 @@ impl WordApp {
             let path = params.get("path").and_then(Value::as_str).unwrap_or("");
             self.report_open_failure(path, e);
         }
+        // Fields marked as out of date (`w:dirty`, as pandoc's `--toc` writes its empty table of
+        // contents) are to be updated before they are shown: Word asks when it opens such a
+        // document, and so does the user's Open here (#6771). Scripts (`execute`) never are.
+        if id == "file.open" && r.is_ok() && self.dialog.is_none() && wordcraft_engine::cmd::references::has_dirty_fields(&self.session.doc) {
+            self.dialog = Some(dialogs::Dialog::UpdateFields);
+        }
         r
     }
 
