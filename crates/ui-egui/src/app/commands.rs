@@ -145,7 +145,9 @@ impl WordApp {
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
-            let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+            // Inspect only the suffix bytes: no full-name allocation or UTF-8 slicing.
+            let has_pdf_suffix = name.as_bytes().last_chunk::<4>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".pdf"));
+            let name = if id == "file.exportPdf" && !has_pdf_suffix { format!("{name}.pdf") } else { name };
             // A save with a password encrypts this and later saves (`file.save`'s `password`).
             if matches!(id, "file.save" | "file.saveAs")
                 && let Some(pw) = params.get("password").filter(|v| !v.is_null())
@@ -777,7 +779,7 @@ impl WordApp {
                 json!({"dir": dir})
             }
             // The built-in file browser (#576), for when the system's file dialog doesn't show up
-            // (desktop only): `purpose` is document (default), picture, recipients or save. A system
+            // (desktop only): `purpose` is document (default), picture, recipients, save or export. A system
             // dialog still waiting for an answer is given up as cancelled.
             #[cfg(not(target_arch = "wasm32"))]
             "ui.fileBrowser" => {

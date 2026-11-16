@@ -172,7 +172,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.formatPainter", "Format Painter", "Home › Clipboard", painter).params(r#"{"sticky"?: bool}"#).pure(),
         CommandSpec::new("edit.copyFormat", "Copy Formatting", "Home › Clipboard", |s, _| {
-            painter_pick(s);
+            // One format buffer, as in Word: Copy Formatting replaces an armed Format Painter.
+            s.painter = None;
+            s.copied_format = Some(picked_format(s));
             sel_result(s)
         })
         .key(copy_format_shortcut(cfg!(target_arch = "wasm32")))
@@ -832,11 +834,21 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-fn painter_pick(s: &mut Session) {
+/// The character and paragraph formatting at the start of the selection.
+fn picked_format(s: &Session) -> (wordcraft_doc::props::CharProps, wordcraft_doc::props::ParaProps) {
     let f = s.sel.ordered().0;
     // A symbol's own font isn't formatting to paint onto text.
-    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol()).unwrap_or_default();
-    let para = s.doc.para_at(&f).map(|p| p.props.clone()).unwrap_or_default();
+    // Formatting only: not the source's hyperlink or revision marks (#5616).
+    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol().formatting()).unwrap_or_default();
+    let para = s.doc.para_at(&f).map(|p| p.props.clone().formatting()).unwrap_or_default();
+    (chr, para)
+}
+
+fn painter_pick(s: &mut Session) {
+    let (chr, para) = picked_format(s);
+    // One format buffer, as in Word: the pick is also what the next Paste Formatting applies,
+    // and stays after the brush is used up or cancelled.
+    s.copied_format = Some((chr.clone(), para.clone()));
     s.painter = Some((chr, para, false));
 }
 
@@ -852,9 +864,14 @@ fn painter(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"active": true}))
 }
 
-/// Apply the format painter's formatting to the selection.
+/// Apply the format painter's formatting to the selection, or else what Copy Formatting picked
+/// up (which stays for the next Paste Formatting).
 fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
-    let Some((chr, para, sticky)) = s.painter.clone() else { return Err(CmdError::Failed("no formatting copied".into())) };
+    let (chr, para, sticky) = match (s.painter.clone(), s.copied_format.clone()) {
+        (Some(brush), _) => brush,
+        (None, Some((chr, para))) => (chr, para, true),
+        (None, None) => return Err(CmdError::Failed("no formatting copied".into())),
+    };
     let (a, b) = s.sel.ordered();
     if a == b {
         // No selection: apply paragraph formatting (and word formatting like Word).
@@ -864,15 +881,11 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
             // Word selection includes trailing spaces; a painter click formats just the word,
             // matching the ordinary collapsed-caret formatting target.
             let word_end = pp.text.get(x..y).map(|word| x + word.trim_end().len()).unwrap_or(y);
-            s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: word_end, ..f.clone() }, &|c| *c = chr.cleared().overlaid(&chr))?;
+            s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: word_end, ..f.clone() }, &|c| *c = c.cleared().overlaid(&chr))?;
         }
         s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
     } else {
-        s.doc.format_range(&a, &b, &|c| {
-            let link = c.link.clone();
-            *c = c.cleared().overlaid(&chr);
-            c.link = link;
-        })?;
+        s.doc.format_range(&a, &b, &|c| *c = c.cleared().overlaid(&chr))?;
         if a.path != b.path || a.off == 0 {
             s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
         }
