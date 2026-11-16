@@ -1,13 +1,14 @@
 use super::{Ui, Value, WordApp, json, vec2};
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 17] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("en-AU", "English (Australia)"),
     ("en-CA", "English (Canada)"),
     ("pl-PL", "Polish"),
     ("pt-BR", "Portuguese (Brazil)"),
+    ("pt-PT", "Portuguese (Portugal)"),
     ("it-IT", "Italian"),
     ("hr-HR", "Croatian"),
     ("tr-TR", "Turkish"),
@@ -220,6 +221,9 @@ fn name_parts(tag: Option<&str>) -> NameParts {
     }
     let mut parts = tag.split(['-', '_']);
     let primary = parts.next().unwrap_or("");
+    if primary.eq_ignore_ascii_case("pt") || primary.eq_ignore_ascii_case("por") {
+        return portuguese_name(tag);
+    }
     // The region: the first region subtag after the language (and script).
     let region = parts.find(|p| wordcraft_engine::packs::is_region(p));
     match region {
@@ -252,6 +256,22 @@ fn name_parts(tag: Option<&str>) -> NameParts {
                 .or_else(|| known().find(|(t, _)| t.contains('-') && wordcraft_engine::packs::without_region(t).eq_ignore_ascii_case(tag)))
                 .map_or_else(|| tag.to_string(), |(_, n)| (*n).to_string()),
         }),
+    }
+}
+
+/// The name of a Portuguese tag, its region read as craft-proof's `ProofLang::from_tag` reads it
+/// (#1028 review): a POSIX `.UTF-8` or `@euro` tail and ISO 639-2 `por` are understood, and a
+/// private-use `pt-x-PT` has no region. A region the lists name is that entry ("Portuguese
+/// (Portugal)"), another is the language and the region ("Portuguese (Angola)"); no region is
+/// Brazil's, as proofed.
+fn portuguese_name(tag: &str) -> NameParts {
+    let base = tag.split(['.', '@']).next().unwrap_or(tag);
+    let region = base.split(['-', '_']).skip(1).take_while(|p| p.len() != 1).find(|p| wordcraft_engine::packs::is_region(p));
+    let Some(region) = region else { return NameParts::Whole("Portuguese (Brazil)".into()) };
+    let listed = format!("pt-{region}");
+    match known().find(|(t, _)| t.eq_ignore_ascii_case(&listed)) {
+        Some((_, name)) => NameParts::Whole((*name).to_string()),
+        None => NameParts::Regioned { language: "Portuguese".into(), region: region_name(region) },
     }
 }
 
@@ -429,11 +449,18 @@ struct TagParts {
 }
 
 /// A tag's parts. An extension or private use (`-x-test`) ends the tag; a tag is a handful of short
-/// subtags, so only the start of a longer one is read.
+/// subtags, so only the start of a longer one is read. A POSIX locale's `.UTF-8` or `@euro` tail
+/// says nothing of the language and `@latin` is the Latin script, as craft-proof reads tags
+/// (`pt_PT.UTF-8` is `pt-PT`, `sr_RS@latin` is `sr-Latn-RS`; #1028 review).
 fn tag_parts(tag: &str) -> TagParts {
-    let lower = tag.trim().replace('_', "-").to_ascii_lowercase();
+    let (base, modifier) = tag.trim().split_once('@').unwrap_or((tag.trim(), ""));
+    let base = base.split('.').next().unwrap_or(base);
+    let lower = base.replace('_', "-").to_ascii_lowercase();
     let mut subtags = lower.split('-').take(8);
     let mut out = TagParts { language: subtags.next().unwrap_or("").to_string(), ..Default::default() };
+    if modifier.eq_ignore_ascii_case("latin") {
+        out.script = Some("latn".into());
+    }
     for p in subtags {
         let alnum = p.bytes().all(|b| b.is_ascii_alphanumeric());
         if p.len() < 2 || !alnum {

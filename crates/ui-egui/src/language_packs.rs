@@ -1149,7 +1149,7 @@ mod tests {
         // The dialog shows the same list, and a tag none of them has besides.
         assert_eq!(crate::ribbon::language_list("bg-BG"), all);
         assert!(crate::ribbon::language_list("xx-YY").iter().any(|(t, _)| t == "xx-YY"));
-        // The short list: the built-in sixteen, then the installed Bulgarian.
+        // The short list: the built-in languages, then the installed Bulgarian.
         let short = crate::ribbon::short_languages();
         assert_eq!(short.len(), crate::ribbon::PROOFING_LANGUAGES.len() + 1);
         assert_eq!(short.last().map(|(t, n)| (t.as_str(), n.as_str())), Some(("bg-BG", "Bulgarian")));
