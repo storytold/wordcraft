@@ -1,0 +1,32 @@
+//! The font panel's `changeFont:` reaches the app (`src/font_panel.rs`). AppKit needs the main
+//! thread, so this test runs without the test harness.
+
+#[cfg(target_os = "macos")]
+#[path = "../src/font_panel.rs"]
+#[allow(dead_code)]
+mod font_panel;
+
+#[cfg(target_os = "macos")]
+fn main() {
+    use font_panel::{FontPanel, Pick};
+    // nextest lists the tests first (`--list --format terse`, then with `--ignored`).
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--list") {
+        if !args.iter().any(|a| a == "--ignored") {
+            println!("change_font_reaches_the_app: test");
+        }
+        return;
+    }
+    let Some(mtm) = objc2::MainThreadMarker::new() else {
+        panic!("not on the main thread");
+    };
+    let panel = FontPanel::new(mtm);
+    panel.show("Helvetica", 14.0, true, false);
+    // What the panel sends when the user picks: with nothing changed there, the selection's font.
+    panel.change_font_for_test();
+    assert_eq!(panel.picks(), vec![Pick { family: "Helvetica".into(), size: 14.0, bold: true, italic: false }]);
+    println!("mac_font_panel: ok");
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {}

@@ -9029,3 +9029,20 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
             .drop_without_applying_deltas();
     }
 }
+
+/// ⌘D (`ui.showFonts`) opens the host's font panel on the selection's font, and says where it
+/// isn't available.
+#[test]
+fn show_fonts_opens_the_hosts_panel_on_the_selections_font() {
+    let mut a = typed();
+    assert!(a.run("ui.showFonts", json!({})).is_err(), "no font panel without the host's");
+    let shown = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let log = shown.clone();
+    a.services.show_fonts = Some(Box::new(move |family, size, bold, _| *log.borrow_mut() = Some((family.to_string(), size, bold))));
+    a.run("select.all", json!({})).unwrap();
+    a.run("format.bold", json!({"value": true})).unwrap();
+    a.run("format.size", json!({"size": 15})).unwrap();
+    a.run("ui.showFonts", json!({})).unwrap();
+    let st = a.session.run("format.state", &json!({})).unwrap();
+    assert_eq!(*shown.borrow(), Some((st["font"].as_str().unwrap_or("").to_string(), 15.0, true)));
+}

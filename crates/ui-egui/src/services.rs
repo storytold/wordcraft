@@ -87,6 +87,10 @@ pub struct Services {
     /// names), where the platform lists them, so a paste that finds nothing it can use says what
     /// is there instead of "empty" (#833).
     pub clipboard_formats: Option<Box<dyn Fn() -> Vec<String>>>,
+    /// Desktop: show the system's font panel (macOS) on the selection's font, given its family,
+    /// size in points, bold and italic (⌘D, `ui.showFonts`). The host formats the selection with
+    /// what the user picks there.
+    pub show_fonts: Option<Box<dyn Fn(&str, f64, bool, bool)>>,
     /// Web: keep a font the user added (stored file name, original bytes) for the next visit
     /// (#582). Desktop fonts are stored by the font database itself, in the app's font folder.
     pub store_font: Option<Box<dyn Fn(&str, &[u8])>>,

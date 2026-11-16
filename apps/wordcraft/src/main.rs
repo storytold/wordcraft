@@ -18,6 +18,8 @@ mod clipboard;
 mod control_server;
 mod default_apps;
 mod file_dialogs;
+#[cfg(target_os = "macos")]
+mod font_panel;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
@@ -47,6 +49,7 @@ struct App(
     // a hidden logic tick.
     RawWindowState,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    #[cfg(target_os = "macos")] Option<std::rc::Rc<font_panel::FontPanel>>,
 );
 
 impl eframe::App for App {
@@ -56,6 +59,12 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         apple_events::poll(&self.5, &mut self.0, ctx);
+        #[cfg(target_os = "macos")]
+        if let Some(panel) = &self.6 {
+            for pick in panel.picks() {
+                font_panel::apply(&mut self.0, &pick);
+            }
+        }
         self.0.logic(ctx);
         self.3.show(frame);
         let mut window = self.4;
@@ -620,6 +629,12 @@ fn main() -> eframe::Result {
             let mut session = Session::new(doc);
             session.system_region = region;
             let mut app = WordApp::new(session, services(file_dialog, cancel_file_dialog, &cc.egui_ctx));
+            #[cfg(target_os = "macos")]
+            let fonts = objc2::MainThreadMarker::new().map(|mtm| std::rc::Rc::new(font_panel::FontPanel::new(mtm)));
+            #[cfg(target_os = "macos")]
+            if let Some(panel) = fonts.clone() {
+                app.services.show_fonts = Some(Box::new(move |family, size, bold, italic| panel.show(family, size, bold, italic)));
+            }
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             // After the preferences, so the reason it gives is in the interface language.
@@ -683,6 +698,8 @@ fn main() -> eframe::Result {
                 RawWindowState::default(),
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
+                #[cfg(target_os = "macos")]
+                fonts,
             )))
         }),
     )

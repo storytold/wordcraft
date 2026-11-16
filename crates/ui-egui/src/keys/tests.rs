@@ -73,6 +73,21 @@ fn a_bound_ctrl_f1_beats_the_ribbon_toggle() {
     assert!(a.session.view.focus_mode && !a.ui.ribbon_collapsed);
 }
 
+/// With the system's font panel, the Font key (Mod+D) opens it instead of the Font dialog.
+#[test]
+fn the_font_key_opens_the_system_font_panel_when_there_is_one() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mod_d = Modifiers { ctrl: !cfg!(target_os = "macos"), mac_cmd: cfg!(target_os = "macos"), command: true, ..Default::default() };
+    assert!(dispatch(&mut a, Key::D, mod_d));
+    assert!(a.dialog.is_some(), "no panel: the Font dialog");
+    a.dialog = None;
+    let shown = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = shown.clone();
+    a.services.show_fonts = Some(Box::new(move |_, _, _, _| seen.set(true)));
+    assert!(dispatch(&mut a, Key::D, mod_d));
+    assert!(shown.get() && a.dialog.is_none(), "the panel, not the dialog");
+}
+
 /// #1678 review: only Ctrl+F1 gives way to a binding; a user's Alt+Q binding leaves Alt+Q
 /// opening the command search.
 #[test]
