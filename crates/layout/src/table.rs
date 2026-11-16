@@ -87,6 +87,15 @@ struct Turned {
     top: f32,
 }
 
+/// Whether the last paragraph of a cell's `blocks` comes right after a table in the text flow.
+/// Measured in Word for Windows: an empty one there takes no room at all, as if the cell ended
+/// with the nested table (the mark ending the cell needs a paragraph to sit in, and Word gives
+/// that paragraph no line). After a floating table it is laid out as any other paragraph.
+fn ends_with_table(blocks: &Blocks) -> bool {
+    let before_last = blocks.len().checked_sub(2).and_then(|i| blocks.get(i));
+    matches!(before_last.map(|b| &**b), Some(Block::Table(t)) if t.props.float.is_none())
+}
+
 /// The number of grid columns of `t` ([`Table::cols`]), which walks every row (each row counted
 /// as a step of [`crate::work`]).
 fn grid_cols(t: &Table) -> usize {
@@ -630,10 +639,14 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     },
                 );
                 // A hidden end-of-cell mark: an empty last paragraph takes no room (Word for
-                // Windows: a row of empty such cells is only its borders).
-                if cell.props.hide_mark && cell.blocks.last().and_then(|b| b.as_para()).is_some_and(|p| p.text.is_empty()) {
+                // Windows: a row of empty such cells is only its borders). Nor does one right
+                // after a table in the cell: the cell ends where that table does, whatever the
+                // paragraph's font size, spacing, shading or borders (`ends_with_table`).
+                let empty_last = cell.blocks.last().and_then(|b| b.as_para()).is_some_and(|p| p.text.is_empty());
+                if empty_last && (cell.props.hide_mark || ends_with_table(&cell.blocks)) {
                     height = last_top;
-                } else {
+                }
+                if !(empty_last && cell.props.hide_mark) {
                     collapsed = false;
                 }
                 for it in &mut items {
