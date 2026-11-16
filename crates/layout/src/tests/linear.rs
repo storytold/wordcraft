@@ -391,9 +391,8 @@ fn drawing_a_warped_boxs_lines_one_by_one_finds_them_once() {
         let l = lay(&d, &LayoutOptions::default());
         (d, l)
     };
-    let lines = |(_, l): &(Document, DocLayout)| {
-        l.pages[0].items.iter().filter(|it| matches!(it, Placed::Lines { story: StoryRef::Part(_), .. })).count()
-    };
+    let lines =
+        |(_, l): &(Document, DocLayout)| l.pages[0].items.iter().filter(|it| matches!(it, Placed::Lines { story: StoryRef::Part(_), .. })).count();
     assert!(lines(&laid(SCALE * 30)) >= SCALE * 30, "the box's lines are all on the page");
     assert_linear_steps("a warped box's lines drawn one by one", 30, laid, |dl| draw_items(dl, &display::DisplayOptions::default()));
 }
