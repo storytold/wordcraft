@@ -33,7 +33,6 @@ pub const MAX_PIXELS: usize = 50_000_000;
 pub const MAX_FILE_BYTES: u64 = 200 << 20;
 /// Most picture files one paste inserts.
 const MAX_FILES: usize = 20;
-const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 
 /// PNG bytes for clipboard pixels, or why they can't be pasted.
 pub fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u8>, String> {
@@ -103,7 +102,7 @@ pub fn dib_picture(dib: Vec<u8>) -> ClipboardPicture {
 }
 
 fn is_picture_file(path: &Path) -> bool {
-    path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| IMAGE_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| crate::file_dialogs::PICTURES.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// Pasted text that is only paths or `file://` addresses of picture files — what file managers
