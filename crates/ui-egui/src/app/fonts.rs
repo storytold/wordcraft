@@ -207,6 +207,22 @@ impl WordApp {
             self.styled = true;
         }
     }
+
+    /// Install the interface fonts again with this window's IME fallback faces (a composition has
+    /// just borrowed one), keeping every choice of the last [`WordApp::install_ui_fonts`]: its CJK
+    /// order and the installed Arabic and Hebrew faces. Those flags stay set, so a dropped face
+    /// would not come back until the language changed.
+    pub(crate) fn install_ui_fonts_with_ime_faces(&self, ctx: &egui::Context) {
+        theme::install_fonts_language_arabic(
+            ctx,
+            self.fonts_hans,
+            self.fonts_korean,
+            self.fonts_hant,
+            self.fonts_system_cjk,
+            theme::InstalledScripts { arabic: self.fonts_system_arabic, hebrew: self.fonts_system_hebrew },
+            &self.canvas.ime_faces,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -236,5 +252,18 @@ mod tests {
         english.install_ui_fonts(&ctx, crate::i18n::Lang::EN);
         assert!(!english.fonts_system_hebrew);
         assert!(!english.fonts_system_arabic);
+    }
+
+    /// An IME composition that borrows a fallback face installs the fonts again. In a build
+    /// without craft-fonts the Hebrew letters come from the installed face, which that reinstall
+    /// keeps: `fonts_system_hebrew` stays set, so nothing would add it back.
+    #[test]
+    fn an_ime_fallback_face_keeps_the_installed_hebrew_face() {
+        let ctx = egui::Context::default();
+        let mut hebrew = app();
+        hebrew.install_ui_fonts(&ctx, crate::i18n::fixture_lang("he", "\tFile\tקובץ\n"));
+        hebrew.install_ui_fonts_with_ime_faces(&ctx);
+        assert!(hebrew.fonts_system_hebrew);
+        crate::i18n::assert_interface_covers_hebrew(&ctx);
     }
 }

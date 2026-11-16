@@ -56,27 +56,36 @@ fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
 /// Run a frame per entry of `steps` (its events), then a few quiet ones, and return every text
 /// drawn in the last.
 fn frames(ctx: &egui::Context, app: &mut WordApp, steps: Vec<Vec<egui::Event>>) -> Vec<String> {
-    // Wide enough that no ribbon tab overflows behind its scroll arrows.
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2560.0, 900.0));
+    let screen = screen();
     let mut drawn = Vec::new();
     let n = steps.len() + 3;
     let mut steps = steps.into_iter();
     for _ in 0..n {
-        TIME.set(TIME.get() + 0.1);
-        let input =
-            egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), events: steps.next().unwrap_or_default(), ..Default::default() };
-        note_global_names();
-        let mut out = ctx.run_ui(input, |ui| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        });
-        note_global_names();
-        drawn.clear();
-        for s in &out.shapes {
-            texts(&s.shape, &mut drawn);
-        }
-        out.textures_delta.clear();
+        drawn = pass(ctx, app, screen, steps.next().unwrap_or_default());
     }
+    drawn
+}
+
+/// The test window: wide enough that no ribbon tab overflows behind its scroll arrows.
+fn screen() -> egui::Rect {
+    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2560.0, 900.0))
+}
+
+/// One UI pass with `events`: the texts it drew.
+fn pass(ctx: &egui::Context, app: &mut WordApp, screen: egui::Rect, events: Vec<egui::Event>) -> Vec<String> {
+    TIME.set(TIME.get() + 0.1);
+    let input = egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), events, ..Default::default() };
+    note_global_names();
+    let mut out = ctx.run_ui(input, |ui| {
+        app.logic(ui.ctx());
+        app.ui(ui);
+    });
+    note_global_names();
+    let mut drawn = Vec::new();
+    for s in &out.shapes {
+        texts(&s.shape, &mut drawn);
+    }
+    out.textures_delta.clear();
     drawn
 }
 
@@ -1023,8 +1032,9 @@ fn switching_away_from_hebrew_clears_rtl_and_the_hebrew_font() {
     assert!(app.fonts_system_arabic);
 }
 
-/// A `ui.language` command is applied in the same `logic` pass that then draws. Hebrew faces
-/// have to be installed for that pass: the previous frame's fonts have no Hebrew letters.
+/// A `ui.language` command is applied in the same `logic` pass that then draws. That one pass
+/// draws the Hebrew labels and asks for the Hebrew faces; egui applies fonts set during a pass
+/// from the next pass on, so the glyph check runs on the pass after it, not after several.
 #[test]
 fn hebrew_selected_through_the_control_channel_is_drawn_with_hebrew_faces() {
     let Some(_) = super::require_hebrew() else { return };
@@ -1035,8 +1045,8 @@ fn hebrew_selected_through_the_control_channel_is_drawn_with_hebrew_faces() {
     frame(&ctx, &mut app);
     let (req, reply) = crate::control::ControlRequest::new("engine.execute", json!({"command": "ui.language", "params": {"value": "he"}}));
     tx.send(req).unwrap();
-    let drawn = frame(&ctx, &mut app);
-    assert!(app.fonts_system_hebrew, "the frame that switches to Hebrew installs a Hebrew face");
+    let drawn = pass(&ctx, &mut app, screen(), Vec::new());
+    assert!(app.fonts_system_hebrew, "the pass that switches to Hebrew installs a Hebrew face");
     assert!(!app.fonts_system_arabic);
     assert!(crate::rtl::on());
     assert!(drawn.iter().any(|t| t.contains("קובץ")), "File is drawn in Hebrew");

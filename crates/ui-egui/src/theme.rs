@@ -697,8 +697,10 @@ pub fn font_definitions_language_arabic(
     // Hebrew letters are a different script from Arabic. The same rule: an embedded Hebrew face,
     // or, when `system_hebrew` is set and none is embedded, one installed face.
     let hebrew = wordcraft_fonts::ui_hebrew_fonts();
+    // Read the installed file only when it would be added, as for Arabic above: an English start
+    // or a build with an embedded Hebrew face never pays for it.
     #[cfg(not(target_arch = "wasm32"))]
-    let installed_hebrew = system_hebrew_font();
+    let installed_hebrew = if system_hebrew && hebrew.is_empty() { system_hebrew_font() } else { None };
     #[cfg(target_arch = "wasm32")]
     let installed_hebrew: Option<&wordcraft_fonts::SystemUiFont> = None;
     add_hebrew_ui_faces(&mut fonts, &hebrew, system_hebrew, installed_hebrew);
@@ -1174,7 +1176,15 @@ mod tests {
         let installed_hebrew = wordcraft_fonts::ui_hebrew_fonts().is_empty() && wordcraft_fonts::system_hebrew_ui_font().is_some();
         assert_eq!(arabic, plain + usize::from(installed_arabic), "Arabic adds the installed font when nothing is embedded");
         assert_eq!(hebrew, plain + usize::from(installed_hebrew), "Hebrew adds the installed font when nothing is embedded");
-        assert_eq!(both, plain + usize::from(installed_arabic) + usize::from(installed_hebrew), "each script adds its own face");
+        // Both lists can pick the same file (Segoe UI leads both on Windows): one entry then.
+        let shared = installed_arabic
+            && installed_hebrew
+            && wordcraft_fonts::system_arabic_ui_font().map(|f| f.family) == wordcraft_fonts::system_hebrew_ui_font().map(|f| f.family);
+        assert_eq!(
+            both,
+            plain + usize::from(installed_arabic) + usize::from(installed_hebrew) - usize::from(shared),
+            "each distinct installed face adds one entry"
+        );
         let arabic_named = |defs: &egui::FontDefinitions| defs.font_data.keys().filter(|k| k.starts_with("system ")).count();
         let cjk_font = super::system_cjk_font(false, false).is_some();
         assert_eq!(arabic_named(&cjk_only), usize::from(cjk_font), "the CJK request adds the CJK font and no Arabic or Hebrew one");

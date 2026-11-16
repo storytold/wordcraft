@@ -1875,14 +1875,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 );
                 if !new.is_empty() {
                     app.canvas.ime_faces.extend(new);
-                    crate::theme::install_fonts_language_extra(
-                        ui.ctx(),
-                        app.fonts_hans,
-                        app.fonts_korean,
-                        app.fonts_hant,
-                        app.fonts_system_cjk,
-                        &app.canvas.ime_faces,
-                    );
+                    app.install_ui_fonts_with_ime_faces(ui.ctx());
                     ui.ctx().request_repaint();
                 }
                 let color = caret_color(app);
