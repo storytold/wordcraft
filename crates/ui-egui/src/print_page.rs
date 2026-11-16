@@ -490,27 +490,70 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout) {
 /// The export "format" of a Word 2003 XML Document: an `.xml` file saved with `format: "wordml2003"`.
 pub(crate) const EXPORT_WORD_2003: &str = "wordml2003";
 
+/// The "save a copy" formats as (label, format), also the built-in browser's types when exporting.
+pub(crate) const EXPORT_FORMATS: &[(&str, &str)] = &[
+    ("PDF document (*.pdf)", "pdf"),
+    ("Word document (*.docx)", "docx"),
+    ("Word XML Document (*.xml)", "xml"),
+    ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
+    ("OpenDocument Text (*.odt)", "odt"),
+    ("OpenDocument Text Template (*.ott)", "ott"),
+    ("Flat OpenDocument Text (*.fodt)", "fodt"),
+    ("Rich Text Format (*.rtf)", "rtf"),
+    ("Web page (*.html)", "html"),
+    ("Markdown (*.md)", "md"),
+    ("LaTeX (*.tex)", "tex"),
+    ("Plain text (*.txt)", "txt"),
+    ("Page image (*.png)", "png"),
+];
+
+/// The file extension an export format writes.
+pub(crate) fn export_file_ext(format: &str) -> &str {
+    if format == EXPORT_WORD_2003 { "xml" } else { format }
+}
+
+/// Is `ext` an extension of a document or export type (the Export types, plus the older `.doc`
+/// and `.htm`)? Such an extension on a typed name gives way to the chosen type's; any other
+/// (`notes.v2`) is part of the name.
+pub(crate) fn is_document_ext(ext: &str) -> bool {
+    ["doc", "htm"].iter().any(|e| e.eq_ignore_ascii_case(ext)) || EXPORT_FORMATS.iter().any(|&(_, f)| export_file_ext(f).eq_ignore_ascii_case(ext))
+}
+
+/// The name an export to `format` is saved under: the chosen type's extension replaces a known
+/// document extension (`notes.docx` as plain text is `notes.txt`) and is added to any other name.
+pub(crate) fn export_name(name: &str, format: &str) -> String {
+    let want = export_file_ext(format);
+    let path = std::path::Path::new(name);
+    // A dotfile name (`.docx`) has no extension for `Path::extension`, which the engine's save also
+    // reads, so it is a stem and gets one (`.docx.xml`); a bare extension would be refused.
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(e) if e.eq_ignore_ascii_case(want) => name.to_string(),
+        Some(e) if is_document_ext(e) => path.with_extension(want).to_string_lossy().into_owned(),
+        // `a.` has an empty extension: its dot is dropped before the type's is added.
+        _ => format!("{}.{want}", name.trim_end_matches('.')),
+    }
+}
+
 /// The "save a copy" formats (File › Export, and below the settings on the Print page).
 pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
-    for (label, ext) in [
-        ("PDF document (*.pdf)", "pdf"),
-        ("Word document (*.docx)", "docx"),
-        ("Word XML Document (*.xml)", "xml"),
-        ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
-        ("OpenDocument Text (*.odt)", "odt"),
-        ("OpenDocument Text Template (*.ott)", "ott"),
-        ("Flat OpenDocument Text (*.fodt)", "fodt"),
-        ("Rich Text Format (*.rtf)", "rtf"),
-        ("Web page (*.html)", "html"),
-        ("Markdown (*.md)", "md"),
-        ("LaTeX (*.tex)", "tex"),
-        ("Plain text (*.txt)", "txt"),
-        ("Page image (*.png)", "png"),
-    ] {
+    // A refused or failed export, said here because Backstage hides the status bar (Export and Print pages both draw this).
+    if !app.export_error.is_empty() {
+        ui.label(egui::RichText::new(&app.export_error).color(ui.visuals().error_fg_color));
+        ui.add_space(6.0);
+    }
+    for &(label, ext) in EXPORT_FORMATS {
         if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             app.export_dialog(ext);
         }
         ui.add_space(4.0);
+    }
+    // Linux and the BSDs (#3535): WordCraft's own browser when the system dialog doesn't appear.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    {
+        ui.add_space(8.0);
+        if ui.add(egui::Button::new(egui::RichText::new(tl!("Browse in WordCraft…")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+            let _ = app.run("ui.fileBrowser", json!({"purpose": "export"}));
+        }
     }
 }
 

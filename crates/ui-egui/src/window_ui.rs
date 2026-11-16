@@ -43,6 +43,8 @@ pub(crate) struct WindowUi {
     /// Per window, as each window shows its own layout: one shared list would be read again
     /// on every frame of every window.
     pub(crate) missing_fonts: crate::chrome::MissingFontsMemo,
+    /// This window's refused or failed export, shown on its Export and Print pages (Backstage hides the status bar).
+    pub(crate) export_error: String,
     pub(crate) last_autosave: f64,
     pub(crate) equation_prev_tab: Option<String>,
     pub(crate) smart_art_item: Option<usize>,
@@ -115,6 +117,7 @@ impl WindowUi {
             status_counts: NOT_COUNTED,
             print_memo: Default::default(),
             missing_fonts: Default::default(),
+            export_error: String::new(),
             last_autosave: 0.0,
             equation_prev_tab: None,
             smart_art_item: None,
@@ -248,6 +251,7 @@ impl WordApp {
             status_counts,
             print_memo,
             missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -355,6 +359,7 @@ impl WordApp {
             status_counts,
             print_memo,
             missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,

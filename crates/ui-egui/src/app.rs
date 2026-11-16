@@ -60,6 +60,7 @@ impl WordApp {
             status_counts,
             print_memo,
             missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -182,6 +183,7 @@ impl WordApp {
             status_counts,
             print_memo,
             missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -500,6 +502,7 @@ impl WordApp {
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);
             backstage::forget_save_as_error(&ctx);
+            self.export_error.clear();
         }
         self.paint_window(ui, &ctx, t);
         if !moved(self) {
