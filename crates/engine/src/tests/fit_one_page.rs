@@ -1093,23 +1093,24 @@ fn fit_one_page_reports_search_exhaustion_when_candidates_cannot_remove_page() {
 
 #[test]
 fn fit_one_page_excludes_line_number_decorations_from_final_page_limits() {
-    let mut lines = 20;
-    let enable_line_numbers = |s: &mut Session| {
-        s.doc.last_section.line_numbers = Some(wordcraft_doc::section::LineNumbering::default());
-        s.touch();
-        s.relayout();
-    };
-    let mut s = create_multiline_doc(lines);
-    enable_line_numbers(&mut s);
-    while s.layout().pages.len() < 2 && lines < 60 {
-        lines += 1;
-        s = create_multiline_doc(lines);
-        enable_line_numbers(&mut s);
-    }
+    let mut s = create_multiline_doc(33);
+    s.doc.last_section.line_numbers = Some(wordcraft_doc::section::LineNumbering::default());
+    s.touch();
+    s.relayout();
     assert_eq!(s.layout().pages.len(), 2);
 
     // Every body line on the final page also places a line-number decoration. Counting those as
-    // content would double the final-page line count and refuse before any candidate is tried.
+    // content would double the final-page line count and refuse before any candidate is tried:
+    // between 7 and 12 body lines are within the 12-line limit, and twice as many are not.
+    let body_lines: usize = s.layout().pages[1]
+        .items
+        .iter()
+        .map(|item| match item {
+            wordcraft_layout::Placed::Lines { story: wordcraft_doc::StoryRef::Body, l0, l1, .. } => l1 - l0,
+            _ => 0,
+        })
+        .sum();
+    assert!((7..=12).contains(&body_lines), "the final page must carry 7 to 12 body lines, has {body_lines}");
     let decorated = s.layout().pages[1]
         .items
         .iter()
