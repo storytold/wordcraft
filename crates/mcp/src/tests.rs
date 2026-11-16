@@ -32,6 +32,27 @@ fn lifecycle_and_tools() {
 }
 
 #[test]
+fn select_text_searches_the_text_get_text_returns() {
+    // The schema option `includeHidden` reaches the engine: the default search skips
+    // occurrences inside hidden runs (matching get_text), includeHidden finds them.
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    tool(&mut s, "type_text", json!({"text": "foo foo"}));
+    tool(&mut s, "select_text", json!({"text": "foo", "occurrence": 1}));
+    tool(&mut s, "execute", json!({"command": "format.hidden", "params": {"value": true}}));
+    // The default search selects the visible occurrence (raw offsets 4..7).
+    let sel = tool(&mut s, "select_text", json!({"text": "foo"}));
+    assert_eq!(sel["anchor"]["off"], 4, "{sel}");
+    assert_eq!(sel["focus"]["off"], 7, "{sel}");
+    tool(&mut s, "type_text", json!({"text": "bar"}));
+    assert_eq!(tool(&mut s, "get_text", json!({}))["text"], " bar");
+    // includeHidden reaches the hidden occurrence (raw offsets 0..3).
+    let sel = tool(&mut s, "select_text", json!({"text": "foo", "occurrence": 1, "includeHidden": true}));
+    assert_eq!(sel["anchor"]["off"], 0, "{sel}");
+    assert_eq!(sel["focus"]["off"], 3, "{sel}");
+}
+
+#[test]
 fn agent_writes_a_formatted_document() {
     let mut s = Server::new(Box::new(Headless::default()));
     tool(&mut s, "new_document", json!({}));

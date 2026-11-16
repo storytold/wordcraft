@@ -137,7 +137,10 @@ pub(crate) enum TextMode {
     Final,
 }
 
-pub(crate) fn text_of(bl: &Blocks, out: &mut String, depth: usize, mode: TextMode) {
+/// The blocks' text in `mode`, one paragraph per line and a table row per tab-separated line
+/// (nested cells flatten onto their row's line at `depth`); `Final` reads the visible
+/// projection — the text the `document.text` command returns.
+pub(crate) fn text_of(bl: &Blocks, out: &mut String, depth: usize, mode: TextMode, styles: &crate::styles::StyleSheet) {
     if depth > 16 {
         return;
     }
@@ -147,7 +150,7 @@ pub(crate) fn text_of(bl: &Blocks, out: &mut String, depth: usize, mode: TextMod
                 out.push_str(&match mode {
                     TextMode::Plain => p.plain_text(),
                     TextMode::Shown => p.shown_text(),
-                    TextMode::Final => p.final_text(),
+                    TextMode::Final => p.final_visible_text(styles),
                 });
                 out.push('\n');
             }
@@ -156,7 +159,7 @@ pub(crate) fn text_of(bl: &Blocks, out: &mut String, depth: usize, mode: TextMod
                     let mut cells = Vec::new();
                     for c in &row.cells {
                         let mut s = String::new();
-                        text_of(&c.blocks, &mut s, depth + 1, mode);
+                        text_of(&c.blocks, &mut s, depth + 1, mode, styles);
                         cells.push(s.trim_end_matches('\n').replace('\n', " "));
                     }
                     out.push_str(&cells.join("\t"));

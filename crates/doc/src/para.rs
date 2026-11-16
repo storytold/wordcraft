@@ -140,6 +140,20 @@ impl Paragraph {
     pub fn final_text(&self) -> String {
         self.text_without(&self.deleted_ranges())
     }
+    /// [`Self::final_text`] — and without hidden runs, hidden directly or through their
+    /// character style: the text as it prints by default. Inspect Document's hidden-text
+    /// detection uses the same resolved formatting, so nothing it would report rides into
+    /// [`Self::final_visible_text`].
+    pub fn final_visible_text(&self, styles: &crate::styles::StyleSheet) -> String {
+        let mut dropped = self.deleted_ranges();
+        let style = self.props.style.as_deref();
+        for (r, c) in self.run_ranges() {
+            if !r.is_empty() && styles.resolve_char(style, c).hidden {
+                dropped.push(r);
+            }
+        }
+        self.text_without(&dropped)
+    }
     /// The byte ranges of the tracked deletions.
     pub fn deleted_ranges(&self) -> Vec<std::ops::Range<usize>> {
         self.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| r).collect()
@@ -620,6 +634,10 @@ impl Paragraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::block::{Block, Blocks};
+    use crate::styles::StyleSheet;
+    use crate::text_walk::{TextMode, text_of};
+    use std::sync::Arc;
 
     #[test]
     fn sentence_at_sentence_start() {
@@ -672,6 +690,33 @@ mod tests {
             assert_eq!(p.text_without(&dropped), naive(&dropped), "{dropped:?} of {text:?}");
         }
         assert_eq!(p.text_without(std::slice::from_ref(&(1..3))), "a7b€c");
+    }
+
+    #[test]
+    fn final_visible_text_drops_hidden_and_tracked_deleted_runs_together() {
+        // A deleted run, a hidden run and an overlapping deleted+hidden run drop out together;
+        // a paragraph whose mark is deleted still yields `\n` in Final mode.
+        let styles = StyleSheet::builtin();
+        let hidden = CharProps { hidden: Some(true), ..Default::default() };
+        let deleted = CharProps { del: Some(1), ..Default::default() };
+        let both = CharProps { hidden: Some(true), del: Some(1), ..Default::default() };
+        let mut p = Paragraph::new();
+        p.text = "abcdefgh".into();
+        p.runs = vec![
+            Run { len: 3, props: CharProps::default() },
+            Run { len: 1, props: deleted.clone() },
+            Run { len: 1, props: hidden.clone() },
+            Run { len: 1, props: both },
+            Run { len: 2, props: CharProps::default() },
+        ];
+        assert_eq!(p.final_visible_text(&styles), "abcgh");
+        // Exact final_text output with the paragraph mark deleted too: the run combinations
+        // drop and the `\n` between paragraphs stays.
+        p.mark.del = Some(1);
+        let blocks: Blocks = vec![Arc::new(Block::Para(p))];
+        let mut out = String::new();
+        text_of(&blocks, &mut out, 0, TextMode::Final, &styles);
+        assert_eq!(out, "abcgh\n");
     }
 
     #[test]
