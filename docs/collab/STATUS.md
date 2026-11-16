@@ -519,7 +519,10 @@ Results at this writing:
   one proof that the tests catch the defect: with `leave` reverted to the old
   three-step form (no seal), `a_join_that_races_the_last_leave_never_lands_outside_the_map`
   fails on `room_count()` 0 with a peer registered in the room it was handed.
-  Details and log name: §5.52.
+  Steps 1–4 were re-taken as one archived `--no-fail-fast` run on `50d4b4ec`:
+  `.craft/logs/gate-wordcraft-5834-50d4b4ec-full.log` (45 targets, 5411 / 2 / 9,
+  `EXIT=1` on the two upstream tests only); steps 5–7 were measured on
+  `9cda1c11`, the code commit under it. Details: §5.52.
 - §5.49, the delivered head `e6f34e8c` (one documentation commit above
   `61565ab3`): on the build host `agents`, `cargo metadata --locked` rc 0 with
   the lock's sha256 unchanged and a clean tree before, after it and after the
@@ -5007,7 +5010,8 @@ code now.
 
 **The code.** `9cda1c11`, one commit on top of `9300ff94` (2 files, +556/−67),
 nothing pushed: the PR's head and the fork still answer `e6f34e8c`, and the
-branch is `0 6` from it locally (this page's own commit is the seventh). At
+branch is `0 8` from it locally — the six commits through `9cda1c11`, this
+section's `50d4b4ec`, and the evidence commit above it. At
 `9cda1c11` the branch is `0 127` from `origin/main` `cc90520b` and
 `git merge-tree --write-tree origin/main 9cda1c11` exits 0 (tree `7417caf2`).
 The tree is clean before and after the gate.
@@ -5059,27 +5063,54 @@ The tree is clean before and after the gate.
 text instead of the deferral. The thread stays unresolved: resolving a review
 thread is the maintainer's.
 
-**The gate** (build host `agents`, rustc 1.99.1, 20 cores, 2026-11-16; log
-`gate-wordcraft-5834-9cda1c11.log` in the cabinet workspace's `.craft/logs/`;
-`CRAFT_I18N_DIR=~/craft-i18n`, `CRAFT_FONTS_DIR=~/craft-fonts` as in
-§5.48–§5.51):
+**The gate** (build host `agents`, rustc 1.99.1, 20 cores, 2026-11-16
+06:39:16Z→06:42:39Z; log **`.craft/logs/gate-wordcraft-5834-50d4b4ec-full.log`**
+in the cabinet workspace, 412 116 bytes, taken on `50d4b4ec` as one
+`--no-fail-fast` run of the whole test step; `CRAFT_I18N_DIR=~/craft-i18n`,
+`CRAFT_FONTS_DIR=~/craft-fonts` as in §5.48–§5.51):
 
 | # | Command | Result |
 |---|---|---|
-| 1 | `cargo metadata --locked --format-version 1` | rc 0; `Cargo.lock` sha256 `a1f66a07d64213f1…` unchanged; `git status --porcelain` empty before and after |
+| 1 | `cargo metadata --locked --format-version 1` | rc 0, 4 063 627-byte JSON; `Cargo.lock` sha256 `a1f66a07d64213f1…` unchanged; `git status --porcelain` empty before and after |
 | 2 | `cargo fmt --all -- --check` | rc 0, no output |
-| 3 | `cargo clippy --workspace --all-targets -- -D warnings` | rc 0; cargo's three unused `[patch]` notes only |
-| 4 | `cargo xtask layers` | rc 0 — `OK: 26 crates, no layering violations` |
-| 5 | `cargo test --workspace --lib --bins --tests --no-fail-fast` | 45 targets, **5411 passed, 2 failed, 9 ignored**; both reds are `wordcraft-engine`'s `tests::fit_one_page::fit_one_page_preserves_budget_across_document_serialization` and `…_respects_step_pt` — the font-metric dependence §5.48 reproduced on clean `origin/main` `cc90520b` and §5.49–§5.51 recorded: not touched by this commit, not fixed here |
-| 6 | `cargo test --workspace --doc` | rc 0 |
-| 7 | `cargo xtask i18n-report`, `language`, `assets`, `wasm` | rc 0 each (the step prints its own counts; only the return codes were kept in this log) |
+| 3 | `cargo clippy --workspace --all-targets -j 12 -- -D warnings` | rc 0; cargo's three unused `[patch]` notes only |
+| 4 | `cargo test --workspace --lib --bins --tests -j 12 --no-fail-fast` | **45 targets, 5411 passed, 2 failed, 9 ignored**; rc 101 with `error: 1 target failed: -p wordcraft-engine --lib`; both reds are `wordcraft-engine`'s `tests::fit_one_page::fit_one_page_preserves_budget_across_document_serialization` (`crates/engine/src/tests/fit_one_page.rs:881`, "second fit within remaining budget must succeed") and `fit_one_page_respects_step_pt` (`:144`, "stepPt=0.1 must generate fine-grained candidates under maxDelta 0.4") — the font-metric dependence §5.48 reproduced on clean `origin/main` `cc90520b` and §5.49–§5.51 recorded: not touched by this commit, not fixed here |
 
-The eight collab targets: `collab` 64, `-app` 51, `-client` 28, `-doc` 116,
-`-engine` 60, `-server` 85 (+1 ignored: the LibreOffice commit gate), `-web` 17,
-`-ws` 3 (integration) — **424 passed, 0 failed**. §5.51 recorded 420; the four
-extra tests are exactly the four ADR-0026 asks for. The aggregate `cargo xtask
-ci` answers rc 1 and stops at `test` on the same two `fit_one_page` reds — the
-shape §5.49–§5.51 recorded, and the reason the gate is read step by step.
+`EXIT=1` from those four step RCs and from nothing else. The log can be read
+without trusting this page: 45 `test result:` lines summing to 5411 / 2 / 9, the
+two failure names in full, and a `== totals` block at the end that repeats the
+arithmetic. The tree is
+`50d4b4ec` before and after the run and `git status --porcelain` answers nothing
+at both ends; the lock is the merge's `a1f66a07…`, so `metadata --locked` also
+proves the branch resolves it without writing.
+
+Steps 5–7 of the earlier table (`cargo xtask layers`, `cargo test --workspace
+--doc`, `cargo xtask i18n-report`/`language`/`assets`/`wasm`) are not re-run in
+this log: they answered rc 0 on `9cda1c11`, the code commit under this
+documentation commit, and this commit changes one Markdown file. The aggregate
+`cargo xtask ci` still answers rc 1 and stops at `test` on the same two
+`fit_one_page` reds — the shape §5.49–§5.51 recorded, and the reason the gate is
+read step by step.
+
+In the same log the collab targets: `collab` 64, `-app` 51, `-client` 28, `-doc`
+116, `-engine` 60, `-server` 85 (+1 ignored: the LibreOffice commit gate),
+`-server` bin 0, `-web` 17, `-ws` lib 0 and `-ws` `tests/reconnect.rs` 3 —
+**424 passed, 0 failed**. §5.51 recorded 420; the four extra tests are exactly
+the four ADR-0026 asks for.
+
+**History of this section's gate evidence (2026-11-16).** The first archived log
+for this code head, `.craft/logs/gate-wordcraft-5834-9cda1c11.log` (235 645
+bytes), was taken **without** `--no-fail-fast`: it holds three `test result:`
+lines (41 + 28 + 0), `error: 1 target failed: -p wordcraft-engine --lib`,
+`TEST_RC=101` and the other steps' return codes, and no totals. The
+5411 / 2 / 9 on 45 targets written here before this revision came from a
+host-side `/tmp/gate-test-9cda1c11.log` that was never archived, so this page
+cited a log that did not contain its numbers (chair's review
+`20261116T063744Z-craft-6479`, which asked for a re-take rather than a rewrite).
+The full run above replaces that citation. The `/tmp` file was read on the host
+during the re-take and holds the same 45 / 5411 / 2 / 9 and the same two names,
+so the old numbers were not invented — they were unarchived, and the archived
+run now reproduces them on a docs-only commit above the same code.
 
 **The reds that are not mine.** Both `fit_one_page` tests fail identically on
 clean `origin/main` `cc90520b` (control run in §5.48) and were red in §5.49,
