@@ -833,8 +833,7 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
             };
             image::Rgba(colours[quadrant])
         });
-        let mut bytes = Vec::new();
-        image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+        let bytes = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image.clone()), image::ImageFormat::Png).unwrap();
         let picture = InlineObject::Image {
             media: "rotation-test".into(),
             w: 200.0,
@@ -976,8 +975,7 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     use crate::table_resize::tests::{H, button, steps};
     use egui::Event;
     let image = image::RgbaImage::from_pixel(16, 16, image::Rgba([30, 120, 210, 255]));
-    let mut bytes = Vec::new();
-    image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+    let bytes = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image.clone()), image::ImageFormat::Png).unwrap();
     let picture = InlineObject::Image {
         media: "large-preview-test".into(),
         w: 14_400.0,
