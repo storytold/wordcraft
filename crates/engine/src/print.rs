@@ -248,7 +248,9 @@ impl Session {
 /// `file.printPdf`: write the print job's PDF to `path` (no dialogs).
 pub(crate) fn print_pdf_to_file(s: &mut Session, v: &Value) -> Result<Value, CmdError> {
     let path = p::req_str(v, "path")?;
-    let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
+    // `.pdf` after a name without it, by the rule exports follow (the built-in browser asks
+    // about replacing this same name).
+    let path = crate::io::with_export_ext(path, "pdf");
     let (bytes, plan) = s.print_pdf(v)?;
     // Through `io`, so an agent confined to an automation write root (#769) can't print elsewhere.
     #[cfg(not(target_arch = "wasm32"))]
