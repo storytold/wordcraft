@@ -94,6 +94,11 @@ The same session can be driven headlessly through the control channel or MCP:
 - Web: `wordcraft:session` opens the session; `session-state`/`presence`/`commit`
   go back through the host bridge; `craft-web-host` comes from the fork pin
   `copoka/craft-libs@7666e2b1` (`host-bridge.md` §"Build note", `STATUS.md` §4).
+- A connection belongs to the document it was opened with: when the window
+  shows another document, the app closes it and says `Left the collaboration
+  session: the open document changed`. The host sends `session` again for the
+  new document; the desktop reopens it with `collab.enable`. One `session_id`
+  names one document (`host-bridge.md`, ADR `WC-0010`, `STATUS.md` §5.54).
 
 ## 6. Tests
 

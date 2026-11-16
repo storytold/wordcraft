@@ -1,35 +1,34 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-16 (this page's branch-side measurement is §5.49, the delivery
-  of the merge of `origin/main` `cc90520b`; the PR facts were read at
-  2026-11-16T03:47Z with `gh pr view 5834 --json
+- Date: 2026-11-16 (this page's branch-side measurement is §5.54, the fix of
+  §5.26 finding 9, on top of the head `59e1eed7` that PR #5834 answers. The PR
+  facts were read at 2026-11-16T14:25Z with `gh pr view 5834 --json
   headRefOid,mergeStateStatus,mergeable,baseRefOid,updatedAt`:
-  `headRefOid: e6f34e8cb0ea22c7ab2727d5771bf26cf5fce9bc`,
-  `mergeStateStatus: BLOCKED`, `mergeable: MERGEABLE`, `baseRefOid`
-  `cc90520b9d8fb0d1e6be2c2688e6f915319e850a`, `updatedAt`
-  2026-11-16T01:14:52Z, and `git ls-remote fork
+  `headRefOid: 59e1eed7ac653201977871677ac745559fb10c37`,
+  `baseRefOid: fe8a8a838cde68b272ac68429e53049347feab40`,
+  `mergeable: MERGEABLE`, `mergeStateStatus: BLOCKED` (the required review),
+  `updatedAt` 2026-11-16T11:45:32Z; `git ls-remote fork
   refs/heads/feature/realtime-collaboration` answered the same commit. The
-  2026-11-16T00:35Z reading — `headRefOid: 9c6e343a`, `DIRTY`/`CONFLICTING`,
-  `updatedAt` 2026-11-14T15:12:50Z — was true before that push: the head had
-  not moved and `origin/main` had, so the merge was still local (§5.48))
+  2026-11-16T03:47Z reading — `headRefOid: e6f34e8c`, `baseRefOid` `cc90520b`,
+  `updatedAt` 2026-11-16T01:14:52Z — was true before `f32a0d3b` and `59e1eed7`
+  were pushed (§5.53).)
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft), title "Real-time collaboration:
   authoritative sync server, document adapter, client core"
 - Base: upstream `main` `4b0d3995` when the branch was rebased onto it (§5.4);
-  the PR answers `baseRefOid` `cc90520b` since the delivery of §5.49. Upstream
-  `main` had moved on to `cc90520b` — 56 commits past `b5fa2f9e`, the last
-  upstream commit this branch had merged — and the branch merged it in
-  `61565ab3` (§5.48), which went up as `e6f34e8c`, one documentation commit
-  above the merge. Measured at 2026-11-16T03:47Z, the fork branch, the PR's
-  `headRefOid` and the local `HEAD` all answer `e6f34e8c` with a clean tree.
-  (The 2026-11-16T00:35Z statement that the merge was "local until the owner
-  pushes" and that the PR "still answers `CONFLICTING` on the unmoved head
-  `9c6e343a`" was true at that reading, before the 01:14:52Z push.) Upstream
-  `main` then moved on to `fe8a8a83`, 15 commits further, and the branch merged
-  it in `257c5a2c` (§5.53) on 2026-11-16, so
-  `git rev-list --left-right --count origin/main...HEAD` reads `0 131` with this
-  documentation commit on top (`0 130` at the merge itself).
+  the PR answers `baseRefOid` `fe8a8a83` at the 14:25Z reading, the commit the
+  branch merged in `257c5a2c` (§5.53). Upstream `main` had moved on to
+  `cc90520b` — 56 commits past `b5fa2f9e`, the last upstream commit this branch
+  had merged — and the branch merged it in `61565ab3` (§5.48), which went up as
+  `e6f34e8c`. Upstream `main` then moved to `fe8a8a83`, 15 commits further,
+  merged in `257c5a2c`, and on to `cdf146ca`, three commits past that, which the
+  branch has not merged: measured at 2026-11-16T14:25Z,
+  `git rev-list --left-right --count origin/main...HEAD` reads `3 132` (three
+  upstream commits behind, this code and documentation commit on top of
+  `59e1eed7`) and `git merge-tree --write-tree origin/main HEAD` exits 0 with
+  tree `dc9f446b`. (The documentation commit that carries this bullet adds one,
+  so a reader's `3 133` is the same branch.)
 - **The head is read, not memorised.** This page does not crown a commit as
   "the delivered head": every commit — including a documentation sync of this
   very page — moves the tip, so a hash written into the header is one
@@ -192,7 +191,7 @@
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`; the implementation ADRs beside this page:
-  `adr/0001`…`adr/0008`.
+  `adr/0001`…`adr/0008`, `adr/WC-0009`, `adr/WC-0010`.
 
 This page records what is implemented, how it was verified, what is known to be
 missing, and where the next session should start.
@@ -480,7 +479,7 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31, 6 (connection identity) in §5.32 and 8 (a failed edit stayed local while the session said `InSync`) in §5.33 — a session whose plan or submission failed now leaves `InSync` for `Status::Diverged`, refuses the next edit and the commit with the reason, and resyncs (`a_command_that_cannot_be_planned_pauses_the_session_before_a_commit`, `a_command_that_cannot_be_submitted_pauses_the_session_before_a_commit`; ADR `0006-diverged-session-pauses.md`); 10 (the token renewal that replaced the client) is closed in §5.34 — a repeated `session` for the live connection renews its credentials in place, so the unconfirmed edit and the participant list survive (`a_repeated_session_renews_the_same_connection_and_keeps_an_unconfirmed_edit`; ADR `0007-token-renewal-keeps-the-connection.md`); 9 (per-document connections) remains open, named in §4. The last finding of `5853542478` — a client whose base stayed above a restored room's head — is closed in §5.41: the base follows the head and the queue built above it is dropped and reported, not replayed (`a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops`, `a_restored_room_does_not_refuse_the_next_operation_stale`, `two_clients_converge_after_the_room_is_restored`; ADR `0008-restore-lowers-the-base.md`), and the author sees the cost since §5.42: the panel names the room's head, the count and the ids of the dropped operations, and the session reads `Resyncing` until the snapshot lands (`a_restored_room_is_named_with_its_count_and_ids_and_leaves_in_sync`) |
+| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31, 6 (connection identity) in §5.32 and 8 (a failed edit stayed local while the session said `InSync`) in §5.33 — a session whose plan or submission failed now leaves `InSync` for `Status::Diverged`, refuses the next edit and the commit with the reason, and resyncs (`a_command_that_cannot_be_planned_pauses_the_session_before_a_commit`, `a_command_that_cannot_be_submitted_pauses_the_session_before_a_commit`; ADR `0006-diverged-session-pauses.md`); 10 (the token renewal that replaced the client) is closed in §5.34 — a repeated `session` for the live connection renews its credentials in place, so the unconfirmed edit and the participant list survive (`a_repeated_session_renews_the_same_connection_and_keeps_an_unconfirmed_edit`; ADR `0007-token-renewal-keeps-the-connection.md`); 9 (per-document connections) is closed in §5.54 — a connection records the document it was opened with, a document switch closes it in the web shell and in the desktop window, and a `session` for another document is refused (`two_documents_in_one_tab_neither_carry_each_others_edits_nor_share_the_queue`, `a_second_document_in_the_same_tab_closes_the_firsts_session`; ADR `WC-0010-connection-belongs-to-a-document.md`), with the named price that a closed connection's unconfirmed operations go with it. The last finding of `5853542478` — a client whose base stayed above a restored room's head — is closed in §5.41: the base follows the head and the queue built above it is dropped and reported, not replayed (`a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops`, `a_restored_room_does_not_refuse_the_next_operation_stale`, `two_clients_converge_after_the_room_is_restored`; ADR `0008-restore-lowers-the-base.md`), and the author sees the cost since §5.42: the panel names the room's head, the count and the ids of the dropped operations, and the session reads `Resyncing` until the snapshot lands (`a_restored_room_is_named_with_its_count_and_ids_and_leaves_in_sync`) |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot; a room restored from an older snapshot is a case of its own (§5.41): the base is lowered to the head and the queue built above it is dropped with the ids reported, so the next operation lands instead of being refused `Stale` (`a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops`, `a_restored_room_does_not_refuse_the_next_operation_stale`); the panel shows that queue at its author and the session leaves `InSync` until the snapshot lands (§5.42, `a_restored_room_is_named_with_its_count_and_ids_and_leaves_in_sync`, `a_welcome_below_the_base_without_a_snapshot_shows_the_reason`) |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate; a viewer's write is refused `forbidden` even when another cabinet session holds the lease, and its read-only join does not take that lease (`a_viewer_joins_a_room_whose_lease_belongs_to_another_session`, §5.43) |
@@ -711,10 +710,15 @@ Results at this writing:
   a submission that fails moves the session to `Status::Diverged`, which pauses
   editing and refuses a commit with the reason, and a resync replaces the local
   document with the room's confirmed one
-  (`docs/collab/adr/0006-diverged-session-pauses.md`, §5.33). One finding of
-  §5.26 stays open, with its own slice: the connection is app-wide while
-  documents are per window (9). Finding 10, a session event that replaced the
-  client and dropped its unconfirmed edits, is closed in §5.34.
+  (`docs/collab/adr/0006-diverged-session-pauses.md`, §5.33). The finding of
+  §5.26 that outlived it — the connection was app-wide while documents are per
+  window, so a socket opened for one document could carry another's edits — is
+  closed in §5.54: a connection records the document it was opened with, a
+  document switch closes it (web shell and desktop window alike), and a `session`
+  whose id belongs to another document is refused instead of joined
+  (`docs/collab/adr/WC-0010-connection-belongs-to-a-document.md`). Finding 10, a
+  session event that replaced the client and dropped its unconfirmed edits, is
+  closed in §5.34.
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
@@ -5210,6 +5214,118 @@ session's archived log (`gate-wordcraft-5834-50d4b4ec-full.log`, the §5.52
 evidence, also held in the cabinet workspace) — the sync's `--exclude='*.log'`
 also protects it from `--delete`, so it is a host-side archive and not a
 repository change.
+
+### 5.54 Finding 9: a connection belongs to one document, and `59e1eed7` is the delivered head (run 2026-11-16)
+
+**The delivery.** Read at 2026-11-16T14:25Z, `gh pr view 5834 --json
+headRefOid,mergeStateStatus,mergeable,baseRefOid,updatedAt` answers
+`headRefOid: 59e1eed7ac653201977871677ac745559fb10c37`, `mergeable: MERGEABLE`,
+`mergeStateStatus: BLOCKED` (the required review), `baseRefOid:
+fe8a8a838cde68b272ac68429e53049347feab40` and `updatedAt`
+2026-11-16T11:45:32Z; `git ls-remote fork
+refs/heads/feature/realtime-collaboration` answers the same commit. So §5.53's
+merge `257c5a2c` and its documentation commit left the local branch and the PR
+carries them. Upstream `main` has moved on to `cdf146ca` — three commits past
+the PR's base (`d53a740b`, `54e3e1cf`, `cdf146ca`: a linear-time paragraph
+layout, a SonarCloud fix, its merge) — so the branch is `3 132` from
+`origin/main` at the code commit (`3 133` with this page's commit on top), and
+`git merge-tree --write-tree origin/main HEAD` exits 0 with tree `dc9f446b`.
+
+**The gate on the delivered head.** Two logs in the cabinet workspace
+(`.craft/logs/`), both on `59e1eed7`:
+
+| Log | Steps | Result |
+|---|---|---|
+| `gate-wordcraft-tip-59e1eed7.log` (header `== HEAD 59e1eed7… 2026-11-16T11:13:46Z`, `dirty=1`) | metadata / fmt / clippy | `rc=0`, `rc=0`, `rc=0` |
+| the same run | test | `rc=101` with **seven** named reds: `tests::fit_one_page::{fit_one_page_preserves_budget_across_document_serialization, fit_one_page_respects_step_pt}` (`wordcraft-engine`), `cmd::packs::tests::swiss_german_and_portugal_portuguese_keep_their_languages_rules` (`wordcraft-engine`), `tests::{auto_hyphenation_breaks_long_words, fragmented_hidden_text_lays_out_like_the_visible_text, hyphenation_and_proofing_follow_each_runs_language}` (`wordcraft-layout`) and `backstage::tests::rtl_template_titles_are_right_aligned` (`wordcraft-ui-egui`) |
+| `gate2-wordcraft-59e1eed7.log` (header `2026-11-16T11:39:08Z`, test step only) | test | `rc=101` with exactly the two `fit_one_page` names |
+
+**Correction to the shorthand.** The earlier summary that the tip gate failed
+"only on main's two `fit_one_page`" is true of the re-run and of §5.53's gate on
+`257c5a2c` (45 targets, 5471 passed, 2 failed, 9 ignored), not of the first
+log: that one names seven. The five extras are the same environment-sensitive
+class the two `fit_one_page` belong to — hyphenation data (`CRAFT_I18N_DIR`),
+font metrics and RTL text metrics — and none of them reproduced 26 minutes
+later on the same commit, with no source change in between (`gate2` ran the
+test step alone). No collab test is among them, in either log. The seven names
+and the two names are recorded here rather than reduced to "the fit_one_page
+reds", so a reader can check both logs against this page.
+
+**The finding.** §5.26 finding 9, last open in §4: the connection was app-wide
+while documents are per window. A window (a tab, an app window) holds one
+`WordApp` and one `Option<Collab>`; `after_command` sent every replicable
+command through it and `tick` polled and published presence through it without
+asking which document was active. A window changes its document without
+closing — File › Open into an untouched blank, a dropped file, the host's
+`open`, or another open document tab — and the room joined for the first
+document then received the second's operations, with the second's positions
+and ids.
+
+**The fix** (`08f41b43`, ADR `WC-0010-connection-belongs-to-a-document.md`):
+
+| Where | What |
+|---|---|
+| `crates/collab-web` | `Collab` records the `document_id` it was opened with and answers `carries(document)`; `HostState::on_event` takes the document the tab shows, remembers which document each `session_id` belongs to (bounded at 64), refuses a message that would move one to another document (`HostAction::Refused`), and `HostState::document_changed` returns the session a switch must close |
+| `crates/collab-app` | the same `document_id`/`carries` on the desktop session |
+| `apps/wordcraft-web` | the shell closes the session when the open document changes (dropping the `Collab` closes its socket), reads every host message for the document that is open now, renews only a connection that carries it, and publishes `session-state`/`presence` only for it |
+| `crates/ui-egui` | `close_if_another_document` runs before `tick` polls and before `after_command` sends, on the web and desktop paths; `viewer_refusal` ignores a connection that answers for another document |
+| `docs/collab/host-bridge.md` | the contract's new item 6: a connection belongs to the document it was opened with, a switch closes it, and the host sends `session` again for the document it wants shared — one `session_id` names one document |
+
+**The named price.** The closed connection's *unconfirmed* operations go with
+it; the local document keeps what was typed, and a rejoin resyncs from the room.
+That is the same price §5.28/§5.29 charge for a forced resync, chosen over
+sending another document's edits into a room. On the desktop the session is
+reopened with `collab.enable`, which already reconnects when none is live; on
+the web the cabinet sends `session` again — it already sends it after an open
+(ADR WC-0004), and a switch repeats that order.
+
+**The gate on the fix** (build host `agents`, 20 cores, rustc 1.99.1,
+2026-11-16; `CRAFT_I18N_DIR=~/craft-i18n`, `CRAFT_FONTS_DIR=~/craft-fonts`), one
+remote session on a clean tree, `.craft/logs/gate-wordcraft-finding9-08f41b43.log`,
+header `== gate wordcraft finding9 08f41b43… 2026-11-16T14:20:04Z`:
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `cargo metadata --locked --format-version 1` | rc 0; `Cargo.lock` sha256 `f03a3508…61c7` before and after |
+| 2 | `cargo fmt --all -- --check` | rc 0, no output |
+| 3 | `cargo clippy -p wordcraft-collab-app -p wordcraft-collab-web -p wordcraft-ui-egui -p wordcraft-web --all-targets -j 4 -- -D warnings` | rc 0 |
+| 4 | `cargo clippy -p wordcraft-ui-egui -p wordcraft-web --target wasm32-unknown-unknown -j 4 -- -D warnings` | **rc 101** on a pre-existing red: `clippy::drop_non_drop` at `crates/fonts/src/fontdb/user.rs:653` (`drop(file)`). This commit does not touch `crates/fonts` (`git diff --stat 59e1eed7 HEAD -- crates/fonts` answers nothing), and the project has no wasm clippy gate — `cargo xtask wasm` is the wasm gate it does run (step 6) |
+| 5 | `cargo check -p wordcraft-web --target wasm32-unknown-unknown -j 8` | rc 0 |
+| 6 | `cargo xtask wasm` | rc 0, 21 crates |
+| 7 | `cargo test -p wordcraft-collab -p wordcraft-collab-app -p wordcraft-collab-web -p wordcraft-ui-egui -p wordcraft-web --lib --tests --no-fail-fast -j 4` | **8 targets, 1467 passed, 0 failed, 3 ignored**; rc 0 |
+
+`EXIT rc1=0 rc2=0 rc3=0 rc4=101 rc5=0 rc6=0 rc7=0` (the header line, the seven
+`== stepN rc=` lines, the totals line and the closing `EXIT` are all in the
+log). The two new tests ran in it:
+`tests::two_documents_in_one_tab_neither_carry_each_others_edits_nor_share_the_queue`
+(`wordcraft-collab-web`, 18 tests in the target, was 17) and
+`host_session::tests::a_second_document_in_the_same_tab_closes_the_firsts_session`
+(`wordcraft-web`, 10 tests, was 9). They are the regression test the finding
+asks for: document 7's connection plans an edit, document 8 becomes the open
+document, the session is reported for closing and its late renewal is refused,
+document 8's session connects with an empty queue, and `carries` is true only
+for the document a connection was opened with.
+
+**State after the run.** The local branch is one commit above `59e1eed7` with
+this documentation commit on top (the code commit `08f41b43` plus this page);
+the tree is clean; nothing was pushed. The fork branch and PR #5834 still
+answer `59e1eed7`. No review thread was answered or resolved, and the PR is
+still `BLOCKED` on the required review.
+
+**What is left.**
+
+- The push of `08f41b43` and this documentation commit belongs to the owner;
+  the head is read from the PR, never from this page (§ header).
+- The cabinet page must send `wordcraft:session` again after a document switch
+  for the new document (mail-frontend owns the page). Until it does, a switch
+  leaves the tab single-user — the documented, honest outcome of the rule, not
+  a broken session.
+- A manual two-document run in the trunk build is still on the list §5.1 names
+  for a person; the headless test proves the routing, not the browser's socket
+  teardown.
+- The desktop guard has no test of its own (a `Collab` needs a socket to exist,
+  and native tests have none): it shares `carries` with the web path, whose
+  routing is tested twice above.
 
 ## 6. Where things live
 

@@ -67,6 +67,22 @@ single-user mode (the rule from `INTEGRATION.md` §6).
    cabinet's order is already document, then session: `index.html?file=…` (or the
    host's `Message::Open`) is handled first, `session` follows. The app cannot
    tell the two apart, so this is a contract on the host, not a race it can win.
+6. **A connection belongs to the document it was opened with** (ADR WC-0010,
+   `STATUS.md` §5.54). When another document becomes active in the same tab — the
+   host's `open`, File › Open, a dropped file, or another open document — the app
+   closes that connection (dropping the `Collab` closes its socket) and says so
+   in the status bar. Its unconfirmed operations go with it; the local document
+   keeps what was typed, and a rejoin resyncs from the room.
+   - To share the new document, the host sends `wordcraft:session` again, for
+     that document, after it is open. One `session_id` names one document: the
+     app refuses a `session` whose id was opened for another document
+     (`Not joining collaboration session …`) instead of joining the new document
+     into the old room.
+   - A repeated `session` for the same id, URL and document is still the
+     credential renewal of ADR WC-0007 and keeps the queue and participants.
+   - `session-state` and `presence` are posted only for the document that is
+     open: after a switch the cabinet sees no state until it opens the next
+     session.
 
 ## Build note
 
