@@ -1395,7 +1395,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=09bed09c2911c51810a90f15496fddd2402c11bd#09bed09c2911c51810a90f15496fddd2402c11bd"
+source = "git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa1c659f271d8605303c#41fb227542efb8a7748caa1c659f271d8605303c"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -1404,7 +1404,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa1c659f271d8605303c#41fb227542efb8a7748caa1c659f271d8605303c"
+source = "git+https://github.com/storytold/craft-libs?rev=6ef2c053dfa758a9e292ff6ce4398bcd84aab1a1#6ef2c053dfa758a9e292ff6ce4398bcd84aab1a1"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -7416,7 +7416,7 @@ name = "wordcraft-geom"
 version = "0.18.1"
 dependencies = [
  "craft-image-codecs",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=09bed09c2911c51810a90f15496fddd2402c11bd)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=6ef2c053dfa758a9e292ff6ce4398bcd84aab1a1)",
  "image",
  "serde",
 ]
