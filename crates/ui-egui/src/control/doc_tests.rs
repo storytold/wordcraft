@@ -131,8 +131,9 @@ fn saved(a: &WordApp) -> Value {
     v
 }
 
-/// #3622: each open document has its own Check Spelling as You Type view; an agent switching to
-/// one opened before the user turned spelling off neither is refused nor changes the saved choice.
+/// #3622: Check Spelling as You Type is one setting for every open document (#5740); an agent
+/// switching to one opened before the user turned spelling off neither is refused nor changes the
+/// saved choice.
 #[test]
 fn switching_documents_keeps_the_saved_spelling_choice() {
     let mut a = app();
@@ -143,7 +144,7 @@ fn switching_documents_keeps_the_saved_spelling_choice() {
     let r = exec(&mut a, "view.switchWindows", json!({"id": first}));
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(a.session.document_id(), first);
-    assert!(a.session.view.proofing, "the first document keeps its own view");
+    assert!(!a.session.view.proofing, "the first document follows the app-wide setting");
     assert_eq!(saved(&a), before, "the user's choice is what is saved");
     assert_eq!(saved(&a)["checkSpelling"], false);
 }

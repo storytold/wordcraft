@@ -53,9 +53,9 @@ fn protecting_preferences_is_off_by_default_and_agents_cannot_turn_it_off() {
     assert_eq!(s.run("file.options", &json!({})).unwrap()["protectPreferences"], true, "reading it still answers");
 }
 
-/// Check Spelling as You Type is shown from the active document's view, and each open document has
-/// its own: switching to a document opened before the user turned spell checking off is not a
-/// preference change, nor is opening a new one.
+/// Check Spelling as You Type is one setting for every open document (#5740): a document made
+/// active takes the saved value. Switching to a document opened before the user turned spell
+/// checking off is not a preference change, nor is opening a new one; turning it back on is.
 #[test]
 fn switching_documents_is_not_a_preference_change() {
     let mut s = Session::new(crate::sample::sample_document());
@@ -64,14 +64,17 @@ fn switching_documents_is_not_a_preference_change() {
     let second = s.document_id();
     s.run("view.switchWindows", &json!({"id": first})).unwrap();
     s.run("review.proofing", &json!({"value": false})).unwrap();
+    assert!(!s.prefs.check_spelling);
     s.preferences_locked = true;
     s.run("view.switchWindows", &json!({"id": second})).unwrap_or_else(|e| panic!("switching while locked: {e}"));
     assert_eq!(s.document_id(), second);
-    assert!(s.view.proofing, "the other document keeps its own view");
+    assert!(!s.view.proofing, "the document switched to follows the app-wide setting");
     s.run("file.new", &json!({})).unwrap_or_else(|e| panic!("file.new while locked: {e}"));
+    assert!(!s.view.proofing, "a new document starts with the setting as it is");
     assert!(!s.prefs.check_spelling, "the saved preference is untouched");
-    // Turning it on in a document is still a preference change.
-    assert!(matches!(s.run("review.proofing", &json!({"value": !s.view.proofing})), Err(CmdError::Disabled(_))));
+    // Turning it back on is still a preference change: refused, and put back.
+    assert!(matches!(s.run("review.proofing", &json!({"value": true})), Err(CmdError::Disabled(_))));
+    assert!(!s.prefs.check_spelling && !s.view.proofing, "the refused change is undone");
 }
 
 #[test]
