@@ -1,17 +1,15 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-16 (this page's branch-side measurement is §5.54, the fix of
-  §5.26 finding 9, on top of the head `59e1eed7` that PR #5834 answers. The PR
-  facts were read at 2026-11-16T14:25Z with `gh pr view 5834 --json
+- Date: 2026-11-16 (this page's branch-side measurement is §5.55: the eleven
+  review threads are answered and the gate on the head is green. The PR facts
+  were read at 2026-11-16T16:48Z with `gh pr view 5834 --json
   headRefOid,mergeStateStatus,mergeable,baseRefOid,updatedAt`:
-  `headRefOid: 59e1eed7ac653201977871677ac745559fb10c37`,
+  `headRefOid: 803e73418de9f114bb9b46ccd2ebbead178832a5`,
   `baseRefOid: fe8a8a838cde68b272ac68429e53049347feab40`,
   `mergeable: MERGEABLE`, `mergeStateStatus: BLOCKED` (the required review),
-  `updatedAt` 2026-11-16T11:45:32Z; `git ls-remote fork
-  refs/heads/feature/realtime-collaboration` answered the same commit. The
-  2026-11-16T03:47Z reading — `headRefOid: e6f34e8c`, `baseRefOid` `cc90520b`,
-  `updatedAt` 2026-11-16T01:14:52Z — was true before `f32a0d3b` and `59e1eed7`
-  were pushed (§5.53).)
+  `reviewDecision: ""`, `updatedAt` 2026-11-16T16:47:44Z. The 14:25Z reading —
+  `headRefOid: 59e1eed7`, `updatedAt` 11:45:32Z — was true before `08f41b43`
+  and `803e7341` were pushed (§5.54, §5.55).)
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft), title "Real-time collaboration:
@@ -5326,6 +5324,36 @@ still `BLOCKED` on the required review.
 - The desktop guard has no test of its own (a `Collab` needs a socket to exist,
   and native tests have none): it shares `carries` with the web path, whose
   routing is tested twice above.
+
+### 5.55 The eleven CodeRabbit threads that waited for a pushed head are answered (run 2026-11-16)
+
+**The head.** Read at 2026-11-16T16:40Z, `gh pr view 5834 --json
+headRefOid,mergeable,state` answers `803e7341`, `MERGEABLE`, `OPEN`; `git
+rev-parse HEAD` matches, the tree is clean and `fork/feature/…` is the same
+commit, so `08f41b43` and its documentation commit are pushed and `951eef4e`
+is an ancestor. The eleven threads whose last comment was CodeRabbit's "the
+head is still `e6f34e8`, GitHub could not find `951eef4e`" are each answered
+against the pushed head with the file, line and regression test that close the
+finding. All sixteen unresolved threads now end with `copoka`; none was
+marked resolved here — that is the reviewer's call on the re-review.
+
+**The gate on that head** (host `agents`, rustc 1.99.1, 16:42:13Z,
+`.craft/logs/gate-wordcraft-803e7341.log`): `cargo metadata --locked` rc 0,
+`fmt --all -- --check` rc 0, `clippy --all-targets -- -D warnings` over the
+eight collab packages rc 0, `cargo test` for the same (`--lib --tests`, ten
+targets) **425 passed, 0 failed, 1 ignored** rc 0. Twelve of the thirteen
+tests the replies name ran in it; the thirteenth,
+`only_enabling_or_moving_the_server_reopens_the_session`
+(`crates/ui-egui/src/collab.rs:458`), ran alone on the same head: 1 passed,
+rc 0. The code here is unchanged since §5.54's gate.
+
+**What is left.** This page's commit is local; the push belongs to the owner,
+and the PR still answers `803e7341`. The re-review of the eleven answers and
+the reviewer's resolve; upstream `main` has moved past the PR base, so the
+next code pass merges it (`git merge-tree` on this head has not been run). One
+gap is named in the answers: `Intent::Resync` in `crates/collab-ws` has no
+test of its own because the crate owns a real socket; lifting the guard into a
+predicate with a unit test is the smallest way to close that.
 
 ## 6. Where things live
 
