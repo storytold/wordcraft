@@ -125,9 +125,11 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
 /// Inline spans → HTML.
 pub fn inlines_html(inlines: &[Inline]) -> String {
     let mut o = String::new();
+    // Nothing visible follows (a bookmark is empty) once past the last non-anchor inline: a
+    // trailing space there would be dropped. Computed once so the scan stays linear.
+    let last_visible = inlines.iter().rposition(|i| !matches!(i, Inline::Anchor(_)));
     for (n, i) in inlines.iter().enumerate() {
-        // Nothing visible follows (a bookmark is empty): a trailing space here would be dropped.
-        let at_end = inlines.get(n + 1..).unwrap_or_default().iter().all(|i| matches!(i, Inline::Anchor(_)));
+        let at_end = last_visible.is_none_or(|l| n >= l);
         match i {
             Inline::Text(t, f) => {
                 let (open, close) = fmt_tags(f);

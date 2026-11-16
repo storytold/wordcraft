@@ -761,3 +761,13 @@ fn trailing_space_survives_round_trip() {
         assert_eq!(back.plain_text(Default::default()).replace('\u{a0}', " "), text);
     }
 }
+
+#[test]
+fn trailing_space_before_many_bookmarks_is_kept() {
+    let mut inlines = vec![Inline::Text("Total: ".into(), Default::default())];
+    inlines.extend((0..60).map(|n| Inline::Anchor(format!("b{n}"))));
+    let html = inlines_html(&inlines);
+    assert!(html.starts_with("Total:&nbsp;<a id=\"b0\">"), "{html}");
+    let back = import(&format!("<p>{html}</p>"));
+    assert_eq!(back.plain_text(Default::default()).replace('\u{a0}', " "), "Total: ");
+}
