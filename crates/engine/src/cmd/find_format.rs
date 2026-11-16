@@ -306,6 +306,17 @@ pub(crate) fn read_with(s: &Session, v: &Value) -> Result<Option<FormatApply>, C
 /// A format-only search with nothing to put in place of the found text would delete it; ask for
 /// replacement text or a `withFormat` instead.
 pub(crate) fn check_replace(s: &Session, with: Option<&FormatApply>) -> Result<(), CmdError> {
+    // A format-only match has no found text: `^&` and group references would expand to nothing
+    // and Replace All would delete the formatted text.
+    if s.find.format.is_some() && s.find.query.is_empty() {
+        let pieces = super::find_pattern::parse_replace(&s.find.replace, &super::edit::find_opts(&s.find));
+        if pieces
+            .iter()
+            .any(|p| matches!(p, super::find_pattern::Piece::Found | super::find_pattern::Piece::Group(_) | super::find_pattern::Piece::Named(_)))
+        {
+            return Err(CmdError::Params("a search by formatting only has no found text for `^&` or a group in `with`".into()));
+        }
+    }
     if s.find.format.is_some() && s.find.query.is_empty() && s.find.replace.is_empty() && with.is_none() {
         return Err(CmdError::Params("replacing found formatting needs `with` text or a `withFormat`".into()));
     }
@@ -403,29 +414,43 @@ fn range_ok(spans: &[(usize, usize, bool)], from: usize, to: usize) -> bool {
     spans.get(k..).unwrap_or_default().iter().take_while(|(start, _, _)| *start < to).all(|(_, _, ok)| *ok)
 }
 
-/// The matches of a text search whose every character has the formatting `f` asks for. The
-/// matches come in document order, so each paragraph's runs are read once.
-pub(crate) fn retain(s: &Session, f: &FormatFilter, found: Vec<Found>) -> Vec<Found> {
-    let mut cache: Option<(Path, Vec<(usize, usize, bool)>)> = None;
-    let mut out = Vec::with_capacity(found.len());
-    for m in found {
-        let ok = if m.a.path == m.b.path {
-            if cache.as_ref().is_none_or(|(path, _)| *path != m.a.path) {
-                cache = Some((m.a.path.clone(), spans(s, f, m.a.story, &m.a.path)));
-            }
-            cache.as_ref().is_some_and(|(_, sp)| range_ok(sp, m.a.off, m.b.off))
-        } else {
-            s.doc.paths_between(&m.a, &m.b).iter().all(|path| {
-                let from = if *path == m.a.path { m.a.off } else { 0 };
-                let to = if *path == m.b.path { m.b.off } else { s.doc.para(m.a.story, path).map_or(0, |p| p.len()) };
-                from >= to || range_ok(&spans(s, f, m.a.story, path), from, to)
-            })
-        };
-        if ok {
-            out.push(m);
-        }
+/// Decides, match by match and in document order, whether a text search's match has the
+/// formatting `f` asks for. A paragraph's runs are read once while the matches stay in it.
+pub(crate) struct Retainer<'a> {
+    s: &'a Session,
+    f: &'a FormatFilter,
+    cache: Option<(Path, Vec<(usize, usize, bool)>)>,
+}
+
+impl<'a> Retainer<'a> {
+    pub(crate) fn new(s: &'a Session, f: &'a FormatFilter) -> Self {
+        Self { s, f, cache: None }
     }
-    out
+
+    /// Whether every character of `m` has the formatting, and, when the match runs across a
+    /// paragraph mark, the mark too (a `^p` match is only as bold as its mark).
+    pub(crate) fn accepts(&mut self, m: &Found) -> bool {
+        let (s, f) = (self.s, self.f);
+        if m.a.path == m.b.path {
+            if self.cache.as_ref().is_none_or(|(path, _)| *path != m.a.path) {
+                self.cache = Some((m.a.path.clone(), spans(s, f, m.a.story, &m.a.path)));
+            }
+            return self.cache.as_ref().is_some_and(|(_, sp)| range_ok(sp, m.a.off, m.b.off));
+        }
+        s.doc.paths_between(&m.a, &m.b).iter().all(|path| {
+            let from = if *path == m.a.path { m.a.off } else { 0 };
+            let to = if *path == m.b.path { m.b.off } else { s.doc.para(m.a.story, path).map_or(0, |p| p.len()) };
+            // Every paragraph but the last has its mark inside the match.
+            (*path == m.b.path || mark_ok(s, f, m.a.story, path)) && (from >= to || range_ok(&spans(s, f, m.a.story, path), from, to))
+        })
+    }
+}
+
+/// Whether the mark of the paragraph at `path` has the formatting.
+fn mark_ok(s: &Session, f: &FormatFilter, story: StoryRef, path: &Path) -> bool {
+    let Some(p) = s.doc.para(story, path) else { return true };
+    let table = table_chr(s, f, story, path);
+    f.run_matches(&s.doc.styles, p.props.style.as_deref(), table.as_ref(), &p.mark)
 }
 
 /// Replace with has formatting and no text: the found text stays and only its formatting changes.

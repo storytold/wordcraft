@@ -288,3 +288,51 @@ fn format_search_and_replace_all_cover_every_paragraph_of_a_big_document() {
     assert_eq!(r["replaced"], n);
     assert_eq!(find_format(&mut s, "cd", json!({"italic": true})).len(), n);
 }
+
+#[test]
+fn format_only_replacement_with_matched_text_code_is_refused_and_changes_nothing() {
+    let mut s = sample();
+    let before = text(&s);
+    for with in ["^&", "^&!"] {
+        assert!(s.run("edit.replaceAll", &json!({"text": "", "format": {"bold": true}, "with": with})).is_err(), "{with}");
+        assert!(s.run("edit.replace", &json!({"text": "", "format": {"bold": true}, "with": with})).is_err(), "{with}");
+        assert_eq!(text(&s), before, "{with}: nothing is deleted");
+    }
+    // `^&` still works when there is text to find, and without special codes it is plain text.
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "beta", "format": {"bold": true}, "with": "^&!"}))["replaced"], 1);
+    assert!(text(&s).contains("beta!"));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "", "format": {"italic": true}, "with": "^&", "special": false}))["replaced"], 1);
+    assert!(text(&s).contains(" ^& "));
+}
+
+#[test]
+fn a_late_formatted_match_is_found_after_many_unformatted_candidates() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": format!("{}\nQa", "a".repeat(100_000))}));
+    format_text(&mut s, "Qa", "format.bold", json!({"value": true}));
+    let r = run(&mut s, "edit.find", json!({"text": "a", "format": {"bold": true}}));
+    assert_eq!(r["count"], 1, "the bold `a` comes after 100,000 plain ones");
+    let r = run(&mut s, "edit.replaceAll", json!({"text": "a", "format": {"bold": true}, "with": "b"}));
+    assert_eq!(r["replaced"], 1);
+    assert!(text(&s).ends_with("\nQb"));
+}
+
+#[test]
+fn a_paragraph_mark_match_needs_the_mark_to_have_the_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "one\ntwo\nthree"}));
+    format_text(&mut s, "on", "format.bold", json!({"value": true}));
+    format_text(&mut s, "hre", "format.bold", json!({"value": true}));
+    // The text around the marks is bold in places, but no mark is bold.
+    run(&mut s, "edit.find", json!({"text": "^p", "format": {"bold": true}}));
+    assert!(s.find.results.is_empty());
+    let before = text(&s);
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "^p", "format": {"bold": true}, "with": ""}))["replaced"], 0);
+    assert_eq!(text(&s), before);
+    // Once the first paragraph's mark is bold, only that mark matches.
+    let path = s.doc.para_paths(StoryRef::Body).first().cloned().unwrap();
+    s.doc.para_mut(StoryRef::Body, &path).unwrap().mark.bold = Some(true);
+    run(&mut s, "edit.find", json!({"text": "^p", "format": {"bold": true}}));
+    assert_eq!(s.find.results.len(), 1);
+    assert_eq!(s.find.results[0].0.path, path);
+}

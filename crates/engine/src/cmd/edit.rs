@@ -487,7 +487,7 @@ pub(crate) fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, Cm
     Ok(search_full(s, story, false)?.into_iter().map(|f| (f.a, f.b)).collect())
 }
 
-fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
+pub(super) fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
     find_pattern::Opts {
         match_case: f.match_case,
         whole_word: f.whole_word,
@@ -519,12 +519,12 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
         }
         return Ok(found);
     }
-    let found = search_text(s, story, with_rep)?;
-    Ok(match &s.find.format {
-        Some(f) => super::find_format::retain(s, f, found),
-        None => found,
-    })
+    search_text(s, story, with_rep)
 }
+
+/// Most text candidates looked at when a format filter drops some of them: the work stays bounded
+/// while the result limit counts only the matches that have the formatting.
+const MAX_CANDIDATES: usize = 2_000_000;
 
 fn search_text(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found>, CmdError> {
     use regex_automata::{Input, meta, util::syntax};
@@ -555,6 +555,8 @@ fn search_text(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found
         }
     }
     let mut out = Vec::new();
+    let mut retainer = s.find.format.as_ref().map(|f| super::find_format::Retainer::new(s, f));
+    let mut candidates = 0usize;
     let mut caps = re.create_captures();
     for chunk in chunks {
         let mut hay = String::new();
@@ -632,8 +634,12 @@ fn search_text(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found
                     let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
                     find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
                 });
-                out.push(Found { a, b, rep });
-                if out.len() >= 100_000 {
+                let found = Found { a, b, rep };
+                candidates += 1;
+                if retainer.as_mut().is_none_or(|r| r.accepts(&found)) {
+                    out.push(found);
+                }
+                if out.len() >= 100_000 || candidates >= MAX_CANDIDATES {
                     return Ok(out);
                 }
             }
