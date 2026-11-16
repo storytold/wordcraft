@@ -133,6 +133,124 @@ fn only_plain_paste_releases_paste_a_clipboard_picture() {
     assert!(!is_paste_special_release(Key::V, m(true, true, true)) && !is_paste_special_release(Key::V, m(true, false, false)));
 }
 
+/// #1537: a browser sends Mod+Shift+V as a paste event; it pastes text only, in the destination's
+/// formatting, though the clipboard also holds bold HTML. Plain Mod+V keeps the HTML's bold.
+#[test]
+fn a_mod_shift_paste_event_keeps_text_only() {
+    for (modifiers, bold) in [(Modifiers::COMMAND | Modifiers::SHIFT, false), (Modifiers::COMMAND, true)] {
+        let services = crate::Services { clipboard_html: Some(Box::new(|| Some("<p><b>external</b></p>".into()))), ..Default::default() };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+        let ctx = egui::Context::default();
+        mods_frame(&ctx, &mut a, modifiers, vec![egui::Event::Paste("external".into())]);
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "external", "{modifiers:?}");
+        let state = a.session.run("format.state", &json!({})).unwrap();
+        assert_eq!(state.get("bold").and_then(serde_json::Value::as_bool) == Some(true), bold, "{modifiers:?}: {state}");
+    }
+}
+
+/// #5616: a browser sends Mod+Shift+V as its key and then a paste event. After Mod+Shift+C the
+/// key pastes the formatting and the paste event that follows doesn't replace the text; a later
+/// Mod+V still pastes.
+#[test]
+fn a_paste_event_after_mod_shift_v_pasted_formatting_is_ignored() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.canvas.paste_event_follows_chord = true;
+    a.run("text.insert", json!({"text": "source target"})).unwrap();
+    a.run("select.text", json!({"text": "source"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copyFormat", json!({})).unwrap();
+    a.run("select.text", json!({"text": "target"})).unwrap();
+    let ctx = egui::Context::default();
+    let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+    mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord), egui::Event::Paste("clipboard text".into())]);
+    let body = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(body(&a), "source target", "the paste event didn't replace the formatted text");
+    let bold = a.session.run("format.state", &json!({})).unwrap().get("bold").and_then(serde_json::Value::as_bool);
+    assert_eq!(bold, Some(true), "the key pasted the formatting");
+    mods_frame(&ctx, &mut a, Modifiers::COMMAND, vec![key_event(Key::V, true, Modifiers::COMMAND), egui::Event::Paste("pasted".into())]);
+    assert_eq!(body(&a), "source pasted", "the next Mod+V pastes");
+}
+
+/// #5616: on a desktop, Mod+Shift+V with nothing copied pastes the text; releasing Shift before V
+/// leaves the V release as plain Mod+V, which mustn't paste a second time through the picture hook.
+/// Likewise after pasting copied formatting.
+#[test]
+fn mod_shift_v_released_shift_first_pastes_once() {
+    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let ctrl = Modifiers { shift: false, ..chord };
+    for formatting in [false, true] {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let services = crate::Services {
+            clipboard_picture: Some(Box::new(move || {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                None
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+        a.canvas.paste_event_follows_chord = false;
+        a.canvas.focused = true;
+        a.run("text.insert", json!({"text": "source target"})).unwrap();
+        if formatting {
+            a.run("select.text", json!({"text": "source"})).unwrap();
+            a.run("format.bold", json!({})).unwrap();
+            a.run("edit.copyFormat", json!({})).unwrap();
+        }
+        // The clipboard holds "source"; "target" is selected.
+        a.run("select.text", json!({"text": "source"})).unwrap();
+        a.run("edit.copy", json!({})).unwrap();
+        a.run("select.text", json!({"text": "target"})).unwrap();
+        let ctx = egui::Context::default();
+        mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord)]);
+        mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::ShiftLeft, false, ctrl)]);
+        mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::V, false, ctrl)]);
+        let body = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert_eq!(body, if formatting { "source target" } else { "source source" }, "formatting={formatting}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0, "formatting={formatting}: the release asked for a picture");
+        // The release used it up: a later plain Mod+V release still pastes a picture.
+        assert!(!a.canvas.pasted);
+    }
+}
+
+/// #5616: Mod+Shift+V pressed with the canvas unfocused (after a ribbon click) runs through the
+/// global shortcuts, and its V release never reaches the canvas: it mustn't leave a paste marked
+/// done that swallows the clipboard picture of a later Mod+V.
+#[test]
+fn a_global_mod_shift_v_leaves_the_next_mod_v_picture_paste_alone() {
+    let ctx = egui::Context::default();
+    let mut a = picture_app();
+    a.canvas.paste_event_follows_chord = false;
+    a.canvas.focused = false;
+    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let events = vec![egui::Event::ModifiersChanged(chord), key_event(Key::V, true, chord)];
+    ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| super::shortcuts::global_shortcuts(&mut a, ui.ctx()))
+        .drop_without_applying_deltas();
+    assert!(!a.canvas.pasted, "no canvas release is coming to use the mark up");
+    a.canvas.focused = true;
+    let ctrl = Modifiers { shift: false, ..chord };
+    mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::V, false, ctrl)]);
+    assert_eq!(pictures(&mut a), 1);
+}
+
+/// #5616: Mod+Shift+V pressed, then focus leaves before V is released: the lost release mustn't
+/// swallow a later Mod+V's picture.
+#[test]
+fn a_focus_change_clears_the_mod_shift_v_paste_mark() {
+    let ctx = egui::Context::default();
+    let mut a = picture_app();
+    a.canvas.paste_event_follows_chord = false;
+    a.canvas.focused = true;
+    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord)]);
+    assert!(a.canvas.pasted);
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![egui::Event::WindowFocused(false)]);
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![egui::Event::WindowFocused(true)]);
+    let ctrl = Modifiers { shift: false, ..chord };
+    mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::V, false, ctrl)]);
+    assert_eq!(pictures(&mut a), 1);
+}
+
 /// An empty document whose clipboard holds a 4 × 4 picture.
 fn picture_app() -> WordApp {
     use crate::paste_picture::ClipboardPicture;
@@ -152,6 +270,129 @@ fn pictures(a: &mut WordApp) -> usize {
 fn mods_frame(ctx: &egui::Context, a: &mut WordApp, modifiers: Modifiers, events: Vec<egui::Event>) {
     let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
     ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| canvas_events(a, ui.ctx())).drop_without_applying_deltas();
+}
+
+/// A source word in bold with Copy Formatting picked up, and "target" selected.
+fn copied_bold_app() -> WordApp {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "source target"})).unwrap();
+    a.run("select.text", json!({"text": "source"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copyFormat", json!({})).unwrap();
+    a.run("select.text", json!({"text": "target"})).unwrap();
+    a
+}
+
+/// #5616: on a desktop no paste event follows Mod+Shift+V's key, so none is swallowed: a later
+/// paste (from a menu, say) pastes.
+#[test]
+fn a_desktop_paste_after_mod_shift_v_is_not_swallowed() {
+    let mut a = copied_bold_app();
+    assert!(!a.canvas.paste_event_follows_chord || cfg!(target_arch = "wasm32"));
+    a.canvas.paste_event_follows_chord = false;
+    let ctx = egui::Context::default();
+    let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+    mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord)]);
+    assert!(!a.canvas.ignore_next_paste);
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![egui::Event::Paste("later".into())]);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "source later");
+}
+
+/// #5616: a pointer press ends the wait for the browser's paste event, so a later keyless paste
+/// (context menu, touch) isn't swallowed.
+#[test]
+fn a_pointer_press_ends_the_wait_for_the_ignored_paste() {
+    let mut a = copied_bold_app();
+    a.canvas.ignore_next_paste = true;
+    let ctx = egui::Context::default();
+    let press =
+        egui::Event::PointerButton { pos: egui::pos2(5.0, 5.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![press]);
+    assert!(!a.canvas.ignore_next_paste);
+}
+
+/// #5616: the modifiers noted for a paste are used up by it: a later paste with no Mod held
+/// keeps the HTML's formatting instead of reading the stale Mod+Shift.
+#[test]
+fn a_paste_event_uses_up_the_noted_paste_modifiers() {
+    let services = crate::Services { clipboard_html: Some(Box::new(|| Some("<p><b>external</b></p>".into()))), ..Default::default() };
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    let ctx = egui::Context::default();
+    mods_frame(&ctx, &mut a, Modifiers::COMMAND | Modifiers::SHIFT, vec![egui::Event::Paste("external".into())]);
+    assert!(a.canvas.paste_mods.is_none());
+    a.run("select.all", json!({})).unwrap();
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![egui::Event::Paste("external".into())]);
+    let bold = a.session.run("format.state", &json!({})).unwrap().get("bold").and_then(serde_json::Value::as_bool);
+    assert_eq!(bold, Some(true), "the later paste was a plain paste");
+}
+
+/// #5616: the dropped browser paste uses up its Mod+Shift, so a later menu-bar paste with no key
+/// or pointer press in between isn't read as Keep Text Only.
+#[test]
+fn the_ignored_paste_uses_up_its_paste_modifiers() {
+    let mut a = copied_bold_app();
+    a.canvas.paste_event_follows_chord = true;
+    let ctx = egui::Context::default();
+    let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+    mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord), egui::Event::Paste("x".into())]);
+    assert!(!a.canvas.ignore_next_paste);
+    assert!(a.canvas.paste_event_mods.is_none());
+}
+
+/// #5616: with no text on the clipboard the browser sends no paste event after Mod+Shift+V; the
+/// wait for it ends, so a later menu-bar paste with no key or pointer press in between pastes.
+#[test]
+fn a_menu_bar_paste_after_an_unpaired_mod_shift_v_pastes() {
+    let mut a = copied_bold_app();
+    a.canvas.paste_event_follows_chord = true;
+    let ctx = egui::Context::default();
+    let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+    let frame = |a: &mut WordApp, time: f64, events: Vec<egui::Event>| {
+        ctx.run_ui(egui::RawInput { time: Some(time), events, ..Default::default() }, |ui| canvas_events(a, ui.ctx())).drop_without_applying_deltas();
+    };
+    frame(&mut a, 10.0, vec![egui::Event::ModifiersChanged(chord), key_event(Key::V, true, chord)]);
+    assert!(a.canvas.ignore_next_paste, "the key waits for its paired paste");
+    // No Mod release reaches the canvas (the menu bar takes it).
+    frame(&mut a, 10.5, vec![]);
+    assert!(a.canvas.ignore_next_paste, "still within the wait");
+    frame(&mut a, 12.0, vec![]);
+    assert!(!a.canvas.ignore_next_paste, "the wait is over");
+    assert!(a.canvas.paste_event_mods.is_none(), "the chord's Mod+Shift is used up");
+    frame(&mut a, 12.1, vec![egui::Event::Paste("menu".into())]);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "source menu", "the menu-bar paste pasted");
+}
+
+/// #5616: the browser paste event after a formatting paste is dropped before an open equation
+/// can type it.
+#[test]
+fn the_ignored_paste_event_never_reaches_an_open_equation() {
+    let mut a = copied_bold_app();
+    a.canvas.paste_event_follows_chord = true;
+    a.run("insert.equation", json!({"linear": "abc"})).unwrap();
+    a.canvas.ignore_next_paste = true;
+    let ctx = egui::Context::default();
+    let before = a.session.math.clone();
+    mods_frame(&ctx, &mut a, Modifiers::COMMAND, vec![egui::Event::Paste("zzz".into())]);
+    assert_eq!(a.session.math, before, "the ignored paste typed nothing into the equation");
+    assert!(!a.canvas.ignore_next_paste);
+}
+
+/// #5616: only Mod+Shift+V leaves a browser paste event; Paste Formatting on another key neither
+/// arms the ignore flag nor waits for a paste.
+#[test]
+fn paste_formatting_on_another_key_leaves_no_paste_to_ignore() {
+    for formatting in [true, false] {
+        let mut a = if formatting {
+            copied_bold_app()
+        } else {
+            WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default())
+        };
+        a.canvas.paste_event_follows_chord = true;
+        a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Alt+P": "edit.pasteFormat"}}));
+        let m = Modifiers::COMMAND | Modifiers::ALT;
+        super::shortcuts::dispatch(&mut a, Key::P, m);
+        assert!(!a.canvas.ignore_next_paste, "formatting={formatting}");
+    }
 }
 
 /// A press or release of `key` with `modifiers`.
@@ -374,6 +615,108 @@ fn altgr_types_its_characters_without_keytips() {
     frame(&mut a, vec![key(Key::AltRight, true, none), egui::Event::ModifiersChanged(alt)]);
     frame(&mut a, vec![key(Key::AltRight, false, alt), egui::Event::ModifiersChanged(none)]);
     assert_eq!(a.ui.keytips, crate::keytips::Phase::Tabs);
+}
+
+/// The Find dialog's Find what box, after the frames that open the dialog and focus the box.
+fn find_box_harness() -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.dialog = crate::dialogs::Dialog::open("find", &mut a);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// What the Find dialog's Find what box holds.
+fn find_box(h: &egui_kittest::Harness<'static, WordApp>) -> String {
+    match &h.state().dialog {
+        Some(crate::dialogs::Dialog::Find { query, .. }) => query.clone(),
+        _ => panic!("the Find dialog is open"),
+    }
+}
+
+/// One frame: Alt held, `digits` pressed and released (with their text, as Linux sends it, when
+/// `digit_text`), Alt let go; then `after`, which a platform may send once Alt is up.
+fn alt_code_frame(h: &mut egui_kittest::Harness<'static, WordApp>, digits: &str, digit_text: bool, after: &[&str]) {
+    let alt = Modifiers { alt: true, ..Default::default() };
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+    h.event(egui::Event::ModifiersChanged(alt));
+    h.event(key(Key::AltLeft, true, alt));
+    for d in digits.chars() {
+        let k = Key::from_name(&d.to_string()).expect("a digit key");
+        h.event(key(k, true, alt));
+        if digit_text {
+            h.event(egui::Event::Text(d.to_string()));
+        }
+        h.event(key(k, false, alt));
+    }
+    h.event(key(Key::AltLeft, false, alt));
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    for t in after {
+        h.event(egui::Event::Text((*t).to_string()));
+    }
+    h.step();
+}
+
+/// #4403: an Alt code typed in a text box (here Find what) types its character there, as on the
+/// page. Before, the box got the digits (Linux sends their text with Alt held), or on Windows only
+/// what the system composes, a byte for a code above 255. The page's text is left alone.
+#[test]
+fn alt_code_types_its_character_in_a_text_box() {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    // The code pages the page's Alt codes use (`text.typeCode`).
+    let (ansi, oem) = if cfg!(target_os = "windows") {
+        wordcraft_engine::cmd::text::system_code_pages()
+    } else {
+        (1252, wordcraft_engine::cmd::text::system_oem_code_page())
+    };
+    let ch = |code| wordcraft_engine::cmd::text::alt_code_char(code, ansi, oem).expect("a character code").to_string();
+    let mut h = find_box_harness();
+    assert_eq!(find_box(&h), "");
+    // Linux: each digit's text arrives too; none of it is typed.
+    alt_code_frame(&mut h, "0233", true, &[]);
+    let mut want = ch("0233");
+    assert_eq!(find_box(&h), want);
+    // Above 255 the code is the Unicode character's (Word's €), and a platform's echo of the
+    // same character isn't typed twice.
+    alt_code_frame(&mut h, "8364", false, &["\u{20AC}"]);
+    want.push('\u{20AC}');
+    assert_eq!(find_box(&h), want);
+    // Windows composes a code itself: up to 255 its character replaces ours (it knows the code
+    // pages), above that ours stays (it reduces the code to a byte). Elsewhere text after the
+    // release is typed as it comes.
+    alt_code_frame(&mut h, "0199", false, &["\u{1E9E}"]);
+    alt_code_frame(&mut h, "9731", false, &["X"]);
+    if cfg!(target_os = "windows") {
+        want.push_str("\u{1E9E}\u{2603}");
+    } else {
+        want.push_str(&format!("{}\u{1E9E}\u{2603}X", ch("0199")));
+    }
+    assert_eq!(find_box(&h), want);
+    // A code we name no character for (past Unicode here; a double-byte lead byte on Windows)
+    // types nothing of ours, and the character the system composes for it is typed, not taken
+    // for a digit's text. Windows sends no digit text; Linux does.
+    assert_eq!(wordcraft_engine::cmd::text::alt_code_char("1114112", ansi, oem), None);
+    alt_code_frame(&mut h, "1114112", !cfg!(target_os = "windows"), &["Y"]);
+    want.push('Y');
+    assert_eq!(find_box(&h), want);
+    // Digits without Alt type themselves; a bare Alt tap types nothing and opens no keytips.
+    h.event(egui::Event::Key { key: Key::Num5, physical_key: Some(Key::Num5), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.event(egui::Event::Text("5".into()));
+    h.step();
+    alt_code_frame(&mut h, "", false, &[]);
+    want.push('5');
+    assert_eq!(find_box(&h), want);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "", "the page typed nothing");
 }
 
 fn alt_frame_app() -> (egui::Context, WordApp) {
@@ -1232,4 +1575,43 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     a.run("edit.undo", json!({})).unwrap();
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
+}
+
+/// #5616: modifiers recorded for an unrelated key (Mod+Shift+C) don't steer a later keyless paste,
+/// whether Mod was released or is still held with no change event.
+#[test]
+fn an_unrelated_keys_modifiers_do_not_steer_a_later_paste() {
+    for mod_still_held in [false, true] {
+        let services = crate::Services { clipboard_html: Some(Box::new(|| Some("<p><b>external</b></p>".into()))), ..Default::default() };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+        let ctx = egui::Context::default();
+        let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+        mods_frame(&ctx, &mut a, chord, vec![key_event(Key::C, true, chord)]);
+        // Shift released, Mod still held: Mod+C's chord isn't the paste's modifiers.
+        let after = if mod_still_held { Modifiers::COMMAND } else { Modifiers::NONE };
+        mods_frame(&ctx, &mut a, after, vec![egui::Event::Paste("external".into())]);
+        let bold = a.session.run("format.state", &json!({})).unwrap().get("bold").and_then(serde_json::Value::as_bool);
+        assert_eq!(bold, Some(true), "held={mod_still_held}: a plain paste keeps the HTML's bold");
+    }
+}
+
+#[test]
+fn delete_previous_sentence_shortcut_dispatches_and_can_be_reassigned() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("text.insert", json!({"text": "First. Second sentence.", "raw": true})).unwrap();
+    let mods = if cfg!(target_os = "macos") {
+        Modifiers { mac_cmd: true, command: true, shift: true, ..Default::default() }
+    } else {
+        Modifiers { ctrl: true, command: true, shift: true, ..Default::default() }
+    };
+    assert!(dispatch(&mut app, Key::Backspace, mods));
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. ");
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(dispatch(&mut app, Key::Backspace, Modifiers { shift: false, ..mods }));
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. Second ");
+    app.run("edit.undo", json!({})).unwrap();
+    app.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Shift+Backspace": "select.all"}}));
+    assert!(dispatch(&mut app, Key::Backspace, mods));
+    assert!(!app.session.sel.is_collapsed());
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. Second sentence.");
 }

@@ -13,13 +13,16 @@ use super::{
 mod commands;
 mod control;
 mod files;
+#[cfg(test)]
+pub(crate) use files::suggested_stem;
 mod fonts;
 mod frame;
 mod input;
 mod pictures;
 mod prefs;
 
-pub(crate) use commands::{discards_document, works_without_document};
+pub(crate) use commands::works_without_document;
+pub(crate) use frame::STATUS_MS;
 pub(crate) use input::control_click_as_secondary;
 
 impl WordApp {
@@ -38,6 +41,7 @@ impl WordApp {
             dialog,
             colors,
             restrict,
+            spelling_review,
             status_msg,
             previews,
             change_picture_target,
@@ -53,7 +57,10 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
+            print_memo,
+            missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -96,11 +103,14 @@ impl WordApp {
                 ..UiState::default()
             },
             services,
+            clipboard_published: false,
             printing: Default::default(),
             print_feedback_seen: None,
+            print_gen: 0,
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
+            packs_rt: Default::default(),
             control_rx: None,
             shots: crate::control::Shots::default(),
             capture_epoch: 0,
@@ -109,17 +119,23 @@ impl WordApp {
             synthetic: Vec::new(),
             synthetic_pending: false,
             synthetic_injected: 0,
+            raw_scroll_events_scaled: 0,
+            last_scaled_scroll_events: Vec::new(),
             styled: false,
             fonts_hans: false,
             fonts_korean: false,
             fonts_hant: false,
             fonts_system_cjk: false,
+            fonts_system_arabic: false,
             want_system_cjk: false,
+            want_system_arabic: false,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
             fonts_frames: 0,
             applied_theme: None,
             native_scale: 1.0,
+            auto_scale_limit: f32::INFINITY,
+            monitor_zoom: 1.0,
             legacy_interface_size: None,
             // Inert until the app binary calls `watch_desktop_theme`.
             desktop_theme: desktop_theme::DesktopTheme::default(),
@@ -148,6 +164,7 @@ impl WordApp {
             dialog,
             colors,
             restrict,
+            spelling_review,
             status_msg,
             previews,
             change_picture_target,
@@ -163,7 +180,10 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
+            print_memo,
+            missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -208,6 +228,12 @@ impl WordApp {
         self.no_document != Some(self.session.document_id())
     }
 
+    /// Whether a modal dialog is open: the rest of the window takes no clicks, keys or
+    /// shortcuts until it closes (#3859).
+    pub(crate) fn modal_open(&self) -> bool {
+        self.file_browser_open() || self.dialog.as_ref().is_some_and(crate::dialogs::Dialog::is_modal) || self.colors.is_some()
+    }
+
     /// Terminal feedback also reaches the normal window when printing starts through control.
     pub fn poll_printing(&mut self, ctx: &egui::Context) {
         self.printing.poll(ctx);
@@ -216,9 +242,14 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
+        // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
+        ctx.add_plugin(super::a11y::FocusGuard);
         updates_ui::tick(self, ctx);
+        crate::language_packs::tick(self);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
+        crate::rtl::sync(ctx);
         // New documents are written in the interface's language when WordCraft can proof it
         // (a Polish interface: Polish spelling, grammar and hyphenation from the first word).
         // An English interface writes the region's English (English (UK) on a British system,
@@ -277,9 +308,33 @@ impl WordApp {
         {
             self.ui.interface_size = theme::migrate_legacy_interface_size(old, native);
         }
-        let zoom = self.ui.interface_size.zoom_factor(self.native_scale);
+        // Auto never draws larger than the screen holds (#4030): a system that guesses 3× on a
+        // 1366x768 panel would put the window's controls off screen. The zoom is shared by every
+        // window, so the smallest screen of all the open windows sets the cap. A viewport's
+        // `monitor_size` is in points of the zoom in force before a pending change applied, so
+        // its pixels are that size times `monitor_zoom` and the window's own native scale; each window's allowed zoom is its own, the smallest is shared.
+        let monitors: Vec<_> = self
+            .windows
+            .viewport_ids()
+            .into_iter()
+            .filter_map(|v| {
+                ctx.input_for(v, |i| {
+                    let info = i.viewport();
+                    Some(((info.monitor_size?.x, info.monitor_size?.y), info.native_pixels_per_point?))
+                })
+            })
+            .collect();
+        self.auto_scale_limit = theme::auto_scale_limit_over(monitors, self.monitor_zoom, self.native_scale);
+        self.monitor_zoom = ctx.zoom_factor();
+        let zoom = self.ui.interface_size.zoom_factor_within(self.native_scale, self.auto_scale_limit);
         if ctx.zoom_factor() != zoom {
             ctx.set_zoom_factor(zoom);
+        }
+        // Mouse-wheel line scroll speed (#6146): scales egui's own scroll areas.
+        let base_line_speed = egui::InputOptions::default().line_scroll_speed;
+        let target_line_speed = base_line_speed * self.ui.scroll_speed.wheel_factor();
+        if (ctx.options(|o| o.input_options.line_scroll_speed) - target_line_speed).abs() > 1e-4 {
+            ctx.options_mut(|o| o.input_options.line_scroll_speed = target_line_speed);
         }
         // Animation effects: the host is asked every frame what the system says (it answers from
         // memory), so a change made in the system's settings is followed without a restart.
@@ -329,6 +384,7 @@ impl WordApp {
         if !native {
             self.window_input(ctx);
         }
+        self.sync_viewport_input(ctx);
         self.send_control_input(ctx);
         // Screenshot deadlines, geometry and completions belong to `logic`; issuing the one
         // callback command belongs to `ui` (`flush_shot_and_synthetic`). A queued/settling capture
@@ -357,6 +413,7 @@ impl WordApp {
     /// Read Aloud, its file dialog, AutoSave of its document. Runs in [`WordApp::logic`] for the
     /// active window and, with native windows, as each window draws.
     pub(crate) fn window_work(&mut self, ctx: &egui::Context) {
+        crate::windows::arrange::poll(self, ctx);
         if self.windows.native() {
             let doc = self.session.document_id();
             if self.print_document.is_none_or(|d| d == doc || !self.session.is_open(d)) {
@@ -378,6 +435,15 @@ impl WordApp {
     /// Pane's Tab keys and dropped files are read in the first UI pass
     /// ([`WordApp::handle_ui_input_events`]).
     pub(crate) fn window_input(&mut self, ctx: &egui::Context) {
+        // The way back when a large interface size has pushed File › Options off screen (#4030).
+        // A modal dialog keeps the keys (Customize Keyboard records them), and a command the user
+        // bound to the chord runs instead.
+        if !self.modal_open()
+            && self.session.keymap.resolve(&self.session.registry, "Mod+Shift+0").is_none()
+            && ctx.input_mut(super::consume_reset_interface_size)
+        {
+            let _ = self.run("ui.interfaceSize", serde_json::json!({"value": "auto"}));
+        }
         if self.windows.native() && ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
             self.quit();
         }
@@ -392,6 +458,7 @@ impl WordApp {
     /// Lay out the windows: on the desktop each open document's in its own native window
     /// ([`windows`]), on the web the one window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        self.clear_raw_scroll_replay();
         if self.windows.native() {
             self.windows_ui(ui);
         } else {
@@ -421,14 +488,21 @@ impl WordApp {
             return;
         }
         let t = theme::Tokens::get(&ctx);
-        self.escape_free = self.dialog.is_none() && !self.ui.backstage && self.ui.keytips == keytips::Phase::Off && !egui::Popup::is_any_open(&ctx);
+        self.escape_free = self.dialog.is_none()
+            && !self.ui.backstage
+            && self.ui.keytips == keytips::Phase::Off
+            && !egui::Popup::is_any_open(&ctx)
+            && !crate::chrome::title_search_open(self, &ctx);
         // Keytips are read before layout so the frame paints the new state; badges paint after
         // the ribbon so they sit on top of it.
         crate::keytips::logic(self, &ctx);
+        // Alt codes in a text box are read before the box is drawn, so it types the character.
+        crate::keys::field_alt_codes(self, &ctx);
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);
             backstage::forget_save_as_error(&ctx);
+            self.export_error.clear();
         }
         self.paint_window(ui, &ctx, t);
         if !moved(self) {
