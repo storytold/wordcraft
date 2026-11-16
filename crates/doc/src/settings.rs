@@ -167,10 +167,22 @@ pub struct Settings {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
     /// The document was opened from ODF: the standard's rules that differ from Word's apply as
-    /// it is laid out, with the choices it leaves open made as the user's profile made them
-    /// (see [`crate::odf_profile`]).
+    /// it is laid out.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub odf: Option<crate::odf_profile::OdfLayout>,
+    pub odf: Option<OdfLayout>,
+}
+
+/// A document opened from ODF, for the layout: rules of the standard that differ from Word's (a
+/// paragraph's padding takes room on a side without a border, XSL's box model) apply, and what
+/// the file says about laying it out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OdfLayout {
+    /// Tab stops are measured from the paragraph's left indent, default ones too (LibreOffice's
+    /// `TabsRelativeToIndent` in the file; from the margin when it doesn't say). The document's
+    /// explicit stops are held from the margin either way; the default ones are counted from the
+    /// indent.
+    pub tabs_from_indent: bool,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).

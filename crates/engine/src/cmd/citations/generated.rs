@@ -72,7 +72,7 @@ const MAX_WRAPPED: usize = 10_000;
 /// A generated list (index, bibliography, table of figures or authorities) held as a complex
 /// field that starts at body block `i` and runs over its entries: its field code and the block
 /// it ends in. `None` for anything else (a TOC has its own update).
-fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize, usize)> {
+fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize, usize, usize)> {
     let p = s.doc.body.get(i)?.as_para()?;
     let (k, off, instr) = p.objects_with_offsets().enumerate().find_map(|(k, (off, o))| match o {
         InlineObject::FieldStart { instr, .. } => {
@@ -97,7 +97,7 @@ fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize, usize)> {
                 InlineObject::FieldEnd => {
                     depth = depth.saturating_sub(1);
                     if depth == 0 {
-                        return Some((instr, j, at + wordcraft_doc::para::OBJ.len_utf8()));
+                        return Some((instr, off, j, at + wordcraft_doc::para::OBJ.len_utf8()));
                     }
                 }
                 _ => {}
@@ -108,13 +108,18 @@ fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize, usize)> {
 }
 
 fn list_kind(p: &Paragraph) -> Option<String> {
-    p.objects.iter().find_map(|o| match o {
+    p.objects.iter().find_map(list_field)
+}
+
+/// The field code of `o` when it is a generated list's field.
+fn list_field(o: &InlineObject) -> Option<String> {
+    match o {
         InlineObject::Field { instr, .. } => {
             let t = instr.trim_start();
             (t.starts_with("BIBLIOGRAPHY") || t.starts_with("INDEX") || t.starts_with("TOA") || figures_label(t).is_some()).then(|| t.to_string())
         }
         _ => None,
-    })
+    }
 }
 
 /// The caption label (SEQ identifier) a table-of-figures field lists, `\c` or `\a`.
@@ -198,12 +203,15 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
         // field's own paragraph, as WordCraft inserts one, its old entries rebuilt below.
         // What follows its closing field end, and its first paragraph's properties and section
         // break, are the document's and stay.
-        if let Some((instr, last, end)) = wrapped_list(s, i) {
+        // (The field it is made: what comes before it in its paragraph may hold other fields.)
+        let mut converted = None;
+        if let Some((instr, start, last, end)) = wrapped_list(s, i) {
             // The entries between its first and last paragraphs go.
             for _ in i.saturating_add(1)..last {
                 s.doc.remove_block(StoryRef::Body, &Path::top(i + 1))?;
             }
-            // Its first paragraph keeps only the field; its last (or, ending in its first, the
+            // Its first paragraph keeps what comes before the field (bookmarks, other fields)
+            // and the field; its last (or, ending in its first, the
             // same) loses what is up to and through the field end, and goes when nothing is left
             // of it and it ends no section.
             let first_end = if last > i {
@@ -217,28 +225,38 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
                 end
             };
             let p = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
-            p.delete(0, first_end)?;
+            p.delete(start, first_end)?;
+            converted = Some(instr.trim_start().to_string());
             p.insert_object(
-                0,
+                start,
                 InlineObject::Field { instr, result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
                 &Default::default(),
             )?;
             // What followed the field end in its own paragraph comes after the list, in a
             // paragraph of its own that takes the section break.
-            let field = wordcraft_doc::para::OBJ.len_utf8();
+            let field = start + wordcraft_doc::para::OBJ.len_utf8();
             if p.len() > field {
                 let rest = p.split_off(field)?;
                 s.doc.insert_block(StoryRef::Body, &Path::top(i + 1), Block::Para(rest))?;
             }
+            // Another list's field before it would be the paragraph's list on later updates (and
+            // have its shown list cleared with this one's): the list gets a paragraph of its own,
+            // after it, and each is rebuilt in its turn.
+            let p = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
+            if p.objects_with_offsets().any(|(off, o)| off < start && list_field(o).is_some()) {
+                let list = p.split_off(start)?;
+                s.doc.insert_block(StoryRef::Body, &Path::top(i + 1), Block::Para(list))?;
+                converted = None;
+            }
         }
-        let kind = s.doc.body.get(i).and_then(|b| b.as_para()).and_then(list_kind);
+        let kind = converted.or_else(|| s.doc.body.get(i).and_then(|b| b.as_para()).and_then(list_kind));
         let Some(kind) = kind else {
             i += 1;
             continue;
         };
         add_entry_style(s);
         if kind.starts_with("INDEX") {
-            crate::cmd::index::rebuild(s, i, None)?;
+            crate::cmd::index::rebuild_from(s, i, None, kind)?;
             i += 1;
             continue;
         }
@@ -432,7 +450,7 @@ mod tests {
             p.insert_object(n, InlineObject::FieldEnd, &props).unwrap();
         }
         let s = Session::new(d);
-        assert_eq!(wrapped_list(&s, 0).map(|(instr, last, _)| (instr, last)), Some(("BIBLIOGRAPHY".to_string(), 1)));
+        assert_eq!(wrapped_list(&s, 0).map(|(instr, _, last, _)| (instr, last)), Some(("BIBLIOGRAPHY".to_string(), 1)));
     }
 
     /// A wrapped list as a session holds it: the field starting paragraph `first`'s text, ending
@@ -486,5 +504,57 @@ mod tests {
         assert!(t.first().is_some_and(|t| !t.contains("Old")), "{t:?}");
         assert_eq!(t.get(1).map(String::as_str), Some(" Then this"), "{t:?}");
         assert_eq!(t.last().map(String::as_str), Some("Below"));
+    }
+
+    /// What comes before a wrapped list's field in its first paragraph (a bookmark, an empty
+    /// `PAGE` field) stays there, before the rebuilt list's field.
+    #[test]
+    fn what_comes_before_a_wrapped_lists_field_stays() {
+        let mut s = wrapped("Old one\nOld two\nBelow", 0, 1, "Old two".len());
+        let props = CharProps::default();
+        if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(0)) {
+            p.insert_object(0, InlineObject::FieldEnd, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::BookmarkStart { name: "Sources".into() }, &props).unwrap();
+        }
+        update_generated(&mut s).unwrap();
+        let first = s.doc.body.first().and_then(|b| b.as_para());
+        let kinds: Vec<&str> = first
+            .map(|p| {
+                p.objects
+                    .iter()
+                    .map(|o| match o {
+                        InlineObject::BookmarkStart { .. } => "bookmark",
+                        InlineObject::FieldStart { instr, .. } if instr == "PAGE" => "page",
+                        InlineObject::FieldEnd => "end",
+                        InlineObject::Field { instr, .. } if instr.starts_with("BIBLIOGRAPHY") => "list",
+                        _ => "other",
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(kinds, ["bookmark", "page", "end", "list"]);
+        assert_eq!(texts(&s), ["", "Below"]);
+    }
+
+    /// A list field before a wrapped list's field in its paragraph doesn't take its place: the
+    /// wrapped list is the one rebuilt.
+    #[test]
+    fn a_wrapped_list_is_rebuilt_as_itself_after_another_list_field() {
+        let mut s = wrapped("Old one\nOld two\nBelow", 0, 1, "Old two".len());
+        s.doc.sources.push(wordcraft_doc::Source { tag: "a".into(), kind: "book".into(), title: "Listed Source".into(), ..Default::default() });
+        let index =
+            InlineObject::Field { instr: "INDEX".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() };
+        if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(0)) {
+            p.insert_object(0, index, &CharProps::default()).unwrap();
+        }
+        // Updated again, each list stays itself.
+        for _ in 0..2 {
+            update_generated(&mut s).unwrap();
+            let t = texts(&s);
+            assert_eq!(t.iter().filter(|t| t.contains("Listed Source")).count(), 1, "the bibliography was rebuilt: {t:?}");
+            let lists: Vec<Option<String>> = s.doc.body.iter().filter_map(|b| b.as_para()).filter_map(list_kind).map(Some).collect();
+            assert_eq!(lists, [Some("INDEX".to_string()), Some("BIBLIOGRAPHY".to_string())]);
+        }
     }
 }

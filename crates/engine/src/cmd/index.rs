@@ -265,6 +265,12 @@ pub fn rebuild(s: &mut Session, i: usize, leader: Option<TabLeader>) -> Result<(
     }) else {
         return Ok(());
     };
+    rebuild_from(s, i, leader, instr)
+}
+
+/// [`rebuild`] the index at body block `i` from field code `instr` (that of the index field in
+/// it, when the paragraph holds more than one).
+pub fn rebuild_from(s: &mut Session, i: usize, leader: Option<TabLeader>, instr: String) -> Result<(), CmdError> {
     let f = FieldCode::parse(&instr);
     // Old entries go; keep their leader and the section their columns had.
     let mut old_leader = None;

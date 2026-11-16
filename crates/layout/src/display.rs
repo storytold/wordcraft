@@ -81,9 +81,12 @@ pub enum Draw {
         rect: Rect,
         media: String,
         crop: [f32; 4],
+        /// Opacity, the picture's own transparency folded in.
         alpha: f32,
         /// The picture's alt text (empty for a floating or diagram picture, which tag themselves).
         alt: String,
+        /// Brightness and contrast to apply to the pixels (transparency is in `alpha`).
+        fx: wordcraft_doc::picfx::PicFx,
         /// Marked decorative (Alt Text › Mark as decorative): an artifact in tagged PDF, which
         /// screen readers skip. Always `false` for a floating or diagram picture, as `alt`.
         decorative: bool,

@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 pub struct Prefs {
     /// Word Count includes text boxes, footnotes and endnotes (Word's default).
     pub count_notes: bool,
+    /// On-screen paper for pages without a document background; excluded from saved documents.
+    #[serde(deserialize_with = "lenient_paper_color")]
+    pub paper_color: crate::cmd::view::PaperColor,
     /// Track Changes Options: what markup shows and how revisions are drawn (per user, as in
     /// Word).
     pub markup: wordcraft_layout::display::MarkupOptions,
@@ -59,22 +62,12 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
-    /// How OpenDocument files fill in what their standard leaves to the application: WordCraft's
-    /// choices, LibreOffice's, or the user's own (File › Options › Advanced, `file.options`'s
-    /// `odf`; see `docs/odf-interpretation.md`). A damaged saved value reads as WordCraft's.
-    #[serde(deserialize_with = "lenient_odf")]
-    pub odf: wordcraft_doc::odf_profile::OdfProfile,
-}
-
-/// A saved ODF profile that doesn't read (an older or damaged one) is WordCraft's.
-fn lenient_odf<'de, D: serde::Deserializer<'de>>(d: D) -> Result<wordcraft_doc::odf_profile::OdfProfile, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {
+            paper_color: Default::default(),
             count_notes: true,
             markup: Default::default(),
             print_markup: false,
@@ -95,7 +88,6 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
-            odf: Default::default(),
         }
     }
 }
@@ -115,6 +107,11 @@ impl Prefs {
 fn lenient_default_language<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     let value = serde_json::Value::deserialize(d)?;
     Ok(value.as_str().and_then(wordcraft_proof::lang::normalize_tag))
+}
+
+fn lenient_paper_color<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::cmd::view::PaperColor, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 /// Ignore an invalid saved Page Color without discarding other preferences.

@@ -103,7 +103,16 @@ impl Ctx {
             b.glyph = Some((face, g, attach));
         }
         if !glyphs.is_empty() {
-            b.items.push(MItem::Glyphs { face, size, color, synth_bold: synth.0, synth_italic: synth.1, glyphs, text: text.to_string() });
+            b.items.push(MItem::Glyphs {
+                face,
+                size,
+                color,
+                synth_bold: synth.0,
+                synth_italic: synth.1,
+                glyphs,
+                text: text.to_string(),
+                ranges: crate::missing::cluster_ranges(text, &shaped),
+            });
         }
         b
     }
@@ -132,7 +141,16 @@ impl Ctx {
         if let Some(t) = &self.t {
             b.ic = t.italics.get(&gid).copied().unwrap_or(0.0) * k;
         }
-        b.items.push(MItem::Glyphs { face, size, color, synth_bold: false, synth_italic: false, glyphs: vec![(gid, 0.0, 0.0)], text: String::new() });
+        b.items.push(MItem::Glyphs {
+            face,
+            size,
+            color,
+            synth_bold: false,
+            synth_italic: false,
+            glyphs: vec![(gid, 0.0, 0.0)],
+            text: String::new(),
+            ranges: Vec::new(),
+        });
         b
     }
 
@@ -227,7 +245,16 @@ impl Ctx {
         } else {
             b.w = pos * k;
         }
-        b.items.push(MItem::Glyphs { face: self.face, size, color: self.color, synth_bold: false, synth_italic: false, glyphs, text: String::new() });
+        b.items.push(MItem::Glyphs {
+            face: self.face,
+            size,
+            color: self.color,
+            synth_bold: false,
+            synth_italic: false,
+            glyphs,
+            text: String::new(),
+            ranges: Vec::new(),
+        });
         Some(b)
     }
 
