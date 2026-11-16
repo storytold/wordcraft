@@ -2,6 +2,7 @@
 //! does whenever it shows, prints or exports one (#1672). Packages are hand-written: the writer
 //! would never produce the stale cached result this is about.
 
+#[cfg(feature = "legacy-doc")]
 use std::io::Write;
 
 use wordcraft_doc::{InlineObject, StoryRef};
@@ -131,6 +132,7 @@ fn a_date_field_in_a_header_is_refreshed_too() {
 
 /// A minimal Word 97-2003 file whose only paragraph holds a `DATE` field cached as " 2001":
 /// FIB, one compressed text piece, and the Clx that points at it.
+#[cfg(feature = "legacy-doc")]
 fn binary_doc_with_stale_date() -> Vec<u8> {
     const TEXT_FC: usize = 0x600;
     let text = "\x13DATE \\@ \"yyyy\"\x14 2001\x15\r";
@@ -173,6 +175,7 @@ fn binary_doc_with_stale_date() -> Vec<u8> {
     comp.into_inner().into_inner()
 }
 
+#[cfg(feature = "legacy-doc")]
 #[test]
 fn binary_doc_opened_by_extension_refreshes_date_fields() {
     let bytes = binary_doc_with_stale_date();

@@ -59,6 +59,30 @@ fn doc_extension_dispatches_to_docbin() {
     }
 }
 
+/// A build without the `legacy-doc` feature says a Word 97-2003 file is left out of it: no panic,
+/// no password prompt, and the bytes are not opened as text. A `.doc` that is really RTF still
+/// opens, by its content.
+#[cfg(not(feature = "legacy-doc"))]
+#[test]
+fn doc_is_reported_unavailable_without_the_legacy_doc_feature() {
+    const MSG: &str = "Word 97–2003 (.doc) import is not included in this build";
+    let ole = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0];
+    for name in ["old.doc", "old.dot"] {
+        assert_eq!(crate::io::open_bytes(name, &ole).unwrap_err(), MSG, "{name}");
+        let e = crate::io::open_bytes_with(name, &ole, Some("secret")).unwrap_err();
+        assert_eq!(e, MSG, "{name}");
+        assert!(!crate::io::needs_password(&e) && !crate::io::wrong_password(&e), "{name}");
+    }
+    let page = wordcraft_doc::SectionProps::default();
+    assert_eq!(crate::io_ext::open("doc", &ole, &page).unwrap().unwrap_err(), MSG);
+    let mut s = s();
+    let e = s.run("file.open", &json!({"path": "old.doc", "data": "0M8R4KGxGuEA"})).unwrap_err();
+    assert!(e.to_string().contains(MSG), "{e}");
+    let rtf = crate::io::open_bytes("letter.doc", b"{\\rtf1 Hi}").unwrap();
+    assert_eq!(rtf.plain_text(StoryRef::Body), "Hi");
+}
+
+#[cfg(feature = "legacy-doc")]
 #[test]
 fn encrypted_doc_asks_for_a_password_and_rejects_a_wrong_one() {
     // #1079: a Word 97-2003 file with the encryption flag and an RC4 header whose verifier does
