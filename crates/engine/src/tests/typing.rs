@@ -1819,6 +1819,48 @@ fn backspace_at_the_document_start_keeps_waiting_formatting() {
     assert!(!bold_at(&s, 3) && bold_at(&s, 4));
 }
 
+/// #6518: Ctrl+Backspace that deletes nothing, at the start of the document, keeps formatting
+/// waiting at the caret, as a plain Backspace there does; one that deletes a word or joins
+/// paragraphs drops it. Observed in Word for Windows.
+#[test]
+fn ctrl_backspace_at_the_document_start_keeps_waiting_formatting() {
+    // "Ab def", "A" bold: Backspace deletes the bold A, Ctrl+Backspace does nothing, X is bold
+    // beside a plain "b".
+    let mut s = with_bold("Ab def", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xb def");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // Bold at the caret before plain "abc", then a Ctrl+Backspace that does nothing: X is bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abc"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "text.deleteWordBack", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xabc");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // "pq xy Ab", "A" bold: Backspace deletes the bold A, Ctrl+Backspace deletes "xy ", X is plain.
+    let mut s = with_bold("pq xy Ab", 6, 7, 7);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "pq Xb");
+    assert!(!bold_at(&s, 3));
+    // "pq" then "Ab", "A" bold: Backspace deletes the bold A, Ctrl+Backspace joins the
+    // paragraphs, X is plain.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("pq\nAb"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 1}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 1}}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "pqXb");
+    assert!(!bold_at(&s, 2));
+}
+
 /// Myanmar (#604): typed in memory order (consonant, medial, then the prevowel ေ that is drawn
 /// before it), the caret steps over whole syllables and Backspace removes one sign at a time.
 #[test]
