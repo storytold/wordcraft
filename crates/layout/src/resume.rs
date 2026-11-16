@@ -16,6 +16,7 @@ use wordcraft_doc::{Block, Document, InlineObject, Paragraph};
 
 use super::ctx::Ctx;
 use super::fields::FieldCtx;
+use super::notes::NoteBox;
 use super::page::PageBuilder;
 use super::pass::Snap;
 use super::placed::Placed;
@@ -275,10 +276,8 @@ fn same(m: &Mark, pb: &PageBuilder, ctx: &Ctx) -> bool {
         && a.page_top == pb.page_top
         && a.bottom == pb.bottom
         && a.number == pb.number
-        && a.notes.is_empty()
-        && pb.notes.is_empty()
-        && a.carry.is_empty()
-        && pb.carry.is_empty()
+        && notes_same(&a.notes, &pb.notes)
+        && notes_same(&a.carry, &pb.carry)
         && a.orig_bottom == pb.orig_bottom
         && a.prev == pb.prev
         && a.after_break_mark == pb.after_break_mark
@@ -305,6 +304,11 @@ fn same(m: &Mark, pb: &PageBuilder, ctx: &Ctx) -> bool {
         && a.settle == pb.settle
         && a.column_lines.is_none()
         && pb.column_lines.is_none()
+}
+
+/// The same notes waiting for the foot of the page.
+fn notes_same(a: &[NoteBox], b: &[NoteBox]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.id == y.id && x.h == y.h && x.cont == y.cont && x.items.len() == y.items.len())
 }
 
 fn fields_same(a: &FieldCtx, b: &FieldCtx) -> bool {
@@ -347,7 +351,15 @@ pub(crate) fn plan(doc: &Document, cache: &LayoutCache, opts: &LayoutOptions) ->
     while p + s < n0.min(n1) && Arc::ptr_eq(&was[n0 - 1 - s], &now[n1 - 1 - s]) {
         s += 1;
     }
-    if !was[p..n0 - s].iter().chain(&now[p..n1 - s]).all(|b| plain_block(b)) {
+    // Notes are numbered through the document: the edited blocks keep theirs, in order.
+    fn refs(blocks: &[Arc<Block>]) -> Vec<(u32, &str)> {
+        let mut v = Vec::new();
+        for b in blocks {
+            note_refs(b, &mut v);
+        }
+        v
+    }
+    if !was[p..n0 - s].iter().chain(&now[p..n1 - s]).all(|b| plain_block(b)) || refs(&was[p..n0 - s]) != refs(&now[p..n1 - s]) {
         return None;
     }
     let delta = n1 as isize - n0 as isize;
@@ -374,8 +386,18 @@ pub(crate) fn plan(doc: &Document, cache: &LayoutCache, opts: &LayoutOptions) ->
     Some(Plan { old, start, edited_end, delta, started: false })
 }
 
-/// A block whose edits change nothing outside it: no notes, bookmarks, section break or
-/// floating objects.
+fn note_refs<'b>(b: &'b Block, v: &mut Vec<(u32, &'b str)>) {
+    match b {
+        Block::Para(p) => v.extend(p.objects.iter().filter_map(|o| match o {
+            InlineObject::NoteRef { id, custom, .. } => Some((*id, custom.as_str())),
+            _ => None,
+        })),
+        Block::Table(t) => t.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).for_each(|b| note_refs(b, v)),
+    }
+}
+
+/// A block whose edits change nothing outside it (beyond its notes, compared apart): no
+/// section break or floating objects.
 fn plain_block(b: &Block) -> bool {
     match b {
         Block::Para(p) => plain_para(p),
@@ -388,7 +410,10 @@ fn plain_para(p: &Paragraph) -> bool {
         && p.objects.iter().all(|o| {
             matches!(
                 o,
-                InlineObject::Field { .. }
+                InlineObject::NoteRef { .. }
+                    | InlineObject::BookmarkStart { .. }
+                    | InlineObject::BookmarkEnd { .. }
+                    | InlineObject::Field { .. }
                     | InlineObject::FieldStart { .. }
                     | InlineObject::FieldEnd
                     | InlineObject::ControlStart { .. }
