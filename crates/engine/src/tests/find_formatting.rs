@@ -337,3 +337,53 @@ fn a_paragraph_mark_match_needs_the_mark_to_have_the_formatting() {
     assert_eq!(s.find.results.len(), 1);
     assert_eq!(s.find.results[0].0.path, path);
 }
+
+/// The Replace with text is kept in the find state like the other search options, so a caller that
+/// sends only `withFormat` after an earlier replacement still replaces with that text; only an
+/// explicit `with: ""` makes the call format-only.
+#[test]
+fn with_format_alone_keeps_the_earlier_replace_with_text_and_an_empty_with_clears_it() {
+    let format_only = json!({"text": "", "format": {"bold": true}, "withFormat": {"underline": true}});
+    // 1. An earlier call left "X" as the Replace with text: the bold stretches become "X", underlined.
+    let mut s = sample();
+    run(&mut s, "edit.replaceAll", json!({"text": "second", "with": "X"}));
+    let r = run(&mut s, "edit.replaceAll", format_only.clone());
+    assert_eq!(r["replaced"], 3);
+    assert_eq!(text(&s), "alpha X X dXa\nX line\nthird");
+    assert_eq!(find_format(&mut s, "X", json!({"underline": true})).len(), 3);
+    // 2. The same sequence with an explicit empty `with`: the text stays, only the formatting changes.
+    let mut s = sample();
+    let before = text(&s);
+    run(&mut s, "edit.replaceAll", json!({"text": "second", "with": "X"}));
+    let after_first = text(&s);
+    assert_ne!(after_first, before);
+    let r = run(&mut s, "edit.replaceAll", json!({"text": "", "format": {"bold": true}, "with": "", "withFormat": {"underline": true}}));
+    assert_eq!(r["replaced"], 3);
+    assert_eq!(text(&s), after_first, "an explicit empty `with` keeps the found text");
+    assert_eq!(find_format(&mut s, "", json!({"underline": true})), ["beta", "gamma", "elt"]);
+}
+
+/// A formatted `^p` search asks for the paragraphs of each match: the work stays linear in the
+/// number of paragraphs (counted steps, not time).
+#[test]
+fn paragraph_mark_search_by_format_does_work_linear_in_the_paragraphs() {
+    let steps = |n: usize| {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": vec!["ab"; n].join("\n")}));
+        for path in s.doc.para_paths(StoryRef::Body) {
+            if let Ok(p) = s.doc.para_mut(StoryRef::Body, &path) {
+                p.mark.bold = Some(true);
+            }
+        }
+        run(&mut s, "select.all", json!({}));
+        run(&mut s, "format.bold", json!({"value": true}));
+        let mut count = 0;
+        let work = wordcraft_doc::work::count(|| {
+            count = run(&mut s, "edit.find", json!({"text": "^p", "format": {"bold": true}}))["count"].as_u64().unwrap_or(0);
+        });
+        assert_eq!(count as usize, n - 1, "every mark but the last one matches");
+        work
+    };
+    let (small, big) = (steps(400), steps(3200));
+    assert!(big < small * 16, "{small} steps for 400 paragraphs, {big} for 3200");
+}

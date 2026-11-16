@@ -13,7 +13,9 @@
 //!
 //! `format` is kept in the find state, like the other search options, until `"format": null` or
 //! `{}` (Word's No Formatting button) clears it. `withFormat` belongs to one call: it is not kept,
-//! so a later plain Replace All with empty `with` still deletes the matches.
+//! so a later plain Replace All with empty `with` still deletes the matches. The Replace with
+//! text is kept like the other options: a call with only `withFormat` (no `with`) still replaces
+//! with the text of the last search; `"with": ""` makes it a format-only call.
 
 use serde_json::Value;
 use wordcraft_doc::props::{CharProps, Highlight, Underline, VertAlign};

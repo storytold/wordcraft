@@ -159,7 +159,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t; left out, the Replace with text of the last search stays, "" clears it), "withFormat"?: {…keys of format, but "highlight" a colour name} | null (formats the replaced text; with "" the found text stays and only its formatting changes), …options of edit.find}"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
