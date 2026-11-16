@@ -4818,6 +4818,76 @@ conflict of §5.48 green. The tree is clean after the whole gate
 (`git status --porcelain` empty), and nothing was pushed by this pass: the head
 did not move, and the PR waits for a maintainer's approval and review.
 
+### 5.50 The sixteen open review threads: eleven fixed locally, five deferred with a reason (run 2026-11-16)
+
+**What was open.** The review of `2026-11-10` left 28 threads on PR #5834; 16 of
+them are unresolved and none of the 16 has an answer. All 16 are `Major`. Every
+thread was read in full (`gh api graphql … reviewThreads`, bodies via
+`pulls/5834/comments`) and checked against the **code** at `08230e85`, not against
+the diff line the thread quotes: several threads point at lines the branch has
+since moved, and two of the 16 describe the same defect on the two hosts
+(`collab-app` and `collab-web` snapshot chunks).
+
+**The fix.** `951eef4e`, one commit on top of the delivered `e6f34e8c`
+(`08230e85` is the documentation head under it): 13 files, +563/−77, eleven
+findings, each with a regression test. Nothing is pushed: the PR head and the fork
+still answer `e6f34e8c`, the local branch is `0 123` from `origin/main`
+`cc90520b`, and `git merge-tree --write-tree origin/main HEAD` exits 0 (tree
+`53217e8d`). The tree is clean after the gate.
+
+| Comment | Where | Severity | Verdict | Answer points at |
+|---|---|---|---|---|
+| 4526700210 | `.github/workflows/ci.yml:24` | Major, heavy lift | **deferred** — a shared-workflow call in `craft-common-actions@main` is a CI change, and `upstream/AGENTS.md` forbids CI changes in a feature PR; the local job is the enforcement §5.24 put there | `ci.yml:24`; separate task + owner |
+| 4526700226 | `apps/collab-server/src/lib.rs:1380` | Major, quick win | **deferred** — a recheck alone does not close the window (the reviewer says so); the fix is a room-lifecycle rule (seal + retry, persist ordering, gate per document) and needs an ADR of its own | `apps/collab-server/src/lib.rs:1354` (`leave`) |
+| 4526700242 | `apps/collab-server/src/store.rs:202` | Major, heavy lift | **deferred** — per-document write serialization, generation-stamped model/meta and `sync_all` change the storage guarantees of ADR-0005/ADR WC-0002; RFC §11 has to say which | `store.rs:325` (`write_atomic`), `lib.rs:375` (`persist`) |
+| 4526700273 | `crates/collab-app/src/lib.rs:128` | Major, quick win | **fixed** in `951eef4e` at `collab-app/src/lib.rs:164` | test `a_refusal_of_an_applied_edit_resyncs_and_a_refused_history_step_does_not` |
+| 4526700318 | `crates/collab-app/src/lib.rs:653` | Major, quick win | **fixed** in `951eef4e` at `collab-app/src/lib.rs:683` (`SnapshotBuffer`, `:122`) | test `snapshot_chunks_join_until_last_and_an_interrupted_transfer_is_dropped` |
+| 4526700339 | `crates/collab-client/src/lib.rs:321` | Major, quick win | **fixed** in `951eef4e` at `collab-client/src/lib.rs:322` (`Event::Tail`), applied in `collab-app/src/lib.rs:723` and `collab-web/src/lib.rs:476` | tests `the_journal_tail_reaches_the_app`, `a_journal_tail_is_applied_like_a_live_answer` |
+| 4526700345 | `crates/collab-client/src/lib.rs:354` | Major, quick win | **fixed** in `951eef4e` at `collab-client/src/lib.rs:350` | test `a_non_retryable_rejection_is_reported_and_leaves_the_queue` |
+| 4526700364 | `crates/collab-engine/src/lib.rs:28` | Major, security, heavy lift | **deferred** — the deny-list is RFC §3.1's wording (`rfc.md:61-63`); an allow-list of reviewed commands is a protocol change, not an edit | `collab-engine/src/lib.rs:28`; RFC §3.1 |
+| 4526700375 | `crates/collab-engine/src/lib.rs:1082` | Major, quick win | **fixed** in `951eef4e` at `collab-engine/src/lib.rs:330` (delta carries `author`) and `:1087` (replay restores it) | test `a_replica_replays_a_command_under_the_peers_author` |
+| 4526700390 | `crates/collab-web/src/lib.rs:441` | Major, quick win | **fixed** in `951eef4e` at `collab-web/src/lib.rs:433` | test `snapshot_frames_join_until_last_and_replace_the_document` |
+| 4526700399 | `crates/collab-ws/src/lib.rs:320` | Major, quick win | **fixed** in `951eef4e` at `collab-ws/src/lib.rs:316` (`Joined \| Resyncing`) | test `a_resync_intent_is_sent_while_the_client_is_resyncing` |
+| 4526700418 | `crates/collab/src/room.rs:277` | Major, security, quick win | **fixed** in `951eef4e` at `collab/src/room.rs:30` (one classifier for `submit` and history; a bare `merge` is not an annotation) and `:509` (a no-op merge claims no node) | tests `a_commenter_may_not_send_a_merge_that_is_not_a_comment_edit`, `a_no_op_merge_does_not_block_the_authors_undo` |
+| 4526700435 | `crates/ui-egui/src/app/commands.rs:127` | Major, quick win | **fixed** in `951eef4e` at `ui-egui/src/app/commands.rs:124` and `ui-egui/src/collab.rs:135` | test `only_enabling_or_moving_the_server_reopens_the_session` |
+| 4526713447 | `crates/collab-app/src/lib.rs:653` | Major, heavy lift | **deferred** — keeping editing disabled between `welcome` and the snapshot changes what a handshake means for a writer (`WelcomeState`, ADR WC-0008) and the panel's status; it is the next session-state ADR, not a one-line gate | `collab-app/src/lib.rs:631` (and `:645`); ADR WC-0008 |
+| 4526713464 | `crates/collab-client/src/lib.rs:354` | Major, quick win | **fixed** in `951eef4e` at `collab-client/src/lib.rs:350` (history entry kept while the op is still queued) | test `a_retryable_rejection_keeps_the_history_entry_until_the_resend_is_confirmed` |
+| 4526713488 | `crates/collab/src/room.rs:288` | Major, security, heavy lift | **fixed** in `951eef4e` at `collab/src/room.rs:399` (`submit_history` checks the current role against the whole step before any of it lands) | test `a_commenter_cannot_replay_an_editors_step_through_a_comment_command` |
+
+**The five deferrals**, and why they are not fixed here: three are named in
+`docs/collab/STATUS.md` §5.24 (CI job) or change a decision the RFC text and an ADR
+own (storage guarantees, command policy); two change session/room lifecycle and are
+designed by an ADR, not in a review pass. Each has an answer in its thread with the
+same reason, so none is silent. The three that are protocol questions are also a
+`question` on the bus (`protocol/op-unit`, 2026-11-16): the allow-list of commands
+(RFC §3.1), per-document snapshot serialization (RFC §11), and the writer's state
+between `welcome` and the snapshot (ADR WC-0008).
+
+**The gate** (build host `agents`, rustc 1.99.1, 20 cores, 2026-11-16; log
+`gate-wordcraft-5834-951eef4e.log` in the cabinet workspace's `.craft/logs/`;
+`CRAFT_I18N_DIR=~/craft-i18n`, `CRAFT_FONTS_DIR=~/craft-fonts` as in §5.48/§5.49):
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `cargo metadata --locked --format-version 1` | rc 0; `Cargo.lock` sha256 `a1f66a07…` unchanged; `git status --porcelain` empty |
+| 2 | `cargo fmt --all -- --check` | rc 0, no output |
+| 3 | `cargo clippy --workspace --all-targets -- -D warnings` | rc 0 in 18.56 s; only cargo's three unused `[patch]` notes |
+| 4 | `cargo xtask layers` | rc 0 — `OK: 26 crates, no layering violations` |
+| 5 | `cargo test --workspace --lib --bins --tests --no-fail-fast` | 67 targets, **1466 passed, 2 failed, 9 ignored**; both reds are `wordcraft-engine` `tests::fit_one_page::{…serialization, …step_pt}`, the font-metric dependence §5.48 reproduced on clean `origin/main` `cc90520b` and §5.49 recorded on the delivered head — not touched by this commit, not fixed here |
+| 6 | `cargo test --workspace --doc` | rc 0 over 22 doc-test targets |
+| 7 | `cargo xtask i18n-report`, `language`, `assets`, `wasm` | rc 0 each: 48 asset files, wasm32 check over 21 crates |
+
+The aggregate `cargo xtask ci` answers rc 1 and stops at `test` (`ok fmt`, `ok
+clippy`, `FAIL test`, the remaining six skipped) — the shape §5.49 recorded. Its
+run does **not** set `CRAFT_I18N_DIR`, so it counts a third red,
+`wordcraft-engine cmd::packs::tests::swiss_german_and_portugal_portuguese_keep_their_languages_rules`;
+that test passes in step 5 with the same environment §5.48/§5.49 used, so it is a
+gate-environment difference and not a code change here. The eight collab targets:
+`collab` 64, `-app` 49, `-client` 28, `-doc` 116, `-engine` 59, `-server` 78 (+1
+ignored: the LibreOffice commit gate), `-web` 16, `-ws` 3 (integration) — **413
+passed, 0 failed**. §5.49 recorded 402; the eleven extra tests are this run's
+regression tests.
+
 ## 6. Where things live
 
 | Concern | File |
