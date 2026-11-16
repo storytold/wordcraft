@@ -68,8 +68,9 @@ fn plain_destination(t: &Table) -> bool {
 const MAX_CONTROL_DEPTH: usize = 16;
 
 /// Whether a cell holds a content control, or a control's start or end in its text, at any depth
-/// of nested tables: overwriting the cell replaces all of its blocks, which could remove a locked
-/// control (the caret's own cell is checked by the caller's edit rules).
+/// of nested tables, or a text box anchor (whose story may hold one): overwriting the cell
+/// replaces all of its blocks, which could remove a locked control (the caret's own cell is
+/// checked by the caller's edit rules).
 fn has_control(c: &Cell) -> bool {
     cell_has_control(c, 0)
 }
@@ -79,7 +80,11 @@ fn cell_has_control(c: &Cell, depth: usize) -> bool {
         return true;
     }
     c.blocks.iter().any(|b| match &**b {
-        Block::Para(p) => p.objects.iter().any(|o| matches!(o, InlineObject::ControlStart { .. } | InlineObject::ControlEnd)),
+        // A text box (or a group holding one) anchored here has its own story, which may hold a locked
+        // control; it is not walked, so a cell with one counts as holding a control.
+        Block::Para(p) => {
+            p.objects.iter().any(|o| matches!(o, InlineObject::ControlStart { .. } | InlineObject::ControlEnd) || !o.text_boxes().is_empty())
+        }
         Block::Table(t) => {
             !t.controls.is_empty() || t.rows.iter().any(|r| !r.controls.is_empty() || r.cells.iter().any(|c| cell_has_control(c, depth + 1)))
         }

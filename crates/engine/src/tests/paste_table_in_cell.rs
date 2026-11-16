@@ -353,3 +353,44 @@ fn a_control_showing_its_placeholder_gets_the_ordinary_paste_not_inserted_rows()
     assert_eq!(t0(&s).rows.len(), before.unwrap_or(0), "no rows inserted above the caret's row");
     assert!(nested(t0(&s)), "the table nests in the cell");
 }
+
+/// A locked control in a text box anchored in a cell the copy would overwrite is not lost: the
+/// paste nests instead (#6739 review).
+#[test]
+fn a_locked_control_in_a_text_box_of_an_overwritten_cell_is_kept() {
+    use wordcraft_doc::para::ShapeKind;
+    use wordcraft_doc::{ContentControl, ControlKind, ControlLock, InlineObject, PartKind};
+    let mut s = dest(0, 0);
+    let mut ctl = ContentControl::new(ControlKind::RichText);
+    ctl.lock = ControlLock::SdtContentLocked;
+    let mut inner = Paragraph::with_text("Locked", Default::default());
+    inner.insert_object(0, InlineObject::ControlStart { control: Box::new(ctl) }, &Default::default()).unwrap();
+    let end = inner.text.chars().count();
+    inner.insert_object(end, InlineObject::ControlEnd, &Default::default()).unwrap();
+    let id = s.doc.add_part(PartKind::TextBox, vec![para_block(inner)]);
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 72.0,
+        h: 36.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Default::default(),
+        story: Some(id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let mut anchor = Paragraph::with_text("Box", Default::default());
+    anchor.insert_object(0, shape, &Default::default()).unwrap();
+    if let Some(Block::Table(t)) = s.doc.body.get_mut(0).map(Arc::make_mut) {
+        t.rows[1].cells[0].blocks = vec![para_block(anchor)];
+    }
+    let before = t0(&s).rows[1].cells[0].blocks.clone();
+    // One column of two cells from the caret in the top cell: the cell with the box is overwritten.
+    copy(&mut s, table("s", 2, 1));
+    paste(&mut s);
+    let kept = |t: &Table| t.rows.iter().flat_map(|r| &r.cells).any(|c| c.blocks == before);
+    assert!(kept(t0(&s)), "the cell anchoring the text box survives");
+    assert!(nested(t0(&s)), "the table nests in the cell instead");
+}
