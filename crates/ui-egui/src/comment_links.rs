@@ -109,6 +109,11 @@ impl CommentText {
             } else {
                 self.text.push(c);
             }
+            // Empty markers contribute no link text. Changing the cached target here would
+            // make the next character extend a preceding link with a different destination.
+            if self.text.len() == start {
+                continue;
+            }
             if let Some(target) = props.and_then(|p| p.link.as_deref()) {
                 // Keep even refused targets here: an unsafe hyperlink with a web-looking label
                 // must not silently become a different, auto-detected link.
@@ -270,6 +275,29 @@ mod tests {
         let linked: Vec<_> =
             job.sections.iter().filter(|s| s.format.underline.width > 0.0).map(|s| &job.text[s.byte_range.start.0..s.byte_range.end.0]).collect();
         assert_eq!(linked, ["Field label"]);
+    }
+
+    #[test]
+    fn empty_bookmarks_do_not_join_adjacent_labels_with_different_targets() {
+        for marker in [InlineObject::BookmarkStart { name: "second".into() }, InlineObject::BookmarkEnd { name: "second".into() }] {
+            for target in ["https://second.example", "mailto:second@example.com", "file:///tmp/blocked"] {
+                let props = CharProps { link: Some(target.into()), ..Default::default() };
+                let mut second = Paragraph::with_text("بتا", props.clone());
+                second.insert_object(0, marker.clone(), &props).unwrap();
+                let mut p = Paragraph::with_text("Alpha", CharProps { link: Some("https://first.example".into()), ..Default::default() });
+                p.append(second);
+
+                let mut content = CommentText::default();
+                content.paragraph(&p);
+                content.detect_addresses();
+                assert_eq!(content.text, "Alphaبتا");
+                let links: Vec<_> = content.links.iter().map(|l| (content.text.get(l.range.clone()).unwrap(), l.target.as_str())).collect();
+                assert_eq!(links, [("Alpha", "https://first.example"), ("بتا", target)], "{marker:?}");
+                let job = content.job(FontId::proportional(12.0), Color32::BLACK, Color32::BLUE, 250.0);
+                let linked = job.sections.iter().filter(|s| s.format.underline.width > 0.0).count();
+                assert_eq!(linked, if is_web_or_mail_link(target) { 2 } else { 1 });
+            }
+        }
     }
 
     #[test]

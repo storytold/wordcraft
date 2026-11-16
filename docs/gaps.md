@@ -1,6 +1,6 @@
 # Where WordCraft falls short of Word
 
-> **Comment links update:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (#6693: web and email links in comment text, including the Ctrl/⌘ hover cursor; readiness estimates unchanged).
+> **Comment links update:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (#6693: web and email links in comment text, including the Ctrl/⌘ hover cursor and distinct destinations across empty bookmark markers; readiness estimates unchanged).
 
 Comment links (#6693): the Comments pane and margin balloons now show web and mail targets with underlines and a modifier-click tooltip. Holding Ctrl/⌘ over a link shows the hand cursor, without the underlying canvas replacing it. Ctrl/⌘+click follows the existing safe URL policy; imported labels retain their destinations when viewed, followed and saved in DOCX, ODT and RTF. Plain-text comment editing retains its existing command and undo behavior. This improves review UI; the ranked fidelity and stability gaps remain open.
 
@@ -186,6 +186,8 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 ## Revision history
 
+> 2026-11-16 · Adjacent comment links retain separate targets across zero-width bookmark markers (#6693); no ranked gap or estimate changed.
+
 > 2026-11-15 · Comment links and their hover cursor in both review surfaces (#6693); no ranked gap or readiness estimate changed.
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
@@ -204,6 +206,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |
 | 2026-11-12 | trivial | Clipboard: a copied picture is published to the system clipboard as PNG, with HTML where the host writes it, and WordCraft's own paste keeps the original fragment; a copy of only shapes stays in WordCraft (#6205). Native external-app paste remains untested. |
 | 2026-11-04 | trivial | #4501 refactor regressions restored: per-section header/footer grid, ODT default font, link tooltip (#4683); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-08 | trivial | #10 narrowed: a turned inline picture with no recorded effect extent keeps its line to its frame (exchanged near a quarter turn in Word 2013+ layout), cut at the line; gap stays open |
