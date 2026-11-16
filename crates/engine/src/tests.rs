@@ -5463,24 +5463,38 @@ fn an_empty_first_line_over_a_selection_is_not_expanded() {
 }
 
 /// The one-line control exemption holds only for a selection wholly inside it: a selection
-/// that starts outside it and ends inside it leaves the caret before the control's marker,
-/// where the breaks are honored, so the limit applies there too.
+/// that reaches out of the control leaves the caret outside it when it is deleted, where
+/// the breaks are honored, so the limit applies there too.
 #[test]
 fn a_selection_out_of_a_one_line_control_is_still_capped() {
     use crate::CmdError;
     use crate::cmd::MAX_INSERTED_PARAGRAPHS;
-    let mut s = s();
-    run(&mut s, "text.insert", json!({"text": "Name: "}));
-    run(&mut s, "developer.plainText", json!({"title": "Name", "tag": "name"}));
-    // From before the control to inside it.
-    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 12}}));
-    let before = body_texts(&s);
     let over = "x\r".repeat(MAX_INSERTED_PARAGRAPHS + 1);
-    match s.run("text.insert", &json!({"text": over, "raw": true})) {
-        Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{m}"),
-        r => panic!("not refused: {r:?}"),
+    // A one-line control between two texts, so a selection can reach out of it in either
+    // direction: from before it to inside it, and from inside it to after it.
+    let control = |s: &mut Session| {
+        run(s, "text.insert", json!({"text": "Name: "}));
+        run(s, "developer.plainText", json!({"title": "Name", "tag": "name"}));
+        run(s, "text.insert", json!({"text": " tail"}));
+    };
+    for (anchor, focus) in [(0, 10), (17, 10)] {
+        let mut s = s();
+        control(&mut s);
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": anchor}, "focus": {"block": 0, "off": focus}}));
+        let before = body_texts(&s);
+        match s.run("text.insert", &json!({"text": over.clone(), "raw": true})) {
+            Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{m}"),
+            r => panic!("{anchor}->{focus}: not refused: {r:?}"),
+        }
+        assert_eq!(body_texts(&s), before, "{anchor}->{focus}: nothing typed");
     }
-    assert_eq!(body_texts(&s), before, "nothing typed");
+    // A selection wholly inside the control keeps its exemption: the breaks are suppressed
+    // there, so the text stays one paragraph.
+    let mut s = s();
+    control(&mut s);
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 10}, "focus": {"block": 0, "off": 12}}));
+    run(&mut s, "text.insert", json!({"text": over.clone(), "raw": true}));
+    assert_eq!(s.doc.paragraph_count(), 1, "the control stayed one paragraph");
 }
 
 /// A refused text leaves the document exactly as it was: the selection it would have replaced
