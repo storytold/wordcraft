@@ -185,7 +185,9 @@ pub(crate) fn geometry_bytes(pic: &Picture) -> usize {
                 let tile_bytes = if tiles.insert(Arc::as_ptr(tile)) { tile.rgba.len().saturating_add(std::mem::size_of::<Tile>()) } else { 0 };
                 (segs.len() * seg).saturating_add(tile_bytes)
             }
-            Item::Text(t) => std::mem::size_of::<craft_metafile::Text>() + t.text.len() + t.dx.len() * std::mem::size_of::<f32>() + t.font.family.len(),
+            Item::Text(t) => {
+                std::mem::size_of::<craft_metafile::Text>() + t.text.len() + t.dx.len() * std::mem::size_of::<f32>() + t.font.family.len()
+            }
         };
         let region_bytes = region.as_ref().map_or(0, |r| r.len() * std::mem::size_of::<[f32; 4]>());
         let clip_bytes: usize = clips
