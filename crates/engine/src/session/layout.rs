@@ -11,6 +11,11 @@ impl Session {
         self.layout_with(typing)
     }
 
+    /// Most recently computed layout, if any.
+    pub(crate) fn cached_layout(&self) -> Option<&DocLayout> {
+        self.layout[0].as_ref().or(self.layout[1].as_ref()).map(|e| &*e.5)
+    }
+
     /// [`Session::layout`] with `typing` as the word being typed.
     fn layout_with(&mut self, typing: Option<wordcraft_layout::TypingWord>) -> Arc<DocLayout> {
         let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
