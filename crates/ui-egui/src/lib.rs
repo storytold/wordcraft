@@ -652,6 +652,11 @@ pub struct WordApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// The most a fit (Page Width, One Page, Multiple Pages) zooms to, 1.0 being 100%; unlimited
+    /// by default. A host previewing documents in a wide window can set 1.0, so a page shows at
+    /// its actual size there instead of filling the window. A zoom the user picks is not capped;
+    /// a cap under 10% (the smallest zoom) counts as 10%.
+    pub max_fit_zoom: f32,
     /// Only a successfully published copy may reuse this window's private fragment.
     pub clipboard_published: bool,
     pub printing: printing::State,

@@ -101,6 +101,7 @@ impl WordApp {
                 ..UiState::default()
             },
             services,
+            max_fit_zoom: f32::INFINITY,
             clipboard_published: false,
             printing: Default::default(),
             print_feedback_seen: None,

@@ -162,6 +162,7 @@ impl WordApp {
             // App-wide.
             session: _,
             services: _,
+            max_fit_zoom: _,
             printing: _,
             print_feedback_seen: _,
             font_generation: _,
