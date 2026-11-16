@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
-use wordcraft_engine::Session;
+use wordcraft_engine::{CmdError, Session};
 
 const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
@@ -19,7 +19,8 @@ wordcraft-cli — WordCraft from the command line
 USAGE:
   wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
-                                              xml); --update-fields refreshes unlocked fields before saving;
+                                              xml); --update-fields refreshes unlocked fields before saving
+                                              (if protection blocks updates, they are skipped with a warning);
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
@@ -451,6 +452,30 @@ fn report_lines(json: &Value) -> Vec<String> {
     wordcraft_engine::strict::lines_from_json(json)
 }
 
+/// Explicitly update unlocked fields in a session before saving the document.
+///
+/// If field updates are disabled by document protection (`CmdError::Disabled`), logs a warning to
+/// stderr and continues conversion rather than aborting. Other command failures are converted to
+/// [`Failure`] via [`engine_error`].
+///
+/// # Arguments
+///
+/// * `s` - The active document [`Session`] whose unlocked fields should be refreshed.
+///
+/// # Errors
+///
+/// Returns `Err(Failure)` if the command fails with an error other than `CmdError::Disabled`.
+fn update_fields(s: &mut Session) -> Result<(), Failure> {
+    if let Err(e) = s.run("references.updateFields", &json!({})) {
+        if matches!(e, CmdError::Disabled(_)) {
+            eprintln!("wordcraft-cli: warning: {e}");
+        } else {
+            return Err(engine_error(e));
+        }
+    }
+    Ok(())
+}
+
 /// `convert <in> <out>`: `rest` is the command line after `convert`, `open` opens the input.
 fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Session, Failure>) -> Result<(), Failure> {
     validate_options("convert", rest, CONVERT_OPTIONS)?;
@@ -473,7 +498,7 @@ fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Sess
     let password = password_from(rest)?;
     let mut s = open(&i, password.as_deref())?;
     if rest.iter().any(|a| a == "--update-fields") {
-        s.run("references.updateFields", &json!({})).map_err(engine_error)?;
+        update_fields(&mut s)?;
     }
     let r = if to_png {
         s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup, "strict": strict}))
