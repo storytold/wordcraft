@@ -568,7 +568,7 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
         if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             if to_drive {
                 if let Err(e) = app.run("ui.drive.export", json!({"format": ext})) {
-                    app.status(e);
+                    crate::gdrive::export_failed(app, e);
                 }
             } else {
                 app.export_dialog(ext);

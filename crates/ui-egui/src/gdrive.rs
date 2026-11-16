@@ -135,9 +135,16 @@ pub(crate) fn export_google_doc_button(app: &mut WordApp, ui: &mut egui::Ui) {
         .clicked()
         && let Err(e) = app.run("ui.drive.export", json!({"format": "gdoc"}))
     {
-        app.status(e);
+        export_failed(app, e);
     }
     ui.add_space(4.0);
+}
+
+/// A Drive export was refused or failed: said on the status bar and on the Export page too,
+/// since Backstage, where the export starts and stays, hides the status bar.
+pub(crate) fn export_failed(app: &mut WordApp, error: String) {
+    app.export_error = error.clone();
+    app.status(error);
 }
 
 /// File › Export's "Save the copy to Google Drive" checkbox, shown once signed in.
@@ -804,6 +811,8 @@ mod native {
         let opts = wordcraft_engine::cmd::file::export_options(&app.session, &json!({}));
         let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, password, &opts)?;
         let r = send(app, Job::Export { name: name.clone(), bytes, google_doc }, "export")?;
+        // An earlier refusal on the Export page is not news any more.
+        app.export_error.clear();
         app.status(i18n::fmt(tl!("Exporting {name} to Google Drive…"), &[("name", &name)]));
         Ok(r)
     }
@@ -1019,6 +1028,7 @@ mod native {
             }
             Event::Exported(file) => {
                 d.busy = None;
+                app.export_error.clear();
                 app.status(i18n::fmt(tl!("Exported {name} to Google Drive"), &[("name", &file.name)]));
             }
             Event::Failed { what, error, doc } => {
@@ -1037,7 +1047,11 @@ mod native {
                 };
                 log::warn!("Google Drive {what} failed: {error}");
                 d.error = Some(msg.clone());
-                app.status(msg);
+                if what == "export" {
+                    super::export_failed(app, msg);
+                } else {
+                    app.status(msg);
+                }
             }
         }
     }

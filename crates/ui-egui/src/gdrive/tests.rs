@@ -430,3 +430,24 @@ impl Drop for Scratch {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// Backstage hides the status bar, so a Drive export's refusal or failure is said on the Export
+/// page too, and a later export that works clears it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_failed_drive_export_is_said_on_the_export_page() {
+    let mut a = app();
+    let e = a.run("ui.drive.export", json!({"format": "exe"})).unwrap_err();
+    super::export_failed(&mut a, e.clone());
+    assert_eq!(a.export_error, e);
+    super::native::apply(&mut a, super::native::Event::Exported(drive_file()));
+    assert!(a.export_error.is_empty());
+    let error = wordcraft_gdrive::Error::NotSignedIn;
+    super::native::apply(&mut a, super::native::Event::Failed { what: "export", error, doc: None });
+    assert_eq!(a.export_error, "Sign in to Google Drive first.");
+    // Other Drive jobs keep to the status bar and the Drive page.
+    a.export_error.clear();
+    let error = wordcraft_gdrive::Error::NotSignedIn;
+    super::native::apply(&mut a, super::native::Event::Failed { what: "list", error, doc: None });
+    assert!(a.export_error.is_empty());
+}
