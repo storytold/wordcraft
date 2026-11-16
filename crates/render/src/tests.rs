@@ -1682,3 +1682,43 @@ fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
     let region = crate::media::geometry_bytes(&pic(vec![bitmap(vec![], Some(vec![[0.0; 4]; 1000]))]));
     assert!(region - plain >= 1000 * 16, "{} bytes", region - plain);
 }
+
+/// A stroked path keeps its dash array on the heap, and a text item keeps its boxed record and font
+/// name; the cache charge counts both, so many dashed paths or text records are not under-counted.
+#[test]
+fn geometry_bytes_counts_dash_arrays_and_text_records() {
+    use craft_metafile::{Font, HAlign, LineStyle, Text, VAlign};
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let path = |dash: usize| Item::Path {
+        segs: vec![Seg::Line(0.0, 0.0); 2],
+        fill: None,
+        stroke: Some(([0, 0, 0, 255], 1.0)),
+        line: LineStyle { dash: vec![1.0; dash], ..LineStyle::default() },
+        even_odd: false,
+        region: None,
+        clips: vec![],
+    };
+    let solid = crate::media::geometry_bytes(&pic(vec![path(0)]));
+    let dashed = crate::media::geometry_bytes(&pic(vec![path(16)]));
+    assert_eq!(dashed - solid, 16 * std::mem::size_of::<f32>());
+    let text = |family: &str| {
+        Item::Text(Box::new(Text {
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            text: "ab".into(),
+            dx: vec![1.0; 2],
+            font: Font { family: family.into(), ..Font::default() },
+            color: [0, 0, 0, 255],
+            background: None,
+            h_align: HAlign::default(),
+            v_align: VAlign::default(),
+            clip: None,
+            region: None,
+            clips: vec![],
+        }))
+    };
+    let bare = crate::media::geometry_bytes(&pic(vec![text("")]));
+    let named = crate::media::geometry_bytes(&pic(vec![text("Some Long Face Name")]));
+    assert_eq!(named - bare, "Some Long Face Name".len());
+    let empty = crate::media::geometry_bytes(&pic(vec![]));
+    assert!(bare - empty >= std::mem::size_of::<Text>(), "the boxed Text struct is charged: {} bytes", bare - empty);
+}

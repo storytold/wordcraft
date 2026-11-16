@@ -163,7 +163,8 @@ fn bitmap_bytes(p: &Pixmap) -> usize {
 }
 
 /// Approximate memory held by a picture's items: path segments and text, the item itself (a bitmap
-/// item stays in the list after its pixels move out), the pixmap slot kept for it, a pattern's path
+/// item stays in the list after its pixels move out), a path's dash array, a text's boxed record and
+/// font name, the pixmap slot kept for it, a pattern's path
 /// and tile, and every item's clip rectangles and clip paths. Tiles and clip paths are shared between
 /// the items that use them, so each is charged once.
 pub(crate) fn geometry_bytes(pic: &Picture) -> usize {
@@ -178,13 +179,13 @@ pub(crate) fn geometry_bytes(pic: &Picture) -> usize {
             Item::Text(t) => (&t.region, &t.clips),
         };
         let own = match it {
-            Item::Path { segs, .. } => segs.len() * seg,
+            Item::Path { segs, line, .. } => (segs.len() * seg).saturating_add(line.dash.len() * std::mem::size_of::<f32>()),
             Item::Bitmap { .. } => 0,
             Item::Pattern { segs, tile, .. } => {
                 let tile_bytes = if tiles.insert(Arc::as_ptr(tile)) { tile.rgba.len().saturating_add(std::mem::size_of::<Tile>()) } else { 0 };
                 (segs.len() * seg).saturating_add(tile_bytes)
             }
-            Item::Text(t) => t.text.len() + t.dx.len() * 4,
+            Item::Text(t) => std::mem::size_of::<craft_metafile::Text>() + t.text.len() + t.dx.len() * std::mem::size_of::<f32>() + t.font.family.len(),
         };
         let region_bytes = region.as_ref().map_or(0, |r| r.len() * std::mem::size_of::<[f32; 4]>());
         let clip_bytes: usize = clips
