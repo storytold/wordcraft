@@ -84,5 +84,5 @@ pub(crate) fn row_ends(doc: &Document, story: StoryRef, tp: &Path, r: usize) -> 
     let first = paths.next()?;
     let last = paths.next_back().unwrap_or_else(|| first.clone());
     let len = doc.para(story, &last).map_or(0, Paragraph::len);
-    Some((Pos { story, path: first, off: 0 }, Pos { story, path: last, off: len }))
+    Some((Pos { story, path: first, off: 0, affinity: None }, Pos { story, path: last, off: len, affinity: None }))
 }

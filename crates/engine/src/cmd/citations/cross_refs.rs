@@ -93,7 +93,7 @@ fn captions(s: &Session) -> Vec<(String, Pos, Option<String>)> {
             let p = s.doc.para(StoryRef::Body, &path).filter(|p| is_caption(&s.doc, p))?;
             let text = p.plain_text();
             let label = caption_label(p, &text);
-            Some((text, Pos { story: StoryRef::Body, path, off: 0 }, label))
+            Some((text, Pos { story: StoryRef::Body, path, off: 0, affinity: None }, label))
         })
         .collect()
 }
@@ -135,7 +135,7 @@ pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
                     && is_caption(&s.doc, p)
                     && p.plain_text().starts_with(label)
                 {
-                    targets.push((p.plain_text(), Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
+                    targets.push((p.plain_text(), Pos { story: StoryRef::Body, path: path.clone(), off: 0, affinity: None }));
                 }
             }
         }
@@ -145,7 +145,7 @@ pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
                     && s.doc.styles.resolve_para(&p.props).outline_level.is_some()
                     && !p.plain_text().trim().is_empty()
                 {
-                    targets.push((p.plain_text().trim().to_string(), Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
+                    targets.push((p.plain_text().trim().to_string(), Pos { story: StoryRef::Body, path: path.clone(), off: 0, affinity: None }));
                 }
             }
         }

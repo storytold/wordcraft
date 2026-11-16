@@ -353,7 +353,7 @@ pub(super) fn apply_heading_line(s: &mut Session, at: &Pos, level: u8) -> Result
     let prev = at.path.with_last(at.path.last().saturating_sub(1));
     let Some(before) = s.doc.para(at.story, &prev).cloned() else { return Ok(()) };
     let tabs = before.text.len() - before.text.trim_start_matches('\t').len();
-    let start = Pos { story: at.story, path: prev.clone(), off: 0 };
+    let start = Pos { story: at.story, path: prev.clone(), off: 0, affinity: None };
     s.sel = Selection { anchor: start.clone(), focus: Pos { off: tabs, ..start } };
     delete_selection(s)?;
     crate::cmd::para::set_heading(s, at.story, &prev, Some(level))?;
@@ -436,6 +436,6 @@ pub(super) fn apply_table_line(s: &mut Session, at: &Pos, cols: &[usize]) -> Res
     s.doc.insert_block(at.story, &at.path, Block::Table(t))?;
     let mut first = at.path.0.clone();
     first.extend([0, 0, 0]);
-    s.sel = Selection::caret(Pos { story: at.story, path: Path(first), off: 0 });
+    s.sel = Selection::caret(Pos { story: at.story, path: Path(first), off: 0, affinity: None });
     Ok(())
 }

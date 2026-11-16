@@ -225,14 +225,14 @@ pub(crate) fn touch_cells(s: &mut Session, tp: &Path) -> Result<(), CmdError> {
 pub(super) fn fix_caret(s: &mut Session, tp: &Path, r: usize, c: usize) -> CmdResult {
     let story = s.sel.focus.story;
     let Some(t) = s.doc.table(story, tp) else {
-        s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: tp.clone(), off: 0 }));
+        s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: tp.clone(), off: 0, affinity: None }));
         return sel_result(s);
     };
     let r = r.min(t.rows.len().saturating_sub(1));
     let c = c.min(t.rows.get(r).map(|x| x.cells.len().saturating_sub(1)).unwrap_or(0));
     let mut path = tp.0.clone();
     path.extend([r as u32, c as u32, 0]);
-    s.sel = Selection::caret(Pos { story, path: Path(path), off: 0 });
+    s.sel = Selection::caret(Pos { story, path: Path(path), off: 0, affinity: None });
     sel_result(s)
 }
 

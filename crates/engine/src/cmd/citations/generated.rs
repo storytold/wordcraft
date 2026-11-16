@@ -359,7 +359,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
         if let Some(ident) = &figures {
             if captioned_as(&s.doc, p, ident) {
                 let text = if bare { caption_body(p, &ident.replace('_', " ")) } else { p.plain_text() };
-                marks.push((text, Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
+                marks.push((text, Pos { story: StoryRef::Body, path: path.clone(), off: 0, affinity: None }));
             }
             continue;
         }
@@ -369,7 +369,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
                 let want = if kind.starts_with("INDEX") { "XE" } else { "TA" };
                 if t.starts_with(want) {
                     let e = t.split('"').nth(1).unwrap_or("").to_string();
-                    marks.push((e, Pos { story: StoryRef::Body, path: path.clone(), off }));
+                    marks.push((e, Pos { story: StoryRef::Body, path: path.clone(), off, affinity: None }));
                 }
             }
         }
@@ -382,7 +382,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
             let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
             if let Some(ident) = &figures {
                 if captioned_as(&s.doc, p, ident) {
-                    v.push(Pos { story: StoryRef::Body, path: path.clone(), off: 0 });
+                    v.push(Pos { story: StoryRef::Body, path: path.clone(), off: 0, affinity: None });
                 }
                 continue;
             }
@@ -390,7 +390,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
                 if let Some(InlineObject::Field { instr, .. }) = p.object_at(off) {
                     let want = if kind.starts_with("INDEX") { "XE" } else { "TA" };
                     if instr.trim_start().starts_with(want) {
-                        v.push(Pos { story: StoryRef::Body, path: path.clone(), off });
+                        v.push(Pos { story: StoryRef::Body, path: path.clone(), off, affinity: None });
                     }
                 }
             }

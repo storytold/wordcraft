@@ -61,13 +61,18 @@ pub struct Pos {
     pub story: StoryRef,
     pub path: Path,
     pub off: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<usize>,
 }
 
 impl Pos {
     pub fn new(story: StoryRef, path: Path, off: usize) -> Pos {
-        Pos { story, path, off }
+        Pos { story, path, off, affinity: None }
+    }
+    pub fn with_affinity(story: StoryRef, path: Path, off: usize, affinity: Option<usize>) -> Pos {
+        Pos { story, path, off, affinity }
     }
     pub fn body(block: usize, off: usize) -> Pos {
-        Pos { story: StoryRef::Body, path: Path::top(block), off }
+        Pos { story: StoryRef::Body, path: Path::top(block), off, affinity: None }
     }
 }

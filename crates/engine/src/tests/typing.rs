@@ -2357,7 +2357,7 @@ fn shift_right_at_the_end_of_a_cell_selects_the_cell_first() {
     // In an empty cell the first press takes it.
     let mut empty = table.0.clone();
     empty.extend([1, 0, 0]);
-    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path(empty), off: 0 };
+    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path(empty), off: 0, affinity: None };
     run(&mut s, "caret.set", json!({"pos": pos}));
     assert_eq!(shift_right(&mut s), Some(((1, 1), (0, 0))));
 }
@@ -3056,7 +3056,7 @@ fn backspace_with_the_whole_table_selected_removes_the_table() {
     assert_eq!(tables(&s), 0, "the table stays: {:?}", table_cells(&s));
     assert_eq!(texts(&s), ["before", "after"]);
     // The caret is in the paragraph that followed the table.
-    assert_eq!(s.sel.focus, Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(1), off: 0 });
+    assert_eq!(s.sel.focus, Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(1), off: 0, affinity: None });
     assert!(s.sel.is_collapsed());
     // One undo brings it back.
     run(&mut s, "edit.undo", json!({}));
@@ -3099,7 +3099,7 @@ fn delete_or_backspace_with_the_paragraph_before_and_the_table_selected_removes_
         run(&mut s, key, json!({}));
         assert_eq!(tables(&s), 0, "{key}: {:?}", table_cells(&s));
         assert_eq!(texts(&s), ["after"], "{key}");
-        assert_eq!(s.sel.focus, Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 }, "{key}");
+        assert_eq!(s.sel.focus, Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0, affinity: None }, "{key}");
     }
 }
 

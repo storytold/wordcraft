@@ -230,7 +230,7 @@ fn long_endnotes_continue_on_new_pages() {
     }
     assert_eq!(seen, (0..80u32).map(|i| vec![i]).collect::<Vec<_>>(), "every paragraph once, in order");
     // The caret reaches the last paragraph, on a page.
-    let c = l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(79), off: 0 }).unwrap();
+    let c = l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(79), off: 0, affinity: None }).unwrap();
     assert!(c.top < 792.0 - 72.0, "{c:?}");
 }
 
@@ -254,7 +254,7 @@ fn caret_in_a_continued_footnote_is_found_on_its_page() {
             _ => None,
         })
         .expect("the note continues on page 2");
-    let at = |off: usize| Pos { story: StoryRef::Part(id), path: Path::top(0), off };
+    let at = |off: usize| Pos { story: StoryRef::Part(id), path: Path::top(0), off, affinity: None };
     let cont = at(para.lines[k + 1].start);
     for hint in [0, 1] {
         assert_eq!(l.caret_on(&at(0), hint).map(|c| c.page), Some(0), "start, hint {hint}");

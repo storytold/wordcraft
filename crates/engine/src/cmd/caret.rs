@@ -162,7 +162,7 @@ fn left(s: &mut Session, p: &Pos) -> Pos {
     match s.doc.prev_para(p.story, &p.path) {
         Some(q) => {
             let off = s.doc.para(p.story, &q).map(|x| x.len()).unwrap_or(0);
-            Pos { story: p.story, path: q, off }
+            Pos { story: p.story, path: q, off, affinity: None }
         }
         None => p.clone(),
     }
@@ -175,7 +175,7 @@ fn right(s: &mut Session, p: &Pos) -> Pos {
         return Pos { off: para.next_boundary(p.off), ..p.clone() };
     }
     match s.doc.next_para(p.story, &p.path) {
-        Some(q) => Pos { story: p.story, path: q, off: 0 },
+        Some(q) => Pos { story: p.story, path: q, off: 0, affinity: None },
         None => p.clone(),
     }
 }
@@ -199,14 +199,14 @@ fn para_up(s: &mut Session, p: &Pos) -> Pos {
         return Pos { off: 0, ..p.clone() };
     }
     match s.doc.prev_para(p.story, &p.path) {
-        Some(q) => Pos { story: p.story, path: q, off: 0 },
+        Some(q) => Pos { story: p.story, path: q, off: 0, affinity: None },
         None => p.clone(),
     }
 }
 
 fn para_down(s: &mut Session, p: &Pos) -> Pos {
     match s.doc.next_para(p.story, &p.path) {
-        Some(q) => Pos { story: p.story, path: q, off: 0 },
+        Some(q) => Pos { story: p.story, path: q, off: 0, affinity: None },
         None => {
             let off = s.doc.para_at(p).map(|x| x.len()).unwrap_or(0);
             Pos { off, ..p.clone() }
@@ -370,7 +370,7 @@ pub fn unit_range(s: &mut Session, at: &Pos, unit: Unit) -> (Pos, Pos) {
     let Some(p) = s.doc.para_at(at) else { return (at.clone(), at.clone()) };
     let len = p.len();
     let mark_end = |s: &Session| match s.doc.next_para(at.story, &at.path) {
-        Some(q) if q.parent() == at.path.parent() => Pos { story: at.story, path: q, off: 0 },
+        Some(q) if q.parent() == at.path.parent() => Pos { story: at.story, path: q, off: 0, affinity: None },
         _ => Pos { off: len, ..at.clone() },
     };
     let (a, b) = match unit {
@@ -488,8 +488,10 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
         for (i, _) in p.text.match_indices(needle) {
             count += 1;
             if count == n {
-                s.sel =
-                    Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
+                s.sel = Selection {
+                    anchor: Pos { story, path: path.clone(), off: i, affinity: None },
+                    focus: Pos { story, path: path.clone(), off: i + needle.len(), affinity: None },
+                };
                 // Formatting picked for the old caret doesn't carry over (as `select.word`): what
                 // replaces the selection takes its formatting.
                 s.pending = None;

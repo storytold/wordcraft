@@ -827,10 +827,15 @@ fn forms_mode_with_malformed_markers_stays_conservative() {
     // An orphan end marker at the end of the first paragraph…
     let props = CharProps::default();
     let paths = s.doc.para_paths(StoryRef::Body);
-    let at = Pos { story: StoryRef::Body, path: paths[0].clone(), off: s.doc.para(StoryRef::Body, &paths[0]).map(|p| p.len()).unwrap_or(0) };
+    let at = Pos {
+        story: StoryRef::Body,
+        path: paths[0].clone(),
+        off: s.doc.para(StoryRef::Body, &paths[0]).map(|p| p.len()).unwrap_or(0),
+        affinity: None,
+    };
     s.doc.insert_object(&at, InlineObject::ControlEnd, &props).unwrap();
     // …and a hostile pile of nested starts, none of them closed (deeper than any cap).
-    let mut at = Pos { story: StoryRef::Body, path: paths[2].clone(), off: 0 };
+    let mut at = Pos { story: StoryRef::Body, path: paths[2].clone(), off: 0, affinity: None };
     for _ in 0..24 {
         at = s.doc.insert_object(&at, InlineObject::ControlStart { control: Box::new(ContentControl::new(ControlKind::RichText)) }, &props).unwrap();
     }
@@ -845,7 +850,7 @@ fn forms_mode_with_malformed_markers_stays_conservative() {
     assert!(s.run("text.insert", &json!({"text": "x"})).is_err());
     assert_eq!(s.doc.plain_text(StoryRef::Body), before);
     // An orphan end mid-paragraph: the text after it, in the same paragraph, stays locked.
-    let mid = Pos { story: StoryRef::Body, path: paths[0].clone(), off: 4 };
+    let mid = Pos { story: StoryRef::Body, path: paths[0].clone(), off: 4, affinity: None };
     s.doc.insert_object(&mid, InlineObject::ControlEnd, &props).unwrap();
     select(&mut s, "ed.");
     assert!(s.run("text.insert", &json!({"text": "x"})).is_err());
@@ -853,7 +858,7 @@ fn forms_mode_with_malformed_markers_stays_conservative() {
     // The walk compares the changed character: the pieces of the malformed document and of a
     // clone with one character added outside any control differ.
     let mut changed = s.doc.clone();
-    let at = Pos { story: StoryRef::Body, path: paths[0].clone(), off: 0 };
+    let at = Pos { story: StoryRef::Body, path: paths[0].clone(), off: 0, affinity: None };
     changed.insert_text(&at, "x", &CharProps::default()).unwrap();
     assert_ne!(outside(&s.doc, &HoleMode::Controls), outside(&changed, &HoleMode::Controls));
 }

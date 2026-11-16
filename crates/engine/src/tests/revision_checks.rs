@@ -57,13 +57,13 @@ fn table_session() -> Session {
 }
 
 fn caret_in(s: &mut Session, r: u32, c: u32, off: usize) {
-    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, r, c, 0]), off });
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, r, c, 0]), off, affinity: None });
 }
 
 /// [`table_session`] with "A1" in a content control tagged `ctl`, locked with `lock`.
 fn locked_table(lock: &str) -> Session {
     let mut s = table_session();
-    let at = |off| Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off };
+    let at = |off| Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off, affinity: None };
     // A partial selection inside the paragraph (not the whole paragraph) wraps inline.
     s.sel = Selection { anchor: at(0), focus: at(1) };
     run(&mut s, "developer.richText", json!({"tag": "ctl"}));
@@ -274,7 +274,7 @@ fn tracked_delete_table_removes_a_table_with_no_live_text() {
 fn merged_title_table(lock: Option<&str>) -> Session {
     let mut s = Session::new(wordcraft_doc::Document::new());
     run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
-    let at = |r, c| Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, r, c, 0]), off: 0 };
+    let at = |r, c| Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, r, c, 0]), off: 0, affinity: None };
     s.sel = Selection { anchor: at(0, 0), focus: at(0, 1) };
     run(&mut s, "table.merge", json!({}));
     assert_eq!(table(&s).unwrap().rows[0].cells.len(), 1);
@@ -285,7 +285,7 @@ fn merged_title_table(lock: Option<&str>) -> Session {
     caret_in(&mut s, 1, 1, 0);
     run(&mut s, "text.insert", json!({"text": "B"}));
     if let Some(l) = lock {
-        let p = |off| Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off };
+        let p = |off| Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off, affinity: None };
         s.sel = Selection { anchor: p(0), focus: p(2) };
         run(&mut s, "developer.richText", json!({"tag": "ctl"}));
         run(&mut s, "developer.properties", json!({"control": "ctl", l: true}));
@@ -325,8 +325,8 @@ fn tracked_row_and_column_deletes_over_tracked_changes_reject_back_to_the_origin
         run(&mut s, "text.insert", json!({"text": "z"}));
         // And a deletion already there.
         s.sel = Selection {
-            anchor: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off: 0 },
-            focus: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off: 1 },
+            anchor: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off: 0, affinity: None },
+            focus: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off: 1, affinity: None },
         };
         run(&mut s, "text.delete", json!({}));
         s.author = me;

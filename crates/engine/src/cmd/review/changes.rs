@@ -177,9 +177,9 @@ fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Opti
     if kind.is_empty() {
         return None;
     }
-    let a = Pos { story, path: path.clone(), off: p.len() };
+    let a = Pos { story, path: path.clone(), off: p.len(), affinity: None };
     let b = if crate::cmd::has_next_para(s, story, path) {
-        Pos { story, path: path.with_last(path.last().saturating_add(1)), off: 0 }
+        Pos { story, path: path.with_last(path.last().saturating_add(1)), off: 0, affinity: None }
     } else {
         a.clone()
     };
@@ -392,7 +392,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
 
 fn changes(s: &Session) -> Vec<Change> {
     let mut out: Vec<Change> = Vec::new();
-    let mk = |path: &wordcraft_doc::Path, off| Pos { story: StoryRef::Body, path: path.clone(), off };
+    let mk = |path: &wordcraft_doc::Path, off| Pos { story: StoryRef::Body, path: path.clone(), off, affinity: None };
     // Style-definition changes sit at the start of the document, as Word shows them.
     let start = s.doc.start_of(StoryRef::Body);
     for st in &s.doc.styles.styles {
@@ -510,7 +510,7 @@ const MAX_DELETION_BALLOONS: usize = 500;
 pub fn deletion_balloons(s: &Session) -> Vec<DeletionBalloon> {
     let doc = &s.doc;
     let author = |rev: u32| doc.revisions.get(rev as usize).map(|r| r.author.clone()).unwrap_or_default();
-    let mk = |path: &wordcraft_doc::Path, off| Pos { story: StoryRef::Body, path: path.clone(), off };
+    let mk = |path: &wordcraft_doc::Path, off| Pos { story: StoryRef::Body, path: path.clone(), off, affinity: None };
     let mut out = Vec::new();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };

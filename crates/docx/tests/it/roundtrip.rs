@@ -2052,7 +2052,7 @@ fn self_showing_text_box_saves_bounded() {
     };
     for _ in 0..30 {
         d.insert_object(
-            &wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0 },
+            &wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0, affinity: None },
             shape(),
             &CharProps::default(),
         )

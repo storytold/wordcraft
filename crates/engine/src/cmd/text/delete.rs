@@ -139,7 +139,7 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     let prev_path = f.path.with_last(i - 1);
     match s.doc.block(f.story, &prev_path) {
         Some(Block::Para(prev)) => {
-            let a = Pos { story: f.story, path: prev_path, off: prev.len() };
+            let a = Pos { story: f.story, path: prev_path, off: prev.len(), affinity: None };
             // An empty paragraph before a non-empty one takes the latter's formatting (Word).
             if s.doc.settings.track_changes {
                 // Tracked: the paragraph mark above is marked deleted (or removed, when this
@@ -166,7 +166,7 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
                 if s.doc.para_at(&f).is_some_and(|x| x.is_empty()) && s.doc.container(f.story, &f.path).is_some_and(|c| c.len() > i + 1) {
                     s.doc.remove_block(f.story, &f.path)?;
                 }
-                s.sel = Selection::caret(Pos { story: f.story, path: q, off });
+                s.sel = Selection::caret(Pos { story: f.story, path: q, off, affinity: None });
             }
         }
         None => {}
@@ -214,7 +214,7 @@ fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
     // At the end: join with the next paragraph in the same container.
     let next = f.path.with_last(f.path.last() + 1);
     if let Some(Block::Para(_)) = s.doc.block(f.story, &next) {
-        let b = Pos { story: f.story, path: next, off: 0 };
+        let b = Pos { story: f.story, path: next, off: 0, affinity: None };
         if s.doc.settings.track_changes {
             // Tracked: the paragraph mark is marked deleted (or removed, when this author
             // inserted it). A mark left in place as a deletion is stepped over, as in Word.
@@ -237,7 +237,7 @@ fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
                 *l -= 1;
             }
             path.extend([0, 0, 0]);
-            s.sel = Selection::caret(Pos { story: f.story, path: wordcraft_doc::Path(path), off: 0 });
+            s.sel = Selection::caret(Pos { story: f.story, path: wordcraft_doc::Path(path), off: 0, affinity: None });
         }
     } else if f.story == StoryRef::Body && f.path.0.len() == 1 && !s.doc.settings.track_changes {
         // The last paragraph: no paragraph to join, but a section break on its mark (the last

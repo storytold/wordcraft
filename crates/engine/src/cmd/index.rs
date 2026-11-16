@@ -98,7 +98,7 @@ fn mark_entry(s: &mut Session, v: &Value) -> CmdResult {
         let Some(end) = para.text.match_indices(&text).map(|(a, m)| (a, a + m.len())).find(|(a, b)| whole(*a, *b)).map(|(_, b)| b) else {
             continue;
         };
-        s.doc.insert_object(&Pos { story: StoryRef::Body, path, off: end }, field(), &hidden)?;
+        s.doc.insert_object(&Pos { story: StoryRef::Body, path, off: end, affinity: None }, field(), &hidden)?;
         marked += 1;
     }
     s.clamp_selection();
@@ -188,7 +188,7 @@ fn collect(s: &mut Session, lang: Option<&str>) -> BTreeMap<Vec<SortKey>, Node> 
             if let Some(InlineObject::Field { instr, .. }) = p.object_at(off) {
                 let f = FieldCode::parse(instr);
                 if f.name == "XE" {
-                    marks.push((f, Pos { story: StoryRef::Body, path: path.clone(), off }));
+                    marks.push((f, Pos { story: StoryRef::Body, path: path.clone(), off, affinity: None }));
                 }
             }
         }
@@ -201,7 +201,7 @@ fn collect(s: &mut Session, lang: Option<&str>) -> BTreeMap<Vec<SortKey>, Node> 
         s.doc.para_paths(StoryRef::Body).into_iter().find_map(|path| {
             let p = s.doc.para(StoryRef::Body, &path)?;
             let off = p.object_offsets().into_iter().find(|o| matches!(p.object_at(*o), Some(InlineObject::BookmarkEnd { name: n }) if n == name))?;
-            Some(Pos { story: StoryRef::Body, path, off })
+            Some(Pos { story: StoryRef::Body, path, off, affinity: None })
         })
     };
     let starts = s.doc.bookmarks();
