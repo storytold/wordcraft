@@ -4888,6 +4888,98 @@ ignored: the LibreOffice commit gate), `-web` 16, `-ws` 3 (integration) — **41
 passed, 0 failed**. §5.49 recorded 402; the eleven extra tests are this run's
 regression tests.
 
+### 5.51 Three protocol ADRs land as code: a file parameter is not a path, a snapshot is one generation, a resync welcome holds the editor (run 2026-11-16)
+
+**What was open.** §5.50 left five of the sixteen review threads deferred. Three
+of them were not engineering questions: `4526700364` (the deny-list lets an
+editor name a server file), `4526700242` (two persists of one document can
+interleave) and `4526713447` (the writer keeps editing between `welcome` and the
+snapshot). Chair accepted a decision for each on the collaboration bus on
+2026-11-16 — `decisions/0023-op-path-untrusted.md`,
+`decisions/0024-snapshot-generation.md`,
+`decisions/0025-welcome-resync-state.md` — so those threads are now answers of
+code with a norm behind them, not a promise of a future ADR.
+
+**The code.** `ad217e46`, one commit on top of `07cca091` (8 files, +660/−118),
+nothing pushed: the PR's head and the fork still answer `e6f34e8c`, and the code
+commit is the fourth above it (this page's own commit is the fifth, and the gate
+below was run on the code head). The tree is clean before and after the gate. The
+branch is `0 126` from `origin/main` `cc90520b` and
+`git merge-tree --write-tree origin/main HEAD` exits 0 (tree `7066d8d9`).
+
+| ADR | Thread | Where the code answers | Regression test |
+|---|---|---|---|
+| 0023 — a path in an operation is untrusted | `4526700364` | `crates/collab-engine/src/lib.rs:199` (the refusal runs before the caret moves or any part of the document changes), inventory `:1167`, `refuse_a_file_parameter` `:1182` | `insert_picture_with_a_server_path_is_refused_before_the_document_changes` (`collab-engine/src/tests.rs:74`) |
+| 0024 — a snapshot is a pair of one generation | `4526700242` | `apps/collab-server/src/store.rs:205` (`Store::save`), one writer per document `:164`, payload envelope and digest `:484`, ordered non-shared temporary writes `:533`, rotation `:522`, read-back `:392`; journal truncated only after the read-back `apps/collab-server/src/lib.rs:383` | `a_crash_between_the_two_renames_serves_the_previous_generation` (`store.rs:896`), `a_corrupt_payload_with_a_valid_meta_refuses_the_join` (`:919`), `two_concurrent_persists_leave_one_generation` (`:938`) |
+| 0025 — any `resync` welcome holds the editor | `4526713447` | `crates/collab-app/src/lib.rs:299` (`WelcomeState::after_welcome` takes the room's `resync`), applied at `:651`; same arm in the web session `crates/collab-web/src/lib.rs:382`; the reason the panel shows is `RESYNC_REASON` `:316` | `a_welcome_with_resync_reads_resyncing_before_the_snapshot` (`collab-app/src/tests.rs:1560`), `a_resync_welcome_does_not_clear_a_paused_session`, `a_welcome_with_resync_holds_the_document_until_the_snapshot` (`collab-web/src/lib.rs:1005`) |
+
+**What each ADR changed, in one paragraph.**
+
+- **0023.** Seven commands whose parameters can name a file (`insert.picture`,
+  `insert.textFromFile`, `font.add`, `mailings.recipients`, `mailings.finish`,
+  `picture.change`, `references.sources`) are refused `forbidden` when they name
+  one, unless the bytes travel inline as `data` — then the path is only a label
+  for the commit and is never opened, `stat`-ed or resolved. The inventory is
+  the table the ADR asks for; the deny-list of RFC §3.1 is left as it is and is
+  explicitly not called a security boundary. The world does not get an allow-list
+  here: that is its own task, with a review of every command's parameters.
+- **0024.** The payload (`model.json`) is an envelope that carries a generation
+  and the document bytes verbatim; the metadata carries the same generation and
+  the payload digest. The pair holds only when the two agree, both parse and the
+  digest matches. A bare payload written before this change is still read, as
+  generation 0. Writes are serialized per document, use a temporary name no other
+  attempt shares, `sync_all` before each rename and rename the metadata last; the
+  previous generation is rotated only from a pair that holds, so a crash between
+  the two renames serves it. The snapshot is a **checkpoint**, so the room's
+  journal is truncated after the pair is read back — an operation dropped before
+  its snapshot is durable is an edit nobody can replay.
+- **0025.** `resync: true` in a `welcome` now means `Resyncing` from the moment
+  the welcome is applied, whatever emptied the queue. Both gates read the status,
+  so the edit is refused before the engine runs (the document stays
+  byte-for-byte the author's) and a commit is refused; the panel names the reason
+  instead of showing a reconnect. The last snapshot chunk reopens the session at
+  the snapshot's version; a session already `Diverged` keeps the stronger reason,
+  and the two states are not merged.
+
+**The three threads answered, and the two that stay deferred.**
+
+| Comment | Where | Verdict now | The answer says |
+|---|---|---|---|
+| 4526700364 | `collab-engine/src/lib.rs:28` | **fixed** in `ad217e46` | `:199` refuses the file-shaped parameter before mutation; inventory `:1167`; test `insert_picture_with_a_server_path_is_refused_before_the_document_changes`; ADR-0023 |
+| 4526700242 | `apps/collab-server/src/store.rs:202` | **fixed** in `ad217e46` | `Store::save` `:205`: serialized writer, generation in payload and metadata, `sync_all`, metadata renamed last, read-back, journal truncated after; the three tests above; ADR-0024 |
+| 4526713447 | `collab-app/src/lib.rs:653` | **fixed** in `ad217e46` | `WelcomeState::after_welcome` `:299` takes `resync`; edit and commit refused in the window; `a_welcome_with_resync_holds_the_document_until_the_snapshot`; ADR-0025 |
+| 4526700210 | `.github/workflows/ci.yml:24` | **deferred** (unchanged) | a shared-workflow call in `craft-common-actions@main` is a CI change, and the house rules forbid CI changes in a feature PR; the job moves in its own task. Nothing here touches `.github/` |
+| 4526700226 | `apps/collab-server/src/lib.rs:1380` | **deferred**, now designed | a recheck does not close the window, so the fix is a room life cycle: draft `docs/collab/adr/WC-0009-seal-retry-persist.md` (seal under the room mutex, retry the join against the map, one snapshot inside the seal, read back per ADR-0024). No code in this PR |
+
+The three fixed answers replace the `deferred` text in the same thread comments
+(copoka's replies `4582114926`, `4582113606`, `4582116409`); the two deferred
+ones keep their thread with the reason sharpened. The threads themselves stay
+unresolved: resolving a review thread is the maintainer's, and this branch has no
+permission to do it.
+
+**The gate** (build host `agents`, rustc 1.99.1, 20 cores, 2026-11-16; log
+`gate-wordcraft-5834-ad217e46.log` in the cabinet workspace's `.craft/logs/`;
+`CRAFT_I18N_DIR=~/craft-i18n`, `CRAFT_FONTS_DIR=~/craft-fonts` as in §5.48–§5.50):
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `cargo metadata --locked --format-version 1` | rc 0; `Cargo.lock` sha256 `a1f66a07d64213f1…` unchanged; `git status --porcelain` empty before and after |
+| 2 | `cargo fmt --all -- --check` | rc 0, no output |
+| 3 | `cargo clippy --workspace --all-targets -- -D warnings` | rc 0 in 20 s; only cargo's three unused `[patch]` notes |
+| 4 | `cargo xtask layers` | rc 0 — `OK: 26 crates, no layering violations` |
+| 5 | `cargo test --workspace --lib --bins --tests --no-fail-fast` | 67 targets, **5407 passed, 2 failed, 9 ignored**; both reds are `wordcraft-engine` `tests::fit_one_page::{…serialization, …step_pt}`, the font-metric dependence §5.48 reproduced on clean `origin/main` `cc90520b` and §5.49/§5.50 recorded — not touched by this commit, not fixed here |
+| 6 | `cargo test --workspace --doc` | rc 0 over 22 doc-test targets |
+| 7 | `cargo xtask i18n-report`, `language`, `assets`, `wasm` | rc 0 each: 48 asset files, wasm32 check over 21 crates |
+
+The eight collab targets: `collab` 64, `-app` 51, `-client` 28, `-doc` 116,
+`-engine` 60, `-server` 81 (+1 ignored: the LibreOffice commit gate), `-web` 17,
+`-ws` 3 (integration) — **420 passed, 0 failed**. §5.50 recorded 413; the seven
+extra tests are this run's regression tests (three in the store, one in the
+engine, one in the web session, two in the app's welcome state). The aggregate
+`cargo xtask ci` answers rc 1 and stops at `test` (`ok fmt`, `ok clippy`,
+`FAIL test`, the other six skipped) on the same two `fit_one_page` reds — the
+shape §5.49 and §5.50 recorded, and the reason the gate is read step by step.
+
 ## 6. Where things live
 
 | Concern | File |
