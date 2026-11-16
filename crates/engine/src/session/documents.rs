@@ -252,6 +252,9 @@ impl Session {
             // Shared by every open document.
             // Names the document it belongs to, so it never applies to another one.
             review_style: _,
+            review_para_fmt: _,
+            review_para_num: _,
+            review_navigated: _,
             user_dict_path: _,
             default_user_dict_path: _,
             clipboard: _,

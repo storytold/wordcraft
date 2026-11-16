@@ -1,6 +1,6 @@
 //! Bounded conversion between craft-wordmodel and WordCraft's document model.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use craft_docx::DocxError;
@@ -32,26 +32,59 @@ where
 
 type GraphicCache = HashMap<usize, Arc<wordcraft_doc::graphic::Graphic>>;
 
-fn blocks_from_shared(source: craft_wordmodel::Blocks, graphics: &mut GraphicCache) -> Result<wordcraft_doc::Blocks, DocxError> {
+struct ReadCtx<'a> {
+    graphics: GraphicCache,
+    numbering: &'a wordcraft_doc::numbering::Numbering,
+    originals: Option<BTreeMap<String, wordcraft_doc::props::NumRef>>,
+    overrides: HashMap<String, crate::num_change::SnapshotEntry>,
+}
+
+impl<'a> ReadCtx<'a> {
+    fn new(numbering: &'a wordcraft_doc::numbering::Numbering, overrides: HashMap<String, crate::num_change::SnapshotEntry>) -> Self {
+        Self { graphics: GraphicCache::new(), numbering, originals: None, overrides }
+    }
+
+    fn snapshot_for(&mut self, loc: &str, original: &str) -> Option<wordcraft_doc::props::NumRef> {
+        if let Some(entry) = self.overrides.get(loc)
+            && entry.original == original
+        {
+            return entry.snapshot.filter(|nr| nr.num == 0 || (nr.level <= 8 && self.numbering.num(nr.num).is_some()));
+        }
+        self.previous_numbering(original)
+    }
+
+    fn previous_numbering(&mut self, original: &str) -> Option<wordcraft_doc::props::NumRef> {
+        let original = original.trim();
+        if original.is_empty() || original.eq_ignore_ascii_case("none") {
+            return None;
+        }
+        let originals = self.originals.get_or_insert_with(|| self.numbering.change_originals());
+        originals.get(original).copied()
+    }
+}
+
+fn blocks_from_shared(source: craft_wordmodel::Blocks, prefix: &str, ctx: &mut ReadCtx<'_>) -> Result<wordcraft_doc::Blocks, DocxError> {
     source
         .into_iter()
-        .map(|block| {
+        .enumerate()
+        .map(|(i, block)| {
             let block = Arc::try_unwrap(block).unwrap_or_else(|shared| (*shared).clone());
-            block_value_from_shared(block, graphics).map(Arc::new)
+            block_value_from_shared(block, &format!("{prefix}:{i}"), ctx).map(Arc::new)
         })
         .collect()
 }
 
-fn block_value_from_shared(source: craft_wordmodel::Block, graphics: &mut GraphicCache) -> Result<wordcraft_doc::Block, DocxError> {
+fn block_value_from_shared(source: craft_wordmodel::Block, loc: &str, ctx: &mut ReadCtx<'_>) -> Result<wordcraft_doc::Block, DocxError> {
     match source {
-        craft_wordmodel::Block::Para(paragraph) => paragraph_value_from_shared(paragraph, graphics).map(wordcraft_doc::Block::Para),
-        craft_wordmodel::Block::Table(table) => table_value_from_shared(table, graphics).map(wordcraft_doc::Block::Table),
+        craft_wordmodel::Block::Para(paragraph) => paragraph_value_from_shared(paragraph, loc, ctx).map(wordcraft_doc::Block::Para),
+        craft_wordmodel::Block::Table(table) => table_value_from_shared(table, loc, ctx).map(wordcraft_doc::Block::Table),
     }
 }
 
 fn paragraph_value_from_shared(
     source: craft_wordmodel::para::Paragraph,
-    graphics: &mut GraphicCache,
+    loc: &str,
+    ctx: &mut ReadCtx<'_>,
 ) -> Result<wordcraft_doc::para::Paragraph, DocxError> {
     let craft_wordmodel::para::Paragraph { text, runs, props, mark, objects, section, .. } = source;
     let mut paragraph = wordcraft_doc::para::Paragraph::new();
@@ -59,8 +92,13 @@ fn paragraph_value_from_shared(
     paragraph.runs =
         runs.into_iter().map(|run| Ok(wordcraft_doc::para::Run { len: run.len, props: convert(run.props)? })).collect::<Result<_, DocxError>>()?;
     paragraph.props = convert(props)?;
+    if let Some(nc) = paragraph.props.num_change.as_deref_mut()
+        && nc.snapshot.is_none()
+    {
+        nc.snapshot = ctx.snapshot_for(loc, &nc.original);
+    }
     paragraph.mark = convert(mark)?;
-    paragraph.objects = objects.into_iter().map(|o| object_value_from_shared(o, graphics)).collect::<Result<_, _>>()?;
+    paragraph.objects = objects.into_iter().map(|o| object_value_from_shared(o, &mut ctx.graphics)).collect::<Result<_, _>>()?;
     paragraph.section = section.map(|section| convert(*section).map(Box::new)).transpose()?;
     Ok(paragraph)
 }
@@ -114,38 +152,52 @@ fn group_child_value_from_shared(
     Ok(wordcraft_doc::para::GroupChild { x: source.x, y: source.y, obj: object_value_from_shared(source.obj, graphics)? })
 }
 
-fn table_value_from_shared(source: craft_wordmodel::table::Table, graphics: &mut GraphicCache) -> Result<wordcraft_doc::table::Table, DocxError> {
+fn table_value_from_shared(
+    source: craft_wordmodel::table::Table,
+    loc: &str,
+    ctx: &mut ReadCtx<'_>,
+) -> Result<wordcraft_doc::table::Table, DocxError> {
     Ok(wordcraft_doc::table::Table {
         props: convert(source.props)?,
         grid: source.grid,
-        rows: source.rows.into_iter().map(|r| row_value_from_shared(r, graphics)).collect::<Result<_, _>>()?,
+        rows: source.rows.into_iter().enumerate().map(|(r, row)| row_value_from_shared(row, &format!("{loc}/{r}"), ctx)).collect::<Result<_, _>>()?,
         controls: convert(source.controls)?,
     })
 }
 
-fn row_value_from_shared(source: craft_wordmodel::table::Row, graphics: &mut GraphicCache) -> Result<wordcraft_doc::table::Row, DocxError> {
+fn row_value_from_shared(source: craft_wordmodel::table::Row, loc: &str, ctx: &mut ReadCtx<'_>) -> Result<wordcraft_doc::table::Row, DocxError> {
     Ok(wordcraft_doc::table::Row {
         props: convert(source.props)?,
-        cells: source.cells.into_iter().map(|c| cell_value_from_shared(c, graphics)).collect::<Result<_, _>>()?,
+        cells: source
+            .cells
+            .into_iter()
+            .enumerate()
+            .map(|(c, cell)| cell_value_from_shared(cell, &format!("{loc}/{c}"), ctx))
+            .collect::<Result<_, _>>()?,
         controls: convert(source.controls)?,
     })
 }
 
-fn cell_value_from_shared(source: craft_wordmodel::table::Cell, graphics: &mut GraphicCache) -> Result<wordcraft_doc::table::Cell, DocxError> {
+fn cell_value_from_shared(
+    source: craft_wordmodel::table::Cell,
+    prefix: &str,
+    ctx: &mut ReadCtx<'_>,
+) -> Result<wordcraft_doc::table::Cell, DocxError> {
     Ok(wordcraft_doc::table::Cell {
         props: convert(source.props)?,
-        blocks: blocks_from_shared(source.blocks, graphics)?,
+        blocks: blocks_from_shared(source.blocks, prefix, ctx)?,
         controls: convert(source.controls)?,
     })
 }
 
-fn part_value_from_shared(source: craft_wordmodel::Part, graphics: &mut GraphicCache) -> Result<wordcraft_doc::Part, DocxError> {
-    Ok(wordcraft_doc::Part { kind: convert(source.kind)?, blocks: blocks_from_shared(source.blocks, graphics)?, body: convert(source.body)? })
+fn part_value_from_shared(source: craft_wordmodel::Part, prefix: &str, ctx: &mut ReadCtx<'_>) -> Result<wordcraft_doc::Part, DocxError> {
+    Ok(wordcraft_doc::Part { kind: convert(source.kind)?, blocks: blocks_from_shared(source.blocks, prefix, ctx)?, body: convert(source.body)? })
 }
 
 fn glossary_value_from_shared(
     source: craft_wordmodel::BuildingBlock,
-    graphics: &mut GraphicCache,
+    prefix: &str,
+    ctx: &mut ReadCtx<'_>,
 ) -> Result<wordcraft_doc::BuildingBlock, DocxError> {
     Ok(wordcraft_doc::BuildingBlock {
         name: source.name,
@@ -156,7 +208,7 @@ fn glossary_value_from_shared(
         style: source.style,
         types: source.types,
         behaviors: source.behaviors,
-        blocks: blocks_from_shared(source.blocks, graphics)?,
+        blocks: blocks_from_shared(source.blocks, prefix, ctx)?,
     })
 }
 
@@ -185,6 +237,28 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
         source.passthrough.remove(&key);
     }
 
+    let mut num_overrides = HashMap::new();
+    let num_key = source
+        .passthrough
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case(crate::num_change::PART))
+        .or_else(|| {
+            source
+                .passthrough
+                .iter()
+                .find_map(|(k, b)| (k.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("customxml/")) && crate::num_change::is_store(b)).then_some(k))
+        })
+        .cloned();
+    if let Some(key) = num_key {
+        if let Some(xml_bytes) = source.passthrough.get(&key)
+            && let Some(parsed) = crate::num_change::read_from_bytes(xml_bytes)
+        {
+            num_overrides = parsed;
+        }
+        crate::num_change::remove_custom_xml_part(&mut source.passthrough, &key);
+    }
+    let part_labels = if num_overrides.is_empty() { HashMap::new() } else { crate::num_change::part_labels(&source) };
+
     let craft_wordmodel::Document {
         body,
         last_section,
@@ -206,13 +280,19 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
         ..
     } = source;
 
-    let mut graphics = GraphicCache::new();
     let mut document = wordcraft_doc::Document::new();
-    document.body = blocks_from_shared(body, &mut graphics)?;
+    let doc_numbering = Arc::new(convert::<_, wordcraft_doc::numbering::Numbering>((*numbering).clone())?);
+    let mut ctx = ReadCtx::new(&doc_numbering, num_overrides);
+    document.body = blocks_from_shared(body, "b", &mut ctx)?;
     document.last_section = convert(last_section)?;
-    document.parts = parts.into_iter().map(|(id, part)| Ok((id, part_value_from_shared(part, &mut graphics)?))).collect::<Result<_, DocxError>>()?;
+    document.parts = parts
+        .into_iter()
+        .map(|(id, part)| {
+            let prefix = part_labels.get(&id).map_or("", String::as_str);
+            Ok((id, part_value_from_shared(part, prefix, &mut ctx)?))
+        })
+        .collect::<Result<_, DocxError>>()?;
     document.styles = Arc::new(convert((*styles).clone())?);
-    document.numbering = Arc::new(convert((*numbering).clone())?);
     document.comments = convert(comments)?;
     document.revisions = convert(revisions)?;
     document.settings = convert(settings)?;
@@ -223,7 +303,10 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.endnote_separators = convert(endnote_separators)?;
     document.media = media;
     document.passthrough = passthrough;
-    document.glossary = glossary.into_iter().map(|g| glossary_value_from_shared(g, &mut graphics)).collect::<Result<_, _>>()?;
+    document.glossary =
+        glossary.into_iter().enumerate().map(|(i, g)| glossary_value_from_shared(g, &format!("g{i}"), &mut ctx)).collect::<Result<_, _>>()?;
+    drop(ctx);
+    document.numbering = doc_numbering;
     document.missing_pictures = missing_pictures_from_shared(missing_pictures)?;
     document.fit_state = fit_state;
     Ok(document)
@@ -233,14 +316,17 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
 // To Shared Model (from WordCraft Document)
 // ---------------------------------------------------------------------------
 
-fn blocks_to_shared(source: &wordcraft_doc::Blocks) -> Result<craft_wordmodel::Blocks, DocxError> {
-    source.iter().map(|block| block_value_to_shared(block).map(Arc::new)).collect()
+fn blocks_to_shared(source: &wordcraft_doc::Blocks, numbering: &wordcraft_doc::numbering::Numbering) -> Result<craft_wordmodel::Blocks, DocxError> {
+    source.iter().map(|block| block_value_to_shared(block, numbering).map(Arc::new)).collect()
 }
 
-fn block_value_to_shared(source: &wordcraft_doc::Block) -> Result<craft_wordmodel::Block, DocxError> {
+fn block_value_to_shared(
+    source: &wordcraft_doc::Block,
+    numbering: &wordcraft_doc::numbering::Numbering,
+) -> Result<craft_wordmodel::Block, DocxError> {
     match source {
-        wordcraft_doc::Block::Para(paragraph) => paragraph_value_to_shared(paragraph).map(craft_wordmodel::Block::Para),
-        wordcraft_doc::Block::Table(table) => table_value_to_shared(table).map(craft_wordmodel::Block::Table),
+        wordcraft_doc::Block::Para(paragraph) => paragraph_value_to_shared(paragraph, numbering).map(craft_wordmodel::Block::Para),
+        wordcraft_doc::Block::Table(table) => table_value_to_shared(table, numbering).map(craft_wordmodel::Block::Table),
     }
 }
 
@@ -277,7 +363,10 @@ fn sanitize_char_props(mut props: wordcraft_doc::CharProps) -> wordcraft_doc::Ch
     props
 }
 
-fn paragraph_value_to_shared(source: &wordcraft_doc::para::Paragraph) -> Result<craft_wordmodel::para::Paragraph, DocxError> {
+fn paragraph_value_to_shared(
+    source: &wordcraft_doc::para::Paragraph,
+    numbering: &wordcraft_doc::numbering::Numbering,
+) -> Result<craft_wordmodel::para::Paragraph, DocxError> {
     let mut paragraph = craft_wordmodel::para::Paragraph::new();
     paragraph.text = source.text.clone();
     paragraph.runs = source
@@ -285,7 +374,16 @@ fn paragraph_value_to_shared(source: &wordcraft_doc::para::Paragraph) -> Result<
         .iter()
         .map(|run| Ok(craft_wordmodel::para::Run { len: run.len, props: convert(sanitize_char_props(run.props.clone()))? }))
         .collect::<Result<_, DocxError>>()?;
-    paragraph.props = convert(sanitize_para_props(source.props.clone()))?;
+    let mut para_props = sanitize_para_props(source.props.clone());
+    // An imported value is kept as written; one this app recorded is cached from the
+    // previous list's definitions, in the format ECMA-376 §17.3.1.20 gives.
+    if let Some(nc) = para_props.num_change.as_deref_mut()
+        && nc.original.is_empty()
+        && let Some(nr) = nc.snapshot
+    {
+        nc.original = numbering.change_original(nr.num, nr.level).unwrap_or_default();
+    }
+    paragraph.props = convert(para_props)?;
     paragraph.mark = convert(sanitize_char_props(source.mark.clone()))?;
     paragraph.objects = source.objects.iter().map(object_value_to_shared).collect::<Result<_, _>>()?;
     paragraph.section = source.section.as_ref().map(|section| convert_ref(section.as_ref()).map(Box::new)).transpose()?;
@@ -324,36 +422,52 @@ fn group_child_value_to_shared(source: &wordcraft_doc::para::GroupChild) -> Resu
     Ok(craft_wordmodel::para::GroupChild { x: source.x, y: source.y, obj: object_value_to_shared(&source.obj)? })
 }
 
-fn table_value_to_shared(source: &wordcraft_doc::table::Table) -> Result<craft_wordmodel::table::Table, DocxError> {
+fn table_value_to_shared(
+    source: &wordcraft_doc::table::Table,
+    numbering: &wordcraft_doc::numbering::Numbering,
+) -> Result<craft_wordmodel::table::Table, DocxError> {
     Ok(craft_wordmodel::table::Table {
         props: convert_ref(&source.props)?,
         grid: source.grid.clone(),
-        rows: source.rows.iter().map(row_value_to_shared).collect::<Result<_, _>>()?,
+        rows: source.rows.iter().map(|r| row_value_to_shared(r, numbering)).collect::<Result<_, _>>()?,
         controls: convert_ref(&source.controls)?,
     })
 }
 
-fn row_value_to_shared(source: &wordcraft_doc::table::Row) -> Result<craft_wordmodel::table::Row, DocxError> {
+fn row_value_to_shared(
+    source: &wordcraft_doc::table::Row,
+    numbering: &wordcraft_doc::numbering::Numbering,
+) -> Result<craft_wordmodel::table::Row, DocxError> {
     Ok(craft_wordmodel::table::Row {
         props: convert_ref(&source.props)?,
-        cells: source.cells.iter().map(cell_value_to_shared).collect::<Result<_, _>>()?,
+        cells: source.cells.iter().map(|c| cell_value_to_shared(c, numbering)).collect::<Result<_, _>>()?,
         controls: convert_ref(&source.controls)?,
     })
 }
 
-fn cell_value_to_shared(source: &wordcraft_doc::table::Cell) -> Result<craft_wordmodel::table::Cell, DocxError> {
+fn cell_value_to_shared(
+    source: &wordcraft_doc::table::Cell,
+    numbering: &wordcraft_doc::numbering::Numbering,
+) -> Result<craft_wordmodel::table::Cell, DocxError> {
     Ok(craft_wordmodel::table::Cell {
         props: convert_ref(&source.props)?,
-        blocks: blocks_to_shared(&source.blocks)?,
+        blocks: blocks_to_shared(&source.blocks, numbering)?,
         controls: convert_ref(&source.controls)?,
     })
 }
 
-fn part_value_to_shared(source: &wordcraft_doc::Part) -> Result<craft_wordmodel::Part, DocxError> {
-    Ok(craft_wordmodel::Part { kind: convert_ref(&source.kind)?, blocks: blocks_to_shared(&source.blocks)?, body: convert_ref(&source.body)? })
+fn part_value_to_shared(source: &wordcraft_doc::Part, numbering: &wordcraft_doc::numbering::Numbering) -> Result<craft_wordmodel::Part, DocxError> {
+    Ok(craft_wordmodel::Part {
+        kind: convert_ref(&source.kind)?,
+        blocks: blocks_to_shared(&source.blocks, numbering)?,
+        body: convert_ref(&source.body)?,
+    })
 }
 
-fn glossary_value_to_shared(source: &wordcraft_doc::BuildingBlock) -> Result<craft_wordmodel::BuildingBlock, DocxError> {
+fn glossary_value_to_shared(
+    source: &wordcraft_doc::BuildingBlock,
+    numbering: &wordcraft_doc::numbering::Numbering,
+) -> Result<craft_wordmodel::BuildingBlock, DocxError> {
     Ok(craft_wordmodel::BuildingBlock {
         name: source.name.clone(),
         gallery: source.gallery.clone(),
@@ -363,7 +477,7 @@ fn glossary_value_to_shared(source: &wordcraft_doc::BuildingBlock) -> Result<cra
         style: source.style.clone(),
         types: source.types.clone(),
         behaviors: source.behaviors.clone(),
-        blocks: blocks_to_shared(&source.blocks)?,
+        blocks: blocks_to_shared(&source.blocks, numbering)?,
     })
 }
 
@@ -383,9 +497,10 @@ fn missing_pictures_to_shared(source: &wordcraft_doc::MissingPictures) -> Result
 /// Converts a WordCraft document to the shared model for serialization.
 pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmodel::Document, DocxError> {
     let mut document = craft_wordmodel::Document::new();
-    document.body = blocks_to_shared(&source.body)?;
+    document.body = blocks_to_shared(&source.body, source.numbering.as_ref())?;
     document.last_section = convert_ref(&source.last_section)?;
-    document.parts = source.parts.iter().map(|(&id, part)| Ok((id, part_value_to_shared(part)?))).collect::<Result<_, DocxError>>()?;
+    document.parts =
+        source.parts.iter().map(|(&id, part)| Ok((id, part_value_to_shared(part, source.numbering.as_ref())?))).collect::<Result<_, DocxError>>()?;
     document.styles = Arc::new(convert_ref(source.styles.as_ref())?);
     document.numbering = Arc::new(convert_ref(source.numbering.as_ref())?);
     document.comments = convert_ref(&source.comments)?;
@@ -398,7 +513,7 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
     document.endnote_separators = convert_ref(&source.endnote_separators)?;
     document.media = source.media.clone();
     document.passthrough = source.passthrough.clone();
-    document.glossary = source.glossary.iter().map(glossary_value_to_shared).collect::<Result<_, _>>()?;
+    document.glossary = source.glossary.iter().map(|g| glossary_value_to_shared(g, source.numbering.as_ref())).collect::<Result<_, _>>()?;
     document.missing_pictures = missing_pictures_to_shared(&source.missing_pictures)?;
 
     // Handle fit_state preservation through custom XML passthrough
@@ -433,6 +548,12 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
             None => Arc::new(root_entry.into_bytes()),
         };
         document.passthrough.insert(CUSTOM_XML_ROOTS.into(), roots);
+    }
+
+    crate::num_change::remove_custom_xml_part(&mut document.passthrough, crate::num_change::PART);
+    let overrides = crate::num_change::collect_overrides(source, &document);
+    if let Some(xml) = crate::num_change::write(&overrides)? {
+        crate::num_change::insert_custom_xml_part(&mut document.passthrough, crate::num_change::PART, xml);
     }
 
     Ok(document)
@@ -598,5 +719,105 @@ mod tests {
         assert_eq!(back.body.len(), 2);
         assert_eq!(back.body[0].as_para().map(|p| p.text.as_str()), Some(long_text.as_str()));
         assert!(Arc::ptr_eq(back.media.get("image1.png").expect("media"), &image));
+    }
+
+    #[test]
+    fn bridges_num_change_original_and_snapshot() {
+        use wordcraft_doc::numbering::{AbstractNum, Level, Num, Numbering};
+        use wordcraft_doc::props::{NumChange, NumRef};
+
+        let mut numbering = Numbering::default();
+        numbering.abstracts.push(AbstractNum { id: 10, levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        numbering.abstracts.push(AbstractNum {
+            id: 20,
+            levels: vec![Level { format: wordcraft_doc::section::NumFormat::UpperRoman, text: "%1.".into(), ..Default::default() }],
+            ..Default::default()
+        });
+        numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
+
+        let mut para_with_active = wordcraft_doc::para::Paragraph::with_text("List changed", Default::default());
+        para_with_active.props.numbering = Some(NumRef { num: 2, level: 0 });
+        para_with_active.props.num_change =
+            Some(Box::new(NumChange { rev: 1, original: String::new(), snapshot: Some(NumRef { num: 1, level: 0 }) }));
+
+        let mut para_removed = wordcraft_doc::para::Paragraph::with_text("List removed", Default::default());
+        para_removed.props.num_change = Some(Box::new(NumChange { rev: 2, original: String::new(), snapshot: Some(NumRef { num: 1, level: 0 }) }));
+
+        let mut doc = wordcraft_doc::Document::new();
+        doc.numbering = Arc::new(numbering);
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Para(para_with_active)), Arc::new(wordcraft_doc::Block::Para(para_removed))];
+
+        let shared = to_shared_model(&doc).expect("to_shared_model");
+        let expected_original = doc.numbering.change_original(1, 0).expect("change_original");
+        assert!(!expected_original.is_empty());
+        assert_eq!(
+            shared.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).map(|nc| nc.original.as_str()),
+            Some(expected_original.as_str())
+        );
+        assert_eq!(
+            shared.body[1].as_para().and_then(|p| p.props.num_change.as_deref()).map(|nc| nc.original.as_str()),
+            Some(expected_original.as_str())
+        );
+
+        let roundtripped = from_shared_model(shared).expect("from_shared_model");
+        assert_eq!(
+            roundtripped.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).and_then(|nc| nc.snapshot),
+            Some(NumRef { num: 1, level: 0 })
+        );
+        assert_eq!(
+            roundtripped.body[1].as_para().and_then(|p| p.props.num_change.as_deref()).and_then(|nc| nc.snapshot),
+            Some(NumRef { num: 1, level: 0 })
+        );
+    }
+
+    #[test]
+    fn bridges_num_change_when_edited_list_leaves_another_sole_cache_match() {
+        use wordcraft_doc::numbering::{AbstractNum, Level, Num, Numbering};
+        use wordcraft_doc::props::{NumChange, NumRef};
+
+        // List 1 is Decimal ("%1:1:0:."); List 2 was edited in place to UpperRoman ("%1:1:1:.").
+        let mut numbering = Numbering::default();
+        numbering.abstracts.push(AbstractNum { id: 10, levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        numbering.abstracts.push(AbstractNum {
+            id: 20,
+            levels: vec![Level { format: wordcraft_doc::section::NumFormat::UpperRoman, text: "%1.".into(), ..Default::default() }],
+            ..Default::default()
+        });
+        numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
+
+        // Paragraph 0 retains its historical "%1:1:0:." original while referencing edited List 2.
+        let mut p_known = wordcraft_doc::para::Paragraph::with_text("Known snapshot on edited list", Default::default());
+        p_known.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 2, level: 0 }) }));
+
+        // Paragraph 1 had an unresolved ambiguous "%1:1:0:." original before List 2 was edited.
+        let mut p_unresolved = wordcraft_doc::para::Paragraph::with_text("Unresolved foreign collision", Default::default());
+        p_unresolved.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: None }));
+
+        let mut doc = wordcraft_doc::Document::new();
+        doc.numbering = Arc::new(numbering);
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Para(p_known)), Arc::new(wordcraft_doc::Block::Para(p_unresolved))];
+
+        let bytes = crate::write(&doc).expect("write docx");
+        let reopened = crate::read(&bytes).expect("read docx");
+        assert!(
+            !reopened.passthrough.keys().any(|k| k.eq_ignore_ascii_case(crate::num_change::PART)),
+            "custom XML part removed from passthrough on read"
+        );
+        for bk in ["wordcraft:embedded.parts", "wordcraft:customXml.roots"] {
+            assert!(
+                !reopened.passthrough.get(bk).is_some_and(|b| String::from_utf8_lossy(b).contains(crate::num_change::PART)),
+                "{bk} cleaned up on read"
+            );
+        }
+
+        let nc0 = reopened.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc0");
+        assert_eq!(nc0.original, "%1:1:0:.", "historical w:original preserved as written");
+        assert_eq!(nc0.snapshot, Some(NumRef { num: 2, level: 0 }), "must restore edited list 2, not sole cache match list 1");
+
+        let nc1 = reopened.body[1].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc1");
+        assert_eq!(nc1.original, "%1:1:0:.");
+        assert_eq!(nc1.snapshot, None, "previously unresolved collision must not attach to sole remaining match list 1");
     }
 }
