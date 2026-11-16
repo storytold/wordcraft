@@ -914,6 +914,7 @@ fn long_word_beside_a_float(n: usize) -> Document {
 /// A word with no break opportunity in it: measuring the word for every line it takes scanned
 /// the whole paragraph each time, so the layout was quadratic in the word's length.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the time ratio")]
 fn a_long_unbreakable_word_lays_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(long_word_beside_a_float, 50_000, &LayoutOptions::default());
     eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
@@ -1134,6 +1135,7 @@ fn long_word_with_alternating_advances_beside_a_float(n: usize) -> Document {
 /// A word whose advances alternate in sign lays out in linear time: the measurement that asks
 /// whether it would fit the full line must not walk the word again for every line it takes.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the time ratio")]
 fn a_word_with_alternating_advances_lays_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(long_word_with_alternating_advances_beside_a_float, 50_000, &LayoutOptions::default());
     eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
@@ -7839,6 +7841,7 @@ fn a_no_break_space_before_a_slash_still_holds() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the time ratio")]
 fn unequal_formats_lay_out_in_linear_time() {
     crate::test_fonts();
     // Runs whose formats never compare equal (NaN spacing from a hostile file) each get a style;
@@ -15442,5 +15445,90 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         let confined = place(direction, false);
         let reference = place(direction, true);
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
+    }
+}
+
+/// A header paragraph beside a Square float on its last lines only: those lines are shorter than
+/// the first. A click on the first line past the short last line's end is still on the header's
+/// text, so a Behind Text picture under it is not grabbed there (#5601 review).
+#[test]
+fn header_text_covers_the_whole_width_of_a_wrapped_first_line() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let text = "Header words that wrap across the whole line and carry on over several lines of the header \
+        paragraph so there are three lines here and the last one is cut short by the float beside it";
+    let mut d = Document::new();
+    let id =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    d.last_section.headers.default = Some(id);
+    let at = |off| Pos::new(wordcraft_doc::StoryRef::Part(id), wordcraft_doc::Path(vec![0]), off);
+    // The Square float narrows the lines below the first two, on the right.
+    let square = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 300.0, y: 30.0, ..Default::default() };
+    d.insert_object(&at(0), rect_shape(160.0, 80.0, square), &Default::default()).unwrap();
+    // The Behind Text picture lies under the first line, past where the last line ends.
+    let behind = Float { wrap: Wrap::BehindText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 340.0, y: 0.0, ..Default::default() };
+    d.insert_object(&at(0), rect_shape(120.0, 20.0, behind), &Default::default()).unwrap();
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let lines: Vec<_> = page
+        .header
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { para, l0, l1, x, y, .. } => {
+                Some((*x, *y, (*l0..*l1).filter_map(|i| para.lines.get(i)).map(|l| (l.top, l.height, l.right)).collect::<Vec<_>>()))
+            }
+            _ => None,
+        })
+        .collect();
+    let (x, y, ls) = lines.first().expect("header lines").clone();
+    let (first, last) = (ls.first().expect("first"), ls.last().expect("last"));
+    assert!(last.2 + 40.0 < first.2 - 20.0, "the last line is shorter than the first: {ls:?}");
+    let (px, py) = (x + first.2 - 15.0, y + first.0 + first.1 / 2.0);
+    assert!(l.object_at_in(0, px, py, 0.0, wordcraft_doc::StoryRef::Part(id)).is_none(), "on the first line's text, not the picture: {lines:?}");
+}
+
+/// `Line::left`/`right` are the edges available to a line, not where its ink sits: a centred or
+/// right-aligned header line covers the Behind Text picture across its whole band, so a click in
+/// the empty space beside its text is still on the header text. Beyond the band (an indent, or
+/// beside a float) and 40pt of slack the picture is hit (#5601 review).
+#[test]
+fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
+    use wordcraft_doc::Align;
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for align in [Align::Center, Align::Right] {
+        let mut d = Document::new();
+        let mut p = wordcraft_doc::Paragraph::with_text("Header", Default::default());
+        p.props.align = Some(align);
+        p.props.indent_left = Some(150.0);
+        let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+        d.last_section.headers.default = Some(id);
+        let story = wordcraft_doc::StoryRef::Part(id);
+        let at = Pos::new(story, wordcraft_doc::Path(vec![0]), 0);
+        // A Behind Text picture across the whole text width, level with the header line.
+        let behind = Float { wrap: Wrap::BehindText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, ..Default::default() };
+        d.insert_object(&at, rect_shape(460.0, 20.0, behind), &Default::default()).unwrap();
+        let l = lay(&d);
+        let (x, y, left, right, height, ink0) = l.pages[0]
+            .header
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { para, l0, x, y, .. } => {
+                    para.lines.get(*l0).and_then(|ln| Some((*x, *y, ln.left, ln.right, ln.height, *ln.xs.first()?)))
+                }
+                _ => None,
+            })
+            .expect("header line");
+        // `left`/`right` are the band edges available to the line, not the ink extent.
+        assert!((left - 150.0).abs() < 0.5, "{align:?}: the band's left edge is the indent: {left}");
+        assert!(ink0 > left + 100.0, "{align:?}: the ink starts well inside the band: ink {ink0}, band left {left}");
+        let ym = y + height / 2.0;
+        let hit = |px: f32| l.object_at_in(0, px, ym, 0.0, story).is_some();
+        // Inside the band, wherever the centred or right-aligned ink sits: header text.
+        assert!(!hit(x + left + 5.0), "{align:?}: the band's left end is text");
+        assert!(!hit(x + (left + right) / 2.0), "{align:?}: the band's middle is text");
+        // Between the indent and the ink is still the text band, not the picture.
+        assert!(!hit(x + left + 160.0), "{align:?}: between the indent and the ink is text");
+        // Within 40pt of the band's left end is still text; further left the picture is hit.
+        assert!(!hit(x + left - 30.0), "{align:?}: within 40pt left of the band is text");
+        assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
 }
