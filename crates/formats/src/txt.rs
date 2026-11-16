@@ -161,7 +161,10 @@ fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter
 
 /// UTF-8 text, CRLF line ends.
 pub fn export(doc: &Document) -> Vec<u8> {
-    let flow = from_doc(doc);
+    let Ok(shared) = wordcraft_docx::to_shared_model(doc) else {
+        return Vec::new();
+    };
+    let flow = from_doc(&shared);
     let mut lines = Vec::new();
     blocks_text(&flow.blocks, &mut lines, &mut ListCounter::default(), 0);
     lines.join("\r\n").into_bytes()

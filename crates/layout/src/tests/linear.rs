@@ -2,10 +2,9 @@
 //! looked up (#3692, #3706): an input 8x the size must cost about 8x as much, not 64x.
 //!
 //! The cost is the steps the lookups' walks count ([`crate::work`]), not a timing, so a busy
-//! machine can't make a linear lookup look quadratic or the other way round. Only proofing text,
-//! whose walk is the document model's, is timed.
+//! machine can't make a linear lookup look quadratic or the other way round.
 
-use super::{SCALE, cost_ratio};
+use super::SCALE;
 use crate::{
     Block, CharProps, DocLayout, Document, HeaderSet, HeightRule, InlineObject, LayoutCache, LayoutOptions, Page, ParaLayout, Paragraph, Path,
     Placed, SectionProps, SectionStart, StoryRef, display, layout, para, work,
@@ -56,22 +55,12 @@ fn proof_text_walks_the_runs_once() {
         p
     };
     assert_eq!(para::proof_text(&para(5)), "a\u{1}a\u{1}a");
-    // The runs are the document model's, whose walk counts no steps, so this one is timed: the
-    // CPU time this thread ran (`cost_ratio`). At 50,000 runs the old walk took 64x as long for
-    // 8x the runs, and the new one about 8x; a limit of 24x stays far from both, and a ratio over
-    // it is measured again, twice, before the test fails, so a busy spell can't fail it alone.
-    let (small, big) = (para(50_000), para(SCALE * 50_000));
-    let proof_8 = |p: &Paragraph| (0..8).for_each(|_| drop(std::hint::black_box(para::proof_text(p))));
-    let mut ratios = Vec::new();
-    for _ in 0..3 {
-        let (t1, tk, ratio) = cost_ratio(SCALE, || proof_8(&small), || proof_8(&big));
-        eprintln!("proof_text: t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
-        if ratio < 24.0 {
-            return;
-        }
-        ratios.push(ratio);
-    }
-    panic!("proof_text: 8x the runs took {ratios:.1?}x the time, three times over: not linear");
+    // The runs the walk looks at are counted now ([`crate::work`]), as every other walk here is,
+    // so this no longer depends on a timing: the ratio was creeping over its limit when the
+    // crate's tests ran in parallel, from cache and memory contention rather than from any
+    // regression (#5185). Going back to the first run for every character counts the runs once
+    // per character, which is the quadratic walk this watches for.
+    assert_linear_steps("proof_text", 50_000, para, |p| drop(std::hint::black_box(para::proof_text(p))));
 }
 
 /// A right-to-left paragraph whose one line holds `n` hidden letters: caret offsets with no width.
@@ -492,4 +481,26 @@ fn selecting_a_header_on_the_hinted_page_does_not_walk_every_page() {
     let (small, big) = (steps(20), steps(160));
     eprintln!("hinted header: {small} steps for 20 pages, {big} for 160");
     assert!(small > 0 && big <= small + 8, "the pages aren't walked: {small} → {big}");
+}
+
+/// A paragraph of a decimal tab at 200 pt followed by `text`.
+fn after_decimal_tab(text: &str) -> Document {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let mut d = Document::from_text(&format!("\t{text}"));
+    let at = Pos::body(0, 0);
+    d.format_paragraphs(&at, &at, &|p| p.tabs = Some(vec![TabStop { pos: 200.0, align: TabAlign::Decimal, leader: Default::default() }])).unwrap();
+    d
+}
+
+/// The text after a decimal tab was looked at again from the tab for its '.' after each of its
+/// clusters, so a long run of clusters without a '.' (soft hyphens take no room, so they stay on
+/// one line) took quadratic time.
+#[test]
+fn text_after_a_decimal_tab_is_looked_at_once() {
+    let opts = LayoutOptions::default();
+    // The text after the tab still ends at the stop, where it ended before.
+    let l = lay(&after_decimal_tab("12.5"), &opts);
+    let (Some(end), Some(start)) = (l.caret(&Pos::body(0, 5)), l.caret(&Pos::body(0, 0))) else { panic!("no carets") };
+    assert!((end.x - start.x - 200.0).abs() < 1.0, "the text ends at the stop: {} from {}", end.x, start.x);
+    assert_layout_linear("decimal tab", 2000, |n| after_decimal_tab(&format!("1{}", "\u{AD}".repeat(n))), &opts);
 }
