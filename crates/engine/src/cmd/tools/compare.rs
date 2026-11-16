@@ -76,7 +76,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let mut not_honoured: Vec<&str> =
         ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
-    let date = crate::cmd::now_iso();
+    let date = crate::cmd::now_word_date();
     let old: Vec<Arc<Block>> = s.doc.body.clone();
     let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
         // The revised document's text boxes get stories of their own in the result, so its

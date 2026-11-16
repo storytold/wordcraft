@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::{Comment, Paragraph, PartKind, Pos, StoryRef, para_block};
 
-use super::{fmt_revisions, now_iso, pos_json, sel_result};
+use super::{fmt_revisions, now_iso, now_word_date, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 mod changes;

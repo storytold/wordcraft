@@ -4080,8 +4080,10 @@ fn new_comments_and_replies_carry_their_utc_time() {
     run(&mut s, "review.reply", json!({"id": id, "text": "two"}));
     assert_eq!(s.doc.comments.len(), 2);
     for c in s.doc.comments.values() {
+        // `date` is local time with the `Z` Word writes there; `date_utc` is the real UTC time.
         assert!(c.date.ends_with('Z'), "{}", c.date);
-        assert_eq!(c.date_utc.as_deref(), Some(c.date.as_str()));
+        let utc = c.date_utc.as_deref().expect("a UTC time");
+        assert!(utc.ends_with('Z') && utc.len() == c.date.len(), "{utc}");
     }
 }
 
@@ -7556,7 +7558,8 @@ fn timestamps_come_from_the_clock() {
     run(&mut s, "text.insert", json!({"text": "Dated"}));
     run(&mut s, "select.text", json!({"text": "Dated"}));
     run(&mut s, "review.newComment", json!({"text": "When?"}));
-    let date = run(&mut s, "review.comments", json!({}))[0]["date"].as_str().unwrap_or_default().to_string();
+    // `date` is local time, as Word writes it; the UTC time is `date_utc`.
+    let date = s.doc.comments.values().next().and_then(|c| c.date_utc.clone()).unwrap_or_default();
     // Fixed-width ISO strings sort by time.
     assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }

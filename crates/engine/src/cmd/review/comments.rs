@@ -1,5 +1,5 @@
 use super::{
-    BTreeMap, BTreeSet, CmdError, CmdResult, Comment, InlineObject, Paragraph, PartKind, Pos, Selection, Session, StoryRef, Value, json, now_iso, p,
+    BTreeMap, BTreeSet, CmdError, CmdResult, Comment, InlineObject, Paragraph, PartKind, Pos, Selection, Session, StoryRef, Value, json, now_iso, now_word_date, p,
     para_block, pos_json, sel_result,
 };
 
@@ -28,7 +28,7 @@ pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
         Comment {
             author: s.author.clone(),
             initials,
-            date: now.clone(),
+            date: now_word_date(),
             date_utc: Some(now),
             parent: None,
             resolved: false,
@@ -68,7 +68,7 @@ pub(super) fn reply(s: &mut Session, v: &Value) -> CmdResult {
         Comment {
             author: s.author.clone(),
             initials,
-            date: now.clone(),
+            date: now_word_date(),
             date_utc: Some(now),
             parent: Some(parent),
             resolved: false,
