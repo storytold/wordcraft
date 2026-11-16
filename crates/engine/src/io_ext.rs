@@ -7,7 +7,10 @@ use wordcraft_doc::Document;
 pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Option<Result<Document, String>> {
     match ext {
         "docx" | "docm" | "dotx" | "dotm" => Some(crate::io::read_docx(bytes, None).map_err(|e| e.to_string())),
+        #[cfg(feature = "legacy-doc")]
         "doc" | "dot" => Some(wordcraft_docbin::read(bytes).map_err(|e| e.to_string())),
+        #[cfg(not(feature = "legacy-doc"))]
+        "doc" | "dot" => Some(Err(crate::io::LEGACY_DOC_UNAVAILABLE.into())),
         // Word XML Document (Flat OPC) or Word 2003 XML, told apart by the root element.
         "xml" => Some(wordcraft_docx::read_xml(bytes).map_err(|e| e.to_string())),
         // HTML, Markdown, RTF…: pictures fit the text width (see `io::fit_pictures`). An

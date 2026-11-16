@@ -173,6 +173,7 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Document, String> {
 /// Open a Word 97-2003 binary file, decrypting it with `password` when it is password-protected
 /// (XOR, RC4, RC4 CryptoAPI). The errors for a missing or wrong password are the same texts the
 /// `.docx` reader gives, so [`needs_password`] and [`wrong_password`] recognise them.
+#[cfg(feature = "legacy-doc")]
 fn open_binary_doc(bytes: &[u8], password: Option<&str>) -> Result<(Document, bool), String> {
     use wordcraft_docbin::DocbinError;
     let encrypted = wordcraft_docbin::is_encrypted(bytes);
@@ -182,6 +183,15 @@ fn open_binary_doc(bytes: &[u8], password: Option<&str>) -> Result<(Document, bo
         Err(DocbinError::WrongPassword) => Err(wordcraft_docx::WRONG_PASSWORD.to_string()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// What opening a Word 97-2003 binary file reports in a build without the `legacy-doc` feature.
+#[cfg(not(feature = "legacy-doc"))]
+pub(crate) const LEGACY_DOC_UNAVAILABLE: &str = "Word 97–2003 (.doc) import is not included in this build";
+
+#[cfg(not(feature = "legacy-doc"))]
+fn open_binary_doc(_bytes: &[u8], _password: Option<&str>) -> Result<(Document, bool), String> {
+    Err(LEGACY_DOC_UNAVAILABLE.into())
 }
 
 /// [`open_bytes`] for a file that may be password-protected: a Word document encrypted with a

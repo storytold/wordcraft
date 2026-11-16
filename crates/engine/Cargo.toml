@@ -9,6 +9,13 @@ description = "WordCraft engine: session, selection, undo, the command registry 
 workspace = true
 
 [features]
+default = ["full"]
+# Everything the desktop app ships. An embedder or a wasm build that wants a smaller engine
+# turns the defaults off and names the parts it needs.
+full = ["legacy-doc"]
+# Opening Word 97-2003 binary documents (.doc, .dot). Without it they report that the format
+# is not included in this build.
+legacy-doc = ["dep:wordcraft-docbin"]
 # Front-end producer tests need to simulate a globally exhausted IME revision allocator. It only
 # ever makes receipt classification fail closed. Never enable this for a production build; the
 # UI's dev-dependencies enable it for its tests.
@@ -22,7 +29,7 @@ wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-proof = { workspace = true }
 wordcraft-docx = { workspace = true }
-wordcraft-docbin = { workspace = true }
+wordcraft-docbin = { workspace = true, optional = true }
 wordcraft-pdf = { workspace = true }
 wordcraft-formats = { workspace = true }
 serde = { workspace = true }
