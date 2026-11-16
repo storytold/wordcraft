@@ -58,7 +58,7 @@ impl FontDb {
 
     /// The fallback face for `c`, and the number of loaded faces it was chosen from.
     fn search_fallback(&self, c: char, exclude: u32) -> (Option<Arc<FontFace>>, usize) {
-        if let Some(face) = self.circle_fallback(c, exclude) {
+        if let Some(face) = self.word_fallback(c, exclude) {
             return (Some(face), self.read_faces().len());
         }
         let (found, n) = self.loaded_fallback(c, exclude);
@@ -68,13 +68,17 @@ impl FontDb {
         self.system_search(c, exclude)
     }
 
-    fn circle_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
-        if c != '\u{25CF}' {
-            return None;
-        }
-        // Word uses this text face for an uncovered black circle, before a UI sans.
-        const FAMILY: &str = "Times New Roman";
-        let find = || self.find(FAMILY, "Regular").filter(|f| f.id != exclude && f.covers(c));
+    /// The face Word itself draws `c` in when the text's font lacks it
+    /// ([`crate::word::fallback_families`]), when one is installed: before the fallback family and
+    /// the other loaded faces.
+    fn word_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
+        crate::word::fallback_families(c).iter().find_map(|family| self.named_fallback(family, c, exclude))
+    }
+
+    /// `family`'s regular face when it covers `c`, loading the family from the system's fonts
+    /// when it is installed and not loaded yet.
+    fn named_fallback(&self, family: &str, c: char, exclude: u32) -> Option<Arc<FontFace>> {
+        let find = || self.find(family, "Regular").filter(|f| f.id != exclude && f.covers(c));
         if let Some(face) = find() {
             return Some(face);
         }
@@ -82,7 +86,7 @@ impl FontDb {
         {
             let enabled = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled;
             if enabled {
-                self.load_cataloged(FAMILY);
+                self.load_cataloged(family);
             }
         }
         find()

@@ -704,6 +704,22 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     r
 }
 
+/// The families Word draws `c` in when the text's font has no glyph for it, in the order it
+/// takes them, for the characters where that is known; empty for every other character.
+///
+/// A black circle (U+25CF): Times New Roman, before a UI sans. A non-breaking hyphen (U+2011):
+/// Cambria Math. Measured in Word for Windows with Arial, Calibri, Courier New, Verdana and
+/// Georgia, none of which has it: the hyphen is Cambria Math's, 0.332 em wide in all five, and
+/// the line takes Cambria Math's ascent and descent as from any font on it. Cambria's hyphen is
+/// as wide and its line as tall, so it stands in where Cambria Math is not installed.
+pub fn fallback_families(c: char) -> &'static [&'static str] {
+    match c {
+        '\u{25CF}' => &["Times New Roman"],
+        '\u{2011}' => &["Cambria Math", "Cambria"],
+        _ => &[],
+    }
+}
+
 /// A line's (ascent, descent) from hhea values, both positive: the line gap goes above the ascent.
 fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())

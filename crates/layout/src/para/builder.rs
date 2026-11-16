@@ -6,6 +6,7 @@ use super::chars::{
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
+use wordcraft_doc::para::NB_HYPHEN;
 use wordcraft_fonts::ShapeContext;
 
 pub(super) struct Builder<'a> {
@@ -52,6 +53,17 @@ struct SegmentInput<'a> {
     context: &'a [bool],
 }
 
+/// The character `face` draws a non-breaking hyphen (U+2011) with when it has no glyph for one:
+/// its own hyphen (U+2010), else its hyphen-minus. Word draws such a hyphen in Cambria Math
+/// ([`wordcraft_fonts::word::fallback_families`]); where that is not installed the font's own
+/// hyphen stands in, and not another fallback face's, whose taller line would move everything
+/// below it (the bundled sans made each such line of 8 pt Arial 1.2 pt taller, where Cambria
+/// Math adds 0.2 pt in Word). Arial's and Times New Roman's hyphen-minus is 0.333 em wide,
+/// Cambria Math's non-breaking hyphen 0.332 em.
+fn own_hyphen(face: FaceRef) -> Option<char> {
+    ['\u{2010}', '-'].into_iter().find(|h| face.covers(*h))
+}
+
 impl<'a> Builder<'a> {
     /// Displayed form of `c` at run-relative byte `at` (Word › Numeral): one char in, one
     /// char out. `rtl` is the shaping direction; in Context mode `context` (from
@@ -83,11 +95,18 @@ impl<'a> Builder<'a> {
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
                 _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
-                Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
+                // (A non-breaking hyphen goes by its own rule below, also right after a character
+                // from a fallback face that has one.)
+                Some(SegKey { face: Some(face), .. }) if face.covers(dc) && dc != NB_HYPHEN => Some(face),
                 _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
                 _ => {
                     let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
-                    wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
+                    let found = wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic);
+                    // A non-breaking hyphen the font lacks stays in the font, drawn with its own
+                    // hyphen ([`own_hyphen`]), unless the face Word draws it in is installed.
+                    let words =
+                        found.as_ref().is_some_and(|f| wordcraft_fonts::word::fallback_families(dc).iter().any(|n| f.family.eq_ignore_ascii_case(n)));
+                    if dc == NB_HYPHEN && !words && own_hyphen(primary).is_some() { None } else { found.map(|f| FaceRef::of(&f)) }
                 }
             };
             let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
@@ -366,6 +385,8 @@ impl<'a> Builder<'a> {
                     // Word sets a no-break space as wide as a space; some fonts draw their own
                     // U+00A0 glyph wider. Only the shaping changes: line breaking reads the text.
                     ' '
+                } else if c == NB_HYPHEN && !st.face.covers(c) {
+                    own_hyphen(st.face).unwrap_or(c)
                 } else if upper {
                     upper_char(c)
                 } else {
