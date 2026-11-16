@@ -68,9 +68,11 @@ impl Request {
                 Duplex::ShortEdge => craft_print::Duplex::ShortEdge,
             }),
             grayscale: self.grayscale,
+            grey_pages: false,
             scaling: if self.shrink { craft_print::Scaling::ShrinkToFit } else { craft_print::Scaling::Exact },
             title: self.title,
             options: self.options,
+            driver_settings: None,
         }
     }
 }
@@ -471,9 +473,11 @@ mod tests {
             collate: false,
             duplex: Some(craft_print::Duplex::ShortEdge),
             grayscale: true,
+            grey_pages: false,
             scaling: craft_print::Scaling::ShrinkToFit,
             title: "A document".into(),
             options: vec![("media".into(), "iso_a4_210x297mm".into())],
+            driver_settings: None,
         };
         let bytes = serde_json::to_vec(&Request::from_job(&expected)).unwrap();
         let received: Request = serde_json::from_slice(&bytes).unwrap();
