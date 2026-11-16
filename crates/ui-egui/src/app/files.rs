@@ -269,6 +269,10 @@ impl WordApp {
         if last || !self.windows.native() {
             self.ui.backstage = false;
         }
+        // Quitting with a sheet per window (`close_every_window`): the last one answered quits.
+        if params.get("quitting").and_then(Value::as_bool) == Some(true) && !self.has_unsaved_documents() {
+            self.quit_requested = true;
+        }
         Ok(json!({"closed": true}))
     }
 

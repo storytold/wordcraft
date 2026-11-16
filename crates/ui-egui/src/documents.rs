@@ -201,7 +201,8 @@ impl WordApp {
     }
 
     /// Quitting with a sheet per window, as Mac apps do: every window runs File › Close, so the
-    /// clean ones close and each one with unsaved work asks on its own window. Quit stops there.
+    /// clean ones close and each one with unsaved work asks on its own window. The app quits once
+    /// the last of them has closed (`{"quitting": true}`); Cancel on any of them keeps it open.
     pub(crate) fn close_every_window(&mut self) {
         let shown = self.session.document_id();
         for d in self.session.documents() {
@@ -210,7 +211,7 @@ impl WordApp {
             }
         }
         if self.has_document() {
-            let _ = self.run("file.close", json!({}));
+            let _ = self.run("file.close", json!({"quitting": true}));
         }
     }
 
@@ -388,6 +389,26 @@ mod tests {
         assert!(!a.close_requested(), "asked again");
         a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
         assert!(a.quit_requested);
+        assert!(a.close_requested());
+    }
+
+    /// Quitting with a sheet per window: Cancel keeps the app open; Don't Save closes the document
+    /// and quits, instead of leaving an empty window to quit again.
+    #[test]
+    fn quitting_with_sheets_quits_after_dont_save() {
+        let mut a = WordApp::new(
+            Session::new(wordcraft_doc::Document::new()),
+            Services { save_prompt: Some(Box::new(|_, _, _| None)), ..Default::default() },
+        );
+        a.run("text.insert", json!({"text": "Unsaved"})).unwrap();
+        assert!(!a.close_requested());
+        assert_eq!(prompt(&a), Some("saveChanges"));
+        a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        assert!(!a.quit_requested && a.has_document(), "Cancel keeps the app and the document");
+
+        assert!(!a.close_requested());
+        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        assert!(a.quit_requested, "the last answer quits");
         assert!(a.close_requested());
     }
 
