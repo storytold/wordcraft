@@ -13,8 +13,10 @@
 //! box starting in the space after the last paragraph makes the header end at its bottom. With
 //! three paragraphs and a box set 26 pt down the page, anchored in the second, no paragraph moves
 //! at mode 14 and the body starts at the box's bottom (55.9 pt). Square wrapping at mode 14 leaves
-//! the text as it is. Not measured: Tight and Through wrapping, footers (which differ), header
-//! table cells, mode 11.
+//! the text as it is. Mode 11 (Word 2003's layout, measured on .doc files) behaves like 14: the
+//! single line stays at the top and the body starts at 54.0 pt (mode 12: 54.0, mode 14: 54.8), and
+//! no paragraph of the three-paragraph header moves. Not measured: Tight and Through wrapping,
+//! footers (which differ), header table cells.
 
 use super::{lay, rect_shape};
 use crate::{DocLayout, Placed, StoryRef};
@@ -144,4 +146,20 @@ fn mode_14_no_header_paragraph_moves_for_an_object_set_down_the_page_from_the_se
     // The box is 60 pt down the page, over the third line (the test font's lines are taller than
     // Word's 11.5 pt, so the box is set lower than the 26 pt measured): the body starts at its bottom.
     assert!((body - (60.0 + BOX_H)).abs() < 0.5, "body at {body}");
+}
+
+#[test]
+fn mode_11_header_text_stays_beside_its_own_top_and_bottom_object_like_mode_14() {
+    // Word: modes 11, 12 and 14 keep the line at the header's top; mode 15 moves it below the box.
+    let (m11, m12, m14, m15) = (
+        page(11, Some(Wrap::TopAndBottom), 7.2),
+        page(12, Some(Wrap::TopAndBottom), 7.2),
+        page(14, Some(Wrap::TopAndBottom), 7.2),
+        page(15, Some(Wrap::TopAndBottom), 7.2),
+    );
+    for l in [&m11, &m12] {
+        assert!((header_line_top(l) - header_line_top(&m14)).abs() < 0.5, "line at {}, {} at mode 14", header_line_top(l), header_line_top(&m14));
+        assert!((body_top(l) - body_top(&m14)).abs() < 0.5, "body at {}, {} at mode 14", body_top(l), body_top(&m14));
+    }
+    assert!(header_line_top(&m15) > header_line_top(&m11) + 5.0, "mode 15 line at {}, mode 11 at {}", header_line_top(&m15), header_line_top(&m11));
 }
