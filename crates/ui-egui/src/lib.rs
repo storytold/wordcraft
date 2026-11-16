@@ -647,6 +647,10 @@ fn migrate_units(v: &mut Value) {
     }
 }
 
+/// A Save Changes prompt the host shows natively: the document it asked about, and where the
+/// answer (`save`, `dontSave`, `cancel`) arrives.
+pub(crate) type NativePrompt = (u64, std::sync::mpsc::Receiver<String>);
+
 /// The application.
 pub struct WordApp {
     pub session: Session,
@@ -825,6 +829,8 @@ pub struct WordApp {
     awaiting_save: Option<AwaitingSave>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    /// The Save Changes prompt the host is showing natively ([`Services::save_prompt`]).
+    native_prompt: Option<NativePrompt>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,

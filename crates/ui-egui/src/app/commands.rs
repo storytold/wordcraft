@@ -490,6 +490,9 @@ impl WordApp {
         if req.get("close").is_some() {
             self.quit_requested = true;
         }
+        if req.get("closeForQuit").is_some() && self.has_document() {
+            let _ = self.run("file.close", json!({}));
+        }
         crate::windows::arrange::request(self, req);
     }
 

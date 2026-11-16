@@ -3187,6 +3187,54 @@ fn open_opens_beside_unsaved_work() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A host with its own Save Changes prompt (a sheet on macOS) gets the question once, the egui
+/// prompt stays out of sight, and the host's answer runs `ui.saveChanges`.
+#[test]
+fn a_native_save_prompt_asks_once_and_its_answer_closes_the_document() {
+    let mut a = typed();
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (answer, rx) = std::sync::mpsc::channel();
+    let rx = std::cell::Cell::new(Some(rx));
+    let log = asked.clone();
+    a.services.save_prompt = Some(Box::new(move |_, question, _| {
+        log.borrow_mut().push(question);
+        rx.take().unwrap_or_else(|| std::sync::mpsc::channel().1)
+    }));
+    let mut d = FrameDriver { ctx: egui::Context::default(), t: 0.0 };
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    a.run("file.close", json!({})).unwrap();
+    // The first frames only install the fonts.
+    for _ in 0..4 {
+        d.frame(&mut a, vec![], screen);
+    }
+    assert_eq!(asked.borrow().len(), 1, "asked once, not every frame");
+    assert!(asked.borrow()[0].contains("save changes"), "{:?}", asked.borrow());
+    assert_eq!(prompt(&a), Some("saveChanges"), "still waiting on the answer");
+    answer.send("dontSave".to_string()).unwrap();
+    d.frame(&mut a, vec![], screen);
+    assert_eq!(prompt(&a), None);
+    assert!(!a.has_document(), "Don't Save closed the document");
+}
+
+/// Find and Replace in a window of its own (`Services::find_window`) stays open while the user
+/// works and closes on Escape, as the built-in one does. (Without a windowing backend egui draws
+/// the window inside this one, so the frames below reach its contents.)
+#[test]
+fn find_in_its_own_window_stays_open_and_closes_on_escape() {
+    let mut a = typed();
+    a.services.find_window = true;
+    let mut d = FrameDriver { ctx: egui::Context::default(), t: 0.0 };
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    a.run("ui.dialog", json!({"name": "find"})).unwrap();
+    for _ in 0..4 {
+        d.frame(&mut a, vec![], screen);
+    }
+    assert_eq!(prompt(&a), Some("find"));
+    let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    d.frame(&mut a, vec![escape], screen);
+    assert_eq!(prompt(&a), None, "Escape closed it");
+}
+
 /// Mod+O without a path only shows the file picker, so it doesn't ask yet.
 #[test]
 fn open_without_a_path_only_shows_the_picker() {

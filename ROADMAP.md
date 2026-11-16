@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-16: macOS system dialogs. "Save changes?" is a sheet on the document's own window: other windows keep their input and each can ask at once; Quit closes the clean windows and asks in every unsaved one, then stops. Find and Replace opens in a window of its own, tied to its document window as a child window and hidden while WordCraft is in the background (the smaller utility title bar needs a panel option in the egui and winit forks, a follow-up). The workspace's `unsafe_code` goes from `forbid` to `deny`, with one macOS-only file allowed in AGENTS.md. Other dialogs may need the same treatment. Readiness estimates unchanged.
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
 

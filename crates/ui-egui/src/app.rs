@@ -70,6 +70,7 @@ impl WordApp {
             read_aloud_at,
             awaiting_save,
             file_dialog,
+            native_prompt,
             info_editing,
             shown_document,
             #[cfg(not(target_arch = "wasm32"))]
@@ -193,6 +194,7 @@ impl WordApp {
             read_aloud_at,
             awaiting_save,
             file_dialog,
+            native_prompt,
             info_editing,
             shown_document,
             #[cfg(not(target_arch = "wasm32"))]

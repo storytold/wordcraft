@@ -200,6 +200,20 @@ impl WordApp {
         !self.unsaved_documents().is_empty()
     }
 
+    /// Quitting with a sheet per window, as Mac apps do: every window runs File › Close, so the
+    /// clean ones close and each one with unsaved work asks on its own window. Quit stops there.
+    pub(crate) fn close_every_window(&mut self) {
+        let shown = self.session.document_id();
+        for d in self.session.documents() {
+            if d.id != shown && Some(d.id) != self.no_document {
+                self.queue_for_window(d.id, &json!({"closeForQuit": true}));
+            }
+        }
+        if self.has_document() {
+            let _ = self.run("file.close", json!({}));
+        }
+    }
+
     /// Quitting: show the next document with unsaved work and ask Save / Don't Save / Cancel
     /// about it (its answer goes on with [`WordApp::close_document`]'s `quit`). With none left,
     /// the app quits.

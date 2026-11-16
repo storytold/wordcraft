@@ -152,14 +152,89 @@ pub(crate) fn release_keyboard(app: &WordApp, ctx: &egui::Context) {
     }
 }
 
+/// Shows the Save Changes prompt through [`Services::save_prompt`](crate::Services::save_prompt)
+/// when the host has one, and answers it when the host does; `false` leaves it to the egui window.
+/// `true`: the prompt is handled, and back in `app.dialog` while it waits.
+fn native_save_prompt(app: &mut WordApp, d: &Dialog) -> bool {
+    let (Dialog::SaveChanges { name, document, message, .. }, Some(hook)) = (d, &app.services.save_prompt) else {
+        return false;
+    };
+    if app.native_prompt.as_ref().is_none_or(|(asked, _)| asked != document) {
+        let question = crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)]);
+        let mut detail = tl!("Your changes will be lost if you don't save them.").to_string();
+        // Why the last Save failed (#1445), as the built-in prompt shows it.
+        if !message.is_empty() {
+            detail = format!("{message}\n\n{detail}");
+        }
+        app.native_prompt = Some((*document, hook(app.sent_title.clone(), question, detail)));
+    }
+    let answer = match app.native_prompt.as_ref().map(|(_, rx)| rx.try_recv()) {
+        Some(Ok(answer)) => answer,
+        Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => "cancel".into(),
+        // Still asking: the prompt stays open, out of sight.
+        _ => {
+            app.dialog = Some(d.clone());
+            return true;
+        }
+    };
+    app.native_prompt = None;
+    // `ui.saveChanges` reads the prompt from `app.dialog`, which `show` has taken out.
+    app.dialog = Some(d.clone());
+    let _ = app.run("ui.saveChanges", serde_json::json!({"answer": answer}));
+    true
+}
+
+/// Find and Replace in a window of its own (`Services::find_window`), placed at the top right of
+/// the document's window the first time and sized to what it shows; closing it closes the dialog.
+fn find_window(app: &mut WordApp, ctx: &egui::Context, mut d: Dialog, title: &str) {
+    let id = egui::ViewportId::from_hash_of(("find window", ctx.viewport_id()));
+    let size = ctx.data(|m| m.get_temp::<egui::Vec2>(id.0)).unwrap_or(egui::vec2(460.0, 240.0));
+    let parent = ctx.input(|i| i.viewport().outer_rect);
+    let at =
+        ctx.data_mut(|m| *m.get_temp_mut_or_insert_with(id.0.with("at"), || parent.map(|r| egui::pos2(r.right() - size.x - 40.0, r.top() + 90.0))));
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title(tl!(title))
+        .with_inner_size(size)
+        .with_resizable(false)
+        .with_minimize_button(false)
+        .with_maximize_button(false);
+    if let Some(at) = at {
+        builder = builder.with_position(at);
+    }
+    let close = ctx.show_viewport_immediate(id, builder, |ui, _| {
+        let mut close = ui.input(|i| i.viewport().close_requested());
+        egui::CentralPanel::default().show(ui, |ui| {
+            let shown = ui.vertical(|ui| crate::rtl::root(ui, |ui| body(app, ui, &mut d)));
+            close |= shown.inner;
+            // The content's size plus the panel's margins; it never asks for more than it has, so it settles.
+            let want = (shown.response.rect.size() + egui::vec2(16.0, 16.0)).round();
+            if want != size {
+                ui.data_mut(|m| m.insert_temp(id.0, want));
+                ui.ctx().request_repaint();
+            }
+        });
+        close
+    });
+    if close {
+        ctx.data_mut(|m| m.remove::<Option<egui::Pos2>>(id.0.with("at")));
+        app.canvas.want_focus = true;
+    } else {
+        app.dialog = Some(d);
+    }
+}
+
 /// Takes the active dialog, resolves its translated title, hosts it as a non-resizable window, draws
 /// its body, keeps it open when it stays, and gives the Save Changes prompt the AccessKit
 /// alert-dialog role.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else {
         ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
+        app.native_prompt = None;
         return;
     };
+    if native_save_prompt(app, &d) {
+        return;
+    }
     let mut close = false;
     let title = match &d {
         Dialog::RenameDocument { .. } => "Rename Document",
@@ -218,6 +293,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::CustomProperties { .. } => "Custom Document Properties",
         Dialog::Layout(d) => d.title(),
     };
+    if app.services.find_window && matches!(d, Dialog::Find { .. }) {
+        return find_window(app, ctx, d, title);
+    }
     let id = egui::Id::unique(("dialog", title));
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
     // A file browser or Colors dialog it opened is above it and takes the keys: Escape or Enter

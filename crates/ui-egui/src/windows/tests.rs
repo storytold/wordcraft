@@ -790,3 +790,34 @@ fn secondary_viewport_syncs_touchpad_scroll_speed_without_control_input() {
     assert_eq!(touchpad, crate::scroll::ScrollSpeed::Fast);
     assert_eq!(wheel, crate::scroll::ScrollSpeed::Fast);
 }
+
+/// With the system's sheets (macOS), Quit closes the clean windows and asks in every window
+/// with unsaved work at once, each on its own window; the quit stops there.
+#[test]
+fn quitting_with_sheets_asks_in_every_unsaved_window_at_once() {
+    let ctx = backend();
+    let mut a = app("One");
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Two"})).unwrap();
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (log, answers) = (asked.clone(), std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
+    a.services.save_prompt = Some(Box::new(move |window, _, _| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        answers.borrow_mut().push(tx);
+        log.borrow_mut().push(window);
+        rx
+    }));
+
+    assert!(!a.quit());
+    frames(&ctx, &mut a, 4);
+    assert!(!a.quit_requested, "the quit stops at the prompts");
+    assert_eq!((a.window_count(), a.session.documents().len()), (2, 2), "the clean window closed");
+    let mut asked = asked.borrow().clone();
+    asked.sort();
+    assert_eq!(asked.len(), 2, "one sheet per unsaved window: {asked:?}");
+    assert_eq!(asked, ["Document1 • - WordCraft", "Document2 • - WordCraft"], "each on its own window");
+}

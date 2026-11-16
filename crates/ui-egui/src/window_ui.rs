@@ -54,6 +54,7 @@ pub(crate) struct WindowUi {
     pub(crate) read_aloud_at: Option<wordcraft_engine::doc::Pos>,
     pub(crate) awaiting_save: Option<AwaitingSave>,
     pub(crate) file_dialog: Option<file_dialogs::PendingDialog>,
+    pub(crate) native_prompt: Option<crate::NativePrompt>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: crate::file_browser::State,
     pub(crate) info_editing: Option<(&'static str, u64)>,
@@ -127,6 +128,7 @@ impl WindowUi {
             read_aloud_at: None,
             awaiting_save: None,
             file_dialog: None,
+            native_prompt: None,
             #[cfg(not(target_arch = "wasm32"))]
             file_browser: Default::default(),
             info_editing: None,
@@ -261,6 +263,7 @@ impl WordApp {
             read_aloud_at,
             awaiting_save,
             file_dialog,
+            native_prompt,
             #[cfg(not(target_arch = "wasm32"))]
             file_browser,
             info_editing,
@@ -369,6 +372,7 @@ impl WordApp {
             read_aloud_at,
             awaiting_save,
             file_dialog,
+            native_prompt,
             #[cfg(not(target_arch = "wasm32"))]
             file_browser,
             info_editing,

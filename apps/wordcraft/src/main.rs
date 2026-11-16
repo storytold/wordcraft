@@ -21,10 +21,14 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+#[cfg(target_os = "macos")]
+mod panels;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod portal_save;
 mod print;
 mod region;
+#[cfg(target_os = "macos")]
+mod save_sheet;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 
@@ -47,6 +51,7 @@ struct App(
     // a hidden logic tick.
     RawWindowState,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    #[cfg(target_os = "macos")] save_sheet::Launcher,
 );
 
 impl eframe::App for App {
@@ -56,8 +61,16 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         apple_events::poll(&self.5, &mut self.0, ctx);
+        #[cfg(target_os = "macos")]
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            panels::tie(mtm);
+        }
         self.0.logic(ctx);
         self.3.show(frame);
+        #[cfg(target_os = "macos")]
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            self.6.show(mtm);
+        }
         let mut window = self.4;
         // Only until the off-screen check below has run: it is the one reader.
         if self.1.is_some() {
@@ -127,6 +140,10 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
         self.3.show(frame);
+        #[cfg(target_os = "macos")]
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            self.6.show(mtm);
+        }
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -620,6 +637,13 @@ fn main() -> eframe::Result {
             let mut session = Session::new(doc);
             session.system_region = region;
             let mut app = WordApp::new(session, services(file_dialog, cancel_file_dialog, &cc.egui_ctx));
+            #[cfg(target_os = "macos")]
+            let (save_prompt, save_sheets) = save_sheet::hook(&cc.egui_ctx);
+            #[cfg(target_os = "macos")]
+            {
+                app.services.save_prompt = Some(save_prompt);
+                app.services.find_window = true;
+            }
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             // After the preferences, so the reason it gives is in the interface language.
@@ -683,6 +707,8 @@ fn main() -> eframe::Result {
                 RawWindowState::default(),
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
+                #[cfg(target_os = "macos")]
+                save_sheets,
             )))
         }),
     )
