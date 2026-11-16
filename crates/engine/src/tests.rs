@@ -17,6 +17,7 @@ mod fit_one_page;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod normal_template;
 mod para_tools;
 mod revision_checks;
 mod typing;

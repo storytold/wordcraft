@@ -212,6 +212,16 @@ fn prefs_path() -> Option<std::path::PathBuf> {
     wordcraft_control_key::settings_dir().map(|b| b.join("ui.json"))
 }
 
+/// `Normal.dotx` in the settings folder: the Normal template new documents start from (#4237).
+/// Runs without preferences have none, so they use the built-in formatting and never change it.
+fn normal_store() -> Option<std::sync::Arc<dyn wordcraft_engine::normal_template::NormalStore>> {
+    if !prefs_enabled() {
+        return None;
+    }
+    let dir = wordcraft_control_key::settings_dir()?;
+    Some(wordcraft_engine::normal_template::FileStore::in_dir(&dir))
+}
+
 /// Where the log files live: `logs` in the preferences folder (see `logging`).
 fn log_dir() -> Option<std::path::PathBuf> {
     Some(prefs_path()?.parent()?.join("logs"))
@@ -614,11 +624,13 @@ fn main() -> eframe::Result {
             // The system region picks the new document's paper, the units and the decimal
             // separator (#838).
             let region = region::system();
-            let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
+            // A blank document is made below, once the preferences and the Normal template are in.
+            let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::doc::Document::new() };
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let cancel_file_dialog = dialogs.cancel_handle();
             let mut session = Session::new(doc);
             session.system_region = region;
+            session.normal_store = normal_store();
             let mut app = WordApp::new(session, services(file_dialog, cancel_file_dialog, &cc.egui_ctx));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
@@ -629,10 +641,11 @@ fn main() -> eframe::Result {
             load_user_dictionary(&mut app);
             // Language packs from the suite's font store; an Install click is the person's own.
             wordcraft_engine::packs::use_font_store(true);
-            // A region chosen in File › Options replaces the system's for the first blank
-            // document too (#838).
-            if !sample && app.session.prefs.region.is_some() {
-                let doc = app.session.blank_document();
+            // The first blank document, like every other: the Normal template's formatting
+            // (#4237), on the paper of the region chosen in File › Options, else the system's
+            // (#838), in the saved proofing language.
+            if !sample {
+                let doc = app.session.normal_document();
                 app.replace_startup_document(doc);
             }
             app.watch_desktop_theme(&cc.egui_ctx);

@@ -190,6 +190,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
+        Dialog::SetDefault { .. } => "Set As Default",
+        Dialog::ResetDefaults => "Reset Default Formatting",
+        Dialog::DesignDefault => "Set as Default",
         Dialog::RecipientList { .. } => "Recipient List",
         Dialog::SelectTable { .. } => "Select Table",
         Dialog::InsertMergeField { .. } => "Insert Merge Field",
@@ -269,6 +272,14 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     }
     if close {
         forget_nudge(ctx, id);
+        // The title-bar × on Set As Default is Cancel: back to the dialog it was asked from,
+        // edits intact (OK and Cancel have already taken `back`).
+        if app.dialog.is_none()
+            && let Dialog::SetDefault { back: Some(b), .. } = d
+        {
+            app.dialog = Some(*b);
+            return;
+        }
         // Not from a browser it opened as it closed (Save As): that one keeps the keyboard.
         if !app.file_browser_open() {
             app.canvas.want_focus = true;

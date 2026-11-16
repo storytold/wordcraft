@@ -8,6 +8,7 @@ pub mod citations;
 pub mod column;
 pub mod connectors;
 pub mod controls;
+pub mod defaults;
 pub mod design;
 pub mod draw;
 pub mod edit;
@@ -89,6 +90,7 @@ pub fn registry() -> Registry {
     v.extend(options::specs());
     v.extend(packs::specs());
     v.extend(design::specs());
+    v.extend(defaults::specs());
     v.extend(references::specs());
     v.extend(fields::specs());
     v.extend(mailings::specs());

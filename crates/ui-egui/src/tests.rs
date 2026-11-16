@@ -3039,7 +3039,7 @@ fn a_command_line_file_still_asks_for_its_password_after_the_startup_document_is
     s.run("file.save", &json!({"path": path.to_string_lossy(), "password": "sesame"})).unwrap();
 
     let mut a = app();
-    let blank = a.session.blank_document();
+    let blank = a.session.normal_document();
     a.replace_startup_document(blank);
     a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
     assert_eq!(prompt(&a), Some("password"));

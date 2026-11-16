@@ -36,7 +36,6 @@ use ime_state::ImeCaretState;
 pub use locale::set_system_locale;
 pub(crate) use locale::system_locale;
 pub use prefs::Prefs;
-pub use query::blank_document;
 pub use snapshot_types::EditSnapshot;
 use snapshot_types::{LayoutSlots, RunSnapshot};
 pub use view::{StylesPaneDock, ViewState};
@@ -63,6 +62,19 @@ pub struct Session {
     /// `None`, so an agent's words stay in memory and never change the person's dictionary.
     /// Add to Dictionary and File › Options › Proofing save through it (#40).
     pub user_dict_path: Option<std::path::PathBuf>,
+    /// Where the Normal template is kept, if the host wired one up (the desktop app: the
+    /// settings folder; the web app: `localStorage`). Headless sessions, tests and runs without
+    /// preferences leave `None`: new documents use the built-in formatting and Set As Default for
+    /// all new documents is refused there (#4237). An agent driving the desktop app (`--control`,
+    /// `mcp --connect`) runs in the app's session and so can change them, as it can the saved
+    /// proofing language.
+    pub normal_store: Option<Arc<dyn crate::normal_template::NormalStore>>,
+    /// Set As Default changes waiting for the Normal template: written by [`Session::run`] only
+    /// once the command has succeeded (see `cmd::defaults::TemplateEdit`).
+    pub(crate) pending_template: Vec<crate::cmd::defaults::TemplateEdit>,
+    /// How many [`Session::run`] calls are dispatching right now: a nested run hands its
+    /// template queue to the outermost one.
+    pub(crate) run_depth: u32,
     pub clipboard: Option<Fragment>,
     /// A tracked cut the next paste can turn into a move (see `cmd::moves`).
     pub pending_move: Option<crate::cmd::moves::PendingMove>,
