@@ -76,7 +76,7 @@ fn paint_style(p: &egui::Painter, r: Rect, id: &str, theme: &[Rgb]) {
 /// Our WordArt styles as a grid; a click runs `cmd` with `{"style": id}`.
 pub fn style_gallery(ui: &mut Ui, app: &mut WordApp, cmd: &str) {
     let theme = app.session.doc.settings.theme_colors.clone();
-    egui::Grid::new(("wordart-styles", cmd)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new(("wordart-styles", cmd)).spacing(vec2(4.0, 4.0)), |ui| {
         for (i, (id, label)) in ART_STYLES.iter().enumerate() {
             if cell(ui, 40.0, 36.0, label, |p, r| paint_style(p, r, id, &theme)) {
                 crate::widgets::run_from_ribbon(app, cmd, json!({"style": id}));
@@ -196,7 +196,7 @@ pub fn transform_menu(ui: &mut Ui, app: &mut WordApp) {
     let t = Tokens::get(ui.ctx());
     mi(ui, app, "No Transform", "wordArt.transform", json!({"preset": "none"}));
     ui.add_space(4.0);
-    egui::Grid::new("wordart-warps").spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("wordart-warps").spacing(vec2(4.0, 4.0)), |ui| {
         for (i, (id, label)) in DRAWN_WARPS.iter().enumerate() {
             if cell(ui, 46.0, 32.0, label, |p, r| paint_warp(p, r.shrink(2.0), id, t.accent)) {
                 crate::widgets::run_from_ribbon(app, "wordArt.transform", json!({"preset": id}));

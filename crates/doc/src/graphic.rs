@@ -51,6 +51,17 @@ pub struct Embedded {
     pub refs: Vec<EmbeddedRef>,
 }
 
+impl Embedded {
+    /// The root element of an ODF embedded object's markup: its files are kept in
+    /// [`crate::Document::passthrough`] for the ODT writer; DOCX shows it as its picture.
+    pub const ODF_OBJECT: &'static str = "<wordcraft:odf-object";
+
+    /// Is it an ODF embedded object (a spreadsheet in an ODT), not Word markup?
+    pub fn is_odf_object(&self) -> bool {
+        self.xml.trim_start().starts_with(Self::ODF_OBJECT)
+    }
+}
+
 /// One relationship an [`Embedded`] object uses.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct EmbeddedRef {
