@@ -547,9 +547,8 @@ mod tests {
 
     fn png(w: u32, h: u32) -> Vec<u8> {
         let img = image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]));
-        let mut v = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png).unwrap();
-        v
+
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap()
     }
 
     fn test_picture() -> InlineObject {

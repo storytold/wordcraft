@@ -9,12 +9,11 @@ const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingm
 const ROOT_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn doc_zip(document_xml: &[u8]) -> Vec<u8> {

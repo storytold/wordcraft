@@ -90,7 +90,7 @@ impl Exporter<'_> {
     fn vector(&mut self, key: &str) -> Option<Arc<Vector>> {
         let doc = self.doc;
         let bytes = doc.media.get(key)?;
-        if !wordcraft_metafile::is_metafile(bytes) {
+        if !craft_metafile::is_metafile(bytes) {
             return None;
         }
         if let Some(v) = self.vectors.get(key) {
