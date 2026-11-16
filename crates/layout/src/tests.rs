@@ -923,6 +923,7 @@ fn a_long_unbreakable_word_lays_out_in_linear_time() {
 
 /// A word a megabyte long lays out in a fraction of a second: it used to take half a minute.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the wall-clock time")]
 fn a_megabyte_long_word_lays_out_quickly() {
     let d = long_word_beside_a_float(1_000_000);
     let t = std::time::Instant::now();
