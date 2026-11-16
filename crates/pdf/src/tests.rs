@@ -1305,6 +1305,211 @@ fn emf_rec(typ: u32, fields: &[i32]) -> Vec<u8> {
     v
 }
 
+/// The PDF of a document holding one 70 pt metafile picture, uncompressed.
+fn metafile_pdf(emf: Vec<u8>) -> String {
+    String::from_utf8_lossy(&metafile_pdf_bytes(emf)).into_owned()
+}
+
+fn metafile_pdf_bytes(emf: Vec<u8>) -> Vec<u8> {
+    export(&metafile_doc(emf), &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap()
+}
+
+/// The uncompressed PDF of a document holding one 70 pt metafile picture, and the picture's box
+/// on the first page in PDF space (points, y up).
+fn metafile_pdf_and_box(emf: Vec<u8>) -> (Vec<u8>, kurbo::Rect) {
+    let d = metafile_doc(emf);
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+    let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &lay.pages[0];
+    let h = f64::from(page.h);
+    let r = wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default())
+        .into_iter()
+        .find_map(|item| if let Draw::Image { rect, .. } = item { Some(rect) } else { None })
+        .expect("the picture is laid out");
+    let (x, y, w, ph) = (f64::from(r.x), f64::from(r.y), f64::from(r.w), f64::from(r.h));
+    (bytes, kurbo::Rect::new(x, h - y - ph, x + w, h - y))
+}
+
+/// The right half of a box.
+fn right_half(r: kurbo::Rect) -> kurbo::Rect {
+    kurbo::Rect::new((r.x0 + r.x1) / 2.0, r.y0, r.x1, r.y1)
+}
+
+/// Whether two boxes have the same edges, to within half a point.
+fn same_box(a: kurbo::Rect, b: kurbo::Rect) -> bool {
+    [a.x0 - b.x0, a.y0 - b.y0, a.x1 - b.x1, a.y1 - b.y1].iter().all(|d| d.abs() < 0.5)
+}
+
+fn metafile_doc(emf: Vec<u8>) -> Document {
+    let mut d = Document::new();
+    let media = d.add_media(emf, "emf");
+    let mut p = Paragraph::with_text("Figure: ", CharProps::default());
+    let n = p.len();
+    p.insert_object(
+        n,
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    d
+}
+
+/// #6636: an EMF+ only file whose EmfPlusDrawImage draws a 32bppPARGB bitmap: the bitmap is
+/// embedded as an image, and the page draws it into the EmfPlusDrawImage rectangle.
+#[test]
+fn emf_plus_only_bitmap_is_embedded() {
+    let plus_rec = |typ: u16, flags: u16, data: &[u8]| {
+        let mut v = typ.to_le_bytes().to_vec();
+        v.extend(flags.to_le_bytes());
+        v.extend(((12 + data.len()) as u32).to_le_bytes());
+        v.extend((data.len() as u32).to_le_bytes());
+        v.extend(data);
+        v
+    };
+    let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let header = plus_rec(0x4001, 0, &le32(&[0xDBC0_1002_u32 as i32, 1, 96, 96]));
+    let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, 2, 2, 8, 0x000E_200B, 0]);
+    image.extend([0u8, 0, 255, 255].repeat(4));
+    let object = plus_rec(0x4008, 0x0500, &image);
+    let mut draw = le32(&[-1, 2]);
+    draw.extend([0.0f32, 0.0, 2.0, 2.0, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+    let draw = plus_rec(0x401A, 0, &draw);
+    let mut comment = 0x2B46_4D45u32.to_le_bytes().to_vec();
+    comment.extend([header, object, draw, plus_rec(0x4002, 0, &[])].concat());
+    let mut rec = 70u32.to_le_bytes().to_vec();
+    rec.extend(((12 + comment.len()) as u32).to_le_bytes());
+    rec.extend((comment.len() as u32).to_le_bytes());
+    rec.extend(comment);
+    let (bytes, pic) = metafile_pdf_and_box(emf_file(&[rec, emf_rec(14, &[0; 3])]));
+    let images = pdf_images(&bytes);
+    assert!(images.iter().any(|(w, h, ..)| (*w, *h) == (2, 2)), "the 2 × 2 bitmap is embedded");
+    let drawn = pdf_drawn_images(&bytes);
+    assert!(
+        drawn.iter().any(|&(w, h, r)| (w, h) == (2, 2) && same_box(r, right_half(pic))),
+        "the page draws the bitmap over the right half of the picture at {pic:?}: {drawn:?}"
+    );
+    assert!(!String::from_utf8_lossy(&bytes).contains("0.8156"), "the gray placeholder box is not drawn");
+}
+
+/// #6636: an EMF+ only file whose EmfPlusDrawImage draws a bitmap in PixelFormat32bppARGB,
+/// 24bppRGB or 32bppRGB, or a compressed PNG or JPEG bitmap: the bitmap is embedded as an image,
+/// and the page draws it into the EmfPlusDrawImage rectangle.
+#[test]
+fn emf_plus_only_bitmap_formats_are_embedded() {
+    let plus_rec = |typ: u16, flags: u16, data: &[u8]| {
+        let mut v = typ.to_le_bytes().to_vec();
+        v.extend(flags.to_le_bytes());
+        v.extend(((12 + data.len()) as u32).to_le_bytes());
+        v.extend((data.len() as u32).to_le_bytes());
+        v.extend(data);
+        v
+    };
+    let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let encoded = |png: bool| {
+        let red = [255u8, 0, 0].repeat(15);
+        if png {
+            let img = image::RgbImage::from_raw(5, 3, red).unwrap();
+            wordcraft_geom::picture::encode_png(&image::DynamicImage::from(img)).unwrap()
+        } else {
+            wordcraft_geom::picture::encode_jpeg(&red, 5, 3, 100).unwrap()
+        }
+    };
+    // Name, width, height, stride, pixel format, bitmap type (0 pixels, 1 compressed) and data.
+    let cases: [(&str, i32, i32, i32, u32, i32, Vec<u8>); 5] = [
+        ("32bppARGB", 2, 2, 8, 0x0026_200A, 0, [0u8, 0, 255, 255].repeat(4)),
+        ("24bppRGB", 2, 2, 8, 0x0002_1808, 0, [0u8, 0, 255, 0, 0, 255, 0, 0].repeat(2)),
+        ("32bppRGB", 2, 2, 8, 0x0002_2009, 0, [0u8, 0, 255, 0].repeat(4)),
+        ("PNG", 5, 3, 0, 0, 1, encoded(true)),
+        ("JPEG", 5, 3, 0, 0, 1, encoded(false)),
+    ];
+    for (name, w, h, stride, format, kind, data) in cases {
+        let header = plus_rec(0x4001, 0, &le32(&[0xDBC0_1002_u32 as i32, 1, 96, 96]));
+        let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, w, h, stride, format as i32, kind]);
+        image.extend(data);
+        // Records are a multiple of 4 bytes long.
+        image.resize(image.len().next_multiple_of(4), 0);
+        let object = plus_rec(0x4008, 0x0500, &image);
+        let mut draw = le32(&[-1, 2]);
+        draw.extend([0.0f32, 0.0, w as f32, h as f32, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+        let draw = plus_rec(0x401A, 0, &draw);
+        let mut comment = 0x2B46_4D45u32.to_le_bytes().to_vec();
+        comment.extend([header, object, draw, plus_rec(0x4002, 0, &[])].concat());
+        let mut rec = 70u32.to_le_bytes().to_vec();
+        rec.extend(((12 + comment.len()) as u32).to_le_bytes());
+        rec.extend((comment.len() as u32).to_le_bytes());
+        rec.extend(comment);
+        let (bytes, pic) = metafile_pdf_and_box(emf_file(&[rec, emf_rec(14, &[0; 3])]));
+        let images = pdf_images(&bytes);
+        assert!(images.iter().any(|(iw, ih, ..)| (*iw, *ih) == (w as u32, h as u32)), "{name}: the {w} × {h} bitmap is embedded");
+        let drawn = pdf_drawn_images(&bytes);
+        assert!(
+            drawn.iter().any(|&(iw, ih, r)| (iw, ih) == (w as u32, h as u32) && same_box(r, right_half(pic))),
+            "{name}: the page draws the bitmap over the right half of the picture at {pic:?}: {drawn:?}"
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("0.8156"), "{name}: the gray placeholder box is not drawn");
+    }
+}
+
+/// A dotted cosmetic pen (CREATEPEN, PS_DOT, width 0) draws hairline dots: its dashes and gaps are
+/// the hairline's width, not the file's device units scaled to the frame (0.7 pt here).
+#[test]
+fn metafile_cosmetic_dotted_pen_draws_hairline_dots() {
+    let recs = [emf_rec(38, &[1, 2, 0, 0, 0]), emf_rec(37, &[1]), emf_rec(27, &[0, 50]), emf_rec(54, &[100, 50]), emf_rec(14, &[0; 3])];
+    let raw = metafile_pdf(emf_file(&recs));
+    assert!(raw.contains("[0.25 0.25]0 d"), "the dots are hairline-sized");
+}
+
+/// A geometric PS_USERSTYLE pen whose dashes and gaps are far below the hairline draws its line
+/// solid: no dash array is written.
+#[test]
+fn metafile_sub_pixel_dashes_draw_solid() {
+    let mut emf = emf_file(&[]);
+    // 10,000 device pixels over 250 mm: a device unit is 0.025 mm. The picture is 1000 units wide.
+    let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    emf[8..24].copy_from_slice(&le32(&[0, 0, 1000, 1000]));
+    emf[72..80].copy_from_slice(&le32(&[10_000, 10_000]));
+    let pen = emf_rec(95, &[1, 0, 0, 0, 0, 0x0001_0207, 80, 0, 0, 0, 2, 1, 1]);
+    let recs = [pen, emf_rec(37, &[1]), emf_rec(27, &[0, 500]), emf_rec(54, &[1000, 500]), emf_rec(14, &[0; 3])];
+    emf.extend(recs.concat());
+    let raw = metafile_pdf(emf);
+    assert!(raw.contains(" w ") && !raw.contains("]0 d"), "a stroke with no dash array");
+}
+
+/// A clip region (INTERSECTCLIPRECT) adds a clip around the rectangle it clips.
+#[test]
+fn metafile_clip_region_is_a_clip() {
+    let clips = |raw: &str| raw.matches("\nW\nn").count() + raw.matches("\nW*\nn").count();
+    let draw = |clip: bool| {
+        let mut recs = vec![emf_rec(39, &[1, 0, 0x0000_00FF, 0]), emf_rec(37, &[1])];
+        if clip {
+            recs.push(emf_rec(30, &[0, 0, 50, 100]));
+        }
+        recs.extend([emf_rec(43, &[0, 0, 100, 100]), emf_rec(14, &[0; 3])]);
+        metafile_pdf(emf_file(&recs))
+    };
+    let (with, without) = (clips(&draw(true)), clips(&draw(false)));
+    assert!(without > 0 && with == without + 1, "one clip more with the region: {with} and {without}");
+}
+
+/// A hatched brush (CREATEBRUSHINDIRECT, BS_HATCHED) fills through a tiling pattern, not with a
+/// solid color.
+#[test]
+fn metafile_hatch_brush_is_a_tiling_pattern() {
+    let recs = [emf_rec(39, &[1, 2, 0x0000_00FF, 1]), emf_rec(37, &[1]), emf_rec(43, &[0, 0, 100, 100]), emf_rec(14, &[0; 3])];
+    let raw = metafile_pdf(emf_file(&recs));
+    assert!(raw.contains("/PatternType 1"), "the hatch is a tiling pattern");
+}
+
 #[test]
 fn metafile_strokes_use_round_caps_and_joins() {
     // A 4-unit black pen (handle 1) outlines a rectangle, so the stroke is drawn with round caps and joins.
@@ -1423,6 +1628,17 @@ fn emf_text_records(text: &str) -> Vec<Vec<u8>> {
     out.extend(units);
     out.resize(76 + padded, 0);
     vec![font, emf_rec(37, &[1]), emf_rec(24, &[0]), out]
+}
+
+/// With the opaque background mode (the default) and a red background color (SETBKCOLOR), a text
+/// run's character cells are filled red behind the text.
+#[test]
+fn metafile_text_fills_its_opaque_background() {
+    let mut recs = vec![emf_rec(25, &[0x0000_00FF])];
+    recs.extend(emf_text_records("Hi"));
+    recs.push(emf_rec(14, &[0; 3]));
+    let raw = metafile_pdf(emf_file(&recs));
+    assert!(raw.contains("1 0 0 rg"), "the character cells are filled red");
 }
 
 /// #1764: the text of an EMF picture (EXTTEXTOUTW) is drawn, so it is in the PDF's text layer.
@@ -2157,6 +2373,40 @@ fn pdf_images(bytes: &[u8]) -> Vec<(u32, u32, Vec<String>, Vec<Vec<u8>>)> {
         out.push((w, h, filters, px));
     }
     out
+}
+
+/// The images the pages draw, through hayro's interpreter: pixel width and height, and the box each
+/// one is drawn into, in PDF space (points, y up).
+fn pdf_drawn_images(bytes: &[u8]) -> Vec<(u32, u32, kurbo::Rect)> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    struct Ex(Vec<(u32, u32, kurbo::Rect)>);
+    impl Device<'_> for Ex {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'_, '_>, t: kurbo::Affine) {
+            // The transform maps the image's pixel grid onto the page.
+            let (w, h) = (image.width(), image.height());
+            self.0.push((w, h, t.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, f64::from(w), f64::from(h)))));
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut ex = Ex(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut ex);
+    }
+    ex.0
 }
 
 /// The fill opacities (`ca`) of the PDF's graphics states.

@@ -257,7 +257,7 @@ const ARROW_BORDER: f32 = 1.0;
 /// A searching combo's state between frames.
 #[derive(Clone, Default)]
 struct ComboSearch {
-    /// The match list is showing (the user typed since focusing the field).
+    /// The match list is showing (opened via the arrow button or typing in the field).
     open: bool,
     /// Whether the user has typed or modified the search query.
     typed: bool,
@@ -332,16 +332,16 @@ fn consume_arrow_steps(ui: &mut Ui, open: bool, has_focus: bool) -> i32 {
 /// - `text`: the current text string in the edit field.
 /// - `reveal`: set to `true` when opening or changing search query to scroll the list/highlight into view.
 ///
-/// Clicking the text box (`resp.clicked()`) when the dropdown is closed sets `s.open = true`,
-/// `s.typed = false`, `s.moved = false`, `*reveal = true`, and selects all text with [`select_all_text`].
-/// Clicking while already open preserves caret positioning for partial edits without re-selecting all text.
-/// Gaining focus alone (`resp.gained_focus()` when `!was_open`, such as on Tab navigation) selects all text
-/// for typing without opening the 420px dropdown popup, while regaining focus when already open (e.g. after
-/// interacting with the popup scrollbar) preserves query text and caret placement without re-selecting all.
-/// Clicking the dropdown arrow (`aresp.clicked()`) toggles `s.open`; when opening, it requests focus on `te_id`,
-/// resets `typed` and `moved`, sets `*reveal = true`, and selects all text.
+/// Clicking the dropdown arrow (`aresp.clicked()`) toggles `s.open`; when opening, it requests focus
+/// on `te_id`, resets `typed` and `moved`, sets `*reveal = true`, and selects all text with
+/// [`select_all_text`].
 /// Changing the text (`resp.changed()`) opens the dropdown with `s.typed = true`, clears `s.highlight`,
 /// clears `s.moved`, and sets `*reveal = true`.
+/// Gaining focus while closed (`resp.gained_focus() && !was_open`, from an initial click in the field
+/// or Tab navigation) selects all text for immediate replacement typing without opening the 420px
+/// dropdown popup; subsequent clicks inside the already-focused field and regaining focus while already
+/// open (e.g. after interacting with the popup scrollbar) preserve caret placement and query text without
+/// re-selecting all.
 fn handle_search_interactions(
     ui: &mut Ui,
     s: &mut ComboSearch,
@@ -352,17 +352,7 @@ fn handle_search_interactions(
     reveal: &mut bool,
 ) {
     let was_open = s.open;
-    if resp.clicked() {
-        if !was_open {
-            s.open = true;
-            s.typed = false;
-            s.moved = false;
-            *reveal = true;
-            select_all_text(ui.ctx(), te_id, text);
-        }
-    } else if resp.gained_focus() && !was_open {
-        select_all_text(ui.ctx(), te_id, text);
-    } else if aresp.clicked() {
+    if aresp.clicked() {
         if was_open {
             s.open = false;
         } else {
@@ -379,6 +369,8 @@ fn handle_search_interactions(
         s.highlight = None;
         s.moved = false;
         *reveal = true;
+    } else if resp.gained_focus() && !was_open {
+        select_all_text(ui.ctx(), te_id, text);
     }
 }
 
