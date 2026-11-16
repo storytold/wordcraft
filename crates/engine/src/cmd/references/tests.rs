@@ -1069,12 +1069,11 @@ fn update_fields_finds_bookmarks_outside_the_body() {
         ("word/endnotes.xml", endnotes),
         ("word/comments.xml", comments),
     ];
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, text) in &files {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+        zw.add(name, text.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let mut s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    let mut s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap()).unwrap());
     assert_eq!(s.layout().pages.len(), 3);
     update_fields(&mut s).unwrap();
     let got: Vec<String> = fields(&s).into_iter().map(|(_, r)| r).collect();
