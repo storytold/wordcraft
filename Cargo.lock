@@ -1249,7 +1249,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=23ebdc708987891b0331a4
 dependencies = [
  "brotli-decompressor 6.3.1",
  "chrono",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa1c659f271d8605303c)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=23ebdc708987891b0331a4af61dab4efe2034636)",
  "quick-xml 0.41.0",
  "serde",
 ]
