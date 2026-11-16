@@ -8,7 +8,7 @@ use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
-use crate::boxes::BoxContext;
+use crate::boxes::{Around, BoxContext};
 use crate::para::{CellText, ClKind, ParaLayout};
 use crate::{BoxInput, BoxLayout, Ctx, Placed, layout_box};
 
@@ -484,7 +484,72 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x }
 }
 
-pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
+/// The style of the mark that ends a table row. Measured in Word for Windows: for contextual
+/// spacing the mark counts as a paragraph in the default paragraph style, so a paragraph in
+/// that style beside it (the last one of the row's last cell, the first one of the next row's
+/// first cell, the one after the table) gives up its space on that side, and one in another
+/// style keeps it.
+pub(crate) const ROW_END_STYLE: &str = "Normal";
+
+/// The style `style` compares as for contextual spacing: Word formats a paragraph naming a style
+/// the document lacks as the default one, and treats it as that style beside its neighbours.
+pub(crate) fn known_style<'a>(doc: &wordcraft_doc::Document, style: &'a str) -> &'a str {
+    if doc.styles.get(style).is_some() { style } else { ROW_END_STYLE }
+}
+
+fn para_style<'a>(doc: &wordcraft_doc::Document, p: &'a Paragraph) -> &'a str {
+    p.props.style.as_deref().map_or(ROW_END_STYLE, |style| known_style(doc, style))
+}
+
+/// The style of the first paragraph of table `t` in document order: that of its first cell,
+/// which may start with a table of its own.
+pub(crate) fn first_style<'a>(doc: &wordcraft_doc::Document, t: &'a Table) -> Option<&'a str> {
+    first_style_in(doc, &t.rows.first()?.cells.first()?.blocks)
+}
+
+fn first_style_in<'a>(doc: &wordcraft_doc::Document, mut blocks: &'a Blocks) -> Option<&'a str> {
+    // Nested tables: bounded like their layout.
+    for _ in 0..8 {
+        match &**blocks.first()? {
+            Block::Para(p) => return Some(para_style(doc, p)),
+            Block::Table(t) => blocks = &t.rows.first()?.cells.first()?.blocks,
+        }
+    }
+    None
+}
+
+/// The style of the last paragraph of `blocks` in document order: after a table comes the mark
+/// ending its last row.
+fn last_style<'a>(doc: &wordcraft_doc::Document, blocks: &'a Blocks) -> Option<&'a str> {
+    match &**blocks.last()? {
+        Block::Para(p) => Some(para_style(doc, p)),
+        Block::Table(_) => Some(ROW_END_STYLE),
+    }
+}
+
+/// The paragraphs beside cell `ci` of row `ri` in document order, for contextual spacing
+/// (measured in Word for Windows, see `docs/layout-parity.md`): before it the last paragraph of
+/// the cell before it in the row, after it the first paragraph of the cell after it. The row's
+/// first cell follows the mark ending the row above, or the paragraph before the table
+/// (`before`); its last cell is followed by its own row's mark.
+fn beside_cell<'a>(doc: &wordcraft_doc::Document, t: &'a Table, (ri, ci): (usize, usize), before: Option<&'a str>) -> Around<'a> {
+    let Some(row) = t.rows.get(ri) else { return Around::default() };
+    Around {
+        before: match (ri, ci.checked_sub(1)) {
+            (_, Some(left)) => row.cells.get(left).and_then(|c| last_style(doc, &c.blocks)),
+            (0, None) => before,
+            (_, None) => Some(ROW_END_STYLE),
+        },
+        after: match row.cells.get(ci + 1) {
+            Some(next) => first_style_in(doc, &next.blocks),
+            None => Some(ROW_END_STYLE),
+        },
+    }
+}
+
+/// Lay out table `t`. `before` is the style of the paragraph before the table in document order,
+/// when the table follows one in the text flow.
+pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize, before: Option<&str>) -> TableLayout {
     let style = table_style(ctx, t);
     // Cell text formatting and looks per set of style parts, built once per table.
     let mut cell_text: Vec<(Region, CellText)> = Vec::new();
@@ -601,6 +666,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let insets = margins[0] + margins[2] + band_t + band_b;
             let turn = cell.props.text_direction;
             let mut turned = None;
+            let around = beside_cell(ctx.doc, t, (ri, ci), before);
             let (items, h) = if cell.props.vmerge == VMerge::Continue {
                 (Vec::new(), 0.0)
             } else if turn.is_turned() {
@@ -612,12 +678,14 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 let len = match (row.props.height, row.props.height_rule) {
                     (Some(h), HeightRule::Exact) if h > 0.0 => (h + row_bottom - insets).clamp(4.0, TURNED_LIMIT),
                     _ => {
-                        let probe = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, TURNED_MAX, text, depth)).items;
+                        let probe =
+                            layout_box(ctx, BoxInput { around, ..BoxInput::cell(story, &cell.blocks, &cpath, TURNED_MAX, text, depth) }).items;
                         (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
                         natural_length(&probe).clamp(4.0, TURNED_MAX)
                     }
                 };
-                let BoxLayout { items, height, floats_bottom, .. } = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth));
+                let BoxLayout { items, height, floats_bottom, .. } =
+                    layout_box(ctx, BoxInput { around, ..BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth) });
                 let across = height.max(floats_bottom);
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
                 (items, len)
@@ -626,6 +694,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     ctx,
                     BoxInput {
                         context: BoxContext::Cell { text, left: -margins[1], right: x1 - x0 - margins[1], clamp: true },
+                        around,
                         ..BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth)
                     },
                 );
@@ -686,7 +755,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         rows.push(cells);
     }
     grow_vertical_merges(&rows, &mut heights);
-    finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total })
+    finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total, before })
 }
 
 fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
@@ -721,10 +790,12 @@ struct TableRows<'a> {
     edges: Vec<f32>,
     x: f32,
     total: f32,
+    /// The style of the paragraph before the table (see [`layout_table`]).
+    before: Option<&'a str>,
 }
 
 fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
-    let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total } = input;
+    let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total, before } = input;
     // Grid columns holding a vertical-merge continuation, per row.
     let cont: Vec<Vec<usize>> = t
         .rows
@@ -805,7 +876,8 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                     let text = cell_text.iter().find(|(r, _)| *r == tn.region).map(|(_, c)| c);
                     // Same list numbers as the first layout: lay it out from the same counters.
                     let now = (std::mem::replace(&mut ctx.counters, tn.snap.0), std::mem::replace(&mut ctx.eq_count, tn.snap.1));
-                    let b = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth));
+                    let around = beside_cell(ctx.doc, t, (ri, tn.ci), before);
+                    let b = layout_box(ctx, BoxInput { around, ..BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth) });
                     (cell_items, across) = (b.items, b.height.max(b.floats_bottom));
                     (ctx.counters, ctx.eq_count) = now;
                 }

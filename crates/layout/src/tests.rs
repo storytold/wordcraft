@@ -347,20 +347,24 @@ fn cell_end_gap_in(mut d: Document, style: &str, contextual: bool, next_cell: Op
 
 #[test]
 fn contextual_spacing_drops_the_space_after_a_cells_last_normal_paragraph() {
-    // The end-of-cell mark is a Normal paragraph: contextual spacing drops the 12 pt after a
-    // Normal last paragraph (docxide-pdf `cell-end-text-context`, `cell-end-empty-context`), not
-    // after one in another style (`cell-end-other-style`) or without contextual spacing.
+    // The mark ending a row is a Normal paragraph: contextual spacing drops the 12 pt after a
+    // Normal last paragraph of the row's last cell (docxide-pdf `cell-end-text-context`,
+    // `cell-end-empty-context`), not after one in another style (`cell-end-other-style`) or
+    // without contextual spacing.
     let kept = cell_end_gap("Normal", false);
     assert!((cell_end_gap("Other", true) - kept).abs() < 0.01);
     let dropped = cell_end_gap("Normal", true);
     assert!((kept - dropped - 12.0).abs() < 0.01, "kept {kept}, dropped {dropped}");
     // An undefined style is formatted as Normal, and drops it too.
     assert!((cell_end_gap("Missing", true) - dropped).abs() < 0.01);
-    // The mark decides, not a neighbour: another style in the next cell or after the table
-    // leaves the drop as it is.
-    for (next_cell, after_table) in [(Some("Other"), None), (None, Some("Other"))] {
-        let gap = cell_end_gap_in(Document::new(), "Normal", true, next_cell, after_table, "Beta probe");
-        assert!((gap - dropped).abs() < 0.01, "{next_cell:?} {after_table:?}: {gap}, dropped {dropped}");
+    // The row's mark decides for its last cell, not the paragraph after the table.
+    let gap = cell_end_gap_in(Document::new(), "Normal", true, None, Some("Other"), "Beta probe");
+    assert!((gap - dropped).abs() < 0.01, "another style after the table: {gap}, dropped {dropped}");
+    // A cell with another one after it is beside that cell's first paragraph instead (Word for
+    // Windows): Normal there drops the space, another style keeps it.
+    for (next_cell, want) in [("Normal", dropped), ("Other", kept)] {
+        let gap = cell_end_gap_in(Document::new(), "Normal", true, Some(next_cell), None, "Beta probe");
+        assert!((gap - want).abs() < 0.01, "{next_cell} in the next cell: {gap}, kept {kept}, dropped {dropped}");
     }
     // And the reverse: another style keeps its space beside Normal neighbours.
     let gap = cell_end_gap_in(Document::new(), "Other", true, Some("Normal"), Some("Normal"), "Beta probe");
@@ -375,6 +379,170 @@ fn contextual_spacing_drops_the_space_after_a_cells_last_normal_paragraph() {
     legacy.settings.allow_space_of_same_style_in_table = true;
     let gap = cell_end_gap_in(legacy, "Normal", true, None, None, "Beta probe");
     assert!((gap - kept).abs() < 0.01, "legacy {gap}, kept {kept}");
+}
+
+/// A paragraph in `style` with contextual spacing, 24 pt lines and `before` and `after` around it.
+fn contextual_para(text: &str, style: &str, (before, after): (f32, f32)) -> Arc<Block> {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let mut p = wordcraft_doc::Paragraph::with_text(text, chr);
+    p.props = ParaProps {
+        style: Some(style.into()),
+        space_before: Some(before),
+        space_after: Some(after),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(24.0)),
+        contextual_spacing: Some(true),
+        ..Default::default()
+    };
+    wordcraft_doc::para_block(p)
+}
+
+/// A table of `rows`, each a list of cells holding blocks, without style, borders or cell margins.
+fn plain_table(rows: Vec<Vec<Blocks>>) -> Arc<Block> {
+    let mut table = Table::new(rows.len(), rows.iter().map(Vec::len).max().unwrap_or(1), 468.0);
+    table.props.style = None;
+    table.props.cell_margins = Some([0.0; 4]);
+    for (row, cells) in table.rows.iter_mut().zip(rows) {
+        row.cells.truncate(cells.len());
+        for (cell, blocks) in row.cells.iter_mut().zip(cells) {
+            cell.blocks = blocks;
+        }
+    }
+    Arc::new(Block::Table(table))
+}
+
+/// How far the first line of the paragraph at `to` sits below that of the one at `from`, in a
+/// document of `body` with the styles S and T (both based on Normal).
+fn contextual_drop(body: Blocks, from: &[u32], to: &[u32]) -> f32 {
+    let mut d = Document::new();
+    for id in ["S", "T"] {
+        Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+            id: id.into(),
+            name: id.into(),
+            based_on: Some("Normal".into()),
+            ..Default::default()
+        });
+    }
+    d.body = body;
+    let l = lay(&d);
+    let baseline = |at: &[u32]| {
+        l.pages[0].items.iter().find_map(|i| match i {
+            Placed::Lines { para, y, path, .. } if path.0 == at => Some(y + para.lines[0].baseline),
+            _ => None,
+        })
+    };
+    let (Some(from), Some(to)) = (baseline(from), baseline(to)) else { panic!("probe lines missing") };
+    to - from
+}
+
+/// Contextual spacing at the edges of table cells, measured in Word for Windows (16.0.20625,
+/// compatibility mode 15) on synthetic tables of one-line paragraphs with 10 and 20 pt before
+/// or after: the paragraphs are compared in document order whatever cell they are in, and the
+/// mark that ends each row counts as a paragraph in the default style. WordCraft compared only
+/// the paragraphs of one cell, so a cell's first paragraph kept its space before, and its last
+/// one its space after, beside a paragraph of its own style in the next cell; and it took every
+/// cell's end for a Normal paragraph, so a Normal last paragraph lost its space after beside
+/// another style too.
+#[test]
+fn contextual_spacing_looks_across_cell_edges() {
+    let p = |style: &str| vec![contextual_para("Alpha probe", style, (0.0, 0.0))];
+    let before = |style: &str| vec![contextual_para("Beta probe", style, (12.0, 0.0))];
+    let after = |style: &str| vec![contextual_para("Beta probe", style, (0.0, 12.0))];
+    let body = |style: &str, spacing: (f32, f32)| contextual_para("Gamma probe", style, spacing);
+    // (what, the space is dropped, the blocks, the two paragraphs measured): 24 pt lines put the
+    // second one 0 or 24 pt below the first, and 12 pt more where the space is kept.
+    let cases: Vec<(&str, bool, Blocks, [&[u32]; 2])> = vec![
+        // A cell's first paragraph is beside the last one of the cell before it.
+        ("before, S after S", true, vec![plain_table(vec![vec![p("S"), before("S")]])], [&[0, 0, 0, 0], &[0, 0, 1, 0]]),
+        ("before, S after T", false, vec![plain_table(vec![vec![p("T"), before("S")]])], [&[0, 0, 0, 0], &[0, 0, 1, 0]]),
+        ("before, S after T then S", true, vec![plain_table(vec![vec![[p("T"), p("S")].concat(), before("S")]])], [&[0, 0, 0, 0], &[0, 0, 1, 0]]),
+        ("before, S after S then T", false, vec![plain_table(vec![vec![[p("S"), p("T")].concat(), before("S")]])], [&[0, 0, 0, 0], &[0, 0, 1, 0]]),
+        // Its last paragraph is beside the first one of the cell after it.
+        ("after, S before S", true, vec![plain_table(vec![vec![after("S"), p("S")], vec![p("S"), p("S")]])], [&[0, 0, 0, 0], &[0, 1, 0, 0]]),
+        ("after, S before T", false, vec![plain_table(vec![vec![after("S"), p("T")], vec![p("S"), p("S")]])], [&[0, 0, 0, 0], &[0, 1, 0, 0]]),
+        (
+            "after, Normal before T",
+            false,
+            vec![plain_table(vec![vec![after("Normal"), p("T")], vec![p("S"), p("S")]])],
+            [&[0, 0, 0, 0], &[0, 1, 0, 0]],
+        ),
+        // The mark ending a row is a paragraph in the default style: after the row's last cell,
+        ("after, S at the row's end", false, vec![plain_table(vec![vec![p("S"), after("S")], vec![p("S"), p("S")]])], [&[0, 0, 0, 0], &[0, 1, 0, 0]]),
+        (
+            "after, Normal at the row's end",
+            true,
+            vec![plain_table(vec![vec![p("S"), after("Normal")], vec![p("T"), p("T")]])],
+            [&[0, 0, 0, 0], &[0, 1, 0, 0]],
+        ),
+        // before the next row's first cell,
+        ("before, S in a later row", false, vec![plain_table(vec![vec![p("S"), p("S")], vec![before("S"), p("S")]])], [&[0, 0, 0, 0], &[0, 1, 0, 0]]),
+        (
+            "before, Normal in a later row",
+            true,
+            vec![plain_table(vec![vec![p("S"), p("S")], vec![before("Normal"), p("S")]])],
+            [&[0, 0, 0, 0], &[0, 1, 0, 0]],
+        ),
+        // and before the paragraph after the table.
+        ("before, S after the table", false, vec![plain_table(vec![vec![p("S"), p("S")]]), body("S", (12.0, 0.0))], [&[0, 0, 0, 0], &[1]]),
+        ("before, Normal after the table", true, vec![plain_table(vec![vec![p("S"), p("S")]]), body("Normal", (12.0, 0.0))], [&[0, 0, 0, 0], &[1]]),
+        // The table's first cell is beside the paragraph before the table, on both sides.
+        (
+            "before, S in the first cell after S",
+            true,
+            vec![body("S", (0.0, 0.0)), plain_table(vec![vec![before("S"), p("S")]])],
+            [&[0], &[1, 0, 0, 0]],
+        ),
+        (
+            "before, S in the first cell after T",
+            false,
+            vec![body("T", (0.0, 0.0)), plain_table(vec![vec![before("S"), p("S")]])],
+            [&[0], &[1, 0, 0, 0]],
+        ),
+        ("after, S before the first cell in S", true, vec![body("S", (0.0, 12.0)), plain_table(vec![vec![p("S"), p("S")]])], [&[0], &[1, 0, 0, 0]]),
+        ("after, S before the first cell in T", false, vec![body("S", (0.0, 12.0)), plain_table(vec![vec![p("T"), p("S")]])], [&[0], &[1, 0, 0, 0]]),
+        // A table in a cell: the same, with the cell's own paragraphs around it.
+        (
+            "after, S before a nested table in S",
+            true,
+            vec![plain_table(vec![vec![[after("S"), vec![plain_table(vec![vec![p("S")]])], p("S")].concat(), p("S")]])],
+            [&[0, 0, 0, 0], &[0, 0, 0, 1, 0, 0, 0]],
+        ),
+        (
+            "before, S in a nested table after S",
+            true,
+            vec![plain_table(vec![vec![[p("S"), vec![plain_table(vec![vec![before("S")]])], p("S")].concat(), p("S")]])],
+            [&[0, 0, 0, 0], &[0, 0, 0, 1, 0, 0, 0]],
+        ),
+        (
+            "before, Normal after a nested table",
+            true,
+            vec![plain_table(vec![vec![[vec![plain_table(vec![vec![p("S")]])], before("Normal")].concat(), p("S")]])],
+            [&[0, 0, 0, 0, 0, 0, 0], &[0, 0, 0, 1]],
+        ),
+        (
+            "before, S after a nested table",
+            false,
+            vec![plain_table(vec![vec![[vec![plain_table(vec![vec![p("S")]])], before("S")].concat(), p("S")]])],
+            [&[0, 0, 0, 0, 0, 0, 0], &[0, 0, 0, 1]],
+        ),
+        // A style the document lacks is formatted as Normal, and compared as Normal.
+        (
+            "before, an undefined style after Normal",
+            true,
+            vec![plain_table(vec![vec![p("Normal"), before("Missing")]])],
+            [&[0, 0, 0, 0], &[0, 0, 1, 0]],
+        ),
+        (
+            "before, two undefined styles",
+            true,
+            vec![plain_table(vec![vec![[p("Missing"), before("Other")].concat()]])],
+            [&[0, 0, 0, 0], &[0, 0, 0, 1]],
+        ),
+    ];
+    for (what, dropped, blocks, [from, to]) in cases {
+        let gap = contextual_drop(blocks, from, to) % 24.0;
+        let want = if dropped { 0.0 } else { 12.0 };
+        assert!((gap - want).abs() < 0.01, "{what}: {gap} pt of the 12 pt left, expected {want}");
+    }
 }
 
 fn contextual_gap(after: f32, before: f32, first: bool, second: bool, different_style: bool, header: bool) -> f32 {

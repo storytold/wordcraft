@@ -981,14 +981,25 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
     if after <= 0.0 {
         return 0.0;
     }
-    if let Some(Block::Para(next)) = ctx.doc.body.get(block + 1).map(|b| &**b) {
-        let nrp = ctx.doc.styles.resolve_para(&next.props);
-        if nrp.style == rp.style && rp.contextual_spacing {
+    match ctx.doc.body.get(block + 1).map(|b| &**b) {
+        Some(Block::Para(next)) => {
+            let nrp = ctx.doc.styles.resolve_para(&next.props);
+            if nrp.style == rp.style && rp.contextual_spacing {
+                return 0.0;
+            }
+            if listed && rp.after_auto && ctx.has_label(next) {
+                return 0.0;
+            }
+        }
+        // A table's first paragraph is the next one (see `place_table`).
+        Some(Block::Table(t))
+            if t.props.float.is_none()
+                && rp.contextual_spacing
+                && crate::table::first_style(ctx.doc, t) == Some(crate::table::known_style(ctx.doc, &rp.style)) =>
+        {
             return 0.0;
         }
-        if listed && rp.after_auto && ctx.has_label(next) {
-            return 0.0;
-        }
+        _ => {}
     }
     after
 }

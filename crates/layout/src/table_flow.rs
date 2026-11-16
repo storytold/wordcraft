@@ -163,7 +163,7 @@ fn row_can_start(doc: &wordcraft_doc::Document, row: &wordcraft_doc::Row, laid: 
 }
 
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
-    pb.prev = None;
+    let above = pb.prev.take();
     // A page break before the first row's paragraph moves the whole table to a new page, as
     // Word does (and as an ODT table starting a page opens). Before the table is laid out, so
     // its cells' fields (PAGE) are those of the page it lands on.
@@ -173,7 +173,18 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         ctx.fields.page = pb.number;
     }
     let width = pb.col_w();
-    let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
+    // The paragraph above is beside the table's first one, as between two paragraphs: with
+    // contextual spacing its space after goes before a paragraph of its own style. Not at the
+    // top of a page or column, where the paragraph above was left behind.
+    let above = above
+        .filter(|_| t.props.float.is_none() && !pb.at_top())
+        .map(|(style, ctxl, after, ..)| (table::known_style(ctx.doc, &style).to_string(), ctxl, after));
+    if let Some((style, true, after)) = &above
+        && table::first_style(ctx.doc, t) == Some(style.as_str())
+    {
+        pb.y -= after;
+    }
+    let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1, above.as_ref().map(|(style, ..)| style.as_str()));
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
         // Before Word 2013 layout (compatibility mode 15) an offset places the first cell's text,
         // so the edge sits a cell margin further out.
@@ -325,6 +336,8 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     if let Some(s) = t.props.space_after.filter(|s| s.is_finite() && *s > 0.0) {
         pb.y += s.min(MAX_TABLE_SPACE);
     }
+    // The mark ending the table's last row is the paragraph above what follows.
+    pb.prev = Some((table::ROW_END_STYLE.into(), false, 0.0, false, false));
 }
 
 /// The most space a table's own space above or below can add, points (22 inches, Word's
