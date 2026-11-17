@@ -150,10 +150,7 @@ fn collect_xml_pic_extras(el: &El, valid_rids: &HashSet<String>, out: &mut Vec<P
     match el.name.as_str() {
         "mc:AlternateContent" => {
             if let Some(choice) = children_of_choice(el) {
-                let is_ink_or_chartex = choice
-                    .find("a:graphicData")
-                    .and_then(|gd| gd.attr("uri"))
-                    .is_some_and(|u| u == INK_URI || u == CHARTEX_URI);
+                let is_ink_or_chartex = choice.find("a:graphicData").and_then(|gd| gd.attr("uri")).is_some_and(|u| u == INK_URI || u == CHARTEX_URI);
                 if !is_ink_or_chartex {
                     collect_xml_pic_extras(choice, valid_rids, out);
                 }
@@ -164,9 +161,7 @@ fn collect_xml_pic_extras(el: &El, valid_rids: &HashSet<String>, out: &mut Vec<P
             if uri == INK_URI || uri.ends_with("/chart") || uri.ends_with("/diagram") {
                 return;
             }
-            let direct_shape = el.child("wps:wsp").filter(|shape| {
-                shape.child("wps:spPr").and_then(|props| props.child("a:blipFill")).is_none()
-            });
+            let direct_shape = el.child("wps:wsp").filter(|shape| shape.child("wps:spPr").and_then(|props| props.child("a:blipFill")).is_none());
             if el.child("wpc:wpc").is_none()
                 && el.child("wpg:wgp").is_none()
                 && direct_shape.is_none()
@@ -302,12 +297,7 @@ pub(crate) fn apply_read_extras(bytes: &[u8], doc: &mut Document) {
     }
 }
 
-fn collect_doc_images(
-    doc: &Document,
-    blocks: &Blocks,
-    visited: &mut HashSet<u32>,
-    out: &mut Vec<PicExtra>,
-) {
+fn collect_doc_images(doc: &Document, blocks: &Blocks, visited: &mut HashSet<u32>, out: &mut Vec<PicExtra>) {
     for block in blocks.iter() {
         match block.as_ref() {
             Block::Para(p) => {
@@ -326,12 +316,7 @@ fn collect_doc_images(
     }
 }
 
-fn collect_obj_images(
-    doc: &Document,
-    obj: &InlineObject,
-    visited: &mut HashSet<u32>,
-    out: &mut Vec<PicExtra>,
-) {
+fn collect_obj_images(doc: &Document, obj: &InlineObject, visited: &mut HashSet<u32>, out: &mut Vec<PicExtra>) {
     match obj {
         InlineObject::Image { media, crop, float, ole, .. } => {
             if ole.as_deref().is_some_and(|e| !e.is_odf_object()) {
@@ -374,11 +359,7 @@ fn build_sppr_extra_els(ex: &PicExtra) -> Vec<Node> {
             children: vec![Node::El(El {
                 name: "a:solidFill".into(),
                 attrs: Vec::new(),
-                children: vec![Node::El(El {
-                    name: "a:srgbClr".into(),
-                    attrs: vec![("val".into(), c.hex())],
-                    children: Vec::new(),
-                })],
+                children: vec![Node::El(El { name: "a:srgbClr".into(), attrs: vec![("val".into(), c.hex())], children: Vec::new() })],
             })],
         }));
     }
@@ -393,20 +374,11 @@ fn build_sppr_extra_els(ex: &PicExtra) -> Vec<Node> {
             let alpha = (((100.0 - sh.transparency.clamp(0.0, 100.0)) * 1000.0).round() as i64).clamp(0, 100_000).to_string();
             fx_children.push(Node::El(El {
                 name: "a:outerShdw".into(),
-                attrs: vec![
-                    ("blurRad".into(), blur),
-                    ("dist".into(), dist),
-                    ("dir".into(), dir),
-                    ("rotWithShape".into(), rot.into()),
-                ],
+                attrs: vec![("blurRad".into(), blur), ("dist".into(), dist), ("dir".into(), dir), ("rotWithShape".into(), rot.into())],
                 children: vec![Node::El(El {
                     name: "a:srgbClr".into(),
                     attrs: vec![("val".into(), sh.color.hex())],
-                    children: vec![Node::El(El {
-                        name: "a:alpha".into(),
-                        attrs: vec![("val".into(), alpha)],
-                        children: Vec::new(),
-                    })],
+                    children: vec![Node::El(El { name: "a:alpha".into(), attrs: vec![("val".into(), alpha)], children: Vec::new() })],
                 })],
             }));
         }
@@ -419,27 +391,15 @@ fn build_sppr_extra_els(ex: &PicExtra) -> Vec<Node> {
                 children: vec![Node::El(El {
                     name: "a:srgbClr".into(),
                     attrs: vec![("val".into(), gl.color.hex())],
-                    children: vec![Node::El(El {
-                        name: "a:alpha".into(),
-                        attrs: vec![("val".into(), alpha)],
-                        children: Vec::new(),
-                    })],
+                    children: vec![Node::El(El { name: "a:alpha".into(), attrs: vec![("val".into(), alpha)], children: Vec::new() })],
                 })],
             }));
         }
         if let Some(se) = fx.soft_edge {
             let rad = wordcraft_geom::to_emu(se.max(0.0)).to_string();
-            fx_children.push(Node::El(El {
-                name: "a:softEdge".into(),
-                attrs: vec![("rad".into(), rad)],
-                children: Vec::new(),
-            }));
+            fx_children.push(Node::El(El { name: "a:softEdge".into(), attrs: vec![("rad".into(), rad)], children: Vec::new() }));
         }
-        nodes.push(Node::El(El {
-            name: "a:effectLst".into(),
-            attrs: Vec::new(),
-            children: fx_children,
-        }));
+        nodes.push(Node::El(El { name: "a:effectLst".into(), attrs: Vec::new(), children: fx_children }));
     }
     nodes
 }
@@ -459,27 +419,15 @@ fn patch_pic_el(el: &mut El, extras: &[PicExtra], pic_idx: &mut usize) -> bool {
             && let Some(bf) = el.child_mut("pic:blipFill")
         {
             let fmt = |v: f32| ((wordcraft_geom::finite(v).clamp(-1000.0, 1000.0) * 100_000.0).round() as i64).to_string();
-            let attrs = vec![
-                ("l".into(), fmt(crop[0])),
-                ("t".into(), fmt(crop[1])),
-                ("r".into(), fmt(crop[2])),
-                ("b".into(), fmt(crop[3])),
-            ];
+            let attrs = vec![("l".into(), fmt(crop[0])), ("t".into(), fmt(crop[1])), ("r".into(), fmt(crop[2])), ("b".into(), fmt(crop[3]))];
             if let Some(sr) = bf.child_mut("a:srcRect") {
                 if sr.attrs != attrs {
                     sr.attrs = attrs;
                     changed = true;
                 }
             } else {
-                let insert_pos = bf
-                    .children
-                    .iter()
-                    .position(|n| matches!(n, Node::El(c) if c.name == "a:stretch"))
-                    .unwrap_or(bf.children.len());
-                bf.children.insert(
-                    insert_pos,
-                    Node::El(El { name: "a:srcRect".into(), attrs, children: Vec::new() }),
-                );
+                let insert_pos = bf.children.iter().position(|n| matches!(n, Node::El(c) if c.name == "a:stretch")).unwrap_or(bf.children.len());
+                bf.children.insert(insert_pos, Node::El(El { name: "a:srcRect".into(), attrs, children: Vec::new() }));
                 changed = true;
             }
         }
