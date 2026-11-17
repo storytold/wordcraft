@@ -22,7 +22,7 @@ const MODES: [&str; 5] = ["none", "readOnly", "comments", "trackedChanges", "for
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("review.restrict", "Restrict Editing", "Review › Protect", restrict).params(
-            r#"{"mode"?: "none|readOnly|comments|trackedChanges|forms" (start enforcing; "none" stops), "formatting"?: bool (limit formatting to unlocked styles), "lockedStyles"?: [style id or name] (the styles that can't be applied; every other style is unlocked), "password"?: string (set when enforcing; required to stop a password-protected document), "stop"?: bool, "exception"?: "add" (the selection stays editable for everyone) | "remove" (exceptions touching the selection) | "removeAll"} → state"#,
+            r#"{"mode"?: "none|readOnly|comments|trackedChanges|forms" (editing restriction; use "none" with "formatting": true for formatting-only protection), "formatting"?: bool (limit formatting to unlocked styles), "lockedStyles"?: [style id or name] (the styles that can't be applied; every other style is unlocked), "password"?: string (set when enforcing; required to stop a password-protected document), "stop"?: bool (true: stop protection), "exception"?: "add" (the selection stays editable for everyone) | "remove" (exceptions touching the selection) | "removeAll"} → state"#,
         ),
     ]
 }

@@ -157,6 +157,14 @@ impl WordApp {
                 }
                 self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
             }
+            // Like a failed native save, a failed serialization or delivery keeps the save stamps.
+            let before_stamp = (
+                self.session.doc.settings.zoom,
+                self.session.doc.core.last_modified_by.clone(),
+                self.session.doc.core.created.clone(),
+                self.session.doc.core.modified.clone(),
+                self.session.doc.core.revision,
+            );
             // A save is a save, download or not: advance the revision and modified stamp (#262).
             if matches!(id, "file.save" | "file.saveAs") {
                 self.session.stamp_save();
@@ -165,7 +173,19 @@ impl WordApp {
             let password =
                 if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
             let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
-            let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
+            let bytes = match wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    (
+                        self.session.doc.settings.zoom,
+                        self.session.doc.core.last_modified_by,
+                        self.session.doc.core.created,
+                        self.session.doc.core.modified,
+                        self.session.doc.core.revision,
+                    ) = before_stamp;
+                    return Err(error);
+                }
+            };
             // A ticket left over from an earlier call isn't this save's.
             let saves = self.services.async_saves.clone();
             if let Some(saves) = &saves {
@@ -185,6 +205,13 @@ impl WordApp {
                 (None, None) => Ok(()),
             };
             if let Err(e) = delivered {
+                (
+                    self.session.doc.settings.zoom,
+                    self.session.doc.core.last_modified_by,
+                    self.session.doc.core.created,
+                    self.session.doc.core.modified,
+                    self.session.doc.core.revision,
+                ) = before_stamp;
                 let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
                 log::error!("download of {name} failed: {e}");
                 self.status(msg.clone());
