@@ -24,6 +24,25 @@ use comments::{
 pub use comments::{comment_list, comment_range_at_caret};
 use proofing::{all_issues, issue_at, next_issue, suggestions, thesaurus, word_count};
 
+/// Review › Display for Review: Simple Markup, All Markup, No Markup or Original. A view
+/// change only: the document and its revisions stay as they are.
+fn display_for_review(s: &mut Session, v: &Value) -> CmdResult {
+    use crate::ReviewDisplay;
+    // Only an omitted (or null) `value` toggles; a number or a bool is refused, not taken as one.
+    let display = match v.get("value") {
+        Some(Value::String(name)) => ReviewDisplay::parse(name).ok_or_else(|| CmdError::Params(format!("unknown `value` {name:?}")))?,
+        Some(Value::Null) | None if s.view.review_display.shows_markup() => ReviewDisplay::NoMarkup,
+        Some(Value::Null) | None => ReviewDisplay::AllMarkup,
+        Some(_) => return Err(CmdError::Params("`value` must be a string".into())),
+    };
+    if display != s.view.review_display {
+        s.view.review_display = display;
+        // The text laid out changes: deletions leave it (Simple, No Markup) or insertions do (Original).
+        s.relayout();
+    }
+    Ok(json!({"value": display.name(), "showMarkup": display.shows_markup()}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("review.newComment", "New Comment", "Review › Comments", new_comment).key(super::mac_or("Mod+Alt+A / Mod+Alt+M", "Mod+Alt+M")).params(r#"{"text": string}"#),
@@ -61,13 +80,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"next"?: bool (then select the next change)}"#),
         CommandSpec::new("review.nextChange", "Next Change", "Review › Changes", |s, _| nav_change(s, 1)).pure(),
         CommandSpec::new("review.previousChange", "Previous Change", "Review › Changes", |s, _| nav_change(s, -1)).pure(),
-        CommandSpec::new("review.markup", "Display for Review", "Review › Tracking", |s, v| {
-            s.view.show_markup = p::str(v, "value").map(|m| m != "noMarkup" && m != "original").unwrap_or(!s.view.show_markup);
-            // Without markup, deletions leave the layout.
-            s.relayout();
-            Ok(json!({"showMarkup": s.view.show_markup}))
-        })
-        .pure(),
+        CommandSpec::new("review.markup", "Display for Review", "Review › Tracking", display_for_review)
+            .params(r#"{"value"?: "simpleMarkup|allMarkup|noMarkup|original" (omit to switch between All Markup and No Markup)} → {"value": the choice, "showMarkup": bool (Simple or All Markup)}"#)
+            .pure(),
         CommandSpec::new("review.trackingOptions", "Track Changes Options", "Review › Tracking", tracking_options)
             .params(
                 r#"{"comments"?: bool, "ink"?: bool, "insertionsDeletions"?: bool, "formatting"?: bool, "balloons"?: "revisions|inline|commentsAndFormatting", "commentDisplay"?: "margin|selected", "insertMark"?: "underline|doubleUnderline|bold|italic|strikethrough|colorOnly|none", "insertColor"?: "byAuthor" | "RRGGBB", "deleteMark"?: "strikethrough|doubleStrikethrough|hidden|caret|hash|underline|doubleUnderline|bold|italic|colorOnly|none", "deleteColor"?: "byAuthor" | "RRGGBB", "changedLines"?: "outside|left|right|none", "changedLinesColor"?: "auto" | "RRGGBB", "trackFormatting"?: bool, "moveFromMark"?: (as deleteMark; none = plain text, no colour), "moveFromColor"?: "byAuthor" | "RRGGBB", "moveToMark"?: (as insertMark; none = plain text, no colour), "moveToColor"?: "byAuthor" | "RRGGBB", "trackMoves"?: bool (the document's setting; off = a cut and paste is a deletion and an insertion, not a move)} → the options (omit all to read them)"#,

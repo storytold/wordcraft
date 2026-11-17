@@ -73,7 +73,9 @@ pub struct ViewState {
     #[serde(skip)]
     pub read_page_color: crate::cmd::view::ReadPageColor,
     pub dark_mode: bool,
-    pub show_markup: bool,
+    /// Review › Display for Review: how tracked changes and comments show on screen.
+    #[serde(default)]
+    pub review_display: ReviewDisplay,
     pub track_changes_pane: bool,
     /// Check spelling and grammar as you type.
     pub proofing: bool,
@@ -104,6 +106,64 @@ pub struct ViewState {
     /// carries it to the window.
     #[serde(default)]
     pub full_screen: bool,
+}
+
+/// Review › Display for Review (`review.markup`): Word's four ways of showing a document's
+/// tracked changes on screen. None of them changes the document or its revisions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewDisplay {
+    /// The text as if the changes were accepted, a red bar beside each changed line, and the
+    /// comments beside the page.
+    SimpleMarkup,
+    /// Every change marked (coloured, underlined or struck, in balloons): Track Changes Options.
+    #[default]
+    AllMarkup,
+    /// The text as if the changes were accepted, with no marks.
+    NoMarkup,
+    /// The text as if the changes were rejected, with no marks.
+    Original,
+}
+
+impl ReviewDisplay {
+    /// Every choice with its `review.markup` name and its label, in Word's menu order.
+    pub const ALL: [(ReviewDisplay, &'static str, &'static str); 4] = [
+        (Self::SimpleMarkup, "simpleMarkup", "Simple Markup"),
+        (Self::AllMarkup, "allMarkup", "All Markup"),
+        (Self::NoMarkup, "noMarkup", "No Markup"),
+        (Self::Original, "original", "Original"),
+    ];
+
+    /// A `review.markup` name (`all` too, the name the ribbon used to send); else `None`.
+    pub fn parse(name: &str) -> Option<Self> {
+        if name == "all" {
+            return Some(Self::AllMarkup);
+        }
+        Self::ALL.iter().find(|(_, n, _)| *n == name).map(|(d, _, _)| *d)
+    }
+
+    pub fn name(self) -> &'static str {
+        Self::ALL.iter().find(|(d, _, _)| *d == self).map(|(_, n, _)| *n).unwrap_or_default()
+    }
+
+    /// The menu label (English; the interface translates it).
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(d, _, _)| *d == self).map(|(_, _, l)| *l).unwrap_or_default()
+    }
+
+    /// Whether markup shows at all (Simple or All Markup): what Show Markup turns on and off, and
+    /// what lets comments show beside the page.
+    pub fn shows_markup(self) -> bool {
+        matches!(self, Self::SimpleMarkup | Self::AllMarkup)
+    }
+
+    /// Set how `display` draws tracked changes on screen for this choice. The session lays the
+    /// text out to match ([`crate::Session::layout`]).
+    pub fn apply(self, display: &mut wordcraft_layout::display::DisplayOptions) {
+        display.markup = self == Self::AllMarkup;
+        display.simple_markup = self == Self::SimpleMarkup;
+        display.original = self == Self::Original;
+    }
 }
 
 /// Where the Styles pane sits (`view.stylesPaneDock`, #1756).
@@ -205,7 +265,7 @@ impl Default for ViewState {
             read_line_spacing: None,
             read_page_color: Default::default(),
             dark_mode: false,
-            show_markup: true,
+            review_display: ReviewDisplay::default(),
             track_changes_pane: false,
             proofing: true,
             numeral: NumeralMode::default(),

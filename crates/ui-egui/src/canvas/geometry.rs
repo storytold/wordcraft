@@ -109,8 +109,10 @@ pub fn markup_width(app: &WordApp) -> f32 {
             facts
         }
     };
-    let formats = m.formatting && has_formats;
-    let moves = m.insertions_deletions && has_moves;
+    // Simple Markup keeps the comments alone beside the page.
+    let revisions = s.revision_balloons_shown();
+    let formats = revisions && m.formatting && has_formats;
+    let moves = revisions && m.insertions_deletions && has_moves;
     let deletions = s.revisions_in_balloons() && has_deletions;
     if s.balloons_shown() && (comments || formats || moves || deletions) { 216.0 } else { 0.0 }
 }

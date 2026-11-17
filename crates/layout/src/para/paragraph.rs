@@ -224,8 +224,8 @@ impl<'a> Shaped<'a> {
         let si = self.b.style(rc, None, false);
         let g = self.b.glyphs.len() as u32;
         // Word still prints the note of a hidden reference mark (and numbers it); a deleted
-        // reference is gone from the final text, note and all.
-        let keeps_notes = !self.b.env.hide_deleted.hides(cx.env.doc, rc.del);
+        // reference is gone from the final text, note and all (an inserted one from the original).
+        let keeps_notes = !self.b.env.hide_deleted.hides_change(cx.env.doc, rc.ins, rc.del);
         for (i, c) in text.char_indices() {
             let mut note = None;
             if c == OBJ {
@@ -713,11 +713,12 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
-    // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted
-    // paragraph in the final text, or moved-away text marked Hidden) is gone: it takes no room.
+    // A paragraph whose text and mark are all a change the layout leaves out (a deleted
+    // paragraph in the final text, an inserted one in the original, or moved-away text marked
+    // Hidden) is gone: it takes no room.
     // So is one whose mark is hidden and whose text is empty or hidden too: Word shows nothing of
     // it, not even its list number, though the number is counted (#3982).
-    let mark_left_out = env.hide_deleted.hides(doc, mark_rc.del) || (mark_rc.hidden && !env.show_hidden);
+    let mark_left_out = env.hide_deleted.hides_change(doc, mark_rc.ins, mark_rc.del) || (mark_rc.hidden && !env.show_hidden);
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);

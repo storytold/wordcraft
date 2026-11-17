@@ -39,7 +39,7 @@ pub use prefs::Prefs;
 pub use query::blank_document;
 pub use snapshot_types::EditSnapshot;
 use snapshot_types::{LayoutSlots, RunSnapshot};
-pub use view::{StylesPaneDock, ViewState};
+pub use view::{ReviewDisplay, StylesPaneDock, ViewState};
 
 /// An editing session: the app-wide state (clipboard, preferences, macros, the command registry…)
 /// and the open documents. The active document's state is in the session's own fields, which

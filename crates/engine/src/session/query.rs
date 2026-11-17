@@ -115,12 +115,13 @@ impl Session {
         self.find.highlights.as_ref().map(|(_, v)| v.as_slice()).unwrap_or(&[])
     }
 
-    /// Whether the markup area beside the page can show balloons: markup shown in Print Layout
-    /// (not Read Mode or pages side by side), comments not listed in the Comments pane instead,
-    /// and Track Changes Options not set to show every revision inline.
+    /// Whether the markup area beside the page can show balloons: markup shown (Simple or All
+    /// Markup) in Print Layout (not Read Mode or pages side by side), comments not listed in the
+    /// Comments pane instead, and Track Changes Options not set to show every revision inline.
+    /// Simple Markup shows only the comments there ([`Session::revision_balloons_shown`]).
     pub fn balloons_shown(&self) -> bool {
         let v = &self.view;
-        v.show_markup
+        v.review_display.shows_markup()
             && !v.comments_pane
             && !v.read_mode
             && !v.multi_page
@@ -133,7 +134,13 @@ impl Session {
     /// as in Word; so do deletions in headers, footers, notes and text boxes, which get no balloons.
     pub fn revisions_in_balloons(&self) -> bool {
         let m = &self.prefs.markup;
-        self.balloons_shown() && m.balloons == wordcraft_layout::display::BalloonMode::Revisions && m.insertions_deletions
+        self.revision_balloons_shown() && m.balloons == wordcraft_layout::display::BalloonMode::Revisions && m.insertions_deletions
+    }
+
+    /// Whether the markup area shows revisions (formatting, moves, deletions) beside the comments:
+    /// in All Markup. Simple Markup shows the comments alone there, as Word does.
+    pub fn revision_balloons_shown(&self) -> bool {
+        self.view.review_display == crate::ReviewDisplay::AllMarkup && self.balloons_shown()
     }
 
     /// Initials for new comments: the ones set in File › Options, else the user name's.

@@ -58,7 +58,7 @@ pub(super) type RunSnapshot = (Document, Selection, Vec<Arc<Undo>>, Vec<Arc<Undo
 
 /// A layout made and what it was made for: ((revision, proofing dictionaries' generation), width, read height, view, read line
 /// spacing, layout, proofing, outline, (deletions left out, deletions marked Hidden, body
-/// deletions in balloons), numeral display, the word being typed, (hidden text shown, field
+/// deletions in balloons, insertions left out), numeral display, the word being typed, (hidden text shown, field
 /// codes shown)).
 pub(super) type LayoutEntry = (
     (u64, u64),
@@ -69,7 +69,7 @@ pub(super) type LayoutEntry = (
     Arc<DocLayout>,
     bool,
     Option<wordcraft_layout::outline::OutlineView>,
-    (bool, wordcraft_layout::HideDeleted, bool),
+    (bool, wordcraft_layout::HideDeleted, bool, bool),
     NumeralMode,
     Option<wordcraft_layout::TypingWord>,
     (bool, bool),
