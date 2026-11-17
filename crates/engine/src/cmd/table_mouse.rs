@@ -16,7 +16,7 @@ use wordcraft_doc::{Document, Path, Pos, StoryRef, Table};
 use wordcraft_geom::{Point, Rect};
 use wordcraft_layout::{DocLayout, Placed};
 
-use super::table_resize::{self, CellBox, Edge, REACH, ResizeTarget};
+use super::table_resize::{self, CellBox, Edge, REACH, Reach, ResizeTarget};
 use super::{sel_result, table};
 use crate::{CellRange, CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"page": n, "x": pt, "y": pt, "toX": pt, "toY": pt, "reach"?: pt} (a drag from the move handle past a table's top-left corner: the table floats where it's dropped, the text wrapping around it; tables in the main text only)"#,
         ),
         CommandSpec::new("table.fitColumn", "AutoFit Column by Double-Clicking", "Table Layout › Cell Size", fit_column).params(
-            r#"{"page": n, "x": pt, "y": pt, "reach"?: pt} (a double-click on a column border: the column left of it fits its contents and the columns right of it keep their widths, moving with the border, so the table narrows or widens (up to the right margin), as in Word)"#,
+            r#"{"page": n, "x": pt, "y": pt, "reach"?: pt} (a double-click on a column border of a table in the caret's story: the column left of it fits its contents and the columns right of it keep their widths, moving with the border, so the table narrows or widens (up to the right margin), as in Word)"#,
         ),
     ]
 }
@@ -205,11 +205,12 @@ pub fn target_at(l: &DocLayout, doc: &Document, story: StoryRef, page: usize, x:
         return None;
     }
     let reach = clean_reach(reach);
-    if table_resize::resize_target(l, doc, page, x, y, reach).is_some() {
+    let tables = Reach::of(l, doc, story, page);
+    if table_resize::resize_target_in(l, doc, page, x, y, reach, tables).is_some() {
         return None;
     }
-    let boxes = table_resize::cell_boxes(l, page);
-    table_resize::tables_on(l, doc, page)
+    let boxes = table_resize::cell_boxes_in(l, page, tables);
+    table_resize::tables_on_in(l, doc, page, tables)
         .into_iter()
         .filter(|g| g.story == story)
         .filter_map(|geom| {
@@ -226,7 +227,7 @@ pub fn handle_table(l: &DocLayout, doc: &Document, story: StoryRef, page: usize,
         return None;
     }
     let pad = clean_reach(reach) / 2.0;
-    table_resize::tables_on(l, doc, page)
+    table_resize::tables_on_in(l, doc, page, Reach::of(l, doc, story, page))
         .into_iter()
         .filter(|g| {
             let h = handle(g);
@@ -242,7 +243,7 @@ pub fn caret_handles(l: &DocLayout, doc: &Document, story: StoryRef, table: &Pat
     let rows = doc.table(story, table).map_or(0, |t| t.rows.len());
     let has_row = |p: usize, r: usize| {
         l.pages.get(p).is_some_and(|pg| {
-            pg.items.iter().any(|it| matches!(it, Placed::Cell { table: t, story: st, row, .. } if *st == story && t == table && *row == r))
+            pg.story_items(story).any(|it| matches!(it, Placed::Cell { table: t, story: st, row, .. } if *st == story && t == table && *row == r))
         })
     };
     // A repeated header row, or a row running on to the next page, is drawn on more than one
@@ -253,7 +254,9 @@ pub fn caret_handles(l: &DocLayout, doc: &Document, story: StoryRef, table: &Pat
         return (None, None);
     }
     // The table's geometry on this page that the pointer handles are drawn and grabbed from.
-    let Some(g) = table_resize::tables_on(l, doc, page).into_iter().find(|g| g.story == story && g.table == *table) else {
+    let Some(g) =
+        table_resize::tables_on_in(l, doc, page, Reach::of(l, doc, story, page)).into_iter().find(|g| g.story == story && g.table == *table)
+    else {
         return (None, None);
     };
     (first.then(|| handle(&g)), last.then(|| g.handle()))
@@ -298,7 +301,7 @@ pub fn cell_rects(l: &DocLayout, doc: &Document, range: &CellRange) -> Vec<(usiz
     let picked: std::collections::BTreeSet<(usize, usize)> = range.cells(t).into_iter().collect();
     let mut out = Vec::new();
     for (pi, pg) in l.pages.iter().enumerate() {
-        for it in &pg.items {
+        for it in pg.story_items(range.story) {
             // A vertically merged cell's box spans its rows (#640); its continuation rows'
             // `covered` boxes would shade it twice.
             if let Placed::Cell { rect, table, row, cell, story, covered: false, .. } = it
@@ -326,7 +329,7 @@ pub fn selection_rects(l: &DocLayout, doc: &Document, a: &Pos, b: &Pos, page_hin
     let mut seen = BTreeMap::new();
     let mut cells = Vec::new();
     for (pi, pg) in l.pages.iter().enumerate() {
-        for it in &pg.items {
+        for it in pg.story_items(a.story) {
             // A vertically merged cell's box spans its rows (#640), as in `cell_rects`.
             if let Placed::Cell { rect, table, row, story, covered: false, .. } = it
                 && *story == a.story
@@ -510,7 +513,7 @@ fn insert_at(s: &mut Session, v: &Value) -> CmdResult {
 /// Where table `table` of `story` is first drawn: its page and top-left corner.
 pub fn corner(l: &DocLayout, story: StoryRef, table: &Path) -> Option<(usize, f32, f32)> {
     l.pages.iter().enumerate().find_map(|(pi, pg)| {
-        let cells = pg.items.iter().filter_map(|it| match it {
+        let cells = pg.story_items(story).filter_map(|it| match it {
             Placed::Cell { rect, table: t, story: st, .. } if *st == story && t == table => Some(*rect),
             _ => None,
         });
@@ -565,10 +568,12 @@ fn move_drag(s: &mut Session, v: &Value) -> CmdResult {
 fn fit_column(s: &mut Session, v: &Value) -> CmdResult {
     let (page, x, y, reach) = point(v)?;
     let l = s.layout();
-    let Some((target, line)) = table_resize::resize_target(&l, &s.doc, page, x, y, reach).and_then(|t| match t.edge {
-        Edge::Column(line) => Some((t, line)),
-        _ => None,
-    }) else {
+    let Some((target, line)) = table_resize::resize_target_in(&l, &s.doc, page, x, y, reach, Reach::of(&l, &s.doc, s.sel.focus.story, page))
+        .and_then(|t| match t.edge {
+            Edge::Column(line) => Some((t, line)),
+            _ => None,
+        })
+    else {
         return Err(CmdError::Failed("there's no column border there".into()));
     };
     let t = s.doc.table(target.story, &target.table).ok_or_else(|| CmdError::Failed("there's no table there".into()))?;
@@ -595,7 +600,7 @@ fn room_right(l: &DocLayout, doc: &Document, page: usize, target: &ResizeTarget)
     let margin = l.pages.get(page).map_or(target.right(), |pg| pg.body.right());
     let Some((outer, row, cell)) = target.table.cell() else { return margin };
     let Some(t) = doc.table(target.story, &outer) else { return margin };
-    let boxes = table_resize::cell_boxes(l, page);
+    let boxes = table_resize::story_cell_boxes(l, page, target.story);
     let Some(b) = boxes.iter().find(|b| b.story == target.story && b.table == outer && b.row == row && b.cell == cell) else {
         return margin;
     };
