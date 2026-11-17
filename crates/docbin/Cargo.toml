@@ -3,23 +3,21 @@ name = "wordcraft-docbin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WordCraft reader for the Word 97-2003 binary file format (.doc, [MS-DOC])"
+description = "WordCraft reader and writer for the Word 97-2003 binary file format (.doc, [MS-DOC])"
 
 [lints]
 workspace = true
 
 [dependencies]
+craft-doc-binary = { workspace = true }
+# craft-doc-binary is pinned ahead of the other craft-libs crates (its writer, storytold/craft-libs
+# #1970), so the shared model comes from the same commit for the bridge's types to match. Back to
+# `workspace = true` at the next craft-libs bump.
+craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "f58c97faacd1aab9dee76e31b7f90864a3440c8d", version = "=0.1.0" }
 wordcraft-doc = { workspace = true }
-wordcraft-geom = { workspace = true }
-cfb = { workspace = true }
-image = { workspace = true }
-miniz_oxide = { workspace = true }
-sha1 = { workspace = true }
-thiserror = { workspace = true }
-log = { workspace = true }
-chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 wordcraft-doc = { workspace = true, features = ["test-support"] }
-proptest = { workspace = true }
-serde_json = { workspace = true }
+cfb = { workspace = true }
