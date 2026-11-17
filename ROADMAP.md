@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** trivial (progress log: Navigation pane Previous and Next result arrows, #5019); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -178,6 +178,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-05: ODT: a watermark added, changed or removed, and Different Odd & Even Pages turned on or off, in a file read from ODT are saved.
 - 2026-11-05: ODT font declarations are kept (gap 19): replacing them made LibreOffice pick other substitutes for fonts not installed, reflowing a document from 83 pages to 70 on a save with no edits.
 - 2026-11-05: ODT pictures offered in several formats show and survive a save (gap 19): LibreOffice's letter templates lost theirs.
+- 2026-10-31: Navigation pane: a "Result 2 of 21" line with Previous and Next result arrows under the search box, and Enter / Shift+Enter in the box, step through the search results, going round at the ends (#5019). Readiness unchanged.
 - 2026-11-07: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). Exact spacing keeps the line's baseline.
 - 2026-11-03: Search types in place: a click on the title bar's Search box, or Alt+Q, takes the typing in that box, with the results under it, as in Word, instead of a second box in a dialog (#5398).
 - 2026-10-31: List labels: a numbering level with format `none` and literal text, such as `RESPONSE:` with a one-inch hanging indent, shows that text as its label, as Word does; it used to show nothing. As in Word, a `none` level still counts and restarts the levels below it, its own number is empty (in legal numbering too), and an empty label still tabs the text to the indent (#4985). Readiness unchanged.
@@ -937,6 +938,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-06 | trivial | Progress log: the Arabic interface's Styles gallery reads from the right (#5566) |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
+| 2026-10-31 | trivial | Progress log: Navigation pane Previous and Next result arrows (#5019); readiness unchanged |
 | 2026-11-07 | trivial | Progress log: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). |
 | 2026-11-03 | trivial | Progress log: the title bar's Search box takes the typing in place (#5398) |
 | 2026-10-31 | trivial | Progress log: a numFmt none list level shows its literal text (#4985); readiness unchanged |
