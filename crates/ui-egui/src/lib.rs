@@ -54,6 +54,7 @@ pub mod keys;
 pub mod keytips;
 pub(crate) mod language_packs;
 mod local_time;
+pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
@@ -69,6 +70,7 @@ pub mod ribbon_fit;
 pub mod rtl;
 pub mod ruler_tabs;
 pub mod scroll;
+pub use scroll::ScrollSpeed;
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
@@ -111,7 +113,7 @@ mod services;
 mod state;
 
 use app::control_click_as_secondary;
-pub(crate) use app::{discards_document, works_without_document};
+pub(crate) use app::works_without_document;
 pub use clock::now_ms;
 pub use services::{HostSaveFn, Inbox, Services};
 pub use state::{AutoSaveBlock, DefaultApp, SaveChoice, keeps_everything};
@@ -138,6 +140,142 @@ struct AwaitingSave {
     rev: u64,
 }
 
+/// File › Options › Advanced › Linux display server (#2184, `ui.displayServer`): how the desktop
+/// app connects on Linux and the BSDs. It's read before the window opens, so a change applies at
+/// the next launch; `WORDCRAFT_WAYLAND` overrides it. An unknown saved value reads as Automatic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum DisplayServer {
+    /// The app's own choice: XWayland whenever there's an X server, for file drag-and-drop.
+    #[default]
+    Auto,
+    Wayland,
+    X11,
+}
+
+impl DisplayServer {
+    /// In menu order.
+    pub const ALL: [DisplayServer; 3] = [DisplayServer::Auto, DisplayServer::Wayland, DisplayServer::X11];
+
+    /// The value used in `ui.json` and by the `ui.displayServer` command.
+    pub fn code(self) -> &'static str {
+        match self {
+            DisplayServer::Auto => "auto",
+            DisplayServer::Wayland => "wayland",
+            DisplayServer::X11 => "x11",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<DisplayServer> {
+        DisplayServer::ALL.into_iter().find(|d| d.code().eq_ignore_ascii_case(code.trim()))
+    }
+
+    /// The English label; only Automatic is translated, the others are names.
+    pub fn label(self) -> &'static str {
+        match self {
+            DisplayServer::Auto => "Automatic",
+            DisplayServer::Wayland => "Wayland",
+            DisplayServer::X11 => "X11 (XWayland)",
+        }
+    }
+}
+
+/// What the status bar's live count shows (#2797): words (the default, as Word's status bar
+/// counts), characters with spaces, or characters without spaces — the same three the Word Count
+/// dialog reports, worded the same way. Right-click the count in the status bar, or File ›
+/// Options › Display, to choose; kept between runs in `ui.json`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum StatusCount {
+    #[default]
+    Words,
+    Characters,
+    CharactersNoSpaces,
+}
+
+impl StatusCount {
+    /// In menu order.
+    pub const ALL: [StatusCount; 3] = [StatusCount::Words, StatusCount::Characters, StatusCount::CharactersNoSpaces];
+
+    /// The value used in `ui.json` and by the `ui.statusCount` command.
+    pub fn code(self) -> &'static str {
+        match self {
+            StatusCount::Words => "words",
+            StatusCount::Characters => "characters",
+            StatusCount::CharactersNoSpaces => "charactersNoSpaces",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<StatusCount> {
+        StatusCount::ALL.into_iter().find(|c| c.code().eq_ignore_ascii_case(code.trim()))
+    }
+
+    /// The English label (translated with `tl!` where shown): the Word Count dialog's own words
+    /// for these counts.
+    pub fn label(self) -> &'static str {
+        match self {
+            StatusCount::Words => "Words",
+            StatusCount::Characters => "Characters (with spaces)",
+            StatusCount::CharactersNoSpaces => "Characters (no spaces)",
+        }
+    }
+}
+
+impl From<String> for DisplayServer {
+    fn from(s: String) -> Self {
+        DisplayServer::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<DisplayServer> for String {
+    fn from(d: DisplayServer) -> Self {
+        d.code().to_string()
+    }
+}
+
+/// An unknown saved value reads as the default rather than discarding the whole `ui.json`.
+impl From<String> for StatusCount {
+    fn from(s: String) -> Self {
+        StatusCount::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<StatusCount> for String {
+    fn from(c: StatusCount) -> Self {
+        c.code().to_string()
+    }
+}
+
+/// Whole-document counts the status bar shows (#2797), computed together whenever the document
+/// changes: words ([`wordcraft_engine::Session::word_count`]), characters and characters without
+/// spaces (the Word Count dialog's [`wordcraft_doc::count_chars`] and [`wordcraft_doc::count_chars_no_spaces`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StatusCounts {
+    pub words: usize,
+    pub chars: usize,
+    pub chars_no_spaces: usize,
+}
+
+impl StatusCounts {
+    /// The total in the unit the status bar is showing.
+    pub fn in_unit(self, unit: StatusCount) -> usize {
+        match unit {
+            StatusCount::Words => self.words,
+            StatusCount::Characters => self.chars,
+            StatusCount::CharactersNoSpaces => self.chars_no_spaces,
+        }
+    }
+}
+
+/// `s` (a selection, say) counted in the unit the status bar is showing.
+pub fn count_in_unit(s: &str, unit: StatusCount) -> usize {
+    match unit {
+        StatusCount::Words => wordcraft_doc::count_words(s),
+        StatusCount::Characters => wordcraft_doc::count_chars(s),
+        StatusCount::CharactersNoSpaces => wordcraft_doc::count_chars_no_spaces(s),
+    }
+}
+
 /// UI state that persists between runs (and that agents can read and set).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -158,6 +296,12 @@ pub struct UiState {
     pub recent: Vec<String>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
+    /// Saved choices in Insert > Date & Time: format picture.
+    pub date_time_format: String,
+    /// Saved language tag in Insert > Date & Time.
+    pub date_time_language: String,
+    /// Saved preference for updating inserted date/time fields automatically (defaults to false).
+    pub date_time_update: bool,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
     pub recent_colors: Vec<String>,
     /// Fonts applied from the font box, the mini toolbar or the Font dialog, most recent first:
@@ -283,6 +427,19 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// File › Options › Advanced › Linux display server (#2184): read by the desktop app before
+    /// the window opens.
+    pub display_server: DisplayServer,
+    /// What the status bar's live count shows (#2797): words (the default), characters with
+    /// spaces, or characters without spaces. Right-click the count in the status bar, or File ›
+    /// Options › Display. Junk saved values read as words.
+    pub status_count: StatusCount,
+    /// How far a mouse-wheel notch scrolls (#6146).
+    #[serde(default, alias = "scrollSpeed")]
+    pub scroll_speed: ScrollSpeed,
+    /// How far a touchpad swipe the system reports in points (Wayland, macOS) scrolls (#6146).
+    #[serde(default, alias = "touchpadScrollSpeed")]
+    pub touchpad_scroll_speed: ScrollSpeed,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -292,6 +449,24 @@ pub const DEFAULT_TAB: &str = "Home";
 
 /// ⌘Q, which only the Mac sends: quit.
 const QUIT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q);
+/// Ctrl+Shift+0 (⌘⇧0): back to the Auto interface size (#4030). Not Ctrl+Alt+0, which is AltGr+0
+/// on some layouts and types a character there (#3424).
+const RESET_INTERFACE_SIZE: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::Num0);
+
+/// Consume Ctrl+Shift+0 (⌘⇧0), matched on the key the layout types and exactly these modifiers.
+/// Where Shift+0 types `=` (German, Swiss and Nordic layouts) the press is Ctrl+Shift+=, which
+/// stays Superscript; an extra Alt (AltGr+Shift+0) doesn't match.
+fn consume_reset_interface_size(input: &mut egui::InputState) -> bool {
+    let mut found = false;
+    input.events.retain(|e| {
+        let hit = matches!(e, egui::Event::Key { key: egui::Key::Num0, pressed: true, modifiers, .. }
+            if modifiers.matches_exact(RESET_INTERFACE_SIZE.modifiers));
+        found |= hit;
+        !hit
+    });
+    found
+}
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.
@@ -302,6 +477,7 @@ pub const MAX_RECENT_FONTS: usize = 10;
 pub const MAX_FONT_NAME_BYTES: usize = 128;
 
 impl Default for UiState {
+    /// Default user interface preferences matching Word defaults.
     fn default() -> Self {
         UiState {
             tab: DEFAULT_TAB.into(),
@@ -312,6 +488,9 @@ impl Default for UiState {
             quick_access_toolbar: true,
             recent: Vec::new(),
             recent_symbols: Vec::new(),
+            date_time_format: String::new(),
+            date_time_language: String::new(),
+            date_time_update: false,
             recent_colors: Vec::new(),
             recent_fonts: Vec::new(),
             theme: theme::Appearance::default(),
@@ -358,6 +537,10 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            display_server: DisplayServer::Auto,
+            status_count: StatusCount::default(),
+            scroll_speed: ScrollSpeed::default(),
+            touchpad_scroll_speed: ScrollSpeed::default(),
         }
     }
 }
@@ -469,8 +652,13 @@ pub struct WordApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// Only a successfully published copy may reuse this window's private fragment.
+    pub clipboard_published: bool,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
+    /// Which job message is current: bumped when a job starts and whenever the message changes,
+    /// so a window can tell a new result from one it already said even when the text is the same.
+    print_gen: u64,
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
@@ -519,6 +707,11 @@ pub struct WordApp {
     synthetic_pending: bool,
     /// How many events of `synthetic` the pending batch contains.
     synthetic_injected: usize,
+    /// Number of raw input events whose scroll delta has already been scaled in the pending host batch.
+    pub(crate) raw_scroll_events_scaled: usize,
+    /// Exact snapshot of the raw input events scaled during the current pending batch, to avoid
+    /// compounding scroll multipliers when eframe replays unconsumed RawInput across hidden logic ticks.
+    pub(crate) last_scaled_scroll_events: Vec<egui::Event>,
     /// macOS: the primary button went down with Control, so it is being read as the secondary.
     control_click: bool,
     /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).
@@ -558,6 +751,12 @@ pub struct WordApp {
     /// The display scale (native pixels per point) seen in the last frame, 1.0 before the first;
     /// `ui.interfaceSize` reports the size Auto draws at with it.
     native_scale: f32,
+    /// The most pixels per point Auto may draw at on this screen ([`theme::auto_scale_limit`], #4030).
+    auto_scale_limit: f32,
+    /// The zoom factor in force during the previous frame's `logic`: egui-winit turns each
+    /// window's monitor size into points with the zoom of the frame before a pending change is
+    /// applied, so the physical size is that size times this zoom ([`theme::auto_scale_limit_over`]).
+    monitor_zoom: f32,
     /// A pre-#822 interface size (percent on top of the display scale) waiting for the first frame
     /// that knows the display's scale, to become the absolute size it drew at
     /// ([`theme::migrate_legacy_interface_size`]).
@@ -587,7 +786,13 @@ pub struct WordApp {
     /// The document's fonts that aren't installed, for the status bar and the font box, and the
     /// layout they were read from.
     pub missing_fonts: crate::chrome::MissingFontsMemo,
-    pub word_count: (u64, usize),
+    /// This window's refused or failed export, shown on its Export and Print pages; see [`WordApp::fail_export`].
+    pub export_error: String,
+    /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
+    pub status_counts: (u64, StatusCounts),
+    /// What this window's Print page knows of the last job's message (the viewport and pass it was
+    /// last drawn in, and the generations of the result it said and holds back); per window.
+    print_memo: crate::print_page::Memo,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
@@ -666,6 +871,9 @@ pub(crate) fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files.sort();
     files
 }
+
+#[cfg(test)]
+mod tests_dialog_tabs;
 
 #[cfg(test)]
 mod tests;

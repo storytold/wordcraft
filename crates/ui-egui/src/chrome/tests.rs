@@ -91,6 +91,113 @@ fn status_bar_controls_hold_still_across_zoom_levels() {
     }
 }
 
+/// #2797: the count line's wording per unit — words (the default), characters with spaces,
+/// characters without spaces — whole document or "selected of total".
+#[test]
+fn the_count_line_words_each_unit() {
+    for (unit, total, selected, expected) in [
+        (StatusCount::Words, 12, None, "12 words"),
+        (StatusCount::Words, 12, Some(3), "3 of 12 words"),
+        (StatusCount::Characters, 23, None, "23 characters"),
+        (StatusCount::Characters, 23, Some(6), "6 of 23 characters"),
+        (StatusCount::CharactersNoSpaces, 21, None, "21 characters (no spaces)"),
+        (StatusCount::CharactersNoSpaces, 21, Some(6), "6 of 21 characters (no spaces)"),
+    ] {
+        assert_eq!(status_count_text(unit, total, selected), expected, "{unit:?} with {selected:?} selected");
+    }
+}
+
+/// #2797: the status bar's totals are the Word Count dialog's numbers (words, characters with
+/// spaces, characters without spaces), and its selection line counts the selection the same way.
+#[test]
+fn the_status_bar_totals_are_the_word_count_dialogs_numbers() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Hello world.\nSecond line"})).unwrap();
+    // Straight from the engine: `a.run` would only open the Word Count dialog (#240).
+    let stats = a.session.run("review.wordCount", &json!({})).unwrap();
+    let counts = a.cached_status_counts();
+    assert_eq!(counts.words, stats["words"].as_u64().unwrap_or_default() as usize, "words, as the dialog counts them");
+    assert_eq!(counts.chars, stats["charactersWithSpaces"].as_u64().unwrap_or_default() as usize, "characters with spaces");
+    assert_eq!(counts.chars_no_spaces, stats["characters"].as_u64().unwrap_or_default() as usize, "characters without spaces");
+    // "world." selected: its own count of the chosen unit over the document's total.
+    a.run("select.text", json!({"text": "world."})).unwrap();
+    let line = |unit: StatusCount| {
+        let selected = crate::count_in_unit(&a.session.selected_text(), unit);
+        status_count_text(unit, counts.in_unit(unit), Some(selected))
+    };
+    assert_eq!(line(StatusCount::Words), "1 of 4 words");
+    assert_eq!(line(StatusCount::Characters), "6 of 23 characters");
+    assert_eq!(line(StatusCount::CharactersNoSpaces), "6 of 21 characters (no spaces)");
+}
+
+/// #2797: the status bar draws the unit the person chose, and right-clicking the count offers
+/// the three units, the choice taking effect at once and kept between runs.
+#[test]
+fn the_status_bar_count_is_chosen_from_its_context_menu() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Hello world.\nSecond line"})).unwrap();
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let mut n = 0;
+    // What the status bar drew last frame: each widget's label and where it sits.
+    let drawn = |a: &mut WordApp, n: &mut u32, events: Vec<egui::Event>| -> Vec<(String, egui::Rect)> {
+        *n += 1;
+        let input = egui::RawInput {
+            time: Some(f64::from(*n) / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| status_bar(a, ui));
+        out.textures_delta.clear();
+        let update = out.platform_output.accesskit_update.take().unwrap();
+        update
+            .nodes
+            .into_iter()
+            .filter_map(|(_, node)| {
+                let b = node.bounds()?;
+                Some((node.label()?.to_string(), egui::Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32))))
+            })
+            .collect()
+    };
+    let at =
+        |seen: &[(String, egui::Rect)], label: &str| seen.iter().find(|(l, _)| l == label).unwrap_or_else(|| panic!("{label} is drawn")).1.center();
+    let button = |at: egui::Pos2, button: egui::PointerButton, pressed: bool| egui::Event::PointerButton {
+        pos: at,
+        button,
+        pressed,
+        modifiers: Default::default(),
+    };
+    // Words are counted: the default unit.
+    let mut seen = drawn(&mut a, &mut n, vec![]);
+    assert!(seen.iter().any(|(l, _)| l == "4 words"), "{seen:?}");
+    // Right-click the count: the menu lists the three units.
+    let count = at(&seen, "4 words");
+    drawn(&mut a, &mut n, vec![egui::Event::PointerMoved(count), button(count, egui::PointerButton::Secondary, true)]);
+    drawn(&mut a, &mut n, vec![button(count, egui::PointerButton::Secondary, false)]);
+    seen = drawn(&mut a, &mut n, vec![]);
+    for label in ["Words", "Characters (with spaces)", "Characters (no spaces)"] {
+        assert!(seen.iter().any(|(l, _)| l == label), "the menu lists {label}: {seen:?}");
+    }
+    // Pick characters with spaces: the count changes at once, with no document change.
+    let pick = at(&seen, "Characters (with spaces)");
+    drawn(&mut a, &mut n, vec![egui::Event::PointerMoved(pick), button(pick, egui::PointerButton::Primary, true)]);
+    drawn(&mut a, &mut n, vec![button(pick, egui::PointerButton::Primary, false)]);
+    assert_eq!(a.ui.status_count, StatusCount::Characters, "the menu's choice is taken");
+    assert_eq!(a.run("ui.statusCount", json!({})).unwrap()["statusCount"], "characters", "and answered to scripts");
+    seen = drawn(&mut a, &mut n, vec![]);
+    assert!(seen.iter().any(|(l, _)| l == "23 characters"), "{seen:?}");
+    // With a selection: "selected of total".
+    a.run("select.text", json!({"text": "world."})).unwrap();
+    seen = drawn(&mut a, &mut n, vec![]);
+    assert!(seen.iter().any(|(l, _)| l == "6 of 23 characters"), "{seen:?}");
+    // The choice comes back after a restart.
+    let mut b = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    b.apply_prefs(crate::UiState::from_json(&saved).unwrap());
+    assert_eq!(b.ui.status_count, StatusCount::Characters, "kept between runs");
+}
+
 /// #2402: a long message (the path of a file that isn't there) is shortened so that it stops
 /// before the controls on the right, instead of being drawn over the Focus button.
 #[test]
