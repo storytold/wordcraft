@@ -30,10 +30,16 @@ fn page_number_type_is_kept_even_when_it_only_repeats_the_defaults() {
 
 #[test]
 fn page_number_type_with_a_start_and_format_still_round_trips() {
-    let body = r#"<w:p><w:r><w:t>One</w:t></w:r></w:p><w:sectPr><w:pgNumType w:fmt="upperRoman" w:start="3"/></w:sectPr>"#;
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
-    assert!(xml.contains(r#"w:fmt="upperRoman""#) && xml.contains(r#"w:start="3""#), "{xml}");
+    for (format, start) in [("decimal", 0), ("upperRoman", 3)] {
+        let page_number_type = format!(r#"<w:pgNumType w:fmt="{format}" w:start="{start}"/>"#);
+        let body = format!(r#"<w:p><w:r><w:t>One</w:t></w:r></w:p><w:sectPr>{page_number_type}</w:sectPr>"#);
+        let d = wordcraft_docx::read(&docx(&body)).unwrap();
+        assert_eq!(d.last_section.page_num_start, Some(start));
+        let saved = wordcraft_docx::write(&d).unwrap();
+        let xml = document_xml(&saved);
+        assert!(xml.contains(&page_number_type), "{xml}");
+        assert_eq!(wordcraft_docx::read(&saved).unwrap().last_section.page_num_start, Some(start));
+    }
 }
 
 #[test]
