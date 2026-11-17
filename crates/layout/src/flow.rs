@@ -1053,7 +1053,9 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, room: 
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
             let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
             let whole = pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after;
-            if pl.rp.keep_next && depth < 8 && whole <= room {
+            // It fits when it does, without its space after: placement measures a paragraph's
+            // own fit without trailing spacing too. The spacing still counts for what follows.
+            if pl.rp.keep_next && depth < 8 && whole - pl.rp.space_after <= room {
                 whole + next_first_line(ctx, block + 1, width, depth + 1, room - whole, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
@@ -1065,7 +1067,8 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, room: 
                 pl.rp.space_before
                     + top
                     + if pl.rp.keep_lines {
-                        pl.height
+                        // Placed whole, with its bottom border room.
+                        pl.height + bottom
                     } else if pl.rp.widow_control && pl.lines.len() >= 2 {
                         // Neither split of three lines is allowed (`settled_end`).
                         to(if pl.lines.len() == 3 { 2 } else { 1 })

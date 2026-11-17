@@ -10851,11 +10851,12 @@ fn keep_with_next_run_moves_with_a_middle_paragraph_that_keeps_its_lines() {
     assert_eq!(pages[..3], [1, 1, 1], "A moves with B, which does not split: {split_b} {pages:?}");
 }
 
-/// A run of kept paragraphs longer than a page is given up on, as in Word: the room-limited count
+/// A run of kept paragraphs longer than a page is given up on, as before: the room-limited count
 /// must not move a paragraph whose whole run fits on no page. A is one line, B to H are ten-line
 /// paragraphs (Letter, 1 inch margins, lines of exactly 20 pt, widow control on), all kept with
-/// the next, then I. B stays on the first page with A; before the fix the shortened count moved
-/// B over and left the first page nearly empty.
+/// the next, then I. A to D (620 pt) stay on the first page. Before the fix the shortened count
+/// (B and the two paragraphs after it whole, then two lines of E: 640 pt) moved B, and C after
+/// it, to the second page and left the first one with A alone.
 #[test]
 fn keep_with_next_run_longer_than_a_page_stays_where_it_is() {
     crate::test_fonts();
@@ -10875,16 +10876,108 @@ fn keep_with_next_run_longer_than_a_page_stays_where_it_is() {
     };
     let lines = |label: &str, n: usize| (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join("
 ");
-    d.body.push(para("A1".to_string(), true));
+    // The new document's one empty paragraph would shift the blocks.
+    d.body = vec![para("A1".to_string(), true)];
     for label in ["B", "C", "D", "E", "F", "G", "H"] {
         d.body.push(para(lines(label, 10), true));
     }
     d.body.push(para(lines("I", 10), false));
+    assert_eq!(d.body.len(), 9);
     let l = lay(&d);
     let page = |block: usize| l.caret(&Pos::body(block, 0)).unwrap().page;
-    assert_eq!([page(0), page(1)], [0, 0], "A and B stay together on the first page");
-    // The next paragraphs follow B on the same page while they fit (C and D).
-    assert_eq!([page(2), page(3)], [0, 0], "C and D follow B on the first page");
+    assert_eq!([page(0), page(1), page(2), page(3)], [0, 0, 0, 0], "A to D stay on the first page");
+}
+
+/// A kept paragraph with space after that fits in the room left keeps the run before it together
+/// with it: the space after is not part of the paragraph's own fit (placement measures it
+/// without), so it must not end the chain. A is one line, B nine lines with 40 pt after it, C
+/// five lines (Letter, 1 inch margins, lines of exactly 20 pt, widow control on); A and B are
+/// kept with the next. Whatever the room, A is on B's page: before the fix, with 188 or 208 pt
+/// left after A, the 220 pt of B and its space after ended the chain at B, A stayed and B moved
+/// alone.
+#[test]
+fn keep_with_next_run_counts_the_space_after_of_a_kept_paragraph_after_its_fit() {
+    crate::test_fonts();
+    let pages = |fillers: usize| -> (usize, usize) {
+        let mut d = Document::new();
+        let props = |kept: bool, after: f32| ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(after),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+            widow_control: Some(true),
+            keep_next: Some(kept),
+            ..Default::default()
+        };
+        let para = |text: String, p: ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+            x.props = p;
+            wordcraft_doc::para_block(x)
+        };
+        let lines = |label: &str, n: usize| (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join("
+");
+        d.body = (0..fillers).map(|i| para(format!("F{i}"), props(false, 0.0))).collect();
+        d.body.push(para("A1".to_string(), props(true, 0.0)));
+        d.body.push(para(lines("B", 9), props(true, 40.0)));
+        d.body.push(para(lines("C", 5), props(false, 0.0)));
+        let l = lay(&d);
+        let page = |block: usize| l.caret(&Pos::body(fillers + block, 0)).unwrap().page;
+        (page(0), page(1))
+    };
+    // A and B on the first page, C not (it cannot start there): the counts that matter.
+    for fillers in 18..=24 {
+        let (a, b) = pages(fillers);
+        assert_eq!(a, b, "A stays with B: {fillers} fillers");
+    }
+    // The window of the fix exists: some count moves A and B over together.
+    assert!((18..=24).any(|n| pages(n) == (1, 1)), "a count moves the pair");
+}
+
+/// A kept paragraph that also keeps its lines together and has a bottom border needs the border
+/// room to be placed whole; the paragraph before it must count that room (the same placement
+/// check), or it stays while the kept paragraph moves alone. A is one line, B nine lines with a
+/// bottom border and Keep lines together (Letter, 1 inch margins, lines of exactly 20 pt), A and
+/// B kept with the next, then C.
+#[test]
+fn keep_with_next_run_counts_the_bottom_border_of_a_paragraph_that_keeps_its_lines() {
+    crate::test_fonts();
+    let pages = |fillers: usize| -> (usize, usize) {
+        let mut d = Document::new();
+        let props = |kept: bool| ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+            widow_control: Some(true),
+            keep_next: Some(kept),
+            ..Default::default()
+        };
+        let para = |text: String, p: ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+            x.props = p;
+            wordcraft_doc::para_block(x)
+        };
+        let lines = |label: &str, n: usize| (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join("
+");
+        d.body = (0..fillers).map(|i| para(format!("F{i}"), props(false))).collect();
+        d.body.push(para("A1".to_string(), props(true)));
+        let bordered = ParaProps {
+            keep_lines: Some(true),
+            borders: Some(Borders {
+                bottom: Some(Border { style: BorderStyle::Single, width: 1.0, space: 12.0, color: None }),
+                ..Default::default()
+            }),
+            ..props(true)
+        };
+        d.body.push(para(lines("B", 9), bordered));
+        d.body.push(para(lines("C", 5), props(false)));
+        let l = lay(&d);
+        let page = |block: usize| l.caret(&Pos::body(fillers + block, 0)).unwrap().page;
+        (page(0), page(1))
+    };
+    for fillers in 18..=24 {
+        let (a, b) = pages(fillers);
+        assert_eq!(a, b, "A stays with B: {fillers} fillers");
+    }
+    assert!((18..=24).any(|n| pages(n) == (1, 1)), "a count moves the pair");
 }
 
 /// Guard, the same before the fix: balanced columns still count a run of kept paragraphs whole
@@ -10901,7 +10994,7 @@ fn balanced_columns_hold_a_run_of_kept_paragraphs() {
     }
     let l = lay(&d);
     let (nl, bl, nr, br, (page, after)) = column_bottoms(&l);
-    assert!(nl == 5 || nl == 6, "{nl} left, {nr} right");
+    assert_eq!(nl, 6, "{nl} left, {nr} right");
     // The kept paragraphs are held in one column (not cut at the trial height), whatever the
     // font metrics: the three of them start at the same left edge.
     let boxes = para_boxes(&l);
