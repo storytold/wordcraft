@@ -258,12 +258,36 @@ pub fn local_path(target: &str, base: Option<&Path>) -> Option<PathBuf> {
 /// the writer drops such a character, so `\0\\host\share` would be saved as `\\host\share`.
 pub(crate) fn check_from_automation(path: &str) -> Result<(), CmdError> {
     let path = path.trim();
-    if crate::automation::active() && (has_dropped_char(path) || has_url_scheme(path) || local_path(path, None).is_none()) {
+    if crate::automation::active() && !local_for_automation(path) {
         return Err(CmdError::Failed(format!(
             "automation path rejected: the attached template must be a file on this computer, not a network or device path or a URL: {path}"
         )));
     }
     Ok(())
+}
+
+/// Refuse a document whose bytes automation gave (`file.open` with `data`) when it is attached to
+/// a template that isn't a file on this computer, by the rules of [`check_from_automation`]:
+/// saving it would write that reference for Word to fetch, as attaching one would (#6101). A
+/// document opened from a file by its path keeps its template, as in Word: the person has that
+/// file, and documents attached to a template on a share are common.
+pub(crate) fn check_opened_from_automation(doc: &Document) -> Result<(), CmdError> {
+    match doc.settings.attached_template.as_deref().map(str::trim) {
+        Some(t) if crate::automation::active() && !local_for_automation(t) => Err(CmdError::Failed(format!(
+            "automation path rejected: the document given in `data` is attached to a template that isn't a file on this computer: {t}"
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// Whether automation may make `path` (trimmed) a document's attached template: a file on this
+/// computer both as written and percent-decoded, with no character the writer drops. The saved
+/// relationship target is a URI, so a reader may decode `%5C%5Chost%5Cshare` (no `file:` scheme)
+/// to `\\host\share`.
+fn local_for_automation(path: &str) -> bool {
+    let local = |t: &str| !has_url_scheme(t) && local_path(t, None).is_some();
+    let decoded = percent_decode(path);
+    !has_dropped_char(path) && local(path) && (decoded == path || local(decoded.trim()))
 }
 
 /// Whether `t` holds a control character or one of the two noncharacters XML leaves out
@@ -595,7 +619,7 @@ mod tests {
     /// What automation may not attach either (#6101): more spellings of another machine (mixed
     /// and forward slashes, lower case, percent-encoded, padded), devices, and URLs (one without
     /// the slashes).
-    const NOT_LOCAL: [&str; 10] = [
+    const NOT_LOCAL: [&str; 13] = [
         "\\/evil.example/share/T.dotx",
         "//?/UNC/evil.example/share/T.dotx",
         "\\\\?\\unc\\evil.example\\share\\T.dotx",
@@ -606,11 +630,16 @@ mod tests {
         "https://evil.example/T.dotx",
         "HTTP:\\\\evil.example\\T.dotx",
         "webdav+x:evil.example/T.dotx",
+        // No `file:` scheme, but the saved target is a URI, which a reader may percent-decode.
+        "%5C%5Cevil.example%5Cshare%5CT.dotx",
+        "%2f%2Fevil.example/share/T.dotx",
+        "https%3A//evil.example/T.dotx",
     ];
 
     /// Templates on this computer, which automation may still attach.
-    const LOCAL: [&str; 9] = [
+    const LOCAL: [&str; 10] = [
         "Report.dotx",
+        "My%20Templates/Report%5FA.dotx",
         "Templates/Report.dotx",
         "C:\\Templates\\Report.dotx",
         "/home/a/Templates/Report.dotx",
@@ -714,6 +743,100 @@ mod tests {
         let mut s = Session::new(Document::new());
         from_automation(|| s.run("tools.attachTemplate", &json!({"path": "C:\\Templates\\100%09 done.dotx"}))).unwrap();
         assert_eq!(s.doc.settings.attached_template.as_deref(), Some("C:\\Templates\\100%09 done.dotx"));
+    }
+
+    /// A document attached to `template`, as the bytes of a `.json` and of a `.docx` file
+    /// (base64), each with the name `file.open` reads it under.
+    fn attached_bytes(template: &str) -> [(&'static str, String); 2] {
+        let mut d = Document::new();
+        d.settings.attached_template = Some(template.into());
+        let encode = |name: &str| crate::cmd::insert::base64_encode(&crate::io::save_bytes(name, &d).unwrap());
+        [("x.json", encode("x.json")), ("x.docx", encode("x.docx"))]
+    }
+
+    /// #6101 review: automation that gives a document's bytes (`file.open` with `data`) can't
+    /// bring in a template on another machine, so it can't attach one in two calls (open, then
+    /// save). Nothing opens and nothing changes. The same bytes from the person go in, a local
+    /// template from automation goes in, and a file automation opens by its path keeps its
+    /// template, as in Word.
+    #[test]
+    fn automation_cannot_open_bytes_attached_to_a_template_on_another_machine() {
+        use crate::automation::from_automation;
+        // The review's own steps: `Document` and `Settings` take any subset of their fields.
+        let review = crate::cmd::insert::base64_encode(br#"{"settings":{"attachedTemplate":"\\\\evil.example\\share\\t.dotm"}}"#);
+        let mut s = Session::new(Document::new());
+        let e = from_automation(|| s.run("file.open", &json!({"path": "x.json", "data": review}))).unwrap_err().to_string();
+        assert!(e.starts_with("automation path rejected: the document given in `data` is attached to a template"), "{e}");
+        assert_eq!((s.documents().len(), s.doc.settings.attached_template.as_deref()), (1, None));
+        s.run("file.open", &json!({"path": "x.json", "data": review})).unwrap();
+        assert_eq!(s.doc.settings.attached_template.as_deref(), Some("\\\\evil.example\\share\\t.dotm"), "from the person it goes in");
+
+        for remote in REMOTE.iter().chain(&NOT_LOCAL) {
+            for (name, data) in attached_bytes(remote) {
+                let mut s = Session::new(Document::new());
+                let params = json!({"path": name, "data": data});
+                let e = from_automation(|| s.run("file.open", &params)).unwrap_err().to_string();
+                assert!(e.starts_with("automation path rejected"), "{name} {remote}: {e}");
+                assert_eq!((s.documents().len(), s.doc.settings.attached_template.as_deref()), (1, None), "{name} {remote}");
+                s.run("file.open", &params).unwrap();
+                assert_eq!(s.doc.settings.attached_template.as_deref().map(str::trim), Some(remote.trim()), "{name} {remote}: from the person");
+            }
+        }
+        for local in LOCAL {
+            for (name, data) in attached_bytes(local) {
+                let mut s = Session::new(Document::new());
+                from_automation(|| s.run("file.open", &json!({"path": name, "data": data}))).unwrap();
+                assert_eq!(s.doc.settings.attached_template.as_deref(), Some(local), "{name} {local}");
+            }
+        }
+        // By its path: the file is the person's, and its template stays (#6101's "Not done").
+        let mut d = Document::new();
+        d.settings.attached_template = Some(REMOTE[0].into());
+        let path = save("open-by-path", &d).with_file_name("Letter.docx");
+        crate::io::save_path(&path, &d).unwrap();
+        let mut s = Session::new(Document::new());
+        from_automation(|| s.run("file.open", &json!({"path": path.to_string_lossy()}))).unwrap();
+        assert_eq!(s.doc.settings.attached_template.as_deref(), Some(REMOTE[0]));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #6101 review: no command, run by automation with a template on another machine in its
+    /// params or in the bytes of a document it is given, leaves an open document attached to
+    /// one. Every command in the registry is run, so one added later is held to it too. Files
+    /// are confined to a scratch folder, as `hostile_file_params_never_panic` does.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn no_command_from_automation_attaches_a_template_on_another_machine() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-templates-registry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let roots = crate::file_access::AutomationRoots::new(Some(&dir), Some(&dir)).unwrap();
+        let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
+        // A share is only ever in a document's bytes: as a value a command may take for a path,
+        // the roots' check would look it up on the network. The spellings used as values name
+        // no machine to a file system.
+        let mut params = vec![];
+        for (in_bytes, value) in
+            [(REMOTE[0], "%5C%5Cevil.example%5Cshare%5CT.dotx"), ("file://evil.example/share/T.dotx", "https://evil.example/T.dotx")]
+        {
+            for (name, data) in attached_bytes(in_bytes) {
+                params.push(json!({"path": at(name), "data": data}));
+                params.push(json!({"path": value, "data": data, "template": value, "name": value, "value": value, "update": true}));
+            }
+        }
+        let reg = crate::cmd::registry();
+        for spec in reg.all() {
+            for v in &params {
+                let mut s = Session::new(Document::new());
+                let _ = crate::automation::from_automation(|| crate::file_access::confine(roots.as_ref(), || s.run(spec.id, v)));
+                for id in s.documents().iter().map(|d| d.id).collect::<Vec<_>>() {
+                    s.activate(id).unwrap();
+                    let t = s.doc.settings.attached_template.clone();
+                    assert!(t.as_deref().is_none_or(local_for_automation), "{} with {v}: attached to {t:?}", spec.id);
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

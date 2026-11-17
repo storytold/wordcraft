@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-11-09 · Attached templates (#6101): automation can't attach a template on another machine.
+> **Last updated:** 2026-11-17 · Attached templates (#6101): automation can't attach a template on another machine, nor open bytes attached to one.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -139,14 +139,20 @@ credentials (NTLM). So automation can't attach one (#6101): `tools.attachTemplat
 read. That covers `\\server\share\...`, `//server/...`, `\\?\UNC\...`, `\??\UNC\...` and other
 device paths, `file://server/...`, and URLs. A path with a control character or U+FFFE or
 U+FFFF in it, written out or percent-encoded in a `file:` URL, is refused as well: the saved
-file drops most of them, so the path saved would not be the path checked. The error is
+file drops most of them, so the path saved would not be the path checked. A path without a
+`file:` scheme is checked percent-decoded too (`%5C%5Cserver%5Cshare`), since the saved target
+is a URI. The error is
 `automation path rejected: the attached template must be a file on this computer, not a network or device path or a URL: …`.
+
+`file.open` with `data` (the document's bytes, in any format) refuses a document attached to
+such a template by the same rules, so automation can't bring one in and save it:
+``automation path rejected: the document given in `data` is attached to a template that isn't a file on this computer: …``.
 
 Automation here means MCP (headless or `--connect`), any request on the app's control channel
 (also the web app's `window.wordcraft` page API, which uses it), and the commands
 `wordcraft-cli run` (`--cmd`, `--script`) and `wordcraft-cli zotero` (`--cmd`) run. With no
 roots in force the check still applies. The person at the keyboard can still attach a template on a share, as in Word.
-A template that a document opened by path or from `data` already names is kept as it is.
+A template that a document opened by path already names is kept as it is.
 
 Not covered: input a control-channel client synthesizes with `ui.click`, `ui.key` or `ui.text`.
 It is handled on a later frame as the person's own, so it can fill in the Templates and Add-ins
