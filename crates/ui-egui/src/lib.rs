@@ -393,7 +393,7 @@ pub struct UiState {
     /// fades, as Word's does on Windows (on, the default), or it jumps and blinks on and off
     /// (off).
     pub caret_animation: bool,
-    /// File › Options › Advanced › Animation: the page scrolling up under the ribbon shows
+    /// File › Options › General: the page scrolling up under the ribbon shows
     /// through it as a blur. Off by default.
     pub ribbon_blur: bool,
     /// Custom keyboard shortcuts (Customize Keyboard, #368); the session owns them while running.
