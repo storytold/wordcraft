@@ -182,8 +182,7 @@ fn decode_image(bytes: &[u8]) -> Result<CopyImage, String> {
     if bytes.len() as u64 > paste_picture::MAX_FILE_BYTES {
         return Err("the picture file is larger than 200 MB".into());
     }
-    let reader = || image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string());
-    let (w, h) = reader()?.into_dimensions().map_err(|e| e.to_string())?;
+    let (w, h) = wordcraft_geom::picture::dimensions(bytes).ok_or_else(|| "unsupported or unreadable picture".to_string())?;
     let pixels = (w as usize).checked_mul(h as usize);
     if w == 0
         || h == 0
@@ -193,13 +192,9 @@ fn decode_image(bytes: &[u8]) -> Result<CopyImage, String> {
     {
         return Err(format!("the picture is too large to copy ({w} × {h} pixels)"));
     }
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(paste_picture::MAX_SIDE as u32);
-    limits.max_image_height = Some(paste_picture::MAX_SIDE as u32);
-    limits.max_alloc = Some((paste_picture::MAX_PIXELS as u64).saturating_mul(4));
-    let mut reader = reader()?;
-    reader.limits(limits);
-    let rgba = reader.decode().map_err(|e| e.to_string())?.into_rgba8();
+    let budget = (paste_picture::MAX_PIXELS as u64).saturating_mul(8);
+    let img = wordcraft_geom::picture::decode_for_drawing(bytes, budget, paste_picture::MAX_SIDE as u32).map_err(|e| e.to_string())?;
+    let rgba = img.into_rgba8();
     Ok(CopyImage { width: w as usize, height: h as usize, rgba: rgba.into_raw() })
 }
 
