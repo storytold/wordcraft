@@ -141,7 +141,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .key(super::mac_or("Mod+Shift+G / Mod+PageUp", "Mod+PageUp"))
         .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
         .pure(),
-        CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace).params(r#"{"text": string, "with": string, …options of edit.replaceAll}"#),
+        CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace).params(
+            r#"{"text": string, "with": string, …options of edit.replaceAll} — Word's Replace button: replaces the match only when it is already selected, then selects the next one. The first call on a caret replaces nothing; call again to replace the selected match, or use edit.replaceAll for every match. Returns {"replaced": 0 | 1, "remaining": n, "selected": {start, end} | null}"#,
+        ),
         // Ctrl+H, Home › Replace: the Find and Replace dialog on its Replace tab (#712). Opening
         // it changes nothing, so it is its own command and never marks the document edited.
         CommandSpec::new("edit.findReplace", "Find and Replace", "Home › Editing", |s, v| {
@@ -746,12 +748,21 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
     let (a, b) = s.sel.ordered();
-    // Replace the current match if selected, then move to the next.
+    // Replace the current match if selected, then move to the next. The result says which
+    // happened (#6877): a first call that only selects a match reads as `replaced: 0`.
+    let mut replaced = 0;
     if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
         super::paste_text(s, &f.rep.unwrap_or_default())?;
+        replaced = 1;
     }
-    let _ = step(s, 1);
-    Ok(json!({"remaining": search(s, story)?.len()}))
+    let selected = match step(s, 1) {
+        Ok(_) => {
+            let (start, end) = s.sel.ordered();
+            json!({"start": pos_json(&start), "end": pos_json(&end)})
+        }
+        Err(_) => Value::Null,
+    };
+    Ok(json!({"replaced": replaced, "remaining": search(s, story)?.len(), "selected": selected}))
 }
 
 /// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
