@@ -151,13 +151,37 @@ pub fn watermark_run(wm: &wordcraft_doc::Watermark, max_chars: usize) -> Option<
 /// in the face its font name resolves to (no fallback face), so a character that face lacks shapes
 /// to glyph id 0. Strict export checks these same glyphs, so the check and the exporters can't
 /// drift.
+pub fn metafile_text_run(t: &craft_metafile::Text) -> (wordcraft_fonts::FaceRef, Vec<ShapedGlyph>) {
+    let family = t.font.family.trim();
+    let family = if family.is_empty() { METAFILE_DEFAULT_FONT } else { family };
+    let face = wordcraft_fonts::word::resolve(family, t.font.weight >= 600, t.font.italic).face;
+    let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
+    (face, shaped)
+}
+
+/// The face a metafile font with no face name is drawn in.
+const METAFILE_DEFAULT_FONT: &str = "Arial";
+/// The cell height (text units) of a metafile font whose height is 0, the file's default size.
+const METAFILE_DEFAULT_HEIGHT: f64 = 16.0;
+
+/// A metafile text run laid out with a font's metrics: the em size (text units), the baseline's y
+/// and each glyph's (x, y), alignment included, in the run's text space (see
+/// `craft_metafile::Text::transform`).
 pub struct MetafileTextLayout {
     pub em: f64,
     pub baseline: f64,
     pub glyphs: Vec<(f64, f64)>,
+    /// The rectangle of the character cells (x0, y0, x1, y1): from the leftmost to the rightmost
+    /// pen position of the run, the font's ascent above the baseline and its descent below. An
+    /// opaque background fills it.
+    pub cell: [f64; 4],
 }
 
-/// Lay out shaped glyphs for a metafile text run.
+/// Lays out the shaped glyphs of `t`, given as (cluster byte offset, x advance, x offset, y offset)
+/// in font units of a font with `upem` units per em, `ascent` above and `descent` below the
+/// baseline. The font height is the em size when negative and the cell height (ascent plus
+/// descent) when positive. The per-character advances `dx` place each cluster when there is one
+/// per character. None when the size is not finite and positive.
 pub fn layout_metafile_text(
     t: &craft_metafile::Text,
     upem: f64,
@@ -166,10 +190,9 @@ pub fn layout_metafile_text(
     glyphs: &[(usize, f64, f64, f64)],
 ) -> Option<MetafileTextLayout> {
     let upem = if upem.is_finite() && upem > 0.0 { upem } else { 1000.0 };
-    let cell_h = ascent + descent;
-    let size = if t.font.height == 0.0 { 12.0 } else { f64::from(t.font.height.abs()) };
-    let cell = t.font.height > 0.0;
-    let em = if cell && cell_h.is_finite() && cell_h > 0.0 { size * upem / cell_h } else { size };
+    let height = if t.font.height == 0.0 { METAFILE_DEFAULT_HEIGHT } else { f64::from(t.font.height) };
+    let cell = ascent + descent;
+    let em = if height > 0.0 && cell.is_finite() && cell > 0.0 { height * upem / cell } else { height.abs() };
     if !em.is_finite() || em <= 0.0 {
         return None;
     }
@@ -187,6 +210,8 @@ pub fn layout_metafile_text(
     });
     let mut out = Vec::with_capacity(glyphs.len());
     let (mut pen, mut cluster_pen, mut last) = (0.0, 0.0, None);
+    // The leftmost and rightmost pen positions: advances can move backward.
+    let (mut lo, mut hi) = (0.0f64, 0.0f64);
     for &(cluster, adv, xo, yo) in glyphs {
         let ci = starts.partition_point(|&b| b <= cluster).saturating_sub(1);
         if last != Some(ci) {
@@ -199,6 +224,10 @@ pub fn layout_metafile_text(
         };
         out.push((x + xo * k, -yo * k));
         pen += adv * k;
+        (lo, hi) = (lo.min(pen), hi.max(pen));
+    }
+    if let Some(cum) = &dx {
+        (lo, hi) = cum.iter().fold((0.0f64, 0.0f64), |(l, h), x| (l.min(*x), h.max(*x)));
     }
     let width = dx.as_ref().and_then(|c| c.last().copied()).unwrap_or(pen);
     let hoff = match t.h_align {
@@ -212,14 +241,8 @@ pub fn layout_metafile_text(
         craft_metafile::VAlign::Bottom => -descent * k,
     };
     let glyphs = out.into_iter().map(|(x, y)| (x + hoff, y + baseline)).collect();
-    Some(MetafileTextLayout { em, baseline, glyphs })
-}
-
-pub fn metafile_text_run(t: &craft_metafile::Text) -> (wordcraft_fonts::FaceRef, Vec<ShapedGlyph>) {
-    let bold = t.font.weight >= 600;
-    let face = wordcraft_fonts::word::resolve(&t.font.family, bold, t.font.italic).face;
-    let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
-    (face, shaped)
+    let cell = [hoff + lo, baseline - ascent * k, hoff + hi, baseline + descent * k];
+    Some(MetafileTextLayout { em, baseline, glyphs, cell })
 }
 
 /// The characters of the watermark that draw as an empty box (glyph id 0), counted as
