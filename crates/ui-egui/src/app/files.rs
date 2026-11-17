@@ -1,6 +1,6 @@
 use super::{
-    AutoSaveBlock, AwaitingSave, PromptSave, SaveChoice, Value, WordApp, async_saves, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
-    printing,
+    AutoSaveBlock, AwaitingSave, PromptSave, SaveChoice, Value, WordApp, async_saves, cloud, dialogs, file_dialogs, i18n, json, keeps_everything,
+    panes, printing,
 };
 
 impl WordApp {
@@ -27,8 +27,11 @@ impl WordApp {
             SaveChoice::Cancel => false,
             SaveChoice::DontSave => true,
             // A new document or an import-only Word file: ask where through Save As. The command
-            // runs once that has saved, on a later frame with the non-blocking dialog (#94).
-            SaveChoice::Save if (self.session.path.is_none() || self.legacy_word_path()) && self.services.download.is_none() => {
+            // runs once that has saved, on a later frame with the non-blocking dialog (#94). A
+            // document that came from the cloud has a destination already, so it goes the ordinary way.
+            SaveChoice::Save
+                if (self.session.path.is_none() || self.legacy_word_path()) && self.services.download.is_none() && !cloud::has_target(self) =>
+            {
                 return match self.save_as(file_dialogs::AfterSave::Continue { then, params, document }) {
                     file_dialogs::Asked::Done(r) => r,
                     file_dialogs::Asked::Pending => Ok(json!({"pending": "saveAs"})),
@@ -64,6 +67,10 @@ impl WordApp {
     /// In the browser the save picker may write the file later ([`PromptSave::Later`], #1315).
     fn save_for_prompt(&mut self) -> Result<PromptSave, String> {
         let v = self.execute("file.save", json!({}))?;
+        if v.get("saving").is_some() {
+            self.status(tl!("The document is still being saved to the cloud. Try again once that has finished."));
+            return Ok(PromptSave::NotSaved);
+        }
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
         if !self.safely_saved(saved) {
             return Ok(PromptSave::NotSaved);

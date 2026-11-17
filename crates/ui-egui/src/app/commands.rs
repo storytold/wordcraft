@@ -1,7 +1,7 @@
 use super::{
-    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, chrome, colors, crop, dialogs, dialogs_table_style,
-    file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
-    table_pen, theme, widgets, zotero,
+    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, chrome, cloud, colors, crop, dialogs,
+    dialogs_table_style, file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font,
+    system_clipboard, table_pen, theme, widgets, zotero,
 };
 
 impl WordApp {
@@ -923,6 +923,104 @@ impl WordApp {
                 self.status(tl!("Click the empty text box the text should continue in (Esc cancels)"));
                 json!({"pending": "link"})
             }
+            // ---- cloud storage (File › Open, File › Save As): split out into its own helper so
+            // this dispatcher stays under the crate's cognitive-complexity limit. A pure move:
+            // `cloud_ui_command` returns `None` for any id it doesn't own, including `file.save`
+            // outside the cloud case, so dispatch falls through exactly as it did inline.
+            "file.save" | "cloud.status" | "cloud.open" | "cloud.browse" | "cloud.shared" | "cloud.link" | "cloud.openFile" | "cloud.save"
+            | "cloud.saveAs" | "cloud.reload" => {
+                return self.cloud_ui_command(id, p);
+            }
+            _ => return None,
+        }))
+    }
+
+    /// The cloud storage arms of [`Self::ui_command`] (File › Open, File › Save As, and the
+    /// `cloud.*` ids): no backend ships right now (see [`cloud`]), so every arm here reports
+    /// unavailable or refuses rather than reaching a service.
+    ///
+    /// `file.save` is intercepted only for a document that came from the cloud, which is also the
+    /// only kind with no file of its own, so saving a local document behaves exactly as it always
+    /// did: this returns `None` and the caller's normal `file.save` handling runs instead.
+    fn cloud_ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
+        let s = |k: &str| p.get(k).and_then(Value::as_str);
+        Some(Ok(match id {
+            "file.save" if p.get("path").is_none() && cloud::has_target(self) => {
+                self.cloud.save_name.clear();
+                return Some(cloud::save(self));
+            }
+            "cloud.status" => cloud::status(self),
+            "cloud.open" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                self.ui.backstage = true;
+                self.ui.backstage_page = "open".into();
+                cloud::start(self);
+                cloud::status(self)
+            }
+            "cloud.browse" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                let path = s("path").unwrap_or("");
+                cloud::browse(self, path);
+                json!({"folder": path})
+            }
+            "cloud.shared" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                cloud::load_shared(self);
+                Value::Null
+            }
+            "cloud.link" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                cloud::link(self);
+                cloud::status(self)
+            }
+            // Opens something already listed, by id or by name. The listing is what the user can
+            // see, which keeps a scripted open and a clicked one on the same footing.
+            "cloud.openFile" => {
+                let id = s("id");
+                let name = s("name").unwrap_or("");
+                let found = self
+                    .cloud
+                    .mine
+                    .entries
+                    .iter()
+                    .chain(self.cloud.shared.entries.iter())
+                    .find(|e| id.is_some_and(|id| e.id == id) || (!name.is_empty() && e.name == name))
+                    .cloned();
+                match found {
+                    Some(entry) if cloud::opens(&entry) => {
+                        cloud::open_entry(self, entry, None);
+                        cloud::status(self)
+                    }
+                    Some(entry) => return Some(Err(format!("WordCraft cannot open {}", entry.name))),
+                    None => return Some(Err("no such file in the cloud listing".to_owned())),
+                }
+            }
+            "cloud.save" => {
+                self.cloud.save_name.clear();
+                return Some(cloud::save(self));
+            }
+            "cloud.saveAs" => match (s("folder"), s("name")) {
+                (Some(folder), Some(name)) => {
+                    self.cloud.save_name = name.to_owned();
+                    return Some(cloud::save_as(self, folder, name));
+                }
+                _ => {
+                    if !cloud::available(self) {
+                        return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                    }
+                    cloud::go_to_save_as(self);
+                    cloud::status(self)
+                }
+            },
+            "cloud.reload" => return Some(cloud::reload_active(self)),
             _ => return None,
         }))
     }
