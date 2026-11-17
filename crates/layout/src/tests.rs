@@ -1997,6 +1997,108 @@ fn break_only_list_has_no_label() {
     }
 }
 
+/// #4828: a list item deleted whole (its text and its mark) under Track Changes shows its number
+/// as deleted text, in the deletion's colour and struck through, with markup shown; without
+/// markup the number is drawn no more than the text.
+#[test]
+fn a_deleted_list_items_number_is_drawn_as_deleted_text() {
+    let mut d = Document::from_text("Intro\nChapter two\nBody");
+    d.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Delete,
+        author: "Ana".into(),
+        date: String::new(),
+        move_name: None,
+    });
+    let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 3), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+    d.format_range(&Pos::body(1, 0), &Pos::body(1, 11), &|c| c.del = Some(0)).unwrap();
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.del = Some(0);
+    let l = lay(&d);
+    let draws = |markup: bool| display::page_display(&d, &l.pages[0], &display::DisplayOptions { markup, ..Default::default() });
+    let glyph_color = |items: &[display::Draw], want: &str| {
+        items.iter().find_map(|i| match i {
+            display::Draw::Glyphs { text, color, glyphs, .. } if text.contains(want) => Some((*color, glyphs.first().map_or(0.0, |g| g.1))),
+            _ => None,
+        })
+    };
+    let marked = draws(true);
+    let (number, nx) = glyph_color(&marked, "1.").expect("the number is drawn with markup");
+    let (text, _) = glyph_color(&marked, "Chapter").expect("the deleted text is drawn with markup");
+    assert_eq!(number, text, "the number takes the deletion's colour");
+    let struck = marked
+        .iter()
+        .any(|i| matches!(i, display::Draw::Line { x0, x1, y0, y1, .. } if (y0 - y1).abs() < 0.01 && *x0 <= nx + 0.01 && *x1 > nx + 1.0));
+    assert!(struck, "the number is struck through");
+    // The number takes the other deletion marks as its text does.
+    let with_mark = |mark: display::DeleteMark| {
+        let mut o = display::DisplayOptions { markup: true, ..Default::default() };
+        o.revisions.delete_mark = mark;
+        display::page_display(&d, &l.pages[0], &o)
+    };
+    let caret = with_mark(display::DeleteMark::Caret);
+    assert!(glyph_color(&caret, "1.").is_none(), "a caret replaces the number");
+    assert!(caret.iter().any(|i| matches!(i, display::Draw::Line { x1, .. } if (*x1 - nx).abs() < 0.01)), "the caret is where the number was");
+    let bold = with_mark(display::DeleteMark::Bold);
+    assert!(bold.iter().any(|i| matches!(i, display::Draw::Glyphs { text, synth_bold: true, .. } if text.contains("1."))));
+    let hashed = with_mark(display::DeleteMark::Hash);
+    let ids = |items: &[display::Draw], want: &str| {
+        items.iter().find_map(|i| match i {
+            display::Draw::Glyphs { text, glyphs, .. } if text.contains(want) => Some(glyphs.iter().map(|g| g.0).collect::<Vec<_>>()),
+            _ => None,
+        })
+    };
+    let (numbers, hashes) = (ids(&marked, "1.").unwrap(), ids(&hashed, "1.").unwrap());
+    assert!(hashes.len() == numbers.len() && hashes.windows(2).all(|w| w[0] == w[1]) && hashes != numbers, "each character shows as #");
+    let plain_label = |items: &[display::Draw]| {
+        items.iter().any(|i| matches!(i, display::Draw::Line { x0, x1, y0, y1, .. } if (y0 - y1).abs() < 0.01 && *x0 <= nx + 0.01 && *x1 > nx + 1.0))
+    };
+    assert!(!plain_label(&with_mark(display::DeleteMark::ColorOnly)), "colour only: no line through or under the number");
+    // Moved-away text marked (none) is plain, its number too.
+    let mut moved = d.clone();
+    if let Some(r) = moved.revisions.get_mut(0) {
+        r.move_name = Some("move1".into());
+    }
+    let mut o = display::DisplayOptions { markup: true, ..Default::default() };
+    o.revisions.move_from_mark = display::DeleteMark::None;
+    let shown = display::page_display(&moved, &l.pages[0], &o);
+    let (moved_number, _) = glyph_color(&shown, "1.").expect("the moved number is drawn");
+    let (moved_text, _) = glyph_color(&shown, "Chapter").expect("the moved text is drawn");
+    assert_eq!(moved_number, moved_text, "plain, like its text");
+    assert!(!plain_label(&shown));
+    // With markup but deletions hidden in Track Changes Options, the number isn't drawn either.
+    assert!(glyph_color(&with_mark(display::DeleteMark::Hidden), "1.").is_none(), "deletions marked hidden");
+    let mut o = display::DisplayOptions { markup: true, ..Default::default() };
+    o.revisions.insertions_deletions = false;
+    assert!(glyph_color(&display::page_display(&d, &l.pages[0], &o), "1.").is_none(), "insertions and deletions not shown");
+    // Without markup neither the text nor its number is drawn.
+    let plain = draws(false);
+    assert!(glyph_color(&plain, "Chapter").is_none() && glyph_color(&plain, "1.").is_none());
+    // A number whose paragraph mark isn't deleted is drawn as before.
+    let mut kept = Document::from_text("Intro\nChapter two\nBody");
+    let id = std::sync::Arc::make_mut(&mut kept.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    kept.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 3), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+    let kl = lay(&kept);
+    let plain = display::page_display(&kept, &kl.pages[0], &display::DisplayOptions { markup: false, ..Default::default() });
+    assert!(glyph_color(&plain, "1.").is_some());
+    // #4828 review: only the paragraph mark deleted (Delete at the end of the item): the text
+    // stays, and so does its number, plain, with markup and without (and in print, where markup
+    // is off).
+    let mut joined = kept.clone();
+    joined.revisions = d.revisions.clone();
+    joined.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.del = Some(0);
+    let jl = lay(&joined);
+    for markup in [false, true] {
+        let shown = display::page_display(&joined, &jl.pages[0], &display::DisplayOptions { markup, ..Default::default() });
+        let (number, jx) = glyph_color(&shown, "1.").unwrap_or_else(|| panic!("markup {markup}: the number stays"));
+        let (text, _) = glyph_color(&shown, "Chapter").unwrap_or_else(|| panic!("markup {markup}: the text stays"));
+        assert_eq!(number, text, "markup {markup}: in the text's colour");
+        let struck = shown
+            .iter()
+            .any(|i| matches!(i, display::Draw::Line { x0, x1, y0, y1, .. } if (y0 - y1).abs() < 0.01 && *x0 <= jx + 0.01 && *x1 > jx + 1.0));
+        assert!(!struck, "markup {markup}: not struck through");
+    }
+}
+
 #[test]
 fn empty_list_paragraph_with_a_hidden_mark_counts_but_shows_nothing() {
     // Word (#3982): a list item whose paragraph mark is hidden, and whose text is empty or hidden
@@ -3705,6 +3807,113 @@ fn text_wraps_around_square_float() {
     assert!(later.left < 1.0, "lines below the float use the full width: {}", later.left);
     assert!(x + first.left > 72.0 + 144.0);
     assert!(l.pages[0].items.iter().any(|i| matches!(i, Placed::Shape { .. })));
+}
+
+/// The left edges of a paragraph's lines beside a 144 × 100 pt square-wrapped rectangle at the
+/// column's top left (9 pt from text), and of its first line below the rectangle, in
+/// compatibility `mode` with Word 2003's indent rules on or off. The paragraph is indented
+/// 216 pt; `float` adjusts the object, `para` the paragraph, and `numbered` makes it a list item.
+fn word_2003_indent_lefts(
+    mode: u32,
+    rules: bool,
+    float: &dyn Fn(&mut wordcraft_doc::para::Float),
+    numbered: bool,
+    para: &dyn Fn(&mut ParaProps),
+) -> (Vec<f32>, Option<f32>) {
+    let mut d = Document::from_text(&"Words beside the picture here. ".repeat(20));
+    d.settings.compat_mode = mode;
+    d.settings.do_not_suppress_indentation = rules;
+    let num = numbered.then(|| Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered));
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.indent_left = Some(216.0);
+        p.indent_first = Some(0.0);
+        p.numbering = num.map(|num| wordcraft_doc::props::NumRef { num, level: 0 });
+        para(p);
+    })
+    .unwrap();
+    let mut f = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 9.0,
+        ..Default::default()
+    };
+    float(&mut f);
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 144.0,
+        h: 100.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: f,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    // After the first word, so a drop cap takes the paragraph's first letter.
+    d.insert_object(&Pos::body(0, 6), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let Placed::Lines { para, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
+        panic!()
+    };
+    let beside = para.lines.iter().filter(|ln| ln.top < 100.0).map(|ln| ln.left).collect();
+    let below = para.lines.iter().find(|ln| ln.top > 120.0).map(|ln| ln.left);
+    (beside, below)
+}
+
+/// Word 2003's indent rules (`w:doNotSuppressIndentation`, a `.doc`'s `Copts.fWW11IndentRules`): an
+/// unnumbered paragraph indented past a floating object on its left starts its lines right after
+/// the object, its indent ignored (ECMA-376 Part 4 §14.8.3.12). In a Word 2003-mode `.doc` saved
+/// by Word, empty paragraphs indented 216 pt sit right after a text box ending 165 pt into the
+/// column, in the 71 pt gap before a second box where the indent would leave under 20 pt. Below
+/// the object, and in Word 2013's layout, the indent applies.
+#[test]
+fn word_2003_indent_rules_start_lines_right_after_a_float_before_the_indent() {
+    let lefts = |mode: u32, rules: bool| word_2003_indent_lefts(mode, rules, &|_| {}, false, &|_| {});
+    for mode in [11, 12, 14] {
+        let (beside, below) = lefts(mode, true);
+        assert!(
+            !beside.is_empty() && beside.iter().all(|x| (x - 153.0).abs() < 0.01),
+            "mode {mode}: lines start after the object and its 9 pt distance: {beside:?}"
+        );
+        assert_eq!(below, Some(216.0), "mode {mode}: below the object the indent applies");
+    }
+    assert_eq!(lefts(11, false).0[0], 216.0, "without the option the indent applies beside the object");
+    assert_eq!(lefts(15, true).0[0], 216.0, "Word 2013's layout keeps the indent");
+}
+
+/// Under Word 2003's indent rules a line starts after a Tight or Through-wrapped object's outline
+/// where the line meets it, not after the outline's widest point: here a right triangle, its
+/// point at the top left, 144 pt wide (and 9 pt from text) only at its foot.
+#[test]
+fn word_2003_indent_rules_follow_a_tight_objects_outline() {
+    use wordcraft_doc::para::Wrap;
+    use wordcraft_doc::wrap::WrapPolygon;
+    let poly = WrapPolygon::new(true, [(0, 0), (0, 21_600), (21_600, 21_600)]).map(Arc::new);
+    for wrap in [Wrap::Tight, Wrap::Through] {
+        let (beside, _) = word_2003_indent_lefts(11, true, &|f| (f.wrap, f.wrap_polygon) = (wrap, poly.clone()), false, &|_| {});
+        assert!(beside.len() > 2 && beside[0] < 60.0, "{wrap:?}: the first line starts near the point: {beside:?}");
+        assert!(beside.windows(2).all(|w| w[0] < w[1]) && beside.iter().all(|&x| x <= 153.0 + 0.01), "{wrap:?}: each line further out: {beside:?}");
+    }
+}
+
+/// Word 2003's indent rules leave the indent alone for a numbered paragraph (its number sits at
+/// the indent) and for one with a drop cap (the letter does), and never start a line left of the
+/// paragraph's own edge after an object out in the margin.
+#[test]
+fn word_2003_indent_rules_keep_the_indent_where_they_do_not_apply() {
+    let (numbered, _) = word_2003_indent_lefts(11, true, &|_| {}, true, &|_| {});
+    assert!(numbered.iter().all(|&x| x >= 216.0 - 0.01), "a numbered paragraph keeps its indent: {numbered:?}");
+    let (dropped, _) = word_2003_indent_lefts(11, true, &|_| {}, false, &|p| p.drop_cap = Some(3));
+    assert!(dropped.iter().all(|&x| x >= 216.0 - 0.01), "lines beside a drop cap stay right of it: {dropped:?}");
+    // An object in the left margin, its right side and distance from text 44 pt short of the column.
+    let (margin, _) = word_2003_indent_lefts(11, true, &|f| f.x = -197.0, false, &|_| {});
+    assert!(margin.iter().all(|&x| x >= -0.01), "no line starts in the margin: {margin:?}");
+    assert!((margin[0] - 0.0).abs() < 0.01, "the line starts at the paragraph's edge: {margin:?}");
 }
 
 #[test]
