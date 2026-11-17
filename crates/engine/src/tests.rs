@@ -1905,6 +1905,103 @@ fn paste_keeps_destination_style_shading() {
     );
 }
 
+/// Multi-line VS Code paste keeps removable paragraph shading rather than stuck character shading,
+/// so Shading › No Color, Clear All Formatting, and Merge Formatting all clear the dark background (#6157).
+#[test]
+fn pasted_code_from_vscode_shading_is_removable() {
+    let vscode_html = concat!(
+        r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-size: 14px;white-space: pre;">"#,
+        r#"<div><span style="color: #569cd6;">const</span><span style="color: #d4d4d4;"> a = 1;</span></div>"#,
+        r#"<div><span style="color: #569cd6;">const</span><span style="color: #d4d4d4;"> b = 2;</span></div>"#,
+        r#"</div>"#,
+    );
+    let plain = "const a = 1;\nconst b = 2;";
+
+    // Home › Paragraph › Shading › No Color removes the dark background across all pasted lines.
+    let mut s = self::s();
+    run(&mut s, "edit.paste", json!({"text": plain, "html": vscode_html}));
+    assert_eq!(s.doc.body.len(), 2);
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none()));
+    }
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.shading", json!({"color": null}));
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, None, "Shading › No Color clears the container background");
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none()));
+    }
+
+    // Clear All Formatting clears both the dark paragraph shading and light syntax colors.
+    let mut s = self::s();
+    run(&mut s, "edit.paste", json!({"text": plain, "html": vscode_html}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.clear", json!({}));
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, None);
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none() && r.props.color.is_none()));
+    }
+
+    // Paste › Merge Formatting drops the dark container background and light text colors up front.
+    let mut s = self::s();
+    run(&mut s, "edit.pasteMerge", json!({"text": plain, "html": vscode_html}));
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, None);
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none() && r.props.color.is_none()));
+    }
+}
+
+/// Copying a paragraph shaded via its style writes `background-color` to the clipboard HTML (#6157).
+#[test]
+fn copy_exports_style_inherited_paragraph_shading_to_clipboard_html() {
+    let mut s = s();
+    Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
+        id: "CodeBlock".into(),
+        name: "Code Block".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: wordcraft_doc::props::ParaProps { shading: Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), ..Default::default() },
+        ..Default::default()
+    });
+    run(&mut s, "document.setText", json!({"text": "const x = 1;"}));
+    run(&mut s, "para.style", json!({"style": "CodeBlock"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default();
+    assert!(html.contains("background-color:#1E1E1E"), "clipboard HTML carries style paragraph shading: {html}");
+
+    let mut dst = self::s();
+    run(&mut dst, "edit.paste", json!({"text": "const x = 1;", "html": html, "privateClipboard": false}));
+    let p = dst.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+}
+
+/// Pasting a single inline-highlighted word into the middle of an unshaded paragraph keeps run
+/// shading on that word alone and leaves the destination paragraph unshaded (#6157).
+#[test]
+fn pasting_inline_highlighted_word_mid_paragraph_keeps_run_shading_only() {
+    for (html, want) in [
+        (r#"<span style="background-color:yellow">word</span>"#, wordcraft_doc::Rgb(0xff, 0xff, 0x00)),
+        (r"<mark>word</mark>", wordcraft_doc::Rgb(0xff, 0xff, 0x00)),
+        (r#"<code style="background-color:#eeeeee">word</code>"#, wordcraft_doc::Rgb(0xee, 0xee, 0xee)),
+    ] {
+        let mut s = self::s();
+        run(&mut s, "document.setText", json!({"text": "before  after"}));
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 7}, "focus": {"block": 0, "off": 7}}));
+        run(&mut s, "edit.paste", json!({"text": "word", "html": html}));
+        assert_eq!(text(&s), "before word after", "{html}");
+        let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+        assert_eq!(p.props.shading, None, "destination paragraph stays unshaded: {html}");
+        assert_eq!(p.props_of_char(0).shading, None, "{html}");
+        assert_eq!(p.props_of_char(7).shading, Some(want), "pasted word keeps run shading: {html}");
+        assert_eq!(p.props_of_char(12).shading, None, "{html}");
+    }
+}
+
 /// A CF_HTML ("HTML Format") clipboard payload around `html`, with the byte offsets Windows writes.
 fn cf_html(html: &str) -> String {
     let n = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n".len();

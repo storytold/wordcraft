@@ -1509,10 +1509,11 @@ impl Document {
         if blocks.is_empty() {
             return Ok(pos.clone());
         }
-        if self.para_at(pos).is_none() {
+        let Some(dest_para) = self.para_at(pos) else {
             return Err(DocError::BadPath(pos.path.to_string()));
-        }
-        let destination_shading = self.para_at(pos).and_then(|p| self.styles.resolve_para(&p.props).shading);
+        };
+        let table_para = table_style_para(self, pos);
+        let destination_shading = self.styles.resolve_para_in(&dest_para.props, table_para.as_ref()).shading;
         let mut parts = frag.parts.clone();
         if !media_remap.is_empty() {
             for b in &mut blocks {
@@ -1586,7 +1587,7 @@ impl Document {
                     } else {
                         l.props.shading = keep_shading;
                     }
-                } else if l.props.shading.is_none() {
+                } else if !keep_empty && l.props.shading.is_none() {
                     l.props.shading = src_shading;
                 }
             }
@@ -1627,6 +1628,13 @@ impl Document {
         }
         Ok(())
     }
+}
+
+/// Paragraph formatting of the table style enclosing `pos`, if any.
+fn table_style_para(doc: &Document, pos: &Pos) -> Option<ParaProps> {
+    let (tp, _, _) = pos.path.cell()?;
+    let id = doc.table(pos.story, &tp)?.props.style.as_deref()?;
+    Some(doc.styles.table_style(id)?.para.clone())
 }
 
 /// Take the drop cap (and its options) off a paragraph's properties.

@@ -202,6 +202,78 @@ fn multi_block_paste_keeps_destination_inherited_shading_over_source_style() {
     );
 }
 
+/// Multi-block paste into an empty unshaded destination keeps a shaded source style without
+/// duplicating its color into direct paragraph shading (#6157).
+#[test]
+fn multi_block_paste_into_empty_destination_keeps_source_style_without_direct_shading() {
+    let mut d = doc(&[""]);
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x33, 0x33, 0x33)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut a = Paragraph::with_text("A", CharProps::default());
+    a.props.style = Some("SourceShaded".into());
+    let mut b = Paragraph::with_text("B", CharProps::default());
+    b.props.style = Some("SourceShaded".into());
+    let frag = Fragment { blocks: vec![Block::Para(a), Block::Para(b)], ..Default::default() };
+    d.insert_fragment(&Pos::body(0, 0), &frag).unwrap();
+    for idx in [0, 1] {
+        let p = d.para(StoryRef::Body, &Path::top(idx)).unwrap();
+        assert_eq!(p.props.style.as_deref(), Some("SourceShaded"));
+        assert_eq!(p.props.shading, None, "paragraph {idx} inherits from its style without redundant direct shading");
+        assert_eq!(d.styles.resolve_para(&p.props).shading, Some(crate::Rgb(0x33, 0x33, 0x33)));
+    }
+}
+
+/// Paragraph shading inherited from an enclosing table's style is preserved as destination shading (#6157).
+#[test]
+fn paste_keeps_destination_table_style_shading() {
+    let mut d = doc(&["outside"]);
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "ShadedGrid".into(),
+        name: "Shaded Grid".into(),
+        kind: crate::StyleKind::Table,
+        para: ParaProps { shading: Some(crate::Rgb(0x22, 0x22, 0x22)), ..Default::default() },
+        ..Default::default()
+    });
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x44, 0x44, 0x44)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut t = Table::new(1, 2, 200.0);
+    t.props.style = Some("ShadedGrid".into());
+    d.insert_block(StoryRef::Body, &Path::top(0), Block::Table(t)).unwrap();
+
+    // Single-block paste into cell (0, 0): table-style paragraph shading is not overridden.
+    let mut src = Paragraph::with_text("cell1", CharProps::default());
+    src.props.shading = Some(crate::Rgb(0x1e, 0x1e, 0x1e));
+    let one = Fragment { blocks: vec![Block::Para(src)], ..Default::default() };
+    let cell0 = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 };
+    d.insert_fragment(&cell0, &one).unwrap();
+    let p0 = d.para(StoryRef::Body, &cell0.path).unwrap();
+    assert_eq!(p0.props.shading, None);
+    let tp = &d.styles.table_style("ShadedGrid").unwrap().para;
+    assert_eq!(d.styles.resolve_para_in(&p0.props, Some(tp)).shading, Some(crate::Rgb(0x22, 0x22, 0x22)));
+
+    // Multi-block paste with a differently shaded source style into empty cell (0, 1).
+    let mut a = Paragraph::with_text("A", CharProps::default());
+    a.props.style = Some("SourceShaded".into());
+    let b = Paragraph::with_text("B", CharProps::default());
+    let multi = Fragment { blocks: vec![Block::Para(a), Block::Para(b)], ..Default::default() };
+    let cell1 = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 0 };
+    d.insert_fragment(&cell1, &multi).unwrap();
+    let p1 = d.para(StoryRef::Body, &cell1.path).unwrap();
+    assert_eq!(d.styles.resolve_para_in(&p1.props, Some(tp)).shading, Some(crate::Rgb(0x22, 0x22, 0x22)));
+}
+
 /// The first paragraph of the deepest cell, following the first table at each level.
 fn deepest(d: &Document) -> Path {
     let (mut path, mut blocks) = (Vec::new(), &d.body);
