@@ -5442,6 +5442,35 @@ Without those two env dirs the run also names the §5.50 hyphenation red.
 PR head answers `MERGEABLE` (`mergeStateStatus` `BLOCKED`, no review decision).
 Left: the re-review, the CI deferral thread, then a maintainer's approve/merge.
 
+### 5.59 House rules regenerated from craft-contrib `937c374` / `f750223` (2026-11-17 16:08Z)
+
+The two generated `craft-house-rules` blocks in `AGENTS.md` recorded `dde09ea3`, which
+`scripts/craft-rules.sh check wordcraft` called stale for both: the canon had gained rule 16
+(shared libraries first, RFC-0040) and, in the Rust block, the `MPL-2.0` paragraph (RFC-0027)
+plus allowlist entries the block did not carry. They were regenerated from the merged canon, not
+retyped: `core` from `937c3744` (`sha256=bee0ffaf…dfc930`), `rust` from `f7502233`
+(`sha256=56ef2b87…e4f2`), both ancestors of `craft-contrib` `main`.
+
+The last section of the file, `## Shared-library reuse`, restated rule 16's guidance and is
+removed — the only local text it held was the same app-local caveat the canonical rule now has.
+Nothing else moved: the generated blocks, the repository rules and the earlier `source=` markers
+are the whole diff.
+
+**Delivered.** PR <https://github.com/storytold/wordcraft/pull/6947> — branch
+`chore/house-rules-sync-core16-wordcraft` from `origin/main` `8b212e66`, head `17f99ece`, one
+file (`AGENTS.md`, +14/−6), `MERGEABLE` / `CLEAN`. Check on that tree:
+`core=ok rust=ok`. `git diff origin/main -- AGENTS.md` read by hand: two start markers, the block
+bodies, the removed section. No Rust, manifest or workflow changed, so no `cargo xtask ci` was
+run; CI files are untouched.
+
+This page is **not** in that PR: it belongs to the collaboration branch, which
+`pr-workqueue.json` freezes, and the sync PR is `AGENTS.md` only.
+
+**Left.** Review, approve and merge are the maintainer's. Separately, this session's envoy
+`bash` policy still carried the Phase-0 blanket `git push` deny, so no fork push was possible
+until it was narrowed to the Phase-1 rule the sibling envoys use (fork allowed, `origin` and
+anything `storytold` denied); the config edit is outside the repository.
+
 ## 6. Where things live
 
 | Concern | File |
