@@ -832,20 +832,32 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             // its text is clipped when drawn.
             // A floating table can sit anywhere: a cell holding one is left alone.
             let (lo, hi) = (c.x, c.x + c.w);
-            let floats = t
-                .rows
-                .get(ri)
-                .and_then(|r| r.cells.get(ci))
-                .is_some_and(|cell| cell.blocks.iter().any(|b| matches!(&**b, wordcraft_doc::Block::Table(nt) if nt.props.float.is_some())));
+            let blocks = t.rows.get(ri).and_then(|r| r.cells.get(ci)).map_or(&[][..], |cell| &cell.blocks[..]);
+            let floats = blocks.iter().any(|b| matches!(&**b, wordcraft_doc::Block::Table(nt) if nt.props.float.is_some()));
+            // Word leaves a table that starts the cell whole, running on over the next cell, and
+            // cuts one only after something else (a paragraph, even an empty one, or a table that
+            // fits; measured in Word for Windows). The items of a first table come first, up to
+            // the area of its last cell.
+            let lead = if blocks.first().is_some_and(|b| matches!(&**b, wordcraft_doc::Block::Table(_))) {
+                let mut table = path.to_vec();
+                table.extend([ri as u32, ci as u32, 0]);
+                cell_items.iter().rposition(|it| matches!(it, Placed::Cell { table: tp, .. } if tp.0 == table)).map_or(0, |k| k + 1)
+            } else {
+                0
+            };
             // Only a table whose own cells run past the edges is cut: half a thick border reaching
             // over the edge isn't.
             let wider = !turned
                 && !floats
-                && cell_items.iter().any(|it| matches!(it, Placed::Cell { rect, .. } if rect.x < lo - 0.01 || rect.right() > hi + 0.01));
+                && cell_items
+                    .get(lead..)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|it| matches!(it, Placed::Cell { rect, .. } if rect.x < lo - 0.01 || rect.right() > hi + 0.01));
             let mut cut = false;
-            for mut it in cell_items {
+            for (k, mut it) in cell_items.into_iter().enumerate() {
                 it.translate(0.0, dy);
-                if wider {
+                if wider && k >= lead {
                     match crop_to_cell(it, lo, hi) {
                         Cropped::Kept(it) => items.push(it),
                         Cropped::Cut(Some(it)) => {

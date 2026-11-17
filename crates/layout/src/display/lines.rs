@@ -58,6 +58,16 @@ impl LineContext<'_, '_, '_> {
 }
 
 pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
+    lines_into(input, out, None);
+}
+
+/// [`lines`] with the inline objects (pictures, shapes, groups, graphics) drawn into `objects`
+/// instead of `out`, for a caller that clips them apart from the text.
+pub(super) fn lines_apart(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>, objects: &mut Vec<Draw>) {
+    lines_into(input, out, Some(objects));
+}
+
+fn lines_into(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>, mut objects: Option<&mut Vec<Draw>>) {
     let LineRender { doc, story, path, pl, range, origin: (x, y), opts, authors, alpha, down } = input;
     let (l0, l1) = (range.start, range.end);
     let Some(first) = pl.lines.get(l0) else { return };
@@ -79,7 +89,7 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
         draw_glyph_runs(&ctx, out);
         proofing_marks(&ctx, out);
         tab_leaders(&ctx, out);
-        inline_objects(&ctx, out);
+        inline_objects(&ctx, objects.as_deref_mut().unwrap_or(&mut *out));
         enclosures(&ctx, out);
         draw_rubies(&ctx, out);
         formatting_marks(&ctx, out);

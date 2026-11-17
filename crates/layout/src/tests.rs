@@ -8505,9 +8505,10 @@ fn a_floating_table_in_a_cell_takes_no_room_and_the_cell_holds_it() {
     assert!(below_y > last_y + 10.0, "text below the outer table at {below_y}, the inner table's last row at {last_y}");
 }
 
-/// A nested table wider than its cell (120% of it here) is cut off at the cell's edges, as Word
-/// draws it (measured in modes 14 and 15): its lines, fills and cell areas end at the outer cell's
-/// edge, the vertical line past it isn't drawn, and the cell clips its text.
+/// A nested table wider than its cell (120% of it here) after a paragraph is cut off at the
+/// cell's edges, as Word draws it (measured in modes 14 and 15): its lines, fills and cell areas
+/// end at the outer cell's edge, the vertical line past it isn't drawn, and the cell clips its
+/// text. A nested table that starts the cell Word leaves whole, running on over the next cell.
 #[test]
 fn a_nested_table_wider_than_its_cell_is_cut_off_at_the_cells_edges() {
     crate::test_fonts();
@@ -8521,7 +8522,7 @@ fn a_nested_table_wider_than_its_cell_is_cut_off_at_the_cells_edges() {
     }
     let mut outer = Table::new(1, 2, 400.0);
     outer.props.fixed = true;
-    outer.rows[0].cells[0].blocks = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(inner.clone())), text("After")];
+    outer.rows[0].cells[0].blocks = vec![text("Before"), std::sync::Arc::new(wordcraft_doc::Block::Table(inner.clone())), text("After")];
     outer.rows[0].cells[1].blocks = vec![text("Beside")];
     let mut d = Document::from_text("Below");
     d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer.clone())).unwrap();
@@ -8571,16 +8572,16 @@ fn a_nested_table_wider_than_its_cell_is_cut_off_at_the_cells_edges() {
     exact.rows[0].props.height = Some(6.0);
     exact.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
     let mut o = outer.clone();
-    o.rows[0].cells[0].blocks[0] = std::sync::Arc::new(wordcraft_doc::Block::Table(exact));
+    o.rows[0].cells[0].blocks[1] = std::sync::Arc::new(wordcraft_doc::Block::Table(exact));
     let mut d = Document::from_text("Below");
     d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(o)).unwrap();
     let got = items(&d);
-    let (cut, cut_clip) = cell_of(&got, &[0, 0, 0, 0], 1);
+    let (cut, cut_clip) = cell_of(&got, &[0, 0, 0, 1], 1);
     assert!((cut.right() - left.right()).abs() < 0.01, "the nested cell is cut at the edge: {cut:?}");
     assert!(cut_clip, "a cut nested cell keeps the clip its exact row gave it");
     // A nested table that fits is left as it is, even with thick outer lines reaching half their
     // width over the cell's edges.
-    let mut fits = inner;
+    let mut fits = inner.clone();
     fits.props.width_pct = Some(80.0);
     fits.props.borders = Some(wordcraft_doc::props::Borders::all(wordcraft_doc::props::Border {
         style: wordcraft_doc::props::BorderStyle::Single,
@@ -8588,11 +8589,85 @@ fn a_nested_table_wider_than_its_cell_is_cut_off_at_the_cells_edges() {
         color: None,
         space: 0.0,
     }));
+    let mut o = outer.clone();
+    o.rows[0].cells[0].blocks[1] = std::sync::Arc::new(wordcraft_doc::Block::Table(fits.clone()));
+    let mut d = Document::from_text("Below");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(o)).unwrap();
+    assert!(!cell_of(&items(&d), &[0], 0).1, "nothing to clip");
+    // The same wide table starting the cell runs on whole over the next cell, uncut and unclipped.
+    let mut o = outer.clone();
+    o.rows[0].cells[0].blocks.remove(0);
+    let mut d = Document::from_text("Below");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(o)).unwrap();
+    let got = items(&d);
+    assert!(!cell_of(&got, &[0], 0).1, "the outer cell clips a table that starts it");
+    let (whole, _) = cell_of(&got, &[0, 0, 0, 0], 1);
+    assert!(whole.right() > left.right() + 10.0, "the table starting the cell is cut at the edge: {whole:?}");
+    // After a table that fits, a wide one is cut again: only the table starting the cell is spared.
     let mut o = outer;
     o.rows[0].cells[0].blocks[0] = std::sync::Arc::new(wordcraft_doc::Block::Table(fits));
     let mut d = Document::from_text("Below");
     d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(o)).unwrap();
-    assert!(!cell_of(&items(&d), &[0], 0).1, "nothing to clip");
+    let got = items(&d);
+    assert!(cell_of(&got, &[0], 0).1, "the wide table after one that fits isn't clipped");
+    let (cut, _) = cell_of(&got, &[0, 0, 0, 1], 1);
+    assert!((cut.right() - left.right()).abs() < 0.01, "the wide table after one that fits isn't cut: {cut:?}");
+}
+
+/// An inline picture in a nested table cut off at its cell's edge runs on past the edge, as Word
+/// draws it (measured in Word for Windows), though the nested table's text is clipped there: the
+/// picture is drawn in a clip that cuts only its top and bottom.
+#[test]
+fn an_inline_picture_in_a_cut_nested_table_runs_past_the_cells_edge() {
+    crate::test_fonts();
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let mut inner = Table::new(1, 2, 300.0);
+    inner.props.fixed = true;
+    let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
+    let picture = InlineObject::Image {
+        media: "pic".into(),
+        w: 120.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
+    p.insert_object(0, picture, &Default::default()).unwrap();
+    inner.rows[0].cells[0].blocks = vec![text("Inner")];
+    inner.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(p)];
+    let mut outer = Table::new(1, 2, 400.0);
+    outer.props.fixed = true;
+    outer.rows[0].cells[0].blocks = vec![text("Before"), std::sync::Arc::new(wordcraft_doc::Block::Table(inner)), text("After")];
+    outer.rows[0].cells[1].blocks = vec![text("Beside")];
+    let mut d = Document::from_text("Below");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+    let l = lay(&d);
+    let edge = l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Placed::Cell { rect, table, cell: 0, clip: true, .. } if table.0 == [0] => Some(rect.right()),
+            _ => None,
+        })
+        .expect("the outer cell clips");
+    // Each picture with the clip it is drawn in.
+    fn pictures(items: &[display::Draw], clip: Option<Rect>, out: &mut Vec<(Rect, Option<Rect>)>) {
+        for it in items {
+            match it {
+                display::Draw::Image { rect, .. } => out.push((*rect, clip)),
+                display::Draw::Clip { rect, items } => pictures(items, Some(*rect), out),
+                display::Draw::Rotated { items, .. } => pictures(items, clip, out),
+                _ => {}
+            }
+        }
+    }
+    let mut found = Vec::new();
+    pictures(&display::page_display(&d, &l.pages[0], &display::DisplayOptions::default()), None, &mut found);
+    let [(pic, Some(clip))] = found[..] else { panic!("one clipped picture: {found:?}") };
+    assert!(pic.right() > edge + 1.0, "the picture at {pic:?} reaches past the cell's edge {edge}");
+    assert!(clip.right() > pic.right() && clip.x < pic.x, "the picture's clip {clip:?} cuts its sides");
 }
 
 /// A floating (anchored, non-inline) picture in a cell grows the row to hold it too, the same
