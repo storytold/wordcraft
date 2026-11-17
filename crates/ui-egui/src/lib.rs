@@ -369,6 +369,14 @@ pub struct UiState {
     /// Keytips (Alt) state; not persisted, it resets each session.
     #[serde(skip)]
     pub keytips: crate::keytips::Phase,
+    /// The ribbon tab the Alt/F10 ring is on, so that the tab holds real keyboard focus and a
+    /// screen reader follows the ring instead of the page (#1012); never persisted.
+    #[serde(skip)]
+    pub keytip_focus: Option<String>,
+    /// The ribbon command the ring is on in the commands phase, by command id (#1012); never
+    /// persisted.
+    #[serde(skip)]
+    pub keytip_cmd: Option<String>,
     /// Alt is held according to key or modifier events; never persisted.
     #[serde(skip)]
     pub alt_pressed: bool,
@@ -517,6 +525,8 @@ impl Default for UiState {
             keytips_enabled: true,
             keytip_prefix: String::new(),
             keytips: crate::keytips::Phase::Off,
+            keytip_focus: None,
+            keytip_cmd: None,
             alt_pressed: false,
             alt_chord_used: false,
             alt_key_down: false,

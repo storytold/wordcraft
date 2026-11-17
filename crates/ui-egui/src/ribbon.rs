@@ -280,7 +280,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     crate::keytips::record_tab(r, tab, "", &mut app.keytip_rects);
                                 }
                                 let active = app.ui.tab == tab && !app.ui.backstage;
-                                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));
+                                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, active, shown));
+                                // The ring is real keyboard focus, so a screen reader reads the tab
+                                // it is on, and the arrows belong to the ribbon while keytips are
+                                // on (#1012). Without this the page held the focus and every arrow
+                                // went back into the text.
+                                let ring =
+                                    app.ui.keytips == crate::keytips::Phase::Tabs && app.ui.keytip_focus.as_deref() == Some(tab) && ghost.is_none();
+                                if ring && !resp.has_focus() {
+                                    resp.request_focus();
+                                }
+                                if ring && resp.has_focus() {
+                                    ui.memory_mut(|m| {
+                                        m.set_focus_lock_filter(
+                                            resp.id,
+                                            egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true },
+                                        )
+                                    });
+                                }
                                 let hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered() && !active && ghost.is_none());
                                 if hover > 0.0 {
                                     ui.painter().rect_filled(

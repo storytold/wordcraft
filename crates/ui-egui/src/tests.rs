@@ -4338,8 +4338,8 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     let para = h.state().session.doc.para_at(&h.state().session.sel.focus).expect("caret paragraph");
     assert_eq!(para.props.style.as_deref(), Some("Heading1"), "the tile applied its style");
 
-    // A ribbon tab name, then a View tab check box.
-    h.get_by_role_and_label(Role::Button, "View").click();
+    // A ribbon tab name, then a View tab check box. Tab names are tabs, not buttons (#1012).
+    h.get_by_role_and_label(Role::Tab, "View").click();
     type_after_click(&mut h, "View tab", " tab");
     assert_eq!(h.state().ui.tab, "View");
     let ruler = h.state().session.view.ruler;
@@ -4348,7 +4348,7 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     assert_ne!(h.state().session.view.ruler, ruler, "the check box toggled the ruler");
 
     // Empty space at the right end of the ribbon, under the tab strip.
-    let tab = h.get_by_role_and_label(Role::Button, "View").rect();
+    let tab = h.get_by_role_and_label(Role::Tab, "View").rect();
     let blank = egui::pos2(1425.0, tab.max.y + 25.0);
     for pressed in [true, false] {
         h.hover_at(blank);
@@ -4385,7 +4385,7 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     type_after_click(&mut h, "language menu cancelled", " lang");
 
     // Back on Home, a text field still takes the focus: the font size box.
-    h.get_by_role_and_label(Role::Button, "Home").click();
+    h.get_by_role_and_label(Role::Tab, "Home").click();
     type_after_click(&mut h, "Home tab", " home");
     let before = body_text(h.state());
     let size_box =
@@ -9062,4 +9062,48 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
             })
             .drop_without_applying_deltas();
     }
+}
+
+/// #1012: Alt arms the keytips and the tab row takes real keyboard focus, so a screen reader reads
+/// the tab it is on instead of the page. The arrows walk the tabs and Escape gives the page back.
+/// Before this the page kept the focus, so every arrow was a key with no badge: it cancelled the
+/// mode and typing landed in the text.
+#[test]
+fn alt_gives_the_tab_row_real_focus_and_the_arrows_walk_it() {
+    let mut h = harness(app());
+    // Keytips only arm in a focused window, and that is RawInput.focused (not an event), which
+    // the harness resets between steps: set it again before every frame.
+    fn frames(h: &mut egui_kittest::Harness<WordApp>, n: usize) {
+        for _ in 0..n {
+            h.input_mut().focused = true;
+            h.step();
+        }
+    }
+    frames(&mut h, 2);
+    let focused = |h: &egui_kittest::Harness<WordApp>, label: &str| h.query_all_by_label(label).any(|n| n.is_focused());
+    assert!(!focused(&h, "Home"), "the page holds the keyboard before Alt");
+
+    // A bare Alt tap: press and release with no other key in between, the chord Word uses.
+    let alt = egui::Modifiers { alt: true, ..Default::default() };
+    h.event(egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed: true, repeat: false, modifiers: alt });
+    frames(&mut h, 1);
+    h.event(egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    frames(&mut h, 2);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Tabs, "Alt arms the keytips");
+    assert!(focused(&h, "Home"), "the open tab holds real keyboard focus");
+
+    h.key_press(egui::Key::ArrowRight);
+    frames(&mut h, 2);
+    assert_eq!(h.state().ui.tab, "Insert", "the right arrow walked to the next tab");
+    assert!(focused(&h, "Insert"), "and the ring took the focus with it");
+
+    h.key_press(egui::Key::ArrowLeft);
+    frames(&mut h, 2);
+    assert_eq!(h.state().ui.tab, "Home", "the left arrow walked back");
+    assert!(focused(&h, "Home"));
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off, "Escape leaves the ribbon");
+    assert!(!focused(&h, "Home"), "and the tab row gives the keyboard back");
 }

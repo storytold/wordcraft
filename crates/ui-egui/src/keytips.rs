@@ -611,9 +611,22 @@ pub fn control_count(tab: &str) -> usize {
 pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
     if app.ui.keytips != Phase::Off {
         match key {
-            egui::Key::Escape => {
-                app.ui.keytips = Phase::Off;
+            // Word walks the ribbon with the arrows, and the ring is real keyboard focus, so a
+            // screen reader follows it (#1012). Before this, an arrow was a key with no badge and
+            // cancelled the mode, dropping the user back into the page.
+            egui::Key::ArrowLeft | egui::Key::ArrowUp if app.ui.keytips == Phase::Tabs => step_tab(app, -1),
+            egui::Key::ArrowRight | egui::Key::ArrowDown if app.ui.keytips == Phase::Tabs => step_tab(app, 1),
+            egui::Key::Enter | egui::Key::Tab if app.ui.keytips == Phase::Tabs => enter_commands(app),
+            egui::Key::ArrowRight | egui::Key::ArrowDown | egui::Key::Tab if app.ui.keytips == Phase::Commands => step_command(app, 1),
+            egui::Key::ArrowLeft | egui::Key::ArrowUp if app.ui.keytips == Phase::Commands => step_command(app, -1),
+            egui::Key::Enter if app.ui.keytips == Phase::Commands => run_focused(app),
+            egui::Key::Escape if app.ui.keytips == Phase::Commands => {
+                // Escape climbs one level, as in Word: controls, then tabs, then the page.
+                app.ui.keytips = Phase::Tabs;
+                app.ui.keytip_cmd = None;
+                app.ui.keytip_focus = Some(app.ui.tab.clone());
             }
+            egui::Key::Escape => turn_off(app),
             k if is_alt(k) => {
                 app.ui.keytips = if app.ui.keytips == Phase::Tabs { Phase::Off } else { Phase::Tabs };
             }
@@ -739,11 +752,85 @@ fn qat_key(app: &mut WordApp, name: &str) {
     }
 }
 
-/// Alt (or F10) turns keytips on: the first press shows the tab badges.
+/// Alt (or F10) turns keytips on: the first press shows the tab badges, and the ring starts on
+/// the tab that is open so that the tab row holds real keyboard focus (#1012).
 pub fn activate(app: &mut WordApp) {
     if app.ui.keytips_enabled && app.ui.keytips == Phase::Off {
-        app.ui.keytip_prefix.clear();
-        app.ui.keytips = Phase::Tabs;
+        turn_on(app);
+    }
+}
+
+/// Put the ring on the open tab. The ribbon draws that tab with real keyboard focus, so a screen
+/// reader hears the tab it is on instead of the page (#1012).
+pub fn turn_on(app: &mut WordApp) {
+    app.ui.keytip_prefix.clear();
+    app.ui.keytips = Phase::Tabs;
+    app.ui.keytip_focus = Some(app.ui.tab.clone());
+    app.ui.keytip_cmd = None;
+}
+
+/// Leave keytips and give the page its keyboard back, as Word does on Escape or a second Alt
+/// (#1012). A badge that runs a command goes through turn_off too, so the ring never survives
+/// the mode.
+pub fn turn_off(app: &mut WordApp) {
+    app.ui.keytips = Phase::Off;
+    app.ui.keytip_prefix.clear();
+    app.ui.keytip_focus = None;
+    app.ui.keytip_cmd = None;
+    app.canvas.want_focus = true;
+}
+
+/// The command a badge target stands for, as the ribbon widgets know it (#1012).
+fn target_id(t: &Target) -> &'static str {
+    match t {
+        Target::Cmd { id, .. } => id,
+        Target::Dialog { .. } => "ui.dialog",
+        Target::Tab(_) => "ui.tab",
+    }
+}
+
+/// Move the ring along the tab row, switching to the tab it lands on as Word does (#1012).
+fn step_tab(app: &mut WordApp, step: isize) {
+    let tabs = badge_tabs(app);
+    let Some(n) = std::num::NonZeroUsize::new(tabs.len()) else {
+        return;
+    };
+    let current = app.ui.keytip_focus.clone().unwrap_or_else(|| app.ui.tab.clone());
+    let at = tabs.iter().position(|t| *t == current).unwrap_or(0);
+    let next = (at as isize + step).rem_euclid(n.get() as isize) as usize;
+    let Some(tab) = tabs.get(next).copied() else {
+        return;
+    };
+    app.ui.keytip_focus = Some(tab.to_string());
+    let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
+}
+
+/// Down or Enter on the tab row drops into that tab's commands, on its first control (#1012).
+fn enter_commands(app: &mut WordApp) {
+    let tab = app.ui.tab.clone();
+    app.ui.keytips = Phase::Commands;
+    app.ui.keytip_cmd = controls_public(&tab).first().map(|c| c.id.to_string());
+}
+
+/// Move the ring along the tab's controls, in the order the ribbon draws them (#1012).
+fn step_command(app: &mut WordApp, step: isize) {
+    let list = controls_public(&app.ui.tab);
+    let Some(n) = std::num::NonZeroUsize::new(list.len()) else {
+        return;
+    };
+    let at = app.ui.keytip_cmd.as_deref().and_then(|c| list.iter().position(|x| x.id == c)).unwrap_or(0);
+    let next = (at as isize + step).rem_euclid(n.get() as isize) as usize;
+    app.ui.keytip_cmd = list.get(next).map(|c| c.id.to_string());
+}
+
+/// Enter on a control runs it, exactly as its badge would (#1012).
+fn run_focused(app: &mut WordApp) {
+    let tab = app.ui.tab.clone();
+    let want = app.ui.keytip_cmd.clone();
+    let hit = want.and_then(|w| controls(&tab).into_iter().find(|c| target_id(&c.target) == w));
+    turn_off(app);
+    if let Some(c) = hit {
+        c.target.run(app);
     }
 }
 
@@ -754,12 +841,16 @@ use crate::keys;
 /// typing while they show. The Backstage's badges end with it (its back chevron, a mouse Save),
 /// so the next letter is typed and never picks a page that is no longer there.
 pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
+    // The ribbon ring is not a text field. Once a tab or a control holds the focus egui wants the
+    // keyboard for it, and that must not read as "a field is typing, so the letters are text"
+    // (#1012): it would cancel the mode the moment it armed.
+    let on_ring = app.ui.keytip_focus.is_some() || app.ui.keytip_cmd.is_some();
     !app.ui.keytips_enabled
         || (app.ui.backstage && app.ui.keytips != Phase::Backstage)
         || (!app.ui.backstage && app.ui.keytips == Phase::Backstage)
         || app.dialog.is_some()
         || app.modal_open()
-        || (ctx.egui_wants_keyboard_input() && !app.canvas.focused)
+        || (ctx.egui_wants_keyboard_input() && !app.canvas.focused && !on_ring)
 }
 
 /// Native backends report Alt through both key and modifier events, in either order. Track
@@ -871,10 +962,21 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
         });
     }
     if ALT_ARMS && alt_released && !other_key {
-        app.ui.keytips = if app.ui.keytips == Phase::Tabs { Phase::Off } else { Phase::Tabs };
-        app.ui.keytip_prefix.clear();
+        // A second Alt leaves the ribbon and gives the page its keyboard back (#1012).
+        if app.ui.keytips == Phase::Tabs {
+            turn_off(app);
+        } else {
+            turn_on(app);
+        }
     } else if f10 {
         activate(app);
+    }
+    // Whatever turned the mode off — Escape, a badge, a Quick Access Toolbar digit — the ring goes
+    // and the page gets the keyboard back, or typing would land on a ribbon button (#1012).
+    if app.ui.keytips == Phase::Off && (app.ui.keytip_focus.is_some() || app.ui.keytip_cmd.is_some()) {
+        app.ui.keytip_focus = None;
+        app.ui.keytip_cmd = None;
+        app.canvas.want_focus = true;
     }
     if app.ui.keytips == Phase::Off {
         app.ui.keytip_prefix.clear();

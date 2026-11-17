@@ -989,7 +989,9 @@ fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, im
         ui.memory_mut(|memory| memory.interrupt_ime());
     }
     // Not while a modal dialog is open: it has the keyboard, and the page takes it when it closes.
-    let wants = app.canvas.want_focus && !app.modal_open();
+    // Not while keytips are on either: the ribbon holds the keyboard then, and taking it back here
+    // would pull a screen reader off the tab it is on (#1012).
+    let wants = app.canvas.want_focus && !app.modal_open() && app.ui.keytips == crate::keytips::Phase::Off;
     if focus_click || (wants && !resp.has_focus()) {
         resp.request_focus();
     }
