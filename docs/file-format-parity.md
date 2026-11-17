@@ -93,7 +93,7 @@ Weights are the share of a Word user's file traffic (estimate). Read/write: ✅ 
 | Encrypted/password-protected `.doc` (XOR/RC4) | <1% | R | 🟡 | — | ~60% | 1–2 | `crates/docbin/src/tests/encrypted.rs` | XOR obfuscation, RC4 and RC4 CryptoAPI open with a password (`docbin` `crypt.rs`, #1079). An AES header (`fAES`) is refused with a clear message: [MS-OFFCRYPTO] defines AES only for encrypted packages, which open through the `.docx` reader (gap 9) |
 | `.md` Markdown | — | (no) | ✅ | ✅ | — | — | `crates/formats/src/tests.rs` | Beyond Word |
 | `.tex` LaTeX | — | — | ✅ | ✅ | — | — | `crates/formats/src/tests.rs` | Beyond Word (#11), incl. math |
-| Pictures for Insert › Picture, drag-and-drop and paste | — | R | ✅ | — | — | — | `insert_picture_takes_a_windows_metafile` (engine), `paste_picture.rs` | PNG, JPEG, GIF, WebP, BMP, and Windows Metafile `.wmf` / Enhanced Metafile `.emf` at their own frame size (#802), drawn by `crates/metafile`. Not yet: SVG, TIFF, ICO, HEIC |
+| Pictures for Insert › Picture, drag-and-drop and paste | — | R | ✅ | — | — | — | `insert_picture_takes_a_windows_metafile` (engine), `paste_picture.rs` | PNG, JPEG, GIF, WebP, BMP, and Windows Metafile `.wmf` / Enhanced Metafile `.emf`, EMF+ records included (#6636), at their own frame size (#802), drawn with craft-libs' `craft-metafile`. Not yet: SVG, TIFF, ICO, HEIC |
 | `.png` page images | — | (Save as picture, Mac) | — | ✅ | — | — | `io_ext.rs` | |
 | `.json` document model | — | — | ✅ | ✅ | — | — | engine tests | For agents. A table cell's span is any number in the file; Insert Column and Merge Cells count it as at most 63 columns, as the `.docx` reader does (#3637) |
 
