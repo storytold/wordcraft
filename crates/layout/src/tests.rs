@@ -7587,6 +7587,31 @@ fn a_percentage_table_from_word_2013_ends_its_outer_borders_at_its_width() {
     }
 }
 
+/// #5181 review: a first row that ends before the last grid column (no `gridAfter`) draws the
+/// inside line at its end, not the table's right border, so a 100% table's room is cut by half
+/// that line, whatever the right border is.
+#[test]
+fn a_short_first_row_ends_at_the_line_its_last_cell_draws() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let cells = |right: f32| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let line = |w: f32| Some(Border { style: BorderStyle::Single, width: w, color: None, space: 0.0 });
+        let mut t = Table::new(2, 3, 300.0);
+        t.props.width_pct = Some(100.0);
+        t.props.fixed = true;
+        t.props.borders =
+            Some(Borders { top: line(0.5), left: line(0.5), bottom: line(0.5), right: line(right), between: line(0.5), inside_v: line(0.5) });
+        t.rows[0].cells.truncate(2);
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        cell_edges(&d)
+    };
+    let (thin, thick) = (cells(0.5), cells(6.0));
+    assert_eq!(thin.len(), 5);
+    // The table's room, and so every column, is the same with a 0.5 pt or a 6 pt right border.
+    assert!(thin.iter().zip(&thick).all(|(a, b)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01), "{thin:?} vs {thick:?}");
+}
+
 /// Measured in Word for Windows (compatibility mode 15, 6pt table borders): an end-aligned table
 /// puts its end border's outer edge on the margin, a 100% table landing where a start-aligned one
 /// does and a 400pt one with its right border half inside the margin; and a row exception

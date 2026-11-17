@@ -423,7 +423,14 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
             .unwrap_or_default();
         let row_b = row.props.exceptions.as_ref().and_then(|e| e.borders).unwrap_or_default();
         let cb = cell.props.borders.unwrap_or_default();
-        if end { cb.right.or(row_b.right).or(rb.right).or(tborders.right) } else { cb.left.or(row_b.left).or(rb.left).or(tborders.left) }
+        // A side that isn't at the row's edge (a first row ending before the last grid column,
+        // without `gridAfter`) is drawn with the inside line, as `layout_table` does.
+        match (end, edges) {
+            (true, (_, true)) => cb.right.or(row_b.right).or(rb.right).or(tborders.right),
+            (true, (_, false)) => cb.right.or(row_b.inside_v).or(rb.inside_v).or(tborders.inside_v),
+            (false, (true, _)) => cb.left.or(row_b.left).or(rb.left).or(tborders.left),
+            (false, (false, _)) => cb.left.or(row_b.inside_v).or(rb.inside_v).or(tborders.inside_v),
+        }
     };
     let (start_border, end_border) =
         t.rows.first().map_or((tborders.left, tborders.right), |r| (edge_border(r, 0, false), edge_border(r, r.cells.len().saturating_sub(1), true)));
