@@ -2,8 +2,6 @@
 //! the object behind: saved as ODT it is the spreadsheet again; saved as DOCX it is the picture
 //! alone, never ODF markup. The ODT is original and synthetic, shaped like LibreOffice's.
 
-use std::io::{Read, Write};
-
 use wordcraft_doc::para::InlineObject;
 use wordcraft_engine::io;
 
@@ -14,8 +12,7 @@ fn odt() -> Vec<u8> {
         r#"<office:document-content {NS}><office:body><office:text><text:p>Costs <draw:frame svg:width="3in" svg:height="1in"><draw:object xlink:href="./Object 1"/><draw:image xlink:href="./ObjectReplacements/Object 1"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
     );
     let sheet = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"><office:body><office:spreadsheet/></office:body></office:document-content>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     let entries: [(&str, &[u8]); 4] = [
         ("mimetype", b"application/vnd.oasis.opendocument.text"),
         ("content.xml", content.as_bytes()),
@@ -23,17 +20,14 @@ fn odt() -> Vec<u8> {
         ("ObjectReplacements/Object 1", b"VCLMTF not a picture WordCraft draws"),
     ];
     for (name, data) in entries {
-        z.start_file(name, o).unwrap();
-        z.write_all(data).unwrap();
+        z.add(name, data, craft_zip::Compression::Deflated).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 fn entry(pkg: &[u8], name: &str) -> Option<String> {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(pkg)).unwrap();
-    let mut s = String::new();
-    z.by_name(name).ok()?.read_to_string(&mut s).ok()?;
-    Some(s)
+    let mut z = craft_zip::Archive::open(pkg, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    String::from_utf8(z.read(name, 16 << 20).ok()??).ok()
 }
 
 #[test]
