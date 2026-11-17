@@ -1061,3 +1061,45 @@ fn table_cell_page_field_uses_the_section_number_format() {
         .collect();
     assert_eq!(shown, "one");
 }
+
+/// Printed or exported, a reference to a bookmark in a text box nested in text boxes shows the
+/// outermost box's anchor page as deep as layout shows the boxes ([`wordcraft_doc::MAX_TEXT_BOX_DEPTH`]
+/// levels); one nested deeper, which layout doesn't show, keeps its stored result.
+#[test]
+fn a_page_reference_into_nested_text_boxes_stops_where_layout_does() {
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    let shape = |story: u32| InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 100.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::Inline, ..Default::default() },
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let deepest = wordcraft_doc::MAX_TEXT_BOX_DEPTH + 1;
+    let mut d = Document::from_text("See \nSecond");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+    // From the deepest box out: box `level` holds bookmark "Level{level}" and the box inside it.
+    let mut inner: Option<u32> = None;
+    for level in (1..=deepest).rev() {
+        let mut p = Paragraph::with_text("Box", Default::default());
+        p.insert_object(0, InlineObject::BookmarkStart { name: format!("Level{level}") }, &Default::default()).unwrap();
+        if let Some(id) = inner {
+            p.insert_object(p.len(), shape(id), &Default::default()).unwrap();
+        }
+        inner = Some(d.add_part(PartKind::TextBox, vec![para_block(p)]));
+    }
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(0, shape(inner.unwrap()), &Default::default()).unwrap();
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for level in [1, wordcraft_doc::MAX_TEXT_BOX_DEPTH, deepest] {
+        let n = p.len();
+        p.insert_object(n, pageref(&format!("PAGEREF Level{level} \\h"), "9"), &Default::default()).unwrap();
+    }
+    let output = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
+    assert_eq!(shown_in(&output, 0, StoryRef::Body), ["2", "2", "9"]);
+}

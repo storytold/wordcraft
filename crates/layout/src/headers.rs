@@ -310,7 +310,7 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
                 let Some(p) = doc.para(story, &path) else { continue };
                 for (off, o) in p.object_offsets().into_iter().zip(&p.objects) {
                     for id in o.text_boxes() {
-                        box_bookmarks(doc, id, (story, &path, off), &mut boxes, &mut seen, &mut wanted);
+                        box_bookmarks(doc, id, (story, &path, off), &mut boxes, &mut wordcraft_doc::BoxBudget::default(), &mut seen, &mut wanted);
                     }
                 }
             }
@@ -359,18 +359,21 @@ type Wanted = HashMap<StoryRef, HashMap<Path, Vec<(String, usize, Option<(usize,
 
 /// Add the bookmarks of text box `id`, and of the boxes inside it, to `wanted` at `anchor` (the
 /// story, paragraph and offset of the outermost box). A box shown twice, or inside itself, counts
-/// once.
+/// once, and the boxes inside one go as deep as layout shows them ([`wordcraft_doc::BoxBudget`]): a
+/// bookmark in a box nested deeper has no page.
 fn box_bookmarks<'d>(
     doc: &'d Document,
     id: u32,
     anchor: (StoryRef, &Path, usize),
     boxes: &mut HashSet<u32>,
+    budget: &mut wordcraft_doc::BoxBudget,
     seen: &mut HashSet<&'d str>,
     wanted: &mut Wanted,
 ) {
-    if !boxes.insert(id) {
+    if boxes.contains(&id) || !budget.enter(id) {
         return;
     }
+    boxes.insert(id);
     let story = StoryRef::Part(id);
     for path in doc.para_paths(story) {
         let Some(p) = doc.para(story, &path) else { continue };
@@ -381,10 +384,11 @@ fn box_bookmarks<'d>(
                 wanted.entry(anchor.0).or_default().entry(anchor.1.clone()).or_default().push((name.clone(), anchor.2, None));
             }
             for inner in o.text_boxes() {
-                box_bookmarks(doc, inner, anchor, boxes, seen, wanted);
+                box_bookmarks(doc, inner, anchor, boxes, budget, seen, wanted);
             }
         }
     }
+    budget.leave();
 }
 
 /// A key for caches standing for `marks`: 0 while the pages aren't known (`None`), something else
