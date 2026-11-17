@@ -62,11 +62,18 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.nextChange", "Next Change", "Review › Changes", |s, _| nav_change(s, 1)).pure(),
         CommandSpec::new("review.previousChange", "Previous Change", "Review › Changes", |s, _| nav_change(s, -1)).pure(),
         CommandSpec::new("review.markup", "Display for Review", "Review › Tracking", |s, v| {
-            s.view.show_markup = p::str(v, "value").map(|m| m != "noMarkup" && m != "original").unwrap_or(!s.view.show_markup);
+            if v.get("value").is_some() || v.get("hideAuthors").is_none() {
+                s.view.show_markup = p::str(v, "value").map(|m| m != "noMarkup" && m != "original").unwrap_or(!s.view.show_markup);
+            }
+            // Markup From: these reviewers' changes show as if accepted.
+            if let Some(a) = v.get("hideAuthors").and_then(|a| a.as_array()) {
+                s.prefs.markup.hidden_authors = a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect();
+            }
             // Without markup, deletions leave the layout.
             s.relayout();
-            Ok(json!({"showMarkup": s.view.show_markup}))
+            Ok(json!({"showMarkup": s.view.show_markup, "hideAuthors": s.prefs.markup.hidden_authors}))
         })
+        .params(r#"{"value"?: "allMarkup" | "simpleMarkup" | "noMarkup" | "original" (omit with hideAuthors to keep the view), "hideAuthors"?: [string] (Markup From: these reviewers' changes are shown as if accepted; [] shows everyone's)}"#)
         .pure(),
         CommandSpec::new("review.trackingOptions", "Track Changes Options", "Review › Tracking", tracking_options)
             .params(

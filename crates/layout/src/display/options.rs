@@ -220,6 +220,10 @@ pub struct MarkupOptions {
     pub move_to_mark: InsertMark,
     /// `None` = by author.
     pub move_to_color: Option<Rgb>,
+    /// Markup From: these reviewers' changes are shown as if accepted (no marks, their deletions
+    /// left out). Empty shows everyone's. For this view only, never saved.
+    #[serde(skip)]
+    pub hidden_authors: Vec<String>,
 }
 
 impl Default for MarkupOptions {
@@ -242,6 +246,7 @@ impl Default for MarkupOptions {
             move_from_color: Some(MOVE_COLOR),
             move_to_mark: InsertMark::DoubleUnderline,
             move_to_color: Some(MOVE_COLOR),
+            hidden_authors: Vec::new(),
         }
     }
 }
@@ -259,6 +264,13 @@ impl MarkupOptions {
 
     /// The deletions the layout leaves out with markup shown ([`crate::LayoutOptions::hide_marked`]).
     pub fn hidden_deletions(&self) -> crate::HideDeleted {
-        crate::HideDeleted { plain: self.hides_deletion(false), moved_from: self.hides_deletion(true) }
+        let authors = self.hidden_authors.iter().fold(0, |m, a| m | crate::author_bit(a));
+        crate::HideDeleted { plain: self.hides_deletion(false), moved_from: self.hides_deletion(true), authors }
+    }
+
+    /// Whether revision `rev` is by a reviewer whose markup is hidden (Markup From).
+    pub fn hides_author(&self, doc: &Document, rev: Option<u32>) -> bool {
+        !self.hidden_authors.is_empty()
+            && rev.and_then(|i| doc.revisions.get(i as usize)).is_some_and(|r| self.hidden_authors.iter().any(|a| *a == r.author))
     }
 }

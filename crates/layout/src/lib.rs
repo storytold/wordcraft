@@ -276,17 +276,32 @@ impl LayoutOptions {
 pub struct HideDeleted {
     pub plain: bool,
     pub moved_from: bool,
+    /// Deletions by these reviewers are left out too, as if accepted (Markup From): a bit per
+    /// reviewer, [`author_bit`] of their name.
+    pub authors: u64,
+}
+
+/// A reviewer's bit in [`HideDeleted::authors`]: one of 64 by a stable hash of their name.
+pub fn author_bit(name: &str) -> u64 {
+    // FNV-1a: the same on every run and machine.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in name.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    1 << (h % 64)
 }
 
 impl HideDeleted {
-    pub const ALL: HideDeleted = HideDeleted { plain: true, moved_from: true };
+    pub const ALL: HideDeleted = HideDeleted { plain: true, moved_from: true, authors: 0 };
     /// Whether any deletion is left out.
     pub fn any(self) -> bool {
-        self.plain || self.moved_from
+        self.plain || self.moved_from || self.authors != 0
     }
     /// Whether text deleted by revision `del` (`None`: not deleted) is left out.
     pub fn hides(self, doc: &Document, del: Option<u32>) -> bool {
-        del.is_some() && if doc.move_name(del).is_some() { self.moved_from } else { self.plain }
+        del.is_some()
+            && (if doc.move_name(del).is_some() { self.moved_from } else { self.plain }
+                || (self.authors != 0 && del.and_then(|i| doc.revisions.get(i as usize)).is_some_and(|r| self.authors & author_bit(&r.author) != 0)))
     }
 }
 
