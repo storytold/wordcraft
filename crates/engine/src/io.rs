@@ -109,7 +109,7 @@ pub fn wrong_password(err: &str) -> bool {
 /// can't be read: opening it says why.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_empty_file(path: &std::path::Path) -> bool {
-    crate::file_access::check_read(&path.to_string_lossy()).is_ok() && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0)
+    crate::file_access::check_read(&path.to_string_lossy()).is_ok() && metadata_for_read(path).is_ok_and(|m| m.is_file() && m.len() == 0)
 }
 
 /// [`is_empty_file`]: on the web files come through the browser, never by path.
@@ -734,7 +734,7 @@ type Fallbacks = Box<dyn Iterator<Item = std::path::PathBuf>>;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn fallback_paths(path: &std::path::Path) -> Fallbacks {
-    let by_hand = follow_links(path, &link_target);
+    let by_hand = std::path::absolute(path).ok().and_then(|path| follow_links(&path, &link_target));
     let path = path.to_path_buf();
     let canonical = std::iter::once_with(move || std::fs::canonicalize(path).ok()).flatten();
     Box::new(by_hand.into_iter().chain(canonical))
@@ -756,6 +756,7 @@ fn open_with(
     };
     for candidate in fallbacks(path) {
         if candidate != path
+            && crate::file_access::check_read(&candidate.to_string_lossy()).is_ok()
             && let Ok(file) = open(&candidate)
         {
             return Ok(file);
@@ -790,7 +791,10 @@ fn metadata_for_read(path: &std::path::Path) -> std::io::Result<std::fs::Metadat
         Ok(meta) => Ok(meta),
         Err(error) if refuses_traversal(&error) => {
             for candidate in fallback_paths(path) {
-                if let Ok(meta) = std::fs::metadata(candidate) {
+                if candidate != path
+                    && crate::file_access::check_read(&candidate.to_string_lossy()).is_ok()
+                    && let Ok(meta) = std::fs::metadata(&candidate)
+                {
                     return Ok(meta);
                 }
             }
@@ -1056,5 +1060,44 @@ mod tests {
         let target = base.join("real");
         let resolved = follow_links(&link.join("folder/doc.txt"), &|path| (path == link).then(|| target.clone()));
         assert_eq!(resolved, Some(target.join("folder/doc.txt")));
+    }
+
+    #[test]
+    fn followed_links_resolve_relative_targets_and_parent_components() {
+        let base = std::env::temp_dir().join(format!("wordcraft-io-links-rel-{}", std::process::id()));
+        let link = base.join("link");
+        let target = base.join("real");
+        let resolved = follow_links(&link.join("..").join("doc.txt"), &|path| (path == link).then(|| target.clone()));
+        assert_eq!(resolved, Some(base.join("doc.txt")));
+
+        let relative = follow_links(std::path::Path::new("a/link/doc.txt"), &|path| (path == std::path::Path::new("a/link")).then(|| "real".into()));
+        assert_eq!(relative, Some(std::path::PathBuf::from("a/real/doc.txt")));
+    }
+
+    #[test]
+    fn followed_links_stop_at_the_depth_limit() {
+        let base = std::env::temp_dir().join(format!("wordcraft-io-links-loop-{}", std::process::id()));
+        let link = base.join("loop");
+        let resolved = follow_links(&link, &|_| Some(link.clone()));
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn a_fallback_outside_the_read_root_is_refused() {
+        let root = scratch("fallback-root");
+        let outside = scratch("fallback-outside");
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+        let roots = crate::file_access::AutomationRoots::new(Some(&root), None).unwrap().expect("read roots");
+        let blocked = root.join("blocked");
+        let error = crate::file_access::confine(Some(&roots), || {
+            open_with(&blocked, &|_| Err(io::Error::from_raw_os_error(448)), &|error| error.raw_os_error() == Some(448), &|_| -> Fallbacks {
+                Box::new(std::iter::once(secret.clone()))
+            })
+        })
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(448));
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
     }
 }
