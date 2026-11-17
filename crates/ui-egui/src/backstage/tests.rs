@@ -1142,6 +1142,77 @@ fn save_as_page_shows_browse_and_no_open_list() {
     assert!(h.query_by_label("Recent").is_none(), "Save As has no list that opens documents");
 }
 
+/// #3467, #3535: a system dialog that never shows up doesn't leave Save As stuck: Browse in
+/// WordCraft… gives it up and saves through WordCraft's own browser.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn save_as_saves_in_wordcraft_when_the_system_dialog_never_shows() {
+    // A host that takes every request and never answers, like a portal that shows nothing.
+    let senders: std::rc::Rc<std::cell::RefCell<Vec<std::sync::mpsc::Sender<crate::FileDialogAnswer>>>> = Default::default();
+    let keep = senders.clone();
+    let services = Services {
+        file_dialog: Some(Box::new(move |_| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            keep.borrow_mut().push(tx);
+            rx
+        })),
+        ..Default::default()
+    };
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-builtin-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    a.run("text.insert", json!({"text": "Saved past a silent portal"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert!(h.state().file_dialog.is_some(), "the system dialog was asked for and never answered");
+    h.get_by_label("Browse in WordCraft…").click();
+    h.run_steps(4);
+    let a = h.state_mut();
+    assert!(a.file_dialog.is_none(), "the silent system dialog is given up");
+    let b = a.file_browser.open.as_mut().expect("WordCraft's own browser is open");
+    b.navigate(dir.clone());
+    b.name = "kept".into();
+    let crate::file_browser::Step::Pick(path) = b.accept() else { panic!("picked") };
+    a.close_file_browser(Some(path));
+    let saved = dir.join("kept.docx");
+    assert_eq!(a.session.path.as_deref(), Some(saved.as_path()));
+    let back = wordcraft_engine::io::open_path(&saved).unwrap();
+    assert!(back.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved past a silent portal"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3535: File › Export offers WordCraft's own browser as well, for its formats.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn export_page_offers_wordcrafts_own_browser() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Browse in WordCraft…").click();
+    h.run_steps(4);
+    let b = h.state().file_browser.open.as_ref().expect("WordCraft's own browser is open");
+    assert!(matches!(&b.after, crate::file_dialogs::AfterPick::Export { ext } if ext == "pdf"));
+}
+
 #[test]
 fn backstage_save_navigates_to_save_as_when_unnamed() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
@@ -1438,4 +1509,243 @@ fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
     let (before, after, bar) = file_page_wheel_at(1428.0);
     assert!(after < before - 1.0, "expected doc0.docx to scroll up at the edge: before={before}, after={after}");
     assert!((bar.right() - 1432.0).abs() < 1.0, "expected the scrollbar at the window edge: {bar:?}");
+}
+
+/// Recursively collects bounding rectangles and text entries from egui shapes.
+fn collect_shapes(shape: &egui::Shape, rects: &mut Vec<egui::Rect>, texts: &mut Vec<(String, egui::Pos2, f32)>) {
+    match shape {
+        egui::Shape::Rect(r) => rects.push(r.rect),
+        egui::Shape::Text(t) => texts.push((t.galley.text().to_string(), t.pos, t.galley.size().x)),
+        egui::Shape::Vec(v) => {
+            for s in v {
+                collect_shapes(s, rects, texts);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// #6151: in an RTL interface (Arabic), template titles on the Start/Home page
+/// and New page are right-aligned to their preview thumbnails rather than left-aligned.
+#[test]
+fn rtl_template_titles_are_right_aligned() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.language = "ar".into();
+    a.ui.backstage = true;
+    a.ui.backstage_page = "home".into();
+    let ctx = egui::Context::default();
+    let mut last_shapes = Vec::new();
+    for frame in 0..4 {
+        let input = egui::RawInput {
+            time: Some(f64::from(frame) * 0.1),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            a.logic(&ctx.clone());
+            a.ui(ui);
+        });
+        out.textures_delta.clear();
+        if frame == 3 {
+            last_shapes = out.shapes;
+        }
+    }
+
+    let mut rects = Vec::new();
+    let mut texts = Vec::new();
+    for s in &last_shapes {
+        collect_shapes(&s.shape, &mut rects, &mut texts);
+    }
+
+    let blank_caption = crate::i18n::tc("template", "Blank document");
+    let (_, pos, width) = texts.iter().find(|(t, _, _)| t == blank_caption).expect("blank template caption drawn");
+    let thumbnail = rects
+        .iter()
+        .find(|r| (r.width() - 150.0).abs() < 1.0 && (r.height() - 194.0).abs() < 1.0 && (r.max.y - pos.y).abs() < 1.0)
+        .expect("blank template thumbnail rect");
+
+    let text_right = pos.x + width;
+    assert!(
+        (thumbnail.max.x - text_right).abs() < 1.0,
+        "template caption should be right-aligned with thumbnail in RTL: thumbnail.max.x={}, text_right={}, text_left={}, caption={}",
+        thumbnail.max.x,
+        text_right,
+        pos.x,
+        blank_caption,
+    );
+
+    // Verify the New page through the normal UI path in Arabic as well (#6151).
+    a.ui.backstage_page = "new".into();
+    let mut new_out = ctx.run_ui(
+        egui::RawInput {
+            time: Some(0.4),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        },
+        |ui| {
+            a.logic(&ctx.clone());
+            a.ui(ui);
+        },
+    );
+    new_out.textures_delta.clear();
+    let mut new_rects = Vec::new();
+    let mut new_texts = Vec::new();
+    for s in &new_out.shapes {
+        collect_shapes(&s.shape, &mut new_rects, &mut new_texts);
+    }
+    for (label, _) in super::TEMPLATES {
+        let caption = crate::i18n::tc("template", label);
+        if let Some((_, new_pos, new_width)) = new_texts.iter().find(|(t, _, _)| t == caption) {
+            let right = new_pos.x + new_width;
+            let has_matching_thumbnail = new_rects.iter().any(|r| {
+                (r.width() - 150.0).abs() < 1.0
+                    && (r.height() - 194.0).abs() < 1.0
+                    && (r.max.y - new_pos.y).abs() < 1.0
+                    && (r.max.x - right).abs() < 1.0
+            });
+            assert!(
+                has_matching_thumbnail,
+                "New page: caption '{caption}' must be right-aligned with its 150pt thumbnail (right={right}, y={})",
+                new_pos.y
+            );
+        }
+    }
+
+    // Also verify that a template tile with a wide caption (>150 pt) aligns both the thumbnail
+    // and caption to the right edge in RTL.
+    let wide_label = "A very long template title that exceeds 150 points width";
+    let mut wide_out = ctx.run_ui(
+        egui::RawInput {
+            time: Some(0.5),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        },
+        |ui| {
+            crate::rtl::root(ui, |ui| {
+                super::template_tile(ui, &mut a, wide_label, "sample");
+            });
+        },
+    );
+    wide_out.textures_delta.clear();
+    let mut wide_rects = Vec::new();
+    let mut wide_texts = Vec::new();
+    for s in &wide_out.shapes {
+        collect_shapes(&s.shape, &mut wide_rects, &mut wide_texts);
+    }
+    let (_, wide_pos, wide_width) = wide_texts.iter().find(|(t, _, _)| t == wide_label).expect("wide template caption drawn");
+    assert!(*wide_width > 150.0, "wide caption should exceed 150 points: {wide_width}");
+    let wide_thumbnail = wide_rects
+        .iter()
+        .find(|r| (r.width() - 150.0).abs() < 1.0 && (r.height() - 194.0).abs() < 1.0 && (r.max.y - wide_pos.y).abs() < 1.0)
+        .expect("wide template thumbnail rect");
+    let wide_text_right = wide_pos.x + wide_width;
+    assert!(
+        (wide_thumbnail.max.x - wide_text_right).abs() < 1.0,
+        "wide template caption and thumbnail should share the same right edge in RTL: thumb.max.x={}, text_right={}",
+        wide_thumbnail.max.x,
+        wide_text_right,
+    );
+}
+
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_export_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Export page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_print_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-print-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "print"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Print page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A cancelled export dialog drops an earlier refusal: it is not news any more.
+#[test]
+fn cancelling_an_export_clears_its_page_error() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.export_error = "old refusal".into();
+    a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, None).unwrap();
+    assert!(a.export_error.is_empty());
+}
+
+/// The export error belongs to the window that refused the export: another window running a
+/// frame outside Backstage must not erase it while this one still shows the Export page.
+#[test]
+fn export_error_belongs_to_its_window() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-two-windows-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    // Window A (this one) is refused; window B is another window's state, outside Backstage.
+    let mut b = crate::window_ui::WindowUi::new(a.session.document_id());
+    let err = a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    assert_eq!(a.export_error, err);
+    // B's frame: swap its state in, run frames outside Backstage, swap back.
+    a.swap_window(&mut b);
+    assert!(!a.ui.backstage && a.export_error.is_empty(), "B has its own, empty, error");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.state_mut().swap_window(&mut b);
+    assert!(h.state().ui.backstage, "A is still on the Export page");
+    assert_eq!(h.state().export_error, err, "B's frames left A's message alone");
+    let _ = std::fs::remove_dir_all(&dir);
 }
