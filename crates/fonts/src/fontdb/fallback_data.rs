@@ -226,7 +226,8 @@ pub(super) const RUN_FALLBACK_CACHE_MAX: usize = 4096;
 pub(super) const RUN_FALLBACK_CACHE_CHARS: usize = 1 << 20;
 
 /// Loaded faces other than `exclude`, in fallback order: for right-to-left text the fonts made
-/// for the script first (so a word isn't split across fonts, which breaks Arabic joining); for a
+/// for the script first (so a word isn't split across fonts, which breaks Arabic joining), after
+/// shaping capability; for a
 /// complex-script character `complex` (Thai, Myanmar…) faces with OpenType layout tables, the
 /// script's own families first, as the per-character fallback ranks them; then the fallback
 /// family, upright, nearest to regular weight.
@@ -238,7 +239,16 @@ pub(super) fn fallback_order(faces: &[Arc<FontFace>], exclude: u32, rtl: bool, c
         Some(c) => (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)),
         None => (false, 0),
     };
-    order.sort_by_key(|f| (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32));
+    order.sort_by_key(|f| {
+        (
+            complex.is_some() && !f.has_layout_tables(),
+            rank(f),
+            shaping(f),
+            !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY),
+            f.italic,
+            (f.weight - 400.0).abs() as i32,
+        )
+    });
     order
 }
 

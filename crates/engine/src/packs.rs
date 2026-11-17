@@ -761,7 +761,7 @@ pub fn missing(s: &Session) -> Vec<Pack> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Proofing {
-    /// English: the embedded dictionaries.
+    /// English dictionaries, or Khmer proofing in an explicit-data build.
     BuiltIn,
     /// An installed Language pack.
     Installed,
@@ -890,9 +890,10 @@ pub fn your_languages_with(s: &Session, folder: Option<&str>, dictionary: &dyn F
         row.default = row.is_tag(&default_tag);
         let tag = row.tags.first().cloned().or_else(|| row.pack.clone()).unwrap_or_default();
         let lang = wordcraft_proof::ProofLang::from_tag(Some(&tag));
-        let file = if lang.is_english() { None } else { dictionary(&tag) };
+        let built_in = lang.is_english() || (lang == wordcraft_proof::ProofLang::Km && wordcraft_proof::khmer::data_available());
+        let file = if built_in { None } else { dictionary(&tag) };
         let own = file.as_ref().is_some_and(|f| folder.is_some_and(|d| !d.trim().is_empty() && f.starts_with(d.trim())));
-        row.proofing = if lang.is_english() {
+        row.proofing = if built_in {
             Proofing::BuiltIn
         } else if own {
             Proofing::OwnDictionary
@@ -1155,7 +1156,13 @@ mod tests {
             .map(|l| l.trim().to_ascii_lowercase())
             .filter(|l| !l.is_empty())
             .collect();
-        let allowed = |base: &str| base == "en" || if named.is_empty() { CARRY_OVER.contains(&base) } else { named.iter().any(|n| n == base) };
+        // Khmer uses an explicit, hash-verified source pack rather than the
+        // Hunspell CRAFT_PROOF_EMBED list; default builds still omit its data.
+        let allowed = |base: &str| {
+            base == "en"
+                || (base == "km" && wordcraft_proof::khmer::data_available())
+                || if named.is_empty() { CARRY_OVER.contains(&base) } else { named.iter().any(|n| n == base) }
+        };
         let embedded = wordcraft_proof::packs::embedded_locales();
         let extra: Vec<&&str> = embedded.iter().filter(|l| !allowed(l.split('-').next().unwrap_or(l))).collect();
         assert!(extra.is_empty(), "embedded beyond English and {named:?} (or the carry-over by default): {extra:?}");

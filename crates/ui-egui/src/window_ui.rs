@@ -39,6 +39,7 @@ pub(crate) struct WindowUi {
     pub(crate) seen_full_screen: Option<bool>,
     pub(crate) escape_free: bool,
     pub(crate) status_counts: (u64, crate::StatusCounts),
+    pub(crate) selected_word_count: crate::chrome::SelectedWordCount,
     pub(crate) print_memo: crate::print_page::Memo,
     /// Per window, as each window shows its own layout: one shared list would be read again
     /// on every frame of every window.
@@ -115,6 +116,7 @@ impl WindowUi {
             seen_full_screen: None,
             escape_free: false,
             status_counts: NOT_COUNTED,
+            selected_word_count: Default::default(),
             print_memo: Default::default(),
             missing_fonts: Default::default(),
             export_error: String::new(),
@@ -249,6 +251,7 @@ impl WordApp {
             seen_full_screen,
             escape_free,
             status_counts,
+            selected_word_count,
             print_memo,
             missing_fonts,
             export_error,
@@ -357,6 +360,7 @@ impl WordApp {
             seen_full_screen,
             escape_free,
             status_counts,
+            selected_word_count,
             print_memo,
             missing_fonts,
             export_error,

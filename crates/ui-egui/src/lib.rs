@@ -791,6 +791,7 @@ pub struct WordApp {
     pub export_error: String,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
+    pub(crate) selected_word_count: chrome::SelectedWordCount,
     /// What this window's Print page knows of the last job's message (the viewport and pass it was
     /// last drawn in, and the generations of the result it said and holds back); per window.
     print_memo: crate::print_page::Memo,
