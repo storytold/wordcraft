@@ -13125,6 +13125,17 @@ fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
     assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
 }
 
+/// A scatter chart saved as ODT and opened again is still drawn as markers without lines.
+#[test]
+fn an_odt_scatter_chart_reopens_without_lines() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "scatter"}));
+    let doc = crate::io::open_bytes("t.odt", &wordcraft_formats::odt::export(&s.doc).unwrap()).unwrap();
+    let c = first_chart(&doc).expect("the chart has its model");
+    assert_eq!(c.kind, wordcraft_doc::chart::ChartType::Scatter);
+    assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line), "{:?}", c.series);
+}
+
 /// A picture an OpenDocument file makes wider than the text (a rule across the whole page) stays
 /// that wide, and its paragraph is written as read: opening a file changes nothing in it.
 #[test]

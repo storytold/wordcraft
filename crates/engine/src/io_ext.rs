@@ -42,8 +42,26 @@ fn draw_charts(doc: &mut Document) {
     fn draw(o: &mut InlineObject, theme: &[wordcraft_doc::Rgb], depth: usize) {
         match o {
             InlineObject::Group { children, .. } if depth < DEPTH => children.iter_mut().for_each(|c| draw(&mut c.obj, theme, depth + 1)),
-            o if undrawn(o, depth) => crate::cmd::chart::redraw(o, theme),
+            o if undrawn(o, depth) => {
+                markers_only_scatter(o);
+                crate::cmd::chart::redraw(o, theme)
+            }
             _ => {}
+        }
+    }
+    // The ODF reader does not read a scatter chart's line setting; the ODF writer writes every
+    // scatter series as markers without a line, and they are drawn that way.
+    fn markers_only_scatter(o: &mut InlineObject) {
+        if let InlineObject::Graphic { graphic, .. } = o
+            && let Some(spec) = graphic.chart.as_deref()
+            && spec.kind == wordcraft_doc::chart::ChartType::Scatter
+            && spec.series.iter().any(|s| !s.no_line)
+        {
+            let mut spec = spec.clone();
+            for series in &mut spec.series {
+                series.no_line = true;
+            }
+            std::sync::Arc::make_mut(graphic).chart = Some(std::sync::Arc::new(spec));
         }
     }
     let theme = doc.settings.theme_colors.clone();
