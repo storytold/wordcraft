@@ -16,7 +16,7 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
             GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width, alpha: fa } => out.push(Draw::Shape {
                 rect: inside(r),
                 kind: *kind,
-                fill: fill.map(|c| Paint::Solid(c, *fa * alpha)),
+                fill: fill.map(|c| Paint::Solid(c, (if fa.is_finite() { fa.clamp(0.0, 1.0) } else { 1.0 }) * alpha)),
                 stroke: *stroke,
                 stroke_width: stroke_width * k,
                 effects: Default::default(),
