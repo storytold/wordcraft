@@ -699,11 +699,10 @@ fn range_fields(doc: &Document, story: StoryRef, out: &mut Vec<Value>) -> bool {
             return false;
         }
         let from = wordcraft_doc::Pos { off: r.start.off.saturating_add(wordcraft_doc::para::OBJ.len_utf8()), ..r.start.clone() };
-        let text = doc.copy_range(&from, &r.end).plain_text();
-        let mut chars = text.chars().filter(|c| *c != wordcraft_doc::para::OBJ);
-        let result: String = chars.by_ref().take(MAX_RANGE_RESULT).collect();
+        // The two markers of a range field are always in one block list.
+        let (result, cut) = doc.range_text(&from, &r.end, MAX_RANGE_RESULT).unwrap_or_default();
         let mut field = field_json(&r.instr, &result);
-        if chars.next().is_some() {
+        if cut {
             field["resultTruncated"] = json!(true);
         }
         out.push(field);

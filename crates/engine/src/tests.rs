@@ -13267,6 +13267,28 @@ fn inspect_lists_range_fields() {
     assert!(part.get("fieldsTruncated").is_none(), "{part}");
 }
 
+/// A range field's result in `document.inspect` is the first 2000 characters of its text, counted
+/// as characters for multibyte text across paragraphs, and marked when it is cut.
+#[test]
+fn inspect_cuts_a_multibyte_range_field_result_at_2000_characters() {
+    use wordcraft_doc::{CharProps, InlineObject, Paragraph, para_block};
+    let mut s = s();
+    let id = run(&mut s, "insert.pageNumber", json!({}))["story"].as_u64().unwrap();
+    let key = u32::try_from(id).unwrap();
+    let c = CharProps::default();
+    let mut first = Paragraph::new();
+    first.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false }, &c).unwrap();
+    first.insert_text(first.len(), &"é😀".repeat(999), &c).unwrap();
+    let mut second = Paragraph::with_text(&"ü".repeat(5000), c.clone());
+    second.insert_object(second.len(), InlineObject::FieldEnd, &c).unwrap();
+    s.doc.parts.get_mut(&key).unwrap().blocks.extend([para_block(first), para_block(second)]);
+    let doc = run(&mut s, "document.inspect", json!({}));
+    let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+    let bib = part["fields"].as_array().unwrap().iter().find(|f| f["code"] == "BIBLIOGRAPHY").unwrap().clone();
+    let want = format!("{}\nü", "é😀".repeat(999));
+    assert_eq!((bib["result"].as_str(), &bib["resultTruncated"]), (Some(want.as_str()), &json!(true)));
+}
+
 /// #4467 review: a field name in lower case is a page field all the same, and a field in a table
 /// nested deeper than `document.inspect` walks (8 tables) is left out with `fieldsTruncated`.
 #[test]
