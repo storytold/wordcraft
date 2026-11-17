@@ -428,6 +428,221 @@ fn clearing_a_font_query_keeps_the_recent_heading_visible() {
     }
 }
 
+fn font_combo_harness(
+    id: &'static str,
+    initial: &str,
+    fonts: Vec<String>,
+    recent: Vec<String>,
+) -> (egui_kittest::Harness<'static>, std::rc::Rc<std::cell::RefCell<Option<String>>>) {
+    let picked = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let current = std::rc::Rc::new(std::cell::RefCell::new(initial.to_string()));
+    let picked_c = picked.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui(move |ui| {
+        let cur = current.borrow().clone();
+        if let Some(f) = font_combo_with_recent(ui, id, 150.0, &cur, &fonts, &recent, None) {
+            *current.borrow_mut() = f.clone();
+            *picked_c.borrow_mut() = Some(f);
+        }
+    });
+    h.run_steps(2);
+    (h, picked)
+}
+
+fn click_at_separated(h: &mut egui_kittest::Harness<'_>, pos: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(pos));
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+}
+
+/// #6722: clicking on the font text field focuses it and selects all text for immediate
+/// replacement typing without opening the 420px dropdown popup; subsequent clicks inside the
+/// already-focused field place the caret without re-selecting all; only typing opens the filtered list.
+#[test]
+fn clicking_the_font_field_selects_all_without_opening_dropdown() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+
+    let fonts: Vec<String> = ["Arial", "Courier New", "Georgia", "Times New Roman"].map(String::from).to_vec();
+    let recent: Vec<String> = ["Courier New"].map(String::from).to_vec();
+    let (mut h, picked) = font_combo_harness("font_field_test", "Arial", fonts, recent);
+
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Arial"));
+    assert!(h.query_by_label("All Fonts").is_none());
+
+    // Focus without click (e.g. Tab navigation) selects text without opening the dropdown.
+    h.get(By::new().role(Role::TextInput)).focus();
+    h.run_steps(2);
+    assert!(h.get(By::new().role(Role::TextInput)).is_focused(), "field takes focus on Tab/focus");
+    assert!(h.query_by_label("All Fonts").is_none(), "focusing without click does not open the 420px dropdown");
+
+    h.event(egui::Event::Text("g".into()));
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("g"), "typing replaces font name selected on focus alone");
+    assert!(h.query_by_label("Georgia").is_some(), "typing while focused opens list and filters to matches");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Arial"));
+    assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes on Escape");
+
+    // Click on the unfocused field: focuses and selects all text without opening the dropdown.
+    h.get(By::new().role(Role::TextInput)).click();
+    h.run_steps(2);
+    assert!(h.get(By::new().role(Role::TextInput)).is_focused(), "clicking field focuses it");
+    assert!(h.query_by_label("Recently Used Fonts").is_none(), "clicking field does not open recently used fonts");
+    assert!(h.query_by_label("All Fonts").is_none(), "clicking field does not open the dropdown list");
+
+    h.event(egui::Event::Text("t".into()));
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("t"));
+    assert!(h.query_by_label("Times New Roman").is_some(), "matching font shows up on typing");
+    assert_eq!(h.query_all_by_label("Courier New").count(), 0, "non-matching font is filtered out");
+
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(picked.borrow().as_deref(), Some("Times New Roman"));
+    assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes after applying");
+    assert!(!h.get(By::new().role(Role::TextInput)).is_focused(), "field loses focus after Enter");
+
+    // First click selects all without opening; a second click inside the focused field places the
+    // caret for partial edits instead of re-selecting all. Separate press/release frames match real input.
+    let field_center = h.get(By::new().role(Role::TextInput)).rect().center();
+    click_at_separated(&mut h, field_center);
+    assert!(h.get(By::new().role(Role::TextInput)).is_focused());
+    assert!(h.query_by_label("All Fonts").is_none(), "first click does not open the dropdown");
+    click_at_separated(&mut h, field_center);
+    assert!(h.query_by_label("All Fonts").is_none(), "second click keeps the dropdown closed");
+
+    h.event(egui::Event::Text("!".into()));
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Times New !Roman"));
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Times New Roman"));
+    assert!(h.query_by_label("Times New Roman").is_some(), "editing the box opens the filtered dropdown");
+}
+
+/// #6722: clicking the dropdown arrow opens Recently Used Fonts and All Fonts, focuses the field,
+/// and selects all text; clicking inside the field while open preserves caret placement; clicking
+/// the arrow again toggles the dropdown closed.
+#[test]
+fn clicking_the_font_arrow_toggles_dropdown_and_preserves_caret_on_field_click() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+
+    let fonts: Vec<String> = ["Arial", "Courier New", "Georgia", "Times New Roman"].map(String::from).to_vec();
+    let recent: Vec<String> = ["Courier New"].map(String::from).to_vec();
+    let (mut h, _picked) = font_combo_harness("font_arrow_test", "Times New Roman", fonts, recent);
+
+    h.get(By::new().role(Role::Button).label_contains("Font options")).click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Recently Used Fonts").is_some(), "recently used fonts show up on arrow click");
+    assert!(h.query_by_label("All Fonts").is_some(), "all fonts show up on arrow click");
+    assert_eq!(h.query_all_by_label("Courier New").count(), 2, "the other fonts show up on arrow click");
+    assert!(h.get(By::new().role(Role::TextInput)).is_focused(), "text edit has focus after arrow click");
+
+    // Clicking the text field while already open preserves caret placement rather than re-selecting all text.
+    h.get(By::new().role(Role::TextInput)).click();
+    h.run_steps(2);
+    assert!(h.query_by_label("All Fonts").is_some(), "dropdown remains open on click inside field");
+
+    h.event(egui::Event::Text("!".into()));
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Times New !Roman"));
+    assert!(egui::Popup::is_any_open(&h.ctx), "dropdown popup stays open even with no matches");
+
+    h.get(By::new().role(Role::Button).label_contains("Font options")).click();
+    h.run_steps(2);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "dropdown popup closes on arrow click toggle");
+    assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes on arrow click toggle");
+}
+
+/// Verifies that when the current font is not in the installed or recent list (e.g. uninstalled
+/// font like "Calibri"), opening the font combo leaves the highlight in a no-pick state so pressing
+/// Enter returns the box text as-is without changing it to an unrelated font. Also verifies that
+/// pressing Down arrow moves the highlight and allows selecting from the list, and that regaining
+/// focus while open preserves the typed query without re-selecting all text.
+#[test]
+fn uninstalled_current_font_not_in_list_commits_box_text_on_enter_without_replacing() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let fonts: Vec<String> = ["Arial", "Courier New", "Georgia"].map(String::from).to_vec();
+    let recent: Vec<String> = ["Courier New"].map(String::from).to_vec();
+    let picked = Rc::new(RefCell::new(None));
+    let current = Rc::new(RefCell::new("Calibri".to_string()));
+
+    let picked_c = picked.clone();
+    let current_c = current.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui(move |ui| {
+        let cur = current_c.borrow().clone();
+        let v = font_combo_with_recent(ui, "uninstalled_font_test", 150.0, &cur, &fonts, &recent, None);
+        if let Some(f) = v {
+            *current_c.borrow_mut() = f.clone();
+            *picked_c.borrow_mut() = Some(f);
+        }
+    });
+
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Calibri"));
+
+    // Click dropdown arrow to open the list
+    h.get(By::new().role(Role::Button).label_contains("Font options")).click();
+    h.run_steps(2);
+    assert!(h.query_by_label("All Fonts").is_some(), "dropdown opens on arrow click");
+
+    // Press Enter without typing and without moving: commits box text "Calibri", not first recent font
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(picked.borrow().as_deref(), Some("Calibri"), "Enter on unchanged box commits Calibri as-is");
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Calibri"));
+    assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes after Enter");
+
+    // Re-open via arrow and move highlight with ArrowDown: now it picks the first font on Enter
+    *picked.borrow_mut() = None;
+    h.get(By::new().role(Role::Button).label_contains("Font options")).click();
+    h.run_steps(2);
+    assert!(h.query_by_label("All Fonts").is_some());
+
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(picked.borrow().as_deref(), Some("Courier New"), "ArrowDown moves highlight to first available font");
+
+    // Re-open via arrow, type partial query "co", lose and regain focus while pointer is over the popup:
+    // verify the dropdown stays open and the query is not re-selected.
+    *picked.borrow_mut() = None;
+    h.get(By::new().role(Role::Button).label_contains("Font options")).click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("co".into()));
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("co"));
+    let popup_pos = h.get_by_label("Courier New").rect().center();
+
+    // Move pointer over the popup and force a genuine blur + refocus cycle while open.
+    h.event(egui::Event::PointerMoved(popup_pos));
+    h.step();
+    let te_id = h.ctx.memory(|m| m.focused()).expect("text input is focused before blur");
+    h.ctx.memory_mut(|m| m.surrender_focus(te_id));
+    assert!(!h.ctx.memory(|m| m.has_focus(te_id)), "text input lost focus before regaining it");
+
+    // Refocus while `was_open` is true so `resp.gained_focus()` actually fires.
+    h.get(By::new().role(Role::TextInput)).focus();
+    h.run_steps(2);
+    assert!(h.get(By::new().role(Role::TextInput)).is_focused(), "text input regains focus while popup remains open");
+    assert!(h.query_by_label("Courier New").is_some(), "dropdown remains open after regaining focus");
+
+    // Next keystroke should append rather than overwrite "co"
+    h.event(egui::Event::Text("u".into()));
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("cou"), "typing appends to existing query without re-selecting all");
+}
+
 /// The rows of a sectioned font list, and where the keyboard highlight lands among them.
 #[test]
 fn font_list_sections_skip_their_headings() {
@@ -550,4 +765,27 @@ fn dialog_tabs_expose_the_selected_state_and_report_clicks() {
     h.get_by_label("Two").click();
     h.run_steps(2);
     assert_eq!(h.state().1, Some(1));
+}
+
+/// Fit One Page button renders in the Layout ribbon across light and dark themes.
+#[test]
+fn layout_fit_one_page_button_renders_in_light_and_dark_themes() {
+    use egui_kittest::kittest::Queryable;
+    for theme in [crate::theme::Appearance::Light, crate::theme::Appearance::Dark] {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.ui.tab = "Layout".to_string();
+        app.ui.theme = theme;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        let button = h.get_by_label("Fit One Page");
+        assert!(button.rect().width() >= 40.0, "button must have allocated width in {theme:?}");
+        assert!(button.rect().height() >= 40.0, "button must have allocated height in {theme:?}");
+    }
 }
