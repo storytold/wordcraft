@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, CharProps, LineSpacing, NumRef, Rgb, TabAlign, TabLeader, TabStop, TextColor};
-use wordcraft_doc::{Block, Document, ListKind, Paragraph, PartKind, Table, para_block};
+use wordcraft_doc::props::{
+    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabLeader, TabStop, TextColor,
+};
+use wordcraft_doc::{Block, Document, ListKind, Paragraph, PartKind, Style, StyleKind, Table, para_block};
 
 fn para(text: &str) -> Paragraph {
     Paragraph::with_text(text, CharProps::default())
@@ -218,6 +220,7 @@ fn gost_para(text: &str, align: Align) -> Paragraph {
     let mut p = Paragraph::with_text(text, gost_body());
     p.props.align = Some(align);
     p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+    p.props.space_after = Some(0.0);
     p
 }
 
@@ -228,11 +231,61 @@ fn gost_indented(text: &str) -> Paragraph {
     p
 }
 
+/// Adds the styles the GOST report template owns: the structural headings and the
+/// numbered section headings. The built-in heading styles would draw them in the
+/// theme's blue-green and put the structural headings in the table of contents.
+fn add_gost_styles(d: &mut Document) {
+    const MM: f32 = 72.0 / 25.4;
+    let body = gost_body();
+    let chr = CharProps { color: Some(TextColor::Auto), bold: Some(true), ..body };
+    let structural_para = ParaProps {
+        align: Some(Align::Center),
+        line_spacing: Some(LineSpacing::Multiple(1.5)),
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        page_break_before: Some(true),
+        ..Default::default()
+    };
+    d.styles.styles.push(Style {
+        id: "GostHeading".into(),
+        name: "GOST heading".into(),
+        based_on: Some("Normal".into()),
+        next: Some("Normal".into()),
+        para: structural_para,
+        chr: chr.clone(),
+        priority: Some(9),
+        ..Default::default()
+    });
+    for (id, name, based_on, outline_level) in
+        [("GostSectionHeading1", "GOST section heading 1", "Heading1", 0), ("GostSectionHeading2", "GOST section heading 2", "Heading2", 1)]
+    {
+        d.styles.styles.push(Style {
+            id: id.into(),
+            name: name.into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some(based_on.into()),
+            next: Some("Normal".into()),
+            para: ParaProps {
+                outline_level: Some(outline_level),
+                line_spacing: Some(LineSpacing::Multiple(1.5)),
+                space_before: Some(0.0),
+                space_after: Some(0.0),
+                indent_first: Some(1.25 * MM),
+                ..Default::default()
+            },
+            chr: chr.clone(),
+            priority: Some(10),
+            ..Default::default()
+        });
+    }
+}
+
 /// A structural-element heading (РЕФЕРАТ, СОДЕРЖАНИЕ, ВВЕДЕНИЕ, …): centred, bold, in
 /// capital letters, one-and-a-half spacing, from a new page as GOST 7.32 requires.
+/// The paragraph style is the document's own black, non-TOC GOST heading.
 fn gost_heading(text: &str) -> Paragraph {
-    let mut p = Paragraph::with_text(text, CharProps { style: Some("Heading1".into()), bold: Some(true), size: Some(14.0), ..gost_body() });
-    p.props.style = Some("Heading1".into());
+    let mut p = Paragraph::with_text(text, CharProps { bold: Some(true), size: Some(14.0), color: Some(TextColor::Auto), ..gost_body() });
+    p.props.style = Some("GostHeading".into());
     p.props.align = Some(Align::Center);
     p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
     p.props.page_break_before = Some(true);
@@ -242,10 +295,15 @@ fn gost_heading(text: &str) -> Paragraph {
 /// A numbered section or subsection heading (GOST 7.32-2017 §6.2.3): from the paragraph
 /// indent, after the number, in bold with an initial capital — not centred (that is for
 /// structural elements), no trailing dot. Sections start on a new page (§6.2.1),
-/// subsections flow on.
+/// subsections flow on. The paragraph style keeps the outline level, so the table of
+/// contents still finds these headings.
 fn gost_section(text: &str, level: &str, new_page: bool) -> Paragraph {
-    let mut p = Paragraph::with_text(text, CharProps { style: Some(level.into()), bold: Some(true), size: Some(14.0), ..gost_body() });
-    p.props.style = Some(level.into());
+    let style = match level {
+        "Heading2" => "GostSectionHeading2",
+        _ => "GostSectionHeading1",
+    };
+    let mut p = Paragraph::with_text(text, CharProps { bold: Some(true), size: Some(14.0), color: Some(TextColor::Auto), ..gost_body() });
+    p.props.style = Some(style.into());
     p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
     p.props.indent_first = Some(1.25 * 72.0 / 25.4);
     p.props.page_break_before = Some(new_page);
@@ -258,19 +316,20 @@ fn gost_section(text: &str, level: &str, new_page: bool) -> Paragraph {
 pub fn gost_report() -> Document {
     const MM: f32 = 72.0 / 25.4;
     let mut d = Document::new();
+    add_gost_styles(&mut d);
     d.core.title = "Отчёт о научно-исследовательской работе".into();
-    let mut b: Vec<Block> = vec![Block::Para(gost_para("НАИМЕНОВАНИЕ ОРГАНИЗАЦИИ", Align::Center)), Block::Para(para(""))];
+    let mut b: Vec<Block> = vec![Block::Para(gost_para("НАИМЕНОВАНИЕ ОРГАНИЗАЦИИ", Align::Center)), Block::Para(gost_para("", Align::Left))];
     // Title page: the report type in the middle, the city and year at the bottom.
     b.push(Block::Para(gost_para("ОТЧЁТ", Align::Center)));
     b.push(Block::Para(gost_para("О НАУЧНО-ИССЛЕДОВАТЕЛЬСКОЙ РАБОТЕ", Align::Center)));
     b.push(Block::Para(gost_para("на тему: «Наименование темы»", Align::Center)));
     for _ in 0..3 {
-        b.push(Block::Para(para("")));
+        b.push(Block::Para(gost_para("", Align::Left)));
     }
     b.push(Block::Para(gost_para("Научный руководитель ________________ И. О. Фамилия", Align::Right)));
     b.push(Block::Para(gost_para("Исполнитель ________________ И. О. Фамилия", Align::Right)));
     for _ in 0..3 {
-        b.push(Block::Para(para("")));
+        b.push(Block::Para(gost_para("", Align::Left)));
     }
     b.push(Block::Para(gost_para("Город", Align::Center)));
     b.push(Block::Para(gost_para(&crate::cmd::insert::format_date("yyyy"), Align::Center)));
@@ -362,21 +421,27 @@ mod tests {
             .iter()
             .filter_map(|b| {
                 let p = b.as_para()?;
-                (p.props.page_break_before == Some(true) && p.props.style == Some("Heading1".into())).then_some(p.text.as_str())
+                (p.props.page_break_before == Some(true) && p.props.style == Some("GostHeading".into())).then_some(p.text.as_str())
             })
             .collect();
         for name in ["РЕФЕРАТ", "СОДЕРЖАНИЕ", "ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]
         {
             assert!(headings.contains(&name), "{name} is missing: {headings:?}");
         }
+        // The GOST template's own heading styles are black and the structural headings
+        // stay out of the table of contents.
+        assert_eq!(d.styles.get("GostHeading").and_then(|s| s.chr.color), Some(TextColor::Auto));
+        assert_eq!(d.styles.get("GostHeading").and_then(|s| s.para.outline_level), None);
+        assert_eq!(d.styles.get("GostSectionHeading1").and_then(|s| s.chr.color), Some(TextColor::Auto));
+        assert_eq!(d.styles.get("GostSectionHeading2").and_then(|s| s.chr.color), Some(TextColor::Auto));
         // Numbered section and subsection headings carry their numbers (§6.2.2–6.2.3).
         let sections: Vec<String> = d
             .body
             .iter()
             .filter_map(|b| {
                 let p = b.as_para()?;
-                let style = p.props_of_char(0).style.as_deref()?;
-                matches!(style, "Heading1" | "Heading2").then_some(p.text.clone())
+                let style = p.props.style.as_deref()?;
+                matches!(style, "GostSectionHeading1" | "GostSectionHeading2").then_some(p.text.clone())
             })
             .collect();
         assert!(sections.iter().any(|t| t.starts_with("1 ")), "{sections:?}");
