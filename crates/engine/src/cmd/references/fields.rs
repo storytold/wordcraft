@@ -543,11 +543,16 @@ fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: us
 }
 
 /// A core-properties creation date as seconds since the epoch and the UTC offset to show it at:
-/// an instant (`2019-05-05T12:00:00Z`, any offset or fraction) at the local offset, or a calendar
-/// date (`2019-05-05`, which W3CDTF allows) at its own midnight, whatever the time zone. `None`
-/// for another form or a date before 1970.
+/// an instant (`2019-05-05T12:00:00Z`, any offset or fraction, or without the seconds,
+/// `2019-05-05T12:00Z`, as W3CDTF allows) at the local offset, or a calendar date (`2019-05-05`)
+/// at its own midnight, whatever the time zone. `None` for another form or a date before 1970.
 fn created_at(stamp: &str) -> Option<(u64, i64)> {
-    if let Ok(t) = chrono::DateTime::parse_from_rfc3339(stamp) {
+    let instant = chrono::DateTime::parse_from_rfc3339(stamp).ok().or_else(|| {
+        // `%:z` takes `+01:00` but not `Z`.
+        let utc = stamp.strip_suffix(['Z', 'z']).map(|t| format!("{t}+00:00"));
+        chrono::DateTime::parse_from_str(utc.as_deref().unwrap_or(stamp), "%Y-%m-%dT%H:%M%:z").ok()
+    });
+    if let Some(t) = instant {
         let unix = u64::try_from(t.timestamp()).ok()?;
         return Some((unix, crate::cmd::local_offset_secs(unix)));
     }

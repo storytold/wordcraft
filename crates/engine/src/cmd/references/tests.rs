@@ -508,6 +508,17 @@ fn createdate_keeps_the_creation_date_on_update() {
     let (_, _, day, _, _) = crate::cmd::local_civil(unix, crate::cmd::local_offset_secs(unix));
     assert_eq!(results, ["2019-05".to_string(), format!("5/{day}/2019")]);
     assert!(day == 5 || day == 6, "{day}");
+    // W3CDTF may leave out the seconds; that is the same instant.
+    for minutes in ["2019-05-05T12:00Z", "2019-05-05T14:00+02:00", "2019-05-05T07:00-05:00"] {
+        // From another date first, so an unread stamp, which keeps the result, shows.
+        s.doc.core.created = "2001-02-03".into();
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert_eq!(fields(&s)[1].1, "2/3/2001");
+        s.doc.core.created = minutes.into();
+        s.run("references.updateFields", &json!({})).unwrap();
+        let results: Vec<String> = fields(&s).into_iter().map(|f| f.1).collect();
+        assert_eq!(results, ["2019-05".to_string(), format!("5/{day}/2019")], "{minutes}");
+    }
     // A date without a time is that calendar day in every time zone.
     s.doc.core.created = "2019-06-07".into();
     s.run("references.updateFields", &json!({})).unwrap();
