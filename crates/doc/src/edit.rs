@@ -1491,10 +1491,11 @@ impl Document {
     /// paragraphs in the original). A list of `src` whose definition this document has too
     /// (the same levels, start overrides and level overrides, as two versions of one document
     /// have) takes this document's list, the one of the same id first, so their numbers
-    /// continue; any other is copied here with ids of its own, its definition reused when this
-    /// document has it. A reference to a list `src` doesn't have names none (`0`), as it did
-    /// there. Every paragraph is changed, in tables too, and the old numbering of a tracked
-    /// paragraph change with it.
+    /// continue; each list here is taken once at most, so two lists of `src` keep counting
+    /// apart. Any other is copied here with free ids of its own, its definition reused when this
+    /// document has it. A reference to a list `src` doesn't have, or to one whose definition it
+    /// lacks, names none (`0`), as it showed no numbers there. Every paragraph is changed, in
+    /// tables too, and the old numbering of a tracked paragraph change with it.
     pub fn adopt_lists(&mut self, src: &crate::numbering::Numbering, blocks: &mut [Arc<Block>]) {
         let mut used = std::collections::BTreeSet::new();
         for b in blocks.iter() {
@@ -1511,40 +1512,62 @@ impl Document {
             a.levels == b.levels && a.name == b.name && a.nsid == b.nsid && a.tmpl == b.tmpl && a.multi_level_type == b.multi_level_type
         };
         let mut map: BTreeMap<u32, u32> = BTreeMap::new();
-        for id in used {
-            let Some(n) = src.nums.iter().find(|n| n.id == id) else {
-                map.insert(id, 0);
-                continue;
-            };
-            let abs = src.abstracts.iter().find(|a| a.id == n.abstract_id);
-            let same_list = |m: &crate::numbering::Num| {
-                m.start_overrides == n.start_overrides
-                    && m.level_overrides == n.level_overrides
-                    && match (abs, self.numbering.abstracts.iter().find(|a| a.id == m.abstract_id)) {
-                        (Some(x), Some(y)) => same_abs(x, y),
-                        (None, None) => true,
-                        _ => false,
-                    }
-            };
-            let here = self.numbering.nums.iter().filter(|m| same_list(m)).min_by_key(|m| (m.id != id, m.id)).map(|m| m.id);
-            if let Some(here) = here {
-                map.insert(id, here);
-                continue;
+        // A list here is taken by one list of `src` at most, so two lists there keep counting
+        // apart here. Those of the same id go first, so a list both have keeps its own.
+        let mut taken = std::collections::BTreeSet::new();
+        for same_id in [true, false] {
+            for &id in &used {
+                if map.contains_key(&id) {
+                    continue;
+                }
+                let Some(n) = src.nums.iter().find(|n| n.id == id) else {
+                    map.insert(id, 0);
+                    continue;
+                };
+                let abs = src.abstracts.iter().find(|a| a.id == n.abstract_id);
+                let same_list = |m: &crate::numbering::Num| {
+                    m.start_overrides == n.start_overrides
+                        && m.level_overrides == n.level_overrides
+                        && match (abs, self.numbering.abstracts.iter().find(|a| a.id == m.abstract_id)) {
+                            (Some(x), Some(y)) => same_abs(x, y),
+                            (None, None) => true,
+                            _ => false,
+                        }
+                };
+                let here =
+                    self.numbering.nums.iter().filter(|m| (!same_id || m.id == id) && !taken.contains(&m.id) && same_list(m)).map(|m| m.id).min();
+                if let Some(here) = here {
+                    map.insert(id, here);
+                    taken.insert(here);
+                    continue;
+                }
+                if same_id {
+                    continue;
+                }
+                // A list whose definition `src` lacks shows no numbers there: none here either,
+                // rather than a definition of this document that has the same id.
+                let Some(a) = abs else {
+                    map.insert(id, 0);
+                    continue;
+                };
+                let abstracts = &self.numbering.abstracts;
+                let abstract_id = match abstracts.iter().find(|b| same_abs(a, b)) {
+                    Some(b) => Some(b.id),
+                    None => crate::parts::free_id(abstracts.iter().map(|b| b.id).max(), abstracts.iter().map(|b| b.id), 0).inspect(|fresh| {
+                        Arc::make_mut(&mut self.numbering).abstracts.push(crate::numbering::AbstractNum { id: *fresh, ..a.clone() });
+                    }),
+                };
+                let nums = &self.numbering.nums;
+                let fresh = crate::parts::free_id(nums.iter().map(|m| m.id).max(), nums.iter().map(|m| m.id), 1);
+                // Every id taken: no list rather than another's.
+                let (Some(abstract_id), Some(fresh)) = (abstract_id, fresh) else {
+                    map.insert(id, 0);
+                    continue;
+                };
+                Arc::make_mut(&mut self.numbering).nums.push(crate::numbering::Num { id: fresh, abstract_id, ..n.clone() });
+                map.insert(id, fresh);
+                taken.insert(fresh);
             }
-            let abstract_id = match abs {
-                Some(a) => match self.numbering.abstracts.iter().find(|b| same_abs(a, b)) {
-                    Some(b) => b.id,
-                    None => {
-                        let fresh = self.numbering.abstracts.iter().map(|b| b.id.saturating_add(1)).max().unwrap_or(0);
-                        Arc::make_mut(&mut self.numbering).abstracts.push(crate::numbering::AbstractNum { id: fresh, ..a.clone() });
-                        fresh
-                    }
-                },
-                None => n.abstract_id,
-            };
-            let fresh = self.numbering.nums.iter().map(|m| m.id.saturating_add(1)).max().unwrap_or(1).max(1);
-            Arc::make_mut(&mut self.numbering).nums.push(crate::numbering::Num { id: fresh, abstract_id, ..n.clone() });
-            map.insert(id, fresh);
         }
         if map.iter().all(|(a, b)| a == b) {
             return;

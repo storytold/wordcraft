@@ -1058,3 +1058,56 @@ fn adopted_list_references_name_lists_of_this_document() {
     assert!(here.numbering.level(copied, 0).is_some_and(|l| l.text == src.level(bullets, 0).map(|l| l.text.clone()).unwrap_or_default()));
     assert_eq!(num(&blocks[2]), Some(0), "a list the other document doesn't have: none");
 }
+
+/// #6921 review: two lists of the other document with one definition stay two lists here, so the
+/// second restarts its numbers; a copy takes a free id when the largest one is taken; and a list
+/// whose definition the other document lacks names no list, not this document's definition of
+/// that id.
+#[test]
+fn adopted_lists_stay_apart_take_free_ids_and_keep_a_missing_definition_missing() {
+    use crate::numbering::{ListKind, Num, Numbering};
+    let para = |num: u32| {
+        let mut p = Paragraph::with_text("x", Default::default());
+        p.props.numbering = Some(crate::props::NumRef { num, level: 0 });
+        crate::para_block(p)
+    };
+    let nums = |blocks: &[Arc<Block>]| blocks.iter().map(|b| b.as_para().and_then(|p| p.props.numbering).map_or(0, |n| n.num)).collect::<Vec<_>>();
+
+    // Two numbered lists there, one numbered list here with the same definition.
+    let mut here = doc(&["a"]);
+    let mine = Arc::make_mut(&mut here.numbering).add_list(ListKind::Numbered);
+    let mut src = Numbering::default();
+    let first = src.add_list(ListKind::Numbered);
+    let second = src.add_list(ListKind::Numbered);
+    let mut blocks = vec![para(first), para(second)];
+    here.adopt_lists(&src, &mut blocks);
+    let got = nums(&blocks);
+    assert_eq!(got[0], mine, "the list of the same id and definition");
+    assert!(got[1] != got[0] && got[1] != 0, "the second list stays a list of its own: {got:?}");
+
+    // The largest list id is taken here: the copy takes a free one, not a duplicate.
+    let mut here = doc(&["a"]);
+    let n = Arc::make_mut(&mut here.numbering);
+    let bullets = n.add_list(ListKind::Bullet);
+    let abstract_id = n.num(bullets).map(|m| m.abstract_id).unwrap();
+    n.nums.push(Num { id: u32::MAX, abstract_id, ..Default::default() });
+    let mut src = Numbering::default();
+    let numbered = src.add_list(ListKind::Numbered);
+    let mut blocks = vec![para(numbered)];
+    here.adopt_lists(&src, &mut blocks);
+    let copied = nums(&blocks)[0];
+    assert!(copied != 0 && copied != u32::MAX && copied != bullets, "a free id: {copied}");
+    assert_eq!(here.numbering.nums.iter().filter(|m| m.id == copied).count(), 1, "one list of that id");
+    assert!(here.numbering.level(copied, 0).is_some_and(|l| l.text == src.level(numbered, 0).map(|l| l.text.clone()).unwrap_or_default()));
+
+    // A list there names a definition that isn't there; here that id is a bullet definition.
+    let mut here = doc(&["a"]);
+    let bullets = Arc::make_mut(&mut here.numbering).add_list(ListKind::Bullet);
+    let missing = here.numbering.num(bullets).map(|m| m.abstract_id).unwrap();
+    let mut src = Numbering::default();
+    src.nums.push(Num { id: 7, abstract_id: missing, ..Default::default() });
+    assert!(src.abstracts.iter().all(|a| a.id != missing));
+    let mut blocks = vec![para(7)];
+    here.adopt_lists(&src, &mut blocks);
+    assert_eq!(nums(&blocks), [0], "no list, not this document's bullets");
+}
