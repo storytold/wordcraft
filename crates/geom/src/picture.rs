@@ -9,7 +9,8 @@ use std::borrow::Cow;
 
 use craft_image_codecs::{
     ChannelLayout, CodecError, DecodeOptions, EncodeOptions, Format as CodecFormat, Image as CodecImage, Limits as CodecLimits, RasterColorType,
-    SampleType, bmp_probe, decode_as_with, detect, encode as codec_encode, inspect_raster, jpeg_worst_case_coefficients, probe_size,
+    SampleType, bmp_probe, decode_as_with, detect, encode as codec_encode, inspect_raster, jpeg_worst_case_coefficients, png_probe, probe_size,
+    webp_probe,
 };
 use image::{DynamicImage, ImageBuffer, ImageFormat};
 
@@ -147,7 +148,7 @@ pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8) -> Result<V
 pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let format = detect(bytes)?;
     match format {
-        CodecFormat::Png => png_chunks(bytes).map(|(w, h, _, _)| (w, h)),
+        CodecFormat::Png => png_probe::pixel_model(bytes).ok().map(|m| (m.width, m.height)),
         CodecFormat::Jpeg | CodecFormat::Tiff | CodecFormat::Gif | CodecFormat::Bmp => {
             inspect_raster(bytes).ok().flatten().map(|i| (i.width, i.height))
         }
@@ -207,14 +208,17 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
         _ => return Err(Refusal::NotAPicture),
     };
     if format == ImageFormat::Png {
-        let (width, height, native, alpha) = png_chunks(bytes).ok_or_else(|| Refusal::Broken("its PNG header can't be read".into()))?;
+        // Measured from `IHDR` and the chunk headers: an ICC profile (`iCCP`) isn't inflated, though the
+        // decoder's own header read inflates one up to its 512 MiB limit.
+        let m = png_probe::pixel_model(bytes).map_err(|_| Refusal::Broken("its PNG header can't be read".into()))?;
+        let (width, height, native, alpha) = (m.width, m.height, u64::from(m.bytes_per_pixel()), m.has_alpha());
         let (width, height, peak) = sized(width, height, native, 0)?;
         return Ok(Probe { bytes: Cow::Borrowed(bytes), format, width, height, peak, alpha });
     }
     if format == ImageFormat::WebP {
         let (width, height) = probe_size(bytes).map_err(broken)?;
         let (width, height, peak) = sized(width, height, 4, 0)?;
-        let alpha = bytes.get(12..16) == Some(b"VP8X") && bytes.get(20).is_some_and(|b| b & 0x10 != 0);
+        let alpha = webp_probe::has_alpha(bytes).unwrap_or(false);
         return Ok(Probe { bytes: Cow::Borrowed(bytes), format, width, height, peak, alpha });
     }
     let info = inspect_raster(bytes).map_err(broken)?.ok_or_else(|| Refusal::Broken("its header can't be read".into()))?;
@@ -223,40 +227,6 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
     let alpha = matches!(info.color_type, RasterColorType::GrayAlpha | RasterColorType::Rgba | RasterColorType::CmykAlpha)
         || info.transparent_index.is_some();
     Ok(Probe { bytes: Cow::Borrowed(bytes), format, width, height, peak, alpha })
-}
-
-/// A PNG's width, height, the bytes a pixel its decoder gives (samples under 8 bits widened to 8,
-/// a palette to RGB, `tRNS` to an alpha channel) and whether it has transparency, from `IHDR` and
-/// the chunk headers before the image data. The decoder's own header read inflates an ICC profile
-/// (`iCCP`) up to its 512 MiB default limit, for a picture that may only be measured.
-fn png_chunks(bytes: &[u8]) -> Option<(u32, u32, u64, bool)> {
-    let be = |at: usize| bytes.get(at..at.checked_add(4)?).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
-    // The 8-byte signature, then IHDR: length, type, width, height, bit depth, colour type.
-    if bytes.get(12..16) != Some(b"IHDR".as_slice()) {
-        return None;
-    }
-    let (width, height) = (be(16)?, be(20)?);
-    let (depth, color) = (*bytes.get(24)?, *bytes.get(25)?);
-    let mut trns = false;
-    let mut at = 8usize;
-    loop {
-        let len = usize::try_from(be(at)?).ok()?;
-        match bytes.get(at.checked_add(4)?..at.checked_add(8)?)? {
-            b"IDAT" => break,
-            b"IEND" => return None,
-            b"tRNS" => trns = true,
-            _ => {}
-        }
-        at = at.checked_add(12)?.checked_add(len)?;
-    }
-    let (channels, alpha) = match color {
-        0 => (1 + u64::from(trns), trns),
-        2 | 3 => (3 + u64::from(trns), trns),
-        4 => (2, true),
-        6 => (4, true),
-        _ => return None,
-    };
-    Some((width, height, channels * if depth == 16 { 2 } else { 1 }, alpha))
 }
 
 /// [`bmp_probe::dib_to_bmp`], its failure (the BMP's bytes can't be allocated) as the refusal a
@@ -1054,6 +1024,200 @@ mod tests {
                     (a, b) => panic!("{d:02x?}: {:?} vs {:?}", a.map(|p| p.width), b.map(|o| o.0)),
                 }
             }
+        }
+    }
+
+    // The local PNG header read before it moved to `craft_image_codecs::png_probe` (#778), kept as the oracle.
+    /// A PNG's width, height, the bytes a pixel its decoder gives (samples under 8 bits widened to 8,
+    /// a palette to RGB, `tRNS` to an alpha channel) and whether it has transparency, from `IHDR` and
+    /// the chunk headers before the image data. The decoder's own header read inflates an ICC profile
+    /// (`iCCP`) up to its 512 MiB default limit, for a picture that may only be measured.
+    fn oracle_png_chunks(bytes: &[u8]) -> Option<(u32, u32, u64, bool)> {
+        let be = |at: usize| bytes.get(at..at.checked_add(4)?).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
+        // The 8-byte signature, then IHDR: length, type, width, height, bit depth, colour type.
+        if bytes.get(12..16) != Some(b"IHDR".as_slice()) {
+            return None;
+        }
+        let (width, height) = (be(16)?, be(20)?);
+        let (depth, color) = (*bytes.get(24)?, *bytes.get(25)?);
+        let mut trns = false;
+        let mut at = 8usize;
+        loop {
+            let len = usize::try_from(be(at)?).ok()?;
+            match bytes.get(at.checked_add(4)?..at.checked_add(8)?)? {
+                b"IDAT" => break,
+                b"IEND" => return None,
+                b"tRNS" => trns = true,
+                _ => {}
+            }
+            at = at.checked_add(12)?.checked_add(len)?;
+        }
+        let (channels, alpha) = match color {
+            0 => (1 + u64::from(trns), trns),
+            2 | 3 => (3 + u64::from(trns), trns),
+            4 => (2, true),
+            6 => (4, true),
+            _ => return None,
+        };
+        Some((width, height, channels * if depth == 16 { 2 } else { 1 }, alpha))
+    }
+
+    /// WordCraft's WebP alpha rule before the cutover: the `VP8X` flag, nothing else.
+    fn oracle_webp_alpha(bytes: &[u8]) -> bool {
+        bytes.get(12..16) == Some(b"VP8X") && bytes.get(20).is_some_and(|b| b & 0x10 != 0)
+    }
+
+    fn new_png(b: &[u8]) -> Option<(u32, u32, u64, bool)> {
+        png_probe::pixel_model(b).ok().map(|m| (m.width, m.height, u64::from(m.bytes_per_pixel()), m.has_alpha()))
+    }
+
+    /// A PNG with the given IHDR fields and chunks before a (junk) `IDAT`.
+    fn png_with(width: u32, height: u32, depth: u8, color: u8, before_idat: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let chunk = |out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]| {
+            out.extend((data.len() as u32).to_be_bytes());
+            out.extend_from_slice(kind);
+            out.extend_from_slice(data);
+            out.extend_from_slice(&[0; 4]);
+        };
+        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = [width.to_be_bytes(), height.to_be_bytes()].concat();
+        ihdr.extend_from_slice(&[depth, color, 0, 0, 0]);
+        chunk(&mut b, b"IHDR", &ihdr);
+        for (k, d) in before_idat {
+            chunk(&mut b, k, d);
+        }
+        chunk(&mut b, b"IDAT", &[1, 2, 3]);
+        chunk(&mut b, b"IEND", &[]);
+        b
+    }
+
+    #[test]
+    fn png_pixel_model_matches_the_local_header_read_for_every_valid_header() {
+        let valid: [(u8, &[u8]); 5] = [(0, &[1, 2, 4, 8, 16]), (2, &[8, 16]), (3, &[1, 2, 4, 8]), (4, &[8, 16]), (6, &[8, 16])];
+        let mut n = 0;
+        for (color, depths) in valid {
+            for &depth in depths {
+                for (trns, icc) in [(false, false), (true, false), (true, true), (false, true)] {
+                    let mut extra: Vec<(&[u8; 4], Vec<u8>)> = vec![];
+                    if icc {
+                        extra.push((b"iCCP", vec![0xAB; 300]));
+                    }
+                    if trns {
+                        extra.push((b"tRNS", vec![0, 0]));
+                    }
+                    let b = png_with(5, 7, depth, color, &extra);
+                    assert!(new_png(&b).is_some(), "colour {color} depth {depth}");
+                    assert_eq!(new_png(&b), oracle_png_chunks(&b), "colour {color} depth {depth} trns {trns}");
+                    // And `probe` reports what the old read gave it: the size and the peak.
+                    let (w, h, native, alpha) = oracle_png_chunks(&b).unwrap();
+                    let p = probe(&b).unwrap();
+                    assert_eq!((p.width, p.height, p.has_alpha(), Some(p.peak_bytes())), (w, h, alpha, peak_bytes(w, h, native, 0)));
+                    assert_eq!(dimensions(&b), Some((5, 7)));
+                    n += 1;
+                }
+            }
+        }
+        assert_eq!(n, 4 * 15);
+        // Real encoder output, every layout the image types give.
+        for img in [
+            DynamicImage::ImageLuma8(image::GrayImage::new(3, 2)),
+            DynamicImage::ImageLumaA8(image::GrayAlphaImage::new(3, 2)),
+            DynamicImage::ImageRgb8(image::RgbImage::new(3, 2)),
+            DynamicImage::ImageRgba8(image::RgbaImage::new(3, 2)),
+            DynamicImage::ImageRgb16(image::ImageBuffer::new(3, 2)),
+            DynamicImage::ImageRgba16(image::ImageBuffer::new(3, 2)),
+        ] {
+            let b = encode(img, ImageFormat::Png);
+            assert_eq!(new_png(&b), oracle_png_chunks(&b));
+        }
+    }
+
+    /// What the old read accepted and `pixel_model` refuses is a header the decoder can't use
+    /// either; `probe` then says the PNG header can't be read (`Broken`) and `dimensions` is None.
+    #[test]
+    fn png_pixel_model_is_stricter_only_on_headers_that_are_not_valid_pngs() {
+        let ok = png_with(5, 7, 8, 2, &[]);
+        let mut cases: Vec<(&str, Vec<u8>)> = vec![
+            ("depth 3 for RGB", png_with(5, 7, 3, 2, &[])),
+            ("depth 16 for palette", png_with(5, 7, 16, 3, &[])),
+            ("depth 4 for RGBA", png_with(5, 7, 4, 6, &[])),
+            ("zero width", png_with(0, 7, 8, 2, &[])),
+            ("zero height", png_with(5, 0, 8, 2, &[])),
+            ("width past i32::MAX", png_with(1 << 31, 1, 8, 2, &[])),
+            ("height past i32::MAX", png_with(1, u32::MAX, 8, 2, &[])),
+        ];
+        let many: Vec<(&[u8; 4], Vec<u8>)> = (0..70_000).map(|_| (b"tEXt", Vec::new())).collect();
+        cases.push(("70,000 chunks before the image data", png_with(5, 7, 8, 2, &many)));
+        for (what, b) in &cases {
+            assert!(oracle_png_chunks(b).is_some(), "{what}: the old read accepted it");
+            assert_eq!(new_png(b), None, "{what}");
+            assert_eq!(dimensions(b), None, "{what}");
+            assert!(matches!(probe(b), Err(Refusal::Broken(_))), "{what}");
+            assert!(!header_has_alpha(b), "{what}");
+        }
+        // Everything else the old read refused (no IHDR, unknown colour, a wrong IHDR length that
+        // throws its chunk walk off, no image data) is still refused.
+        let mut short_ihdr = ok.clone();
+        short_ihdr[8..12].copy_from_slice(&12u32.to_be_bytes());
+        for b in [png_with(5, 7, 8, 5, &[]), b"\x89PNG\r\n\x1a\n".to_vec(), ok[..33].to_vec(), short_ihdr] {
+            assert_eq!(new_png(&b), None);
+            assert_eq!(oracle_png_chunks(&b), None);
+        }
+        // Truncations and damage: where the new read answers, it answers as the old one did.
+        let full = png_with(5, 7, 8, 6, &[(b"tRNS", vec![0]), (b"gAMA", vec![0; 4])]);
+        for n in 0..=full.len() {
+            if new_png(&full[..n]).is_some() {
+                assert_eq!(new_png(&full[..n]), oracle_png_chunks(&full[..n]), "prefix {n}");
+            }
+        }
+        let mut seed = 0x9e37_79b9u32;
+        for _ in 0..3000 {
+            let mut f = full.clone();
+            for _ in 0..3 {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let (i, v) = ((seed >> 8) as usize % f.len(), (seed >> 24) as u8);
+                f[i] = v;
+            }
+            if new_png(&f).is_some() {
+                assert_eq!(new_png(&f), oracle_png_chunks(&f), "{f:02x?}");
+            }
+        }
+    }
+
+    /// A RIFF WebP with one chunk.
+    fn riff_webp(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut b = b"RIFF".to_vec();
+        b.extend((4 + 8 + payload.len() as u32).to_le_bytes());
+        b.extend_from_slice(b"WEBP");
+        b.extend_from_slice(kind);
+        b.extend((payload.len() as u32).to_le_bytes());
+        b.extend_from_slice(payload);
+        b
+    }
+
+    #[test]
+    fn webp_alpha_follows_vp8x_and_now_vp8l() {
+        // VP8X: the flag, as before.
+        for flags in [0u8, 0x10, 0x20, 0x30] {
+            let mut payload = vec![flags, 0, 0, 0];
+            payload.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // 1 x 1 canvas
+            let b = riff_webp(b"VP8X", &payload);
+            assert_eq!(webp_probe::has_alpha(&b).unwrap(), oracle_webp_alpha(&b), "flags {flags:#x}");
+            assert_eq!(oracle_webp_alpha(&b), flags & 0x10 != 0);
+        }
+        // A bare lossless picture (VP8L) says so in its header: 1 x 1, `alpha_is_used` (bit 28).
+        let with = riff_webp(b"VP8L", &[0x2f, 0, 0, 0, 0x10, 0, 0, 0]);
+        let without = riff_webp(b"VP8L", &[0x2f, 0, 0, 0, 0x00, 0, 0, 0]);
+        assert!(!oracle_webp_alpha(&with), "the old rule never saw it");
+        assert!(webp_probe::has_alpha(&with).unwrap());
+        assert!(!webp_probe::has_alpha(&without).unwrap());
+        // A real encoder's lossless RGBA WebP.
+        let enc = encode(image::RgbaImage::from_pixel(4, 4, image::Rgba([9, 8, 7, 100])), ImageFormat::WebP);
+        assert_eq!(probe(&enc).unwrap().has_alpha(), webp_probe::has_alpha(&enc).unwrap());
+        // Lossy VP8 never has alpha; and input that isn't a RIFF WebP reads as none, as before.
+        assert!(!webp_probe::has_alpha(&riff_webp(b"VP8 ", &[0; 10])).unwrap());
+        for junk in [&b"not a webp at all"[..], b"", b"RIFF", b"RIFF\0\0\0\0WEBPVP8L"] {
+            assert!(!webp_probe::has_alpha(junk).unwrap_or(false));
         }
     }
 }
