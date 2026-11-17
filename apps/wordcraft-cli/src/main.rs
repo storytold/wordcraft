@@ -35,10 +35,11 @@ USAGE:
                                               --strict writes nothing and exits 3 if a character on the
                                               page can't be drawn or a picture is missing or undecodable
                                               (report on stderr, as for convert --strict)
-  wordcraft-cli run [--file F | --template T] [--script FILE|-] --cmd 'id={json}' [--cmd …]
-                    [--save OUT] [--print] [--author NAME]
+  wordcraft-cli run [--file F | --template T] [--script FILE|-] [--cmd 'id={json}' …]
+                    [--save OUT] [--page N] [--scale S] [--print] [--author NAME]
                                               run commands headlessly, then save (--author names
                                               who tracked changes and comments are by).
+                                              PNG saves use --page (1-based, default 1) and --scale (default 2).
                                               --script runs a JSON file (- is stdin) first:
                                               {\"file\"?, \"template\"?, \"commands\": [{\"command\": id,
                                               \"params\"?: {…}} | id, …], \"save\"?: [OUT, …]}; save
