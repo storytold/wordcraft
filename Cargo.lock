@@ -1434,6 +1434,11 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=453b0da782ccef39be9a6dac8d27c80b553ef1cc#453b0da782ccef39be9a6dac8d27c80b553ef1cc"
 
 [[package]]
+name = "craft-ssip"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=453b0da782ccef39be9a6dac8d27c80b553ef1cc#453b0da782ccef39be9a6dac8d27c80b553ef1cc"
+
+[[package]]
 name = "craft-tiff"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=453b0da782ccef39be9a6dac8d27c80b553ef1cc#453b0da782ccef39be9a6dac8d27c80b553ef1cc"
@@ -7435,6 +7440,7 @@ dependencies = [
  "craft-font-store",
  "craft-mime",
  "craft-proof",
+ "craft-ssip",
  "craft-zip",
  "encoding_rs",
  "getrandom 0.3.4",
