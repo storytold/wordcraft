@@ -819,6 +819,23 @@ fn styles_with_qformat_keep_their_gallery() {
     assert_eq!(gallery_ids(&styles), vec!["Normal".to_string()]);
 }
 
+/// Word writes Normal with `w:qFormat` but no `w:uiPriority`: it still leads the gallery, ahead
+/// of quick styles with a priority, and a built-in or custom style without one still sorts last
+/// (#6884).
+#[test]
+fn normal_without_ui_priority_leads_the_gallery() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:style w:type="paragraph" w:styleId="FootnoteText"><w:name w:val="footnote text"/><w:basedOn w:val="Normal"/><w:qFormat/></w:style>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
+ <w:style w:type="paragraph" w:customStyle="1" w:styleId="Aside"><w:name w:val="Aside"/><w:basedOn w:val="Normal"/><w:qFormat/></w:style>
+ <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/></w:style>
+ <w:style w:type="paragraph" w:styleId="Caption"><w:name w:val="caption"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="35"/><w:qFormat/></w:style>
+</w:styles>"#
+    );
+    assert_eq!(gallery_ids(&styles), vec!["Normal", "Heading1", "Caption", "Aside", "FootnoteText"]);
+}
+
 /// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
 /// It reads as a reference to the note itself, so the note text shows its number.
 #[test]

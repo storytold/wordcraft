@@ -780,8 +780,23 @@ impl StyleSheet {
     /// The Quick Styles gallery, in priority order.
     pub fn gallery(&self) -> Vec<&Style> {
         let mut v: Vec<&Style> = self.styles.iter().filter(|s| s.quick && !s.hidden && s.kind != StyleKind::Table).collect();
-        v.sort_by_key(|s| (s.priority.unwrap_or(99), s.name.clone()));
+        v.sort_by_cached_key(|s| (Self::sort_priority(s), s.name.clone()));
         v
+    }
+    /// The priority a style sorts by in the gallery and the recommended style lists. A style
+    /// without its own takes the built-in default for its name when it is built in: Word writes
+    /// its Normal style with no `w:uiPriority`, and Normal still comes first (#6884). Anything
+    /// else without one sorts last (99, Word's highest).
+    pub fn sort_priority(st: &Style) -> u32 {
+        static BUILTIN: std::sync::OnceLock<StyleSheet> = std::sync::OnceLock::new();
+        if let Some(p) = st.priority {
+            return p;
+        }
+        if !st.builtin {
+            return 99;
+        }
+        let builtin = BUILTIN.get_or_init(StyleSheet::builtin);
+        builtin.styles.iter().find(|b| b.kind == st.kind && b.name.eq_ignore_ascii_case(&st.name)).and_then(|b| b.priority).unwrap_or(99)
     }
     /// The `based_on` chain from the root down to `id` (bounded, cycle-safe).
     pub fn chain(&self, id: &str) -> Vec<&Style> {
