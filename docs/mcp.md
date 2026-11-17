@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-10-31 · Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+> **Last updated:** 2026-11-14 · Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -173,10 +173,7 @@ test source in File › Options › Language and on the bar's Install.
 | `new_document` | blank, sample, letter, resume, report; opens beside the open documents |
 | `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |
 | `list_documents` | the open documents: `id`, `title`, `path`, `dirty`, `active` |
-| `type_text` | type at the caret (`paragraphs: true` splits lines into paragraphs: one undo
-  step; each break is the Enter it stands for, so AutoFormat and AutoCorrect run and a
-  one-line control refuses; at most 10,000 lines — the cap is `text.insert`'s own, so a
-  control-channel or CLI call is held to it too) |
+| `type_text` | type at the caret (`paragraphs: true` splits lines into paragraphs: one undo step; each break is the Enter it stands for, so AutoFormat and AutoCorrect run and a one-line control refuses; at most 10,000 lines — the cap is `text.insert`'s own, so a control-channel or CLI call is held to it too) |
 | `select_text` | select the n-th occurrence of some text |
 | `get_text` / `inspect_document` | read the document back (verify without screenshots) |
 | `render_page` | a page as PNG |
