@@ -4031,3 +4031,25 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
 }
+
+/// #6788: Enter in a paragraph with a drop cap makes a normal paragraph; only the first keeps
+/// the cap (Word behaviour), for a dropped cap and one in the margin.
+#[test]
+fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
+    for position in ["dropped", "margin"] {
+        let mut s = typed("Sugar and knowledge");
+        run(&mut s, "insert.dropCap", json!({"position": position, "lines": 3, "distance": 4.0, "font": "Liberation Mono"}));
+        let first_has_cap = s.doc.body.first().and_then(|b| b.as_para()).is_some_and(|p| p.props.drop_cap == Some(3));
+        assert!(first_has_cap, "{position}: the cap is set");
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 10}, "focus": {"block": 0, "off": 10}}));
+        run(&mut s, "text.newParagraph", json!({}));
+        let paras: Vec<_> = s.doc.body.iter().filter_map(|b| b.as_para()).collect();
+        assert_eq!(paras.len(), 2, "{position}");
+        let (first, second) = (&paras[0].props, &paras[1].props);
+        assert_eq!(first.drop_cap, Some(3), "{position}: the first paragraph keeps its cap");
+        assert_eq!(second.drop_cap, None, "{position}");
+        assert_eq!(second.drop_cap_margin, None, "{position}");
+        assert_eq!(second.drop_cap_distance, None, "{position}");
+        assert_eq!(second.drop_cap_font, None, "{position}");
+    }
+}
