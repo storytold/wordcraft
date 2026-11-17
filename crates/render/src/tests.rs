@@ -1,4 +1,5 @@
 use super::*;
+use crate::media::fit_cache;
 use wordcraft_layout::display::page_display;
 use wordcraft_layout::{LayoutCache, LayoutOptions, layout};
 
@@ -1041,6 +1042,124 @@ fn metafile_picture_is_drawn_as_vectors() {
     assert!(left[..3].iter().all(|c| *c > 200), "left half should be paper, not the grey box: {left:?}");
 }
 
+/// An EMF whose only record is one `w` x `h` 1 bpp black and white bitmap over the whole picture.
+fn emf_with_1bpp_bitmap(w: i32, h: i32) -> Vec<u8> {
+    let mut hdr = vec![0u8; 88];
+    hdr[0..4].copy_from_slice(&1u32.to_le_bytes());
+    hdr[4..8].copy_from_slice(&88u32.to_le_bytes());
+    hdr[8..24].copy_from_slice(&le32(&[0, 0, 100, 100]));
+    hdr[24..40].copy_from_slice(&le32(&[0, 0, 2500, 2500]));
+    hdr[40..44].copy_from_slice(&0x464D_4520u32.to_le_bytes());
+    hdr[72..88].copy_from_slice(&le32(&[1000, 1000, 250, 250]));
+    let stride = (w as usize).div_ceil(32) * 4;
+    let mut payload = vec![0u8; 16];
+    payload.extend(le32(&[0, 0, 0, 0, w, h, 80, 48, 128, (stride * h as usize) as i32, 0, 0x00CC_0020, 100, 100]));
+    payload.extend(le32(&[40, w, h, 1 | (1 << 16), 0, 0, 0, 0, 0, 0]));
+    payload.extend([0, 0, 0, 0, 255, 255, 255, 0]);
+    payload.extend((0..stride * h as usize).map(|i| (i * 31) as u8));
+    [hdr, emf_rec(81, &payload), emf_rec(14, &[0; 12])].concat()
+}
+
+/// #5482: a metafile whose bitmaps are past the whole cache budget was parsed and decoded again on
+/// every repaint, because the cache refused it. It is now kept (its bitmaps at a smaller size).
+#[test]
+fn a_metafile_with_a_huge_bitmap_is_parsed_once() {
+    // 8000 x 5000 is 160 MB of RGBA, past the 128 MB cache, from a 5 MB file.
+    let mut d = Document::new();
+    // A key of its own: the vector cache is global and tests running in threads share `image1.emf`.
+    let key = "huge-parsed-once.emf";
+    d.media.insert(key.to_string(), Arc::new(emf_with_1bpp_bitmap(8000, 5000)));
+    let first = vector_for(&d, key).expect("the metafile reads");
+    let again = vector_for(&d, key).expect("the metafile reads");
+    assert!(Arc::ptr_eq(&first, &again), "the second repaint reuses the parsed picture");
+    assert!(first.bytes() <= CACHE_BYTES / 8, "{} bytes", first.bytes());
+}
+
+/// Several huge metafiles on screen together (zoomed-out pages, thumbnails) sit side by side in the
+/// cache instead of clearing it, so a small metafile drawn with them stays a hit.
+#[test]
+fn huge_metafiles_do_not_push_a_small_one_out_of_the_cache() {
+    let mut d = Document::new();
+    let small = "evict-small.emf";
+    d.media.insert(small.to_string(), Arc::new(emf_with_1bpp_bitmap(64, 64)));
+    let huge: Vec<String> = (0..4).map(|n| format!("evict-huge-{n}.emf")).collect();
+    for (n, k) in huge.iter().enumerate() {
+        // Distinct bytes per file (the width differs; 8000 x 5000 is the most pixels a metafile decodes), so each is its own cache entry.
+        d.media.insert(k.clone(), Arc::new(emf_with_1bpp_bitmap(8000 - n as i32, 5000)));
+    }
+    let small_first = vector_for(&d, small).expect("the small metafile reads");
+    for round in 0..2 {
+        for k in &huge {
+            assert!(vector_for(&d, k).is_some(), "round {round}");
+        }
+    }
+    let kept: Vec<_> = huge.iter().map(|k| vector_for(&d, k).unwrap()).collect();
+    let again: Vec<_> = huge.iter().map(|k| vector_for(&d, k).unwrap()).collect();
+    for (a, b) in kept.iter().zip(&again) {
+        assert!(Arc::ptr_eq(a, b), "a huge metafile is parsed once while four are drawn together");
+    }
+    assert!(Arc::ptr_eq(&small_first, &vector_for(&d, small).unwrap()), "the small metafile is still cached");
+}
+
+/// Time of three repaints of a picture with a 160 MB bitmap:
+/// `cargo test -p wordcraft-render --release -- --ignored --nocapture huge_metafile_repaint_time`.
+#[test]
+#[ignore = "timing only"]
+fn huge_metafile_repaint_time() {
+    let mut d = Document::new();
+    let key = d.add_media(emf_with_1bpp_bitmap(8000, 5000), "emf");
+    for n in 1..=4 {
+        let t = std::time::Instant::now();
+        assert!(vector_for(&d, &key).is_some());
+        eprintln!("repaint {n}: vector_for {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+}
+
+#[test]
+fn bitmaps_are_shrunk_in_proportion_only_when_the_picture_is_past_the_cache() {
+    let px = vello_cpu::color::PremulRgba8 { r: 1, g: 2, b: 3, a: 255 };
+    let pm = |w: u16, h: u16| Some(Pixmap::from_parts(vec![px; usize::from(w) * usize::from(h)], w, h));
+    let bytes = |v: &[Option<Pixmap>]| v.iter().flatten().map(|p| usize::from(p.width()) * usize::from(p.height()) * 4).sum::<usize>();
+    // Within the budget: untouched.
+    let kept = fit_cache(vec![pm(1000, 1000), None, pm(2000, 2000)], 1_000_000);
+    assert_eq!(kept.iter().flatten().map(|p| (p.width(), p.height())).collect::<Vec<_>>(), [(1000, 1000), (2000, 2000)]);
+    assert!(kept[1].is_none(), "a path item keeps its place in the list");
+    // A 144 MB and a 36 MB bitmap: both shrink by the same factor.
+    let fit = fit_cache(vec![pm(6000, 6000), pm(3000, 3000)], 4_000_000);
+    assert!(bytes(&fit) + 4_000_000 <= CACHE_BYTES / 8, "{} bytes", bytes(&fit));
+    let (a, b) = (fit[0].as_ref().unwrap(), fit[1].as_ref().unwrap());
+    assert_eq!((a.width(), b.width()), (1500, 750), "each bitmap keeps its share of the pixels that fit");
+    assert!(a.data().iter().all(|p| (p.r, p.g, p.b, p.a) == (1, 2, 3, 255)), "flat stays flat");
+}
+
+/// Geometry of an eighth of the budget or more leaves the bitmaps a positive allowance, so the
+/// picture is still kept (and reused) when it fits the whole budget after shrinking; one whose
+/// geometry alone fills the budget stays uncached.
+#[test]
+fn heavy_geometry_still_leaves_the_bitmaps_a_cacheable_size() {
+    let px = vello_cpu::color::PremulRgba8 { r: 1, g: 2, b: 3, a: 255 };
+    let pm = |w: u16, h: u16| Some(Pixmap::from_parts(vec![px; usize::from(w) * usize::from(h)], w, h));
+    let bytes = |v: &[Option<Pixmap>]| v.iter().flatten().map(|p| usize::from(p.width()) * usize::from(p.height()) * 4).sum::<usize>();
+    let geometry = CACHE_BYTES / 8 + 4_000_000;
+    let fit = fit_cache(vec![pm(6000, 6000)], geometry);
+    let size = bytes(&fit);
+    assert!(size > 0 && size < 6000 * 6000 * 4, "shrunk, not dropped: {size} bytes");
+    assert!(size + geometry <= CACHE_BYTES, "{size} bytes");
+    // The shrunk picture is accepted by the cache and hit again.
+    let src = Arc::new(vec![0u8; 1]);
+    let mut c: MediaCache<u8> = MediaCache { map: Default::default(), bytes: 0 };
+    c.insert("heavy", &src, 7, size + geometry);
+    assert_eq!(c.get("heavy", &src), Some(7));
+    // Just under and just over the eighth: both shrink the bitmap to a positive size, none to nothing.
+    for g in [CACHE_BYTES / 8 - 1, CACHE_BYTES / 8, CACHE_BYTES / 8 + 1] {
+        let size = bytes(&fit_cache(vec![pm(6000, 6000)], g));
+        assert!(size > 0 && size < 6000 * 6000 * 4 && size + g <= CACHE_BYTES / 4, "geometry {g}: {size} bytes");
+    }
+    // Geometry that takes the whole budget leaves nothing to shrink to: the bitmap stays as it is.
+    let full = fit_cache(vec![pm(6000, 6000)], CACHE_BYTES);
+    assert_eq!(bytes(&full), 6000 * 6000 * 4);
+}
+
 /// #6636: an EMF+ only file (no plain EMF drawing records) whose EmfPlusDrawImage draws a
 /// 32bppPARGB bitmap over the right half: the bitmap's pixels are drawn.
 #[test]
@@ -1819,6 +1938,31 @@ fn paths_far_past_every_canvas_are_not_flattened() {
     assert!(!path_extent_ok(Affine::IDENTITY, &line(f64::NAN)));
 }
 
+#[test]
+fn rules_of_one_width_cover_the_same_whole_pixels_at_every_zoom() {
+    for zoom in [0.5, 0.6, 0.75] {
+        for ppp in [1.0, 1.25] {
+            let k = zoom * ppp * 96.0 / 72.0;
+            let view = Affine::new([k, 0.0, 0.0, k, 37.3, 12.9]);
+            let mut widths = Vec::new();
+            for i in 0..20 {
+                let pos = 10.0 + f64::from(i) * 17.37;
+                let (w_h, (_, oy)) = snap_rule(view, (5.0, pos, 400.0, pos), 0.5).unwrap();
+                let (w_v, (ox, _)) = snap_rule(view, (pos, 5.0, pos, 400.0), 0.5).unwrap();
+                widths.push(w_h);
+                widths.push(w_v);
+                for (w, centre) in [(w_h, (pos + oy) * k + 12.9), (w_v, (pos + ox) * k + 37.3)] {
+                    let edge = centre - w / 2.0;
+                    assert!((edge - edge.round()).abs() < 1e-9, "zoom {zoom} ppp {ppp}: edge {edge} is off the pixel grid");
+                }
+            }
+            assert!(widths.iter().all(|w| *w == widths[0] && *w >= 1.0 && w.fract() == 0.0), "zoom {zoom} ppp {ppp}: {widths:?}");
+        }
+    }
+    assert!(snap_rule(Affine::rotate(0.3), (0.0, 0.0, 9.0, 0.0), 0.5).is_none());
+    assert!(snap_rule(Affine::scale(2.0), (0.0, 0.0, 9.0, 4.0), 0.5).is_none());
+}
+
 /// The same three pictures that don't draw as in the PDF test: each stays a grey box, and the page's
 /// pixels are what they were before strict export existed (#6005).
 #[test]
@@ -1856,4 +2000,103 @@ fn undecodable_pictures_keep_their_grey_box_pixels() {
     // FNV-1a of the pixels, recorded before the shared decode check existed.
     let h = img.pixels.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
     assert_eq!(h, 0x79f9f1d3602a9925, "{h:#x}");
+}
+
+/// The cache charge for a metafile's geometry covers what its items keep after their pixels move
+/// out: a pattern's path and tile, and the clip rectangles and clip paths of every kind of item.
+/// A tile or clip path shared by several items is charged once.
+#[test]
+fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
+    use craft_metafile::{ClipPath, Tile};
+    let segs = |n: usize| vec![Seg::Line(0.0, 0.0); n];
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
+    let base = crate::media::geometry_bytes(&pic(vec![]));
+    let tile = Arc::new(Tile { width: 1000, height: 1000, rgba: vec![0; 4_000_000], cell: [1.0, 1.0], origin: [0.0, 0.0] });
+    let pattern = |tile: &Arc<Tile>| Item::Pattern { segs: segs(1000), even_odd: false, tile: tile.clone(), region: None, clips: vec![] };
+    let one = crate::media::geometry_bytes(&pic(vec![pattern(&tile)]));
+    assert!(one - base >= 4_000_000 + 1000 * std::mem::size_of::<Seg>(), "{} bytes", one - base);
+    // Two fills of the same brush keep one tile.
+    let two = crate::media::geometry_bytes(&pic(vec![pattern(&tile), pattern(&tile)]));
+    assert!(two - one < 1_000_000, "the shared tile is charged once: {} bytes more", two - one);
+    // A clip path shared by two bitmaps is charged once; a clip region is charged per item.
+    let clip = Arc::new(ClipPath { segs: segs(100_000), even_odd: false });
+    let bitmap = |clips: Vec<Arc<ClipPath>>, region: Option<Vec<[f32; 4]>>| Item::Bitmap {
+        rect: [0.0; 4],
+        transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        width: 0,
+        height: 0,
+        rgba: vec![],
+        region,
+        clips,
+    };
+    let plain = crate::media::geometry_bytes(&pic(vec![bitmap(vec![], None)]));
+    let clipped = crate::media::geometry_bytes(&pic(vec![bitmap(vec![clip.clone()], None), bitmap(vec![clip.clone()], None)]));
+    let clip_bytes = 100_000 * std::mem::size_of::<Seg>();
+    assert!(clipped - 2 * plain >= clip_bytes && clipped - 2 * plain < 2 * clip_bytes, "{} bytes", clipped - 2 * plain);
+    let region = crate::media::geometry_bytes(&pic(vec![bitmap(vec![], Some(vec![[0.0; 4]; 1000]))]));
+    assert!(region - plain >= 1000 * 16, "{} bytes", region - plain);
+}
+
+/// The parser collects segments and dashes without shrinking them, so the charge follows the
+/// capacity a vector keeps, not only its length.
+#[test]
+fn geometry_bytes_charges_the_capacity_of_segment_and_dash_vectors() {
+    use craft_metafile::LineStyle;
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
+    let path = |segs: Vec<Seg>, dash: Vec<f32>| Item::Path {
+        segs,
+        fill: None,
+        stroke: Some(([0, 0, 0, 255], 1.0)),
+        line: LineStyle { dash, ..LineStyle::default() },
+        even_odd: false,
+        region: None,
+        clips: vec![],
+    };
+    let tight = crate::media::geometry_bytes(&pic(vec![path(vec![Seg::Line(0.0, 0.0); 2], vec![1.0; 2])]));
+    let mut segs = Vec::with_capacity(10_000);
+    segs.extend([Seg::Line(0.0, 0.0); 2]);
+    let mut dash = Vec::with_capacity(1_000);
+    dash.extend([1.0f32; 2]);
+    let slack = crate::media::geometry_bytes(&pic(vec![path(segs, dash)]));
+    assert!(slack - tight >= 9_000 * std::mem::size_of::<Seg>(), "{} bytes more", slack - tight);
+}
+
+/// A stroked path keeps its dash array on the heap, and a text item keeps its boxed record and font
+/// name; the cache charge counts both, so many dashed paths or text records are not under-counted.
+#[test]
+fn geometry_bytes_counts_dash_arrays_and_text_records() {
+    use craft_metafile::{Font, HAlign, LineStyle, Text, VAlign};
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
+    let path = |dash: usize| Item::Path {
+        segs: vec![Seg::Line(0.0, 0.0); 2],
+        fill: None,
+        stroke: Some(([0, 0, 0, 255], 1.0)),
+        line: LineStyle { dash: vec![1.0; dash], ..LineStyle::default() },
+        even_odd: false,
+        region: None,
+        clips: vec![],
+    };
+    let solid = crate::media::geometry_bytes(&pic(vec![path(0)]));
+    let dashed = crate::media::geometry_bytes(&pic(vec![path(16)]));
+    assert_eq!(dashed - solid, 16 * std::mem::size_of::<f32>());
+    let text = |family: &str| {
+        Item::Text(Box::new(Text {
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            text: "ab".into(),
+            dx: vec![1.0; 2],
+            font: Font { family: family.into(), ..Font::default() },
+            color: [0, 0, 0, 255],
+            background: None,
+            h_align: HAlign::default(),
+            v_align: VAlign::default(),
+            clip: None,
+            region: None,
+            clips: vec![],
+        }))
+    };
+    let bare = crate::media::geometry_bytes(&pic(vec![text("")]));
+    let named = crate::media::geometry_bytes(&pic(vec![text("Some Long Face Name")]));
+    assert_eq!(named - bare, "Some Long Face Name".len());
+    let empty = crate::media::geometry_bytes(&pic(vec![]));
+    assert!(bare - empty >= std::mem::size_of::<Text>(), "the boxed Text struct is charged: {} bytes", bare - empty);
 }
