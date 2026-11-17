@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
 
-use crate::file_dialogs::{AfterPick, FileDialogRequest, open_filters};
+use crate::file_dialogs::{AfterPick, FileDialogRequest, format_name, open_filters, save_filters};
 use crate::print_page::{EXPORT_FORMATS, export_file_ext, export_name, is_document_ext};
 use crate::theme::{Tokens, regular};
 use crate::{WordApp, icons};
@@ -154,9 +154,18 @@ impl FileBrowser {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
-            FileDialogRequest::Save { name, .. } => {
+            // Print's Save as PDF writes a PDF whatever type is picked: only that one, then All
+            // files. (An export's types are File › Export's formats, below.)
+            FileDialogRequest::Save { name, .. } if matches!(after, AfterPick::PrintPdf { .. }) => {
                 let ext = Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty());
-                let mut f: Vec<(String, Vec<String>)> = ext.map(|e| (format!("*.{e}"), vec![e.to_string()])).into_iter().collect();
+                let mut f: Vec<(String, Vec<String>)> =
+                    ext.map(|e| (format!("{} (*.{e})", format_name(&e.to_ascii_lowercase())), vec![e.to_string()])).into_iter().collect();
+                f.push(("All files".into(), vec!["*".into()]));
+                (name.clone(), f)
+            }
+            // Every format WordCraft saves, the suggested one first, as the system dialog lists them (#5368).
+            FileDialogRequest::Save { name, .. } => {
+                let mut f = save_filters(name);
                 f.push(("All files".into(), vec!["*".into()]));
                 (name.clone(), f)
             }
@@ -202,14 +211,27 @@ impl FileBrowser {
         self.note = Note::None;
     }
 
-    /// A type was chosen: when exporting it is the format, and the name's export extension follows it.
+    /// A type was chosen: when exporting it is the format, and the name's export extension follows
+    /// it. Saving, the name's extension changes to the type's when it is a format's
+    /// (`Report.docx` → `Report.pdf`), so the type picked is the type saved (#5368).
     fn type_changed(&mut self) {
-        let Some(format) = self.exports.get(self.filter).cloned() else { return };
-        // Only a known document extension is replaced; `notes.v2` keeps its `.v2`.
-        if Path::new(&self.name).extension().and_then(|e| e.to_str()).is_some_and(is_document_ext) {
-            self.name = export_name(&self.name, &format);
+        if let Some(format) = self.exports.get(self.filter).cloned() {
+            // Only a known document extension is replaced; `notes.v2` keeps its `.v2`.
+            if Path::new(&self.name).extension().and_then(|e| e.to_str()).is_some_and(is_document_ext) {
+                self.name = export_name(&self.name, &format);
+            }
+            self.after = AfterPick::Export { ext: format };
+            return;
         }
-        self.after = AfterPick::Export { ext: format };
+        if !matches!(self.req, FileDialogRequest::Save { .. }) {
+            return;
+        }
+        let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*").cloned() else { return };
+        let path = Path::new(&self.name);
+        let typed = path.extension().and_then(std::ffi::OsStr::to_str);
+        if typed.and_then(wordcraft_engine::io::save_format).is_some() {
+            self.name = path.with_extension(ext).to_string_lossy().into_owned();
+        }
     }
 
     fn up(&mut self) {
@@ -245,11 +267,13 @@ impl FileBrowser {
                     // The chosen type is the format: its extension replaces a known document
                     // extension on the name, and is added to any other.
                     path = PathBuf::from(export_name(&path.to_string_lossy(), ext));
-                } else if path.extension().is_none()
-                    && let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*")
-                {
-                    path.set_extension(ext);
+                } else if let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*") {
+                    // A name with no extension WordCraft saves (`Report v1.2`) gets the type's (#5368).
+                    path = PathBuf::from(wordcraft_engine::io::with_save_ext(&path.to_string_lossy(), ext));
                 }
+                // Then the save's own rule (All files: the suggested format; Print's Save as PDF:
+                // `.pdf`), so a file about to be replaced is asked about under its written name.
+                path = PathBuf::from(self.after.written_path(&path.to_string_lossy()));
                 if path.exists() && self.note != Note::Replace(path.clone()) {
                     self.note = Note::Replace(path);
                     return Step::Stay;
@@ -300,6 +324,24 @@ impl WordApp {
         self.file_browser.open = Some(Box::new(FileBrowser::new(req, after, start, unavailable)));
     }
 
+    /// Ask whether to replace `path` before a save or export writes it: the built-in browser on
+    /// its folder and name, saying it exists (#5368 review). The system dialog only asked about
+    /// the name it returned, and the save added an extension to that. OK replaces the file,
+    /// another name saves there, Cancel cancels the save.
+    pub(crate) fn confirm_replace(&mut self, req: FileDialogRequest, after: AfterPick, path: PathBuf) {
+        let req = match req {
+            FileDialogRequest::Save { .. } => FileDialogRequest::Save {
+                name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                dir: path.parent().filter(|d| d.is_dir()).map(|d| d.to_string_lossy().into_owned()),
+            },
+            other => other,
+        };
+        self.show_file_browser(req, after, false);
+        if let Some(b) = self.file_browser.open.as_mut() {
+            b.note = Note::Replace(path);
+        }
+    }
+
     /// `ui.fileBrowser`: the built-in browser for `purpose` (document, picture, recipients, save,
     /// export), even when a system dialog was asked for and never showed up (it is given up as cancelled).
     pub(crate) fn browse_builtin(&mut self, purpose: &str) {
@@ -311,10 +353,11 @@ impl WordApp {
         let (req, after) = match purpose {
             "picture" => (FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture),
             "recipients" => (FileDialogRequest::Open { purpose: "recipients".into() }, AfterPick::Recipients),
-            "save" => (
-                FileDialogRequest::Save { name: self.default_save_name(), dir: None },
-                AfterPick::SaveAs { after: crate::file_dialogs::AfterSave::Nothing, document: self.session.document_id() },
-            ),
+            "save" => {
+                let name = self.default_save_name();
+                let after = AfterPick::save_as(crate::file_dialogs::AfterSave::Nothing, self.session.document_id(), &name);
+                (FileDialogRequest::Save { name, dir: None }, after)
+            }
             "export" => {
                 let ext = pending.unwrap_or_else(|| "pdf".into());
                 let name = format!("{}.{}", self.title_stem(), export_file_ext(&ext));
@@ -599,6 +642,66 @@ mod tests {
         b.name = "old".into();
         assert_eq!(b.accept(), Step::Stay, "asks before replacing");
         assert_eq!(b.accept(), Step::Pick(dir.join("drafts").join("old.docx")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #5368: the built-in Save As lists every format WordCraft saves, the suggested one first;
+    /// picking a type changes the name's extension to it, a name with no format's extension gets
+    /// the type's, and the replace prompt is about the file that will be written.
+    #[test]
+    fn save_lists_every_format_and_the_type_picked_is_saved() {
+        let dir = scratch("save-types");
+        let req = FileDialogRequest::Save { name: "Document1.docx".into(), dir: None };
+        let after = AfterPick::save_as(crate::file_dialogs::AfterSave::Nothing, 0, "Document1.docx");
+        let mut b = FileBrowser::new(req, after, dir.clone(), false);
+        assert_eq!(b.filters.len(), wordcraft_engine::io::SAVE_EXTS.len() + 1, "every format, then All files");
+        assert_eq!(b.filters[0].1, ["docx"]);
+        assert_eq!(b.filters.last().map(|f| f.1.clone()), Some(vec!["*".to_string()]));
+        let pdf = b.filters.iter().position(|(_, e)| e[0] == "pdf").unwrap();
+        b.filter = pdf;
+        b.type_changed();
+        assert_eq!(b.name, "Document1.pdf");
+        assert_eq!(b.accept(), Step::Pick(dir.join("Document1.pdf")));
+        b.name = "Report v1.2".into();
+        b.type_changed();
+        assert_eq!(b.name, "Report v1.2", "a name with no format's extension isn't changed");
+        assert_eq!(b.accept(), Step::Pick(dir.join("Report v1.2.pdf")));
+        // Another spelling of a format is a format's extension too.
+        b.name = "Page.htm".into();
+        b.type_changed();
+        assert_eq!(b.name, "Page.pdf");
+        // All files: the suggested format, and a file of that name is asked about before it's replaced.
+        b.filter = b.filters.len() - 1;
+        b.type_changed();
+        b.name = "Bare".into();
+        assert_eq!(b.accept(), Step::Pick(dir.join("Bare.docx")));
+        std::fs::write(dir.join("Bare.docx"), b"x").unwrap();
+        assert_eq!(b.accept(), Step::Stay, "asks before replacing Bare.docx");
+        assert_eq!(b.accept(), Step::Pick(dir.join("Bare.docx")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #5368 review: Print's Save as PDF writes a PDF whatever type is picked, so the built-in
+    /// browser offers only that one and All files; the file asked about before it's replaced is
+    /// the one written, `.pdf` added as `file.printPdf` adds it. (An export's types are File ›
+    /// Export's formats, and the one picked is written: `export_types_choose_the_format_and_the_extension`.)
+    #[test]
+    fn print_to_pdf_lists_only_pdf() {
+        let dir = scratch("export-types");
+        let req = FileDialogRequest::Save { name: "Handout.pdf".into(), dir: None };
+        let mut b = FileBrowser::new(req, AfterPick::PrintPdf { settings: serde_json::json!({}) }, dir.clone(), false);
+        assert_eq!(b.filters.len(), 2, "{:?}", b.filters);
+        assert_eq!(b.filters[0].1, ["pdf"]);
+        assert!(b.filters[0].0.starts_with("PDF"), "{}", b.filters[0].0);
+        assert_eq!(b.filters[1].1, ["*"]);
+        b.filter = 1;
+        b.type_changed();
+        b.name = "Handout.docx".into();
+        assert_eq!(b.accept(), Step::Pick(dir.join("Handout.docx.pdf")), "a PDF is written, named so");
+        std::fs::write(dir.join("Notes.pdf"), b"x").unwrap();
+        b.name = "Notes".into();
+        assert_eq!(b.accept(), Step::Stay, "asks before replacing Notes.pdf");
+        assert_eq!(b.accept(), Step::Pick(dir.join("Notes.pdf")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -55,14 +55,69 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
     }
 }
 
+/// The file types Save As offers: every format the engine saves, with the suggested name's own
+/// format first. rfd makes a filter's first extension the dialog's default, which the Windows,
+/// macOS and Linux panels append to a file name the user typed without one; with no filter at
+/// all the name came back bare and the save failed, since the format is chosen by extension
+/// (#689). The built-in browser lists them too (#5368).
+pub fn save_exts(name: &str) -> Vec<String> {
+    let saves = wordcraft_engine::io::SAVE_EXTS;
+    let suggested = std::path::Path::new(name)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        // A .markdown file is under Markdown's one entry in the list.
+        .map(|e| if e == "markdown" { "md".to_string() } else { e })
+        .filter(|e| saves.contains(&e.as_str()))
+        .unwrap_or_else(|| "docx".to_string());
+    let mut exts: Vec<String> = Vec::with_capacity(saves.len());
+    exts.push(suggested.clone());
+    exts.extend(saves.iter().filter(|e| **e != suggested).map(|e| (*e).to_string()));
+    exts
+}
+
+/// The "Save as type" list (#1399): one named entry per format, the suggested one first (see
+/// [`save_exts`] for why the order matters).
+///
+/// On Linux and the BSDs, the app asks the desktop portal directly over D-Bus and gives a name
+/// the dialog left alone the chosen type's extension (#6180). When falling back to `rfd`, the
+/// extension in the name wins, as `rfd` doesn't report which entry the user picked.
+pub fn save_filters(name: &str) -> Vec<(String, Vec<String>)> {
+    save_exts(name).into_iter().map(|e| (format!("{} (*.{e})", format_name(&e)), vec![e])).collect()
+}
+
+/// A readable name for a save format's extension.
+pub(crate) fn format_name(ext: &str) -> String {
+    match ext {
+        "docx" => "Word Document".into(),
+        "docm" => "Word Macro-Enabled Document".into(),
+        "dotx" => "Word Template".into(),
+        "dotm" => "Word Macro-Enabled Template".into(),
+        "pdf" => "PDF".into(),
+        "txt" => "Plain Text".into(),
+        "md" => "Markdown".into(),
+        "html" => "Web Page".into(),
+        "rtf" => "Rich Text Format".into(),
+        "odt" => "OpenDocument Text".into(),
+        "ott" => "OpenDocument Text Template".into(),
+        "fodt" => "Flat OpenDocument Text".into(),
+        "tex" => "LaTeX".into(),
+        "png" => "PNG Image".into(),
+        "json" => "JSON".into(),
+        "xml" => "XML".into(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
     /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
     OpenDocument { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
-    /// Save the document there, then carry on.
-    SaveAs { after: AfterSave, document: u64 },
+    /// Save the document there, then carry on. A name with no extension WordCraft saves gets
+    /// `ext`, the suggested name's (#5368).
+    SaveAs { after: AfterSave, document: u64, ext: String },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
     Export { ext: String },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
@@ -80,6 +135,30 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
+}
+
+impl AfterPick {
+    /// Save As for `document`, suggested as `name`: its extension is the format a name typed
+    /// without one is saved in (`.docx` when it has none).
+    pub(crate) fn save_as(after: AfterSave, document: u64, name: &str) -> Self {
+        let ext = std::path::Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty()).unwrap_or("docx");
+        AfterPick::SaveAs { after, document, ext: ext.to_ascii_lowercase() }
+    }
+
+    /// The path a save or export writes for the `path` picked (#5368): Save As adds the format's
+    /// extension to a name with none it saves; an export names the file as the built-in browser
+    /// does (`print_page::export_name`: its format's extension replaces a known document one and
+    /// is added to any other); Print's Save as PDF adds `.pdf` to a name without it, as
+    /// `file.printPdf` does. Applied before asking to replace a file too, so the file asked about
+    /// is the one written.
+    pub(crate) fn written_path(&self, path: &str) -> String {
+        match self {
+            AfterPick::SaveAs { ext, .. } => wordcraft_engine::io::with_save_ext(path, ext),
+            AfterPick::Export { ext } => crate::print_page::export_name(path, ext),
+            AfterPick::PrintPdf { .. } => wordcraft_engine::io::with_export_ext(path, "pdf"),
+            _ => path.to_string(),
+        }
+    }
 }
 
 /// What to do once Save As has written the document.
@@ -149,7 +228,7 @@ impl WordApp {
             }
             FileDialogRequest::Save { name, .. } => self.services.pick_save.as_ref().and_then(|f| f(name)),
         };
-        Asked::Done(self.finish_pick(after, picked))
+        self.finish_system_pick(req, after, picked.into_iter().collect()).map_or(Asked::Pending, Asked::Done)
     }
 
     /// Pick up the answer of an open file dialog, if it has arrived (every frame, from `logic`),
@@ -163,7 +242,7 @@ impl WordApp {
         };
         let d = self.file_dialog.take()?;
         match answer {
-            Ok(picked) => Some(self.finish_picks(d.after, picked)),
+            Ok(picked) => self.finish_system_pick(d.req, d.after, picked),
             Err(reason) => {
                 log::warn!("no system file dialog ({reason}); showing the built-in file browser");
                 self.dialog_unavailable(d.req, d.after)
@@ -196,6 +275,24 @@ impl WordApp {
     #[cfg(target_arch = "wasm32")]
     fn dialog_unavailable(&mut self, _req: FileDialogRequest, after: AfterPick) -> Option<Result<Value, String>> {
         Some(self.finish_pick(after, None))
+    }
+
+    /// Finish what the system dialog was for with its answer. A save or export that writes another
+    /// name than the one picked (its extension added, #5368) asks first when a file of that name
+    /// exists: the system dialog only asked about the name it returned (#5368 review). `None`
+    /// while that question is open in the built-in browser.
+    fn finish_system_pick(&mut self, req: FileDialogRequest, after: AfterPick, picked: Vec<String>) -> Option<Result<Value, String>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = picked.first() {
+            let written = after.written_path(p);
+            if written != *p && std::path::Path::new(&written).exists() {
+                self.confirm_replace(req, after, std::path::PathBuf::from(written));
+                return None;
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = req;
+        Some(self.finish_picks(after, picked))
     }
 
     /// Do what the dialog was for with the picked paths (none: the user cancelled). Only Add Font
@@ -247,6 +344,8 @@ impl WordApp {
 
     /// Do what the dialog was for with the picked path (`None`: the user cancelled).
     pub(crate) fn finish_pick(&mut self, after: AfterPick, picked: Option<String>) -> Result<Value, String> {
+        // An export names its file itself, below, and won't replace a file under a new name.
+        let picked = if matches!(after, AfterPick::Export { .. }) { picked } else { picked.map(|p| after.written_path(&p)) };
         match after {
             AfterPick::OpenDocument { document } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
@@ -302,21 +401,22 @@ impl WordApp {
                     self.clear_export_error();
                     return Ok(json!({"cancelled": true}));
                 };
+                // A system Save dialog lets the user type any name, and the engine picks the format
+                // by the extension (an explicit format only for an .xml path): the file is named as
+                // the built-in browser names it (`notes.docx` as PDF is `notes.pdf`, `notes.v2`
+                // `notes.v2.pdf`, #5368). A file of that name the dialog never confirmed isn't
+                // replaced (the system dialog's answer asks first, `finish_system_pick`).
+                let named = crate::print_page::export_name(&path, &ext);
+                if named != path {
+                    path = named;
+                    if std::path::Path::new(&path).exists() {
+                        // Callers drop the result, so say it where the person sees it.
+                        return Err(self.fail_export(format!("{path} already exists; choose another name")));
+                    }
+                }
                 let r = if ext == "png" {
                     self.run("file.exportPng", json!({"path": path}))
                 } else if ext == "xml" || ext == crate::print_page::EXPORT_WORD_2003 {
-                    // The engine takes an explicit format only for an .xml path, and a system Save
-                    // dialog lets the user type any name: give it the extension, as the built-in
-                    // browser does (`notes.docx` becomes `notes.xml`, `notes.v2` `notes.v2.xml`).
-                    let named = crate::print_page::export_name(&path, "xml");
-                    if named != path {
-                        path = named;
-                        // The dialog only confirmed the name it was given, not this one.
-                        if std::path::Path::new(&path).exists() {
-                            // Callers drop the result, so say it where the person sees it.
-                            return Err(self.fail_export(format!("{path} already exists; choose another name")));
-                        }
-                    }
                     // Word XML even over a Word 2003 XML file, which a save by path would keep.
                     let format = if ext == "xml" { wordcraft_engine::cmd::file::FORMAT_FLAT_OPC } else { crate::print_page::EXPORT_WORD_2003 };
                     self.run("file.saveAs", json!({"path": path, "format": format}))
@@ -344,7 +444,7 @@ impl WordApp {
                 }
                 r
             }
-            AfterPick::SaveAs { after, document } => {
+            AfterPick::SaveAs { after, document, .. } => {
                 // The document it was for may wait behind another one: it is shown and saved.
                 if document != self.session.document_id() {
                     if !self.session.is_open(document) {
@@ -431,7 +531,8 @@ impl WordApp {
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::SaveAs { after, document: self.session.document_id() })
+        let after = AfterPick::save_as(after, self.session.document_id(), &name);
+        self.ask_file(FileDialogRequest::Save { name, dir: None }, after)
     }
 
     /// The user templates folder (#2852): the one File › Options names, else the app's own.
@@ -467,7 +568,7 @@ impl WordApp {
         }
         let dir = dir.filter(|d| d.is_dir()).map(|d| d.to_string_lossy().into_owned());
         let name = format!("{}.dotx", self.title_stem());
-        let after = AfterPick::SaveAs { after: AfterSave::Nothing, document: self.session.document_id() };
+        let after = AfterPick::save_as(AfterSave::Nothing, self.session.document_id(), &name);
         let _ = self.ask_file(FileDialogRequest::Save { name, dir: dir.clone() }, after);
         dir
     }
