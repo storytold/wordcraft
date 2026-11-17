@@ -3,6 +3,19 @@ use wordcraft_doc::Pos;
 use wordcraft_doc::props::Align;
 use wordcraft_engine::Session;
 
+/// Paste Special lists and pastes the same formats the engine chose: the clipboard ownership
+/// result must survive into the dialog's payload, or another program's copy could be replaced
+/// by WordCraft's own fragment.
+#[test]
+fn paste_special_dialog_keeps_the_clipboard_ownership_result() {
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+    let d = Dialog::paste_special(&a, &json!({"text": "Bold", "privateClipboard": false}));
+    let Dialog::PasteSpecial { formats, payload, .. } = d else { panic!("not Paste Special") };
+    assert_eq!(formats, ["text"], "another program's copy isn't our fragment");
+    assert_eq!(payload.get("privateClipboard"), Some(&json!(false)));
+    assert_eq!(payload.get("text").and_then(Value::as_str), Some("Bold"));
+}
+
 /// #3931: hovering Insert › Table's grid asks the page for a preview of that table (rows by
 /// columns) and changes nothing; leaving the grid drops it; a click inserts the table with no
 /// preview left over for the page to show on top of it.
@@ -1853,6 +1866,27 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     h.run_steps(4);
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
+}
+
+/// A tall dialog on a short screen stays inside it and scrolls.
+#[test]
+fn a_tall_dialog_fits_a_short_screen() {
+    let mut app = app_with("Some text");
+    app.dialog = Dialog::open("pageSetup", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 360.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let id = egui::Id::unique(("dialog", "Page Setup"));
+    let rect = h.ctx.memory(|m| m.area_rect(id)).expect("the dialog is open");
+    assert!(rect.height() <= 360.5, "the dialog is {}pt tall on a 360pt screen", rect.height());
 }
 
 /// #3859: a dialog is modal, as in Word. While Font is open, typing (from the frame it opens),
