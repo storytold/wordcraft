@@ -15786,3 +15786,40 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
 }
+
+/// A floating table placed by an offset from the margin (measured in Word for Windows): before
+/// Word 2013 its first cell's text is at the offset, moved by `w:tblInd`; from it its edge is,
+/// moved in by half its left border, and `w:tblInd` doesn't move it.
+#[test]
+fn a_floating_table_placed_by_an_offset_takes_its_indent_before_word_2013_only() {
+    crate::test_fonts();
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let text_x = |mode: u32, indent: Option<f32>| {
+        let mut t = Table::new(1, 2, 300.0);
+        t.props.fixed = true;
+        t.props.indent = indent;
+        t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+        t.props.borders = Some(wordcraft_doc::props::Borders::all(wordcraft_doc::props::Border::single(0.5)));
+        t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, ..Default::default() });
+        for c in &mut t.rows[0].cells {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell", Default::default()))];
+        }
+        let mut d = Document::from_text("Below");
+        d.settings.compat_mode = mode;
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        lay(&d).pages[0]
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Placed::Lines { path, x, .. } if path.0 == [0, 0, 0, 0] => Some(*x),
+                _ => None,
+            })
+            .expect("the first cell's text")
+    };
+    let margin = 72.0;
+    assert!((text_x(14, None) - margin).abs() < 0.01, "mode 14: {}", text_x(14, None));
+    assert!((text_x(14, Some(-5.4)) - (margin - 5.4)).abs() < 0.01, "mode 14, indent: {}", text_x(14, Some(-5.4)));
+    assert!((text_x(15, None) - (margin + 0.25 + 5.4)).abs() < 0.01, "mode 15: {}", text_x(15, None));
+    assert!((text_x(15, Some(-5.4)) - (margin + 0.25 + 5.4)).abs() < 0.01, "mode 15, indent: {}", text_x(15, Some(-5.4)));
+}

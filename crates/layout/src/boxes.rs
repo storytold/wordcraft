@@ -159,8 +159,8 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     let layout = table::layout_table(ctx, story, t, path, width, depth + 1);
     let (tx, ty) = match t.props.float {
         Some(float) => {
-            let legacy = (ctx.doc.settings.compat_mode < 15).then(|| table::first_cell_left_margin(ctx, t));
-            let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
+            let place = FloatPlace { shift: table::float_offset_shift(ctx, t), modern: ctx.doc.settings.compat_mode >= 15 };
+            let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, place, float_tables);
             exclusions.push((area, false, None, WrapText::BothSides, true));
             float_tables.push(area);
             table_areas.push(area);
@@ -466,17 +466,25 @@ pub(crate) struct BoxLayout {
     pub(crate) last_top: f32,
 }
 
+/// How a floating table placed by an offset stands from it.
+#[derive(Clone, Copy)]
+struct FloatPlace {
+    /// How far left of the offset its edge stands ([`table::float_offset_shift`]).
+    shift: f32,
+    /// Word 2013 layout (compatibility mode 15).
+    modern: bool,
+}
+
 /// Where floating table `tl` goes in a box `width` wide whose next paragraph starts at `y`, and
 /// the area text keeps clear of. Positions relative to the page or its margins need the box's
-/// `frame`; without one (a table cell) they're relative to the box. `legacy` is the first cell's
-/// left margin before Word 2013 layout, `None` in it.
+/// `frame`; without one (a table cell) they're relative to the box.
 fn box_float_table_rect(
     frame: Option<PageFrame>,
     width: f32,
     y: f32,
     tl: &table::TableLayout,
     f: &TableFloat,
-    legacy: Option<f32>,
+    place: FloatPlace,
     float_tables: &[Rect],
 ) -> (Rect, Rect) {
     let h = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
@@ -512,8 +520,8 @@ fn box_float_table_rect(
     };
     // Nor is there an area to align in: the table starts where the text is.
     let v_align = if frame.is_none() && matches!(f.v_rel, Anchor::Page | Anchor::Margin) { None } else { f.v_align };
-    let x = align_in(h_area, f.x, w, PageFrame::h_align(frame.as_ref(), f.h_align)) - if f.h_align.is_none() { legacy.unwrap_or(0.0) } else { 0.0 };
-    let r = clear_of_float_tables(Rect::new(x, align_in(v_area, y_off, h, v_align), w, h), f, legacy.is_none(), h_area.0, float_tables);
+    let x = align_in(h_area, f.x, w, PageFrame::h_align(frame.as_ref(), f.h_align)) - if f.h_align.is_none() { place.shift } else { 0.0 };
+    let r = clear_of_float_tables(Rect::new(x, align_in(v_area, y_off, h, v_align), w, h), f, place.modern, h_area.0 - place.shift, float_tables);
     let [dl, dt, dr, db] = f.dist_from_text();
     (r, r.inset(-dl, -dt, -dr, -db))
 }

@@ -176,8 +176,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
         // Before Word 2013 layout (compatibility mode 15) an offset places the first cell's text,
-        // so the edge sits a cell margin further out.
-        let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
+        // so the edge sits a cell margin further out (and the indent further); from it the edge,
+        // half its border in.
+        let legacy = table::float_offset_shift(ctx, t);
         let h: f32 = tl.rows.iter().map(|r| r.height).sum();
         if h <= pb.uncapped_bottom() - pb.top + 0.01 {
             place_floating_table(ctx, pb, &tl, &f, legacy, block, body_top);
@@ -349,11 +350,12 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
         let x = float_table_x(pb, w, f, legacy, ctx.mirror);
         let mut obstacles = if f.overlap { Vec::new() } else { header_table_areas(ctx, pb) };
         obstacles.extend_from_slice(&pb.float_tables);
+        // Moved below another, it keeps its distance from the text's edge, half its border in.
         let r = clear_of_float_tables(
             Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h),
             f,
             ctx.doc.settings.compat_mode >= 15,
-            h_area.0,
+            h_area.0 - legacy,
             &obstacles,
         );
         // Like Word, a table that doesn't fit below the text before it moves to the next page with
@@ -434,8 +436,8 @@ fn float_table_h_area(pb: &PageBuilder, f: &TableFloat, mirror: bool) -> (f32, f
     }
 }
 
-/// A floating table's left edge on the page (`legacy`: the first cell's left margin before Word
-/// 2013 layout, when an offset places the cell's text).
+/// A floating table's left edge on the page (`legacy`: how far left of an offset its edge stands,
+/// [`table::float_offset_shift`]).
 fn float_table_x(pb: &PageBuilder, w: f32, f: &TableFloat, legacy: f32, mirror: bool) -> f32 {
     let align = PageFrame::h_align(Some(&page_frame(pb, mirror)), f.h_align);
     let x = align_in(float_table_h_area(pb, f, mirror), f.x, w, align);
