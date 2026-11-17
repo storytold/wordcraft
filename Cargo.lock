@@ -1460,7 +1460,7 @@ dependencies = [
 [[package]]
 name = "craft-web-api"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=fd5e2feff6ea25bed371a99cc732b3968d621505#fd5e2feff6ea25bed371a99cc732b3968d621505"
+source = "git+https://github.com/dooreelko/craft-libs?rev=90a5e7060ea7760955b43f5a93ebe63d85c91c21#90a5e7060ea7760955b43f5a93ebe63d85c91c21"
 dependencies = [
  "js-sys",
  "serde_json",
@@ -1471,7 +1471,7 @@ dependencies = [
 [[package]]
 name = "craft-web-host"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=fd5e2feff6ea25bed371a99cc732b3968d621505#fd5e2feff6ea25bed371a99cc732b3968d621505"
+source = "git+https://github.com/dooreelko/craft-libs?rev=90a5e7060ea7760955b43f5a93ebe63d85c91c21#90a5e7060ea7760955b43f5a93ebe63d85c91c21"
 dependencies = [
  "wasm-bindgen",
  "web-sys",
