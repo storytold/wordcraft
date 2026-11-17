@@ -32,8 +32,12 @@
 
 use std::rc::Rc;
 
+use craft_web_host::Participant as HostPerson;
 use craft_web_host::web::{FileData, Host, Message};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
+
+use crate::host_session::{self, HostInbox};
+use wordcraft_collab_web::{HostEvent, HostParticipant};
 
 /// The app id in the host messages (`wordcraft:ready`).
 const APP: &str = "wordcraft";
@@ -61,9 +65,9 @@ impl Bridge {
     }
 
     /// Hand saved and exported files to the host instead of downloading them, report unsaved
-    /// changes to it, and hear the files it sends.
-    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
+    /// changes to it, and hear the files and sessions it sends.
+    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context, events: HostInbox) {
+        self.listen(inbox, ctx, events);
         let bridge = self.clone();
         services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| bridge.post_save(name, bytes, save_as)));
         // Anything else that would download goes to the host too.
@@ -98,14 +102,40 @@ impl Bridge {
         self.host.post_save(&name, bytes, None, save_as)
     }
 
-    /// Hear `wordcraft:open` and queue the file like a dropped one.
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
-        self.host.listen(move |message| {
-            if let Message::Open { name, data } = message {
-                deliver_open(&inbox, &ctx, &name, &data);
+    /// `<app>:session-state`: the cabinet's sync indicator and who is here.
+    pub(crate) fn post_session_state(&self, status: &str, participants: &[HostParticipant]) -> Result<(), String> {
+        self.host.post_session_state(status, &host_people(participants))
+    }
+
+    /// `<app>:presence`: the participant list at the sync server's pace.
+    pub(crate) fn post_presence(&self, participants: &[HostParticipant]) -> Result<(), String> {
+        self.host.post_presence(&host_people(participants))
+    }
+
+    /// `<app>:commit`: the cabinet stores the session (it owns the file).
+    pub(crate) fn post_commit(&self, session_id: &str, bytes: Option<&[u8]>) -> Result<(), String> {
+        self.host.post_commit(session_id, bytes)
+    }
+
+    /// Hear `wordcraft:open`, `wordcraft:session` and `wordcraft:committed`.
+    fn listen(&self, inbox: Inbox, ctx: egui::Context, events: HostInbox) {
+        self.host.listen(move |message| match message {
+            Message::Open { name, data } => deliver_open(&inbox, &ctx, &name, &data),
+            Message::Session { session_id, ws_url, token, role } => {
+                host_session::deliver(&events, HostEvent::Session(host_session::HostSession::new(session_id, ws_url, token, role)));
             }
+            Message::Committed { version, etag } => host_session::deliver(&events, HostEvent::Committed { version, etag }),
+            Message::Host { .. } | Message::Saved { .. } | Message::HandoffDone { .. } => {}
         });
     }
+}
+
+/// The crate's participant shape, from the session's.
+fn host_people(participants: &[HostParticipant]) -> Vec<HostPerson> {
+    participants
+        .iter()
+        .map(|participant| HostPerson { client_id: participant.client_id.clone(), role: participant.role.clone(), color: participant.color.clone() })
+        .collect()
 }
 
 /// The file an open message carries, pushed onto the inbox for the next frame, like a dropped

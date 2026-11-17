@@ -9,6 +9,10 @@ use wordcraft_engine::Session;
 use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
+use crate::host::Bridge;
+use crate::host_session::{HostAction, HostInbox, HostSession, HostState};
+use wordcraft_collab_web::HostParticipant;
+
 const DOC_EXTS: &[&str] =
     &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
@@ -35,6 +39,7 @@ pub fn start() {
         // on the canvas (`host`). The host guards leaving the page, so this one doesn't.
         let bridge = crate::host::Bridge::detect(&canvas);
         let app_bridge = bridge.clone();
+        let host_events: HostInbox = HostInbox::default();
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
         if bridge.is_none()
@@ -74,10 +79,16 @@ pub fn start() {
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
                     if let Some(bridge) = &app_bridge {
-                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
+                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone(), host_events.clone());
                     }
                     let control = crate::api::install(cc.egui_ctx.clone());
                     let mut app = WordApp::new(session, services).with_control(control);
+                    // The host owns the stored file: the Commit button asks the
+                    // cabinet (`wordcraft:commit`) instead of the sync server.
+                    if let Some(bridge) = &app_bridge {
+                        let commit_bridge = bridge.clone();
+                        app.host_commit = Some(Box::new(move |session_id: &str, bytes: Option<&[u8]>| commit_bridge.post_commit(session_id, bytes)));
+                    }
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
@@ -104,7 +115,17 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        messages,
+                        prefs,
+                        bridge: app_bridge.clone(),
+                        host_events: host_events.clone(),
+                        host_state: HostState::default(),
+                        last_host_state: None,
+                        last_presence_ms: 0.0,
+                    }))
                 }),
             )
             .await;
@@ -139,6 +160,16 @@ struct WebShell {
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    /// The host bridge, when the page hosts WordCraft: session state, presence and
+    /// the cabinet's commit go through it.
+    bridge: Option<Bridge>,
+    /// `wordcraft:session` / `wordcraft:committed` queued by the bridge callback.
+    host_events: HostInbox,
+    host_state: HostState,
+    /// The last `session-state` sent: status and participants, to send only changes.
+    last_host_state: Option<(String, Vec<HostParticipant>)>,
+    /// Browser clock of the last presence post (5–10 Hz, ADR-0006).
+    last_presence_ms: f64,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -151,15 +182,21 @@ fn stored_prefs() -> Option<String> {
 }
 
 impl eframe::App for WebShell {
-    /// Runs one browser frame: forwards queued host messages to the status bar, advances the app,
-    /// then writes changed preferences to browser storage immediately, because a reload or closed
-    /// tab never runs the exit path.
+    /// Runs one browser frame: advances the app, forwards queued host messages to the status bar,
+    /// keeps the collaboration session on the document that is open, then writes changed
+    /// preferences to browser storage immediately, because a reload or closed tab never runs the
+    /// exit path.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // The app first: opening a document (a dropped file, the host's `open`, File › Open)
+        // moves `document_id`, and the session routing below must see the document this frame
+        // ends on, not the one it started with (§5.26 finding 9).
+        self.app.logic(ctx);
+        self.sync_document();
+        self.apply_host_events();
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
             self.app.status(msg);
         }
-        self.app.logic(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
         if let Some(json) = self.prefs.changed(&self.app) {
             match local_storage() {
@@ -181,6 +218,10 @@ impl eframe::App for WebShell {
     /// Draws the app. On the first pass of a visible frame it takes the browser's dropped files and
     /// spawns asynchronous byte reads into the inbox; later passes only draw.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // A document the app opened inside `ui` (a command, the Open dialog) closes the session
+        // that answered for the previous one before that session's next poll or send (§5.26
+        // finding 9).
+        self.sync_document();
         // Browser drops are input: take them only in the first real UI pass, never in a hidden
         // `run_logic` tick that still sees the previous shown frame's RawInput.
         if ui.ctx().current_pass_index() == 0 {
@@ -202,6 +243,113 @@ impl eframe::App for WebShell {
             }
         }
         self.app.ui(ui);
+        // Polling happens in `WordApp::ui`, so the session state posted here is
+        // the one this frame drew.
+        self.publish_host_state();
+    }
+}
+
+impl WebShell {
+    /// `wordcraft:session` opens the session; `wordcraft:committed` is the
+    /// cabinet's commit result. Nothing here runs without a session message.
+    /// Each message is read for the document that is open now: a session opened
+    /// for another one is refused, not joined (§5.26 finding 9).
+    fn apply_host_events(&mut self) {
+        let events = std::mem::take(&mut *self.host_events.borrow_mut());
+        let document = self.app.session.document_id();
+        for event in events {
+            match self.host_state.on_event(event, document) {
+                HostAction::Connect(session) => self.connect(session),
+                // The cabinet pushes a fresh JWT for the session this shell already
+                // holds (ADR WC-0007): the token changes on the live client, and its
+                // unconfirmed edit and the participant list stay. A first dial that
+                // never finished has no client to renew, so that one is dialled.
+                HostAction::Renew(session) => {
+                    let document = self.app.session.document_id();
+                    // Only a connection that belongs to this document is renewed in
+                    // place; any other is dialled fresh (the state above refused the
+                    // sessions that belong elsewhere).
+                    let renewed = self.app.collab.as_mut().is_some_and(|collab| collab.carries(document) && collab.renew(&session));
+                    if renewed {
+                        self.app.host_session = Some(session.clone());
+                        self.app.status(format!("Renewed collaboration session {}", session.session_id()));
+                    } else {
+                        self.connect(session);
+                    }
+                }
+                // The id was opened for a document this tab no longer shows. Joining it
+                // would send the open document's edits into that room.
+                HostAction::Refused { session_id, document } => {
+                    self.app.status(format!("Not joining collaboration session {session_id}: it belongs to another document ({document})"));
+                }
+                HostAction::Committed { version, etag } => {
+                    self.app.host_committed = Some((version, etag.clone()));
+                    self.app.status(format!("Committed as version {version} · etag {etag}"));
+                }
+            }
+        }
+    }
+
+    /// The document decides which session this tab may hold (§5.26 finding 9):
+    /// when another becomes active, the connection that answered for the
+    /// previous one is closed — the `Collab` owns the socket, so dropping it
+    /// closes it — and the host sends a `session` again for the document it
+    /// opens. What the closed connection never got confirmed goes with it; the
+    /// room is never written with this document's edits in its place.
+    fn sync_document(&mut self) {
+        let document = self.app.session.document_id();
+        let Some(left) = self.host_state.document_changed(document) else { return };
+        let name = left.session_id().to_string();
+        self.app.collab = None;
+        self.app.host_session = None;
+        self.last_host_state = None;
+        self.app.status(format!("Left collaboration session {name}: the open document changed"));
+    }
+
+    /// Open the session the host sent. The session is stored first, then dialled:
+    /// an app without it makes no network call.
+    fn connect(&mut self, session: HostSession) {
+        let document = self.app.session.document_id();
+        let client_id = wordcraft_collab_web::session_client_id("web", document);
+        let actor = self.app.session.author.clone();
+        let name = session.session_id().to_string();
+        self.app.host_session = Some(session.clone());
+        match wordcraft_collab_web::Collab::connect(&session, &actor, &client_id, &self.app.session.doc, document) {
+            Ok(collab) => {
+                self.app.collab = Some(collab);
+                self.app.status(format!("Joined collaboration session {name}"));
+            }
+            Err(message) => {
+                self.app.host_session = None;
+                self.app.status(format!("Collaboration is unavailable: {message}"));
+            }
+        }
+    }
+
+    /// `session-state` on a status or participant change (join, leave,
+    /// reconnect), `presence` at the sync server's 5–10 Hz. Only a connection
+    /// that answers for the open document reports (§5.26 finding 9).
+    fn publish_host_state(&mut self) {
+        let Some(bridge) = self.bridge.clone() else { return };
+        let document = self.app.session.document_id();
+        let Some(collab) = self.app.collab.as_ref().filter(|collab| collab.carries(document)) else { return };
+        let status = wordcraft_collab_web::host_status(collab.status());
+        let participants = wordcraft_collab_web::host_participants(collab.participants());
+        let signature = (status.to_string(), participants.clone());
+        if self.last_host_state.as_ref() != Some(&signature) {
+            if let Err(message) = bridge.post_session_state(status, &participants) {
+                log::warn!("session-state: {message}");
+            }
+            self.last_host_state = Some(signature);
+            self.host_state.mark_connected();
+        }
+        let now = js_sys::Date::now();
+        if now - self.last_presence_ms >= 100.0 {
+            self.last_presence_ms = now;
+            if let Err(message) = bridge.post_presence(&participants) {
+                log::warn!("presence: {message}");
+            }
+        }
     }
 }
 

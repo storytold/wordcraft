@@ -1,0 +1,18 @@
+[package]
+name = "wordcraft-collab-engine"
+description = "Session-based collaboration adapter: engine commands and document primitives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+wordcraft-collab = { path = "../collab" }
+wordcraft-collab-doc = { path = "../collab-doc" }
+wordcraft-engine = { workspace = true }
+wordcraft-doc = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

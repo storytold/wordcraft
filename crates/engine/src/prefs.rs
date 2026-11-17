@@ -45,6 +45,10 @@ pub struct Prefs {
     /// Template starts in (File › Options › Advanced › File locations, #2852). `None`: the app's
     /// own `Templates` folder in its settings folder.
     pub user_templates_folder: Option<String>,
+    /// Real-time collaboration (ADR-0001…0011). Off by default; enabling it
+    /// only records the server address, the connection itself belongs to the
+    /// front end.
+    pub collab: CollabPrefs,
     /// Formatting marks shown even while Show/Hide ¶ is off.
     pub marks: wordcraft_layout::display::FormattingMarks,
     /// Mark grammar errors as you type (with Check spelling as you type on).
@@ -64,11 +68,28 @@ pub struct Prefs {
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
 }
 
+/// Real-time collaboration settings (`collab.*` commands).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CollabPrefs {
+    /// Off by default: a single-user session makes no network calls (TASK.md §1).
+    pub enabled: bool,
+    /// WebSocket address of the sync server. The token is never stored here.
+    pub server: String,
+}
+
+impl Default for CollabPrefs {
+    fn default() -> Self {
+        CollabPrefs { enabled: false, server: "ws://127.0.0.1:8087/ws".to_string() }
+    }
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {
             paper_color: Default::default(),
             count_notes: true,
+            collab: CollabPrefs::default(),
             markup: Default::default(),
             print_markup: false,
             typing_replaces_selection: true,
