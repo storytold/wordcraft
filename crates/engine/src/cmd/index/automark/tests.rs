@@ -382,3 +382,45 @@ fn rows_that_start_alike_cost_no_more_reading() {
     assert_eq!(s.run("references.autoMark", &json!({"entries": entries})).unwrap()["marked"], 5);
     assert_eq!(marked_text(&s), vec![r#"the{XE "Entry 0"}{XE "Entry 1"}{XE "Entry 2"} kiln and the glaze, the the pot{XE "Pots"}{XE "Pot"}"#]);
 }
+
+/// `count` rows for the text `the`, each naming an entry of its own (`E0`, `E1`…).
+fn entries_for_the(count: usize) -> Value {
+    Value::Array((0..count).map(|i| json!(["the", format!("E{i}")])).collect())
+}
+
+/// #6183 review: rows that share a text but name different entries put that many fields in one
+/// paragraph, and those go in in one walk of it: 8,000 rows cost about eight times the steps
+/// 1,000 take, not 64 times (inserting the fields one by one moves the paragraph's text and
+/// objects for each). The fields are in the rows' order, after the text.
+#[test]
+fn many_entries_for_one_text_cost_their_number() {
+    let steps = |rows: usize| {
+        let mut s = session("Kilns hold heat while the glaze sets on every pot in the room.");
+        let mut marked = Value::Null;
+        let n = wordcraft_doc::work::count(|| marked = s.run("references.autoMark", &json!({"entries": entries_for_the(rows)})).unwrap());
+        assert_eq!(marked["marked"], rows);
+        let expected: String = (0..rows).map(|i| format!(r#"{{XE "E{i}"}}"#)).collect();
+        assert_eq!(marked_text(&s), vec![format!("Kilns hold heat while the{expected} glaze sets on every pot in the room.")]);
+        n
+    };
+    let (short, long) = (steps(1_000), steps(8_000));
+    let ratio = long as f64 / short.max(1) as f64;
+    assert!(ratio <= 12.0, "8x the fields in one paragraph cost {ratio:.1}x the steps ({short} -> {long})");
+}
+
+/// #6183 review: one AutoMark inserts at most `MAX_FIELDS` fields. 1,000 rows for `the` on 101
+/// paragraphs holding it would insert 101,000, so it is refused, before anything changes; on 100
+/// paragraphs, exactly `MAX_FIELDS`, it goes in.
+#[test]
+fn an_automark_that_would_insert_too_many_fields_is_refused() {
+    let entries = entries_for_the(1_000);
+    let mut s = session(&vec!["the kiln"; 101].join("\n"));
+    let before = s.doc.clone();
+    let e = s.run("references.autoMark", &json!({"entries": entries})).unwrap_err().to_string();
+    assert!(e.contains(&format!("AutoMark would mark more than {MAX_FIELDS} index entries; nothing was marked")), "{e}");
+    assert!(s.doc.same_content(&before), "nothing was marked");
+    assert!(!s.dirty);
+
+    let mut s = session(&vec!["the kiln"; MAX_FIELDS / 1_000].join("\n"));
+    assert_eq!(s.run("references.autoMark", &json!({"entries": entries})).unwrap()["marked"], MAX_FIELDS);
+}

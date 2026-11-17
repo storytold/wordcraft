@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashSet};
 use serde_json::{Value, json};
 use wordcraft_doc::para::{InlineObject, OBJ};
 use wordcraft_doc::props::CharProps;
-use wordcraft_doc::{Document, Pos, StoryRef};
+use wordcraft_doc::{Document, StoryRef};
 
 use super::super::references::quoted;
 use super::{ENTRY_STYLE, clean};
@@ -28,6 +28,11 @@ const MAX_ENTRY: usize = 200;
 
 /// Longest text looked for, in characters: what Word's Find box takes. A longer row is skipped.
 const MAX_TEXT: usize = 255;
+
+/// Most index entries (XE fields) one AutoMark inserts. Rows that share a text but name
+/// different entries each mark every paragraph the text is in, so a short concordance on a long
+/// document could otherwise insert millions of hidden fields.
+const MAX_FIELDS: usize = 100_000;
 
 /// Largest concordance file read: 32,767 rows of the longest text and entry fit many times over,
 /// and a document's worth of anything bigger is not a word list.
@@ -184,13 +189,20 @@ fn starting(texts: &[(&str, Vec<usize>)], rest: &str, mut found: impl FnMut(usiz
 /// word starts, and there the texts are narrowed a byte at a time ([`starting`]) instead of
 /// tried one by one. A text is looked for until its first match in the paragraph, which serves
 /// every term with that text.
+///
+/// At most [`MAX_FIELDS`] fields go in: a run that would insert more is refused before anything
+/// changes. Rows that share a text but name different entries each mark every paragraph the text
+/// is in, so the fields grow as rows times paragraphs, which the row cap doesn't bound. A
+/// paragraph's fields go in in one walk of it ([`wordcraft_doc::para::Paragraph::insert_objects`]),
+/// so many fields in one paragraph cost its length plus their number.
 pub(super) fn mark_terms(s: &mut Session, terms: &[Term]) -> Result<u32, CmdError> {
     let texts = texts(terms);
     if texts.is_empty() {
         return Ok(0);
     }
-    let hidden = CharProps { hidden: Some(true), ..Default::default() };
-    let mut marked = 0u32;
+    // Where each paragraph's fields go: the paragraph, and each field's offset and term.
+    let mut planned: Vec<(wordcraft_doc::Path, Vec<(usize, usize)>)> = Vec::new();
+    let mut count = 0usize;
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(para) = s.doc.para(StoryRef::Body, &path) else { continue };
         if para.props.style.as_deref().is_some_and(|st| st == ENTRY_STYLE || st.starts_with("TOC")) {
@@ -236,17 +248,38 @@ pub(super) fn mark_terms(s: &mut Session, terms: &[Term]) -> Result<u32, CmdErro
                 at.push((end, k));
             }
         }
-        // From the end back, so earlier offsets stay put; fields at one place keep the terms' order.
-        at.sort_unstable_by(|a, b| b.cmp(a));
-        for (end, k) in at {
-            let Some(t) = terms.get(k) else { continue };
-            let field =
-                InlineObject::Field { instr: t.instr.clone(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() };
-            s.doc.insert_object(&Pos { story: StoryRef::Body, path: path.clone(), off: end }, field, &hidden)?;
-            marked = marked.saturating_add(1);
+        count = count.saturating_add(at.len());
+        if count > MAX_FIELDS {
+            return Err(CmdError::Failed(format!(
+                "AutoMark would mark more than {MAX_FIELDS} index entries; nothing was marked. Use a concordance file with fewer entries for the same text"
+            )));
         }
+        // In text order; fields at one place keep the terms' order.
+        at.sort_unstable();
+        planned.push((path, at));
     }
-    Ok(marked)
+    let hidden = CharProps { hidden: Some(true), ..Default::default() };
+    for (path, at) in planned {
+        let fields = at
+            .into_iter()
+            .filter_map(|(end, k)| terms.get(k).map(|t| (end, t)))
+            .map(|(end, t)| {
+                (
+                    end,
+                    InlineObject::Field {
+                        instr: t.instr.clone(),
+                        result: String::new(),
+                        locked: false,
+                        dirty: false,
+                        code: false,
+                        form: String::new(),
+                    },
+                )
+            })
+            .collect();
+        s.doc.para_mut(StoryRef::Body, &path)?.insert_objects(fields, &hidden)?;
+    }
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
 }
 
 #[cfg(test)]
