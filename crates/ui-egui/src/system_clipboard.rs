@@ -937,8 +937,8 @@ mod tests {
 
     /// Text that only names a picture file, with a mirrored host clipboard holding that text: the
     /// host's copy is read, as with the clipboard in reach, so its picture is pasted even when no
-    /// such file is here; with other text there, a path naming no file stays text. A mirrored copy
-    /// with the text but no picture inserts the file the text names.
+    /// such file is here; with other text there, a path naming no file stays text. A host copy
+    /// with the text but no copied files leaves the text as text, though the file it names exists.
     #[test]
     fn a_mirrored_clipboard_holding_a_named_file_is_read() {
         let path = if cfg!(windows) { r"C:\no-such-dir\copied.png" } else { "/no-such-dir/copied.png" };
@@ -954,7 +954,8 @@ mod tests {
             assert_eq!(paste_picture::paste_named_files(&mut a, path), inserted, "{host}");
             assert_eq!(!a.session.doc.media.is_empty(), inserted, "{host}");
         }
-        // The mirrored copy holds the text but no picture: the file the text names is inserted.
+        // The mirrored copy holds the text but no picture: it is plain text, as with the clipboard
+        // in reach.
         let dir = std::env::temp_dir().join(format!("wc-mirrored-named-file-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -970,8 +971,8 @@ mod tests {
             ..Default::default()
         };
         let mut a = app(services);
-        assert!(paste_picture::paste_named_files(&mut a, &named), "{named}");
-        assert!(!a.session.doc.media.is_empty(), "{named}");
+        assert!(!paste_picture::paste_named_files(&mut a, &named), "{named}");
+        assert!(a.session.doc.media.is_empty(), "{named}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
