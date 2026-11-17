@@ -68,6 +68,7 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .key("Escape")
+        .params(r#"{"end"?: bool (default false: collapse to the start; true: to the end)}"#)
         .pure(),
     ]
 }

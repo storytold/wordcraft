@@ -93,6 +93,72 @@ fn page_numbers_dialog_sets_the_format_and_start() {
     assert_eq!((f.section, f.format.as_str(), f.start), (1, "lowerRoman", 9));
 }
 
+/// #4911: zero is an explicit start, distinct from continuing the previous section.
+#[test]
+fn page_numbers_dialog_preserves_zero_and_continue() {
+    let mut a = app();
+    a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+    assert!(f.cont);
+    assert_eq!(f.start, 1, "unspecified numbering still defaults to one");
+    for start in [0, 1, 100_000] {
+        a.run("layout.pageNumberFormat", json!({"start": start})).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(start));
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+        assert!(!f.cont);
+        assert_eq!(f.start, start);
+        assert_eq!(f.params()["start"], json!(start));
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(start));
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+        assert!(!f.cont);
+        assert_eq!(f.start, start, "reopening preserves the explicit start");
+        f.cont = true;
+        assert_eq!(f.params()["start"], serde_json::Value::Null);
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, None);
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+        assert!(f.cont);
+        assert_eq!(f.start, 1, "continuing does not become an explicit zero");
+    }
+}
+
+/// #4911: typing zero in Start at and pressing OK restarts numbering from zero.
+#[test]
+fn page_numbers_dialog_accepts_typed_zero() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut a = app();
+    a.run("ui.language", json!({"value": "en"})).unwrap();
+    a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    // The dialog's existing numeric input and format picker lack accessible names.
+    let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Start at:").click();
+    h.run_steps(2);
+    h.get_by_role(Role::SpinButton).click();
+    h.run_steps(2);
+    h.get_by_role(Role::SpinButton).type_text("0");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc.last_section.page_num_start, None, "typing does not apply before OK");
+
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    assert_eq!(h.state().session.doc.last_section.page_num_start, Some(0));
+}
+
 /// #755: the Line Numbers "From text" distance and the Hyphenation zone follow the
 /// File › Options unit (centimeters here); `params` sends points whatever the unit.
 #[test]
@@ -208,7 +274,14 @@ fn language_dialog_default_survives_a_restart() {
     use egui_kittest::kittest::Queryable;
     let mut a = app();
     a.ui.language = "en".into();
-    a.dialog = Some(Dialog::Layout(Box::new(LayoutDialog::Language(LanguageForm { lang: "fr-FR".into(), no_proof: false, detect: false }))));
+    a.dialog = Some(Dialog::Layout(Box::new(LayoutDialog::Language(LanguageForm {
+        lang: "fr-FR".into(),
+        no_proof: false,
+        detect: false,
+        whole_document: false,
+        initial: ("fr-FR".into(), false),
+        proof_touched: false,
+    }))));
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             app.logic(&ui.ctx().clone());
@@ -230,6 +303,143 @@ fn language_dialog_default_survives_a_restart() {
     assert!(!b.session.dirty && !b.session.can_undo());
     b.run("file.new", json!({})).unwrap();
     assert_eq!(LanguageForm::read(&b).lang, "fr-FR");
+}
+
+/// #3518: ticking "Apply to the whole document" makes OK send `scope: "document"`; unticked sends none.
+#[test]
+fn language_dialog_whole_document_checkbox_sends_scope() {
+    use egui_kittest::kittest::Queryable;
+    let f = LanguageForm {
+        lang: "fr-FR".into(),
+        no_proof: false,
+        detect: false,
+        whole_document: false,
+        initial: ("fr-FR".into(), false),
+        proof_touched: false,
+    };
+    assert!(f.params().get("scope").is_none());
+    assert_eq!(LanguageForm { whole_document: true, ..f.clone() }.params()["scope"], "document");
+    let mut a = app();
+    a.ui.language = "en".into();
+    let para = wordcraft_doc::Paragraph::with_text("Header", Default::default());
+    let header = a.session.doc.add_part(wordcraft_doc::PartKind::Header, vec![Arc::new(wordcraft_doc::Block::Para(para))]);
+    a.dialog = Some(Dialog::Layout(Box::new(LayoutDialog::Language(f))));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(3);
+    h.get_by_label("Apply to the whole document").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    // The header, which the caret isn't in, took the language.
+    let doc = &h.state().session.doc;
+    let hp = doc.para(wordcraft_doc::StoryRef::Part(header), &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(hp.runs.first().and_then(|r| r.props.lang.as_deref()), Some("fr-FR"));
+}
+
+/// "Plain text, then a Do-not-check run", the caret in the plain text.
+fn proofing_mix_app() -> WordApp {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Plain code"})).unwrap();
+    a.run("select.text", json!({"text": "code"})).unwrap();
+    a.run("review.language", json!({"lang": "de-DE", "noProof": true})).unwrap();
+    a.run("select.text", json!({"text": "Plain"})).unwrap();
+    a.run("review.language", json!({"lang": "en-US", "noProof": false})).unwrap();
+    a.run("select.text", json!({"text": "Plain"})).unwrap();
+    a
+}
+
+fn run_proofing(a: &mut WordApp, text: &str) -> (Option<String>, Option<bool>) {
+    a.run("select.text", json!({"text": text})).unwrap();
+    let st = a.run("format.state", json!({})).unwrap();
+    (st["lang"].as_str().map(String::from), st["noProof"].as_bool())
+}
+
+/// #3518: whole-document OK sends only what the user changed.
+#[test]
+fn language_dialog_whole_document_sends_only_changes() {
+    // Changing only the language leaves the Do-not-check run alone.
+    let mut a = proofing_mix_app();
+    let mut f = LanguageForm::read(&a);
+    f.whole_document = true;
+    f.lang = "en-GB".into();
+    let p = f.params();
+    assert!(p.get("noProof").is_none());
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("en-GB".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-GB".into()), Some(false)));
+
+    // Changing only Do-not-check leaves each run's language alone.
+    let mut a = proofing_mix_app();
+    let mut f = LanguageForm::read(&a);
+    f.whole_document = true;
+    f.no_proof = true;
+    f.proof_touched = true;
+    let p = f.params();
+    assert!(p.get("lang").is_none());
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("de-DE".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-US".into()), Some(true)));
+
+    // No edits: the caret's language, no noProof (never the engine's en-US default).
+    let mut a = proofing_mix_app();
+    let mut f = LanguageForm::read(&a);
+    f.lang = "fr-FR".into();
+    f.initial.0 = "fr-FR".into();
+    f.whole_document = true;
+    let p = f.params();
+    assert_eq!(p["lang"], "fr-FR");
+    assert!(p.get("noProof").is_none());
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("fr-FR".into()), Some(true)));
+
+    // Selection mode is unchanged: both are sent.
+    f.whole_document = false;
+    assert_eq!(f.params()["noProof"], false);
+}
+
+/// #3518: a ticked Do-not-check box the user did not change (the caret sits in a no-proof run)
+/// is not sent, so a language-only whole-document apply leaves other runs' proofing state alone.
+#[test]
+fn language_dialog_whole_document_unchanged_no_proof_is_not_sent() {
+    let mut a = proofing_mix_app();
+    a.run("select.text", json!({"text": "code"})).unwrap();
+    let mut f = LanguageForm::read(&a);
+    assert!(f.no_proof && f.initial.1);
+    f.whole_document = true;
+    f.lang = "en-GB".into();
+    let p = f.params();
+    assert!(p.get("noProof").is_none(), "{p}");
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("en-GB".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-GB".into()), Some(false)));
+}
+
+/// #3518: with the caret in a no-proof run, ticking the whole-document box and clicking Do not
+/// check off and on again (ending ticked) still marks the whole document no-proof.
+#[test]
+fn language_dialog_whole_document_retoggled_no_proof_is_sent() {
+    let mut a = proofing_mix_app();
+    a.run("select.text", json!({"text": "code"})).unwrap();
+    let mut f = LanguageForm::read(&a);
+    assert!(f.no_proof && f.initial.1 && !f.proof_touched);
+    f.whole_document = true;
+    for _ in 0..2 {
+        f.no_proof = !f.no_proof;
+        f.proof_touched = true;
+    }
+    assert!(f.no_proof);
+    let p = f.params();
+    assert_eq!(p["noProof"], true, "{p}");
+    assert!(p.get("lang").is_none(), "{p}");
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-US".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "code"), (Some("de-DE".into()), Some(true)));
 }
 
 /// #407: Envelopes starts from the selected address; Add to Document puts an envelope
