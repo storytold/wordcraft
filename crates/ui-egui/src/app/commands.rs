@@ -145,7 +145,9 @@ impl WordApp {
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
-            let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+            // Inspect only the suffix bytes: no full-name allocation or UTF-8 slicing.
+            let has_pdf_suffix = name.as_bytes().last_chunk::<4>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".pdf"));
+            let name = if id == "file.exportPdf" && !has_pdf_suffix { format!("{name}.pdf") } else { name };
             // A save with a password encrypts this and later saves (`file.save`'s `password`).
             if matches!(id, "file.save" | "file.saveAs")
                 && let Some(pw) = params.get("password").filter(|v| !v.is_null())
@@ -155,6 +157,14 @@ impl WordApp {
                 }
                 self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
             }
+            // Like a failed native save, a failed serialization or delivery keeps the save stamps.
+            let before_stamp = (
+                self.session.doc.settings.zoom,
+                self.session.doc.core.last_modified_by.clone(),
+                self.session.doc.core.created.clone(),
+                self.session.doc.core.modified.clone(),
+                self.session.doc.core.revision,
+            );
             // A save is a save, download or not: advance the revision and modified stamp (#262).
             if matches!(id, "file.save" | "file.saveAs") {
                 self.session.stamp_save();
@@ -163,7 +173,19 @@ impl WordApp {
             let password =
                 if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
             let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
-            let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
+            let bytes = match wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    (
+                        self.session.doc.settings.zoom,
+                        self.session.doc.core.last_modified_by,
+                        self.session.doc.core.created,
+                        self.session.doc.core.modified,
+                        self.session.doc.core.revision,
+                    ) = before_stamp;
+                    return Err(error);
+                }
+            };
             // A ticket left over from an earlier call isn't this save's.
             let saves = self.services.async_saves.clone();
             if let Some(saves) = &saves {
@@ -183,6 +205,13 @@ impl WordApp {
                 (None, None) => Ok(()),
             };
             if let Err(e) = delivered {
+                (
+                    self.session.doc.settings.zoom,
+                    self.session.doc.core.last_modified_by,
+                    self.session.doc.core.created,
+                    self.session.doc.core.modified,
+                    self.session.doc.core.revision,
+                ) = before_stamp;
                 let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
                 log::error!("download of {name} failed: {e}");
                 self.status(msg.clone());
@@ -667,7 +696,7 @@ impl WordApp {
                     }
                 }
                 let size = self.ui.interface_size;
-                json!({"auto": size.is_auto(), "percent": size.drawn_percent(self.native_scale)})
+                json!({"auto": size.is_auto(), "percent": size.drawn_percent_within(self.native_scale, self.auto_scale_limit)})
             }
             "ui.animations" => {
                 // `system` (follow the system's animation setting), `on` or `off`; no value reads
@@ -775,7 +804,7 @@ impl WordApp {
                 json!({"dir": dir})
             }
             // The built-in file browser (#576), for when the system's file dialog doesn't show up
-            // (desktop only): `purpose` is document (default), picture, recipients or save. A system
+            // (desktop only): `purpose` is document (default), picture, recipients, save or export. A system
             // dialog still waiting for an answer is given up as cancelled.
             #[cfg(not(target_arch = "wasm32"))]
             "ui.fileBrowser" => {
