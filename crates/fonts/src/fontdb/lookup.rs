@@ -19,7 +19,8 @@ fn keep_own_faces<T>(cands: &mut Vec<&T>, family: &str, legacy: impl Fn(&T) -> &
 /// Is a face with legacy family name `legacy` one of `family`'s own: `family` itself, or a style
 /// named after it ("Roboto Light")? See `keep_own_faces`.
 pub(super) fn owns_name(legacy: &str, family: &str) -> bool {
-    legacy.get(..family.len()).is_some_and(|p| p.eq_ignore_ascii_case(family)) && legacy[family.len()..].chars().next().is_none_or(|c| c == ' ')
+    legacy.get(..family.len()).is_some_and(|p| p.eq_ignore_ascii_case(family))
+        && legacy.get(family.len()..).is_some_and(|rest| rest.chars().next().is_none_or(|c| c == ' '))
 }
 
 /// Is `f` a face claiming `family` only by its typographic name (see `keep_own_faces`)?

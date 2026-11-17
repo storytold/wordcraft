@@ -91,7 +91,9 @@ pub struct FontDb {
     catalog_gen: AtomicU32,
     /// The families a lookup has tried to load from their installed files
     /// ([`FontDb::load_cataloged`]), for the scan they were cataloged in: a file that can't be
-    /// read is tried once per scan, not on every lookup.
+    /// read is tried once per scan, not on every lookup. A family counts as tried before its files
+    /// are read, so one whose files fail for a passing reason (a file an installer still holds
+    /// open on Windows) stays missing until the next rescan, by design.
     #[cfg(not(target_arch = "wasm32"))]
     tried: Mutex<(u32, std::collections::HashSet<String>)>,
 }

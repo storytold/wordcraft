@@ -7,13 +7,18 @@ use super::names::{CatalogEntry, file_face_names, style_italic, style_weight};
 use super::names::{LocalName, MAX_FAMILY_NAME, MAX_FILE_FACES, enumerate_faces, make_face, name_language_matches};
 use super::{Arc, FontDb, HashMap};
 
+/// What makes two faces the same face: family, style and legacy family name, ignoring ASCII case.
+pub(super) fn face_key(f: &FontFace) -> (String, String, String) {
+    (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase(), f.legacy_family.to_ascii_lowercase())
+}
+
 /// Adds the faces of `new` that `faces` doesn't have yet, returning how many. A face is already
 /// there when one with its family, style and legacy family name (name ID 1) is: the same font
 /// in two folders loads once, but TH SarabunIT๙, whose typographic family (name ID 16) is "TH
 /// SarabunPSK", doesn't keep TH SarabunPSK's own file out of the family.
 pub(super) fn push_new_faces(faces: &mut Vec<Arc<FontFace>>, new: Vec<Arc<FontFace>>) -> usize {
     // Indexed: a document's fonts may add hundreds of faces to thousands (#3716).
-    let key = |f: &FontFace| (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase(), f.legacy_family.to_ascii_lowercase());
+    let key = face_key;
     let mut present: std::collections::HashSet<_> = faces.iter().map(|g| key(g)).collect();
     let mut added = 0;
     for f in new {

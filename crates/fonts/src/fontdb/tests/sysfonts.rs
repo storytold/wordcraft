@@ -223,6 +223,22 @@ fn with_only_a_face_claiming_it_installed_the_family_is_missing() {
 }
 
 #[test]
+fn adding_the_familys_own_font_after_a_claimant_adds_it() {
+    // As someone adding THSarabunIT9.ttf and then THSarabun.ttf (or the web build restoring them
+    // in that order): the claimant's faces have the family's name and styles, but they are not the
+    // family's own, so the second file is added and used.
+    let db = FontDb::with_font_dirs(vec![]);
+    db.install_font("Claimant.ttf", &claimant_of_family("SourceSans3-Regular.ttf", "Sysfont Othr3")).unwrap();
+    assert_eq!(db.face(FAMILY, "Regular").family, FALLBACK_FAMILY);
+    let r = db.install_font("Sysfont-Regular.ttf", &renamed("SourceSans3-Regular.ttf")).expect("the family's own file is added");
+    assert_eq!(r.font.families(), vec![FAMILY.to_string()]);
+    assert_eq!(db.face(FAMILY, "Regular").legacy_family, FAMILY);
+    assert!(db.has_family(FAMILY));
+    // The same file again is already there.
+    assert!(matches!(db.install_font("Again.ttf", &renamed("SourceSans3-Regular.ttf")), Err(UserFontError::AlreadyAvailable(_))));
+}
+
+#[test]
 fn a_family_tried_is_told_apart_from_one_differing_only_in_non_ascii_case() {
     // The catalog compares names by ASCII case only, so "Семья" and "семья" are two families:
     // trying to load one's installed files doesn't count as trying the other's.
