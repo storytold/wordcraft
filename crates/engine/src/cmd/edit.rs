@@ -214,6 +214,8 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
 
 /// For each block a copy of `a..b` gives, whether it goes out bare (`with_source_spacing`): a
 /// paragraph taken out of a table cell, or a piece of one paragraph.
+/// Its two branches mirror those of `Document::copy_blocks` (same parent: one block per
+/// container slot, else one per `paths_between` path), so change them together.
 fn bare_blocks(s: &Session, a: &Pos, b: &Pos) -> Vec<bool> {
     if a.path == b.path && (a.off > 0 || b.off < s.doc.para(a.story, &a.path).map_or(0, |p| p.len())) {
         return vec![true];
