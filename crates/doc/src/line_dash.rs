@@ -100,7 +100,10 @@ impl LineDash {
         if cap == crate::connector::LineCap::Flat {
             return pattern;
         }
-        // The width the painters stroke with: a zero or thinner width is painted 0.25 pt wide.
+        // The width the painters stroke a `Draw::Shape` with (render's `draw_shape` and the PDF
+        // exporter): a zero or thinner width is painted 0.25 pt wide, a non-finite one 0.75 pt.
+        // A `Draw::Path` is given the width its painters use (`path_stroke_width`: 0 is a 0.75 pt
+        // hairline) before this is called.
         let ext = if width.is_finite() { width.clamp(0.25, 200.0) } else { 0.75 };
         for (i, v) in pattern.iter_mut().enumerate() {
             *v = if i % 2 == 0 { (*v - ext).max(MIN_DASH_POINTS) } else { (*v + ext).min(MAX_DASH_POINTS) };
@@ -139,7 +142,7 @@ mod tests {
             assert_eq!(LineDash::Dash.pattern_with_cap(2.0, cap), [6.0, 8.0], "{cap:?}");
             assert_eq!(LineDash::DashDot.pattern_with_cap(1.0, cap), [3.0, 4.0, MIN_DASH_POINTS, 4.0], "{cap:?}");
         }
-        // A zero-width outline is painted 0.25 pt wide: its caps take 0.25 pt off each dot too.
+        // A zero-width shape outline is painted 0.25 pt wide: its caps take 0.25 pt off each dot.
         assert_eq!(LineDash::SystemDot.pattern_with_cap(0.0, LineCap::Round), [MIN_DASH_POINTS, 0.5]);
         assert!(LineDash::Solid.pattern_with_cap(2.0, LineCap::Round).is_empty());
         let hostile = LineDash::Custom(vec![(0, u32::MAX); 3]).pattern_with_cap(f32::NAN, LineCap::Round);

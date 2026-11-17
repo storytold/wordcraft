@@ -248,7 +248,7 @@ Dashed outlines with square or round caps keep the caps inside each dash, as Wor
 width long and one width apart, where the painters' caps used to close the gaps. Word for Windows,
 measured on lines it drew at 2 and 4 pt: `dot` with square or round caps paints 1 width on and 3
 off, as with flat ends; flat-ended dashes are unchanged. `render::tests::capped_dotted_lines_keep_their_gaps`
-covers preset lines and connectors with each cap.
+covers preset lines and connectors with each cap. `dash`, `dashDot` and the other dashes with square or round caps take the same rule but weren't measured in Word.
 When content exceeds a preferred column width, AutoFit donors lose equal widths until they reach their content minima. Original synthetic Word probes cover donor reductions; cached field refresh and wrapping remain separate gaps.
 
 Behind-text pictures in table cells participate in centre and bottom vertical alignment without increasing row flow height.
