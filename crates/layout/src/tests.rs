@@ -10942,6 +10942,44 @@ fn keep_with_next_never_moves_a_paragraph_holding_a_break() {
     }
 }
 
+/// #6937 review: a kept heading before a kept paragraph that holds a break and is kept together
+/// counts that paragraph's bottom border, as the paragraph does when it moves whole: the heading
+/// goes over with it rather than staying alone at the foot of the page, at every place on the
+/// page, for a page and a column break.
+#[test]
+fn a_kept_heading_counts_the_border_of_a_kept_paragraph_holding_a_break() {
+    use wordcraft_doc::props::LineSpacing;
+    crate::test_fonts();
+    // Pages of the heading and of the break paragraph's first line.
+    let pages = |fillers: usize, brk: char| {
+        let mut d = Document::new();
+        let para = |text: &str, props: ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(12.0)), ..props };
+            wordcraft_doc::para_block(x)
+        };
+        d.body = (0..fillers).map(|i| para(&format!("F{i}"), ParaProps::default())).collect();
+        d.body.push(para("Heading", ParaProps { keep_next: Some(true), ..Default::default() }));
+        let bottom = Some(Border { space: 10.0, ..Border::single(4.0) });
+        let kept = ParaProps {
+            keep_next: Some(true),
+            keep_lines: Some(true),
+            borders: Some(Borders { bottom, ..Borders::default() }),
+            ..Default::default()
+        };
+        d.body.push(para(&format!("B{brk}tail"), kept));
+        d.body.push(para("After", ParaProps::default()));
+        let l = lay(&d);
+        (l.caret(&Pos::body(fillers, 0)).unwrap().page, l.caret(&Pos::body(fillers + 1, 0)).unwrap().page)
+    };
+    for brk in ['\u{C}', '\u{E}'] {
+        for n in 40..70 {
+            let (heading, b) = pages(n, brk);
+            assert_eq!(heading, b, "{n} fillers, break {brk:?}: the heading stays with B");
+        }
+    }
+}
+
 /// A kept heading goes with the paragraph after it when that paragraph cannot start on its
 /// page (#966): with widow/orphan control on, one line of it at the bottom of the page moves
 /// over with the rest, so only two lines below the heading hold it there. Word and LibreOffice

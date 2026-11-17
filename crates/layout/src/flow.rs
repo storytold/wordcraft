@@ -339,11 +339,7 @@ impl<'a> Flow<'a> {
         let rp = &self.pl.rp;
         let keep_next = rp.keep_next && (pb.web || !holds_break(&self.pl));
         // A terminal page-break mark stays with the break and draws no bottom border there.
-        let break_mark = !pb.web
-            && self.pl.lines.len() >= 2
-            && self.pl.lines.get(self.pl.lines.len() - 2).is_some_and(|line| {
-                line.end == LineEnd::PageBreak && self.pl.lines.last().is_some_and(|mark| only_markers(self.p, mark.start..mark.stop))
-            });
+        let break_mark = !pb.web && ends_in_break_mark(self.p, &self.pl);
         let height = self.pl.height + rooms.top + if break_mark { 0.0 } else { rooms.bottom };
         if !(rp.keep_lines || (keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
@@ -1002,6 +998,16 @@ fn holds_break(pl: &ParaLayout) -> bool {
     pl.lines.iter().any(|l| matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak))
 }
 
+/// Whether `pl` ends with a page break and then only its mark, which stays with the break and
+/// draws no bottom border there.
+fn ends_in_break_mark(p: &Paragraph, pl: &ParaLayout) -> bool {
+    pl.lines.len() >= 2
+        && pl
+            .lines
+            .get(pl.lines.len() - 2)
+            .is_some_and(|line| line.end == LineEnd::PageBreak && pl.lines.last().is_some_and(|mark| only_markers(p, mark.start..mark.stop)))
+}
+
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the
 /// next one to start there — its first line, two of its lines with widow/orphan control (it
 /// doesn't leave a single line at the bottom of a page; it moves over whole instead), all three
@@ -1045,10 +1051,13 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
             // One holding a break ends the chain: what follows starts after the break (#6919).
+            let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
             if pl.rp.keep_next && !holds_break(&pl) && depth < 8 {
-                let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
                 pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
             } else {
+                // A kept one that ends the chain at its break still moves whole under keep lines
+                // together, its bottom border too (`keep_together`): room for all of that.
+                let ends_chain = pl.rp.keep_next && holds_break(&pl) && !ends_in_break_mark(p, &pl);
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
                 let to = |k: usize| match (pl.lines.first(), pl.lines.get(k)) {
@@ -1058,7 +1067,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                 pl.rp.space_before
                     + top
                     + if pl.rp.keep_lines {
-                        pl.height
+                        pl.height + if ends_chain { bottom } else { 0.0 }
                     } else if pl.rp.widow_control && pl.lines.len() >= 2 {
                         // Neither split of three lines is allowed (`settled_end`).
                         to(if pl.lines.len() == 3 { 2 } else { 1 })
