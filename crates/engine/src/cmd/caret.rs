@@ -352,7 +352,7 @@ fn click_and_type(s: &mut Session, v: &Value) -> CmdResult {
                 break;
             }
             super::text::append_paragraphs(s, 1)?;
-            s.relayout();
+            s.touch();
             added += 1;
         }
     }
@@ -375,7 +375,7 @@ fn click_and_type(s: &mut Session, v: &Value) -> CmdResult {
             trimmed = true;
         }
         if trimmed {
-            s.relayout();
+            s.touch();
             let l = s.layout();
             pos = l.hit(page, x, y, StoryRef::Body).ok_or_else(|| CmdError::Params("no text on that page".into()))?;
         }

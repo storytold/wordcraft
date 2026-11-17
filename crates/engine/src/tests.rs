@@ -13599,6 +13599,20 @@ fn click_and_type_on_a_line_adds_nothing() {
     assert_eq!(s.sel.focus.story, StoryRef::Body);
 }
 
+/// #4246 review: the old caret may sit in a content control's placeholder; Click and Type must
+/// not clear that placeholder while adding paragraphs at the end of the body.
+#[test]
+fn click_and_type_keeps_a_placeholder_control_outside_the_click() {
+    let mut s = s();
+    run(&mut s, "developer.richText", json!({"tag": "name"}));
+    assert!(s.doc.control_ranges(StoryRef::Body).first().is_some_and(|r| r.control.showing_placeholder), "setup: the control shows its placeholder");
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": body.bottom() - 10.0}));
+    assert!(s.doc.control_ranges(StoryRef::Body).first().is_some_and(|r| r.control.showing_placeholder), "the placeholder control is unchanged");
+}
+
 /// #4246: Click and Type appends plain paragraphs, not the AutoFormat/AutoCorrect that Enter
 /// would apply to the last paragraph.
 #[test]

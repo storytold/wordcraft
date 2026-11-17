@@ -73,7 +73,6 @@ pub(super) fn append_paragraphs(s: &mut Session, n: usize) -> Result<(), CmdErro
     if n == 0 {
         return Ok(());
     }
-    crate::cmd::controls::prepare_edit(s)?;
     let start = s.doc.body.len();
     for i in 0..n {
         let path = Path::top(start + i);
