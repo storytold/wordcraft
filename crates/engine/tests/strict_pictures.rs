@@ -1,6 +1,5 @@
 //! Pictures a layout draws that the exporters can't decode (#6005): a DOCX opened, laid out, and
 //! asked which of its pictures would be grey boxes, and in which story.
-use std::io::Write;
 use wordcraft_doc::{Document, MissingPictureReason};
 use wordcraft_layout::display::DisplayOptions;
 use wordcraft_layout::{LayoutCache, LayoutOptions, StrictOutput, layout, media_check, undecodable_pictures};
@@ -9,11 +8,11 @@ const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/
 const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
 fn png() -> Vec<u8> {
-    let mut out = Vec::new();
-    image::RgbaImage::from_pixel(4, 4, image::Rgba([20, 90, 200, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-        .unwrap();
-    out
+    wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(4, 4, image::Rgba([20, 90, 200, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap()
 }
 
 fn pic(rid: &str) -> String {
@@ -39,7 +38,7 @@ fn docx(header_media: &[u8], body_media: &[u8]) -> Vec<u8> {
         r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdI" Type="{REL}/image" Target="media/image2.bin"/></Relationships>"#
     );
     let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="bin" ContentType="application/octet-stream"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     let hdr = format!(r#"<w:hdr {NS}><w:p>{}</w:p></w:hdr>"#, pic("rIdI"));
     for (name, bytes) in [
         ("[Content_Types].xml", types.as_bytes()),
@@ -51,10 +50,9 @@ fn docx(header_media: &[u8], body_media: &[u8]) -> Vec<u8> {
         ("word/media/image2.bin", header_media),
         ("word/media/body.png", body_media),
     ] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(bytes).unwrap();
+        zip.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 fn report(d: &Document, pages: Option<std::ops::RangeInclusive<usize>>) -> Vec<(String, String, MissingPictureReason)> {

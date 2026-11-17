@@ -145,7 +145,9 @@ impl WordApp {
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
-            let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+            // Inspect only the suffix bytes: no full-name allocation or UTF-8 slicing.
+            let has_pdf_suffix = name.as_bytes().last_chunk::<4>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".pdf"));
+            let name = if id == "file.exportPdf" && !has_pdf_suffix { format!("{name}.pdf") } else { name };
             // A save with a password encrypts this and later saves (`file.save`'s `password`).
             if matches!(id, "file.save" | "file.saveAs")
                 && let Some(pw) = params.get("password").filter(|v| !v.is_null())
@@ -667,7 +669,7 @@ impl WordApp {
                     }
                 }
                 let size = self.ui.interface_size;
-                json!({"auto": size.is_auto(), "percent": size.drawn_percent(self.native_scale)})
+                json!({"auto": size.is_auto(), "percent": size.drawn_percent_within(self.native_scale, self.auto_scale_limit)})
             }
             "ui.animations" => {
                 // `system` (follow the system's animation setting), `on` or `off`; no value reads
@@ -691,6 +693,28 @@ impl WordApp {
                     }
                 }
                 json!({"statusCount": self.ui.status_count.code()})
+            }
+            "ui.scrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: mouse-wheel scroll speed (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.scroll_speed = s,
+                        None => return Some(Err(format!("unknown scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"scrollSpeed": self.ui.scroll_speed.code(), "factor": self.ui.scroll_speed.wheel_factor()})
+            }
+            "ui.touchpadScrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: touchpad scroll speed on Wayland (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.touchpad_scroll_speed = s,
+                        None => return Some(Err(format!("unknown touchpad scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"touchpadScrollSpeed": self.ui.touchpad_scroll_speed.code(), "factor": self.ui.touchpad_scroll_speed.touchpad_factor()})
             }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
@@ -753,7 +777,7 @@ impl WordApp {
                 json!({"dir": dir})
             }
             // The built-in file browser (#576), for when the system's file dialog doesn't show up
-            // (desktop only): `purpose` is document (default), picture, recipients or save. A system
+            // (desktop only): `purpose` is document (default), picture, recipients, save or export. A system
             // dialog still waiting for an answer is given up as cancelled.
             #[cfg(not(target_arch = "wasm32"))]
             "ui.fileBrowser" => {
@@ -1134,6 +1158,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.recentClear"
             | "ui.displayServer"
             | "ui.statusCount"
+            | "ui.scrollSpeed"
+            | "ui.touchpadScrollSpeed"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }
