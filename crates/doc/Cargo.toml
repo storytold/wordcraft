@@ -26,4 +26,5 @@ thiserror = { workspace = true }
 unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
+craft-zip = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
