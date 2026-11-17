@@ -402,6 +402,10 @@ impl Session {
         }
         if sel_before.focus.story == StoryRef::Body && self.in_header_footer() {
             self.hf_return = Some(sel_before.clone());
+        } else if sel_before.focus.story != StoryRef::Body && !self.in_header_footer() {
+            // Back in the body: a header or footer entered next starts its own return position
+            // and section, so a stale one cannot steer its section commands.
+            self.hf_section = None;
         }
         // A selection command that moves the insertion point ends the typing group, like
         // caret movement: typing, Select, typing are two undo steps (#419).

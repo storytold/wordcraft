@@ -144,11 +144,10 @@ fn page_numbers_dialog_accepts_typed_zero() {
         a,
     );
     h.run_steps(4);
-    h.get_by_label("Start at:").click();
+    // Choosing Start at focuses the field with its value selected, so typing replaces it.
+    h.get_by_role_and_label(Role::RadioButton, "Start at:").click();
     h.run_steps(2);
-    h.get_by_role(Role::SpinButton).click();
-    h.run_steps(2);
-    h.get_by_role(Role::SpinButton).type_text("0");
+    h.event(egui::Event::Text("0".into()));
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
     assert_eq!(h.state().session.doc.last_section.page_num_start, None, "typing does not apply before OK");

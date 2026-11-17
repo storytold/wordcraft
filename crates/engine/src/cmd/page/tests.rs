@@ -634,3 +634,30 @@ fn repagination_during_shared_footer_edit_preserves_active_section() {
     assert_eq!((secs[0].1.page_num_format, secs[0].1.page_num_start), (NumFormat::Decimal, None));
     assert_eq!((secs[1].1.page_num_format, secs[1].1.page_num_start), (NumFormat::LowerRoman, Some(10)));
 }
+
+/// Section commands follow the page whose header or footer is open, not the body caret's section.
+#[test]
+fn section_commands_follow_the_page_being_edited() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("front\nbody"));
+    s.run("select.text", &json!({"text": "front"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    let body_end = s.doc.end_of(StoryRef::Body);
+    s.sel = Selection::caret(body_end.clone());
+    // Page 0 is the first section's, page 1 the second's.
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("text.insert", &json!({"text": "Footer on the first section"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    assert_eq!(s.sel, Selection::caret(body_end), "close returns to the body caret");
+    // Editing page 1's footer (inherited) acts on section 1...
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    assert_eq!(section_index_of_focus(&s), 1);
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    // ...and going back to page 0's own footer acts on section 0, though the body caret is in 1.
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    assert_eq!(section_index_of_focus(&s), 0);
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    let secs = s.doc.sections();
+    assert!(secs[0].1.landscape, "the section whose footer is open");
+    assert!(!secs[1].1.landscape);
+}

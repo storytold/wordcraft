@@ -214,6 +214,24 @@ fn new_header_links_to_previous_and_even_pages_edit_what_they_show() {
     assert_eq!(s.doc.sections()[0].1.headers.even, None, "nothing made");
 }
 
+/// Edit Header from the body on a later section's page makes the header in the first section,
+/// linked through to every page, as on main: the caret's page selects the page, not the section.
+#[test]
+fn edit_header_from_the_body_links_to_previous_sections() {
+    let mut s = two_pages();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Three"})).unwrap();
+    let pages = s.layout().pages.len();
+    assert!(pages >= 3 && s.layout().pages[pages - 1].section == 1, "a second section");
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    let id = s.run("insert.editHeader", &json!({})).unwrap()["story"].as_u64().unwrap() as u32;
+    s.run("text.insert", &json!({"text": "Draft"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    assert!(s.layout().pages.iter().all(|p| p.header_story == Some(id)), "every page shows it");
+    assert_eq!(s.doc.sections()[0].1.headers.default, Some(id), "made in the first section");
+    assert_eq!(s.doc.sections()[1].1.headers.default, None, "the later section inherits it");
+}
+
 #[test]
 fn base64_round_trip() {
     let data = b"hello world!?";
@@ -416,8 +434,7 @@ fn local_civil_date_follows_the_utc_offset() {
     }
 }
 
-/// Close Header and Footer restores the original body selection rather than a synthetic caret
-/// at the section boundary when header/footer was opened without a page argument or from the same section.
+/// Close Header and Footer restores the body selection, with or without a page argument.
 #[test]
 fn close_header_preserves_original_body_selection() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("First paragraph.\nSecond paragraph with more text."));
@@ -441,6 +458,28 @@ fn close_header_preserves_original_body_selection() {
     // Close header and footer.
     s.run("insert.closeHeader", &json!({})).unwrap();
     assert_eq!(s.sel, original, "original body selection was preserved with same-section page argument");
+}
+
+/// Entering a header or footer on another section's page leaves the body caret that Close Header
+/// and Footer returns to where it was (#3331); the page only picks the section commands act on.
+#[test]
+fn closing_a_header_on_another_sections_page_returns_to_the_body_caret() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("front\nbody"));
+    s.run("select.text", &json!({"text": "front"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("text.insert", &json!({"text": "Footer on sec 0"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    // The body caret stays in the first section, page 1 belongs to the second.
+    let before = Selection::caret(Pos::new(StoryRef::Body, Path::top(0), 2));
+    s.sel = before.clone();
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    // A click into the footer on page 1's page, while the footer is open.
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    assert!(s.in_header_footer());
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    assert_eq!(s.sel, before);
 }
 
 #[test]

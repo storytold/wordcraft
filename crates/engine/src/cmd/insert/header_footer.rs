@@ -1,6 +1,6 @@
 use super::{
-    Align, Block, Border, Borders, CharProps, CmdError, CmdResult, InlineObject, Paragraph, PartKind, Path, Pos, Selection, Session, StoryRef, Table,
-    Value, json, p, para_block,
+    Align, Block, Border, Borders, CharProps, CmdError, CmdResult, InlineObject, Paragraph, PartKind, Selection, Session, StoryRef, Table, Value,
+    json, p, para_block,
 };
 
 /// The header (or footer) of the caret's section in the slot the caret's page uses (first page,
@@ -90,7 +90,6 @@ pub(super) fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResu
 
 /// Edit the header or footer shown on `page`, or at the caret's current body position.
 pub(super) fn edit_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
-    let explicit_page = p::u64(v, "page").is_some();
     let mut page = p::u64(v, "page").map(|page| usize::try_from(page).unwrap_or(usize::MAX));
     if page.is_none() && s.sel.focus.story == StoryRef::Body {
         // The caret's page: with Different First Page on, page 1 edits its own header (#2826).
@@ -114,27 +113,15 @@ pub(super) fn edit_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let Some(id) = shown else {
         // None yet: made by the mutating command, so it is an undo step and protection applies.
         let cmd = if header { "insert.createHeader" } else { "insert.createFooter" };
-        let params = if explicit_page { page.map_or_else(|| json!({}), |page| json!({ "page": page })) } else { json!({}) };
+        let params = page.map_or_else(|| json!({}), |page| json!({ "page": page }));
         return s.run(cmd, &params);
     };
     if let Some(page) = page {
+        // The page's section is what section commands act on; the body position Close Header and
+        // Footer returns to stays where it was (#3331).
         s.page_hint = page;
-        if explicit_page && let Some(pg) = s.layout().pages.get(page) {
-            let sec = pg.section.min(s.doc.sections().len().saturating_sub(1));
-            let already_in_sec = if s.sel.focus.story == StoryRef::Body {
-                s.doc.section_index_of(s.sel.focus.path.0.first().copied().unwrap_or(0) as usize) == sec
-            } else if let Some(ret) = &s.hf_return
-                && ret.focus.story == StoryRef::Body
-            {
-                s.doc.section_index_of(ret.focus.path.0.first().copied().unwrap_or(0) as usize) == sec
-            } else {
-                false
-            };
-            if !already_in_sec {
-                let block = s.doc.sections().get(sec).map(|(end, _)| *end).unwrap_or(0);
-                s.hf_return = Some(Selection::caret(Pos::new(StoryRef::Body, Path::top(block), 0)));
-            }
-        }
+        let sec = s.layout().pages.get(page).map(|pg| pg.section);
+        s.hf_section = sec.map(|sec| sec.min(s.doc.sections().len().saturating_sub(1)));
     }
     s.touch();
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
@@ -155,22 +142,8 @@ pub(super) fn create_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
         Some(page) => {
             let page = usize::try_from(page).unwrap_or(usize::MAX);
             s.page_hint = page;
-            if let Some(pg) = s.layout().pages.get(page) {
-                let sec = pg.section.min(s.doc.sections().len().saturating_sub(1));
-                let already_in_sec = if s.sel.focus.story == StoryRef::Body {
-                    s.doc.section_index_of(s.sel.focus.path.0.first().copied().unwrap_or(0) as usize) == sec
-                } else if let Some(ret) = &s.hf_return
-                    && ret.focus.story == StoryRef::Body
-                {
-                    s.doc.section_index_of(ret.focus.path.0.first().copied().unwrap_or(0) as usize) == sec
-                } else {
-                    false
-                };
-                if !already_in_sec {
-                    let block = s.doc.sections().get(sec).map(|(end, _)| *end).unwrap_or(0);
-                    s.hf_return = Some(Selection::caret(Pos::new(StoryRef::Body, Path::top(block), 0)));
-                }
-            }
+            let sec = s.layout().pages.get(page).map(|pg| pg.section);
+            s.hf_section = sec.map(|sec| sec.min(s.doc.sections().len().saturating_sub(1)));
             page_hf_part(s, page, header)?
         }
         None => {

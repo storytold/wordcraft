@@ -240,27 +240,23 @@ fn section_of_part(s: &Session, id: u32) -> usize {
             ]
             .contains(&Some(id))
         };
-        if let Some(ret) = &s.hf_return
-            && ret.focus.story == wordcraft_doc::StoryRef::Body
+        // The section of the page whose header or footer was opened decides: a footer inherited from
+        // an earlier section still belongs to the later section that shows it. It is kept apart
+        // from the page hint because a taller footer can repaginate the pages under it.
+        if let Some(sec) = s.hf_section.map(|sec| sec.min(sections.len().saturating_sub(1)))
+            && uses_hf(sec)
         {
-            let ret_sec = s.doc.section_index_of(ret.focus.path.0.first().copied().unwrap_or(0) as usize);
-            if uses_hf(ret_sec) {
-                let ret_page = s.cached_layout().and_then(|l| l.page_of(&ret.focus));
-                let hint_sec = s.cached_layout().and_then(|l| l.pages.get(s.page_hint)).map(|pg| pg.section.min(sections.len().saturating_sub(1)));
-                if let (Some(rp), Some(hs)) = (ret_page, hint_sec)
-                    && hs < ret_sec
-                    && s.page_hint < rp
-                {
-                    return ret_sec;
-                }
-            }
+            return sec;
         }
+        // Entered without a page (Insert › Header, a page number): the page the hint names.
         if let Some(pg) = s.cached_layout().and_then(|l| l.pages.get(s.page_hint)) {
             let sec = pg.section.min(sections.len().saturating_sub(1));
             if uses_hf(sec) {
                 return sec;
             }
         }
+        // Neither names a section that uses it (a stale page hint): the body position the header
+        // was entered from.
         if let Some(ret) = &s.hf_return
             && ret.focus.story == wordcraft_doc::StoryRef::Body
         {

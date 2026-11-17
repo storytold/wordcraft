@@ -19,6 +19,7 @@ pub struct WindowView {
     goal_x: Option<f32>,
     page_hint: usize,
     hf_return: Option<Selection>,
+    hf_section: Option<usize>,
     typing_open: bool,
     join_next: bool,
     equation_join_next: bool,
@@ -65,6 +66,7 @@ impl Session {
             goal_x: self.goal_x.take(),
             page_hint: take(&mut self.page_hint),
             hf_return: self.hf_return.take(),
+            hf_section: self.hf_section.take(),
             typing_open: take(&mut self.typing_open),
             join_next: take(&mut self.join_next),
             equation_join_next: take(&mut self.equation_join_next),
@@ -89,6 +91,7 @@ impl Session {
             goal_x: self.goal_x,
             page_hint: self.page_hint,
             hf_return: self.hf_return.clone(),
+            hf_section: self.hf_section,
             // The new window hasn't typed: its first key starts an undo step of its own.
             typing_open: false,
             join_next: false,
@@ -119,6 +122,7 @@ impl Session {
             goal_x,
             page_hint,
             hf_return,
+            hf_section,
             typing_open,
             join_next,
             equation_join_next,
@@ -156,6 +160,7 @@ impl Session {
             return;
         }
         self.hf_return = hf_return.map(|s| Selection { anchor: self.doc.clamp(&s.anchor), focus: self.doc.clamp(&s.focus) });
+        self.hf_section = hf_section;
         self.typing_open = false;
         self.join_next = false;
         self.equation_join_next = false;
