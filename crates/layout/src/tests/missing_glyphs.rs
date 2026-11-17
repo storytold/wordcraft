@@ -242,3 +242,62 @@ fn an_equation_run_names_each_glyphs_characters() {
     assert!(found.iter().any(|(t, g, _)| (t.contains('\u{1D44E}') || t == "ab") && *g == 2), "{found:?}");
     assert!(found.iter().all(|(_, g, r)| g == r), "{found:?}");
 }
+
+/// A metafile text run with the given font height and advances, left-aligned at the baseline.
+fn meta_text(height: f32, dx: Vec<f32>) -> craft_metafile::Text {
+    craft_metafile::Text {
+        transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        text: "ab".into(),
+        dx,
+        font: craft_metafile::Font { family: "Arial".into(), height, ..Default::default() },
+        color: [0, 0, 0, 255],
+        background: Some([255, 255, 255, 255]),
+        h_align: craft_metafile::HAlign::Left,
+        v_align: craft_metafile::VAlign::Baseline,
+        clip: None,
+        region: None,
+        clips: Vec::new(),
+    }
+}
+
+/// A metafile font height of 0 is the file's default size: a 16-unit cell. A negative height is
+/// the em size, and a positive one the cell (ascent plus descent, 1200 units of a 1000-unit em
+/// here).
+#[test]
+fn metafile_text_heights() {
+    let glyphs = [(0, 500.0, 0.0, 0.0), (1, 500.0, 0.0, 0.0)];
+    let em = |h| crate::layout_metafile_text(&meta_text(h, Vec::new()), 1000.0, 900.0, 300.0, &glyphs).map(|l| l.em);
+    let near = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-9);
+    assert!(near(em(0.0), 16.0 * 1000.0 / 1200.0), "{:?}", em(0.0));
+    assert!(near(em(-10.0), 10.0), "{:?}", em(-10.0));
+    assert!(near(em(24.0), 20.0), "a positive height is the cell: {:?}", em(24.0));
+}
+
+/// A cosmetic pen's dashes become whole output pixels (the shortest one pixel), a period under a
+/// pixel draws solid, and so does a pattern that would split the path into too many pieces.
+#[test]
+fn metafile_dashes_follow_the_output_pixel() {
+    let cosmetic = crate::metafile_dashes(&[0.75, 0.25], true, 0.5, 100.0).unwrap_or_default();
+    assert!(cosmetic.len() == 2 && (cosmetic[0] - 1.5).abs() < 1e-6 && (cosmetic[1] - 0.5).abs() < 1e-6, "{cosmetic:?}");
+    assert_eq!(crate::metafile_dashes(&[3.0, 1.0], false, 0.5, 100.0), Some(vec![3.0, 1.0]));
+    assert_eq!(crate::metafile_dashes(&[0.2, 0.2], false, 0.5, 100.0), None, "a period under a pixel");
+    assert_eq!(crate::metafile_dashes(&[1.0, 1.0], false, 0.5, 1e6), None, "a million pieces");
+    assert_eq!(crate::metafile_dashes(&[1.0, -1.0], false, 0.5, 100.0), None, "a negative length");
+    assert_eq!(crate::metafile_dashes(&[0.0, 0.0], true, 0.5, 100.0), None, "no length at all");
+}
+
+/// A negative crop side is no crop; the others stay as they are.
+#[test]
+fn negative_crop_sides_are_no_crop() {
+    assert_eq!(crate::crop_sides([-0.5, 0.25, f32::NAN, 1.5]), [0.0, 0.25, 0.0, 1.5]);
+    assert_eq!(crate::crop_window([-0.5, 0.0, 0.0, 0.0]), [0.0, 0.0, 1.0, 1.0]);
+}
+
+/// The opaque background of a run whose advances move backward covers every pen position, not
+/// only the run's total advance.
+#[test]
+fn metafile_text_cell_spans_backward_advances() {
+    let glyphs = [(0, 500.0, 0.0, 0.0), (1, 500.0, 0.0, 0.0)];
+    let lay = crate::layout_metafile_text(&meta_text(-10.0, vec![50.0, -40.0]), 1000.0, 800.0, 200.0, &glyphs).expect("a layout");
+    assert_eq!(lay.cell, [0.0, -8.0, 50.0, 2.0]);
+}
