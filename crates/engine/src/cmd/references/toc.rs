@@ -504,9 +504,26 @@ fn bookmark_heading(s: &mut Session, path: &Path, lead: usize) -> Result<String,
 }
 
 /// Regenerate the TOC entries with page numbers (two layout passes: entries change pagination).
+/// A locked TOC (`w:fldLock`) keeps its entries, as Update Fields keeps every locked field's
+/// result (#6771 review: opening a document with a field marked dirty updates the others).
 pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
+    if toc_locked(s) {
+        return Ok(());
+    }
     let tabs = cached_toc_tabs(s);
     regenerate_toc(s, None, &tabs)
+}
+
+/// Whether the body's table of contents field (inline or a range) is locked.
+fn toc_locked(s: &Session) -> bool {
+    let toc = |instr: &str| {
+        let f = FieldCode::parse(instr);
+        f.name == "TOC" && !f.is_table_of_figures()
+    };
+    s.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).any(|o| match o {
+        InlineObject::Field { instr, locked: true, .. } | InlineObject::FieldStart { instr, locked: true, .. } => toc(instr),
+        _ => false,
+    })
 }
 
 /// Rebuild the entries the TOC field's switches ask for. The tab leader is `leader`, or the one
@@ -519,10 +536,12 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     // that the engine's TOC shape matches `toc_span` and the DOCX writer spans the field across entries.
     if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(start)) {
         for o in &mut p.objects {
-            if let InlineObject::Field { instr, result, .. } = o {
+            if let InlineObject::Field { instr, result, dirty, .. } = o {
                 let f = FieldCode::parse(instr);
                 if f.name == "TOC" && !f.is_table_of_figures() {
                     result.clear();
+                    // Its entries are rebuilt: no longer stale (#6771 review).
+                    *dirty = false;
                 }
             }
         }

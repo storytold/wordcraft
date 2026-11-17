@@ -517,6 +517,41 @@ fn dirty_fields_ask_for_an_update_until_it_runs() {
     assert!(has_dirty_fields(&s.doc), "in the body");
 }
 
+/// #6771 review: Update Fields rebuilds a table of contents marked dirty and clears the mark, so
+/// the document doesn't ask for an update again; a locked one keeps its entries and its mark.
+#[test]
+fn update_fields_clears_a_dirty_toc_and_keeps_a_locked_one() {
+    for locked in [false, true] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Contents\nChapter One\nText"));
+        s.doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.style = Some("Heading1".into());
+        let toc = InlineObject::Field {
+            instr: r#"TOC \o "1-3" \h \z \u"#.into(),
+            result: String::new(),
+            locked,
+            dirty: true,
+            code: false,
+            form: String::new(),
+        };
+        s.doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(0, toc, &CharProps::default()).unwrap();
+        s.run("references.updateFields", &json!({"all": true})).unwrap();
+        let headings = s.doc.plain_text(StoryRef::Body).matches("Chapter One").count();
+        assert_eq!(headings, if locked { 1 } else { 2 }, "locked {locked}: the heading, and its entry unless locked");
+        let marks: Vec<bool> = s
+            .doc
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .filter_map(|o| match o {
+                InlineObject::Field { instr, dirty, .. } if instr.starts_with("TOC") => Some(*dirty),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marks, [locked], "locked {locked}: the mark");
+        assert!(!has_dirty_fields(&s.doc), "locked {locked}: nothing asks for an update");
+    }
+}
+
 #[test]
 fn toc_tabs_ignore_nonentries() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Before\nContents\nOld\t9\nAfter"));
