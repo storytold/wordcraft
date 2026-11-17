@@ -173,6 +173,7 @@ fn a_window_that_regains_the_focus_types_into_its_canvas() {
     assert_eq!(ctx.memory(|m| m.focused()), Some(a.window_id("wordcraft_canvas")), "the first window's canvas holds the keyboard focus");
 
     a.run("file.new", json!({})).unwrap();
+    let second = a.session.document_id();
     frames(&ctx, &mut a, 3);
     let child = a.active_viewport();
     assert_ne!(child, ViewportId::ROOT, "the new window has a viewport of its own");
@@ -184,6 +185,15 @@ fn a_window_that_regains_the_focus_types_into_its_canvas() {
     frames(&ctx, &mut a, 2);
     assert_eq!(a.session.document_id(), first, "the focused window becomes the active one");
     assert_eq!(ctx.memory(|m| m.focused()), Some(a.window_id("wordcraft_canvas")), "regaining the OS focus gives its canvas the keyboard focus back");
+
+    EVENTS.with(|e| e.borrow_mut().entry(ViewportId::ROOT).or_default().extend([egui::Event::Text(" back".into())]));
+    frame(&ctx, &mut a);
+    assert_eq!(text(&a), "First back", "the typing after the switch goes into the window that regained the focus");
+    assert_eq!(
+        a.session.with_document(second, |s| s.doc.plain_text(StoryRef::Body).trim().to_string()).unwrap(),
+        "",
+        "and not into the other window's document"
+    );
 
     focus(child);
     frames(&ctx, &mut a, 2);
