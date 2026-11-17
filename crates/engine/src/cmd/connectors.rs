@@ -332,6 +332,7 @@ mod tests {
 
     /// Drawing commands must not search every page again for each glued connector.
     #[test]
+    #[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
     fn rerouting_many_pages_does_not_rescan_all_objects_per_connector() {
         use wordcraft_doc::{Document, Paragraph, para_block};
         let mut doc = Document::new();
