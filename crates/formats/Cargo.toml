@@ -8,6 +8,11 @@ description = "WordCraft import/export: plain text, Markdown, HTML, RTF, OpenDoc
 [lints]
 workspace = true
 
+[features]
+# `sheet::xls_fixture`, the binary workbook builder other crates' tests share; turned on only as a
+# dev-dependency, so never built into the app.
+test-support = ["craft-xls/test-support"]
+
 [dependencies]
 wordcraft-doc = { workspace = true }
 wordcraft-docx = { workspace = true }

@@ -79,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .when(has_canvas)
             .pure(),
         CommandSpec::new("canvas.member", "Canvas Member", "Shape Format › Drawing Canvas", member)
-            .params(r#"{"index": n, "x"?: pt, "y"?: pt, "width"?: pt, "height"?: pt, "delete"?: bool}  (moves, resizes or removes member `index` of the selected canvas; x/y from the canvas's top-left; with no change, returns the members)"#)
+            .params(r#"{"index"?: n, "x"?: pt, "y"?: pt, "width"?: pt, "height"?: pt, "delete"?: bool}  (moves, resizes or removes member `index` of the selected canvas; x/y from the canvas's top-left; without index, returns the members)"#)
             .when(has_canvas),
     ]
 }
@@ -211,7 +211,7 @@ fn scale(s: &mut Session, v: &Value) -> CmdResult {
     result(&o)
 }
 
-/// `canvas.member`: move, resize or remove one member; with no change, list the members.
+/// `canvas.member`: move, resize or remove one member; without index, list the members.
 fn member(s: &mut Session, v: &Value) -> CmdResult {
     let pos = canvas_pos(s)?;
     let Some(i) = p::u64(v, "index").and_then(|i| usize::try_from(i).ok()) else {

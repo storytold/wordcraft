@@ -15,6 +15,9 @@ const MAX_FILES: usize = 16;
 const DISK_BUDGET: u64 = 2 << 30;
 /// Times a record lock held for a moment (by a process being started) is tried again.
 const LOCK_RETRIES: u32 = 10;
+/// How many times, 10 ms apart, a record's emptied folder is removed again while it isn't empty
+/// yet ([`remove_record_dir`]).
+const REMOVE_RETRIES: u32 = 100;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -347,10 +350,24 @@ impl Store {
         self.entries.remove(id);
         self.locks.remove(id);
         fs::remove_file(dir.join("owner.lock")).map_err(|e| e.to_string())?;
-        fs::remove_dir(&dir).map_err(|e| e.to_string())?;
+        remove_record_dir(&dir, |d| fs::remove_dir(d)).map_err(|e| e.to_string())?;
         sync_dir(&self.root).map_err(|e| e.to_string())?;
         Ok(())
     }
+}
+/// Removes a record's emptied folder `dir` with `remove`. On Windows a file just deleted stays in
+/// its folder, pending deletion, while another process still has it open (an antivirus scanner
+/// or a search indexer looking at a file just written), so the folder isn't empty yet and
+/// removing it fails ("The directory is not empty", os error 145): wait that out, retrying
+/// [`REMOVE_RETRIES`] times 10 ms apart, as [`Store::lock`] waits out a lock held for a moment.
+fn remove_record_dir(dir: &Path, mut remove: impl FnMut(&Path) -> io::Result<()>) -> io::Result<()> {
+    for _ in 0..REMOVE_RETRIES {
+        match remove(dir) {
+            Err(e) if e.kind() == io::ErrorKind::DirectoryNotEmpty => std::thread::sleep(Duration::from_millis(10)),
+            done => return done,
+        }
+    }
+    remove(dir)
 }
 struct Limited<W> {
     inner: W,
