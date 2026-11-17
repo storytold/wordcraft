@@ -69,22 +69,17 @@ pub(super) fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
 
 /// Append `n` empty paragraphs at the end of the body. The caller's command owns the undo step.
 pub(super) fn append_paragraphs(s: &mut Session, n: usize) -> Result<(), CmdError> {
-    let last = s.doc.body.len().saturating_sub(1);
-    let path = Path::top(last);
-    let at = if let Some(p) = s.doc.body.get(last).and_then(|b| b.as_para()) {
-        Pos { story: StoryRef::Body, path, off: p.len() }
-    } else {
-        // A table closes the body: put a paragraph after it first.
-        let path = Path::top(s.doc.body.len());
-        s.doc.insert_block(StoryRef::Body, &path, Block::Para(Paragraph::new()))?;
-        Pos { story: StoryRef::Body, path, off: 0 }
-    };
-    s.sel = Selection::caret(at);
-    crate::cmd::controls::prepare_edit(s)?;
-    for _ in 0..n {
-        let at = s.sel.focus.clone();
-        let new = split_para_plain(s, &at)?;
-        s.sel = Selection::caret(new);
+    if n == 0 {
+        return Ok(());
+    }
+    let start = s.doc.body.len();
+    for i in 0..n {
+        let path = Path::top(start + i);
+        let mut para = Paragraph::new().styled("Normal");
+        if s.doc.settings.track_changes {
+            para.mark.ins = Some(crate::cmd::new_revision(s, RevisionKind::Insert));
+        }
+        s.doc.insert_block(StoryRef::Body, &path, Block::Para(para))?;
     }
     s.goal_x = None;
     Ok(())

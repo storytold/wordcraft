@@ -334,13 +334,25 @@ fn click_and_type(s: &mut Session, v: &Value) -> CmdResult {
     let last_bottom = lines.iter().map(|ln| ln.bottom).fold(body.y, f32::max);
     let below = y - last_bottom;
     let original_body = s.doc.body.len();
-    if in_body && !on_line && l.cell_at(page, x, y).is_none() && page == l.pages.len().saturating_sub(1) && below > 0.0 {
-        let line_h = lines.last().map(|ln| (ln.bottom - ln.top).max(1.0)).unwrap_or(12.0);
-        let n = ((below / line_h).ceil() as usize).clamp(1, MAX_CLICK_AND_TYPE_PARAGRAPHS);
-        super::text::append_paragraphs(s, n)?;
-        // The command's own layout is still the pre-append one until the command finishes, so
-        // lay the new paragraphs out before hit-testing the click point.
-        s.relayout();
+    if in_body && !on_line && l.cell_at(page, x, y).is_none() && page == l.pages.len().saturating_sub(1) && y > last_bottom {
+        // Add one paragraph at a time until the last line reaches the click, laying out after
+        // each one: an inline picture or a large Title line can be much taller than the empty
+        // Click and Type paragraphs that follow it, so one estimate cannot place the caret.
+        let mut added = 0;
+        while added < MAX_CLICK_AND_TYPE_PARAGRAPHS {
+            let l = s.layout();
+            let Some(pg) = l.pages.get(page) else { break };
+            if l.pages.len().saturating_sub(1) != page || l.cell_at(page, x, y).is_some() {
+                break;
+            }
+            let last_bottom = page_lines(pg, StoryRef::Body).into_iter().map(|ln| ln.bottom).fold(pg.body.y, f32::max);
+            if y <= last_bottom {
+                break;
+            }
+            super::text::append_paragraphs(s, 1)?;
+            s.touch();
+            added += 1;
+        }
     }
     let l = s.layout();
     let Some(mut pos) = l.hit(page, x, y, StoryRef::Body) else { return Err(CmdError::Params("no text on that page".into())) };
@@ -361,7 +373,7 @@ fn click_and_type(s: &mut Session, v: &Value) -> CmdResult {
             trimmed = true;
         }
         if trimmed {
-            s.relayout();
+            s.touch();
             let l = s.layout();
             pos = l.hit(page, x, y, StoryRef::Body).ok_or_else(|| CmdError::Params("no text on that page".into()))?;
         }
