@@ -22,7 +22,7 @@ pub use fontdb::{
 pub use harfrust::Feature;
 use harfrust::{Direction, ShapeOptions, ShapePlan, ShapePlanKey, Shaper, Tag, UnicodeBuffer};
 pub use kurbo::BezPath;
-pub use script::{fallback_rank, is_emoji, joins_cursively, needs_layout_tables, script_fallbacks};
+pub use script::{fallback_rank, is_arabic, is_emoji, joins_cursively, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
 pub use ui_fallback::{

@@ -93,12 +93,21 @@ pub fn needs_layout_tables(c: char) -> bool {
     )
 }
 
+/// Arabic-script characters, marks, digits and punctuation: they belong with the Arabic letters
+/// around them when choosing a fallback font.
+pub fn is_arabic(c: char) -> bool {
+    c.script() == Script::Arabic || matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
+}
+
 /// Families preferred, in order, for a character of `c`'s script when the document's font lacks
 /// it: the platforms' own OpenType fonts and the open Noto/SIL families. Apple's older fonts for
 /// these scripts carry only AAT tables (which the shaper doesn't read), so they come last.
 pub fn script_fallbacks(c: char) -> &'static [&'static str] {
     if is_emoji(c) {
         return COLOR_EMOJI;
+    }
+    if is_arabic(c) {
+        return crate::word::ARIAL_FALLBACKS;
     }
     match c.script() {
         Script::Myanmar => &["Myanmar Text", "Noto Sans Myanmar", "Padauk", "Pyidaungsu", "Noto Serif Myanmar", "Myanmar Sangam MN", "Myanmar MN"],
@@ -214,5 +223,17 @@ mod tests {
         for c in ['✔', '☺', '→', 'a', '1'] {
             assert!(!is_emoji(c), "{c}");
         }
+    }
+
+    #[test]
+    fn arabic_prefers_arial_and_its_substitution_chain() {
+        for c in ['ع', 'ش', '٠', '،'] {
+            assert!(is_arabic(c), "{c}");
+            assert_eq!(script_fallbacks(c), crate::word::ARIAL_FALLBACKS, "{c}");
+        }
+        assert_eq!(fallback_rank('ع', "Arial"), 0);
+        assert!(fallback_rank('ع', "Arial") < fallback_rank('ع', "Liberation Sans"));
+        assert!(fallback_rank('ع', "Liberation Sans") < fallback_rank('ع', "Noto Naskh Arabic"));
+        assert!(!is_arabic('ש') && !is_arabic('a'));
     }
 }

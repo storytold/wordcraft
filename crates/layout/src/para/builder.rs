@@ -252,11 +252,25 @@ impl<'a> Builder<'a> {
         // Symbol-font characters are laid out as their Unicode equivalents.
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
+        let has_arabic = text.chars().any(wordcraft_fonts::is_arabic);
         // A font isn't installed when it was substituted, or looked up as a missing roman font.
+        // For Arabic-script runs, a missing non-Arabic font falls back to Arial (or its
+        // substitution chain) rather than Aptos / generic Latin substitutes (#6958).
         let resolved_cs = rc_cs.as_ref().map(|r| {
             let family = lookup_family(self.env.doc, &r.font);
             let resolved = wordcraft_fonts::word::resolve(family, r.bold, r.italic);
-            (resolved.face, resolved.substituted || family != r.font)
+            let missing = resolved.substituted || family != r.font;
+            let face = if missing
+                && has_arabic
+                && !wordcraft_fonts::word::has_named_substitutes(&r.font)
+                && !wordcraft_fonts::word::is_thai_family(&r.font)
+                && !wordcraft_doc::symbol_fonts::is_symbol_font(&r.font)
+            {
+                wordcraft_fonts::word::resolve("Arial", r.bold, r.italic).face
+            } else {
+                resolved.face
+            };
+            (face, missing)
         });
         let primary_cs = resolved_cs.map(|(face, _)| face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
@@ -329,7 +343,8 @@ impl<'a> Builder<'a> {
             };
             let rc = &rc;
             let small = key.small;
-            let si = self.style(rc, key.face, small);
+            let face = key.face.or_else(|| key.complex.then_some(primary_cs).flatten());
+            let si = self.style(rc, face, small);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
             // All Caps and Small Caps draw a letter's full capital, which can be several

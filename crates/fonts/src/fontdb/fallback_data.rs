@@ -195,12 +195,6 @@ pub(super) const SYSTEM_FALLBACKS: &[&str] = &[
     "Noto Color Emoji",
 ];
 
-/// Arabic-script marks and digits (bidi classes NSM / AN): they belong with the Arabic letters
-/// around them when choosing a fallback font.
-pub(super) fn arabic_block(c: char) -> bool {
-    matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
-}
-
 #[derive(Default)]
 pub(super) struct FallbackCache {
     pub(super) faces: usize,
@@ -225,6 +219,22 @@ pub(super) const RUN_FALLBACK_CACHE_MAX: usize = 4096;
 
 pub(super) const RUN_FALLBACK_CACHE_CHARS: usize = 1 << 20;
 
+/// Rank a loaded face for right-to-left fallback: Arabic script prefers Arial (and its
+/// substitution chain) first, then the general `RTL_FALLBACKS` order.
+pub(super) fn rtl_rank(c: Option<char>, rtl: bool, family: &str) -> (usize, usize) {
+    if let Some(ch) = c.filter(|&ch| crate::is_arabic(ch))
+        && let Some(i) = crate::script_fallbacks(ch).iter().position(|n| family.eq_ignore_ascii_case(n))
+    {
+        return (0, i);
+    }
+    if rtl {
+        let i = RTL_FALLBACKS.iter().position(|n| family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len());
+        (1, i)
+    } else {
+        (0, 0)
+    }
+}
+
 /// Loaded faces other than `exclude`, in fallback order: for right-to-left text the fonts made
 /// for the script first (so a word isn't split across fonts, which breaks Arabic joining); for a
 /// complex-script character `complex` (Thai, Myanmar…) faces with OpenType layout tables, the
@@ -232,8 +242,7 @@ pub(super) const RUN_FALLBACK_CACHE_CHARS: usize = 1 << 20;
 /// family, upright, nearest to regular weight.
 pub(super) fn fallback_order(faces: &[Arc<FontFace>], exclude: u32, rtl: bool, complex: Option<char>) -> Vec<&Arc<FontFace>> {
     let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
-    let rank =
-        |f: &FontFace| if rtl { RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len()) } else { 0 };
+    let rank = |f: &FontFace| rtl_rank(complex, rtl, &f.family);
     let shaping = |f: &FontFace| match complex {
         Some(c) => (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)),
         None => (false, 0),
@@ -243,3 +252,19 @@ pub(super) fn fallback_order(faces: &[Arc<FontFace>], exclude: u32, rtl: bool, c
 }
 
 pub(super) const FALLBACK_CACHE_MAX: usize = 20_000;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtl_rank_prefers_arial_for_arabic_and_keeps_hebrew_in_rtl_fallbacks() {
+        assert!(rtl_rank(Some('ع'), true, "Arial") < rtl_rank(Some('ع'), true, "Noto Naskh Arabic"));
+        assert!(rtl_rank(Some('ع'), true, "Arial") < rtl_rank(Some('ع'), true, "Vazirmatn"));
+        assert!(rtl_rank(Some('ع'), true, "Arial") < rtl_rank(Some('ع'), true, "Geeza Pro"));
+        assert!(rtl_rank(Some('ع'), true, "Liberation Sans") < rtl_rank(Some('ع'), true, "Noto Naskh Arabic"));
+        // Hebrew keeps its RTL_FALLBACKS order rather than jumping to Arial.
+        assert_eq!(rtl_rank(Some('ש'), true, "Noto Sans Hebrew").0, 1);
+        assert!(rtl_rank(Some('ש'), true, "Noto Sans Hebrew") < rtl_rank(Some('ש'), true, "Arial"));
+    }
+}

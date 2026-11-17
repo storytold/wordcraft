@@ -40,6 +40,9 @@ pub fn has_named_substitutes(family: &str) -> bool {
 
 const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
 
+/// Arial and its metric-compatible / open substitutes in fallback order.
+pub const ARIAL_FALLBACKS: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
+
 /// [`substitutes`], and whether they were chosen for this family by name.
 fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     if family.contains(';') {
@@ -55,8 +58,8 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     }
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
-    const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
-    const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
+    const ARIAL: &[&str] = ARIAL_FALLBACKS.split_at(1).1;
+    const ARIAL_UNICODE: &[&str] = ARIAL_FALLBACKS;
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
     // Word's symbol fonts (Symbol, Wingdings…) are proprietary: their characters are drawn as their
     // Unicode equivalents (`wordcraft_doc::symbol_fonts`) from these faces or any face that has them.
