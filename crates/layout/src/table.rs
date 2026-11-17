@@ -1606,9 +1606,15 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
         return;
     }
     if sum <= 100.0 {
-        for (w, p) in grid.iter_mut().zip(&pcts) {
-            *w = total * (p / sum);
+        let shares: Vec<f32> = pcts.iter().map(|p| total * (p / sum)).collect();
+        // A grid Word wrote from these same percentages is within its rounding of them (whole
+        // twips, and percentages in fiftieths): it is kept exactly. Rebuilt, a column could come
+        // out a few hundredths of a point narrower and wrap its text differently (#6575).
+        let rounding = 0.05 + total * 0.0002;
+        if grid.iter().zip(&shares).all(|(g, s)| (g - s).abs() <= rounding) {
+            return;
         }
+        grid.copy_from_slice(&shares);
         return;
     }
     // A grid too narrow for the floor in every column shares its width out instead, so the table
@@ -1709,6 +1715,24 @@ mod width_tests {
         let content = [(28.0, 28.0), (40.0, 120.0), (40.0, 40.0), (30.0, 90.0)];
         autofit(&mut grid, &content, &table, 260.0);
         assert_eq!(grid, [28.0, 111.0, 40.0, 81.0]);
+    }
+
+    /// #5074 review (and #6575): a grid Word wrote from the cells' percentages is kept exactly,
+    /// while one that is off by more than Word's rounding is rebuilt from them.
+    #[test]
+    fn a_grid_matching_its_percentages_is_kept() {
+        let mut t = Table::new(1, 3, 300.0);
+        t.props.width = Some(300.0);
+        for (cell, p) in t.rows[0].cells.iter_mut().zip([33.32, 33.34, 33.34]) {
+            cell.props.width = None;
+            cell.props.width_pct = Some(p);
+        }
+        let mut grid = [99.95, 100.05, 100.0];
+        apply_pct_widths(&t, &mut grid, 468.0);
+        assert_eq!(grid, [99.95, 100.05, 100.0], "kept");
+        let mut stale = [90.0, 110.0, 100.0];
+        apply_pct_widths(&t, &mut stale, 468.0);
+        assert!(stale.iter().zip([99.96, 100.02, 100.02]).all(|(g, w)| (g - w).abs() < 0.01), "rebuilt: {stale:?}");
     }
 
     #[test]
