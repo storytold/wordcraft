@@ -755,6 +755,70 @@ fn compare_mark_block_records_paragraph_mark_revisions_on_whole_block_changes() 
     assert_eq!(s5.doc.plain_text(StoryRef::Body), orig_empty);
 }
 
+/// Issue #6899: when the revised document's paragraph mark already carries another author's
+/// pending deletion, a whole-paragraph insertion by compare must not leave the mark with both
+/// `ins` and `del` — on accept the deletion branch would remove the inserted paragraph (or join
+/// it away), losing the inserted break. The revised clone's mark keeps only the compare's `ins`.
+#[test]
+fn compare_inserted_paragraph_mark_drops_a_foreign_del() {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut rev = Document::from_text("Keep start.\nNew line.\nKeep end.");
+    rev.revisions.push(Revision { kind: RevisionKind::Delete, author: "Other".into(), date: String::new(), move_name: None });
+    if let Some(Block::Para(p)) = rev.body.get_mut(1).map(Arc::make_mut) {
+        p.mark.del = Some(0);
+    }
+    let path = std::env::temp_dir().join(format!("wc-compare-6899-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    let check = crate::io::open_path(&path).unwrap();
+    assert!(check.body[1].as_para().unwrap().mark.del.is_some(), "the foreign del must survive the docx round-trip, or this test proves nothing");
+
+    let mut s = Session::new(Document::from_text("Keep start.\nKeep end."));
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let ins = s.doc.body[1].as_para().expect("block 1 is the inserted paragraph");
+    assert!(ins.mark.ins.is_some(), "compare marks the whole inserted paragraph's mark");
+    assert!(ins.mark.del.is_none(), "the foreign del does not sit next to the compare's ins");
+    // Accepting keeps the inserted paragraph break: the text reads as the revised document's.
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Keep start.\nNew line.\nKeep end.");
+}
+
+/// Issue #6899, inside a table: `mark_block` recurses into cells, so a paragraph mark there gets
+/// the same treatment — a foreign `del` does not sit next to the compare's `ins`.
+#[test]
+fn compare_inserted_table_cell_paragraph_mark_drops_a_foreign_del() {
+    use wordcraft_doc::{Revision, RevisionKind, Table};
+    let mut rev = Document::from_text("Keep start.\nKeep end.");
+    rev.revisions.push(Revision { kind: RevisionKind::Delete, author: "Other".into(), date: String::new(), move_name: None });
+    let mut t = Table::new(1, 1, 200.0);
+    if let Some(c) = t.rows.first_mut().and_then(|r| r.cells.first_mut())
+        && let Some(Block::Para(p)) = c.blocks.first_mut().map(Arc::make_mut)
+    {
+        p.mark.del = Some(0);
+    }
+    rev.body.insert(1, Arc::new(Block::Table(t)));
+    let path = std::env::temp_dir().join(format!("wc-compare-6899-table-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    let check = crate::io::open_path(&path).unwrap();
+    let cell_marked = check.body.iter().any(|b| match &**b {
+        Block::Table(t) => {
+            t.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()).any(|b| b.as_para().is_some_and(|p| p.mark.del.is_some()))
+        }
+        _ => false,
+    });
+    assert!(cell_marked, "the cell paragraph's foreign del must survive the docx round-trip, or this test proves nothing");
+
+    let mut s = Session::new(Document::from_text("Keep start.\nKeep end."));
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let Some(Block::Table(t)) = s.doc.body.get(1).map(|b| &**b) else { panic!("block 1 is the inserted table") };
+    let cell_para = t.rows[0].cells[0].blocks[0].as_para().expect("the cell paragraph");
+    assert!(cell_para.mark.ins.is_some(), "compare marks the inserted cell paragraph's mark");
+    assert!(cell_para.mark.del.is_none(), "the foreign del does not sit next to the compare's ins");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert!(matches!(s.doc.body.get(1).map(|b| &**b), Some(Block::Table(_))), "accepting keeps the inserted table");
+}
+
 #[test]
 fn macros_record_and_run() {
     let mut s = Session::new(Document::new());
