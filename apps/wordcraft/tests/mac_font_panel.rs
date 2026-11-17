@@ -32,12 +32,27 @@ fn main() {
     bigger.setTag(objc2_app_kit::NSFontAction::SizeUpFontAction.0 as isize);
     // SAFETY: `modifyFont:` reads only the sender's tag.
     #[allow(unsafe_code)]
-    unsafe {
-        objc2_app_kit::NSFontManager::sharedFontManager(mtm).modifyFont(Some(&bigger))
-    };
+    let press_bigger = || unsafe { objc2_app_kit::NSFontManager::sharedFontManager(mtm).modifyFont(Some(&bigger)) };
+    press_bigger();
     let picks = panel.picks();
     assert_eq!(picks.len(), 1, "{picks:?}");
-    assert!(picks[0].size.is_some_and(|size| size > 14.0) && picks[0].family.is_none() && picks[0].bold.is_none(), "{picks:?}");
+    let size_only = |p: &font_panel::Pick| p.family.is_none() && p.bold.is_none() && p.italic.is_none();
+    assert!(picks[0].size.is_some_and(|size| size > 14.0 && size < 20.0) && size_only(&picks[0]), "{picks:?}");
+    // With the panel open, another selection (30 pt here) becomes what the panel converts.
+    let mut word =
+        wordcraft_ui_egui::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), wordcraft_ui_egui::Services::default());
+    word.run("text.insert", serde_json::json!({"text": "Big"})).unwrap();
+    word.run("select.all", serde_json::json!({})).unwrap();
+    word.run("format.size", serde_json::json!({"size": 30})).unwrap();
+    panel.follow(&mut word);
+    press_bigger();
+    let picks = panel.picks();
+    assert!(picks.len() == 1 && picks[0].size.is_some_and(|size| size > 30.0) && size_only(&picks[0]), "{picks:?}");
+    // A family the system doesn't have shows the system font, bold as the selection is.
+    panel.show("No Such Family", 12.0, true, false);
+    let manager = objc2_app_kit::NSFontManager::sharedFontManager(mtm);
+    let shown = manager.selectedFont().expect("a font is shown");
+    assert!(manager.traitsOfFont(&shown).contains(objc2_app_kit::NSFontTraitMask::BoldFontMask), "{shown:?}");
     drop(app);
     println!("mac_font_panel: ok");
 }
