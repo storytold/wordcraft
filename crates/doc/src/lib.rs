@@ -95,8 +95,8 @@ pub use settings::{
     COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, OdfLayout, PagePicture, Settings, Source,
     THEME_COLORS, Watermark, Zoom, ZoomFit,
 };
-pub(crate) use text_walk::{PARA_WALK_DEPTH, walk_between};
-pub use text_walk::{count_chars, count_chars_no_spaces};
+pub(crate) use text_walk::walk_between;
+pub use text_walk::{PARA_WALK_DEPTH, count_chars, count_chars_no_spaces};
 pub use word_count::count_words;
 
 /// A document.

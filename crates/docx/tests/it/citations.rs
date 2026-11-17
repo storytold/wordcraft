@@ -2,8 +2,6 @@
 //! multi-paragraph results, and custom document properties round-trip. All markup here is
 //! synthetic, written from ECMA-376.
 
-use std::io::Write;
-
 use wordcraft_doc::para::OBJ;
 use wordcraft_doc::{CharProps, Document, InlineObject, Path, StoryRef};
 use wordcraft_docx::{read, write};
@@ -16,12 +14,11 @@ const CITE_B: &str = r#""citationItems":[{"id":7,"uris":["http://zotero.org/user
 const BIBL: &str = r#" ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY "#;
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn fld(kind: &str) -> String {
@@ -129,10 +126,9 @@ fn count(xml: &str, kind: &str) -> usize {
 }
 
 fn document_xml(docx: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(docx)).unwrap();
-    let mut s = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(docx, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 #[test]
@@ -174,9 +170,8 @@ fn custom_property_bookmark_links_survive_saves_and_value_edits() {
         let before = d.custom_props.clone();
         for _ in 0..2 {
             let out = write(&d).unwrap();
-            let mut z = zip::ZipArchive::new(std::io::Cursor::new(&out)).unwrap();
-            let mut xml = String::new();
-            std::io::Read::read_to_string(&mut z.by_name("docProps/custom.xml").unwrap(), &mut xml).unwrap();
+            let mut z = craft_zip::Archive::open(&out, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+            let xml = String::from_utf8(z.read("docProps/custom.xml", 16 << 20).unwrap().unwrap()).unwrap();
             assert!(xml.contains(r#"linkTarget="OriginalBookmark""#), "{xml}");
             assert!(xml.contains(r#"linkTarget="RawBookmark""#), "{xml}");
             assert_eq!(xml.matches("linkTarget=").count(), 2, "unlinked properties stay unlinked");

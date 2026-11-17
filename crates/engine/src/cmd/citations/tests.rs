@@ -488,6 +488,32 @@ fn table_of_authorities_updates() {
     assert!(after.matches("Doe v. Roe").count() > t.matches("Doe v. Roe").count(), "{after}");
 }
 
+/// #3856: the table of figures and the table of authorities write each page as its footer shows
+/// it, in the section's number format; the authority cited on pages i and ii lists both.
+#[test]
+fn figures_and_authorities_follow_the_page_number_format() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Smith v. Jones held it.\nSmith v. Jones again."));
+    s.run("select.text", &json!({"text": "Smith v. Jones again"})).unwrap();
+    s.run("caret.home", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "page"})).unwrap();
+    s.run("references.caption", &json!({"label": "Figure", "text": "The court"})).unwrap();
+    for occurrence in [1, 2] {
+        s.run("select.text", &json!({"text": "Smith v. Jones", "occurrence": occurrence})).unwrap();
+        s.run("references.markCitation", &json!({})).unwrap();
+    }
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("layout.pageNumberFormat", &json!({"format": "lowerRoman", "start": 1})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.tableOfFigures", &json!({})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.tableOfAuthorities", &json!({})).unwrap();
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("Figure 1: The court\tii"), "{t}");
+    assert!(t.contains("Smith v. Jones\ti, ii"), "{t}");
+}
+
 /// Field instructions and results in the body, in order.
 fn fields(s: &Session) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -899,4 +925,43 @@ fn citation_refresh_source_lookup_work_scales_with_document_size() {
     assert!(ratio < 32.0, "citation refresh: {a:.6}s -> {b:.6}s, {ratio:.1}x for {SCALE}x input");
     let p = big.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
     assert!(p.objects.iter().enumerate().all(|(i, o)| matches!(o, InlineObject::Field { result, .. } if result == &format!("[{}]", i + 1))));
+}
+
+/// A heading that starts with a page break and has a `_Ref` bookmark from before the break: the
+/// page cross-reference reuses it and reads the heading's page, and still does after Update Field.
+#[test]
+fn a_ref_bookmark_before_a_page_break_reads_the_heading_page() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Front\nPreface"));
+    s.run("select.text", &json!({"text": "Preface"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.run("caret.home", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "page"})).unwrap();
+    let path =
+        s.doc.para_paths(StoryRef::Body).into_iter().find(|p| s.doc.para(StoryRef::Body, p).is_some_and(|p| p.text.contains("Preface"))).unwrap();
+    let len = s.doc.para(StoryRef::Body, &path).unwrap().len();
+    let props = CharProps::default();
+    s.doc
+        .insert_object(
+            &Pos { story: StoryRef::Body, path: path.clone(), off: len },
+            InlineObject::BookmarkEnd { name: "_Ref000000003".into() },
+            &props,
+        )
+        .unwrap();
+    s.doc.insert_object(&Pos { story: StoryRef::Body, path, off: 0 }, InlineObject::BookmarkStart { name: "_Ref000000003".into() }, &props).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("insert.crossReference", &json!({"to": "heading", "target": "Preface", "show": "page"})).unwrap();
+    let pageref = |s: &Session| {
+        s.doc
+            .para_paths(StoryRef::Body)
+            .into_iter()
+            .flat_map(|p| s.doc.para(StoryRef::Body, &p).map(|p| p.objects.clone()).unwrap_or_default())
+            .find_map(|o| match o {
+                InlineObject::Field { instr, result, .. } if instr.starts_with("PAGEREF") => Some((instr, result)),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(pageref(&s), ("PAGEREF _Ref000000003 \\h".to_string(), "2".to_string()));
+    crate::cmd::references::update_fields_in(&mut s, true).unwrap();
+    assert_eq!(pageref(&s).1, "2");
 }
