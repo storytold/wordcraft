@@ -231,6 +231,15 @@ impl FontPanel {
         if !NSFontPanel::sharedFontPanelExists(mtm) || !NSFontPanel::sharedFontPanel(mtm).isVisible() {
             return;
         }
+        // Open but never shown: macOS reopened the panels a quit left open (window restoration,
+        // which may come after the first frames). They open only when asked.
+        if self.shown.borrow().is_none() {
+            NSFontPanel::sharedFontPanel(mtm).orderOut(None);
+            if NSColorPanel::sharedColorPanelExists(mtm) {
+                NSColorPanel::sharedColorPanel(mtm).orderOut(None);
+            }
+            return;
+        }
         let face = face();
         if self.shown.borrow().as_ref() != Some(&face) {
             self.select(face);
@@ -328,6 +337,8 @@ fn set_targets(mtm: MainThreadMarker, target: &FontTarget) {
         colors.setAction(Some(sel!(changeColor:)));
         // A drag in a picker is one pick (one undo step), sent when it ends.
         colors.setContinuous(false);
+        colors.setRestorable(false);
+        NSFontPanel::sharedFontPanel(mtm).setRestorable(false);
         // The panel asks `validModesForFontPanel:` of the responder chain, not of the target; keep
         // whatever followed the app.
         let app = NSApplication::sharedApplication(mtm);
