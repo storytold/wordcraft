@@ -10901,6 +10901,47 @@ fn keep_with_next_moves_a_paragraph_only_when_it_would_fit() {
     assert_eq!(pages(fit - 1, kn.clone(), kn.clone()), [1, 1, 1, 1, 1, 1], "a kept chain moves together");
 }
 
+/// #6919: keep with next can't hold a paragraph that holds a page (or column) break with the next
+/// one, which starts after the break wherever the paragraph goes. A Google Docs export puts its
+/// page breaks in Heading 1 paragraphs (kept with the next): moving one at the foot of a page to
+/// the next page left that page empty and the heading on the page after. With and without keep
+/// with next, such a paragraph lands on the same pages, at every place on the page, and so does
+/// a kept paragraph before it, which needs only the break's line beside it, not what follows.
+/// (A break line that doesn't fit at the foot of the page goes over either way, as in Word.)
+#[test]
+fn keep_with_next_never_moves_a_paragraph_holding_a_break() {
+    crate::test_fonts();
+    // Pages of the last paragraph before the break paragraph (a kept one with `chain`), the
+    // break paragraph's first and last lines, and the next paragraph.
+    let pages = |fillers: usize, brk: &str, keep: bool, chain: bool| {
+        let mut d = Document::new();
+        let para = |text: &str, keep_next: bool| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = ParaProps {
+                space_before: Some(0.0),
+                space_after: Some(0.0),
+                line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+                keep_next: keep_next.then_some(true),
+                ..Default::default()
+            };
+            wordcraft_doc::para_block(x)
+        };
+        d.body = (0..fillers).map(|i| para(&format!("F{i}"), chain && i + 1 == fillers)).collect();
+        d.body.push(para(brk, keep));
+        d.body.push(para("Heading", false));
+        let l = lay(&d);
+        let page = |block: usize, off: usize| l.caret(&Pos::body(block, off)).unwrap().page;
+        [page(fillers - 1, 0), page(fillers, 0), page(fillers, brk.len()), page(fillers + 1, 0)]
+    };
+    for brk in ["\u{C}", "\u{E}"] {
+        for chain in [false, true] {
+            for n in 20..80 {
+                assert_eq!(pages(n, brk, true, chain), pages(n, brk, false, chain), "{n} fillers, break {brk:?}, chain {chain}");
+            }
+        }
+    }
+}
+
 /// A kept heading goes with the paragraph after it when that paragraph cannot start on its
 /// page (#966): with widow/orphan control on, one line of it at the bottom of the page moves
 /// over with the rest, so only two lines below the heading hold it there. Word and LibreOffice
