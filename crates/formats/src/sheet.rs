@@ -313,7 +313,7 @@ impl NumFmt {
     /// Whether the format shows `value` as a date, a time or an elapsed time.
     fn date_kind(&self, value: f64) -> Option<DateKind> {
         match self {
-            NumFmt::Builtin(id) => builtin_date(*id),
+            NumFmt::Builtin(id) => builtin_date(*id, value),
             NumFmt::Code(sections) => format_section(sections, value).and_then(|s| s.kind),
         }
     }
@@ -337,11 +337,18 @@ enum Elapsed {
 }
 
 /// The built-in number formats (ECMA-376 Part 1 §18.8.30) that show dates or times.
-fn builtin_date(id: u32) -> Option<DateKind> {
+///
+/// Formats 34, 35, 52, 53, 55 and 56 are dates in some East Asian locales and times in others,
+/// and a workbook does not record which. For those, a number under 1 reads as a time, a whole
+/// number as a date, and any other number as a date and time.
+fn builtin_date(id: u32, value: f64) -> Option<DateKind> {
     match id {
-        // 32 to 35, 55 and 56 are the East Asian time formats.
-        14..=17 | 27..=31 | 36 | 50..=54 | 57 | 58 => Some(DateKind::Date),
-        18..=21 | 32..=35 | 45 | 47 | 55 | 56 => Some(DateKind::Time),
+        34 | 35 | 52 | 53 | 55 | 56 if value < 1.0 => Some(DateKind::Time),
+        34 | 35 | 52 | 53 | 55 | 56 if value.fract() == 0.0 => Some(DateKind::Date),
+        34 | 35 | 52 | 53 | 55 | 56 => Some(DateKind::DateTime),
+        // 32 and 33 are the East Asian time formats.
+        14..=17 | 27..=31 | 36 | 50 | 51 | 54 | 57 | 58 => Some(DateKind::Date),
+        18..=21 | 32 | 33 | 45 | 47 => Some(DateKind::Time),
         46 => Some(DateKind::Elapsed(Elapsed::Hours)),
         22 => Some(DateKind::DateTime),
         _ => None,
@@ -646,7 +653,7 @@ mod tests {
         assert_eq!(custom_date("mmm"), Some(DateKind::Date));
         assert_eq!(custom_date(r#"0.00" days""#), None);
         assert_eq!(custom_date("General"), None);
-        assert_eq!(builtin_date(22), Some(DateKind::DateTime));
+        assert_eq!(builtin_date(22, 1.0), Some(DateKind::DateTime));
         assert_eq!(serial_date(1.0, true, DateKind::Date).as_deref(), Some("1904-01-02"));
         assert_eq!(serial_date(59.0, false, DateKind::Date).as_deref(), Some("1900-02-28"));
         assert_eq!(serial_date(61.0, false, DateKind::Date).as_deref(), Some("1900-03-01"));
@@ -663,7 +670,7 @@ mod tests {
         assert_eq!(serial_date(0.5, false, DateKind::Elapsed(Elapsed::Minutes)).as_deref(), Some("720"));
         assert_eq!(custom_date("[s]"), Some(DateKind::Elapsed(Elapsed::Seconds)));
         assert_eq!(serial_date(0.5, false, DateKind::Elapsed(Elapsed::Seconds)).as_deref(), Some("43200"));
-        assert_eq!(builtin_date(46), Some(DateKind::Elapsed(Elapsed::Hours)));
+        assert_eq!(builtin_date(46, 1.0), Some(DateKind::Elapsed(Elapsed::Hours)));
         // 2957003 is 9999-12-31 in the 1904 system; the next day is not a date.
         assert_eq!(serial_date(2_957_003.0, true, DateKind::Date).as_deref(), Some("9999-12-31"));
         assert_eq!(serial_date(2_957_004.0, true, DateKind::Date), None);
@@ -672,8 +679,8 @@ mod tests {
         assert_eq!(serial_date(0.5 + 30.25 / 86_400.0, false, DateKind::Elapsed(Elapsed::Minutes)).as_deref(), Some("720:30.25"));
         assert_eq!(serial_date(45_356.999_999_999_9, false, DateKind::Date).as_deref(), Some("2024-03-05"));
         assert_eq!(serial_date(45_356.999_999_999_9, false, DateKind::DateTime).as_deref(), Some("2024-03-06 00:00"));
-        assert_eq!(builtin_date(32), Some(DateKind::Time));
-        assert_eq!(builtin_date(57), Some(DateKind::Date));
+        assert_eq!(builtin_date(32, 1.0), Some(DateKind::Time));
+        assert_eq!(builtin_date(57, 1.0), Some(DateKind::Date));
         assert_eq!(NumFmt::code("[Red][>=40000]yyyy-mm-dd;0").date_kind(12.0), None);
         assert_eq!(NumFmt::code("[Red][>=40000]yyyy-mm-dd;0").date_kind(45356.0), Some(DateKind::Date));
         // The section that shows the value decides.
@@ -681,6 +688,17 @@ mod tests {
         assert_eq!(NumFmt::code("[>=40000]yyyy-mm-dd;0").date_kind(12.0), None);
         assert_eq!(NumFmt::code("0;yyyy-mm-dd").date_kind(5.0), None);
         assert_eq!(NumFmt::code(r#""a;b"yyyy"#).date_kind(5.0), Some(DateKind::Date));
+    }
+
+    #[test]
+    fn east_asian_built_ins_read_by_value() {
+        // Dates in some East Asian locales and times in others.
+        for id in [34, 35, 52, 53, 55, 56] {
+            let kind = NumFmt::Builtin(id).date_kind(45356.0);
+            assert_eq!(kind.and_then(|k| serial_date(45356.0, false, k)).as_deref(), Some("2024-03-05"), "{id}");
+            assert_eq!(NumFmt::Builtin(id).date_kind(0.75), Some(DateKind::Time), "{id}");
+            assert_eq!(NumFmt::Builtin(id).date_kind(45356.75), Some(DateKind::DateTime), "{id}");
+        }
     }
 
     #[test]
