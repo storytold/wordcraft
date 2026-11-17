@@ -398,8 +398,11 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     props.fmt_change = None;
     // Its direction comes from its own letters, as on screen, not from the run it's typed into:
     // Latin typed into reopened Hebrew must not be saved as right-to-left (#1543). The DOCX
-    // writer marks the right-to-left pieces itself.
-    props.rtl = None;
+    // writer marks the right-to-left pieces itself. Combining marks alone (a haraka, a Hebrew
+    // point) have no direction of their own: they take the run they are typed into, their
+    // letter's, so the font places them on it (#6766); in a run of their own they were shaped
+    // apart, beside the letter.
+    props.rtl = if !text.is_empty() && text.chars().all(wordcraft_doc::bidi::attaches_to_previous) { s.caret_props().rtl } else { None };
     if s.doc.settings.track_changes && !text.is_empty() {
         props.ins = Some(new_revision(s, RevisionKind::Insert));
         props.del = None;
