@@ -285,8 +285,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 // it is on, and the arrows belong to the ribbon while keytips are
                                 // on (#1012). Without this the page held the focus and every arrow
                                 // went back into the text.
-                                let ring =
-                                    app.ui.keytips == crate::keytips::Phase::Tabs && app.ui.keytip_focus.as_deref() == Some(tab) && ghost.is_none();
+                                let ring = app.ui.keytips == crate::keytips::Phase::Tabs
+                                    && app.ui.keytip_qat.is_none()
+                                    && app.ui.keytip_focus.as_deref() == Some(tab)
+                                    && ghost.is_none();
                                 if ring && !resp.has_focus() {
                                     resp.request_focus();
                                 }

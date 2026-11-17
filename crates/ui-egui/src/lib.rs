@@ -377,6 +377,10 @@ pub struct UiState {
     /// persisted.
     #[serde(skip)]
     pub keytip_cmd: Option<String>,
+    /// The Quick Access Toolbar button the ring is on, by its place in the toolbar (#1012); never
+    /// persisted.
+    #[serde(skip)]
+    pub keytip_qat: Option<usize>,
     /// Alt is held according to key or modifier events; never persisted.
     #[serde(skip)]
     pub alt_pressed: bool,
@@ -527,6 +531,7 @@ impl Default for UiState {
             keytips: crate::keytips::Phase::Off,
             keytip_focus: None,
             keytip_cmd: None,
+            keytip_qat: None,
             alt_pressed: false,
             alt_chord_used: false,
             alt_key_down: false,

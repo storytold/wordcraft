@@ -614,9 +614,17 @@ pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
             // Word walks the ribbon with the arrows, and the ring is real keyboard focus, so a
             // screen reader follows it (#1012). Before this, an arrow was a key with no badge and
             // cancelled the mode, dropping the user back into the page.
-            egui::Key::ArrowLeft | egui::Key::ArrowUp if app.ui.keytips == Phase::Tabs => step_tab(app, -1),
-            egui::Key::ArrowRight | egui::Key::ArrowDown if app.ui.keytips == Phase::Tabs => step_tab(app, 1),
-            egui::Key::Enter | egui::Key::Tab if app.ui.keytips == Phase::Tabs => enter_commands(app),
+            // Up from the tab row reaches the Quick Access Toolbar, as it does in Word (#1012).
+            egui::Key::ArrowUp if app.ui.keytips == Phase::Tabs && app.ui.keytip_qat.is_none() => enter_qat(app),
+            // On the toolbar the arrows walk it and Down goes back to the tab row.
+            egui::Key::ArrowLeft if app.ui.keytip_qat.is_some() => step_qat(app, -1),
+            egui::Key::ArrowRight if app.ui.keytip_qat.is_some() => step_qat(app, 1),
+            egui::Key::ArrowDown if app.ui.keytip_qat.is_some() => leave_qat(app),
+            egui::Key::Enter | egui::Key::Space if app.ui.keytip_qat.is_some() => run_qat(app),
+            // The tab row: Left and Right walk the tabs, Down or Enter goes into the controls.
+            egui::Key::ArrowLeft if app.ui.keytips == Phase::Tabs => step_tab(app, -1),
+            egui::Key::ArrowRight if app.ui.keytips == Phase::Tabs => step_tab(app, 1),
+            egui::Key::ArrowDown | egui::Key::Enter | egui::Key::Tab if app.ui.keytips == Phase::Tabs => enter_commands(app),
             egui::Key::ArrowRight | egui::Key::ArrowDown | egui::Key::Tab if app.ui.keytips == Phase::Commands => step_command(app, 1),
             egui::Key::ArrowLeft | egui::Key::ArrowUp if app.ui.keytips == Phase::Commands => step_command(app, -1),
             egui::Key::Enter if app.ui.keytips == Phase::Commands => run_focused(app),
@@ -767,6 +775,7 @@ pub fn turn_on(app: &mut WordApp) {
     app.ui.keytips = Phase::Tabs;
     app.ui.keytip_focus = Some(app.ui.tab.clone());
     app.ui.keytip_cmd = None;
+    app.ui.keytip_qat = None;
 }
 
 /// Leave keytips and give the page its keyboard back, as Word does on Escape or a second Alt
@@ -777,6 +786,7 @@ pub fn turn_off(app: &mut WordApp) {
     app.ui.keytip_prefix.clear();
     app.ui.keytip_focus = None;
     app.ui.keytip_cmd = None;
+    app.ui.keytip_qat = None;
     app.canvas.want_focus = true;
 }
 
@@ -790,8 +800,14 @@ fn target_id(t: &Target) -> &'static str {
 }
 
 /// Move the ring along the tab row, switching to the tab it lands on as Word does (#1012).
+/// The tabs the arrows walk: the ribbon tabs, without File, which opens the Backstage instead of
+/// a tab (#1012). Left from Home therefore wraps to Help, and Right from Help back to Home.
+fn ring_tabs(app: &WordApp) -> Vec<&'static str> {
+    badge_tabs(app).into_iter().filter(|t| *t != "File").collect()
+}
+
 fn step_tab(app: &mut WordApp, step: isize) {
-    let tabs = badge_tabs(app);
+    let tabs = ring_tabs(app);
     let Some(n) = std::num::NonZeroUsize::new(tabs.len()) else {
         return;
     };
@@ -809,7 +825,57 @@ fn step_tab(app: &mut WordApp, step: isize) {
 fn enter_commands(app: &mut WordApp) {
     let tab = app.ui.tab.clone();
     app.ui.keytips = Phase::Commands;
+    app.ui.keytip_qat = None;
     app.ui.keytip_cmd = controls_public(&tab).first().map(|c| c.id.to_string());
+}
+
+/// The buttons the Quick Access Toolbar shows, in drawing order (#1012).
+fn qat_ids(app: &WordApp) -> Vec<String> {
+    if app.ui.quick_access_toolbar { app.session.ribbon.qat().into_iter().map(str::to_string).collect() } else { Vec::new() }
+}
+
+/// Up from the tab row puts the ring on the Quick Access Toolbar, as Word does (#1012).
+fn enter_qat(app: &mut WordApp) {
+    if qat_ids(app).is_empty() {
+        return;
+    }
+    app.ui.keytip_qat = Some(0);
+    app.ui.keytip_focus = None;
+    app.ui.keytip_cmd = None;
+}
+
+/// Down from the Quick Access Toolbar goes back to the tab row (#1012).
+fn leave_qat(app: &mut WordApp) {
+    app.ui.keytip_qat = None;
+    app.ui.keytips = Phase::Tabs;
+    app.ui.keytip_focus = Some(app.ui.tab.clone());
+}
+
+/// Move the ring along the Quick Access Toolbar (#1012).
+fn step_qat(app: &mut WordApp, step: isize) {
+    let Some(n) = std::num::NonZeroUsize::new(qat_ids(app).len()) else {
+        return;
+    };
+    let at = app.ui.keytip_qat.unwrap_or(0);
+    let next = (at as isize + step).rem_euclid(n.get() as isize) as usize;
+    app.ui.keytip_qat = Some(next);
+}
+
+/// Enter on a Quick Access Toolbar button runs it, as its digit badge would (#1012).
+fn run_qat(app: &mut WordApp) {
+    let id = app.ui.keytip_qat.and_then(|i| qat_ids(app).get(i).cloned());
+    turn_off(app);
+    if let Some(id) = id
+        && crate::chrome::qat_enabled(app, &id)
+    {
+        let _ = app.run(&id, serde_json::json!({}));
+    }
+}
+
+/// True when the ring is on this ribbon command, so the widget takes the real keyboard focus and a
+/// screen reader announces the button the arrow keys are on (#1012).
+pub fn wants_command_focus(app: &WordApp, id: &str) -> bool {
+    app.ui.keytips == Phase::Commands && app.ui.keytip_qat.is_none() && app.ui.keytip_cmd.as_deref() == Some(id)
 }
 
 /// Move the ring along the tab's controls, in the order the ribbon draws them (#1012).
@@ -844,7 +910,7 @@ pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
     // The ribbon ring is not a text field. Once a tab or a control holds the focus egui wants the
     // keyboard for it, and that must not read as "a field is typing, so the letters are text"
     // (#1012): it would cancel the mode the moment it armed.
-    let on_ring = app.ui.keytip_focus.is_some() || app.ui.keytip_cmd.is_some();
+    let on_ring = app.ui.keytip_focus.is_some() || app.ui.keytip_cmd.is_some() || app.ui.keytip_qat.is_some();
     !app.ui.keytips_enabled
         || (app.ui.backstage && app.ui.keytips != Phase::Backstage)
         || (!app.ui.backstage && app.ui.keytips == Phase::Backstage)
@@ -973,9 +1039,10 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
     }
     // Whatever turned the mode off — Escape, a badge, a Quick Access Toolbar digit — the ring goes
     // and the page gets the keyboard back, or typing would land on a ribbon button (#1012).
-    if app.ui.keytips == Phase::Off && (app.ui.keytip_focus.is_some() || app.ui.keytip_cmd.is_some()) {
+    if app.ui.keytips == Phase::Off && (app.ui.keytip_focus.is_some() || app.ui.keytip_cmd.is_some() || app.ui.keytip_qat.is_some()) {
         app.ui.keytip_focus = None;
         app.ui.keytip_cmd = None;
+        app.ui.keytip_qat = None;
         app.canvas.want_focus = true;
     }
     if app.ui.keytips == Phase::Off {

@@ -9080,7 +9080,12 @@ fn alt_gives_the_tab_row_real_focus_and_the_arrows_walk_it() {
         }
     }
     frames(&mut h, 2);
+    use egui_kittest::kittest::NodeT as _;
     let focused = |h: &egui_kittest::Harness<WordApp>, label: &str| h.query_all_by_label(label).any(|n| n.is_focused());
+    // A ribbon command is named with its shortcut ("Paste ([Mod]V)"), so match the start.
+    let focused_cmd = |h: &egui_kittest::Harness<WordApp>, name: &str| {
+        h.query_all_by_role(egui::accesskit::Role::Button).any(|n| n.is_focused() && n.accesskit_node().label().is_some_and(|l| l.starts_with(name)))
+    };
     assert!(!focused(&h, "Home"), "the page holds the keyboard before Alt");
 
     // A bare Alt tap: press and release with no other key in between, the chord Word uses.
@@ -9100,6 +9105,43 @@ fn alt_gives_the_tab_row_real_focus_and_the_arrows_walk_it() {
     h.key_press(egui::Key::ArrowLeft);
     frames(&mut h, 2);
     assert_eq!(h.state().ui.tab, "Home", "the left arrow walked back");
+    assert!(focused(&h, "Home"));
+
+    // The arrows walk the ribbon tabs only, so the ends wrap: Left from Home is Help, and Right
+    // from Help is Home again. File opens the Backstage, so it is not in the ring.
+    h.key_press(egui::Key::ArrowLeft);
+    frames(&mut h, 2);
+    assert_eq!(h.state().ui.tab, "Help", "Left from Home wraps to the last tab");
+    assert!(focused(&h, "Help"), "and the ring wraps with it");
+    h.key_press(egui::Key::ArrowRight);
+    frames(&mut h, 2);
+    assert_eq!(h.state().ui.tab, "Home", "Right from Help wraps back to the first tab");
+
+    // Up reaches the Quick Access Toolbar; Down comes back to the tab row (#1012).
+    h.key_press(egui::Key::ArrowUp);
+    frames(&mut h, 2);
+    assert!(h.state().ui.keytip_qat.is_some(), "Up puts the ring on the Quick Access Toolbar");
+    h.key_press(egui::Key::ArrowDown);
+    frames(&mut h, 2);
+    assert!(h.state().ui.keytip_qat.is_none(), "Down comes back to the tab row");
+    assert!(focused(&h, "Home"), "and the tab takes the focus again");
+
+    // Down from the tab row enters that tab's controls, and the first one takes real focus, so a
+    // screen reader announces the command the ring is on.
+    h.key_press(egui::Key::ArrowDown);
+    frames(&mut h, 2);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Commands, "Down enters the controls");
+    assert_eq!(h.state().ui.keytip_cmd.as_deref(), Some("edit.paste"), "the ring starts on the first control");
+    assert!(focused_cmd(&h, "Paste"), "and the button holds the keyboard focus");
+    h.key_press(egui::Key::ArrowRight);
+    frames(&mut h, 2);
+    assert_eq!(h.state().ui.keytip_cmd.as_deref(), Some("edit.cut"), "the arrow walked to Cut");
+    assert!(focused_cmd(&h, "Cut"), "and the focus went with it");
+
+    // Escape climbs back to the tabs, then to the page.
+    h.key_press(egui::Key::Escape);
+    frames(&mut h, 2);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Tabs, "Escape climbs one level");
     assert!(focused(&h, "Home"));
 
     h.key_press(egui::Key::Escape);
