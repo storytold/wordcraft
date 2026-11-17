@@ -4,7 +4,7 @@ use super::chars::caps_char;
 use super::grid::{auto_space, snap_chars};
 use super::justify::hyphenation_points;
 use super::lines::break_lines;
-use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
+use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, StyleRun, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use wordcraft_fonts::ShapeContext;
 
@@ -523,8 +523,16 @@ impl<'a> BreakText<'a> {
 }
 
 /// Mark the clusters a line may break after.
-fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
-    let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
+fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara, source: &str, styles: &[StyleRun]) {
+    // The slashes in a complex-script run (`w:cs`, or `w:rtl`), by their offset in the paragraph:
+    // Word breaks around those as around Thai.
+    let cs_slashes: std::collections::HashSet<usize> = clusters
+        .iter()
+        .filter(|c| source.get(c.start..c.end) == Some("/") && styles.get(c.style as usize).is_some_and(|s| s.rc.cs || s.rc.rtl))
+        .map(|c| c.start)
+        .collect();
+    let cs_slash = |i: usize| !cs_slashes.is_empty() && bt.to_para(i + 1).is_some_and(|end| cs_slashes.contains(&(end - 1)));
+    let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp, &cs_slash).into_iter().filter_map(|i| bt.to_para(i)).collect();
     for c in clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
     }
@@ -679,7 +687,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
-    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
+    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp, &p.text, &sh.b.styles);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
@@ -812,15 +820,19 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
     }
 }
 
-fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
+/// The places a line of `text` may break after. `cs_slash(i)`: whether the slash at offset `i` is in
+/// a complex-script run (`w:cs`).
+fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara, cs_slash: &dyn Fn(usize) -> bool) -> Vec<usize> {
     let mut found = Vec::new();
-    // A slash with Thai on either side is a place to break after, before a digit too
-    // ("ปีงบประมาณ/" | "2563", "2563/" | "แผนการ", "planning/" | "แผนการ"), as measured in Word for
-    // Windows; between Latin letters and digits it isn't.
+    // Measured in Word for Windows (compatibility modes 14 and 15, Thai in `w:cs` runs): a slash
+    // with Thai after it is a place to break after ("planning/" | "แผนการ", "2563/" | "แผนการ",
+    // ".../wiki/" | "ภาษาไทย"). One with Thai only before it is when the slash itself is in a
+    // `w:cs` run, as Thai text types it ("ปีงบประมาณ/" | "2563"), not when it is in a Latin run
+    // ("แผนการ" + "/planning" stays whole). Between Latin letters and digits it never is.
     let thai = |c: Option<char>| c.is_some_and(|c| matches!(c, '\u{0e00}'..='\u{0e7f}'));
     let next_char = |i: usize| text.get(i..).and_then(|t| t.chars().next());
     let break_after_slash = |i: usize| {
-        text.get(..i).and_then(|t| t.strip_suffix('/')).is_some_and(|t| thai(t.chars().next_back()) || thai(next_char(i)))
+        text.get(..i).and_then(|t| t.strip_suffix('/')).is_some_and(|t| thai(next_char(i)) || (cs_slash(i - 1) && thai(t.chars().next_back())))
             && next_char(i).is_some_and(char::is_alphanumeric)
     };
     for (i, o) in unicode_linebreak::linebreaks(text) {
@@ -851,6 +863,12 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     if !before_slash.is_empty() {
         found.extend(before_slash);
     }
+    // A `w:cs` slash between a Latin letter or digit and Thai goes with the Thai: Word breaks
+    // before it too ("planning" | "/แผนการ"), where LB13 forbids a break before a slash.
+    found.extend(text.match_indices('/').map(|(i, _)| i).filter(|&i| {
+        let prev = text.get(..i).and_then(|t| t.chars().next_back());
+        cs_slash(i) && thai(next_char(i + 1)) && prev.is_some_and(|c| c.is_alphanumeric() && !thai(Some(c)))
+    }));
 
     // Word breaks after a hyphen even when a digit follows ("2016-" / "2022"), where UAX #14
     // keeps a hyphen and a number together (LB25), and when a slash and a letter follow
