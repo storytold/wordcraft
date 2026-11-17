@@ -41,14 +41,27 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         return None;
     }
     let o = params.as_object_mut()?;
+    let passed_text = o.get("text").and_then(Value::as_str).map(|t| t.replace("\r\n", "\n"));
+    let had_text = passed_text.is_some();
+    if let Some(ref event_text) = passed_text
+        && let Some(read_text) = app.services.clipboard_text.as_ref()
+    {
+        let live_text = read_text().map(|t| t.replace("\r\n", "\n"));
+        if live_text.as_deref() != Some(event_text.as_str()) {
+            // The clipboard changed (e.g. an external tool restored the prior clipboard) after
+            // `Event::Paste` captured `text`: do not attach stale HTML/RTF/ownership from it.
+            if !o.contains_key("privateClipboard") {
+                o.insert("privateClipboard".into(), Value::Bool(false));
+            }
+            return None;
+        }
+    }
     // A caller that captured ownership already (Paste Special's dialog) keeps that value.
     if app.services.clipboard_is_own.is_some() && !o.contains_key("privateClipboard") {
         let own = app.clipboard_published && app.services.clipboard_is_own.as_ref().is_some_and(|f| f());
         o.insert("privateClipboard".into(), Value::Bool(own));
     }
-    if !o.contains_key("text")
-        && let Some(text) = app.services.clipboard_text.as_ref().and_then(|f| f()).filter(|t| !t.is_empty())
-    {
+    if !had_text && let Some(text) = app.services.clipboard_text.as_ref().and_then(|f| f()).filter(|t| !t.is_empty()) {
         // Picture files copied in a file manager reach us as their paths: paste the pictures,
         // as Ctrl+V does.
         if id == "edit.paste"
@@ -74,7 +87,7 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     }
     // Native bitmap/image formats are for other programs. Our own paste keeps the original
     // fragment (size, cropping and floating-picture properties), while its owner mark lasts.
-    if app.session.clipboard.is_some() && o.get("privateClipboard").and_then(Value::as_bool) == Some(true) {
+    if !had_text && app.session.clipboard.is_some() && o.get("privateClipboard").and_then(Value::as_bool) == Some(true) {
         o.insert("text".into(), Value::String(app.session.clipboard_text.clone()));
     }
     if id == "edit.pasteSpecial"
@@ -503,5 +516,34 @@ mod tests {
         let empty_r2 = a2.run("edit.copy", json!({})).unwrap();
         put_result(&mut a2, &ctx, &empty_r2);
         assert!(!a2.clipboard_published, "empty copy must not change published-copy state when false");
+    }
+
+    /// When a paste event already carries its text (e.g. an external tool sets the clipboard,
+    /// sends Ctrl+V, and restores the previous clipboard before the frame runs), `fill` must not
+    /// attach stale HTML/RTF or overwrite `text` from the restored clipboard (#6940).
+    #[test]
+    fn paste_event_ignores_stale_rich_formats_after_clipboard_restore() {
+        let services = Services {
+            clipboard_text: Some(Box::new(|| Some("old restored".into()))),
+            clipboard_html: Some(Box::new(|| Some("<p><b>old restored</b></p>".into()))),
+            clipboard_rtf: Some(Box::new(|| Some(r"{\rtf1\ansi old restored}".into()))),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        a.run("edit.paste", json!({"text": "dictated text"})).unwrap();
+        assert_eq!(first_para(&a), "dictated text");
+
+        // Also when the restored clipboard reports WordCraft ownership: `privateClipboard` must be
+        // false and `text` must not be overwritten with `session.clipboard_text`.
+        let services_own =
+            Services { clipboard_text: Some(Box::new(|| Some("own copy".into()))), clipboard_is_own: Some(Box::new(|| true)), ..Default::default() };
+        let mut a2 = app(services_own);
+        a2.run("document.setText", json!({"text": "own copy"})).unwrap();
+        a2.run("select.all", json!({})).unwrap();
+        a2.run("edit.copy", json!({})).unwrap();
+        a2.clipboard_published = true;
+        a2.run("caret.docEnd", json!({})).unwrap();
+        a2.run("edit.paste", json!({"text": "dictated text"})).unwrap();
+        assert_eq!(first_para(&a2), "own copydictated text");
     }
 }
