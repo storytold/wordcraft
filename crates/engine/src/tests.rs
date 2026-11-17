@@ -1491,6 +1491,30 @@ fn session_with_lists() -> Session {
     s
 }
 
+/// #2015 review: with Track Changes (and Track Moves) on, numbered items cut and pasted elsewhere
+/// are a tracked move, though the clipboard's text has their labels; and `^c` in Replace puts in
+/// the copied text without them.
+#[test]
+fn a_cut_list_item_pasted_elsewhere_is_a_tracked_move() {
+    let mut s = session_with_lists();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(1, 0), "focus": Pos::body(3, 0)}));
+    run(&mut s, "edit.cut", json!({}));
+    assert!(s.clipboard_text.starts_with("1.\tItem 1"), "{:?}", s.clipboard_text);
+    run(&mut s, "caret.docEnd", json!({}));
+    let clip = s.clipboard_text.clone();
+    run(&mut s, "edit.paste", json!({"text": clip}));
+    let moves: Vec<wordcraft_doc::RevisionKind> = s.doc.revisions.iter().filter(|r| r.move_name.is_some()).map(|r| r.kind).collect();
+    assert_eq!(moves, [wordcraft_doc::RevisionKind::Delete, wordcraft_doc::RevisionKind::Insert], "a move, its source and its destination");
+
+    let mut s = session_with_lists();
+    run(&mut s, "select.range", json!({"anchor": Pos::body(1, 0), "focus": Pos::body(1, 6)}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "1.\tItem 1");
+    run(&mut s, "edit.replaceAll", json!({"text": "Intro", "with": "^c"}));
+    assert!(text(&s).starts_with("Item 1\n"), "{:?}", text(&s));
+}
+
 /// #2015: Copy puts each list paragraph's number or bullet, and the tab after it, in the
 /// clipboard's text, as Word's plain-text copy has them. Pasting that copy back here still pastes
 /// our own copy: the lists, not their labels typed out as text.

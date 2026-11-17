@@ -583,6 +583,8 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
             Some(Pos { story, path: paths.get(sg.para)?.clone(), off: sg.raw + (x - sg.hay) })
         };
         cuts.push(hay.len());
+        // `^c`: the copied text without the list labels the plain-text clipboard has (#2015 review).
+        let clip = s.clipboard.as_ref().map_or_else(|| s.clipboard_text.clone(), |f| f.clipboard_text());
         let mut from = 0;
         for cut in cuts {
             if cut <= from {
@@ -609,7 +611,7 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                 let (Some(a), Some(b)) = (pos_of(m.start(), false), pos_of(m.end(), true)) else { continue };
                 let rep = pieces.as_ref().map(|pc| {
                     let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
-                    find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
+                    find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &clip)
                 });
                 out.push(Found { a, b, rep });
                 if out.len() >= 100_000 {
