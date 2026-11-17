@@ -57,7 +57,9 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Document {
 }
 
 /// The picture parts a page names. While the document keeps a part's copy, every `img` that names
-/// the part shares it; a copy the document does not keep (not a picture) is freed.
+/// the part shares it; a copy the document does not keep (not a picture) is freed. `loaded` keeps
+/// a `Weak` for each part loaded, also after its copy is freed, so it holds at most one entry per
+/// part, and `craft_mime::Limits::max_parts` bounds the number of parts.
 struct Pictures<'a> {
     resources: craft_mime::Resources<'a>,
     base: &'a str,
