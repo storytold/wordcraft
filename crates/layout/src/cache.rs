@@ -51,6 +51,9 @@ pub struct LayoutCache {
     /// What the last layout leaves to the next incremental one, and what this pass will.
     pub(crate) resume: Option<Arc<crate::resume::Resume>>,
     pub(crate) pending: Option<crate::resume::Resume>,
+    /// The stamps of the paragraphs the current layout holds thinned ([`crate::lazy`]): the
+    /// cache keeps no full layout of them, so they cost nothing until their pages are wanted.
+    pub(crate) thinned: HashSet<u64>,
 }
 
 impl LayoutCache {
@@ -69,6 +72,7 @@ impl LayoutCache {
         self.outlines.clear();
         self.styleref = None;
         self.resume = None;
+        self.thinned.clear();
     }
 
     /// The STYLEREF style index for `doc`, rebuilt only when the body or the styles changed.

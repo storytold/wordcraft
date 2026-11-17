@@ -38,7 +38,10 @@ pub(crate) struct Mark {
 }
 
 /// What a layout leaves to the next one.
+#[derive(Clone)]
 pub(crate) struct Resume {
+    /// Which one this is, for the layout that left it ([`crate::lazy::Lazy`]).
+    pub(crate) id: u64,
     /// The document laid out (blocks are shared: an edited one is another pointer).
     doc: Document,
     key: u64,
@@ -58,6 +61,35 @@ impl Resume {
     pub(crate) fn resumed(&self) -> bool {
         self.in_a_row > 0
     }
+
+    /// The pages as placed, for [`crate::lazy`] to thin or fill in: placing from them again
+    /// reads only their lines' extent and paths, which a thinned paragraph keeps.
+    pub(crate) fn pages_mut(&mut self) -> &mut [Page] {
+        &mut self.pages
+    }
+}
+
+/// Numbers each [`Resume`].
+static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A plan that lays out pages `pages` of the last layout again, as they were, for
+/// [`crate::lazy`]: no block was edited, so it starts at the mark at or before the block at
+/// the top of the first page and meets the last layout again after the block at the top of the
+/// page after the last. `None` unless the document and options are the ones the last layout had.
+pub(crate) fn range_plan(doc: &Document, cache: &LayoutCache, opts: &LayoutOptions, pages: std::ops::Range<usize>) -> Option<Plan> {
+    let old = cache.resume.clone()?;
+    if old.key != options_key(opts) || old.typing != opts.typing_word || !rest_same(&old.doc, doc) {
+        return None;
+    }
+    let (was, now) = (&old.doc.body, &doc.body);
+    if was.len() != now.len() || !(0..was.len()).all(|i| Arc::ptr_eq(&was[i], &now[i])) {
+        return None;
+    }
+    let first = old.pages.get(pages.start)?.first_block;
+    // Placing stops being new once a mark after this block is reached in the same state.
+    let edited_end = old.pages.get(pages.end).map_or(usize::MAX, |p| p.first_block);
+    let start = old.marks.partition_point(|(b, _)| *b <= first).checked_sub(1)?;
+    Some(Plan { old, start, edited_end, delta: 0, started: false })
 }
 
 /// Where a layout picks up from the last one.
@@ -206,6 +238,7 @@ impl Run {
             _ => Arc::new(Mark { si, snap: Snap::take(pb, ctx), fields: ctx.fields.clone() }),
         };
         Some(Resume {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             doc: doc.clone(),
             key: options_key(opts),
             typing: opts.typing_word,

@@ -656,7 +656,7 @@ pub(crate) fn layout_pass_with(
     if !resumed {
         evict_unused(ctx.cache);
     }
-    let mut lay = DocLayout { index: index_lines(&pages), pages, ms: 0.0, text_boxes: 0 };
+    let mut lay = DocLayout { index: index_lines(&pages), pages, ms: 0.0, text_boxes: 0, epoch: 0, lazy: None, thinned: false };
     if opts.comment_balloons && !mode.web {
         balloons::add(&mut ctx, &mut lay);
     }

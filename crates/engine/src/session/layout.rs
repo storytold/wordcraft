@@ -78,9 +78,51 @@ impl Session {
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         let [newest, _] = std::mem::take(&mut self.layout);
+        // A thinned layout can't be laid out again once the cache's incremental state is
+        // another's (`keep_full`): it isn't kept to be found again.
+        let newest = newest.filter(|e| !e.5.thinned);
         self.layout =
             [Some((rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)), newest];
         l
+    }
+
+    /// The current layout with pages `keep` in full and the body paragraphs of the others
+    /// thinned ([`wordcraft_layout::lazy`]): a long document then holds only the pages a reader
+    /// is near. The pages around the caret and the selection's other end are kept too, as the
+    /// editing commands read them. Print layout only. The same layout (the same
+    /// [`DocLayout::epoch`], its pages the same but for what is thinned) comes back when
+    /// nothing changes or it can't be thinned. The other layout slot is let go: its pages would
+    /// keep the full paragraphs.
+    pub fn keep_full(&mut self, keep: &[std::ops::Range<usize>]) -> Arc<DocLayout> {
+        let cur = self.layout();
+        if self.view.read_mode || self.view.mode != ViewMode::Print || cur.lazy.is_none() {
+            return cur;
+        }
+        let mut keep = keep.to_vec();
+        for pos in [&self.sel.focus, &self.sel.anchor] {
+            for &(page, _) in cur.index.get(&(pos.story, pos.path.clone())).map_or(&[][..], Vec::as_slice) {
+                keep.push(page.saturating_sub(1)..page + 2);
+            }
+        }
+        let Some(new) = wordcraft_layout::lazy::keep_full(&self.doc, &mut self.cache, &cur, &keep) else { return cur };
+        let new = Arc::new(new);
+        if let Some(e) = self.layout[0].as_mut() {
+            e.5 = new.clone();
+        }
+        self.layout[1] = None;
+        new
+    }
+
+    /// Pages `range` of `layout` in full ([`wordcraft_layout::lazy::layout_pages`]) while it is
+    /// this session's current layout (by [`DocLayout::epoch`]); `None` once it isn't.
+    pub fn layout_pages(&mut self, layout: &DocLayout, range: std::ops::Range<usize>) -> Option<Vec<wordcraft_layout::Page>> {
+        let current = self.layout[0].as_ref().filter(|e| e.5.epoch == layout.epoch)?.5.clone();
+        // Pages this session already holds in full are the same pages: no need to lay them out.
+        let held = current.pages.get(range.clone()).filter(|p| !p.iter().any(wordcraft_layout::lazy::page_is_thin));
+        if let Some(pages) = held {
+            return Some(pages.to_vec());
+        }
+        wordcraft_layout::lazy::layout_pages(&self.doc, &mut self.cache, layout, range)
     }
 
     /// The recorded word while the caret and the word are as typing left them; else drops it.

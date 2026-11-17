@@ -101,9 +101,86 @@ pub struct ParaLayout {
     /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
     /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
     pub auto_space: Vec<(usize, f32)>,
+    /// What this layout was made from, hashed: the layout environment and the paragraph cache's
+    /// key. Equal stamps mean the same layout. A [`ParaLayout::thinned`] copy keeps it. 0 for a
+    /// layout not made through the cache, which is never thinned.
+    pub stamp: Stamp,
+    /// A [`ParaLayout::thinned`] copy: the lines' extent without what drawing reads.
+    pub thin: bool,
+}
+
+/// [`ParaLayout::stamp`]. Its `Debug` leaves the number out, so layouts made in different
+/// environments that come out the same still print the same.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Stamp(pub u64);
+
+impl std::fmt::Debug for Stamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Stamp")
+    }
 }
 
 impl ParaLayout {
+    /// A copy without what only drawing, text and hit testing read: the clusters, the glyphs,
+    /// the bidi levels and each line's cluster positions. What pagination and page geometry read
+    /// stays: the lines' extent, byte ranges and ends, notes, label and objects ([`crate::lazy`]).
+    pub fn thinned(&self) -> ParaLayout {
+        let lines = self
+            .lines
+            .iter()
+            .map(|l| Line {
+                top: l.top,
+                height: l.height,
+                baseline: l.baseline,
+                text_asc: l.text_asc,
+                text_desc: l.text_desc,
+                c0: l.c0,
+                c1: l.c1,
+                xs: Vec::new(),
+                leaders: Vec::new(),
+                end: l.end,
+                start: l.start,
+                stop: l.stop,
+                left: l.left,
+                right: l.right,
+                hyphen: l.hyphen,
+                beside: l.beside,
+                vis: Vec::new(),
+                rtl: l.rtl,
+            })
+            .collect();
+        ParaLayout {
+            rp: self.rp.clone(),
+            substituted: self.substituted.clone(),
+            styles: self.styles.clone(),
+            glyphs: Vec::new(),
+            clusters: Vec::new(),
+            lines,
+            label: self.label.clone(),
+            height: self.height,
+            text_len: self.text_len,
+            joined_cluster_starts: self.joined_cluster_starts.clone(),
+            has_page_fields: self.has_page_fields,
+            notes: self.notes.clone(),
+            issues: self.issues.clone(),
+            drop_cap: self.drop_cap,
+            hyph_after: self.hyph_after.clone(),
+            bidi_levels: Vec::new(),
+            drop_cap_w: self.drop_cap_w,
+            maths: self.maths.clone(),
+            check_boxes: self.check_boxes.clone(),
+            rubies: self.rubies.clone(),
+            displays: self.displays.clone(),
+            ptabs: self.ptabs.clone(),
+            left_out: self.left_out.clone(),
+            shown: self.shown.clone(),
+            enclosures: self.enclosures.clone(),
+            auto_space: self.auto_space.clone(),
+            stamp: self.stamp,
+            thin: true,
+        }
+    }
+
     /// The room a horizontal rule at cluster `k` is placed in, from its left edge to the end of
     /// what the line has left. A first-line indent moves that end along (Word, measured with
     /// 50 % and fixed-width rules beside floats on either side and with first-line and hanging

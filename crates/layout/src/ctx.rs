@@ -261,18 +261,26 @@ impl Ctx<'_> {
         let fitted = self.fitted_boxes(p);
         let (key, eq_number) = self.para_key(p, width, table, exclusions, label.as_ref(), &fitted);
         self.cache.used.insert(key.clone());
-        if let Some(pl) = self.cache.paras.get(&key) {
+        // A thinned layout never serves placement (`lazy`): it is laid out again, the same.
+        if let Some(pl) = self.cache.paras.get(&key).filter(|pl| !pl.thin) {
             self.cache.hits += 1;
             return pl.clone();
         }
         self.cache.misses += 1;
         let typing = key.typing;
-        let pl = Arc::new(para::layout_para(
+        let mut pl = para::layout_para(
             p,
             &self.para_env(ParaEnvInput { width, label, table, exclusions, eq_number, typing_word: typing, fitted: &fitted }),
-        ));
+        );
+        pl.stamp = para::Stamp(self.stamp(&key));
+        let pl = Arc::new(pl);
         self.cache.paras.insert(key, pl.clone());
         pl
+    }
+
+    /// [`ParaLayout::stamp`] for a layout made with `key` in this environment (never 0).
+    fn stamp(&self, key: &Key) -> u64 {
+        hash_of(&(self.cache.env, key)) | 1
     }
 
     /// `p` laid out on its own, as the paragraph after a kept one is measured before it is placed
@@ -295,15 +303,17 @@ impl Ctx<'_> {
             return None;
         }
         self.cache.used.insert(key.clone());
-        if let Some(pl) = self.cache.paras.get(&key) {
+        if let Some(pl) = self.cache.paras.get(&key).filter(|pl| !pl.thin) {
             self.cache.hits += 1;
             return Some(pl.clone());
         }
         self.cache.misses += 1;
-        let pl = Arc::new(para::layout_para(
+        let mut pl = para::layout_para(
             p,
             &self.para_env(ParaEnvInput { width, label, table: None, exclusions: &[], eq_number, typing_word: None, fitted: &[] }),
-        ));
+        );
+        pl.stamp = para::Stamp(self.stamp(&key));
+        let pl = Arc::new(pl);
         self.cache.paras.insert(key, pl.clone());
         Some(pl)
     }

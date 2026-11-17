@@ -59,6 +59,7 @@ mod ctx;
 mod floats;
 mod flow;
 mod headers;
+pub mod lazy;
 mod missing;
 mod notes;
 mod page;
@@ -346,6 +347,14 @@ pub struct DocLayout {
     pub ms: f64,
     /// Text box stories laid out (each time a box's text was).
     pub text_boxes: usize,
+    /// Which layout this is: each [`layout`] makes a new number, and [`lazy::keep_full`] keeps it
+    /// (its pages are the same, thinned or not).
+    pub epoch: u64,
+    /// What laying its pages out again takes ([`lazy::layout_pages`]); `None` for a layout that
+    /// left no incremental state, which is never thinned.
+    pub lazy: Option<Arc<lazy::Lazy>>,
+    /// Some page holds thinned paragraphs ([`lazy::page_is_thin`]).
+    pub thinned: bool,
 }
 
 /// Lay out the whole document.
@@ -402,10 +411,18 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         }
     };
     l.ms = now_ms() - t0;
+    l.epoch = lazy::next_epoch();
+    l.thinned = l.pages.iter().any(lazy::page_is_thin);
+    if l.thinned && cache.resume.is_none() {
+        // Thinned pages taken from the last layout, and nothing left to lay them out again
+        // from: lay the document out in full (the cache holds no thinned paragraph).
+        return layout(doc, cache, opts);
+    }
+    l.lazy = cache.resume.as_ref().map(|r| Arc::new(lazy::Lazy { opts: opts.clone(), resume: r.id }));
     if VERIFY_INCREMENTAL.load(std::sync::atomic::Ordering::Relaxed) && cache.resume.as_ref().is_some_and(|r| r.resumed()) {
         let full = layout(doc, &mut LayoutCache::new(), &LayoutOptions { incremental: false, ..opts.clone() });
         VERIFIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if format!("{:?}", l.pages) != format!("{:?}", full.pages) {
+        if !lazy::same_pages(&l.pages, &full.pages) {
             DIFFERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
