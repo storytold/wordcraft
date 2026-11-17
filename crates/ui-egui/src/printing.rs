@@ -16,12 +16,15 @@ pub fn commands(app: &crate::WordApp) -> Vec<serde_json::Value> {
             "enabled":true}),
         json!({"id":"ui.printSubmit", "label":"Submit print job", "location":"File › Print", "shortcut":null, "params":submit_params, "enabled":enabled}),
         json!({"id":"ui.print", "label":"Print (alias of ui.printSubmit)", "location":"File › Print", "shortcut":null, "params":submit_params, "enabled":enabled}),
+        json!({"id":"ui.printCancel", "label":"Cancel printing", "location":"File › Print", "shortcut":null,
+            "params":"none. Stops the job being submitted if it hasn't started reaching the spooler (it may wait on a sleeping printer's driver); returns cancelled: true when nothing will be sent, false when the job was already being sent (cancel it from the system's print queue).",
+            "enabled": app.services.cancel_print.is_some() && app.printing.busy()}),
     ]
 }
 
 /// Builds translated print labels, draws the shared print-settings panel, and shows the current
-/// feedback message.
-pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate: impl Fn(&str) -> String) {
+/// feedback message (unless `hide_message`: this window has already said it).
+pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, hide_message: bool, translate: impl Fn(&str) -> String) {
     let labels = Labels {
         printer: &translate("Printer"),
         select_printer: &translate("Select a printer"),
@@ -35,7 +38,7 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate
         grayscale: &translate("Grayscale"),
     };
     state.show(ui, egui::Id::unique("wordcraft_print_settings"), discover, &labels);
-    if let Some(message) = &state.message {
+    if let Some(message) = state.message.as_ref().filter(|_| !hide_message) {
         ui.label(feedback(message, translate));
     }
 }
@@ -125,6 +128,28 @@ pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> Strin
         Feedback::Failed(error) => translate("Print failed: {error}").replace("{error}", error),
         Feedback::WorkerStopped => translate("Print failed: the printing worker stopped."),
     }
+}
+
+/// `ui.printCancel`: stop the job being submitted before it reaches the spooler. A job can wait
+/// a long time on a sleeping network printer's driver (#5710) with the print settings locked;
+/// once cancelled it is never sent, so the panel is free again at once: printer list and
+/// settings kept, the printers listed again.
+pub fn cancel(app: &mut crate::WordApp) -> Result<serde_json::Value, String> {
+    if !app.printing.busy() {
+        return Err("no print job is being submitted".into());
+    }
+    let cancel = app.services.cancel_print.as_ref().ok_or("cancelling a print job isn't available here")?;
+    if !cancel() {
+        app.status(tl!("Cancellation could not be confirmed here. The printer driver may still be processing the job. If it appears in the system's print queue, cancel it there."));
+        return Ok(serde_json::json!({"cancelled": false}));
+    }
+    // The shared state keeps the job's receiver private: a fresh one drops it (the worker's
+    // answer, if it ever comes, goes nowhere) and keeps the user's settings.
+    let old = std::mem::take(&mut app.printing);
+    app.printing.settings = old.settings;
+    app.printing.printers = old.printers;
+    app.status(tl!("Printing cancelled. Nothing was sent to the printer."));
+    Ok(serde_json::json!({"cancelled": true}))
 }
 
 /// The IPP/PWG 5101.1 media name of a Layout › Size paper (the spooler's `media` option).
@@ -218,6 +243,7 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
             }
             app.printing.begin(submit(bytes, settings, collate, print_options)).map_err(|_| "A print job is already being submitted.".to_owned())?;
             app.print_feedback_seen = None;
+            app.print_gen = app.print_gen.wrapping_add(1);
         } else if let Some(print) = &app.services.print {
             print(&bytes)?;
         }
