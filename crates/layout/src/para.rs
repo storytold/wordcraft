@@ -81,6 +81,8 @@ pub struct ParaLayout {
     pub drop_cap_w: f32,
     /// Laid-out equations by object index.
     pub maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
+    /// Formulas drawn for `EQ` fields (`\f`, `\r`…), by the field's object index.
+    pub field_maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
     /// The legacy check boxes among its objects (inline objects' indexes).
     pub check_boxes: Vec<usize>,
     /// Ruby (Phonetic Guide) text over base-text clusters, in cluster order.
