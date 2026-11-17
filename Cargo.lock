@@ -7390,6 +7390,7 @@ name = "wordcraft-doc"
 version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
+ "craft-codepage",
  "craft-zip",
  "log",
  "proptest",
