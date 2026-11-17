@@ -762,7 +762,7 @@ fn enforced_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane, mode: &str
         if ui.button(tl!("Find Next Editable Region")).clicked() {
             let from = app.session.sel.ordered().1;
             if let Some((a, b)) = wordcraft_engine::cmd::protect::next_region(&app.session, &from) {
-                app.session.sel = wordcraft_engine::Selection { anchor: a, focus: b };
+                app.session.set_selection(wordcraft_engine::Selection { anchor: a, focus: b });
                 app.canvas.want_focus = true;
             }
         }

@@ -129,7 +129,7 @@ pub(super) fn alt_code_echoed(app: &mut WordApp, echo: &AltCodeEcho, text: &str)
         let ours =
             start.filter(|_| s.sel.is_collapsed()).filter(|st| s.doc.para_at(&f).and_then(|p| p.text.get(*st..f.off)) == Some(echo.typed.as_str()));
         if let Some(start) = ours {
-            app.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos { off: start, ..f.clone() }, focus: f };
+            app.session.set_selection(wordcraft_engine::Selection { anchor: wordcraft_doc::Pos { off: start, ..f.clone() }, focus: f });
             let _ = app.run("text.insert", json!({"text": text}));
         }
     }

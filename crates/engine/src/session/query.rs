@@ -266,6 +266,15 @@ impl Session {
         }
     }
 
+    /// Move the caret or select text without a command, as a front end does for a right-click,
+    /// a click into a header or a balloon. Formatting Backspace carried over stays only if the
+    /// caret is still where the character was deleted: once it has been anywhere else, coming
+    /// back does not bring it back (#6518). Assigning [`Self::sel`] directly skips this.
+    pub fn set_selection(&mut self, sel: Selection) {
+        self.sel = sel;
+        self.drop_stale_carried();
+    }
+
     /// Drop formatting Backspace carried over, wherever the caret is: it is for typing, and a
     /// paste is not typing, so pasted text takes the formatting where it lands (#6518).
     pub(crate) fn forget_carried(&mut self) {

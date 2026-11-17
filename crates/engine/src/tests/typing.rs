@@ -1927,6 +1927,76 @@ fn backspace_formatting_is_not_kept_past_find_or_go_to() {
     assert!(bold_at(&s, 0));
 }
 
+/// #6518 review: a Paste with nothing on the clipboard pastes nothing: the formatting Backspace
+/// carried over stays for the typing that follows.
+#[test]
+fn backspace_formatting_survives_a_paste_of_an_empty_clipboard() {
+    // "ab Cd", "C" bold: Backspace the bold C, Paste fails, X is bold.
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}");
+    assert!(s.run("edit.paste", &json!({})).is_err(), "the clipboard is empty");
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab Xd");
+    assert!(bold_at(&s, 3));
+    // What Paste would insert, asked for on its own: nothing, and the formatting stays.
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}");
+    assert!(crate::cmd::paste::paste_content(&mut s, &json!({})).is_err());
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true));
+}
+
+/// #6518 review: a front end that moves the caret itself (a right-click) goes through
+/// `Session::set_selection`: once the caret has been elsewhere, putting it back where the
+/// character was deleted does not bring the carried formatting back.
+#[test]
+fn backspace_formatting_is_not_kept_past_a_direct_caret_move_and_back() {
+    // "Xy plain word", "X" bold: Backspace the bold X, the caret goes to "word" and back: Q is plain.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    s.set_selection(crate::Selection::caret(Pos::body(0, 8)));
+    s.set_selection(crate::Selection::caret(Pos::body(0, 0)));
+    assert_ne!(s.typing_props().bold, Some(true));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Qy plain word");
+    assert!(!bold_at(&s, 0));
+    // Put where it already is, the caret keeps it: Q is bold.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    s.set_selection(crate::Selection::caret(Pos::body(0, 0)));
+    typ(&mut s, "Q");
+    assert!(bold_at(&s, 0));
+}
+
+/// #6518 review: a command that fails leaves the formatting waiting at the caret as it was: a
+/// Backspace refused by a content control locked against editing keeps what an earlier Backspace
+/// carried over, and Bold picked at the caret.
+#[test]
+fn a_refused_backspace_keeps_the_formatting_waiting_at_the_caret() {
+    let w = wordcraft_doc::para::OBJ.len_utf8();
+    // "abC" in a content control, "C" bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abC"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 2}, "focus": {"block": 0, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 3}}));
+    run(&mut s, "developer.richText", json!({"tag": "ctl"}));
+    let lock = |s: &mut Session| run(s, "developer.properties", json!({"control": "ctl", "lockEdit": true}));
+    // Backspace the bold C, lock the control: the next Backspace is refused, and X is still bold.
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": w + 3}}));
+    typ(&mut s, "\u{8}");
+    lock(&mut s);
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true));
+    let before = s.doc.clone();
+    assert!(s.run("text.backspace", &json!({})).is_err(), "the control is locked");
+    assert_eq!(s.doc, before);
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, w + 2)));
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true), "the refused Backspace keeps the carried bold");
+    // Bold picked at the caret, then a refused Backspace: still bold.
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": w + 1}}));
+    s.pending = Some(wordcraft_doc::props::CharProps { bold: Some(true), ..Default::default() });
+    assert!(s.run("text.backspace", &json!({})).is_err(), "the control is locked");
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true), "the refused Backspace keeps the Bold picked at the caret");
+}
+
 /// #6518: the carried formatting goes on with the typing that follows, and Undo of that typing
 /// brings it back where it was, so typing again there takes it once more.
 #[test]

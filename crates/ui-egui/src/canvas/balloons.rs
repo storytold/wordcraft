@@ -181,7 +181,7 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
     }
     if let Some((id, p)) = clicked {
         select_balloon(app, id);
-        app.session.sel = wordcraft_engine::Selection::caret(p);
+        app.session.set_selection(wordcraft_engine::Selection::caret(p));
     }
 }
 

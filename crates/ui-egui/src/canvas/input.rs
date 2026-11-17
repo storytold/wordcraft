@@ -268,7 +268,7 @@ fn handle_primary_press(
         if app.run(id, json!({ "page": page })).is_ok() {
             let to = app.session.sel.focus.story;
             if let Some(pos) = app.session.layout().hit(page, x, y, to) {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                app.session.set_selection(wordcraft_engine::Selection::caret(pos));
             }
             app.session.page_hint = page;
         }
@@ -284,7 +284,7 @@ fn handle_primary_press(
     if !mods.shift
         && let Some((at, inner)) = layout.equation_hit(page, x, y, story)
     {
-        app.session.sel = wordcraft_engine::Selection::caret(at);
+        app.session.set_selection(wordcraft_engine::Selection::caret(at));
         let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
         app.session.page_hint = page;
         return true;
@@ -422,14 +422,14 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
             if app.run(id, json!({ "page": page })).is_ok()
                 && let Some(pos) = app.session.layout().hit(page, x, y, app.session.sel.focus.story)
             {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                app.session.set_selection(wordcraft_engine::Selection::caret(pos));
             }
             return true;
         }
         if matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none() {
             let _ = app.run("insert.closeHeader", json!({}));
             if let Some(pos) = layout.hit(page, x, y, StoryRef::Body) {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                app.session.set_selection(wordcraft_engine::Selection::caret(pos));
             }
             return true;
         }
@@ -437,7 +437,7 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
         if let Some(pos) = layout.hit(page, x, y, story)
             && let Some(field) = field_showing_code(app, &pos)
         {
-            app.session.sel = wordcraft_engine::Selection::caret(field);
+            app.session.set_selection(wordcraft_engine::Selection::caret(field));
             let _ = app.run("fields.setCode", json!({}));
             return true;
         }

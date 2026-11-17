@@ -74,9 +74,16 @@ impl Session {
         // caret the front end moved itself (a click elsewhere) has left it behind (#6518).
         self.drop_stale_carried();
         let carried_before = self.pending_at.clone().map(|at| (self.pending.clone(), at));
+        // The formatting waiting at the caret is not part of the document snapshot a failed
+        // command is rolled back to: put it back here, so a refused edit (a Backspace into a
+        // locked content control) leaves it as it was.
+        let document_before = self.document_id;
+        let waiting_before = (self.pending.clone(), self.pending_at.clone());
         let result = self.run_command(id, params);
         if result.is_ok() {
             self.settle_carried(carried_before);
+        } else if self.document_id == document_before {
+            (self.pending, self.pending_at) = waiting_before;
         }
         result
     }

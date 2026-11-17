@@ -281,8 +281,14 @@ pub enum Pasted {
 /// that knows another program owns the clipboard passes `privateClipboard: false`, which keeps
 /// the fragment out even when the text matches.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
-    // Formatting Backspace carried over is for typing, not for what is pasted (#6518).
+    let pasted = clipboard_content(s, v)?;
+    // Formatting Backspace carried over is for typing, not for what is pasted (#6518). An empty
+    // clipboard pastes nothing, so it stays.
     s.forget_carried();
+    Ok(pasted)
+}
+
+fn clipboard_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     if owns_clipboard(v)
         && let Some(f) = &s.clipboard

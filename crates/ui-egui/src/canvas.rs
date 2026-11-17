@@ -1385,7 +1385,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         let on_cells =
             wordcraft_engine::cmd::table_mouse::cell_rects(layout, &app.session.doc, range).iter().any(|(pi, r)| *pi == page && r.contains(at));
         if !on_cells && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
-            app.session.sel = wordcraft_engine::Selection::caret(pos);
+            app.session.set_selection(wordcraft_engine::Selection::caret(pos));
         }
     }
     // Right-click: move the caret there (unless inside the selection), then the context menu.
@@ -1396,7 +1396,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     {
         match layout.equation_hit(page, x, y, app.session.sel.focus.story) {
             Some((at, inner)) => {
-                app.session.sel = wordcraft_engine::Selection::caret(at);
+                app.session.set_selection(wordcraft_engine::Selection::caret(at));
                 let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
             }
             None if app.session.math.is_some() => {
@@ -1417,7 +1417,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         } else if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
             let (a, b) = app.session.sel.ordered();
             if !(a <= pos && pos <= b) || app.session.sel.is_collapsed() {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                app.session.set_selection(wordcraft_engine::Selection::caret(pos));
             }
             context_suggestions(app);
         }
