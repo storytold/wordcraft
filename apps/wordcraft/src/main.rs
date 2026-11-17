@@ -644,7 +644,7 @@ fn main() -> eframe::Result {
     }
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("WordCraft")
+            .with_title(wordcraft_ui_egui::build_config::app_name())
             .with_app_id("ai.storyteller.wordcraft")
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size([760.0, 480.0])
@@ -692,7 +692,7 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
     eframe::run_native(
-        "WordCraft",
+        wordcraft_ui_egui::build_config::app_name(),
         options,
         Box::new(move |cc| {
             // The system region picks the new document's paper, the units and the decimal

@@ -56,7 +56,7 @@ impl WordApp {
     /// Whether the app asks for a newer release when it starts (off until the desktop app turns it on).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_startup_update_check(&mut self, on: bool) {
-        self.updates_rt.startup_check = on;
+        self.updates_rt.startup_check = crate::build_config::startup_update_check(on);
     }
 
     /// Turns the self-update off for the rest of this process: no update is offered, and Help ▸
@@ -267,20 +267,43 @@ mod tests {
                 out.textures_delta.clear();
             };
             frame(&mut app, Vec::new());
-            let status = app.updates_rt.updater.status();
-            assert!(expected(status), "{file}: {status:?}");
-            assert!(app.updates_rt.manual_window_open, "{file}: the result window opens by itself");
-            assert!(!record.exists(), "{file}: the record is read once");
-            frame(&mut app, Vec::new());
-            assert!(app.updates_rt.manual_window_open, "{file}: the window stays open");
-            let escape =
-                egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
-            frame(&mut app, vec![escape]);
-            assert!(!app.updates_rt.manual_window_open, "{file}: Esc closes the window");
-            assert_eq!(app.updates_rt.updater.status(), &Status::Idle, "{file}: closing clears the status");
-            frame(&mut app, Vec::new());
-            assert!(!app.updates_rt.manual_window_open, "{file}: the window stays closed");
+            if crate::build_config::startup_update_check(true) {
+                let status = app.updates_rt.updater.status();
+                assert!(expected(status), "{file}: {status:?}");
+                assert!(app.updates_rt.manual_window_open, "{file}: the result window opens by itself");
+                assert!(!record.exists(), "{file}: the record is read once");
+                frame(&mut app, Vec::new());
+                assert!(app.updates_rt.manual_window_open, "{file}: the window stays open");
+                let escape =
+                    egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+                frame(&mut app, vec![escape]);
+                assert!(!app.updates_rt.manual_window_open, "{file}: Esc closes the window");
+                assert_eq!(app.updates_rt.updater.status(), &Status::Idle, "{file}: closing clears the status");
+                frame(&mut app, Vec::new());
+                assert!(!app.updates_rt.manual_window_open, "{file}: the window stays closed");
+            } else {
+                assert_eq!(app.updates_rt.updater.status(), &Status::Idle, "a labelled build does not check at start");
+                assert!(!app.updates_rt.manual_window_open);
+                assert!(record.exists(), "a suppressed startup check leaves the update record unread");
+            }
             let _ = std::fs::remove_dir_all(&root);
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod build_policy_tests {
+    use super::*;
+
+    /// The compiled build policy gates startup only; a manual check is still accepted.
+    #[test]
+    fn internal_build_keeps_startup_check_off_but_accepts_manual_checks() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        assert!(!app.updates_rt.startup_check);
+        app.set_startup_update_check(true);
+        assert_eq!(app.updates_rt.startup_check, crate::build_config::BUILD_LABEL.is_empty());
+        check(&mut app);
+        assert!(app.updates_rt.check_requested);
+        assert_eq!(app.updates_rt.startup_check, crate::build_config::BUILD_LABEL.is_empty());
     }
 }
