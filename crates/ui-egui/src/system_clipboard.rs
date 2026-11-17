@@ -73,6 +73,8 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         }
         o.insert("text".into(), Value::String(text));
     }
+    // A clipboard that only mirrors Xwayland is read while it holds the text being pasted.
+    let unreachable = unreachable && !params.get("text").and_then(Value::as_str).is_some_and(|t| host_has(app, t));
     let o = params.as_object_mut()?;
     // Keep Text Only needs nothing more; a caller that passed formats of its own (an agent, Paste
     // Special's OK) has them already.
@@ -102,8 +104,24 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     None
 }
 
+/// Whether the host's clipboard holds the copy that `text` (egui's text for a paste) came from, so
+/// its HTML, RTF and copied files go with it: always when the host can read the clipboard
+/// ([`crate::Services::clipboard_unreachable`] is false); when it sees only what the compositor
+/// copies over to Xwayland ([`crate::Services::clipboard_mirrored`]), only while that copy's text
+/// is `text`, line endings aside. Another program's earlier copy there has other text.
+pub(crate) fn host_has(app: &WordApp, text: &str) -> bool {
+    if !app.services.clipboard_unreachable.as_ref().is_some_and(|f| f()) {
+        return true;
+    }
+    let lines = |s: &str| s.replace("\r\n", "\n");
+    app.services.clipboard_mirrored.as_ref().is_some_and(|f| f())
+        && app.services.clipboard_text.as_ref().and_then(|f| f()).is_some_and(|t| lines(&t) == lines(text))
+}
+
 /// Said when the text comes after another document or window was brought forward.
 pub(crate) const CANCELLED: &str = "the paste was cancelled: another document or window is active";
+/// Said when the text comes after the document was edited another way (an agent's edit).
+pub(crate) const CHANGED: &str = "the paste was cancelled: the document changed while it waited";
 
 /// How long a deferred Paste waits for egui's text before saying there is none: longer than the
 /// three seconds egui-winit's Wayland bridge may take to deliver it, so a late answer is still
@@ -133,6 +151,9 @@ pub(crate) struct PendingPaste {
     window: u64,
     /// The egui viewport of that window: egui is asked there, and answers in its input.
     viewport: egui::ViewportId,
+    /// The document's revision when the Paste was chosen: an edit made since (an agent's, over
+    /// the control channel or MCP) may have moved the caret.
+    rev: u64,
 }
 
 /// A waiting Paste chosen in a window with a viewport of its own: that viewport's input reaches
@@ -207,6 +228,7 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
         document: app.session.document_id(),
         window: app.windows.shown(),
         viewport: app.choosing_viewport(&ctx),
+        rev: app.session.rev(),
     });
     // What a window found for an earlier Paste isn't this one's answer.
     app.viewport_paste(&ctx, |v| *v = None);
@@ -293,7 +315,14 @@ pub(crate) fn scan(id: &str, wait: &mut Wait, held: impl Fn(&egui::Key) -> bool,
                 log::debug!("{id}: a key came first; the paste is cancelled");
                 return Scan::Cancelled;
             }
-            egui::Event::Paste(_) | egui::Event::PasteImage(_) | egui::Event::PointerButton { pressed: true, .. } | egui::Event::Text(_) => {
+            // egui-winit drops its read in flight at an IME commit and when the window loses the
+            // focus, so no text would come.
+            egui::Event::Paste(_)
+            | egui::Event::PasteImage(_)
+            | egui::Event::PointerButton { pressed: true, .. }
+            | egui::Event::Text(_)
+            | egui::Event::Ime(egui::ImeEvent::Commit(_))
+            | egui::Event::WindowFocused(false) => {
                 log::debug!("{id}: other input came first; the paste is cancelled");
                 return Scan::Cancelled;
             }
@@ -314,12 +343,17 @@ pub(crate) enum Read {
 /// one on the same document with its own caret; a document opened) cancels it rather than
 /// pasting there.
 fn deliver(app: &mut WordApp, read: Read) -> bool {
-    let Some(PendingPaste { id, mut params, document, window, viewport, .. }) = app.pending_paste.take() else {
+    let Some(PendingPaste { id, mut params, document, window, viewport, rev, .. }) = app.pending_paste.take() else {
         return false;
     };
     if app.session.document_id() != document || app.windows.shown() != window || app.active_viewport() != viewport {
         log::debug!("{id}: another document or window is active; the paste is cancelled");
         app.status(CANCELLED.to_string());
+        return true;
+    }
+    if app.session.rev() != rev {
+        log::debug!("{id}: the document changed while the paste waited; the paste is cancelled");
+        app.status(CHANGED.to_string());
         return true;
     }
     let text = match read {
@@ -864,6 +898,101 @@ mod tests {
         assert!(!bold_at(&a, 4), "the earlier copy's HTML isn't pasted");
     }
 
+    /// A host clipboard that mirrors Xwayland, read while it holds the text egui gave the paste:
+    /// Ctrl+V and the menu Paste keep its formatting, and an earlier copy there, with other text,
+    /// stays unread.
+    #[test]
+    fn a_mirrored_clipboard_holding_the_pasted_text_keeps_its_formatting() {
+        let mirrored = |text: &'static str| Services {
+            clipboard_text: Some(Box::new(move || Some(text.into()))),
+            clipboard_html: Some(Box::new(|| Some("<p>a <b>bold</b> line</p>".into()))),
+            clipboard_unreachable: Some(Box::new(|| true)),
+            clipboard_mirrored: Some(Box::new(|| true)),
+            ..Default::default()
+        };
+        // Ctrl+V brings egui's text.
+        for (host, bold) in [("a bold line", true), ("an older copy", false)] {
+            let mut a = app(mirrored(host));
+            a.ctx = Some(egui::Context::default());
+            a.run("edit.paste", json!({"text": "a bold line"})).unwrap();
+            assert_eq!(first_para(&a), "a bold line", "{host:?}");
+            assert_eq!(bold_at(&a, 3), bold, "{host:?}");
+        }
+        // CRLF on one side and LF on the other is the same text.
+        let mut a = app(mirrored("a bold\r\nline"));
+        a.ctx = Some(egui::Context::default());
+        a.run("edit.paste", json!({"text": "a bold\nline"})).unwrap();
+        assert!(bold_at(&a, 3));
+        // The menu Paste waits for egui's text, then reads the host's HTML beside it.
+        let mut a = app(mirrored("a bold line"));
+        let ctx = egui::Context::default();
+        assert_eq!(menu_paste(&mut a, &ctx, "edit.paste").0.unwrap(), json!({"pending": "paste"}));
+        for t in [0.01, 0.02, 0.03] {
+            frame(&mut a, &ctx, t, vec![]);
+        }
+        frame(&mut a, &ctx, 0.1, vec![paste("a bold line")]);
+        assert_eq!(first_para(&a), "a bold line");
+        assert!(bold_at(&a, 3));
+    }
+
+    /// Text that only names a picture file, with a mirrored host clipboard holding that text: the
+    /// host's copy is read, as with the clipboard in reach, so its picture is pasted even when no
+    /// such file is here; with other text there, a path naming no file stays text. A mirrored copy
+    /// with the text but no picture inserts the file the text names.
+    #[test]
+    fn a_mirrored_clipboard_holding_a_named_file_is_read() {
+        let path = if cfg!(windows) { r"C:\no-such-dir\copied.png" } else { "/no-such-dir/copied.png" };
+        for (host, inserted) in [(path, true), ("an older copy", false)] {
+            let services = Services {
+                clipboard_text: Some(Box::new(move || Some(host.into()))),
+                clipboard_picture: Some(Box::new(|| Some(ClipboardPicture::Pixels { width: 2, height: 2, rgba: vec![255; 16] }))),
+                clipboard_unreachable: Some(Box::new(|| true)),
+                clipboard_mirrored: Some(Box::new(|| true)),
+                ..Default::default()
+            };
+            let mut a = app(services);
+            assert_eq!(paste_picture::paste_named_files(&mut a, path), inserted, "{host}");
+            assert_eq!(!a.session.doc.media.is_empty(), inserted, "{host}");
+        }
+        // The mirrored copy holds the text but no picture: the file the text names is inserted.
+        let dir = std::env::temp_dir().join(format!("wc-mirrored-named-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("copied.png");
+        std::fs::write(&file, paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap()).unwrap();
+        let named = file.to_string_lossy().into_owned();
+        let host = named.clone();
+        let services = Services {
+            clipboard_text: Some(Box::new(move || Some(host.clone()))),
+            clipboard_picture: Some(Box::new(|| None)),
+            clipboard_unreachable: Some(Box::new(|| true)),
+            clipboard_mirrored: Some(Box::new(|| true)),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        assert!(paste_picture::paste_named_files(&mut a, &named), "{named}");
+        assert!(!a.session.doc.media.is_empty(), "{named}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An edit made another way while the Paste waits (an agent's, over the control channel or
+    /// MCP) may have moved the caret: the paste is cancelled with a message.
+    #[test]
+    fn an_edit_while_the_paste_waits_cancels_it() {
+        let mut a = app(unreachable());
+        let ctx = egui::Context::default();
+        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
+        for t in [0.01, 0.02, 0.03] {
+            frame(&mut a, &ctx, t, vec![]);
+        }
+        a.execute("text.insert", json!({"text": "agent"})).unwrap();
+        let (_, left) = frame(&mut a, &ctx, 0.1, vec![paste("late")]);
+        assert!(left.is_empty(), "the text was the menu Paste's");
+        assert!(a.pending_paste.is_none());
+        assert_eq!(first_para(&a), "agent");
+        assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(CHANGED));
+    }
+
     /// The text goes to the document the Paste was chosen in: with another one shown by the time
     /// it comes, the paste is cancelled with a message, and neither document changes.
     #[test]
@@ -918,7 +1047,9 @@ mod tests {
             modifiers: egui::Modifiers::default(),
         };
         let key = egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::default() };
-        for interrupt in [click(true), key, egui::Event::Text("a".into())] {
+        // An IME commit and the window losing the focus end egui-winit's read too.
+        let ime = egui::Event::Ime(egui::ImeEvent::Commit("あ".into()));
+        for interrupt in [click(true), key, egui::Event::Text("a".into()), ime, egui::Event::WindowFocused(false)] {
             let mut a = app(unreachable());
             let ctx = egui::Context::default();
             menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();

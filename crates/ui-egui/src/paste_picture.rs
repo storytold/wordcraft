@@ -210,18 +210,23 @@ fn read_picture_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
 }
 
 /// Paste text naming copied picture files: insert the pictures when the clipboard holds those
-/// files. False leaves the text to the usual paste. When the host can't open the system clipboard
-/// ([`crate::Services::clipboard_unreachable`]), it can't list the copied files either, so the
-/// files named in the text are inserted; text that names no regular file here stays text.
+/// files. False leaves the text to the usual paste. When the host can't read the copy the text
+/// came from ([`crate::system_clipboard::host_has`]: the system clipboard can't be opened, or it
+/// mirrors Xwayland and holds other text), it can't list the copied files either, so the files
+/// named in the text are inserted; text that names no regular file here stays text. A mirrored
+/// copy holding the text but no picture falls back to the named files the same way.
 pub(crate) fn paste_named_files(app: &mut WordApp, text: &str) -> bool {
     if !names_picture_files(text) {
         return false;
     }
-    if app.services.clipboard_unreachable.as_ref().is_some_and(|f| f()) {
-        let files: Vec<PathBuf> = named_files(text).into_iter().filter(|p| p.is_file()).collect();
-        return !files.is_empty() && insert(app, ClipboardPicture::Files(files)).is_some();
+    if !app.services.clipboard_unreachable.as_ref().is_some_and(|f| f()) {
+        return paste(app).is_some();
     }
-    paste(app).is_some()
+    if crate::system_clipboard::host_has(app, text) && paste(app).is_some() {
+        return true;
+    }
+    let files: Vec<PathBuf> = named_files(text).into_iter().filter(|p| p.is_file()).collect();
+    !files.is_empty() && insert(app, ClipboardPicture::Files(files)).is_some()
 }
 
 /// The files named in text that [`names_picture_files`] accepts: each line's path, with a

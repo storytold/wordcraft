@@ -181,6 +181,12 @@ pub fn unreachable() -> bool {
     !platform::can_set() || arboard::Clipboard::new().is_err()
 }
 
+/// `true` when the system clipboard opens but holds only what the compositor copies over to
+/// Xwayland (a Wayland session without data-control, with an X11 server to fall back to).
+pub fn mirrored() -> bool {
+    !platform::can_set() && arboard::Clipboard::new().is_ok()
+}
+
 /// The names of the formats on the clipboard, where the platform lists them (Wayland, Windows).
 pub fn formats() -> Vec<String> {
     platform::formats()

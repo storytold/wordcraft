@@ -389,6 +389,7 @@ fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::C
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
         clipboard_unreachable: Some(Box::new(clipboard::unreachable)),
+        clipboard_mirrored: Some(Box::new(clipboard::mirrored)),
         save_prefs: Some(Box::new(try_save_prefs)),
         ..Default::default()
     }
