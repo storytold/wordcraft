@@ -15827,3 +15827,57 @@ fn a_floating_table_placed_by_an_offset_takes_its_indent_before_word_2013_only()
     assert!((text_x(15, None) - (margin + 0.25 + 5.4)).abs() < 0.01, "mode 15: {}", text_x(15, None));
     assert!((text_x(15, Some(-5.4)) - (margin + 0.25 + 5.4)).abs() < 0.01, "mode 15, indent: {}", text_x(15, Some(-5.4)));
 }
+
+/// From Word 2013 a table moves in by half its first cell's left border, and a first row's
+/// `w:tblPrEx` border is that border (measured in Word for Windows): with an 8 pt table border and
+/// a 2 pt exception the first cell's text is at 78.38, 1 pt in; without the exception at 81.38.
+/// The same inline and floating, and for every row.
+#[test]
+fn a_first_rows_exception_border_is_the_half_border_a_table_moves_in_by() {
+    crate::test_fonts();
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let text_x = |float: bool, exception: bool| {
+        let mut t = Table::new(2, 2, 300.0);
+        t.props.fixed = true;
+        t.props.style = None;
+        t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+        t.props.borders = Some(Borders { left: Some(Border::single(8.0)), ..Default::default() });
+        if float {
+            t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, ..Default::default() });
+        }
+        if exception {
+            t.rows[0].props.exceptions = Some(Box::new(wordcraft_doc::props::TableProps {
+                borders: Some(Borders { left: Some(Border::single(2.0)), ..Default::default() }),
+                ..Default::default()
+            }));
+        }
+        for r in &mut t.rows {
+            for c in &mut r.cells {
+                c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell", Default::default()))];
+            }
+        }
+        let mut d = Document::from_text("Below");
+        d.settings.compat_mode = 15;
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let at = |row: u32| {
+            l.pages[0]
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    Placed::Lines { path, x, .. } if path.0 == [0, row, 0, 0] => Some(*x),
+                    _ => None,
+                })
+                .expect("the first cell's text")
+        };
+        (at(0), at(1))
+    };
+    for float in [false, true] {
+        for (exception, want) in [(false, 72.0 + 4.0 + 5.4), (true, 72.0 + 1.0 + 5.4)] {
+            let (first, second) = text_x(float, exception);
+            assert!((first - want).abs() < 0.01, "float {float}, exception {exception}: {first}");
+            assert!((second - want).abs() < 0.01, "float {float}, exception {exception}, row 2: {second}");
+        }
+    }
+}

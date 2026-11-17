@@ -324,10 +324,17 @@ pub(crate) fn float_offset_shift(ctx: &Ctx, t: &Table) -> f32 {
         if let Some(own) = t.props.borders {
             borders.overlay(&own);
         }
-        let first = t.rows.first().and_then(|r| r.cells.first());
-        let left = first.and_then(|c| c.props.borders.and_then(|b| b.left)).or(borders.left);
-        -left.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+        -half_edge_border(t, &borders)
     }
+}
+
+/// Half the left border of a table's first cell, which Word (from mode 15) moves the table in by:
+/// the cell's own border, else its row's `w:tblPrEx`, else the table's (`borders`, with its style's).
+fn half_edge_border(t: &Table, borders: &Borders) -> f32 {
+    let row = t.rows.first();
+    let own = row.and_then(|r| r.cells.first()).and_then(|c| c.props.borders.and_then(|b| b.left));
+    let exception = row.and_then(|r| r.props.exceptions.as_ref()).and_then(|e| e.borders).and_then(|b| b.left);
+    own.or(exception).or(borders.left).filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
 }
 
 fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
@@ -473,7 +480,6 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     if let Some(own) = t.props.borders {
         tborders.overlay(&own);
     }
-    let first_cell = t.rows.first().and_then(|r| r.cells.first());
     // A right-to-left table (`w:bidiVisual`) mirrors: its first column stands at the right, its
     // start alignment and indent are measured from the right margin, and each cell's start
     // (left) margin and border are on its right.
@@ -482,8 +488,7 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     let start_offset = if ctx.doc.settings.compat_mode >= 15 {
         // The border is centred on the edge, so half of it sits outside: Word moves the table in
         // by that half.
-        let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
-        indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+        indent + half_edge_border(t, &tborders)
     } else {
         indent - first_cell_left_margin_in(t, margins_def)
     };
