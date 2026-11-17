@@ -11005,6 +11005,22 @@ fn table_formula_reads_and_writes_decimal_comma_in_polish() {
     assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}))["result"], "1253.75");
 }
 
+/// #6872: a formula's `\#` picture reads its separators in the cell text's language, as the
+/// cells are read (#836): `#.##0,00 €` in a German table writes `1.236,75 €`, and the English
+/// picture still writes English numbers in an English table.
+#[test]
+fn a_numeric_picture_takes_the_separators_of_the_cell_language() {
+    let mut s = column_table("de-DE", &["1.234,50", "2,25", ""]);
+    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE) \\# \"#.##0,00 €\""}))["result"], "1.236,75 €");
+    let mut s = column_table("de-DE", &["1.234,50", "2,25", ""]);
+    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE) \\# \"0,0\""}))["result"], "1236,8");
+    let mut s = column_table("en-US", &["1,234.50", "2.25", ""]);
+    assert_eq!(run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE) \\# \"#,##0.00 €\""}))["result"], "1,236.75 €");
+    // The literal text around the digits keeps its own points and commas.
+    assert_eq!(crate::cmd::table_formula::format_picture_in(1236.75, "Nr. #.##0,00 netto", Some("de-DE")), "Nr. 1.236,75 netto");
+    assert_eq!(crate::cmd::table_formula::format_picture_in(0.5, "0%", Some("de-DE")), "50%");
+}
+
 /// #837: text sorts follow the language's alphabet: Polish `ł` after `l`, `ć` after `c`.
 #[test]
 fn table_and_paragraph_sort_use_polish_alphabet() {

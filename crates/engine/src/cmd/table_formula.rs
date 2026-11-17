@@ -75,29 +75,26 @@ pub fn evaluate_field_with(
 ) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
     let value = evaluate_with(t, doc, default_lang, r, c, formula)?;
+    // The language the result is written in: its cell's text's, else the table's, else the
+    // document's.
+    let out_lang = doc
+        .and_then(|d| {
+            t.rows.get(r).and_then(|row| row.cells.get(c)).and_then(|cl| {
+                cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
+            })
+        })
+        .or_else(|| {
+            doc.and_then(|d| {
+                t.rows.iter().flat_map(|row| row.cells.iter()).take(100).find_map(|cl| {
+                    cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
+                })
+            })
+        })
+        .or_else(|| default_lang.map(str::to_string));
     let text = match switch.and_then(picture_of) {
-        Some(picture) => format_picture(value, &picture),
-        None => {
-            let out_lang = doc
-                .and_then(|d| {
-                    t.rows.get(r).and_then(|row| row.cells.get(c)).and_then(|cl| {
-                        cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
-                    })
-                })
-                .or_else(|| {
-                    doc.and_then(|d| {
-                        t.rows.iter().flat_map(|row| row.cells.iter()).take(100).find_map(|cl| {
-                            cl.blocks
-                                .iter()
-                                .filter_map(|b| b.as_para())
-                                .find(|p| !p.plain_text().trim().is_empty())
-                                .and_then(|p| super::para_lang(d, p))
-                        })
-                    })
-                })
-                .or_else(|| default_lang.map(str::to_string));
-            wordcraft_doc::locale_number::format_number(value, out_lang.as_deref())
-        }
+        // The picture's separators are that language's too (#6872).
+        Some(picture) => format_picture_in(value, &picture, out_lang.as_deref()),
+        None => wordcraft_doc::locale_number::format_number(value, out_lang.as_deref()),
     };
     Ok(match switch {
         Some(switch) => format_switches(switch, value, text),
@@ -168,6 +165,17 @@ fn picture_of(switch: &str) -> Option<String> {
 /// decimals, `%` multiplies by 100, and anything else shows as it is. Sections split by `;` give the
 /// positive, negative and zero forms; with one section a negative value takes a `-` in front.
 pub fn format_picture(value: f64, picture: &str) -> String {
+    format_picture_in(value, picture, None)
+}
+
+/// [`format_picture`] in language `lang` (a BCP 47 tag; `None` is English): the picture's decimal
+/// mark and thousands separator are that language's, as Word reads a picture with the separators
+/// it writes numbers with. In German `#.##0,00` groups thousands with `.` and marks the decimals
+/// with `,` (`1.236,75`), as `#,##0.00` does in English (#6872). The literal text around the
+/// digits keeps its own `.` and `,`.
+pub fn format_picture_in(value: f64, picture: &str, lang: Option<&str>) -> String {
+    let point = wordcraft_doc::locale_number::decimal_separator(lang);
+    let group = if point == ',' { '.' } else { ',' };
     let sections: Vec<&str> = picture.split(';').collect();
     let (section, x, minus) = if value < 0.0 && sections.len() >= 2 {
         (sections[1], -value, false)
@@ -182,7 +190,7 @@ pub fn format_picture(value: f64, picture: &str) -> String {
     let (core, suffix) = rest.split_at(len);
     let prefix = &section[..start];
     let x = if prefix.contains('%') || suffix.contains('%') { x * 100.0 } else { x };
-    let (int_pic, frac_pic) = match core.split_once('.') {
+    let (int_pic, frac_pic) = match core.split_once(point) {
         Some((int_pic, frac_pic)) => (int_pic, Some(frac_pic)),
         None => (core, None),
     };
@@ -200,26 +208,26 @@ pub fn format_picture(value: f64, picture: &str) -> String {
         None => (digits.clone(), String::new()),
     };
     let whole = if whole == "0" && min_int == 0 { String::new() } else { format!("{whole:0>min_int$}") };
-    let whole = if int_pic.contains(',') { group_thousands(&whole) } else { whole };
+    let whole = if int_pic.contains(group) { group_thousands(&whole, group) } else { whole };
     let mut decimals = decimals;
     while decimals.len() > min_frac && decimals.ends_with('0') {
         decimals.pop();
     }
     let mut body = whole;
     if !decimals.is_empty() {
-        body.push('.');
+        body.push(point);
         body.push_str(&decimals);
     }
     let sign = if minus && rounded != 0.0 { "-" } else { "" };
     format!("{sign}{prefix}{body}{suffix}")
 }
 
-/// `1234567` → `1,234,567`.
-fn group_thousands(digits: &str) -> String {
+/// `1234567` → `1,234,567` (with `,` as `sep`).
+fn group_thousands(digits: &str, sep: char) -> String {
     let mut out = String::new();
     for (i, ch) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
+            out.push(sep);
         }
         out.push(ch);
     }
