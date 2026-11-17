@@ -447,6 +447,15 @@ impl Builder<'_> {
                 let (x, w) = line.mark_box();
                 push_char(&mut lb.run, "\n", x, w);
             }
+            // A line with nothing to read (a page or column break alone on it, or only a picture)
+            // still ends in a character, as a line break does: AccessKit's line search never
+            // returns on an empty text run alone on its line, which froze the app under an
+            // accessibility client (#6893, AccessKit/accesskit#864). Its box is the mark's, so a
+            // magnifier still finds the caret there (#1119).
+            if lb.run.lens.is_empty() && lb.prev.is_none() {
+                let (x, w) = line.mark_box();
+                push_char(&mut lb.run, "\n", x, w);
+            }
             if !lb.run.lens.is_empty() || lb.prev.is_none() {
                 self.flush(&mut lb, line, at);
             }
@@ -894,6 +903,55 @@ mod tests {
         // The consumer's focus is one of its nodes.
         let focus = tree.state().focus_id_in_tree();
         assert!(tree.state().has_node(focus), "the consumer's focus is in the node list");
+    }
+
+    /// #6893: a paragraph that starts with a column break, or a page break alone in its paragraph
+    /// (Ctrl+Enter), gave its first line an empty text run, alone on its line. AccessKit's
+    /// `to_line_index` never returned there (AccessKit/accesskit#864), and macOS asks for it
+    /// whenever an accessibility client such as the Accessibility Keyboard is on: the app froze.
+    /// No text run is empty now, and every position of the document finds its line.
+    #[test]
+    fn a_line_holding_only_a_break_has_no_empty_text_run() {
+        use wordcraft_doc::para::{COLUMN_BREAK, PAGE_BREAK};
+        let text = format!("First paragraph.\n{COLUMN_BREAK}Heading after a column break\n{PAGE_BREAK}\nAfter the page break");
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text)), Default::default());
+        let update = described(&mut app, &egui::Context::default());
+        let tree = std::sync::Arc::new(accesskit_consumer::Tree::new(update, true));
+        // The document node, and the text runs under it (not the ribbon's text boxes).
+        let (document, runs) = {
+            let state = tree.state();
+            let mut stack = vec![state.root()];
+            let mut found = None;
+            while let Some(n) = stack.pop() {
+                if n.role() == Role::Document {
+                    found = Some(n);
+                    break;
+                }
+                stack.extend(n.children());
+            }
+            let document = found.expect("a Document node");
+            let (mut runs, mut stack) = (Vec::new(), vec![document]);
+            while let Some(n) = stack.pop() {
+                if n.role() == Role::TextRun {
+                    runs.push(n.value().unwrap_or_default());
+                }
+                stack.extend(n.children());
+            }
+            (document.id(), runs)
+        };
+        assert!(runs.len() >= 4 && runs.iter().all(|v| !v.is_empty()), "{runs:?}");
+        let total: usize = runs.iter().map(|v| v.encode_utf16().count()).sum();
+        for index in 0..=total {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let tree = tree.clone();
+            // On a worker, so a hang fails the test instead of freezing it.
+            std::thread::spawn(move || {
+                let state = tree.state();
+                let line = state.node_by_id(document).and_then(|n| n.text_position_from_global_utf16_index(index).map(|p| p.to_line_index()));
+                let _ = tx.send(line);
+            });
+            assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(), "no line index for utf16 index {index} of {total}");
+        }
     }
 
     struct NoopHandler;
