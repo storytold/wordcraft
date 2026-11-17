@@ -12,6 +12,25 @@ fn input_frame(ctx: &egui::Context, app: &mut WordApp, events: Vec<egui::Event>)
     ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| logic(app, ui.ctx())).drop_without_applying_deltas();
 }
 
+/// #4497: a compact button is nearly all icon (`widgets::small`: 17×17 in 24×22), and its
+/// badge sat on 63% of the glyph. It now hangs out over the corner and covers a sliver, for a
+/// one-letter and a two-letter badge alike; a big control keeps its corner badge.
+#[test]
+fn a_compact_buttons_badge_leaves_its_icon_visible() {
+    let button = Rect::from_min_size(egui::pos2(100.0, 60.0), Vec2::new(24.0, 22.0));
+    let icon = Rect::from_center_size(egui::pos2(button.min.x + 12.0, button.center().y), Vec2::splat(17.0));
+    for (width, most) in [(7.0, 0.10), (14.0, 0.20)] {
+        let r = badge_rect(button, width);
+        let covered = r.intersect(icon);
+        let share = covered.width().max(0.0) * covered.height().max(0.0) / (icon.width() * icon.height());
+        assert!(share <= most, "a badge {width} wide covers {share:.2} of the icon (at most {most})");
+        assert!(r.min.x >= button.min.x - 4.0 && r.min.y >= button.min.y - 4.0, "it hangs out of the corner by no more than 4 px");
+        assert!(r.width() >= 12.0 && r.height() >= 12.0, "and stays big enough to read");
+    }
+    let big = Rect::from_min_size(egui::pos2(100.0, 60.0), Vec2::new(44.0, 66.0));
+    assert_eq!(badge_rect(big, 7.0), Rect::from_min_size(egui::pos2(102.0, 61.0), Vec2::new(15.0, 15.0)));
+}
+
 #[test]
 fn native_alt_taps_toggle_once_in_either_event_order() {
     let alt = egui::Modifiers { alt: true, ..Default::default() };
@@ -159,6 +178,60 @@ fn letters_are_unique_inside_every_tab() {
         assert!(!tl.contains(l), "duplicate tab letter {l}");
         tl.push(l.clone());
     }
+}
+
+/// #4498: no badge is the start of another, on any tab, or the short one runs as soon as its
+/// letter is typed and the long one can never be reached.
+#[test]
+fn no_badge_starts_another_badge() {
+    let mut a = app();
+    a.run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
+    let (_, cmds) = letters(&a);
+    let mut two_letter = 0;
+    for (tab, ls) in &cmds {
+        for l in ls {
+            assert!(!l.is_empty() && !l.starts_with('?'), "{tab}: a control without a badge ({l:?})");
+            two_letter += usize::from(l.chars().count() > 1);
+            let others = ls.iter().filter(|o| *o != l && o.starts_with(l.as_str())).count();
+            assert_eq!(others, 0, "{tab}: badge {l} starts another badge in {ls:?}");
+        }
+    }
+    assert!(two_letter > 0, "Home has more controls than letters, so some badges take two");
+}
+
+/// #4498: the first letter of a two-letter badge keeps KeyTips on and waits; the second runs
+/// the command. A letter that completes nothing ends KeyTips and runs nothing.
+#[test]
+fn a_two_letter_badge_is_completed_by_its_second_letter() {
+    let key = |c: char| egui::Key::from_name(&c.to_string()).unwrap();
+    let mut a = app();
+    a.canvas.focused = false;
+    a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
+    let ls = letters_for(&a, "Home");
+    let long: Vec<&String> = ls.iter().filter(|l| l.chars().count() == 2).collect();
+    let target = *long.first().expect("Home has two-letter badges");
+    let (first, second) = (target.chars().next().unwrap(), target.chars().nth(1).unwrap());
+    let sibling = long.iter().find(|l| l.starts_with(first) && *l != &target).map(|l| l.chars().nth(1).unwrap());
+    let before = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    activate(&mut a);
+    assert!(handle_key(&mut a, egui::Key::H));
+    assert_eq!(a.ui.keytips, Phase::Commands);
+    assert!(handle_key(&mut a, key(first)));
+    assert_eq!((a.ui.keytips, a.ui.keytip_prefix.as_str()), (Phase::Commands, first.to_string().as_str()), "waits for the second letter");
+    assert!(handle_key(&mut a, key(second)));
+    assert_eq!(a.ui.keytips, Phase::Off, "the second letter completes it");
+    assert!(a.ui.keytip_prefix.is_empty());
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before, "no letter reached the document");
+    // The first letter then a second that completes nothing: off, and nothing runs.
+    let unused = ('A'..='Z').find(|c| !ls.contains(&format!("{first}{c}"))).unwrap();
+    a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
+    activate(&mut a);
+    handle_key(&mut a, egui::Key::H);
+    handle_key(&mut a, key(first));
+    assert!(handle_key(&mut a, key(unused)));
+    assert_eq!((a.ui.keytips, a.ui.keytip_prefix.as_str()), (Phase::Off, ""));
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before);
+    assert!(sibling.is_none() || sibling != Some(second), "siblings of a prefix have distinct second letters");
 }
 
 #[test]
