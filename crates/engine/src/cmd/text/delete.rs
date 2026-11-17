@@ -38,13 +38,12 @@ fn remove_number(s: &mut Session, f: &Pos, n: NumRef) -> CmdResult {
 }
 
 /// The formatting Backspace carries over from the character between `a` and `f` (#6518): only an
-/// ordinary character, not an object, field or anchor marker or a page or column break, and not
-/// with Track Changes on (the character stays, marked deleted). Cleaned up the way the caret's
-/// own formatting is: no hyperlink, symbol font, note-number style or revision marks.
+/// ordinary character, not an object, field or anchor marker or a page or column break. With Track
+/// Changes on it carries too, as in Word: the character stays, marked deleted (or goes, when this
+/// author inserted it), and the caret sits before it. Cleaned up the way the caret's own
+/// formatting is: no hyperlink, symbol font, note-number style or revision marks, so typed text
+/// gets its own insertion mark and never the deletion.
 fn deleted_char_props(s: &Session, a: &Pos, f: &Pos) -> Option<wordcraft_doc::props::CharProps> {
-    if s.doc.settings.track_changes {
-        return None;
-    }
     let p = s.doc.para_at(f)?;
     let text = p.text.get(a.off..f.off).filter(|t| !t.is_empty())?;
     if text.contains([OBJ, PAGE_BREAK, COLUMN_BREAK]) {

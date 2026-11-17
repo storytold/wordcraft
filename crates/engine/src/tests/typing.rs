@@ -1943,6 +1943,50 @@ fn backspace_formatting_follows_typing_and_comes_back_with_undo() {
     assert!(bold_at(&s, 3));
 }
 
+/// #6518: with Track Changes on, Backspace leaves the character in place marked deleted, and text
+/// typed next still takes its formatting (a tracked insertion, never marked deleted); moving the
+/// caret away and back drops it. Backspace over the author's own tracked insertion, which removes
+/// it, carries it too. Observed in Word for Windows.
+#[test]
+fn tracked_backspace_carries_the_deleted_characters_formatting() {
+    // "xy Abc", "Abc" bold: Backspace after the bold A, then X is bold beside a plain space.
+    let mut s = with_bold("xy Abc", 3, 6, 4);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 3)));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "xy XAbc", "the A stays, marked deleted");
+    let x = p.props_of_char(3);
+    assert!(x.bold == Some(true) && x.ins.is_some() && x.del.is_none(), "X is a bold tracked insertion: {x:?}");
+    assert!(p.props_of_char(4).del.is_some() && p.props_of_char(5).del.is_none());
+    // Moving the caret right and back after the Backspace drops it: X is plain.
+    let mut s = with_bold("xy Abc", 3, 6, 4);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 3)));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xy XAbc");
+    assert!(!bold_at(&s, 3));
+    // A bold A this author typed with Track Changes on: Backspace removes it, X is still bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("xy "));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    typ(&mut s, "A");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 4}}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xy ");
+    typ(&mut s, "X");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "xy X");
+    let x = p.props_of_char(3);
+    assert!(x.bold == Some(true) && x.ins.is_some() && x.del.is_none(), "X is a bold tracked insertion: {x:?}");
+}
+
 /// Myanmar (#604): typed in memory order (consonant, medial, then the prevowel ေ that is drawn
 /// before it), the caret steps over whole syllables and Backspace removes one sign at a time.
 #[test]
