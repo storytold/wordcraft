@@ -1738,7 +1738,6 @@ fn a_right_to_left_file_page_follows_the_window_width() {
 /// and a window narrower than the settings column itself scrolls sideways cleanly without clipping.
 #[test]
 fn a_narrow_print_page_shows_its_settings_alone() {
-    use egui::accesskit::Role;
     for (lang, dx) in [(crate::i18n::Lang::EN, -2000.0), (right_to_left(), 2000.0)] {
         for width in [500.0, 760.0, 850.0] {
             let mut h = page_at("print", width, Rc::new(Cell::new(lang)));
@@ -1747,7 +1746,7 @@ fn a_narrow_print_page_shows_its_settings_alone() {
             if width >= 760.0 {
                 assert!(save.left() >= 8.0 && save.right() <= width - 8.0, "at {width}: the settings must fit: {save:?}");
             } else {
-                let v_bars: Vec<egui::Rect> = h.query_all_by_role(Role::ScrollBar).map(|n| n.rect()).filter(|r| r.height() > r.width()).collect();
+                let v_bars = page_v_bars(&h);
                 assert!(v_bars.len() <= 1, "at {width} (rtl={}): expected no clipped inner vertical bar: {v_bars:?}", lang.rtl());
                 if lang.rtl() {
                     let close_nav = h.get_by_label("Close").rect();
@@ -1869,6 +1868,17 @@ fn side_menu_button(h: &egui_kittest::Harness<'static, WordApp>, label: &str) ->
         .map(|n| n.rect())
         .find(|r| (r.width() - 200.0).abs() < 0.5)
         .unwrap_or_else(|| panic!("the side menu's {label} button"))
+}
+
+/// The page's own vertical scrollbars: the side menu's bar, shown when a short window scrolls the menu (#6639),
+/// is left out.
+fn page_v_bars(h: &egui_kittest::Harness<'static, WordApp>) -> Vec<egui::Rect> {
+    let menu = side_menu_button(h, "Home");
+    h.query_all_by_role(egui::accesskit::Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .filter(|r| r.left() < menu.left() - 0.5 || r.right() > menu.right() + 0.5)
+        .collect()
 }
 
 /// #6639: in a window too short for the File page's side menu, the wheel over the menu scrolls
@@ -2268,7 +2278,7 @@ fn your_languages_tall_list_scrolls_vertically_without_bar_overlap() {
 
         // Before scrolling sideways too, keep at most Backstage's single page vertical scrollbar and
         // keep RTL columns strictly left of the Options sidebar.
-        let v_bars_before: Vec<egui::Rect> = h.query_all_by_role(Role::ScrollBar).map(|n| n.rect()).filter(|r| r.height() > r.width()).collect();
+        let v_bars_before = page_v_bars(&h);
         assert!(v_bars_before.len() <= 1, "at {width} (rtl={}): expected no nested vertical scrollbar, got {v_bars_before:?}", lang.rtl());
         if lang.rtl() {
             let sidebar = h.get_by_label("General").rect();
@@ -2282,7 +2292,7 @@ fn your_languages_tall_list_scrolls_vertically_without_bar_overlap() {
         if width < 1440.0 {
             wheel_page_sideways(&mut h, dx);
         }
-        let v_bars: Vec<egui::Rect> = h.query_all_by_role(Role::ScrollBar).map(|n| n.rect()).filter(|r| r.height() > r.width()).collect();
+        let v_bars = page_v_bars(&h);
         assert!(v_bars.len() <= 1, "at {width} (rtl={}) after sideways scroll: {v_bars:?}", lang.rtl());
         let v_bar = v_bars.into_iter().next().expect("tall Options > Language exposes Backstage's vertical scrollbar");
         let built_in = label_rect_starting(&h, "Built in");
