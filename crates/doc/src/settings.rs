@@ -80,8 +80,7 @@ pub struct Settings {
     pub default_tab: f32,
     pub even_odd_headers: bool,
     pub mirror_margins: bool,
-    /// The gutter is added to the top margin instead of the left one (`w:gutterAtTop`). Kept so
-    /// that opening and saving a document leaves it as it was.
+    /// The gutter is added to the top margin instead of the left one (`w:gutterAtTop`).
     pub gutter_at_top: bool,
     pub auto_hyphenation: bool,
     /// Hyphenation zone (`w:hyphenationZone`), points: a line is hyphenated only when breaking

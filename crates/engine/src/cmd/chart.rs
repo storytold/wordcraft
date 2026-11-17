@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use wordcraft_doc::chart::{ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES};
+use wordcraft_doc::chart::{ChartAxis, ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES, value_axis};
 use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::para::{Float, InlineObject};
 use wordcraft_doc::props::Rgb;
@@ -40,6 +40,14 @@ pub fn specs() -> Vec<CommandSpec> {
                         if series.no_line && series.markers == Some(false) {
                             series.markers = None;
                         }
+                    }
+                }
+                // Pie and doughnut charts have a plain value axis and the other types a new
+                // chart's value axis; an axis left as the old type had it takes the new type's.
+                if c.kind.is_round() != kind.is_round() {
+                    let (from, to) = if kind.is_round() { (value_axis(), ChartAxis::default()) } else { (ChartAxis::default(), value_axis()) };
+                    if c.val_axis == from {
+                        c.val_axis = to;
                     }
                 }
                 c.kind = kind;

@@ -7809,6 +7809,35 @@ fn scatter_chart_series_have_no_line_and_edit_data_keeps_formatting() {
     assert!(!c.data_labels && c.series.iter().all(|x| x.labels.is_none()));
 }
 
+/// A pie chart changed to a column chart gets a new column chart's value axis, and back; an
+/// axis that was changed stays as it is.
+#[test]
+fn chart_type_between_round_and_axis_charts_sets_the_value_axis() {
+    use wordcraft_doc::chart::{ChartAxis, value_axis};
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "pie"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis::default());
+    run(&mut s, "chart.type", json!({"type": "column"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, value_axis());
+    run(&mut s, "chart.type", json!({"type": "doughnut"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis::default());
+
+    let mut s = self::s();
+    run(&mut s, "insert.chart", json!({"type": "column"}));
+    let pos = Pos::body(0, 0);
+    let p = s.doc.para_mut(pos.story, &pos.path).unwrap();
+    let off = p.object_offsets()[0];
+    if let Some(wordcraft_doc::para::InlineObject::Graphic { graphic, .. }) = p.object_at_mut(off) {
+        let g = std::sync::Arc::make_mut(graphic);
+        let mut spec = (**g.chart.as_ref().unwrap()).clone();
+        spec.val_axis.max = Some(50.0);
+        g.chart = Some(std::sync::Arc::new(spec));
+    }
+    run(&mut s, "chart.type", json!({"type": "pie"}));
+    run(&mut s, "chart.type", json!({"type": "bar"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis { max: Some(50.0), ..value_axis() });
+}
+
 #[test]
 fn hostile_chart_data_is_capped() {
     use wordcraft_doc::chart::{MAX_CELLS, MAX_POINTS, MAX_SERIES, MAX_TEXT};
