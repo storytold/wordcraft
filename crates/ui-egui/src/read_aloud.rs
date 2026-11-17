@@ -93,7 +93,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         .resizable(false)
         .pivot(egui::Align2::RIGHT_TOP)
         .default_pos(right_top);
-    let shown = crate::window_close::show_window(ctx, window, |ui| {
+    let shown = crate::window_close::window(ctx, window).show(ctx, |ui| {
         ui.set_width(236.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
