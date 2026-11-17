@@ -3043,6 +3043,7 @@ fn cache_reuses_unchanged_paragraphs() {
 /// proofing off or on, and proofing moves nothing.
 #[test]
 fn kept_headings_measure_the_next_paragraph_through_the_cache() {
+    let _dict_lock = crate::test_dict_lock();
     let mut d = Document::new();
     let kept = ParaProps { keep_next: Some(true), ..Default::default() };
     for i in 0..40 {
@@ -10348,6 +10349,7 @@ fn hyphenation_and_proofing_follow_each_runs_language() {
 #[test]
 fn list_item_first_word_gets_no_capital_squiggle() {
     crate::test_fonts();
+    let _dict_lock = crate::test_dict_lock();
     use wordcraft_doc::props::NumRef;
     let opts = LayoutOptions { proofing: true, ..LayoutOptions::default() };
     let grammar_squiggles = |d: &Document| -> usize {

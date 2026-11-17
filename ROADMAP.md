@@ -938,6 +938,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-08 | trivial | Progress log: contextual spacing drops the space after a cell's last Normal paragraph (#5450) |
 | 2026-10-26 | trivial | Progress log: dialog sections across 13 dialogs; conditional scrolling for tall dialogs (#4035, #4038) |
 | 2026-11-06 | trivial | Progress log: the Arabic interface's Styles gallery reads from the right (#5566) |
+| 2026-11-07 | trivial | Progress log: German proofing accepts valid coordinated compounds with ellipsis (#5903); readiness unchanged |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
 | 2026-11-07 | trivial | Progress log: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). |

@@ -234,22 +234,22 @@ fn check_forward_coordinated(
         return partner_opt.as_deref().is_some_and(|partner| test_compound_forward(word, partner, lang, opts));
     }
 
-    let (scan_end, partner_opt) = scan_forward_partner(text, word, end.saturating_add(hyphen_char.len_utf8()), lang, opts);
-    *cache = Some((start..scan_end, partner_opt.clone()));
-
-    partner_opt.as_deref().is_some_and(|partner| test_compound_forward(word, partner, lang, opts))
+    let (scan_end, partner_opt, matched) = scan_forward_partner(text, word, end.saturating_add(hyphen_char.len_utf8()), lang, opts);
+    *cache = Some((start..scan_end, partner_opt));
+    matched
 }
 
 /// Scan forward from `after_hyphen_offset` to find the terminal candidate partner word of a coordination chain.
 ///
-/// Returns the byte offset up to which the scan reached and the candidate partner word, if found.
+/// Returns the byte offset up to which the scan reached, the candidate partner word if found, and
+/// whether `word` itself forms a valid compound with that partner.
 fn scan_forward_partner(
     text: &str,
     word: &str,
     after_hyphen_offset: usize,
     lang: wordcraft_proof::ProofLang,
     opts: &wordcraft_proof::Options,
-) -> (usize, Option<String>) {
+) -> (usize, Option<String>, bool) {
     let mut saw_connector = false;
     let mut modifier_count: usize = 0;
     let mut remainder = text.get(after_hyphen_offset..).unwrap_or("");
@@ -330,7 +330,7 @@ fn scan_forward_partner(
                 }
 
                 if test_compound_forward(word, partner, lang, opts) {
-                    return (current_offset, Some(partner.to_string()));
+                    return (current_offset, Some(partner.to_string()), true);
                 }
 
                 let is_lowercase = token.chars().next().is_some_and(|c| c.is_lowercase());
@@ -340,7 +340,7 @@ fn scan_forward_partner(
                 }
 
                 if is_noun && token_is_noun {
-                    return (current_offset, Some(partner.to_string()));
+                    return (current_offset, Some(partner.to_string()), false);
                 }
             }
 
@@ -352,7 +352,7 @@ fn scan_forward_partner(
         }
     }
 
-    (current_offset, None)
+    (current_offset, None, false)
 }
 
 /// Test whether `word` plus any valid suffix/base of `partner` forms a valid German compound.
@@ -937,7 +937,7 @@ mod tests {
         let aff = "SET UTF-8\n";
         let short_partner = "Rechtsanwalt";
         let long_partner = "Donaudampfschiffahrtsgesellschaftskapitaenswitwenrentenversicherungsgrundgesetzabwicklungsabteilungsleiter";
-        let dic = format!("3\nund\n{short_partner}\n{long_partner}\n");
+        let dic = format!("4\nund\n{short_partner}\n{long_partner}\nHandlungsleiter\n");
         let _ = std::fs::write(temp_dir.join("de_DE.aff"), aff);
         let _ = std::fs::write(temp_dir.join("de_DE.dic"), dic);
         wordcraft_proof::set_dictionaries_folder(Some(temp_dir));
@@ -962,5 +962,20 @@ mod tests {
         });
         assert!(steps_short_f > 0, "work must be counted in test_compound_forward");
         assert!(steps_long_f <= 45, "test_compound_forward scanned beyond the 40-byte candidate window: {steps_long_f} steps");
+
+        // Uncached check_forward_coordinated reuses scan_forward_partner's verdict instead of testing the partner twice.
+        let accepted_text = format!("Handlungs- und {long_partner}");
+        let steps_accepted = crate::work::count(|| {
+            let mut cache = None;
+            assert!(check_forward_coordinated(&accepted_text, 0, "Handlungs".len(), "Handlungs", lang, &opts, &mut cache));
+        });
+        assert!(steps_accepted <= 45, "check_forward_coordinated tested the accepted partner twice: {steps_accepted} steps");
+
+        let rejected_text = format!("Xyzq- und {long_partner}");
+        let steps_rejected = crate::work::count(|| {
+            let mut cache = None;
+            assert!(!check_forward_coordinated(&rejected_text, 0, "Xyzq".len(), "Xyzq", lang, &opts, &mut cache));
+        });
+        assert!(steps_rejected <= 45, "check_forward_coordinated tested the rejected partner twice: {steps_rejected} steps");
     }
 }
