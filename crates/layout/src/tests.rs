@@ -12246,6 +12246,30 @@ fn cell_widths_override_grid() {
 }
 
 #[test]
+fn autofit_cell_widths_override_grid_with_one_twip_mismatch() {
+    crate::test_fonts();
+    // An automatic-width, non-fixed table: the grid is 4 × 2000 twips, while
+    // the preferred cell widths sum to 7999 twips.
+    let mut t = Table::new(2, 4, 400.0);
+    t.props.width = None;
+    t.props.width_pct = None;
+    t.props.fixed = false;
+    t.grid = vec![100.0; 4];
+    for row in &mut t.rows {
+        for (cell, width) in row.cells.iter_mut().zip([26.65, 53.3, 80.0, 240.0]) {
+            cell.props.width = Some(width);
+            cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
+        }
+    }
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let [(x0, _, _)] = para_at(&l, &[0, 1, 0, 0])[..] else { panic!("cell missing") };
+    let [(x1, _, _)] = para_at(&l, &[0, 1, 1, 0])[..] else { panic!("cell missing") };
+    assert!((x1 - x0 - 26.65).abs() < 0.01);
+}
+
+#[test]
 fn ambiguous_widths_keep_grid() {
     crate::test_fonts();
     let mut t = Table::new(2, 3, 450.0);
