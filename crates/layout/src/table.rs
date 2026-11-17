@@ -516,7 +516,8 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // on it, and earlier modes the last cell's text (measured in Word for Windows, tables of a
     // percentage or a width in points). A right-to-left table aligned to the end (the left
     // margin) keeps its edge on the margin whatever its borders in Word 2013+, and its last
-    // cell's text on it before (measured too).
+    // cell's text on it before (measured too). "Before" was measured in mode 14 only: Word
+    // 2003/2007 files (modes 11 and 12) take the same rule, not checked in Word.
     let end_offset = if new_borders { end_half } else { -end_margin };
     let rtl_end_offset = if new_borders { 0.0 } else { -end_margin };
     // A right-to-left table aligned to the start (the right margin) stands further left in Word
