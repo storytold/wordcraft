@@ -4168,6 +4168,7 @@ fn keys_during_a_text_form_field_fill_keep_the_fields_and_the_text() {
     let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
     // "next" ends with no space or punctuation, so AutoCorrect hasn't capitalised it yet.
     assert_eq!(texts, ["Name: Jane City: Oslo", "next"]);
+}
 /// #6788: Enter in a paragraph with a drop cap makes a normal paragraph; only the first keeps
 /// the cap (Word behaviour), for a dropped cap and one in the margin.
 #[test]
