@@ -1568,6 +1568,29 @@ fn attached_template_and_link_styles_round_trip() {
     assert!(!plain.settings.link_styles);
 }
 
+/// Gutter position Top (`w:gutterAtTop`) is kept when a document is opened and saved again, and
+/// is not written when it is off.
+#[test]
+fn gutter_at_top_survives_open_and_save() {
+    let settings_xml = |bytes: &[u8]| {
+        let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+        String::from_utf8(zip.read("word/settings.xml", 16 << 20).unwrap().unwrap()).unwrap()
+    };
+    let mut d = Document::new();
+    d.settings.gutter_at_top = true;
+    let first = wordcraft_docx::write(&d).expect("write");
+    assert_eq!(settings_xml(&first).matches("<w:gutterAtTop/>").count(), 1);
+
+    let opened = wordcraft_docx::read(&first).expect("read");
+    assert!(opened.settings.gutter_at_top);
+    let saved = wordcraft_docx::write(&opened).expect("write again");
+    assert_eq!(settings_xml(&saved).matches("<w:gutterAtTop/>").count(), 1);
+    assert!(wordcraft_docx::read(&saved).expect("read again").settings.gutter_at_top);
+
+    let plain = wordcraft_docx::write(&Document::new()).expect("write plain");
+    assert!(!settings_xml(&plain).contains("gutterAtTop"));
+}
+
 /// #995: the zoom a document was saved at (`w:zoom`), One Page (`fullPage`) included, is read
 /// and written back.
 #[test]
