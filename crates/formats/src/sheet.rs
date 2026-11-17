@@ -392,6 +392,18 @@ mod tests {
     }
 
     #[test]
+    fn an_ods_date_with_two_zones_reads_its_text() {
+        let book = craft_ods::testing::spreadsheet(
+            r#"<table:table table:name="Dates">
+              <table:table-row><table:table-cell office:value-type="date" office:date-value="2024-03-05T13:45:00+02:00Z"><text:p>offset then Z</text:p></table:table-cell><table:table-cell office:value-type="date" office:date-value="2024-03-05T13:45:00Z+02:00"><text:p>Z then offset</text:p></table:table-cell><table:table-cell office:value-type="date" office:date-value="2024-03-05T13:45:00+02:00"><text:p>one zone</text:p></table:table-cell></table:table-row>
+            </table:table>"#,
+        )
+        .unwrap();
+        let (_, rows) = read_rows(&book, Pick::Name("Dates")).unwrap();
+        assert_eq!(rows, [["offset then Z", "Z then offset", "2024-03-05 13:45"]]);
+    }
+
+    #[test]
     fn ods_dates_and_durations() {
         assert_eq!(iso_time("PT1H59M59.6S").as_deref(), Some("01:59:59.6"));
         assert_eq!(iso_time("PT0.25S").as_deref(), Some("00:00:00.25"));
