@@ -199,8 +199,11 @@ pub(super) fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
     app.canvas.command_previewed = command.clone().filter(|_| table.is_none());
     let Some((id, params)) = table.or(command) else {
         app.canvas.table_preview_layout = None;
-        return app.session.layout();
+        return ime_shown_layout(app);
     };
+    // A command preview takes over the page; the composition goes back to being painted as an
+    // overlay so the two previews never fight over the same layout.
+    app.canvas.ime_preview = None;
     // The caret can move, or the view change, with the grid still hovered: the table then goes
     // somewhere else, or the page is laid out to another width.
     let key = ((id.clone(), params.clone(), app.session.document_id(), app.session.rev(), app.session.sel.clone()), app.session.layout());
@@ -222,16 +225,85 @@ pub(super) fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
     }
 }
 
-/// The document the pages of [`shown_layout`] are drawn from: the previewed copy while the page
-/// shows Insert › Table's preview, whose paragraph paths are the layout's (#3931).
+/// The layout shown while an input method composes in the body: the document with the pre-edit
+/// inserted at the caret so the text on its right reflows right. Built on a copy and cached by
+/// everything that can change it, so an idle composition frame does not lay the document out
+/// again. Falls back to the document's own layout outside a body composition.
+fn ime_shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
+    let preedit = app.canvas.ime_preedit.clone();
+    if preedit.is_empty() || app.session.math.is_some() {
+        app.canvas.ime_preview = None;
+        return app.session.layout();
+    }
+    let cursor = super::preedit_cursor_chars(&preedit, app.canvas.ime_preedit_range.as_ref());
+    let document = app.session.document_id();
+    let rev = app.session.rev();
+    let real_sel = app.session.sel.clone();
+    let base = app.session.layout();
+    if let Some(p) = &app.canvas.ime_preview
+        && p.preedit == preedit
+        && p.cursor_chars == cursor
+        && p.document == document
+        && p.rev == rev
+        && p.real_sel == real_sel
+        && std::sync::Arc::ptr_eq(&p.base, &base)
+    {
+        return p.layout.clone();
+    }
+    match app.session.ime_preview_layout(&preedit, cursor) {
+        Some((doc, sel, layout)) => {
+            app.canvas.ime_preview = Some(super::ImePreview {
+                preedit,
+                cursor_chars: cursor,
+                document,
+                rev,
+                real_sel,
+                base,
+                doc,
+                sel,
+                layout: layout.clone(),
+            });
+            layout
+        }
+        None => {
+            app.canvas.ime_preview = None;
+            base
+        }
+    }
+}
+
+/// The document the page's layout belongs to: the previewed copy while the page shows Insert ›
+/// Table's preview, whose paragraph paths are the layout's (#3931). This is also the document
+/// a11y and non-caret selection drawing use; an input method's composition is *not* a document
+/// change, so it must not leak into those paths.
 pub(crate) fn page_doc(app: &WordApp) -> &wordcraft_doc::Document {
     app.canvas.table_preview_layout.as_ref().map_or(&app.session.doc, |(_, doc, _, _)| doc)
 }
 
+/// The document the page pixels are drawn from. While an input method composes in the body this
+/// is the copy with the pre-edit inserted, so the text on its right reflows right; `page_doc`
+/// stays the real document for everything that is not a page raster or its caret.
+pub(crate) fn shown_doc(app: &WordApp) -> &wordcraft_doc::Document {
+    if let Some(p) = &app.canvas.ime_preview {
+        return &p.doc;
+    }
+    page_doc(app)
+}
+
 /// The previewed copy's selection while the page shows Insert › Table's preview: the caret and
 /// selection are drawn from it, as the document's own name other places in the preview's layout.
+/// An input method's composition is not a selection change: a11y and find keep the real one.
 pub(crate) fn preview_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection> {
     app.canvas.table_preview_layout.as_ref().map(|(_, _, sel, _)| sel)
+}
+
+/// The selection whose caret is drawn on the page: the input method's cursor inside its
+/// composition when there is one, otherwise the table preview's or the document's own.
+pub(crate) fn shown_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection> {
+    if let Some(p) = &app.canvas.ime_preview {
+        return Some(&p.sel);
+    }
+    preview_sel(app)
 }
 
 /// Whether the pages are drawn dark: View › Switch Modes, or in Read Mode the Page color's

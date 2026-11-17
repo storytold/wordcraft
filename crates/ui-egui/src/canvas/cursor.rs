@@ -65,7 +65,9 @@ pub(super) fn caret_color_at(
         return c;
     }
     let Some(p) = layout.pages.get(page) else { return Color32::BLACK };
-    let bg = wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, dim_body), x, y);
+    // Sample the same document the layout was built from: while an IME composition is laid out
+    // into a copy, `p` holds that copy's geometry and the real document would sample stale spots.
+    let bg = wordcraft_render::background_at(super::shown_doc(app), p, &page_render_options(app, dim_body), x, y);
     let c = caret_contrast(bg);
     app.canvas.caret_bg = Some((key, c));
     c

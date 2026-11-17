@@ -84,6 +84,70 @@ fn the_preview_follows_the_caret_and_the_view() {
     assert_eq!(web.pages[0].w, app.session.layout().pages[0].w, "laid out at the Web view's width");
 }
 
+/// IME pre-edit is shown by the page raster, laid out into a copy at the caret, so the glyphs on
+/// its right reflow right. It is cached for still frames and dropped as soon as the composition
+/// ends; the document, its revision and the undo history stay untouched.
+#[test]
+fn the_page_shows_the_input_method_composition_in_the_document() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("甲乙")), Default::default());
+    app.session.run("caret.docStart", &json!({})).unwrap();
+    app.session.run("caret.right", &json!({})).unwrap();
+    let (doc, rev, sel) = (app.session.doc.clone(), app.session.rev(), app.session.sel.clone());
+    let base_off = app.session.sel.focus.off;
+
+    app.canvas.ime_preedit = "にほん".into();
+    app.canvas.ime_preedit_range = Some(0..1);
+    let layout = shown_layout(&mut app);
+    assert!(!std::sync::Arc::ptr_eq(&layout, &app.session.layout()), "the page has the composed layout");
+    assert_eq!(shown_doc(&app).plain_text(StoryRef::Body), "甲にほん乙");
+    assert!(!std::ptr::eq(shown_doc(&app), &app.session.doc), "the raster is drawn from the copy");
+    // A composition is not a document or selection change: a11y, find and window state keep the
+    // real ones. Only the raster and its caret see the copy.
+    assert_eq!(page_doc(&app).plain_text(StoryRef::Body), "甲乙");
+    assert!(preview_sel(&app).is_none());
+    let composed_caret = shown_sel(&app).expect("the composition's caret").clone();
+    assert_eq!(composed_caret.focus.off, base_off + 3, "one kana into the pre-edit");
+    let base = app.session.layout();
+    let before = base.caret_on(&sel.focus, 0).unwrap();
+    let after = layout.caret_on(&wordcraft_doc::Pos { off: base_off + "にほん".len(), ..composed_caret.focus.clone() }, 0).unwrap();
+    assert!(after.x > before.x + 1.0, "乙 moved right: {} > {}", after.x, before.x);
+    assert_eq!((&app.session.doc, app.session.rev(), &app.session.sel, app.session.can_undo()), (&doc, rev, &sel, false));
+
+    app.canvas.ime_preedit = "にほん".into();
+    app.canvas.ime_preedit_range = Some(0..1);
+    let again = shown_layout(&mut app);
+    assert!(std::sync::Arc::ptr_eq(&layout, &again), "an unchanged composition reuses its layout");
+
+    app.canvas.ime_preedit_range = Some(0..0);
+    let moved = shown_layout(&mut app);
+    assert!(!std::sync::Arc::ptr_eq(&layout, &moved), "the caret moving through the pre-edit rebuilds it");
+    assert_eq!(shown_sel(&app).unwrap().focus.off, base_off, "the caret is at the composition's start");
+
+    app.canvas.ime_preedit.clear();
+    app.canvas.ime_preedit_range = None;
+    assert!(std::sync::Arc::ptr_eq(&shown_layout(&mut app), &app.session.layout()));
+    assert!(std::ptr::eq(page_doc(&app), &app.session.doc), "the composition is gone: the document's own pages");
+    assert!(preview_sel(&app).is_none());
+    assert!(app.canvas.ime_preview.is_none());
+}
+
+/// A table preview takes over the page; the input method's pre-edit goes back to being an overlay
+/// rather than leaving the two previews fighting over the same raster.
+#[test]
+fn a_table_preview_takes_over_from_an_input_method_composition() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns")), Default::default());
+    app.canvas.ime_preedit = "に".into();
+    app.canvas.ime_preedit_range = Some(0..1);
+    let composed = shown_layout(&mut app);
+    assert!(app.canvas.ime_preview.is_some());
+
+    app.canvas.table_preview = Some((2, 2));
+    let table = shown_layout(&mut app);
+    assert!(!std::sync::Arc::ptr_eq(&composed, &table));
+    assert!(app.canvas.ime_preview.is_none(), "the composition falls back to the overlay");
+    assert!(table.index.keys().any(|(st, p)| *st == StoryRef::Body && p.0.len() == 4));
+}
+
 /// A window-following layout size (#1876, Read Mode): applied at once on entry or when forced,
 /// held while the window is dragged, applied once the size has been still for the settle time.
 #[test]

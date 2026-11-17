@@ -62,7 +62,7 @@ pub use navigation::{nearest_page, page_at, page_to_screen};
 use navigation::{scrollbar_page_tip, viewed_page};
 #[cfg(test)]
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
-pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
+pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options, shown_doc, shown_sel};
 use pages::{
     drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, page_shows, shown_layout, texel_aligned_rect,
     view_key, visible_tiles,
@@ -108,6 +108,21 @@ fn canvas_scroll_thumb(visuals: &mut egui::Visuals, t: &Tokens) {
     visuals.widgets.inactive.bg_fill = t.border_strong;
     visuals.widgets.hovered.bg_fill = t.input_border;
     visuals.widgets.active.bg_fill = t.text_dim;
+}
+
+/// One frame's laid-out input-method composition. The pre-edit is inserted into a document copy so
+/// the text to its right reflows right, and the caret is placed at the input method's cursor inside
+/// it. Held with the inputs that produced it so an idle frame reuses the layout.
+pub(crate) struct ImePreview {
+    pub(super) preedit: String,
+    pub(super) cursor_chars: usize,
+    pub(super) document: u64,
+    pub(super) rev: u64,
+    pub(super) real_sel: wordcraft_engine::Selection,
+    pub(super) base: std::sync::Arc<DocLayout>,
+    pub(super) doc: wordcraft_doc::Document,
+    pub(super) sel: wordcraft_engine::Selection,
+    pub(super) layout: std::sync::Arc<DocLayout>,
 }
 
 pub struct CanvasState {
@@ -185,6 +200,8 @@ pub struct CanvasState {
     /// The chars of `ime_preedit` the input method marks as its cursor or selection, as it reports
     /// them (unchecked).
     pub(crate) ime_preedit_range: Option<std::ops::Range<usize>>,
+    /// The composition laid out into a document copy, so the text on its right reflows right.
+    pub(crate) ime_preview: Option<ImePreview>,
     /// Document faces added to the interface fonts so the input method's composition (#565) and a
     /// file name in the window caption can be drawn.
     pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
@@ -429,6 +446,7 @@ impl Default for CanvasState {
             render_ms: 0.0,
             ime_preedit: String::new(),
             ime_preedit_range: None,
+            ime_preview: None,
             ime_faces: Vec::new(),
             want_focus: true,
             context_issue: None,
@@ -639,7 +657,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
             app.canvas.scroll_to_caret = true;
         }
     }
-    let caret = layout.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+    let caret = layout.caret_on(&shown_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
     let dim_body = dims_body(app, layout);
     let grid_story = text_box_host(app, layout).unwrap_or(app.session.sel.focus.story);
     let grid_story = matches!(part_kind(app, grid_story), Some(PartKind::Header | PartKind::Footer)).then_some(grid_story);
@@ -1170,7 +1188,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             opts.hinting &= hinted;
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
-            let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
+            let img = wordcraft_render::render_page(shown_doc(app), page, scale_px, &opts);
             let ci = page_image(&img);
             match app.canvas.textures.get_mut(&i) {
                 Some((k, showed, tex)) => {
@@ -1229,7 +1247,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                     // The tiny subtraction avoids a 1px overshoot from round-tripping f32
                     // pixels through page points and render_area's ceil() conversion.
                     let img = wordcraft_render::render_area(
-                        page_doc(app),
+                        shown_doc(app),
                         page,
                         wordcraft_geom::Rect::new(0.0, start_px as f32 / scale_px, page.w, (height_px as f32 - 0.01).max(0.01) / scale_px),
                         scale_px,
@@ -1863,7 +1881,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         if !math_caret
-            && let Some(c) = layout.caret_on(&preview_sel(app).unwrap_or(&app.session.sel).focus, app.session.page_hint)
+            && let Some(c) = layout.caret_on(&shown_sel(app).unwrap_or(&app.session.sel).focus, app.session.page_hint)
             && let Some(pr) = rects.get(c.page)
         {
             let scale = layout.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
@@ -1876,11 +1894,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             // worked out only when something is drawn in it.
             let caret_color =
                 |app: &mut WordApp| caret_color_at(app, &layout, c.page, c.x + c.width / 2.0, c.top + c.height / 2.0, page_view, dim_body);
-            // An input method's composition is drawn from the caret, and the caret and the candidate
-            // window move to the input method's cursor inside it.
+            // An input method's composition is drawn either into the page raster (the body: the
+            // pre-edit is laid out at the caret so the text on its right reflows right) or, when
+            // no such layout was possible, as the overlay below. Never paint both.
             let mut preedit_color = None;
             let mut ime_dx = 0.0;
-            if focused && !app.canvas.ime_preedit.is_empty() {
+            if focused && !app.canvas.ime_preedit.is_empty() && app.canvas.ime_preview.is_none() {
                 // The composition is interface text, but it may be in a script the interface fonts lack
                 // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
                 let new = crate::theme::faces_for_preedit(
@@ -1918,7 +1937,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 [pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)]
             };
             // The caret glides and fades like Word's (`caret_glide`).
-            let shown = preview_sel(app).unwrap_or(&app.session.sel).is_collapsed() && focused;
+            let shown = shown_sel(app).unwrap_or(&app.session.sel).is_collapsed() && focused;
             let look = crate::caret_glide::look(
                 app,
                 ui,
