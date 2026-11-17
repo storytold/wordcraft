@@ -950,7 +950,9 @@ mod tests {
                 let line = state.node_by_id(document).and_then(|n| n.text_position_from_global_utf16_index(index).map(|p| p.to_line_index()));
                 let _ = tx.send(line);
             });
-            assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(), "no line index for utf16 index {index} of {total}");
+            // A timeout (the hang) and a position with no line both fail.
+            let line = rx.recv_timeout(std::time::Duration::from_secs(5));
+            assert!(matches!(line, Ok(Some(_))), "no line index for utf16 index {index} of {total}: {line:?}");
         }
     }
 
