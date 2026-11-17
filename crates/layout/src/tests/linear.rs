@@ -373,6 +373,46 @@ fn drawing_items_one_by_one_ranks_the_authors_once() {
     assert_linear_steps("items drawn one by one", 40, laid, |dl| draw_items(dl, &opts));
 }
 
+/// #5060 review: each line of a warped text box looked for the box's other lines on the whole
+/// page (lines x page items) when the PDF export drew it on its own. They are found once for
+/// the page.
+#[test]
+fn drawing_a_warped_boxs_lines_one_by_one_finds_them_once() {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    let laid = |n: usize| {
+        let mut d = Document::from_text("Under the box.");
+        let line = |_| {
+            let mut p = Paragraph::with_text("w", CharProps { size: Some(1.0), ..Default::default() });
+            p.mark.size = Some(1.0);
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            wordcraft_doc::para_block(p)
+        };
+        let id = d.add_part(wordcraft_doc::PartKind::TextBox, (0..n).map(line).collect());
+        let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::TextBox,
+            w: 200.0,
+            h: 600.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 0.0,
+            float,
+            story: Some(id),
+            effects: Default::default(),
+            freeform: None,
+            extra: wordcraft_doc::connector::ShapeExtra { warp: wordcraft_doc::wordart::TextWarp::new("textChevron"), ..Default::default() },
+        };
+        d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+        let l = lay(&d, &LayoutOptions::default());
+        (d, l)
+    };
+    let lines =
+        |(_, l): &(Document, DocLayout)| l.pages[0].items.iter().filter(|it| matches!(it, Placed::Lines { story: StoryRef::Part(_), .. })).count();
+    assert!(lines(&laid(SCALE * 30)) >= SCALE * 30, "the box's lines are all on the page");
+    assert_linear_steps("a warped box's lines drawn one by one", 30, laid, |dl| draw_items(dl, &display::DisplayOptions::default()));
+}
+
 /// #3866: the same for the clipped cells, which each item's `page_display` collected again
 /// (lines x clipped cells).
 #[test]
