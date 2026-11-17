@@ -5386,6 +5386,32 @@ other threads with CodeRabbit's last word stay open: `crates/collab/src/room.rs`
 asks a commenter's undo/redo be authorised against the stored step (`Client::undo`
 sends a null payload, `Room::submit` refuses it before `submit_history` reads it).
 
+### 5.57 Four threads are resolved on the pushed head (2026-11-17 01:46Z)
+
+The owner pushed `cd4cb417` and `6792a6ff`; the PR head is `6792a6ff`, and four of
+the five current threads are answered there and resolved in place. Each claim was
+re-checked on that head before the reply that names it:
+
+| Thread | What closes it | Where on `6792a6ff` |
+|---|---|---|
+| `crates/collab-client/src/lib.rs:389` (CR) | `cd4cb417`: the applied version is kept apart from the announced head, `Tail` moves it | `:190`, `:197`, `:362`, `:374`, `:388`; test `tests.rs:286` |
+| `crates/ui-egui/src/app/commands.rs:131` (CR) | `cd4cb417`: the call site passes `is_some()` | `commands.rs:126`, `collab.rs:164`; test through `execute` at `commands.rs:1247` |
+| `crates/collab-engine/src/lib.rs:28` | `ad217e46`: a file parameter is refused before anything changes | `:199`, inventory `:1167`, check `:1182`; test `tests.rs:74` |
+| `crates/collab-app/src/lib.rs:765` | `ad217e46`: `resync` and `catching_up` read `Resyncing` | `:299`, applied `:700` and web `:527`; tests `tests.rs:1560/1577/1590`, web `:1214` |
+
+`.github/workflows/ci.yml:24` stays open: that is the deliberate deferral of §5.51,
+and the house rules keep CI out of a feature PR.
+
+No code changed in this pass, so the gate of §5.56 stands unchanged: it ran on
+`cd4cb417` (`fmt`, `clippy -D warnings`, `test` 1429 passed / 0 failed / 3 ignored,
+`check` for the two web crates — all rc 0) and pushes nothing below it. `6792a6ff`
+on top touches one file, `docs/collab/STATUS.md`.
+
+**Left.** One current thread — the CI deferral, whose resolution belongs to the
+reviewer. Otherwise nothing is outstanding in the branch: the PR answers
+`MERGEABLE` with an empty `reviewDecision` and needs the re-review, then a
+maintainer's approve and merge.
+
 ## 6. Where things live
 
 | Concern | File |
