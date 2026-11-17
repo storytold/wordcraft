@@ -457,6 +457,8 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
+        // a marker for checks: nothing to draw
+        Placed::Overflow { .. } => {}
         Placed::Image { rect, media, crop, spin, fx, .. } => {
             let alpha = alpha * fx.opacity();
             spun(

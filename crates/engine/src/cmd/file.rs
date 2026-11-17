@@ -195,6 +195,9 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("document.layout", "Layout Summary", "Agents", layout_summary).pure(),
+        CommandSpec::new("document.overflow", "Text Overflow", "Agents", overflow)
+            .params(r#"{} → {items: [{page, kind: textbox|cell|frame, needed, available, over, text, box: [x, y, w, h]}]}: text cut off where it is laid out (points): a text box that keeps its size, a cell of an exactly tall row, an exactly tall text frame. Headers and footers count on each page they show on"#)
+            .pure(),
         CommandSpec::new("document.setText", "Replace Document Text", "Agents", |s, v| {
             let text = p::req_str(v, "text")?;
             let d = Document::from_text(text);
@@ -725,6 +728,30 @@ fn paragraph(s: &mut Session, v: &Value) -> CmdResult {
     let p = s.doc.para(story, &wordcraft_doc::Path(path)).ok_or_else(|| CmdError::Params("no paragraph there".into()))?;
     let resolved = s.doc.styles.resolve_para(&p.props);
     Ok(json!({"paragraph": p, "resolved": resolved}))
+}
+
+fn overflow(s: &mut Session, _: &Value) -> CmdResult {
+    fn walk(items: &[wordcraft_layout::Placed], page: u32, out: &mut Vec<Value>) {
+        for it in items {
+            match it {
+                wordcraft_layout::Placed::Overflow { rect, kind, needed, available, text } => {
+                    let r = |v: f32| (f64::from(v) * 100.0).round() / 100.0;
+                    out.push(json!({"page": page, "kind": kind, "needed": r(*needed), "available": r(*available), "over": r(needed - available),
+                                    "text": text, "box": [r(rect.x), r(rect.y), r(rect.w), r(rect.h)]}));
+                }
+                wordcraft_layout::Placed::Clip { items, .. } => walk(items, page, out),
+                _ => {}
+            }
+        }
+    }
+    let l = s.layout();
+    let mut items = Vec::new();
+    for p in &l.pages {
+        walk(&p.items, p.number, &mut items);
+        walk(&p.header, p.number, &mut items);
+        walk(&p.footer, p.number, &mut items);
+    }
+    Ok(json!({"items": items}))
 }
 
 fn layout_summary(s: &mut Session, _: &Value) -> CmdResult {

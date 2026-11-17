@@ -860,6 +860,10 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 story,
                 clip: exact && c.h > span_h + 0.01,
             });
+            if exact && c.h > span_h + 0.5 && c.vmerge != VMerge::Continue {
+                let text = t.rows.get(ri).and_then(|r| r.cells.get(ci)).map(|x| crate::placed::excerpt(&x.blocks)).unwrap_or_default();
+                items.push(Placed::Overflow { rect: Rect::new(c.x, 0.0, c.w, span_h), kind: "cell", needed: c.h, available: span_h, text });
+            }
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             parts.push(CellPart { top, items: first..items.len(), end, align });
         }
@@ -1097,6 +1101,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                 | Placed::Shape { rect, .. }
                 | Placed::Graphic { rect, .. }
                 | Placed::Clip { rect, .. }
+                | Placed::Overflow { rect, .. }
                 | Placed::Object { rect, .. } => {
                     if fits(rect.bottom()) {
                         a.push(it.clone());
