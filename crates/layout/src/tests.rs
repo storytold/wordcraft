@@ -10877,8 +10877,12 @@ fn keep_with_next_run_longer_than_a_page_stays_where_it_is() {
         x.props = props(kept);
         wordcraft_doc::para_block(x)
     };
-    let lines = |label: &str, n: usize| (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join("
-");
+    let lines = |label: &str, n: usize| {
+        (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join(
+            "
+",
+        )
+    };
     // The new document's one empty paragraph would shift the blocks.
     d.body = vec![para("A1".to_string(), true)];
     for label in ["B", "C", "D", "E", "F", "G", "H"] {
@@ -10916,8 +10920,12 @@ fn keep_with_next_run_counts_the_space_after_of_a_kept_paragraph_after_its_fit()
             x.props = p;
             wordcraft_doc::para_block(x)
         };
-        let lines = |label: &str, n: usize| (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join("
-");
+        let lines = |label: &str, n: usize| {
+            (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join(
+                "
+",
+            )
+        };
         d.body = (0..fillers).map(|i| para(format!("F{i}"), props(false, 0.0))).collect();
         d.body.push(para("A1".to_string(), props(true, 0.0)));
         d.body.push(para(lines("B", 9), props(true, 40.0)));
@@ -10958,8 +10966,12 @@ fn keep_with_next_run_counts_the_bottom_border_of_a_paragraph_that_keeps_its_lin
             x.props = p;
             wordcraft_doc::para_block(x)
         };
-        let lines = |label: &str, n: usize| (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join("
-");
+        let lines = |label: &str, n: usize| {
+            (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join(
+                "
+",
+            )
+        };
         d.body = (0..fillers).map(|i| para(format!("F{i}"), props(false))).collect();
         d.body.push(para("A1".to_string(), props(true)));
         let bordered = ParaProps {
