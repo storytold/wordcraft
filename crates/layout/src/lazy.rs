@@ -9,9 +9,9 @@
 //! the incremental state's pages are read only for their lines' extent and paths.
 //!
 //! [`layout_pages`] lays pages out again in full from the incremental state: it starts at the
-//! mark before the block at the top of the first page, places blocks until the state meets the
-//! last layout's again, and takes the rest from it, as an incremental layout after an edit does.
-//! The pages come back as a full layout has them. A layout without an incremental state (one
+//! mark before the block at the top of the first page and places blocks until the state meets
+//! the last layout's again, then stops; the paragraphs laid out fill in the thinned ones. A
+//! page costs about a page wherever it is. The pages come back as a full layout has them. A layout without an incremental state (one
 //! that took more than one pass, columns, text boxes, endnotes, page totals in the body: see
 //! [`crate::resume`]) is never thinned.
 
@@ -177,20 +177,58 @@ pub fn layout_pages(doc: &Document, cache: &mut LayoutCache, layout: &DocLayout,
     Some(pages)
 }
 
-/// [`layout_pages`] from the incremental state: one pass that places only from the mark
-/// before `range` until it meets the last layout after it.
+/// [`layout_pages`] from the incremental state: one pass that places only from the mark at the
+/// top of the first page until the state meets the last layout's again after the last, and
+/// stops ([`Run::range`]), so it costs about the pages asked for, wherever they are. The
+/// paragraphs it lays out fill in the thinned ones of `layout`'s pages, by stamp, each with the
+/// same lines; the rest of each page (where things sit, headers, footers, notes) is `layout`'s
+/// own. `None` if any thinned paragraph isn't laid out again the same.
 fn again(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions, layout: &DocLayout, range: Range<usize>) -> Option<Vec<Page>> {
     let plan = resume::range_plan(doc, cache, opts, range.clone())?;
     AGAIN.fetch_add(1, Ordering::Relaxed);
     let totals = Totals::first_guess(doc.sections().len());
-    let pass = pass::layout_pass_with(doc, cache, opts, (&HashMap::new(), &totals, true), (&EarlyFloats::new(), true), Run::new(Some(plan)));
+    let pass = pass::layout_pass_with(doc, cache, opts, (&HashMap::new(), &totals, true), (&EarlyFloats::new(), true), Run::range(plan));
     // What this pass would leave to the next layout: the last layout's stays.
     cache.pending = None;
-    let Pass::Done(mut l) = pass else { return None };
-    if l.pages.len() != layout.pages.len() || !range.clone().all(|i| same_geometry(&l.pages[i], &layout.pages[i])) {
-        return None;
+    let Pass::Done(placed) = pass else { return None };
+    let mut full: HashMap<u64, Arc<ParaLayout>> = HashMap::new();
+    for p in &placed.pages {
+        each_body(&p.items, &mut |pl| {
+            if pl.stamp.0 != 0 && !pl.thin {
+                full.entry(pl.stamp.0).or_insert_with(|| pl.clone());
+            }
+        });
     }
-    Some(l.pages.drain(range).collect())
+    let mut out = Vec::with_capacity(range.len());
+    for i in range {
+        let mut page = layout.pages[i].clone();
+        let mut missing = false;
+        map_body(&mut page.items, &mut |pl| {
+            if !pl.thin {
+                return None;
+            }
+            match full.get(&pl.stamp.0) {
+                Some(f) if same_lines(pl, f) => Some(f.clone()),
+                _ => {
+                    missing = true;
+                    None
+                }
+            }
+        });
+        if missing {
+            return None;
+        }
+        out.push(page);
+    }
+    Some(out)
+}
+
+/// Whether two layouts of a paragraph break and stack its lines alike.
+fn same_lines(a: &ParaLayout, b: &ParaLayout) -> bool {
+    a.lines.len() == b.lines.len()
+        && a.lines.iter().zip(&b.lines).all(|(m, n)| {
+            (m.top.to_bits(), m.height.to_bits(), m.c0, m.c1, m.start, m.stop) == (n.top.to_bits(), n.height.to_bits(), n.c0, n.c1, n.start, n.stop)
+        })
 }
 
 /// `layout` laid out again in full, from nothing: for a layout whose incremental state is gone

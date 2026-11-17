@@ -112,12 +112,23 @@ pub(crate) struct Run {
     /// The states met: the rest of the pages are the last layout's.
     pub(crate) met: bool,
     pub(crate) off: bool,
+    /// Lays out only the pages a [`range_plan`] asks for ([`Run::range`]).
+    pub(crate) only: bool,
 }
 
 impl Run {
     pub(crate) fn new(plan: Option<Plan>) -> Self {
         let marks = plan.as_ref().map_or_else(Vec::new, |p| p.old.marks[..p.start].to_vec());
-        Run { plan, marks, last_pages: usize::MAX, last_block: 0, met: false, off: false }
+        Run { plan, marks, last_pages: usize::MAX, last_block: 0, met: false, off: false, only: false }
+    }
+
+    /// A run that places only from a [`range_plan`]'s mark until the state meets the last
+    /// layout's again, and stops there: no marks, no rest of the pages taken, nothing left for
+    /// the next layout. The pages before the mark are placeholders (size, section and number,
+    /// no items) but for the last few, which placing may reach back into. For [`crate::lazy`],
+    /// which takes only the paragraphs laid out: a page costs about a page.
+    pub(crate) fn range(plan: Plan) -> Self {
+        Run { plan: Some(plan), marks: Vec::new(), last_pages: usize::MAX, last_block: 0, met: false, off: false, only: true }
     }
 
     /// Stop: this layout can't be resumed from, nor can it resume.
@@ -144,7 +155,12 @@ impl Run {
         }
         p.started = true;
         let n = m.snap.pages;
-        let mut pages = p.old.pages[..n].to_vec();
+        let mut pages: Vec<Page> = if self.only {
+            let full = n.saturating_sub(KEEP_DEPTH);
+            p.old.pages[..full].iter().map(Page::placeholder).chain(p.old.pages[full..n].iter().cloned()).collect()
+        } else {
+            p.old.pages[..n].to_vec()
+        };
         let mut behind = p.old.behind[..n].to_vec();
         if let (Some(pg), Some(b)) = (pages.last_mut(), behind.last_mut()) {
             let k = b.saturating_sub(m.snap.behind).min(pg.items.len());
@@ -169,10 +185,17 @@ impl Run {
             && let Ok(k) = p.old.marks.binary_search_by_key(&was, |(b, _)| *b)
             && same(&p.old.marks[k].1, pb, ctx)
         {
+            if self.only {
+                self.met = true;
+                return true;
+            }
             let old = Arc::clone(&p.old);
             let delta = p.delta;
             self.take_rest(ctx, pb, &old, (k, delta));
             return true;
+        }
+        if self.only {
+            return false;
         }
         let pages = pb.pages.len();
         if pages != self.last_pages || block >= self.last_block + EVERY {
@@ -221,7 +244,7 @@ impl Run {
 
     /// After the last block: what the next layout resumes from. `None` if this one can't be.
     pub(crate) fn finish(self, doc: &Document, opts: &LayoutOptions, pb: &mut PageBuilder, ctx: &Ctx, si: usize) -> Option<Resume> {
-        if self.off || ctx.uses_totals || ctx.boxes.total() > 0 || pb.pages.iter().any(|p| !p.float_tables.is_empty()) {
+        if self.off || self.only || ctx.uses_totals || ctx.boxes.total() > 0 || pb.pages.iter().any(|p| !p.float_tables.is_empty()) {
             return None;
         }
         // What resuming and taking the rest index by.
@@ -500,6 +523,27 @@ fn rest_same(a: &Document, b: &Document) -> bool {
 }
 
 impl Page {
+    /// The page's size, section, number and first block, with no items, header or footer: what
+    /// a [`Run::range`] keeps of a page long before the one it places from.
+    fn placeholder(&self) -> Page {
+        Page {
+            w: self.w,
+            h: self.h,
+            section: self.section,
+            number: self.number,
+            items: Vec::new(),
+            header: Vec::new(),
+            footer: Vec::new(),
+            body: self.body,
+            header_story: self.header_story,
+            footer_story: self.footer_story,
+            hf_slot: self.hf_slot,
+            first_block: self.first_block,
+            markup: self.markup,
+            float_tables: Vec::new(),
+        }
+    }
+
     fn clone_without_items(&self) -> Page {
         Page {
             w: self.w,

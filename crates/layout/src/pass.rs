@@ -627,6 +627,11 @@ pub(crate) fn layout_pass_with(
         }
         section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block));
     }
+    if run.only {
+        // Only the pages a range plan asks for ([`crate::lazy`]): as placed, unfinished, with
+        // placeholders before the mark. Their paragraphs are what is wanted.
+        return Pass::Done(DocLayout { index: HashMap::new(), pages: std::mem::take(&mut pb.pages), ms: 0.0, text_boxes: 0, epoch: 0, lazy: None, thinned: false });
+    }
     if !run.met {
         if pb.pages.is_empty() {
             pb.new_page(0, sect_ref.margin_top);
