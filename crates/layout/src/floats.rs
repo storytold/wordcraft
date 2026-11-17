@@ -718,12 +718,18 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
     // (#4250). Inline objects go with their own line.
     let first = l0 == 0;
     let late = at.late.filter(|l| !l.placed.is_empty());
-    let late_lines = late.map(LateFloats::lines_here).unwrap_or_default();
-    for li in 0..pl.lines.len() {
+    // A later piece looks only at its own lines and those holding the anchors of the late floats
+    // it draws, in order: walking every line of the paragraph for each piece made a paragraph of
+    // many pages quadratic (#6757).
+    let (piece, mut late_lines) =
+        if first { (0..pl.lines.len(), Vec::new()) } else { (l0..l1.min(pl.lines.len()), late.map(LateFloats::lines_here).unwrap_or_default()) };
+    late_lines.retain(|li| !piece.contains(li));
+    late_lines.sort_unstable();
+    late_lines.dedup();
+    let (before, after) = late_lines.split_at(late_lines.partition_point(|li| *li < piece.start));
+    for li in before.iter().copied().chain(piece).chain(after.iter().copied()) {
+        crate::work::steps(1);
         let in_piece = (l0..l1).contains(&li);
-        if !in_piece && !first && !late_lines.contains(&li) {
-            continue;
-        }
         let Some(line) = pl.lines.get(li) else { continue };
         for k in line.c0..line.c1 {
             let Some(c) = pl.clusters.get(k) else { continue };
@@ -778,16 +784,6 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             };
             // A box linked from another shows (and edits) that box's story.
             let shown = text_box.map(|id| textbox::shown_story(ctx, id));
-            front.push(Placed::Object {
-                rect,
-                spin: float.spin(),
-                story,
-                path: Path(path.to_vec()),
-                off: c.start,
-                text_box: shown,
-                wrap: float.wrap,
-                origin: Point::new(at.col.0, late_here.map_or(at.para_y, |l| l.top)),
-            });
             // Its text (a group: its text boxes', each where the group's turn carries it; the
             // text itself stays upright), unless the box budget says no (a box inside itself,
             // too deep, too many).
@@ -803,6 +799,25 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                     .collect(),
                 _ => text_box.map(|id| (id, rect)).into_iter().collect(),
             };
+            // A group's text boxes are where a click edits their text (#6027): kept on the
+            // group's area, relative to it so they move with it.
+            let group_boxes = match obj {
+                InlineObject::Group { .. } => {
+                    boxes.iter().map(|&(id, r)| (Rect::new(r.x - rect.x, r.y - rect.y, r.w, r.h), textbox::shown_story(ctx, id))).collect()
+                }
+                _ => Vec::new(),
+            };
+            front.push(Placed::Object {
+                rect,
+                spin: float.spin(),
+                story,
+                path: Path(path.to_vec()),
+                off: c.start,
+                text_box: shown,
+                wrap: float.wrap,
+                origin: Point::new(at.col.0, late_here.map_or(at.para_y, |l| l.top)),
+                group_boxes,
+            });
             for (id, rect) in boxes {
                 let items = textbox::box_items(ctx, id, rect, depth);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
