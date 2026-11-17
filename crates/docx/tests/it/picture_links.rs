@@ -1,16 +1,15 @@
 //! A picture's hyperlink (#5267): Word keeps it on the drawing (`wp:docPr/a:hlinkClick`,
 //! ECMA-376 Part 1 §20.4.2.5) rather than in a `w:hyperlink` around the run. Original
 //! synthetic packages; the 2×2 picture is generated in code.
-use std::io::{Read, Write};
 use std::sync::Arc;
 use wordcraft_doc::{CharProps, Document, InlineObject, Pos};
 
 fn png() -> Vec<u8> {
-    let mut out = Vec::new();
-    image::RgbaImage::from_pixel(2, 2, image::Rgba([20, 90, 200, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-        .unwrap();
-    out
+    wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(2, 2, image::Rgba([20, 90, 200, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap()
 }
 
 /// An inline picture's run; `link` goes into its `wp:docPr`.
@@ -28,7 +27,7 @@ fn package(body: &str) -> Vec<u8> {
     let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdPic" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/square.png"/><Relationship Id="rIdWeb" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/picture" TargetMode="External"/><Relationship Id="rIdRun" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/run" TargetMode="External"/></Relationships>"#;
     let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
     let png = png();
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, bytes) in [
         ("[Content_Types].xml", types.as_bytes()),
         ("_rels/.rels", rels.as_bytes()),
@@ -36,10 +35,9 @@ fn package(body: &str) -> Vec<u8> {
         ("word/_rels/document.xml.rels", doc_rels.as_bytes()),
         ("word/media/square.png", png.as_slice()),
     ] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(bytes).unwrap();
+        zip.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// The link on each picture of the first paragraph, in order.
@@ -53,10 +51,9 @@ fn picture_links(doc: &Document) -> Vec<Option<String>> {
 }
 
 fn part(bytes: &[u8], name: &str) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read(name, 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 #[test]
@@ -109,19 +106,16 @@ fn a_linked_picture_is_saved_with_its_link_on_the_drawing_too() {
     // The drawing's link alone (as Word writes it) reads back the same.
     let without_run_link = xml.replace(&format!(r#"<w:hyperlink r:id="{rid}" w:history="1">"#), "").replacen("</w:hyperlink>", "", 1);
     assert_ne!(without_run_link, xml);
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
-    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for i in 0..z.len() {
-        let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_string();
-        let mut data = Vec::new();
-        f.read_to_end(&mut data).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
+    let mut out = craft_zip::Writer::new();
+    for name in names {
+        let mut data = z.read(&name, 16 << 20).unwrap().unwrap();
         if name == "word/document.xml" {
             data = without_run_link.clone().into_bytes();
         }
-        out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        out.write_all(&data).unwrap();
+        out.add(&name, &data, craft_zip::Compression::Deflated).unwrap();
     }
-    let edited = out.finish().unwrap().into_inner();
+    let edited = out.finish().unwrap();
     assert_eq!(picture_links(&wordcraft_docx::read(&edited).unwrap())[0], Some("https://example.com/saved".to_string()));
 }
