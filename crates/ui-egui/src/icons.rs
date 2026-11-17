@@ -600,6 +600,22 @@ fn paint_draw_to_review(pen: &Pen, name: &str) -> bool {
             pen.line(&[(4.0, 16.0), (14.0, 6.0), (16.0, 8.0), (6.0, 18.0), (3.5, 18.5), (4.0, 16.0)]);
             pen.fill(&[(14.0, 6.0), (15.5, 4.5), (17.5, 6.5), (16.0, 8.0)], a);
         }
+        // Table Design > Borders > Line Style: a solid, a dashed and a dotted line.
+        "lineStyle" => {
+            pen.line(&[(3.0, 5.0), (17.0, 5.0)]);
+            for x in [3.0, 9.0, 15.0] {
+                pen.line(&[(x, 10.0), (x + 3.0, 10.0)]);
+            }
+            for x in [3.5, 6.5, 9.5, 12.5, 15.5] {
+                pen.fcircle(x, 15.0, 0.8, c);
+            }
+        }
+        // Line Weight: three lines, thin to thick.
+        "lineWeight" => {
+            pen.frect(3.0, 4.5, 17.0, 5.0, c);
+            pen.frect(3.0, 9.0, 17.0, 10.5, c);
+            pen.frect(3.0, 14.0, 17.0, 17.0, c);
+        }
         "pencil" => {
             pen.line(&[(4.0, 16.0), (14.0, 6.0), (16.0, 8.0), (6.0, 18.0), (3.5, 18.5), (4.0, 16.0)]);
             pen.fill(&[(14.0, 6.0), (15.5, 4.5), (17.5, 6.5), (16.0, 8.0)], orange);
