@@ -1,6 +1,7 @@
 # Releasing WordCraft
 
-1. Bump the version on `main`: `cargo xtask version set 0.2.0` (the one source of truth is
+1. On a branch, bump the version with `cargo xtask version set 0.2.0`, then open and
+   merge a pull request into `main` (the one source of truth is
    `[workspace.package] version`; the app shows it in `--version` and About, with the commit from
    `WORDCRAFT_BUILD_SHA`).
 2. Merge `main` into `release` and push. `.github/workflows/release.yml` builds:
@@ -17,12 +18,13 @@
 3. The run drafts a GitHub Release `WordCraft v<version>` with `SHA256SUMS.txt`; review and publish it.
 
 Signing secrets live in the repository's `release` environment (deployment branch: `release` only),
-synced from the release manager's machine. Missing secrets
-produce unsigned builds with a warning, so forks still build.
+synced from the release manager's machine. On the release branch, the shared workflow fails the
+macOS and Windows jobs if their signing credentials are missing. Local packaging can still
+produce unsigned builds with a warning.
 
 Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windows/package.ps1`,
 `packaging/linux/package.sh` (then `packaging/linux/flatpak-bundle.sh` for the Flatpak), `packaging/web/package.sh`.
 
-Dry run: `gh workflow run release.yml --ref <branch>` builds the unsigned jobs (version, Linux,
-Linux riscv64, Flatpak, FreeBSD, web) on any branch; the signing jobs are refused there by the `release`
-environment's branch rule, so no draft release is made.
+A scheduled dry run runs on `main` nightly at 03:00 UTC. It builds every release target except
+macOS, without signing, entering the `release` environment, pushing Flatpak images or making a
+draft release. Manual dispatch uses the normal release path (`dry-run` is false).
