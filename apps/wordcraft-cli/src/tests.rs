@@ -498,6 +498,27 @@ fn command_line_template_wins_over_the_scripts_file() {
 }
 
 #[test]
+fn cmd_value_missing_is_reported() {
+    let missing = std::env::temp_dir().join(format!(
+        "wc-cli-missing-cmd-{}-{}.docx",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+    ));
+    assert!(!missing.exists());
+    let missing = missing.to_string_lossy();
+    for argv in [
+        vec!["run", "--cmd"],
+        vec!["run", "--cmd", "--save", "out.docx"],
+        vec!["run", "--cmd", "caret.docEnd", "--cmd", "--print"],
+        vec!["run", "--cmd", "--bogus"],
+        vec!["run", "--cmd", "--file", &missing],
+    ] {
+        assert_eq!(run(&args(&argv)), Err("--cmd needs a value".into()), "{argv:?}");
+    }
+    assert!(run(&args(&["run", "--cmd", "caret.docEnd", "--cmd", "caret.docStart"])).is_ok());
+}
+
+#[test]
 fn script_value_missing_is_reported() {
     let e = run(&args(&["run", "--script", "--cmd", "caret.docEnd"])).unwrap_err().to_string();
     assert!(e.contains("--script requires a value"), "{e}");
