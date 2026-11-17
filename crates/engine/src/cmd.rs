@@ -200,7 +200,7 @@ pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
 
 /// A revision record for the current author.
 pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
-    let date = now_iso();
+    let date = now_word_date();
     // Never one end of a move, nor the deletion a cut may still turn into one.
     let held = s.pending_move.as_ref().map(|m| m.rev);
     if let Some((i, _)) = s
@@ -561,6 +561,14 @@ pub fn now_unix() -> u64 {
 /// ISO-8601 timestamp (UTC, seconds).
 pub fn now_iso() -> String {
     iso_from_unix_secs(now_unix())
+}
+
+/// The time to stamp a tracked change or a comment's `w:date` with: local time, written with the
+/// `Z` Word writes there and doesn't mean. Word reads `w:date` as local time, so a UTC time shows
+/// hours out in Word's balloons and Reviewing pane. The UTC time goes in `w16cex:dateUtc`.
+pub fn now_word_date() -> String {
+    let now = now_unix();
+    iso_from_unix_secs(now.saturating_add_signed(local_offset_secs(now)))
 }
 
 /// The local time zone's offset from UTC in seconds (east positive) at `unix`, daylight saving

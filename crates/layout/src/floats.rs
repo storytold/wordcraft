@@ -423,7 +423,7 @@ pub(crate) fn place_late(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, oi:
     let Some(o) = p.objects.get(oi) else { return };
     let Some((w, h, float)) = floating(o) else { return };
     let h = ctx.float_height(o, w, h);
-    let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+    let frame = PageFrame { sect: &pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
     let rect = float_rect(Some(frame), (pb.col_x(), pb.col_w()), top, w, h, float);
     let outline = ctx.wrap_outline(o);
     let area = wrap_area(rect, float, outline.as_deref().map(Vec::as_slice)).map(|a| {
@@ -485,7 +485,7 @@ fn anchor_floats_but(
         // The paragraph's top, and whether text was placed before it on the page.
         let top = y0 - before;
         let text_before = top > pb.top + 0.5 || pb.col > 0;
-        let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+        let frame = PageFrame { sect: &pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
         // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
         // it takes no room either.
         let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);

@@ -205,12 +205,12 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let m = &opts.revisions;
         // Without markup a deletion is never drawn as ordinary text, even in a layout that
         // kept it; nor when its mark is Hidden.
-        if rc.del.is_some() && (!opts.markup || m.hides_deletion(doc.move_name(rc.del).is_some())) {
+        if rc.del.is_some() && (!opts.markup || m.hides_deletion(doc.move_name(rc.del).is_some()) || m.hides_author(doc, rc.del)) {
             continue;
         }
         let shown = opts.markup && m.insertions_deletions;
         let del = rc.del.filter(|_| shown);
-        let ins = rc.ins.filter(|_| shown && del.is_none());
+        let ins = rc.ins.filter(|_| shown && del.is_none() && !m.hides_author(doc, rc.ins));
         let author = |r: u32| authors.color(r);
         // Moved text: the Moves marks and colours (by default green, double strikethrough
         // where it was, double underline where it went).

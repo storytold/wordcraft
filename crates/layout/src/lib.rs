@@ -65,6 +65,7 @@ mod notes;
 mod page;
 mod pass;
 mod placed;
+mod resume;
 mod strict;
 mod substituted;
 mod table_flow;
@@ -94,6 +95,7 @@ use notes::{MAX_NOTE_PASSES, footnote_pages};
 #[cfg(test)]
 use notes::{NOTE_SEP, note_numbers};
 use page::item_bottom;
+#[cfg(test)]
 use pass::layout_pass;
 pub use pass::now_ms;
 pub use placed::{HfSlot, Placed, turn_point, turn_rect, unturn_point};
@@ -234,6 +236,10 @@ pub struct LayoutOptions {
     pub filename: Option<Arc<str>>,
     /// Document full path for FILENAME \p fields ([`FieldCtx::filepath`]).
     pub filepath: Option<Arc<str>>,
+    /// Lay out again only from the page before the first block edited since the last layout
+    /// with the same cache, when nothing else changed (see `resume`). The pages are the same as
+    /// a full layout's.
+    pub incremental: bool,
 }
 
 /// The word being typed ([`LayoutOptions::typing_word`]): the paragraph by its revision
@@ -272,17 +278,32 @@ impl LayoutOptions {
 pub struct HideDeleted {
     pub plain: bool,
     pub moved_from: bool,
+    /// Deletions by these reviewers are left out too, as if accepted (Markup From): a bit per
+    /// reviewer, [`author_bit`] of their name.
+    pub authors: u64,
+}
+
+/// A reviewer's bit in [`HideDeleted::authors`]: one of 64 by a stable hash of their name.
+pub fn author_bit(name: &str) -> u64 {
+    // FNV-1a: the same on every run and machine.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in name.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    1 << (h % 64)
 }
 
 impl HideDeleted {
-    pub const ALL: HideDeleted = HideDeleted { plain: true, moved_from: true };
+    pub const ALL: HideDeleted = HideDeleted { plain: true, moved_from: true, authors: 0 };
     /// Whether any deletion is left out.
     pub fn any(self) -> bool {
-        self.plain || self.moved_from
+        self.plain || self.moved_from || self.authors != 0
     }
     /// Whether text deleted by revision `del` (`None`: not deleted) is left out.
     pub fn hides(self, doc: &Document, del: Option<u32>) -> bool {
-        del.is_some() && if doc.move_name(del).is_some() { self.moved_from } else { self.plain }
+        del.is_some()
+            && (if doc.move_name(del).is_some() { self.moved_from } else { self.plain }
+                || (self.authors != 0 && del.and_then(|i| doc.revisions.get(i as usize)).is_some_and(|r| self.authors & author_bit(&r.author) != 0)))
     }
 }
 
@@ -344,8 +365,22 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     let mut totals = Totals::first_guess(doc.sections().len());
     let mut passes = 0;
     let (mut early, mut rewraps) = (EarlyFloats::new(), 0);
+    let mut first = true;
     let mut l = loop {
-        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, (&early, rewraps < MAX_REWRAP_PASSES)) {
+        let mut run = resume::Run::new(if first && opts.incremental && !per_page { resume::plan(doc, cache, opts) } else { None });
+        if !first || per_page {
+            run.turn_off();
+        }
+        first = false;
+        let pass =
+            pass::layout_pass_with(doc, cache, opts, (&note_pages, &totals, passes < MAX_TOTAL_PASSES), (&early, rewraps < MAX_REWRAP_PASSES), run);
+        // Only a layout done in one pass can be resumed.
+        let pending = cache.pending.take();
+        cache.resume = match (&pass, passes + rewraps + note_passes) {
+            (Pass::Done(_), 1) => pending.map(Arc::new),
+            _ => None,
+        };
+        match pass {
             Pass::Again(t) => {
                 totals = t;
                 passes += 1;
@@ -369,7 +404,30 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         }
     };
     l.ms = now_ms() - t0;
+    if VERIFY_INCREMENTAL.load(std::sync::atomic::Ordering::Relaxed) && cache.resume.as_ref().is_some_and(|r| r.resumed()) {
+        let full = layout(doc, &mut LayoutCache::new(), &LayoutOptions { incremental: false, ..opts.clone() });
+        VERIFIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if format!("{:?}", l.pages) != format!("{:?}", full.pages) {
+            DIFFERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
     l
+}
+
+static VERIFY_INCREMENTAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static VERIFIED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static DIFFERED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Check every incremental layout ([`LayoutOptions::incremental`]) against a full one. For
+/// tests: it makes each layout cost two. [`incremental_checks`] counts the results.
+pub fn verify_incremental(on: bool) {
+    VERIFY_INCREMENTAL.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many incremental layouts [`verify_incremental`] has checked, and how many of them had
+/// pages different from a full layout's.
+pub fn incremental_checks() -> (usize, usize) {
+    (VERIFIED.load(std::sync::atomic::Ordering::Relaxed), DIFFERED.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use super::{
-    BTreeMap, BTreeSet, CmdError, CmdResult, Comment, InlineObject, Paragraph, PartKind, Pos, Selection, Session, StoryRef, Value, json, now_iso, p,
+    BTreeMap, BTreeSet, CmdError, CmdResult, Comment, InlineObject, Paragraph, PartKind, Pos, Selection, Session, StoryRef, Value, json, now_iso, now_word_date, p,
     para_block, pos_json, sel_result,
 };
 
@@ -28,7 +28,7 @@ pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
         Comment {
             author: s.author.clone(),
             initials,
-            date: now.clone(),
+            date: now_word_date(),
             date_utc: Some(now),
             parent: None,
             resolved: false,
@@ -68,7 +68,7 @@ pub(super) fn reply(s: &mut Session, v: &Value) -> CmdResult {
         Comment {
             author: s.author.clone(),
             initials,
-            date: now.clone(),
+            date: now_word_date(),
             date_utc: Some(now),
             parent: Some(parent),
             resolved: false,
@@ -76,7 +76,40 @@ pub(super) fn reply(s: &mut Session, v: &Value) -> CmdResult {
             ..Default::default()
         },
     );
+    // Word drops a reply that has no range of its own in the document, so the reply's range is
+    // its parent's, as Word writes it.
+    let (start, end) = anchors_of(s, parent);
+    // Just inside the parent's own marks: Word threads a reply under the comment whose marks come
+    // first, and shows it as a comment of its own when its marks come before its parent's.
+    if let (Some(a), Some(b)) = (start, end) {
+        let props = Default::default();
+        let past = |s: &Session, p: Pos| {
+            let w = s.doc.para(p.story, &p.path).and_then(|q| q.text.get(p.off..)).and_then(|t| t.chars().next()).map_or(0, char::len_utf8);
+            Pos { off: p.off + w, ..p }
+        };
+        let (a, b) = (past(s, a), past(s, b));
+        s.doc.insert_object(&b, InlineObject::CommentEnd { id }, &props)?;
+        s.doc.insert_object(&a, InlineObject::CommentStart { id }, &props)?;
+    }
     Ok(json!({"id": id}))
+}
+
+/// Where comment `id`'s range starts and ends.
+fn anchors_of(s: &Session, id: u32) -> (Option<Pos>, Option<Pos>) {
+    let (mut start, mut end) = (None, None);
+    for story in s.doc.shown_stories() {
+        for path in s.doc.para_paths(story) {
+            let Some(p) = s.doc.para(story, &path) else { continue };
+            for off in p.object_offsets() {
+                match p.object_at(off) {
+                    Some(InlineObject::CommentStart { id: x }) if *x == id => start = Some(Pos { story, path: path.clone(), off }),
+                    Some(InlineObject::CommentEnd { id: x }) if *x == id => end = Some(Pos { story, path: path.clone(), off }),
+                    _ => {}
+                }
+            }
+        }
+    }
+    (start, end)
 }
 
 /// An id no comment has: one past the largest, or the lowest free one once a file used `u32::MAX`.

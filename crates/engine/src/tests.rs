@@ -4022,6 +4022,28 @@ fn no_markup_view_lays_out_the_final_text() {
 }
 
 #[test]
+fn markup_from_shows_others_changes_as_accepted() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "original"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Priya Nair".into();
+    run(&mut s, "select.text", json!({"text": "orig"}));
+    run(&mut s, "text.delete", json!({}));
+    let gap = |s: &mut Session| {
+        let l = s.layout();
+        let x = |off| l.caret(&Pos::body(0, off)).map(|c| c.x).unwrap_or(f32::NAN);
+        x(4) - x(0)
+    };
+    assert!(gap(&mut s) > 5.0, "everyone's markup shows the deletion");
+    run(&mut s, "review.markup", json!({"hideAuthors": ["Priya Nair"]}));
+    assert!(gap(&mut s).abs() < 0.01, "Priya's deletion is left out, as if accepted");
+    run(&mut s, "review.markup", json!({"hideAuthors": ["Alex Chen"]}));
+    assert!(gap(&mut s) > 5.0, "someone else hidden: Priya's still shows");
+    run(&mut s, "review.markup", json!({"hideAuthors": []}));
+    assert!(gap(&mut s) > 5.0);
+}
+
+#[test]
 fn replace_all_is_tracked() {
     let mut s = s();
     let original = "We walked towards the light, then towards home.";
@@ -4102,8 +4124,10 @@ fn new_comments_and_replies_carry_their_utc_time() {
     run(&mut s, "review.reply", json!({"id": id, "text": "two"}));
     assert_eq!(s.doc.comments.len(), 2);
     for c in s.doc.comments.values() {
+        // `date` is local time with the `Z` Word writes there; `date_utc` is the real UTC time.
         assert!(c.date.ends_with('Z'), "{}", c.date);
-        assert_eq!(c.date_utc.as_deref(), Some(c.date.as_str()));
+        let utc = c.date_utc.as_deref().expect("a UTC time");
+        assert!(utc.ends_with('Z') && utc.len() == c.date.len(), "{utc}");
     }
 }
 
@@ -7646,7 +7670,8 @@ fn timestamps_come_from_the_clock() {
     run(&mut s, "text.insert", json!({"text": "Dated"}));
     run(&mut s, "select.text", json!({"text": "Dated"}));
     run(&mut s, "review.newComment", json!({"text": "When?"}));
-    let date = run(&mut s, "review.comments", json!({}))[0]["date"].as_str().unwrap_or_default().to_string();
+    // `date` is local time, as Word writes it; the UTC time is `date_utc`.
+    let date = s.doc.comments.values().next().and_then(|c| c.date_utc.clone()).unwrap_or_default();
     // Fixed-width ISO strings sort by time.
     assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }

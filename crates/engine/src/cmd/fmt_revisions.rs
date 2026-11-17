@@ -235,7 +235,7 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     }
     let author = s.author.clone();
     let doc = &mut s.doc;
-    let mut r = Recorder { author, date: super::now_iso(), before: &before.revisions, revisions: &mut doc.revisions, rid: None };
+    let mut r = Recorder { author, date: super::now_word_date(), before: &before.revisions, revisions: &mut doc.revisions, rid: None };
     r.blocks(&before.body, &mut doc.body, 0);
     for (k, pb) in &before.parts {
         if let Some(pa) = doc.parts.get_mut(k) {
@@ -264,7 +264,7 @@ impl ParaPropTracker {
         if !s.doc.settings.track_changes || !s.prefs.markup.track_formatting {
             return after.fmt_change.clone();
         }
-        let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &self.before, revisions: &mut s.doc.revisions, rid: None };
+        let mut r = Recorder { author: s.author.clone(), date: super::now_word_date(), before: &self.before, revisions: &mut s.doc.revisions, rid: None };
         r.change(before, after, ParaProps::formatting, |p| &p.fmt_change)
             .map(|Replacement(change)| change)
             .unwrap_or_else(|| after.fmt_change.clone())
@@ -281,7 +281,7 @@ pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, b
     }
     let Some(after) = s.doc.para(story, path).map(|p| p.props.clone()) else { return Ok(()) };
     let revisions = s.doc.revisions.clone();
-    let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &revisions, revisions: &mut s.doc.revisions, rid: None };
+    let mut r = Recorder { author: s.author.clone(), date: super::now_word_date(), before: &revisions, revisions: &mut s.doc.revisions, rid: None };
     if let Some(Replacement(want)) = r.change(before, &after, ParaProps::formatting, |p| &p.fmt_change) {
         let p = s.doc.para_mut(story, path)?;
         p.props.fmt_change = want;

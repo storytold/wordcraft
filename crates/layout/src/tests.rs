@@ -12633,9 +12633,9 @@ fn a_paragraph_left_out_whole_takes_no_room() {
     assert!((three_top(&d, &fin, 2) - without).abs() < 0.01, "no blank line in the final text");
     assert!(three_top(&d, &LayoutOptions::default(), 2) > without + 1.0, "with markup it keeps its line");
     // Only moved-away text hidden: an ordinary deletion keeps its line.
-    let moves = LayoutOptions { hide_marked: HideDeleted { plain: false, moved_from: true }, ..Default::default() };
+    let moves = LayoutOptions { hide_marked: HideDeleted { plain: false, moved_from: true, authors: 0 }, ..Default::default() };
     assert!(three_top(&d, &moves, 2) > without + 1.0);
-    let plain = LayoutOptions { hide_marked: HideDeleted { plain: true, moved_from: false }, ..Default::default() };
+    let plain = LayoutOptions { hide_marked: HideDeleted { plain: true, moved_from: false, authors: 0 }, ..Default::default() };
     assert!((three_top(&d, &plain, 2) - without).abs() < 0.01);
 }
 

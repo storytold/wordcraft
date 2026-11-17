@@ -48,6 +48,9 @@ pub struct LayoutCache {
     pub(crate) styleref: Option<(Blocks, u64, Arc<styleref::StyleIndex>)>,
     pub hits: u64,
     pub misses: u64,
+    /// What the last layout leaves to the next incremental one, and what this pass will.
+    pub(crate) resume: Option<Arc<crate::resume::Resume>>,
+    pub(crate) pending: Option<crate::resume::Resume>,
 }
 
 impl LayoutCache {
@@ -65,6 +68,7 @@ impl LayoutCache {
         self.measures.clear();
         self.outlines.clear();
         self.styleref = None;
+        self.resume = None;
     }
 
     /// The STYLEREF style index for `doc`, rebuilt only when the body or the styles changed.
