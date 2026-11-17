@@ -221,24 +221,29 @@ fn iso_datetime(v: &str) -> Option<String> {
     Some(out)
 }
 
-/// A clock time `hh:mm[:ss[.s…]]` with an optional `Z` or `±hh:mm` zone, which is left out.
+/// A clock time `hh:mm[:ss[.s…]]` with an optional `Z` or `±hh:mm` zone (one, not both), which is
+/// left out.
 fn clock_time(t: &str) -> Option<chrono::NaiveTime> {
-    let t = t.strip_suffix('Z').unwrap_or(t);
-    let t = match t.rfind(['+', '-']) {
-        Some(i) => {
+    let t = match (t.strip_suffix('Z'), t.rfind(['+', '-'])) {
+        (Some(t), _) => t,
+        (None, Some(i)) => {
             zone_offset(t.get(i + 1..)?)?;
             t.get(..i)?
         }
-        None => t,
+        (None, None) => t,
     };
     let clock = chrono::NaiveTime::parse_from_str(t, "%H:%M:%S%.f").or_else(|_| chrono::NaiveTime::parse_from_str(t, "%H:%M")).ok()?;
     // A leap second (`23:59:60`) is not a time a cell holds.
     (chrono::Timelike::nanosecond(&clock) < 1_000_000_000).then_some(clock)
 }
 
-/// A zone offset's `hh:mm`, at most `14:00` as XML Schema allows.
+/// A zone offset's `hh:mm`, two digits each and at most `14:00` as XML Schema allows.
 fn zone_offset(z: &str) -> Option<()> {
     use chrono::Timelike;
+    let two_digit = z.len() == 5 && z.bytes().enumerate().all(|(i, b)| if i == 2 { b == b':' } else { b.is_ascii_digit() });
+    if !two_digit {
+        return None;
+    }
     let z = chrono::NaiveTime::parse_from_str(z, "%H:%M").ok()?;
     (z.hour() < 14 || (z.hour() == 14 && z.minute() == 0)).then_some(())
 }
@@ -376,7 +381,8 @@ mod tests {
               <table:table-row table:number-rows-repeated="2"><table:table-cell office:value-type="string" table:number-columns-spanned="2"><text:p>Ada<text:s text:c="2"/>L</text:p><text:p>x</text:p><office:annotation><text:p>note</text:p></office:annotation></table:table-cell><table:covered-table-cell office:value-type="string"><text:p>hidden</text:p></table:covered-table-cell><table:table-cell office:value-type="float" office:value="3.50"><text:p>3,5</text:p></table:table-cell><table:table-cell office:value-type="date" office:date-value="2024-03-05T00:00:00"><text:p>05/03/24</text:p></table:table-cell><table:table-cell office:value-type="boolean" office:boolean-value="false"><text:p>NO</text:p></table:table-cell><table:table-cell office:value-type="time" office:time-value="PT13H45M00S"><text:p>01:45 PM</text:p></table:table-cell></table:table-row>
               <table:table-row><table:table-cell office:value-type="date" office:date-value="2024-03-05T13:45:30"><text:p>Tue</text:p></table:table-cell><table:table-cell office:value-type="date" office:date-value="not a date"><text:p>someday</text:p></table:table-cell><table:table-cell office:value-type="percentage" office:value="0.25"><text:p>25%</text:p></table:table-cell><table:table-cell office:value-type="currency" office:value="9"/></table:table-row>
             </table:table>"#,
-        );
+        )
+        .unwrap();
         let (_, rows) = read_rows(&book, Pick::Name("Guests")).unwrap();
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0], ["Name", "", "", "When", "Tag", "Tag"]);
@@ -413,6 +419,26 @@ mod tests {
         assert_eq!(iso_datetime("2024-03-05T13:45:00+14:00").as_deref(), Some("2024-03-05 13:45"));
         assert_eq!(iso_datetime("2024-03-05T13:45:00+14:01"), None);
         assert_eq!(iso_time("13:45:00-15:00"), None);
+    }
+
+    #[test]
+    fn a_zone_is_z_or_an_offset_not_both() {
+        assert_eq!(iso_datetime("2024-03-05T13:45:00+02:00Z"), None);
+        assert_eq!(iso_datetime("2024-03-05T13:45:00Z+02:00"), None);
+        assert_eq!(iso_datetime("2024-03-05+02:00Z"), None);
+        assert_eq!(iso_datetime("2024-03-05Z+02:00"), None);
+        assert_eq!(iso_time("13:45:00+02:00Z"), None);
+        assert_eq!(iso_time("13:45:00Z+02:00"), None);
+        assert_eq!(iso_datetime("2024-03-05T13:45:00Z").as_deref(), Some("2024-03-05 13:45"));
+        assert_eq!(iso_datetime("2024-03-05T13:45:00-05:00").as_deref(), Some("2024-03-05 13:45"));
+        assert_eq!(iso_time("13:45:00+02:00").as_deref(), Some("13:45"));
+    }
+
+    #[test]
+    fn a_zone_offset_has_two_digit_hours_and_minutes() {
+        assert_eq!(iso_datetime("2024-03-05T13:45:00+2:00"), None);
+        assert_eq!(iso_datetime("2024-03-05T13:45:00+ 2:00"), None);
+        assert_eq!(iso_time("13:45:00-5:00"), None);
     }
 
     #[test]
