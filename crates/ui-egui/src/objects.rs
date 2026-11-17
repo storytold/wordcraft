@@ -564,7 +564,7 @@ impl ObjectGesture {
             || (mods.cmd && mods.shift && wordcraft_engine::cmd::objects::picked_objects(&app.session).contains(&object.pos()));
         let shift_only = mods.shift && !mods.cmd;
         if adding && selected(app).is_some() && (shift_only || !again) {
-            let _ = app.run("select.addObject", json!({"pos": object.pos()}));
+            let _ = app.run_keep_view("select.addObject", json!({"pos": object.pos()}));
             return Some(Self::inert());
         }
         // While editing a header/footer, a click on its Behind Text picture where no header/footer
@@ -582,7 +582,8 @@ impl ObjectGesture {
         }
         let pos = object.pos();
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
-        let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+        // Under the pointer, so in view: the selection is not followed like a caret (#5602).
+        let _ = app.run_keep_view("select.range", json!({"anchor": pos, "focus": end}));
         // A header/footer picture repeats on every page: select the copy clicked, as `select_at` does.
         app.session.page_hint = object.page;
         if selected(app).is_none() {
@@ -604,7 +605,7 @@ impl ObjectGesture {
         if self.pending_behind {
             let pos = object.pos();
             let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
-            let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+            let _ = app.run_keep_view("select.range", json!({"anchor": pos, "focus": end}));
             // The text click path has been tracking the pointer until it became a drag.
             app.canvas.cancel_text_drag();
             self.pending_behind = false;
@@ -758,8 +759,8 @@ fn press_member(app: &mut WordApp, layout: &DocLayout, body: &PageBody, at: Pos2
     }
     let pos = object.pos();
     let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
-    let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
-    if app.run("select.member", json!({"index": index})).is_err() {
+    let _ = app.run_keep_view("select.range", json!({"anchor": pos, "focus": end}));
+    if app.run_keep_view("select.member", json!({"index": index})).is_err() {
         return Some(ObjectGesture::inert());
     }
     ObjectGesture::start(body, object, at)
@@ -911,7 +912,10 @@ pub fn select_at(app: &mut WordApp, layout: &DocLayout, body: &PageBody, at: Pos
     // Already selected (alone or among several picked for Group): keep the selection.
     if !wordcraft_engine::cmd::objects::picked_objects(&app.session).contains(&pos) {
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
-        let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+        // The object is under the pointer, so it is in view: following the new selection would
+        // scroll a picture taller than the window, or one partly off its edge, as it is clicked
+        // (#5602).
+        let _ = app.run_keep_view("select.range", json!({"anchor": pos, "focus": end}));
     }
     // A header/footer picture repeats on every page: its frame belongs on the page clicked, not
     // the one last edited.
