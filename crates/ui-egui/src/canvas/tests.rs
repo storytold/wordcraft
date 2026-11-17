@@ -161,6 +161,60 @@ fn composition_keeps_hit_testing_and_a11y_on_the_real_document() {
     assert!(std::sync::Arc::ptr_eq(&document_layout(&mut app, &plain), &plain), "no composition: one layout everywhere");
 }
 
+/// #6916: a right-click during a composition commits the pre-edit where it is (WPS) instead of
+/// leaving the uncommitted text to drift to the pointer. The click interrupts the composition so
+/// the platform's commit lands at the caret, and the caret must not move to the clicked spot in
+/// the meantime. The context menu still opens at the pointer.
+#[test]
+fn right_click_commits_the_composition_instead_of_dragging_it() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("甲乙丙丁")), Default::default());
+    app.session.run("caret.docStart", &json!({})).unwrap();
+    app.session.run("caret.right", &json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(kana_test_glyphs)
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    // A live composition at the caret between 甲 and 乙.
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほん".into(), active_range_chars: Some(0..0) }));
+    h.step();
+    h.step();
+    assert!(h.state().canvas.ime_preview.is_some(), "the composition is shown in the page copy");
+    let caret_off = h.state().session.sel.focus.off;
+
+    // Right-click far to the right of the composition, on the same page.
+    let at = h.state().canvas.page_rects.first().map(|r| egui::pos2(r.max.x - 12.0, r.center().y)).expect("a page");
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    let mut interrupted = false;
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+        interrupted |= h.output().platform_output.ime.as_ref().is_some_and(|ime| ime.should_interrupt_composition);
+    }
+    assert!(interrupted, "the right-click interrupts the composition so its pre-edit is committed");
+    assert_eq!(h.state().session.sel.focus.off, caret_off, "the caret stays at the composition, it does not drift to the pointer");
+    assert!(h.state().canvas.context_menu_open, "the context menu still opens at the pointer");
+
+    // The platform answers the interrupt with a commit: the pre-edit lands where it was composed,
+    // between 甲 and 乙, not at the spot under the mouse.
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text, "甲にほん乙丙丁", "the committed text stays at the composition: {text:?}");
+}
+
 /// A table preview takes over the page; the input method's pre-edit goes back to being an overlay
 /// rather than leaving the two previews fighting over the same raster.
 #[test]

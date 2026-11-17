@@ -1001,9 +1001,12 @@ fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, im
     // while the canvas does not, and does not interrupt an editor that already has it.
     let keyboard_click = ui.memory(|m| m.has_focus(resp.id)) && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
     let pointer_click = resp.clicked_by(egui::PointerButton::Primary);
+    let secondary_click = resp.clicked_by(egui::PointerButton::Secondary);
     let accesskit_click = resp.clicked() && !pointer_click && !keyboard_click;
     let focus_click = pointer_click || accesskit_click || resp.drag_started();
-    if focus_click {
+    // A right-click on the page commits a composition like a left-click does (WPS): interrupt it
+    // so the pending pre-edit lands in the body instead of drifting to the pointer (#6916).
+    if focus_click || secondary_click {
         ui.memory_mut(|memory| memory.interrupt_ime());
     }
     // Not while a modal dialog is open: it has the keyboard, and the page takes it when it closes.
@@ -1404,7 +1407,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         let at = wordcraft_geom::Point::new(x, y);
         let on_cells =
             wordcraft_engine::cmd::table_mouse::cell_rects(layout, &app.session.doc, range).iter().any(|(pi, r)| *pi == page && r.contains(at));
-        if !on_cells && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
+        if !on_cells && app.canvas.ime_preview.is_none() && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
             app.session.sel = wordcraft_engine::Selection::caret(pos);
         }
     }
@@ -1431,13 +1434,20 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         && let Some(p) = resp.interact_pointer_pos()
         && let Some((page, x, y)) = page_at(rects, layout, geo.scale, p)
     {
+        // A right-click commits a live composition (update_canvas_focus interrupts it): keep the
+        // caret where it is this frame so the incoming commit lands at the composition, not at the
+        // pointer. Moving it now would rebuild the preview under the mouse and drag the pre-edit
+        // there. The context menu still opens at the pointer (#6916).
+        let composing = app.canvas.ime_preview.is_some();
         if crate::objects::select_at(app, layout, rects, geo.scale, p) {
             app.canvas.context_issue = None;
             app.canvas.context_synonyms = None;
         } else if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
-            let (a, b) = app.session.sel.ordered();
-            if !(a <= pos && pos <= b) || app.session.sel.is_collapsed() {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+            if !composing {
+                let (a, b) = app.session.sel.ordered();
+                if !(a <= pos && pos <= b) || app.session.sel.is_collapsed() {
+                    app.session.sel = wordcraft_engine::Selection::caret(pos);
+                }
             }
             context_suggestions(app);
         }
