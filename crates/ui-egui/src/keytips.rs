@@ -480,7 +480,7 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Picture border", "picture.border"),
             c("Alt Text", "view.altTextPane"),
             c("Position", "arrange.position"),
-            m("Wrap Text", "arrange.wrapText"),
+            m("Wrap Text", "arrange.wrap"),
             m("Rotate", "arrange.rotate"),
             m("Align", "arrange.align"),
             m("Group", "arrange.group"),
@@ -492,7 +492,7 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Shadow, glow and soft edges", "shape.effects"),
             c("Alt Text", "view.altTextPane"),
             m("Drawing Canvas", "canvas.fit"),
-            m("WordArt Styles", "wordArt.style"),
+            m("Decorative Text Styles", "wordArt.style"),
             m("Text Fill", "wordArt.textFill"),
             m("Text Outline", "wordArt.textOutline"),
             m("Text Effects", "wordArt.transform"),
@@ -501,7 +501,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Break Link", "shape.breakLink"),
             c("Create Link", "ui.linkTextBox"),
             c("Position", "arrange.position"),
-            m("Wrap Text", "arrange.wrapText"),
+            m("Wrap Text", "arrange.wrap"),
             m("Rotate", "arrange.rotate"),
             m("Align", "arrange.align"),
         ],
@@ -555,8 +555,17 @@ fn letters_for(app: &WordApp, tab: &str) -> Vec<String> {
         Target::Tab(_) => "ui.tab",
     };
 
+    // These contextual ribbon menus have no selection parameters in a KeyTip invocation, so the
+    // command would apply a destructive default instead of opening the menu. Keep their slots in
+    // the list to preserve ribbon drawing order, but leave them without a badge or key mapping.
+    let unsafe_menu_default =
+        |ctl: &Control| matches!(id_of(ctl), "picture.corrections" | "picture.color" | "picture.transparency" | "picture.style" | "picture.border");
+
     // Pass 1: own shortcut letters. First-come keeps it if two commands somehow share a letter.
     for (i, ctl) in ctrls.iter().enumerate() {
+        if unsafe_menu_default(ctl) {
+            continue;
+        }
         if let Some(c) = shortcut_letter(app, id_of(ctl))
             && !used.contains(&c)
         {
@@ -566,7 +575,7 @@ fn letters_for(app: &WordApp, tab: &str) -> Vec<String> {
     }
     // Pass 2: name-derived letters for everything still unassigned.
     for (i, ctl) in ctrls.iter().enumerate() {
-        if out[i].is_some() {
+        if out[i].is_some() || unsafe_menu_default(ctl) {
             continue;
         }
         let own = shortcut_letter(app, id_of(ctl));

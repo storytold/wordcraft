@@ -661,11 +661,19 @@ fn contextual_tabs_badge_their_controls() {
         assert!(ids.iter().all(|id| a.session.registry.get(id).is_some() || id.starts_with("ui.")), "{tab}: unknown command id");
         let letters = letters_for(&a, tab);
         assert!(!letters.is_empty(), "{tab} has controls");
-        let mut seen = letters.clone();
+        let disabled_menus = ["picture.corrections", "picture.color", "picture.transparency", "picture.style", "picture.border"];
+        for (id, letter) in ids.iter().zip(&letters) {
+            assert_eq!(
+                letter.is_empty(),
+                tab == "Picture Format" && disabled_menus.contains(id),
+                "{tab} {id}: only menus with unsafe default commands lack keytips"
+            );
+        }
+        let mut seen: Vec<String> = letters.iter().filter(|l| !l.is_empty()).cloned().collect();
         seen.sort();
         seen.dedup();
-        assert_eq!(seen.len(), letters.len(), "{tab}: letters are unique");
-        assert!(letters.iter().all(|l| !l.is_empty() && !l.starts_with('?')), "{tab}: every control has a letter");
+        assert_eq!(seen.len(), letters.iter().filter(|l| !l.is_empty()).count(), "{tab}: letters are unique");
+        assert!(letters.iter().all(|l| l.is_empty() || !l.starts_with('?')), "{tab}: every assigned control has a letter");
     }
 }
 
