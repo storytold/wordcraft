@@ -539,36 +539,7 @@ fn worst_coefficients(bytes: &[u8]) -> u64 {
 /// tag is missing. None when the header can't be read, or when the tag appears more than once:
 /// the decoder keeps the last copy, so a harmless first one must not hide a JPEG one after it.
 fn tiff_compression(bytes: &[u8]) -> Option<u16> {
-    let le = match bytes.get(..4)? {
-        b"II*\0" => true,
-        b"MM\0*" => false,
-        _ => return None,
-    };
-    let u16_at = |at: usize| -> Option<u16> {
-        let b = [*bytes.get(at)?, *bytes.get(at.checked_add(1)?)?];
-        Some(if le { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) })
-    };
-    let u32_at = |at: usize| -> Option<u32> {
-        let b: [u8; 4] = bytes.get(at..at.checked_add(4)?)?.try_into().ok()?;
-        Some(if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
-    };
-    let ifd = usize::try_from(u32_at(4)?).ok()?;
-    let mut found = None;
-    for i in 0..usize::from(u16_at(ifd)?) {
-        let entry = ifd.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
-        if u16_at(entry)? != 259 {
-            continue;
-        }
-        if found.is_some() || u32_at(entry.checked_add(4)?)? != 1 {
-            return None;
-        }
-        found = Some(match u16_at(entry.checked_add(2)?)? {
-            3 => u16_at(entry.checked_add(8)?)?,
-            4 => u16::try_from(u32_at(entry.checked_add(8)?)?).ok()?,
-            _ => return None,
-        });
-    }
-    Some(found.unwrap_or(1))
+    craft_tiff::probe::first_image_compression(bytes)
 }
 
 /// A DIB with a V4 or V5 header in the layout the decoder reads. A 32-bit one whose alpha mask
