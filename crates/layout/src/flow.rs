@@ -116,8 +116,9 @@ fn with_page_map<T>(ctx: &mut Ctx, map: &mut Vec<(usize, u32)>, f: impl FnOnce(&
 /// drawn by its first and last paragraph.
 #[derive(Clone, Copy)]
 struct Rooms {
-    /// Joined to the paragraph above.
+    /// Joined to the paragraph above, and to the one below.
     above: bool,
+    below: bool,
     top: f32,
     bottom: f32,
 }
@@ -127,7 +128,7 @@ impl Rooms {
         let above = joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None);
         let below = joined(ctx.doc, &ctx.doc.body, block, Some(block + 1), None);
         let own = Edges::own(pl, 0, pl.lines.len());
-        Rooms { above, top: if above { 0.0 } else { own.top }, bottom: if below { 0.0 } else { own.bottom } }
+        Rooms { above, below, top: if above { 0.0 } else { own.top }, bottom: if below { 0.0 } else { own.bottom } }
     }
 }
 
@@ -528,7 +529,8 @@ impl<'a> Flow<'a> {
             pb.bottom = pb.body_floor().max(placed_bottom).min(pb.orig_bottom);
         }
         let mut items = Vec::new();
-        let mut edges = Edges { top: if l0 == 0 { rooms.top } else { 0.0 }, bottom: if l1 >= n { rooms.bottom } else { 0.0 }, up: 0.0 };
+        let ends = (l0 == 0 && !rooms.above, l1 >= n && !rooms.below);
+        let mut edges = Edges { top: if l0 == 0 { rooms.top } else { 0.0 }, bottom: if l1 >= n { rooms.bottom } else { 0.0 }, up: 0.0, ends };
         if l0 == 0
             && rooms.above
             && let Some((page, col, end)) = pb.para_end

@@ -1,4 +1,5 @@
 use super::ctx::{Ctx, page_anchored};
+use super::display::THINNEST_BORDER;
 use super::floats::{
     ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
 };
@@ -320,10 +321,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 let (above, below) = (joined(ctx.doc, blocks, i, i.checked_sub(1), cell), joined(ctx.doc, blocks, i, Some(i + 1), cell));
                 let mut edges = Edges::own(&pl, 0, pl.lines.len());
                 if above {
-                    edges.top = 0.0;
+                    (edges.top, edges.ends.0) = (0.0, false);
                 }
                 if below {
-                    edges.bottom = 0.0;
+                    (edges.bottom, edges.ends.1) = (0.0, false);
                 }
                 let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0)) + edges.top;
                 if above {
@@ -627,9 +628,9 @@ pub(crate) fn joined(doc: &Document, blocks: &Blocks, i: usize, j: Option<usize>
 }
 
 /// The room a paragraph's top or bottom border takes in the text flow: its distance from the
-/// text plus its width (Word).
+/// text plus its width (Word), so just the distance for one of width 0.
 fn border_room(b: Option<Border>) -> f32 {
-    b.filter(Border::is_visible).map_or(0.0, |b| {
+    b.filter(Border::is_drawn).map_or(0.0, |b| {
         let extent = b.space + b.width;
         if extent.is_finite() { extent.max(0.0) } else { 0.0 }
     })
@@ -644,13 +645,16 @@ pub(crate) struct Edges {
     pub(crate) top: f32,
     pub(crate) bottom: f32,
     pub(crate) up: f32,
+    /// Whether its top and bottom borders are drawn here; one of width 0 takes no room.
+    pub(crate) ends: (bool, bool),
 }
 
 impl Edges {
     /// A paragraph on its own: its top and bottom borders at its ends.
     pub(crate) fn own(pl: &ParaLayout, l0: usize, l1: usize) -> Edges {
         let b = pl.rp.borders.unwrap_or_default();
-        Edges { top: if l0 == 0 { border_room(b.top) } else { 0.0 }, bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 }, up: 0.0 }
+        let ends = (l0 == 0, l1 >= pl.lines.len());
+        Edges { top: if ends.0 { border_room(b.top) } else { 0.0 }, bottom: if ends.1 { border_room(b.bottom) } else { 0.0 }, up: 0.0, ends }
     }
 }
 
@@ -686,20 +690,22 @@ pub(crate) fn push_para(
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
         // All four lines lie beyond their distance from the text; top and bottom reach the corners.
-        if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
-            let ty = y - t.space - t.width / 2.0;
+        // A line of width 0 is drawn inside that distance, at the thinnest line (Word).
+        let half = |t: &Border| t.width.max(THINNEST_BORDER) / 2.0;
+        if let Some(t) = b.top.filter(|t| e.ends.0 && t.is_drawn() && t.space.is_finite()) {
+            let ty = y - t.space - t.width + half(&t);
             items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
         }
-        if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
-            let by = y + h + t.space + t.width / 2.0;
+        if let Some(t) = b.bottom.filter(|t| e.ends.1 && t.is_drawn() && t.space.is_finite()) {
+            let by = y + h + t.space + t.width - half(&t);
             items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
         }
-        if let Some(t) = b.left.filter(Border::is_visible) {
-            let bx = lx + t.width / 2.0;
+        if let Some(t) = b.left.filter(Border::is_drawn) {
+            let bx = lx + half(&t);
             items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
         }
-        if let Some(t) = b.right.filter(Border::is_visible) {
-            let bx = rx - t.width / 2.0;
+        if let Some(t) = b.right.filter(Border::is_drawn) {
+            let bx = rx - half(&t);
             items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
         }
     }
