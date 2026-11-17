@@ -347,3 +347,41 @@ fn removed_hyperlink_on_an_unchanged_word_follows_the_revised_side_document_path
     let (_, manual) = run_with(p, "manual");
     assert_eq!(manual.link, None, "the unchanged word takes the revised side's run, which dropped the link");
 }
+
+// --- list references of the revised side (#6900) --------------------------------------------------
+
+/// #6900: a paragraph Compare copies from the revised document names a list of the result, not
+/// the id it had in the revised document's own numbering table. The revised file numbers its
+/// lists differently (a bulleted list comes first there), so its numbered items' id names the
+/// original's bullets, or nothing, unless it is mapped: the changed item stays in the numbered
+/// list the unchanged ones are in.
+#[test]
+fn a_revised_paragraph_keeps_its_list_in_the_result() {
+    let numbered = |s: &mut Session, from: usize, to: usize| {
+        let (a, b) = (Pos::body(from, 0), Pos::body(to, s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(to)).unwrap().len()));
+        s.run("select.range", &json!({"anchor": a, "focus": b})).unwrap();
+        s.run("para.numbering", &json!({})).unwrap();
+    };
+    let mut rev = Session::new(Document::from_text("Note\nIntro\nFirst step\nSecond step changed"));
+    rev.run("select.range", &json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 4)})).unwrap();
+    rev.run("para.bullets", &json!({})).unwrap();
+    numbered(&mut rev, 2, 3);
+    let path = std::env::temp_dir().join(format!("wc-compare-lists-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev.doc).unwrap();
+
+    let mut s = Session::new(Document::from_text("Intro\nFirst step\nSecond step"));
+    numbered(&mut s, 1, 2);
+    let list = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).and_then(|p| p.props.numbering).map(|n| n.num).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let numbering_of = |text: &str| {
+        s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().contains(text)).and_then(|p| p.props.numbering).map(|n| n.num)
+    };
+    let changed = numbering_of("changed").expect("the changed item is a list item");
+    assert_eq!(numbering_of("First step"), Some(list), "the unchanged item stays in the original's list");
+    assert_eq!(changed, list, "and the changed one is in the same list, so its number follows");
+    let num = s.doc.numbering.num(changed).expect("a list of the result");
+    let level = s.doc.numbering.abstracts.iter().find(|a| a.id == num.abstract_id).and_then(|a| a.levels.first()).expect("its definition");
+    assert_ne!(level.text, "\u{2022}", "numbered, not the revised file's bullets: {:?}", level.text);
+}

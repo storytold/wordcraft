@@ -1023,3 +1023,38 @@ fn split_paragraph_keeps_the_drop_cap_on_the_first_paragraph_only() {
     d.split_paragraph(&Pos::body(0, 0)).unwrap();
     assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), cap));
 }
+
+/// #6900: `adopt_lists` maps another document's list references onto this document's lists: a
+/// list with the same definition takes this document's id, one this document lacks is copied in
+/// with a fresh id (its definition reused when there is one), and a reference to no list of the
+/// other document names none. Paragraphs in tables are mapped too.
+#[test]
+fn adopted_list_references_name_lists_of_this_document() {
+    use crate::numbering::{ListKind, Numbering};
+    let mut here = doc(&["a"]);
+    let numbered_here = std::sync::Arc::make_mut(&mut here.numbering).add_list(ListKind::Numbered);
+    let mut src = Numbering::default();
+    let bullets = src.add_list(ListKind::Bullet);
+    let numbered = src.add_list(ListKind::Numbered);
+    assert_ne!(numbered, numbered_here, "the other document numbers its lists differently");
+    let para = |num: u32| {
+        let mut p = Paragraph::with_text("x", Default::default());
+        p.props.numbering = Some(crate::props::NumRef { num, level: 0 });
+        p
+    };
+    let mut table = Table::new(1, 1, 100.0);
+    table.rows[0].cells[0].blocks = vec![crate::para_block(para(numbered))];
+    let mut blocks =
+        vec![crate::para_block(para(numbered)), crate::para_block(para(bullets)), crate::para_block(para(77)), Arc::new(Block::Table(table))];
+    here.adopt_lists(&src, &mut blocks);
+    let num = |b: &Block| match b {
+        Block::Para(p) => p.props.numbering.map(|n| n.num),
+        Block::Table(t) => t.rows[0].cells[0].blocks[0].as_para().and_then(|p| p.props.numbering).map(|n| n.num),
+    };
+    assert_eq!(num(&blocks[0]), Some(numbered_here), "the same definition: this document's list");
+    assert_eq!(num(&blocks[3]), Some(numbered_here), "in a table too");
+    let copied = num(&blocks[1]).unwrap();
+    assert!(copied != numbered_here && copied != 0, "bullets this document lacks are copied in");
+    assert!(here.numbering.level(copied, 0).is_some_and(|l| l.text == src.level(bullets, 0).map(|l| l.text.clone()).unwrap_or_default()));
+    assert_eq!(num(&blocks[2]), Some(0), "a list the other document doesn't have: none");
+}

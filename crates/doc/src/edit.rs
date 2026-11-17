@@ -1486,6 +1486,92 @@ impl Document {
         blocks
     }
 
+    /// Make the list references of `blocks`, which come from another document whose lists are
+    /// `src`, name lists of this document (#6900: Compare puts the revised document's
+    /// paragraphs in the original). A list of `src` whose definition this document has too
+    /// (the same levels, start overrides and level overrides, as two versions of one document
+    /// have) takes this document's list, the one of the same id first, so their numbers
+    /// continue; any other is copied here with ids of its own, its definition reused when this
+    /// document has it. A reference to a list `src` doesn't have names none (`0`), as it did
+    /// there. Every paragraph is changed, in tables too, and the old numbering of a tracked
+    /// paragraph change with it.
+    pub fn adopt_lists(&mut self, src: &crate::numbering::Numbering, blocks: &mut [Arc<Block>]) {
+        let mut used = std::collections::BTreeSet::new();
+        for b in blocks.iter() {
+            each_para(b, 0, &mut |p| {
+                let old = p.props.fmt_change.as_ref().and_then(|c| c.old.numbering);
+                used.extend(p.props.numbering.iter().chain(old.iter()).map(|n| n.num).filter(|n| *n != 0));
+            });
+        }
+        if used.is_empty() {
+            return;
+        }
+        // A definition apart from its own id.
+        let same_abs = |a: &crate::numbering::AbstractNum, b: &crate::numbering::AbstractNum| {
+            a.levels == b.levels && a.name == b.name && a.nsid == b.nsid && a.tmpl == b.tmpl && a.multi_level_type == b.multi_level_type
+        };
+        let mut map: BTreeMap<u32, u32> = BTreeMap::new();
+        for id in used {
+            let Some(n) = src.nums.iter().find(|n| n.id == id) else {
+                map.insert(id, 0);
+                continue;
+            };
+            let abs = src.abstracts.iter().find(|a| a.id == n.abstract_id);
+            let same_list = |m: &crate::numbering::Num| {
+                m.start_overrides == n.start_overrides
+                    && m.level_overrides == n.level_overrides
+                    && match (abs, self.numbering.abstracts.iter().find(|a| a.id == m.abstract_id)) {
+                        (Some(x), Some(y)) => same_abs(x, y),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            };
+            let here = self.numbering.nums.iter().filter(|m| same_list(m)).min_by_key(|m| (m.id != id, m.id)).map(|m| m.id);
+            if let Some(here) = here {
+                map.insert(id, here);
+                continue;
+            }
+            let abstract_id = match abs {
+                Some(a) => match self.numbering.abstracts.iter().find(|b| same_abs(a, b)) {
+                    Some(b) => b.id,
+                    None => {
+                        let fresh = self.numbering.abstracts.iter().map(|b| b.id.saturating_add(1)).max().unwrap_or(0);
+                        Arc::make_mut(&mut self.numbering).abstracts.push(crate::numbering::AbstractNum { id: fresh, ..a.clone() });
+                        fresh
+                    }
+                },
+                None => n.abstract_id,
+            };
+            let fresh = self.numbering.nums.iter().map(|m| m.id.saturating_add(1)).max().unwrap_or(1).max(1);
+            Arc::make_mut(&mut self.numbering).nums.push(crate::numbering::Num { id: fresh, abstract_id, ..n.clone() });
+            map.insert(id, fresh);
+        }
+        if map.iter().all(|(a, b)| a == b) {
+            return;
+        }
+        let remap = |n: &mut Option<crate::props::NumRef>| {
+            if let Some(n) = n.as_mut()
+                && let Some(to) = map.get(&n.num)
+            {
+                n.num = *to;
+            }
+        };
+        for b in blocks.iter_mut() {
+            let mut refers = false;
+            each_para(b, 0, &mut |p| refers |= p.props.numbering.is_some_and(|n| n.num != 0) || p.props.fmt_change.is_some());
+            if !refers {
+                continue;
+            }
+            each_para_mut(Arc::make_mut(b), 0, &mut |p| {
+                remap(&mut p.props.numbering);
+                if let Some(c) = p.props.fmt_change.as_mut() {
+                    remap(&mut c.old.numbering);
+                }
+                p.touch();
+            });
+        }
+    }
+
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
         let mut media_remap = BTreeMap::new();
