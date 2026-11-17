@@ -30,6 +30,28 @@ struct ElsewhereContext {
 }
 
 impl Session {
+    /// Every open document with its id: the active one, then the others.
+    fn open_documents(&self) -> impl Iterator<Item = (u64, &Document)> {
+        std::iter::once((self.document_id, &self.doc)).chain(self.others.iter().map(|d| (d.document_id, &d.doc)))
+    }
+
+    /// `result` of command `id`, run with `params` from the document `home`, or the refusal of a
+    /// command run for automation that added fields Word acts on to an open document (`before`:
+    /// what they held as it started; see `active_fields::after_run`). The caller undoes it.
+    fn held_to_active_fields(
+        &self,
+        result: Result<Value, CmdError>,
+        before: Option<&crate::active_fields::Before>,
+        id: &str,
+        params: &Value,
+        home: u64,
+    ) -> Result<Value, CmdError> {
+        match before {
+            Some(before) if result.is_ok() => crate::active_fields::after_run(before, id, params, home, self.open_documents()).and(result),
+            _ => result,
+        }
+    }
+
     fn leave_math_for_command(&mut self, id: &str) {
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
@@ -209,17 +231,21 @@ impl Session {
         let mutates = spec.mutates;
         let ime_caret_before = self.current_ime_caret_state();
         let rev_before = self.rev;
+        // Run for automation: what the open documents hold that Word acts on, so the command can't
+        // add to it (#3628, `active_fields::after_run`).
+        let active_before = crate::active_fields::before_run(self.open_documents());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match crate::cmd::canvas::member_command(self, id, params) {
             Some(r) => r,
             None => crate::cmd::column::dispatch(self, id, mutates, run, params),
         }));
-        let mut result = match result {
+        let result = match result {
             Ok(r) => r,
             Err(p) => {
                 let msg = p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
                 Err(CmdError::Failed(format!("{id} panicked: {msg}")))
             }
         };
+        let mut result = self.held_to_active_fields(result, active_before.as_ref(), id, params, home);
         if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
             return self.finish_elsewhere(
                 ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
