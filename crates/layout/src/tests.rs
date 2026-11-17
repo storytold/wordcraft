@@ -2665,6 +2665,57 @@ fn a_row_leaves_room_for_the_merged_cell_closed_below_it() {
     }
 }
 
+/// Two exact 20 pt rows merged in the first column, the merged cell holding eight lines, more
+/// than the merge's 40 pt: the rows keep their height, as in Word, and where the page breaks between the two rows, the lines that run on
+/// onto the next page are still cut off at the merge's bottom, as on one page. The row they land
+/// in carries the restart cell's clip. Swept over the space above the table, so the break lands
+/// between the rows at some offset.
+#[test]
+fn an_exact_merge_stays_clipped_across_a_page_break() {
+    use wordcraft_doc::props::{HeightRule, VMerge};
+    crate::test_fonts();
+    let mut split = 0;
+    for k in 0..40 {
+        let mut d = Document::from_text("filler");
+        let room = d.last_section.page_h - d.last_section.margin_top - d.last_section.margin_bottom;
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props =
+            ParaProps { space_before: Some(room - 60.0 + k as f32 * 1.5), ..Default::default() };
+        let mut t = Table::new(3, 2, 468.0);
+        t.props.style = None;
+        for (i, row) in t.rows.iter_mut().enumerate() {
+            if i < 2 {
+                row.props.height = Some(20.0);
+                row.props.height_rule = HeightRule::Exact;
+                row.cells[0].props.vmerge = if i == 0 { VMerge::Restart } else { VMerge::Continue };
+            }
+            row.cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("row", Default::default()))];
+        }
+        t.rows[0].cells[0].blocks =
+            (0..8).map(|n| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("line {n}"), Default::default()))).collect();
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page_of =
+            |row: usize| l.pages.iter().position(|p| p.items.iter().any(|it| matches!(it, Placed::Cell { row: r, cell: 1, .. } if *r == row)));
+        let (Some(a), Some(b)) = (page_of(0), page_of(1)) else { continue };
+        if a == b {
+            continue;
+        }
+        split += 1;
+        let at = format!("{:.1} pt over the room above the table", k as f32 * 1.5);
+        let page = &l.pages[b];
+        let clip = page.items.iter().find_map(|it| match it {
+            Placed::Cell { rect, row: 0, cell: 0, clip: true, .. } => Some(*rect),
+            _ => None,
+        });
+        let clip = clip.unwrap_or_else(|| panic!("{at}: the second row's page clips the merged cell"));
+        let row2 = page.items.iter().find_map(|it| if let Placed::Cell { rect, row: 1, cell: 1, .. } = it { Some(*rect) } else { None }).unwrap();
+        assert!((clip.bottom() - row2.bottom()).abs() < 0.5, "{at}: the clip ends at the merge's bottom ({clip:?}, {row2:?})");
+        let carried = page.items.iter().any(|it| matches!(it, Placed::Lines { path, .. } if path.0.starts_with(&[1, 0, 0])));
+        assert!(carried, "{at}: some of the merged cell's lines run on onto the second page");
+    }
+    assert!(split > 0, "the sweep breaks the page between the two rows");
+}
+
 /// A 1×3 table after "before" whose middle cell holds `text` running `dir`.
 fn turned_table(dir: TextDirection, text: &str, row: Option<f32>) -> Document {
     let mut d = Document::from_text("before\nafter");

@@ -696,12 +696,14 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         heights.push(if collapsed && !cells.is_empty() { rh.max(0.0) } else { rh.max(4.0) });
         rows.push(cells);
     }
-    grow_vertical_merges(&rows, &mut heights);
+    let exact: Vec<bool> = t.rows.iter().map(|r| r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)).collect();
+    grow_vertical_merges(&rows, &mut heights, &exact);
     finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total })
 }
 
-fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
-    // Vertically merged cells: grow the last row of the merge if the content is taller.
+fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32], exact: &[bool]) {
+    // Vertically merged cells: grow the last row of the merge if the content is taller. A row of
+    // exact height keeps it, as in Word: the content is cut off at the merge's bottom instead.
     for ri in 0..rows.len() {
         let restarts: Vec<(usize, f32, usize)> =
             rows.get(ri).map(|r| r.iter().filter(|c| c.vmerge == VMerge::Restart).map(|c| (c.g, c.h, c.span)).collect()).unwrap_or_default();
@@ -712,6 +714,7 @@ fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
             }
             let have: f32 = heights.get(ri..=end).map(|s| s.iter().sum()).unwrap_or(0.0);
             if h > have
+                && !exact.get(end).copied().unwrap_or(false)
                 && let Some(last) = heights.get_mut(end)
             {
                 *last += h - have;
@@ -815,7 +818,17 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             let end = (c.vmerge != VMerge::Continue && c.turned.is_none())
                 .then_some(c.end + dy)
                 .map(|e| (bands.iter().position(|b| e <= b.2 + 0.01).unwrap_or(bands.len() - 1), e));
-            let mut to = Bands { bands: &bands, ri, g: c.g, end, inset: c.top, items: &mut items, carry: &mut carry };
+            // The restart cell's clip for the rows the merge runs on into (see `Bands::clip`).
+            let clip_cell = (exact && c.vmerge == VMerge::Restart && c.h > span_h + 0.01).then(|| Placed::Cell {
+                rect: Rect::new(c.x, 0.0, c.w, 0.0),
+                covered: true,
+                table: wordcraft_doc::Path(path.to_vec()),
+                row: ri,
+                cell: ci,
+                story,
+                clip: true,
+            });
+            let mut to = Bands { bands: &bands, ri, g: c.g, end, inset: c.top, items: &mut items, carry: &mut carry, clip: clip_cell.as_ref() };
             if c.vmerge != VMerge::Continue
                 && let Some(f) = c.fill
             {
@@ -858,7 +871,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 }
             }
             let content = items.len();
-            let mut to = Bands { bands: &bands, ri, g: c.g, end, inset: c.top, items: &mut items, carry: &mut carry };
+            let mut to = Bands { bands: &bands, ri, g: c.g, end, inset: c.top, items: &mut items, carry: &mut carry, clip: clip_cell.as_ref() };
             for mut it in cell_items {
                 it.translate(0.0, dy);
                 // Turned text runs along the whole merge and moves as a whole.
@@ -951,6 +964,11 @@ struct Bands<'a> {
     inset: f32,
     items: &'a mut Vec<Placed>,
     carry: &'a mut [Carry],
+    /// An exact-height merge whose content is taller than it: the restart cell's clip (its
+    /// [`Placed::Cell`] with `clip`), given again to each row below it that takes some of the
+    /// content, so the content stays cut off at the merge's bottom on a page the restart row
+    /// isn't on.
+    clip: Option<&'a Placed>,
 }
 
 impl Bands<'_> {
@@ -963,7 +981,8 @@ impl Bands<'_> {
             self.items.push(it);
             return;
         };
-        let band_of = |y: f32| self.bands.iter().position(|b| y <= b.2 + 0.01).unwrap_or(last);
+        // The bands run down in order: a binary search keeps a long merge linear.
+        let band_of = |y: f32| self.bands.partition_point(|b| y > b.2 + 0.01).min(last);
         match it {
             Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
                 let base = para.lines.get(l0).map(|l| l.top).unwrap_or(0.0);
@@ -981,7 +1000,13 @@ impl Bands<'_> {
                 }
             }
             Placed::Fill { rect, color } => {
-                for (band, &(_, top, bottom)) in self.bands.iter().enumerate() {
+                // Only the bands the shading reaches, not all of them for every paragraph's.
+                let first = self.bands.partition_point(|b| b.2 <= rect.y);
+                for band in first..self.bands.len() {
+                    let (_, top, bottom) = self.bands[band];
+                    if top >= rect.bottom() {
+                        break;
+                    }
                     let (a, b) = (rect.y.max(top), rect.bottom().min(bottom));
                     if b > a {
                         self.put_in(band, Placed::Fill { rect: Rect::new(rect.x, a, rect.w, b - a), color });
@@ -990,7 +1015,7 @@ impl Bands<'_> {
             }
             it => {
                 let top = crate::notes::v_span(&it).0;
-                let band = self.bands.iter().position(|b| top < b.2 - 0.01).unwrap_or(last);
+                let band = self.bands.partition_point(|b| top >= b.2 - 0.01).min(last);
                 self.put_in(band, it);
             }
         }
@@ -1007,6 +1032,23 @@ impl Bands<'_> {
         } else if let Some(c) = self.carry.get_mut(row) {
             if !matches!(it, Placed::Fill { .. }) {
                 c.lead = c.lead.max(self.inset - crate::notes::v_span(&it).0);
+            }
+            // The first of the cell's items in this row: the row gets the merge's clip over its
+            // own part of the merge, down to the merge's bottom (the last row's part takes what
+            // runs on below it, which is cut off there).
+            if !matches!(c.cells.last(), Some((g, _)) if *g == self.g)
+                && let Some(Placed::Cell { rect, covered, table, row: r, cell, story, clip }) = self.clip
+            {
+                let (_, _, bottom) = self.bands[band];
+                c.items.push(Placed::Cell {
+                    rect: Rect::new(rect.x, 0.0, rect.w, bottom - top),
+                    covered: *covered,
+                    table: table.clone(),
+                    row: *r,
+                    cell: *cell,
+                    story: *story,
+                    clip: *clip,
+                });
             }
             c.items.push(it);
             let n = c.items.len();
