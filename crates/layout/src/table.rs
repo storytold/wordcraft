@@ -774,13 +774,16 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                     items.push(Placed::Clip { rect, spin: wordcraft_geom::Spin::default(), items: images });
                 }
             }
-            // Behind-text frames count towards vertical alignment even without inline content.
-            // They do not increase the row's flow height.
+            // Frames text doesn't wrap around, behind it (#1871) or in front of it (#6939), count
+            // towards vertical alignment even without inline content: Word centres down to their
+            // bottom. They do not increase the row's flow height.
             let align_h = c
                 .items
                 .iter()
                 .filter_map(|item| match item {
-                    Placed::Object { rect, wrap: wordcraft_doc::para::Wrap::BehindText, .. } => Some(rect.bottom()),
+                    Placed::Object { rect, wrap: wordcraft_doc::para::Wrap::BehindText | wordcraft_doc::para::Wrap::InFrontOfText, .. } => {
+                        Some(rect.bottom())
+                    }
                     _ => None,
                 })
                 .fold(c.h, f32::max);

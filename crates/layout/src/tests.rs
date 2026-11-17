@@ -13251,6 +13251,53 @@ fn cell_frame_centres_empty() {
     assert!((frames[0].y - 66.5).abs() < 0.5, "Word frame top: {frames:?}");
 }
 
+/// #6939: a picture in front of the text counts in a cell's vertical alignment as one behind it
+/// does (#1871), in a cell merged down two rows too. Measured in Word: a 37.15 pt picture 2.95 pt
+/// above its paragraph, alone in a centred cell 41.05 pt tall, sits inside the cell, its top about
+/// 1 pt below the cell's (the picture's extent below the line is centred, so its top is
+/// (41.05 − 34.2) / 2 − 2.95 = 0.475 pt down); WordCraft centred the line alone and the picture
+/// ran 9.6 pt over the next row.
+#[test]
+fn a_picture_in_front_of_the_text_counts_in_a_merged_cell_s_vertical_alignment() {
+    crate::test_fonts();
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::{HeightRule, VAlign, VMerge};
+    let top = |wrap: Wrap| {
+        let mut d = Document::new();
+        let mut t = Table::new(2, 1, 109.35);
+        for (row, h) in t.rows.iter_mut().zip([34.15, 6.9]) {
+            row.props.height = Some(h);
+            row.props.height_rule = HeightRule::Exact;
+        }
+        for (ri, row) in t.rows.iter_mut().enumerate() {
+            let cell = &mut row.cells[0];
+            cell.props.valign = Some(VAlign::Center);
+            cell.props.margins = Some([0.0; 4]);
+            cell.props.vmerge = if ri == 0 { VMerge::Restart } else { VMerge::Continue };
+            let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            if ri == 0 {
+                let float = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 30.2, y: -2.95, ..Default::default() };
+                p.insert_object(0, picture(34.05, 37.15, float), &Default::default()).unwrap();
+            }
+            cell.blocks = vec![wordcraft_doc::para_block(p)];
+        }
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let frames: Vec<_> =
+            l.pages[0].items.iter().filter_map(|item| if let Placed::Object { rect, .. } = item { Some(*rect) } else { None }).collect();
+        let [frame] = frames[..] else { panic!("{frames:?}") };
+        frame.y
+    };
+    // The table starts at the 72 pt top margin; the merged cell runs to 72 + 41.05.
+    for wrap in [Wrap::InFrontOfText, Wrap::BehindText] {
+        let y = top(wrap);
+        assert!((y - 72.475).abs() < 0.5, "{wrap:?}: the picture's top at {y}, not 72.475 (give or take the table's border)");
+        assert!(y + 37.15 <= 72.0 + 41.05 + 0.01, "{wrap:?}: inside the merged cell");
+    }
+}
+
 #[test]
 fn section_start_summed_spacing() {
     crate::test_fonts();
