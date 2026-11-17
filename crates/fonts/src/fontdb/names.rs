@@ -14,6 +14,20 @@ pub(super) fn east_asian_font(f: &skrifa::FontRef<'_>) -> bool {
     }
 }
 
+/// The font's average character width in font units: `OS/2.xAvgCharWidth`, or half the em when
+/// the table is missing or says nothing. An East Asian font gets half the em whatever its table
+/// says, because a platform's text metrics report a double-byte font's average as the width of
+/// its half-width cell, not the full-width figure the table carries (Yu Gothic says 1972 of
+/// 2048, and Word spaces it as 1024).
+fn avg_char_width(f: &skrifa::FontRef<'_>, upem: f64) -> f64 {
+    use skrifa::raw::TableProvider;
+    let half = upem / 2.0;
+    if east_asian_font(f) {
+        return half;
+    }
+    f.os2().ok().map(|t| f64::from(t.x_avg_char_width())).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(half).min(upem)
+}
+
 /// A family name in another language, from a font's `name` table.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalName {
@@ -371,6 +385,7 @@ pub(super) fn make_face(
         .map(|v| v >= 0.5)
         .or(axis(b"slnt").map(|v| v.abs() > 0.1))
         .unwrap_or(!matches!(a.style, skrifa::attribute::Style::Normal) || style_italic(&style));
+    let upem = m.units_per_em.max(1) as f64;
     Some(FontFace {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         family,
@@ -381,11 +396,12 @@ pub(super) fn make_face(
         postscript: coords.is_empty().then(|| name(&f, &[StringId::POSTSCRIPT_NAME])).flatten(),
         weight,
         italic,
-        upem: m.units_per_em.max(1) as f64,
+        upem,
         ascent: m.ascent as f64,
         descent: -(m.descent as f64),
         cap_height: m.cap_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.72),
         x_height: m.x_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.5),
+        avg_char_width: avg_char_width(&f, upem),
         shaper,
         coords,
         location,
