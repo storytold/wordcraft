@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-11-18 · The bridge authenticates once per connection with the control token (`WORDCRAFT_CONTROL_TOKEN` or the app's token file). Earlier: The protocol core is the shared `craft-mcp-server` crate (#778); `click` and `key` list every argument they accept. Earlier: Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+> **Last updated:** 2026-11-21 · Documented `WORDCRAFT_CONTROL_PORT` and the inherited environment that decides whether a launcher opens the channel (#6928). Earlier: The bridge authenticates once per connection with the control token (`WORDCRAFT_CONTROL_TOKEN` or the app's token file). Earlier: The protocol core is the shared `craft-mcp-server` crate (#778); `click` and `key` list every argument they accept. Earlier: Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -8,10 +8,20 @@ Claude and other agents can write and edit documents.
 ```sh
 wordcraft-cli mcp                          # headless session (no window)
 wordcraft --control 7981 &                 # or: drive the running app…
+WORDCRAFT_CONTROL_PORT=7981 wordcraft &    # …the same, with the port in the environment
 wordcraft-cli mcp --connect 127.0.0.1:7981 # …including clicks, keys and screenshots
 ```
 
 Claude Code: `claude mcp add wordcraft -- wordcraft-cli mcp`.
+
+The app also reads `WORDCRAFT_CONTROL_PORT` at startup, which suits a launch from a desktop
+shortcut or the Start menu. Such a launch inherits the environment of whatever started it:
+Explorer takes up a variable changed in the Windows Environment Variables dialog and passes it
+to programs it starts afterwards, but a variable set only inside another process — one terminal
+session, or a script that set it for its own children — never reaches Explorer, so the shortcut
+opens the app without the channel. Pass `--control <port>` explicitly, or set the variable as a
+persistent user variable and sign out and back in (a variable that lives only in one terminal
+session does not survive signing out), or start the app from that terminal.
 
 With `--connect`, the bridge authenticates once per connection with the app's control token, which
 it reads from `WORDCRAFT_CONTROL_TOKEN` or from the token file the app writes at start. It sends
