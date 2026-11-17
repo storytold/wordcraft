@@ -131,7 +131,7 @@ fn compare_pins_the_terminal_deleted_paragraph_limitation() {
 }
 
 #[test]
-fn compare_pins_rejecting_an_inserted_section_restyles_the_next_paragraph() {
+fn compare_pins_rejecting_an_inserted_section_keeps_the_next_paragraphs_style() {
     // Pins the fixed behaviour for rejecting an inserted paragraph that carries a section
     // break. This was a known limitation recorded on `mark_block` (compare.rs): `resolve`'s
     // `remove_empty_para` refused paragraphs carrying a section, so once the inserted
@@ -160,6 +160,42 @@ fn compare_pins_rejecting_an_inserted_section_restyles_the_next_paragraph() {
     assert_eq!(s.doc.body.len(), 2);
     let body = s.doc.body[1].as_para().unwrap();
     assert_eq!(body.plain_text(), "Body");
+    assert_eq!(body.props.style.as_deref(), Some("Heading1"), "the following paragraph keeps its own properties (fixed on main by #5734)");
+}
+
+#[test]
+fn compare_pins_accepting_a_deleted_section_keeps_the_next_paragraphs_style() {
+    // The Accept-side mirror of `compare_pins_rejecting_an_inserted_section_keeps_the_next_paragraphs_style`:
+    // compare deletes a paragraph that carries a section break whole (original `A`, `OLD`
+    // with a section break, `B`; revised `A`, `B`). Accept All goes through the same #5734
+    // branch in `resolve_para` as the reject case: the section break is removed first, so
+    // the emptied paragraph goes whole instead of being joined into the next one. After
+    // Accept All the revised text stands exactly and `B` keeps its own properties.
+    let mut original = Document::from_text("A\nOLD\nB");
+    {
+        let p = original.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+        p.props.style = Some("Normal".into());
+        p.section = Some(Box::new(wordcraft_doc::section::SectionProps::default()));
+    }
+    original.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap().props.style = Some("Heading1".into());
+    let mut s = Session::new(original);
+
+    let mut rev = Document::from_text("A\nB");
+    rev.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.style = Some("Heading1".into());
+    let path = std::env::temp_dir().join(format!("wc-compare-section-accept-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(s.doc.body.len(), 3);
+    let mid = s.doc.body[1].as_para().unwrap();
+    assert_eq!(mid.plain_text(), "OLD");
+    assert!(mid.mark.del.is_some(), "the deleted sectioned paragraph's mark is not marked deleted");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB");
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(empty_paras(&s), 0, "accepting the deleted sectioned paragraph left it behind");
+    let body = s.doc.body[1].as_para().unwrap();
+    assert_eq!(body.plain_text(), "B");
     assert_eq!(body.props.style.as_deref(), Some("Heading1"), "the following paragraph keeps its own properties (fixed on main by #5734)");
 }
 
