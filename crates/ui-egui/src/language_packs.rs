@@ -567,124 +567,187 @@ pub(crate) fn your_languages_section(app: &mut WordApp, ui: &mut Ui) {
     let view = your_view(app, &index, &installed);
     let mut install = None;
     let mut removal = None;
+    const COL1_W: f32 = 250.0;
+    const COL2_MIN_W: f32 = 190.0;
+    const COL_GAP: f32 = 16.0;
+    const ROW_GAP: f32 = 8.0;
+    let install_prompt = |row: &packs::LanguageRow| {
+        let size = size_text(row.size);
+        if row.proofing == Proofing::Install {
+            crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size)])
+        } else {
+            crate::i18n::fmt(tl!("Install spelling ({size})"), &[("size", &size)])
+        }
+    };
     let mut default = None;
-    // As wide as the window leaves room for (the rows scroll sideways in a narrow one).
-    let room = (ui.ctx().content_rect().right() - ui.cursor().min.x - 16.0).clamp(200.0, 760.0);
-    let narrow = room < 660.0;
-    egui::ScrollArea::both().id_salt("options_your_languages").max_width(room).max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
-        crate::rtl::grid(
-            ui,
-            egui::Grid::new("options_your_languages_grid").num_columns(if narrow { 2 } else { 3 }).spacing(vec2(16.0, 8.0)).striped(true),
-            |ui| {
-                for (name, detail, row) in &view {
-                    let mut actions = |ui: &mut Ui| {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-                            if !row.default
-                                && ui
-                                    .small_button(tl!("Set as default"))
-                                    .on_hover_text(tl!("New blank documents are written in this language"))
-                                    .clicked()
-                            {
-                                default = Some(row_tag(row));
-                            }
-                            if row.installed
-                                && let Some(locale) = &row.pack
-                                && ui.add_enabled(!busy(), egui::Button::new(tl!("Remove")).small()).clicked()
-                            {
-                                removal = Some(locale.clone());
-                            }
-                        });
-                    };
-                    let here = caret.as_deref().is_some_and(|c| row.is_tag(c));
-                    ui.vertical(|ui| {
-                        ui.set_width(if narrow { 170.0 } else { 250.0 });
-                        let shown_name = shown(name, MAX_BAR_NAME);
-                        let line = if row.default { crate::i18n::fmt(tl!("{language} (default)"), &[("language", &shown_name)]) } else { shown_name };
-                        ui.label(if here { RichText::new(line).font(semibold(14.0)) } else { RichText::new(line) });
-                        ui.label(RichText::new(detail.as_str()).small().weak());
+    // Measure columns upfront and lay rows out directly instead of using `egui::Grid` (whose
+    // hidden pass-1 sizing leaves RTL right-anchoring too narrow on frame 1 inside `max_passes = 2`)
+    // or a nested vertical ScrollArea (which clips its bar onto column 2 and overflows RTL right).
+    let btn_gap = ui.spacing().item_spacing.x;
+    let btn_w = |label: &str| {
+        let galley = egui::WidgetText::from(label).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+        let pad = ui.spacing().button_padding.x * 2.0 + 2.0 * ui.visuals().widgets.inactive.bg_stroke.width;
+        (galley.size().x + pad).ceil()
+    };
+    let mut col2_w = COL2_MIN_W;
+    let mut col3_w = 0.0_f32;
+    let set_w = btn_w(tl!("Set as default"));
+    let remove_w = btn_w(tl!("Remove"));
+    let cancel_w = btn_w(tl!("Cancel"));
+    for (_, _, row) in &view {
+        if row.pack.as_deref().and_then(|l| index.iter().find(|p| p.locale == l)).is_some()
+            && !row.installed
+            && matches!(row.proofing, Proofing::Install | Proofing::GrammarBuiltIn)
+        {
+            let w = if row.pack.as_deref().and_then(progress).is_some() { 90.0 + btn_gap + cancel_w } else { btn_w(&install_prompt(row)) };
+            col2_w = col2_w.max(w);
+        }
+        let has_set = !row.default;
+        let has_remove = row.installed && row.pack.is_some();
+        let w3 = match (has_set, has_remove) {
+            (true, true) => set_w + btn_gap + remove_w,
+            (true, false) => set_w,
+            (false, true) => remove_w,
+            (false, false) => 0.0,
+        };
+        col3_w = col3_w.max(w3);
+    }
+    let total_w = COL1_W + COL_GAP + col2_w + if col3_w > 0.0 { COL_GAP + col3_w } else { 0.0 };
+    let draw_table = |ui: &mut Ui| {
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
+        let mut row_idx = 0usize;
+        let mut add_row = |ui: &mut Ui, c1: &mut dyn FnMut(&mut Ui), c2: &mut dyn FnMut(&mut Ui), c3: &mut dyn FnMut(&mut Ui)| {
+            let stripe = (row_idx % 2 == 1).then(|| ui.painter().add(egui::Shape::Noop));
+            row_idx += 1;
+            let row_resp = ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = COL_GAP;
+                ui.allocate_ui_with_layout(vec2(COL1_W, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_width(COL1_W);
+                    c1(ui);
+                });
+                ui.allocate_ui_with_layout(vec2(col2_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_width(col2_w);
+                    ui.spacing_mut().item_spacing.x = btn_gap;
+                    c2(ui);
+                });
+                if col3_w > 0.0 {
+                    ui.allocate_ui_with_layout(vec2(col3_w, 0.0), egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                        ui.set_min_width(col3_w);
+                        ui.spacing_mut().item_spacing.x = btn_gap;
+                        c3(ui);
                     });
-                    let pack = row.pack.as_deref().and_then(|l| index.iter().find(|p| p.locale == l));
-                    let size = size_text(row.size);
-                    ui.vertical(|ui| {
-                        ui.set_width(190.0);
-                        match row.proofing {
-                            Proofing::BuiltIn => {
-                                ui.label(tl!("Built in"));
-                            }
-                            Proofing::Installed => {
-                                ui.label(RichText::new(tl!("Installed")).color(t.green));
-                            }
-                            Proofing::OwnDictionary => {
-                                ui.label(tl!("Your own dictionary"));
-                            }
-                            Proofing::SystemDictionary => {
-                                ui.label(tl!("System dictionary"));
-                            }
-                            Proofing::NotAvailable => {
-                                ui.label(RichText::new(tl!("Not available yet")).weak());
-                            }
-                            Proofing::GrammarBuiltIn => {
-                                ui.label(tl!("Grammar built in"));
-                            }
-                            Proofing::Install => {}
-                        }
-                        if let Some(pack) = pack
-                            && !row.installed
-                            && matches!(row.proofing, Proofing::Install | Proofing::GrammarBuiltIn)
-                        {
-                            match progress(&pack.locale) {
-                                Some((done, total)) => {
-                                    ui.horizontal(|ui| {
-                                        ui.add(egui::ProgressBar::new(done.min(total) as f32 / total as f32).desired_width(90.0).show_percentage());
-                                        if ui.small_button(tl!("Cancel")).clicked() {
-                                            packs::cancel(&pack.locale);
-                                        }
-                                    });
-                                }
-                                None => {
-                                    let label = if row.proofing == Proofing::Install {
-                                        crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size)])
-                                    } else {
-                                        crate::i18n::fmt(tl!("Install spelling ({size})"), &[("size", &size)])
-                                    };
-                                    if ui.button(label).on_hover_text(licence_hover(pack)).clicked() {
-                                        install = Some(pack.clone());
-                                    }
-                                }
-                            }
-                        }
-                        if narrow {
-                            actions(ui);
-                        }
-                    });
-                    if !narrow {
-                        actions(ui);
-                    }
-                    ui.end_row();
-                    let error = row.pack.as_deref().and_then(|l| error_of(app, l));
-                    let unreadable = (matches!(row.proofing, Proofing::OwnDictionary | Proofing::SystemDictionary))
-                        .then(|| wordcraft_engine::proof::dictionary_load_error(wordcraft_engine::proof::ProofLang::from_tag(Some(&row_tag(row)))))
-                        .flatten();
-                    if error.is_some() || unreadable.is_some() {
-                        ui.label("");
-                        ui.vertical(|ui| {
-                            if let Some(e) = error {
-                                ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
-                            }
-                            if let Some(reason) = unreadable {
-                                let line = crate::i18n::fmt(tl!("Its dictionary couldn't be read: {reason}"), &[("reason", &shown_error(&reason))]);
-                                ui.add(egui::Label::new(RichText::new(line).small().color(t.red)).wrap());
-                            }
-                        });
-                        if !narrow {
-                            ui.label("");
-                        }
-                        ui.end_row();
-                    }
                 }
-            },
-        );
-    });
+            });
+            if let Some(slot) = stripe {
+                ui.painter().set(
+                    slot,
+                    egui::epaint::RectShape::filled(row_resp.response.rect.expand2(vec2(0.0, 2.0)), 2.0, ui.style().visuals.faint_bg_color),
+                );
+            }
+        };
+        for (name, detail, row) in &view {
+            let here = caret.as_deref().is_some_and(|c| row.is_tag(c));
+            let pack = row.pack.as_deref().and_then(|l| index.iter().find(|p| p.locale == l));
+            add_row(
+                ui,
+                &mut |ui| {
+                    let shown_name = shown(name, MAX_BAR_NAME);
+                    let line = if row.default { crate::i18n::fmt(tl!("{language} (default)"), &[("language", &shown_name)]) } else { shown_name };
+                    ui.label(if here { RichText::new(line).font(semibold(14.0)) } else { RichText::new(line) });
+                    ui.label(RichText::new(detail.as_str()).small().weak());
+                },
+                &mut |ui| {
+                    match row.proofing {
+                        Proofing::BuiltIn => {
+                            ui.label(tl!("Built in"));
+                        }
+                        Proofing::Installed => {
+                            ui.label(RichText::new(tl!("Installed")).color(t.green));
+                        }
+                        Proofing::OwnDictionary => {
+                            ui.label(tl!("Your own dictionary"));
+                        }
+                        Proofing::SystemDictionary => {
+                            ui.label(tl!("System dictionary"));
+                        }
+                        Proofing::NotAvailable => {
+                            ui.label(RichText::new(tl!("Not available yet")).weak());
+                        }
+                        Proofing::GrammarBuiltIn => {
+                            ui.label(tl!("Grammar built in"));
+                        }
+                        Proofing::Install => {}
+                    }
+                    if let Some(pack) = pack
+                        && !row.installed
+                        && matches!(row.proofing, Proofing::Install | Proofing::GrammarBuiltIn)
+                    {
+                        match progress(&pack.locale) {
+                            Some((done, total)) => {
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::ProgressBar::new(done.min(total) as f32 / total as f32).desired_width(90.0).show_percentage());
+                                    if ui.small_button(tl!("Cancel")).clicked() {
+                                        packs::cancel(&pack.locale);
+                                    }
+                                });
+                            }
+                            None => {
+                                if ui.button(install_prompt(row)).on_hover_text(licence_hover(pack)).clicked() {
+                                    install = Some(pack.clone());
+                                }
+                            }
+                        }
+                    }
+                },
+                &mut |ui| {
+                    if !row.default
+                        && ui.small_button(tl!("Set as default")).on_hover_text(tl!("New blank documents are written in this language")).clicked()
+                    {
+                        default = Some(row_tag(row));
+                    }
+                    if row.installed
+                        && let Some(locale) = &row.pack
+                        && ui.add_enabled(!busy(), egui::Button::new(tl!("Remove")).small()).clicked()
+                    {
+                        removal = Some(locale.clone());
+                    }
+                },
+            );
+
+            let error = row.pack.as_deref().and_then(|l| error_of(app, l));
+            let unreadable = (matches!(row.proofing, Proofing::OwnDictionary | Proofing::SystemDictionary))
+                .then(|| wordcraft_engine::proof::dictionary_load_error(wordcraft_engine::proof::ProofLang::from_tag(Some(&row_tag(row)))))
+                .flatten();
+            if error.is_some() || unreadable.is_some() {
+                add_row(
+                    ui,
+                    &mut |_| {},
+                    &mut |ui| {
+                        if let Some(e) = &error {
+                            ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
+                        }
+                        if let Some(reason) = &unreadable {
+                            let line = crate::i18n::fmt(tl!("Its dictionary couldn't be read: {reason}"), &[("reason", &shown_error(reason))]);
+                            ui.add(egui::Label::new(RichText::new(line).small().color(t.red)).wrap());
+                        }
+                    },
+                    &mut |_| {},
+                );
+            }
+        }
+    };
+    if crate::rtl::flows(ui) {
+        let room = ui.available_rect_before_wrap();
+        let left = room.max.x - total_w;
+        if left.is_finite() {
+            let max_rect = egui::Rect::from_min_max(egui::pos2(left, room.min.y), egui::pos2(room.max.x, room.max.y));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(max_rect).layout(egui::Layout::top_down(egui::Align::Min)), draw_table);
+        } else {
+            ui.vertical(draw_table);
+        }
+    } else {
+        ui.vertical(draw_table);
+    }
     ui.add_space(4.0);
     if let Some(e) = error_of(app, "") {
         ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
@@ -1662,5 +1725,146 @@ mod tests {
         assert_eq!(crate::canvas::issue_heading(&french), tl!("Possible spelling mistake"));
         let grammar = json!({"kind": "grammar", "message": "Repeated word"});
         assert_eq!(crate::canvas::issue_heading(&grammar), tl!("Repeated word"));
+    }
+
+    /// #5396: an active download row in Your languages uses the same button gap inside column 2
+    /// as measured for `col2_w`, keeping column 3 aligned in LTR and avoiding rightward overflow
+    /// in RTL even when a localized "Cancel" label pushes column 2 wider than `COL2_MIN_W`.
+    #[test]
+    fn your_languages_downloading_row_matches_measured_spacing() {
+        let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = ResetBackend;
+        struct HoldBackend {
+            base: FixedBackend,
+            release: (std::sync::Mutex<bool>, std::sync::Condvar),
+        }
+        impl Backend for HoldBackend {
+            fn index(&self) -> Result<Vec<packs::Pack>, String> {
+                self.base.index()
+            }
+            fn fetch_index(&self, cancel: &packs::Cancel) -> Result<Vec<packs::Pack>, String> {
+                self.base.fetch_index(cancel)
+            }
+            fn network_on(&self) -> bool {
+                self.base.network_on()
+            }
+            fn enable_network(&self) -> Result<(), String> {
+                self.base.enable_network()
+            }
+            fn install(&self, _pack: &packs::Pack, cancel: &packs::Cancel, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
+                progress(50, 100);
+                let (lock, cv) = &self.release;
+                let mut done = lock.lock().unwrap();
+                while !*done && !cancel.is_cancelled() {
+                    let (guard, _) = cv.wait_timeout(done, std::time::Duration::from_millis(20)).unwrap();
+                    done = guard;
+                }
+                Err("stopped test install".into())
+            }
+            fn remove(&self, locale: &str) -> Result<(), String> {
+                self.base.remove(locale)
+            }
+            fn packs_dir(&self) -> Option<std::path::PathBuf> {
+                self.base.packs_dir()
+            }
+            fn installed(&self) -> Vec<packs::Installed> {
+                self.base.installed()
+            }
+        }
+        struct DropHold<'a>(&'a HoldBackend);
+        impl Drop for DropHold<'_> {
+            fn drop(&mut self) {
+                *self.0.release.0.lock().unwrap() = true;
+                self.0.release.1.notify_all();
+                packs::cancel("nl");
+                for _ in 0..100 {
+                    if packs::installing().is_empty() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+
+        let hold = std::sync::Arc::new(HoldBackend {
+            base: FixedBackend { network: std::sync::atomic::AtomicBool::new(true), ..FixedBackend::sample() },
+            release: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+        });
+        let _drop_hold = DropHold(&hold);
+        packs::set_backend(Some(hold.clone() as std::sync::Arc<dyn Backend>));
+        packs::set_background(Some(std::sync::Arc::new(|| {})));
+
+        let doc = wordcraft_doc::Document::from_text("Hallo\nBonjour");
+        let mut a = WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
+        for (para, lang) in [(0, "nl-NL"), (1, "fr-FR")] {
+            a.run("caret.set", json!({"pos": {"block": para, "off": 0}})).unwrap();
+            a.run("select.paragraph", json!({})).unwrap();
+            a.run("review.language", json!({"lang": lang})).unwrap();
+        }
+        packs::start_install("nl").unwrap();
+        for _ in 0..200 {
+            if packs::installing().iter().any(|p| p.locale == "nl" && p.done == 50) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(packs::installing().iter().any(|p| p.locale == "nl"), "install must remain in flight");
+
+        let long_cancel_en = crate::i18n::fixture_lang("en", "\tCancel\tCancel language installation now\n");
+        let long_cancel_ar = crate::i18n::fixture_lang("ar", "\tCancel\tCancel language installation now\n");
+
+        for lang in [long_cancel_en, long_cancel_ar] {
+            crate::i18n::set_current(lang);
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts(&ctx);
+            crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+            crate::rtl::sync(&ctx);
+            let rtl = lang.rtl();
+            let mut set_rects = Vec::new();
+            let container = egui::Rect::from_min_max(egui::pos2(200.0, 20.0), egui::pos2(800.0, 480.0));
+            let align = if rtl { egui::Align::Max } else { egui::Align::Min };
+            for _ in 0..3 {
+                set_rects.clear();
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 500.0))),
+                        focused: true,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        crate::rtl::root(ui, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(container).layout(egui::Layout::top_down(align)), |ui| {
+                                super::your_languages_section(&mut a, ui);
+                            });
+                        });
+                    },
+                );
+                out.textures_delta.clear();
+                let set_default = crate::i18n::t("Set as default");
+                for shape in &out.shapes {
+                    fn visit(shape: &egui::Shape, needle: &str, out: &mut Vec<(String, egui::Rect)>) {
+                        match shape {
+                            egui::Shape::Text(t) if t.galley.text() == needle => {
+                                out.push((t.galley.text().to_string(), egui::Rect::from_min_size(t.pos, t.galley.size())));
+                            }
+                            egui::Shape::Vec(v) => v.iter().for_each(|s| visit(s, needle, out)),
+                            _ => {}
+                        }
+                    }
+                    visit(&shape.shape, set_default, &mut set_rects);
+                }
+            }
+            assert_eq!(set_rects.len(), 2, "both Dutch and French rows must render Set as default: {set_rects:?}");
+            let dx = (set_rects[0].1.left() - set_rects[1].1.left()).abs();
+            assert!(dx <= 0.5, "rtl={rtl}: Set as default buttons misaligned across rows ({set_rects:?})");
+            if rtl {
+                assert!(
+                    set_rects.iter().all(|(_, r)| r.right() <= container.right() + 0.5),
+                    "rtl={rtl}: column 3 overflowed container right {}: {set_rects:?}",
+                    container.right()
+                );
+            }
+        }
+        crate::i18n::set_current(crate::i18n::Lang::EN);
     }
 }
