@@ -149,12 +149,11 @@ fn docx_embedding(family: &str, font: Option<(&[u8], &str)>, text: &str) -> Vec<
     }
     table.push_str("</w:font></w:fonts>");
     files.push(("word/fontTable.xml".into(), table.into_bytes()));
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, bytes) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, &bytes).unwrap();
+        zip.add(&name, &bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 #[test]
