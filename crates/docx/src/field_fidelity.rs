@@ -1,261 +1,146 @@
 //! Range-field `w:ffData` (`form`) and result `w:rPrChange` preservation around `craft-docx`.
 
-use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use craft_xml::{El, Node};
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::{Block, Blocks, Document};
 
 const RANGE_MARKER: &str = "ADDIN __WC_RANGE__ ";
+const ZIP_LIMITS: craft_zip::Limits = craft_zip::Limits { max_entries: 10_000, max_total_bytes: 256 << 20 };
 
-fn attr_str(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
-    for a in e.attributes().flatten() {
-        if a.key.as_ref() == key || a.key.local_name().as_ref() == key {
-            return String::from_utf8(a.value.into_owned()).ok();
-        }
-    }
-    None
+#[derive(Default)]
+struct FieldScan {
+    form: String,
+    in_result: bool,
+    has_rpr_change: bool,
 }
 
-/// Extract `<w:ffData>...</w:ffData>` strings from each `<w:fldChar w:fldCharType="begin">` in
-/// document order, and mark complex fields whose result runs carry `<w:rPrChange` so `craft-docx`
-/// keeps them as range fields (`FieldStart`..`FieldEnd`).
-fn inspect_and_mark_fields_xml(xml: &str) -> (Vec<String>, Option<String>) {
-    if !xml.contains("fldChar") {
-        return (Vec::new(), None);
-    }
-    // First pass: for each top-level complex field (`begin`..`end`), record:
-    // 1) any `<w:ffData>...</w:ffData>` inside its `begin`
-    // 2) whether its result (between `separate` and `end`) contains `<w:rPrChange`
-    let mut reader = quick_xml::Reader::from_str(xml);
-    let mut buf = Vec::new();
-    let mut forms = Vec::new();
-    let mut needs_range_marker = Vec::new();
-
-    #[derive(Default)]
-    struct FieldScan {
-        in_begin: bool,
-        in_ffdata: usize,
-        ffdata_buf: Vec<u8>,
-        in_result: bool,
-        has_rpr_change: bool,
-    }
-    let mut stack: Vec<FieldScan> = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                if let Some(top) = stack.last_mut()
-                    && top.in_begin
-                    && (e.name().as_ref() == b"w:ffData" || top.in_ffdata > 0)
-                {
-                    top.in_ffdata += 1;
-                    let mut w = quick_xml::Writer::new(&mut top.ffdata_buf);
-                    let _ = w.write_event(Event::Start(e.clone()));
-                    buf.clear();
-                    continue;
-                }
-                match e.name().as_ref() {
-                    b"w:fldChar" => match attr_str(e, b"w:fldCharType").as_deref() {
-                        Some("begin") => {
-                            stack.push(FieldScan { in_begin: true, ..Default::default() });
-                        }
-                        Some("separate") => {
-                            if let Some(top) = stack.last_mut() {
-                                top.in_result = true;
-                            }
-                        }
-                        Some("end") => {
-                            if let Some(done) = stack.pop() {
-                                forms.push(String::from_utf8(done.ffdata_buf).unwrap_or_default());
-                                needs_range_marker.push(done.has_rpr_change);
-                            }
-                        }
-                        _ => {}
-                    },
-                    b"w:rPrChange" => {
-                        if let Some(top) = stack.last_mut()
-                            && top.in_result
-                        {
-                            top.has_rpr_change = true;
-                        }
-                    }
-                    _ => {}
+fn scan_fields_el(el: &El, stack: &mut Vec<FieldScan>, forms: &mut Vec<String>, needs_range_marker: &mut Vec<bool>) {
+    match el.name.as_str() {
+        "w:fldChar" => match el.attr_or_plain("w:fldCharType") {
+            Some("begin") => {
+                let form = el.child("w:ffData").map_or_else(String::new, |ff| ff.to_xml());
+                stack.push(FieldScan { form, in_result: false, has_rpr_change: false });
+            }
+            Some("separate") => {
+                if let Some(top) = stack.last_mut() {
+                    top.in_result = true;
                 }
             }
-            Ok(Event::Empty(ref e)) => {
-                if let Some(top) = stack.last_mut()
-                    && top.in_begin
-                    && (e.name().as_ref() == b"w:ffData" || top.in_ffdata > 0)
-                {
-                    let mut w = quick_xml::Writer::new(&mut top.ffdata_buf);
-                    let _ = w.write_event(Event::Empty(e.clone()));
-                    buf.clear();
-                    continue;
-                }
-                match e.name().as_ref() {
-                    b"w:fldChar" => match attr_str(e, b"w:fldCharType").as_deref() {
-                        Some("begin") => {
-                            stack.push(FieldScan::default());
-                        }
-                        Some("separate") => {
-                            if let Some(top) = stack.last_mut() {
-                                top.in_result = true;
-                            }
-                        }
-                        Some("end") => {
-                            if let Some(done) = stack.pop() {
-                                forms.push(String::from_utf8(done.ffdata_buf).unwrap_or_default());
-                                needs_range_marker.push(done.has_rpr_change);
-                            }
-                        }
-                        _ => {}
-                    },
-                    b"w:rPrChange" => {
-                        if let Some(top) = stack.last_mut()
-                            && top.in_result
-                        {
-                            top.has_rpr_change = true;
-                        }
-                    }
-                    _ => {}
+            Some("end") => {
+                if let Some(done) = stack.pop() {
+                    forms.push(done.form);
+                    needs_range_marker.push(done.has_rpr_change);
                 }
             }
-            Ok(Event::End(ref e)) => {
-                if let Some(top) = stack.last_mut()
-                    && top.in_begin
-                    && top.in_ffdata > 0
-                {
-                    let mut w = quick_xml::Writer::new(&mut top.ffdata_buf);
-                    let _ = w.write_event(Event::End(e.clone()));
-                    top.in_ffdata -= 1;
-                    buf.clear();
-                    continue;
-                }
-                if e.name().as_ref() == b"w:fldChar"
-                    && let Some(top) = stack.last_mut()
-                {
-                    top.in_begin = false;
-                }
-            }
-            Ok(Event::Eof) | Err(_) => break,
-            Ok(ev) => {
-                if let Some(top) = stack.last_mut()
-                    && top.in_begin
-                    && top.in_ffdata > 0
-                {
-                    let mut w = quick_xml::Writer::new(&mut top.ffdata_buf);
-                    let _ = w.write_event(ev);
-                }
+            _ => {}
+        },
+        "w:rPrChange" => {
+            if let Some(top) = stack.last_mut()
+                && top.in_result
+            {
+                top.has_rpr_change = true;
             }
         }
-        buf.clear();
+        _ => {}
     }
+    for ch in el.elements() {
+        scan_fields_el(ch, stack, forms, needs_range_marker);
+    }
+}
 
+fn mark_fields_el(el: &mut El, needs_range_marker: &[bool], field_idx: &mut usize, active_marked: &mut bool) -> bool {
+    let mut changed = false;
+    match el.name.as_str() {
+        "w:fldChar" if el.attr_or_plain("w:fldCharType") == Some("begin") => {
+            *active_marked = needs_range_marker.get(*field_idx).copied().unwrap_or(false);
+            *field_idx += 1;
+        }
+        "w:instrText" if *active_marked => {
+            if let Some(Node::Text(t)) = el.children.first_mut() {
+                *t = format!("{RANGE_MARKER}{t}");
+            } else {
+                el.children.insert(0, Node::Text(RANGE_MARKER.to_string()));
+            }
+            *active_marked = false;
+            changed = true;
+        }
+        _ => {}
+    }
+    for ch in el.elements_mut() {
+        if mark_fields_el(ch, needs_range_marker, field_idx, active_marked) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn inspect_and_mark_fields_xml(data: &[u8]) -> (Vec<String>, Option<Vec<u8>>) {
+    let Ok(s) = std::str::from_utf8(data) else {
+        return (Vec::new(), None);
+    };
+    if !s.contains("fldChar") {
+        return (Vec::new(), None);
+    }
+    let Ok(mut root) = craft_xml::parse(data) else {
+        return (Vec::new(), None);
+    };
+    let mut stack = Vec::new();
+    let mut forms = Vec::new();
+    let mut needs_range_marker = Vec::new();
+    scan_fields_el(&root, &mut stack, &mut forms, &mut needs_range_marker);
     if !needs_range_marker.iter().any(|&b| b) {
         return (forms, None);
     }
-
-    // Second pass: prefix the first `<w:instrText>` of each marked complex field with `RANGE_MARKER`.
-    let mut reader = quick_xml::Reader::from_str(xml);
-    let mut writer = quick_xml::Writer::new(Vec::with_capacity(xml.len() + 64));
     let mut field_idx = 0usize;
     let mut active_marked = false;
-    let mut in_instr_text = false;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                match e.name().as_ref() {
-                    b"w:fldChar" if attr_str(&e, b"w:fldCharType").as_deref() == Some("begin") => {
-                        active_marked = needs_range_marker.get(field_idx).copied().unwrap_or(false);
-                        field_idx += 1;
-                    }
-                    b"w:instrText" if active_marked => {
-                        in_instr_text = true;
-                    }
-                    _ => {}
-                }
-                if writer.write_event(Event::Start(e)).is_err() {
-                    return (forms, None);
-                }
-            }
-            Ok(Event::Empty(e)) => {
-                if e.name().as_ref() == b"w:fldChar" && attr_str(&e, b"w:fldCharType").as_deref() == Some("begin") {
-                    active_marked = needs_range_marker.get(field_idx).copied().unwrap_or(false);
-                    field_idx += 1;
-                }
-                if writer.write_event(Event::Empty(e)).is_err() {
-                    return (forms, None);
-                }
-            }
-            Ok(Event::Text(e)) if in_instr_text && active_marked => {
-                let raw = String::from_utf8_lossy(e.as_ref());
-                let new_txt = format!("{RANGE_MARKER}{raw}");
-                let _ = writer.write_event(Event::Text(BytesText::from_escaped(&new_txt)));
-                active_marked = false;
-                in_instr_text = false;
-            }
-            Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"w:instrText" {
-                    in_instr_text = false;
-                }
-                if writer.write_event(Event::End(e)).is_err() {
-                    return (forms, None);
-                }
-            }
-            Ok(Event::Eof) => break,
-            Ok(ev) => {
-                if writer.write_event(ev).is_err() {
-                    return (forms, None);
-                }
-            }
-            Err(_) => return (forms, None),
-        }
-        buf.clear();
+    if !mark_fields_el(&mut root, &needs_range_marker, &mut field_idx, &mut active_marked) {
+        return (forms, None);
     }
-    (forms, String::from_utf8(writer.into_inner()).ok())
+    let mut out = String::with_capacity(data.len() + 64);
+    out.push_str(craft_xml::DECL_STANDALONE);
+    root.write_xml(&mut out);
+    (forms, Some(out.into_bytes()))
 }
 
 pub(crate) fn preprocess_read(bytes: &[u8]) -> (Vec<String>, Option<Vec<u8>>) {
-    let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
+    let Ok(mut archive) = craft_zip::Archive::open(bytes, ZIP_LIMITS) else {
         return (Vec::new(), None);
     };
     let mut entries = Vec::with_capacity(archive.len());
     let mut forms = Vec::new();
     let mut changed = false;
     for idx in 0..archive.len() {
-        let Ok(mut file) = archive.by_index(idx) else {
+        let Some(name) = archive.entry_name(idx).ok().flatten() else {
             return (Vec::new(), None);
         };
-        let name = file.name().to_string();
-        let mut data = Vec::new();
-        if std::io::Read::read_to_end(&mut file, &mut data).is_err() {
-            return (Vec::new(), None);
+        if archive.entry_is_dir(idx).ok().flatten().unwrap_or(false) {
+            continue;
         }
-        if name == "word/document.xml"
-            && let Ok(xml) = std::str::from_utf8(&data)
-        {
-            let (f, rewritten) = inspect_and_mark_fields_xml(xml);
+        let stored = archive.is_stored(&name).unwrap_or(false);
+        let Some(mut data) = archive.read(&name, craft_docx::MAX_XML_FILE as u64).ok().flatten() else {
+            return (Vec::new(), None);
+        };
+        if name == "word/document.xml" {
+            let (f, rewritten) = inspect_and_mark_fields_xml(&data);
             forms = f;
             if let Some(r) = rewritten {
-                data = r.into_bytes();
+                data = r;
                 changed = true;
             }
         }
-        entries.push((name, data));
+        let comp = if stored { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated };
+        entries.push((name, data, comp));
     }
     if !changed {
         return (forms, None);
     }
-    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(bytes.len() + 64)));
-    for (name, data) in entries {
-        if out.start_file(name, zip::write::SimpleFileOptions::default()).is_err() {
-            return (forms, None);
-        }
-        if std::io::Write::write_all(&mut out, &data).is_err() {
+    let mut out = craft_zip::Writer::new();
+    for (name, data, comp) in entries {
+        if out.add(&name, &data, comp).is_err() {
             return (forms, None);
         }
     }
-    (forms, out.finish().ok().map(|c| c.into_inner()))
+    (forms, out.finish().ok())
 }
 
 fn apply_forms_to_blocks(blocks: &mut Blocks, forms: &mut std::slice::Iter<'_, String>) {
@@ -327,46 +212,40 @@ fn collect_forms_from_blocks(blocks: &Blocks, out: &mut Vec<String>) {
     }
 }
 
-fn inject_forms_into_xml(xml: &str, forms: &[String]) -> Option<String> {
+fn inject_forms_el(el: &mut El, forms: &[String], idx: &mut usize) -> bool {
+    let mut changed = false;
+    if el.name == "w:fldChar" && el.attr_or_plain("w:fldCharType") == Some("begin") {
+        let cur_form = forms.get(*idx).map_or("", String::as_str);
+        *idx += 1;
+        if !cur_form.is_empty()
+            && el.child("w:ffData").is_none()
+            && let Ok(ff_el) = craft_xml::parse(cur_form.as_bytes())
+        {
+            el.children.push(Node::El(ff_el));
+            changed = true;
+        }
+    }
+    for ch in el.elements_mut() {
+        if inject_forms_el(ch, forms, idx) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn inject_forms_into_xml(data: &[u8], forms: &[String]) -> Option<Vec<u8>> {
     if !forms.iter().any(|f| !f.is_empty()) {
         return None;
     }
-    let mut reader = quick_xml::Reader::from_str(xml);
-    let mut writer = quick_xml::Writer::new(Vec::with_capacity(xml.len() + 256));
-    let mut buf = Vec::new();
+    let mut root = craft_xml::parse(data).ok()?;
     let mut idx = 0usize;
-    let mut changed = false;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                if e.name().as_ref() == b"w:fldChar" && attr_str(&e, b"w:fldCharType").as_deref() == Some("begin") {
-                    idx += 1;
-                }
-                writer.write_event(Event::Start(e)).ok()?;
-            }
-            Ok(Event::Empty(e)) => {
-                if e.name().as_ref() == b"w:fldChar" && attr_str(&e, b"w:fldCharType").as_deref() == Some("begin") {
-                    let cur_form = forms.get(idx).map(String::as_str).unwrap_or("");
-                    idx += 1;
-                    if !cur_form.is_empty() {
-                        writer.write_event(Event::Start(e)).ok()?;
-                        writer.get_mut().extend_from_slice(cur_form.as_bytes());
-                        writer.write_event(Event::End(BytesEnd::new("w:fldChar"))).ok()?;
-                        changed = true;
-                        buf.clear();
-                        continue;
-                    }
-                }
-                writer.write_event(Event::Empty(e)).ok()?;
-            }
-            Ok(Event::Eof) => break,
-            Ok(ev) => writer.write_event(ev).ok()?,
-            Err(_) => return None,
-        }
-        buf.clear();
+    if !inject_forms_el(&mut root, forms, &mut idx) {
+        return None;
     }
-    if changed { String::from_utf8(writer.into_inner()).ok() } else { None }
+    let mut out = String::with_capacity(data.len() + 256);
+    out.push_str(craft_xml::DECL_STANDALONE);
+    root.write_xml(&mut out);
+    Some(out.into_bytes())
 }
 
 pub(crate) fn postprocess_write(doc: &Document, bytes: Vec<u8>) -> Vec<u8> {
@@ -375,47 +254,39 @@ pub(crate) fn postprocess_write(doc: &Document, bytes: Vec<u8>) -> Vec<u8> {
     if !forms.iter().any(|f| !f.is_empty()) {
         return bytes;
     }
-    let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())) else {
+    let Ok(mut archive) = craft_zip::Archive::open(&bytes, ZIP_LIMITS) else {
         return bytes;
     };
     let mut entries = Vec::with_capacity(archive.len());
     let mut changed = false;
     for idx in 0..archive.len() {
-        let (name, mut data) = {
-            let Ok(mut file) = archive.by_index(idx) else {
-                drop(archive);
-                return bytes;
-            };
-            let name = file.name().to_string();
-            let mut data = Vec::new();
-            if std::io::Read::read_to_end(&mut file, &mut data).is_err() {
-                drop(file);
-                drop(archive);
-                return bytes;
-            }
-            (name, data)
+        let Some(name) = archive.entry_name(idx).ok().flatten() else {
+            return bytes;
+        };
+        if archive.entry_is_dir(idx).ok().flatten().unwrap_or(false) {
+            continue;
+        }
+        let stored = archive.is_stored(&name).unwrap_or(false);
+        let Some(mut data) = archive.read(&name, craft_docx::MAX_XML_FILE as u64).ok().flatten() else {
+            return bytes;
         };
         if name == "word/document.xml"
-            && let Ok(xml) = std::str::from_utf8(&data)
-            && let Some(rewritten) = inject_forms_into_xml(xml, &forms)
+            && let Some(rewritten) = inject_forms_into_xml(&data, &forms)
         {
-            data = rewritten.into_bytes();
+            data = rewritten;
             changed = true;
         }
-        entries.push((name, data));
+        let comp = if stored { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated };
+        entries.push((name, data, comp));
     }
-    drop(archive);
     if !changed {
         return bytes;
     }
-    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(bytes.len() + 256)));
-    for (name, data) in entries {
-        if out.start_file(name, zip::write::SimpleFileOptions::default()).is_err() {
-            return bytes;
-        }
-        if std::io::Write::write_all(&mut out, &data).is_err() {
+    let mut out = craft_zip::Writer::new();
+    for (name, data, comp) in entries {
+        if out.add(&name, &data, comp).is_err() {
             return bytes;
         }
     }
-    out.finish().map(|c| c.into_inner()).unwrap_or(bytes)
+    out.finish().unwrap_or(bytes)
 }
