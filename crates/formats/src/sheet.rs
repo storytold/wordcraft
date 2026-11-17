@@ -175,6 +175,10 @@ fn format_value(v: &Value) -> String {
 /// `yyyy-mm-dd hh:mm[:ss]`, `hh:mm[:ss]`), booleans as `TRUE`/`FALSE`, and strings, percentages
 /// and currencies as the cell's text (their value when the text is blank). A value that does not
 /// parse falls back to the text. A covered cell under a merged cell is blank.
+///
+/// A float merges its value, not the text its number format shows: a ZIP code `01234` shown
+/// through the format `00000` merges as `1234`, and `1,234` shown with a thousands separator
+/// merges as `1234`.
 fn ods_value(c: &craft_ods::Cell) -> String {
     use craft_ods::ValueType as T;
     if c.covered {
