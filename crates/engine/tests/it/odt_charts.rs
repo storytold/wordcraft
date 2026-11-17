@@ -2,8 +2,6 @@
 //! WordCraft draws and edits: Chart Design's commands change it like a chart made here. The ODT
 //! is original and synthetic, shaped like LibreOffice's.
 
-use std::io::Write;
-
 use serde_json::json;
 use wordcraft_doc::chart::ChartType;
 use wordcraft_doc::para::InlineObject;
@@ -17,14 +15,12 @@ fn odt() -> Vec<u8> {
     );
     // A well-formed chart part, its prefixes declared as LibreOffice writes them.
     let chart = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"><office:body><office:chart><chart:chart chart:class="chart:line"><chart:title><text:p>Visits</text:p></chart:title><chart:plot-area><chart:axis chart:dimension="x"><chart:categories table:cell-range-address="local-table.$A$2:.$A$4"/></chart:axis><chart:series chart:values-cell-range-address="local-table.$B$2:.$B$4" chart:label-cell-address="local-table.$B$1"/></chart:plot-area><table:table table:name="local-table"><table:table-header-rows><table:table-row><table:table-cell/><table:table-cell office:value-type="string"><text:p>Site</text:p></table:table-cell></table:table-row></table:table-header-rows><table:table-rows><table:table-row><table:table-cell office:value-type="string"><text:p>Mon</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="3"/></table:table-row><table:table-row><table:table-cell office:value-type="string"><text:p>Tue</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="5"/></table:table-row><table:table-row><table:table-cell office:value-type="string"><text:p>Wed</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="4"/></table:table-row></table:table-rows></table:table></chart:chart></office:chart></office:body></office:document-content>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str()), ("Object 1/content.xml", chart)]
     {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 /// The document's charts: their type, title, and whether they're drawn.
@@ -55,20 +51,18 @@ fn an_odt_chart_opens_drawn_and_editable() {
 fn a_chart_in_a_group_opens_drawn() {
     // The chart is a member of a drawing group (`draw:g`): it is drawn too.
     let odt = odt();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&odt)).unwrap();
-    let chart = std::io::read_to_string(z.by_name("Object 1/content.xml").unwrap()).unwrap();
+    let mut z = craft_zip::Archive::open(&odt, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let chart = String::from_utf8(z.read("Object 1/content.xml", 16 << 20).unwrap().unwrap()).unwrap();
     let content = format!(
         r#"<office:document-content {NS}><office:body><office:text><text:p>Group <draw:g text:anchor-type="as-char"><draw:frame svg:x="0in" svg:y="0in" svg:width="3in" svg:height="2in"><draw:object xlink:href="./Object 1"/></draw:frame><draw:rect svg:x="3in" svg:y="0in" svg:width="1in" svg:height="1in"/></draw:g></text:p></office:text></office:body></office:document-content>"#
     );
-    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut w = craft_zip::Writer::new();
     for (name, data) in
         [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str()), ("Object 1/content.xml", chart.as_str())]
     {
-        w.start_file(name, o).unwrap();
-        w.write_all(data.as_bytes()).unwrap();
+        w.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let doc = io::open_bytes("group.odt", &w.finish().unwrap().into_inner()).unwrap();
+    let doc = io::open_bytes("group.odt", &w.finish().unwrap()).unwrap();
     let members: Vec<bool> = doc
         .body
         .iter()
