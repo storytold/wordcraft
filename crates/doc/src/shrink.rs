@@ -318,7 +318,13 @@ pub fn fit_document_typography(doc: &mut Document, delta_pt: f32, space_factor: 
         }
     }
 
-    // Default paragraph formatting
+    // Default paragraph formatting. A file with no `w:pPrDefault` is laid out with Word's own
+    // defaults (8 pt after), which have no field here to scale: they are written out first, so
+    // the layout before the shrink stays the same and the saved file says what was shown.
+    if !st.default_para_present {
+        st.default_para = st.para_defaults();
+        st.default_para_present = true;
+    }
     scale_para_props(&mut st.default_para, space_factor);
 
     // All named styles (excluding header/footer styles if any)
@@ -514,6 +520,22 @@ mod tests {
         assert_eq!(p_after.props.space_after, Some(10.8));
         // 1.15 * 0.9 = 1.035 -> clamped to safe line spacing floor (1.15 * 0.94 = 1.081) -> ceil hundredth 1.09
         assert_eq!(p_after.props.line_spacing, Some(LineSpacing::Multiple(1.09)));
+    }
+
+    /// #6219 review: a document with no `w:pPrDefault` is laid out with Word's own 8 pt after,
+    /// which tightening the spacing must shrink too.
+    #[test]
+    fn spacing_shrinks_words_own_defaults_when_the_file_has_none() {
+        let mut doc = Document::new();
+        let st = Arc::make_mut(&mut doc.styles);
+        st.default_para = Default::default();
+        st.default_para_present = false;
+        doc.body = vec![para_block(Paragraph::with_text("Body", CharProps::default()))];
+        let after = |doc: &Document| doc.styles.resolve_para(&doc.body[0].as_para().unwrap().props).space_after;
+        assert_eq!(after(&doc), 8.0);
+        fit_document_typography(&mut doc, 0.0, 0.9);
+        assert!((after(&doc) - 7.2).abs() < 1e-4, "{}", after(&doc));
+        assert!(doc.styles.default_para_present, "the saved file says what was shown");
     }
 
     #[test]

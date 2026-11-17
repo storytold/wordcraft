@@ -1,5 +1,6 @@
 # File-format parity with Microsoft Word
 
+> **2026-11-17:** A `.docx` with no `w:pPrDefault` gets Word's own 8 pt after each paragraph; Word 2003 XML keeps none (#6219).
 > **2026-11-08:** `wordcraft-cli convert --strict` refuses a PDF or PNG that would draw an empty box for a character or leave out a picture, including those a DOCX names outside the file or not at all (#6005); never fetched.
 > **2026-11-05:** A Word template opened from the file manager starts a new document based on it, and is never saved over (#3433).
 > **2026-11-05:** Strict Open XML documents open with their shapes, text boxes, groups and canvases (#3548).
@@ -154,7 +155,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Glossary document (building blocks) | ✅ | ✅ | `w:docPart` entries (name, style, gallery, category, types, behaviours, description, guid, body) are read into `Document::glossary` and offered by Insert › Quick Parts and AutoText; `save` with `"in": "document"` stores one in the file. An untouched glossary is written back byte for byte with its own parts (styles, settings, fonts…); an edited one, or one whose parts weren't kept, is written from the model as `word/glossary1.xml` with copies of the document's styles and numbering. The glossary's own styles, settings and fonts, text boxes inside entries, and the notes and comments of a selection saved into the document don't survive an edit. Tests: `crates/docx/tests/it/glossary.rs` |
 | Sub-documents | ❌ | ❌ | |
 | Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard. Failed zip entries count against the size limit, case variants of a part name are one part, embedded fonts and charts are written within budgets, and Flat OPC inlines kept XML only when it is one well-formed element (2026-10-22) |
-| Document paragraph defaults (`w:pPrDefault`) | ✅ | ✅ | Omission and explicit empty defaults remain distinct across repeated saves; nonempty defaults and later default-spacing edits are written |
+| Document paragraph defaults (`w:pPrDefault`) | ✅ | ✅ | Omission and explicit empty defaults remain distinct across repeated saves; nonempty defaults and later default-spacing edits are written. A file that leaves `w:pPrDefault` out is laid out with Word's own paragraph defaults, 8 pt after (its Normal template's, measured in Word for Microsoft 365 on Windows); a Word 2003 XML Document, which has no document defaults, keeps none, as Word 2003 did; Fit One Page writes Word's defaults out before tightening them. The run defaults Word fills in (12 pt, the theme's body fonts, Times New Roman for a default naming no font) need storytold/craft-libs#1293 and a craft-docx pin that includes it |
 
 ## Saving many content controls
 

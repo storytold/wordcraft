@@ -70,7 +70,14 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Docu
 /// Read a Word XML file (`.xml`).
 pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
     let shared = craft_docx::read_xml(bytes)?;
-    from_shared_model(shared)
+    let mut doc = from_shared_model(shared)?;
+    // A Word 2003 XML Document has no document defaults, and Word 2003 laid its paragraphs out
+    // with none: the styles part craft-docx converts it into has no `w:pPrDefault`, which would
+    // otherwise read as Word's own 8 pt after.
+    if sniff_xml(bytes) == XmlKind::WordMl2003 {
+        std::sync::Arc::make_mut(&mut doc.styles).default_para_present = true;
+    }
+    Ok(doc)
 }
 
 /// Write a document as `.docx`.

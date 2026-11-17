@@ -151,6 +151,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-17: DOCX: a file whose `w:docDefaults` leaves out `w:pPrDefault` is laid out with Word's own paragraph defaults, 8 pt after each paragraph, instead of none; Word 2003 XML, which has no document defaults, keeps none, and Fit One Page tightens Word's defaults too (#6219). Word's run defaults for such files need storytold/craft-libs#1293. Readiness estimates unchanged.
+
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
 
