@@ -100,6 +100,32 @@ fn east_asian_text_of_any_size_keeps_its_size_plus_the_grid_adjustment() {
 }
 
 #[test]
+fn snap_to_chars_keeps_every_character_in_whole_cells() {
+    // `snapToChars` exists to keep characters in whole cells: East Asian text takes as many cells
+    // as its size needs at the default size (rounded), Latin text as many as its advance fills,
+    // so in a mixed line every character starts on a cell boundary whatever its size.
+    for scale in [1.0, 1.375, 0.75, 2.0] {
+        let (mut d, size, pitch) = tight_grid("关于abc通知");
+        d.last_section.doc_grid.as_mut().unwrap().kind = DocGridType::SnapToChars;
+        if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+            p.runs[0].props.size = Some(size * scale);
+        }
+        let g = first_para(&lay(&d));
+        let line = &g.lines[0];
+        let text = "关于abc通知";
+        for (k, c) in g.clusters.iter().enumerate() {
+            let cells = c.adv / pitch;
+            assert!((cells - cells.round()).abs() < 0.001 && cells >= 0.999, "cluster {k} at {} pt: {cells} cells", size * scale);
+            if text[c.start..].starts_with(|ch: char| para::is_east_asian(ch)) {
+                assert!((cells - scale.round().max(1.0)).abs() < 0.001, "ideograph at {} pt takes {cells} cells", size * scale);
+            }
+            let x = (line.xs[k] - line.xs[0]) / pitch;
+            assert!((x - x.round()).abs() < 0.001, "cluster {k} starts {x} cells in");
+        }
+    }
+}
+
+#[test]
 fn character_indents_count_grid_cells() {
     // `w:firstLineChars="200"` on a character grid is two cells, not two font sizes: on a pitch
     // under the font size the first line must not lose a character to the indent.
