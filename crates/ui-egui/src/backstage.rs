@@ -188,13 +188,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(0, 30))).show(ui, |ui| {
         // The side padding sits inside the pages, so the scroll area reaches the window's edge.
         let pad = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 0));
-        // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
-        if app.ui.backstage_page == "print" {
+        // The Print page fills the pane and scrolls its settings and its preview itself (#1156)
+        // when at least the settings column fits; narrower windows fall through to sideways scroll.
+        if app.ui.backstage_page == "print" && ui.available_width() >= 80.0 + crate::print_page::SETTINGS_WIDTH {
             pad.show(ui, |ui| crate::rtl::root(ui, |ui| export_page(app, ui)));
             return;
         }
         // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
-        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+        // A page wider than a narrow window scrolls sideways instead of being cut off, with that bar
+        // at the bottom of the window rather than under a short page (#5396).
+        let page = app.ui.backstage_page.clone();
+        crate::rtl::scroll_both(ui, &page, |ui| {
             pad.show(ui, |ui| {
                 crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
                     "home" => home_page(app, ui),
@@ -207,7 +211,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     "options" => crate::options::page(app, ui),
                     _ => home_page(app, ui),
                 })
-            })
+            });
         });
     });
 }
@@ -837,15 +841,42 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// File › Info: document properties and protection at the reading start, with statistics beside them.
 fn info_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Info");
     let info = app.session.run("file.info", &json!({})).unwrap_or_default();
-    // Properties at the reading start, so at the right in a mirrored interface, Statistics after.
-    let (first, second) = if crate::rtl::on() { (1, 0) } else { (0, 1) };
-    ui.columns(2, |cols| {
-        crate::rtl::root(&mut cols[first], |ui| info_properties(app, ui, &info));
-        crate::rtl::root(&mut cols[second], |ui| info_statistics(ui, &info));
+    let rtl = crate::rtl::flows(ui);
+    let row = ui.available_rect_before_wrap();
+    let gap = 32.0;
+    let half = ((row.width() - gap) * 0.5).max(0.0);
+    let prop_w = half.max(360.0);
+    let align = if rtl { egui::Align::Max } else { egui::Align::Min };
+    let layout = egui::Layout::top_down(align);
+    let col1_max = if rtl {
+        Rect::from_min_max(pos2(row.max.x - prop_w, row.min.y), row.max)
+    } else {
+        Rect::from_min_max(row.min, pos2(row.min.x + prop_w, row.max.y))
+    };
+    let col1 = ui.scope_builder(egui::UiBuilder::new().max_rect(col1_max).layout(layout), |ui| {
+        ui.allocate_space(vec2(prop_w, 0.0));
+        info_properties(app, ui, &info);
     });
+    // Place Statistics strictly past the measured Properties column so wide fields or button
+    // pairs never paint over Statistics in either direction; Backstage scrolls sideways when narrow.
+    let col1_rect = col1.response.rect;
+    let stat_w = (row.width() - gap - col1_rect.width()).max(240.0);
+    let col2_max = if rtl {
+        let right = col1_rect.min.x - gap;
+        Rect::from_min_max(pos2(right - stat_w, row.min.y), pos2(right, row.max.y))
+    } else {
+        let left = col1_rect.max.x + gap;
+        Rect::from_min_max(pos2(left, row.min.y), pos2(left + stat_w, row.max.y))
+    };
+    let col2 = ui.scope_builder(egui::UiBuilder::new().max_rect(col2_max).layout(layout), |ui| {
+        ui.allocate_space(vec2(stat_w, 0.0));
+        info_statistics(ui, &info);
+    });
+    ui.advance_cursor_after_rect(col1_rect.union(col2.response.rect));
 }
 
 fn info_properties(app: &mut WordApp, ui: &mut Ui, info: &serde_json::Value) {
