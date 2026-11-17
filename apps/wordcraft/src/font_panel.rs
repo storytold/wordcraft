@@ -289,6 +289,30 @@ impl FontPanel {
     pub fn change_attributes_for_test(&self, changed: &NSDictionary<NSString, AnyObject>) {
         self.target.send(Pick::from_attributes(changed));
     }
+
+    /// What the font manager's Bigger, Smaller, Bold… items do, for `tests/mac_font_panel.rs`.
+    #[allow(dead_code, unsafe_code)]
+    pub fn modify_font_for_test(&self, action: objc2_app_kit::NSFontAction) {
+        let mtm = self.target.mtm();
+        let sender = objc2_app_kit::NSButton::new(mtm);
+        sender.setTag(action.0 as isize);
+        // SAFETY: `modifyFont:` reads only the sender's tag, and the sender is a control we made.
+        unsafe { NSFontManager::sharedFontManager(mtm).modifyFont(Some(&sender)) };
+    }
+
+    /// The controls the panel would show, asked of the responder chain as the panel asks, for
+    /// `tests/mac_font_panel.rs`.
+    #[allow(dead_code, unsafe_code)]
+    pub fn modes_for_test(&self) -> usize {
+        let mtm = self.target.mtm();
+        let panel = NSFontPanel::sharedFontPanel(mtm);
+        // SAFETY: `targetForAction:` only looks the selector up; `validModesForFontPanel:` takes the
+        // panel and returns its mode mask.
+        unsafe {
+            let Some(target) = NSApplication::sharedApplication(mtm).targetForAction(sel!(validModesForFontPanel:)) else { return 0 };
+            msg_send![&target, validModesForFontPanel: &*panel]
+        }
+    }
 }
 
 #[allow(unsafe_code)]
@@ -302,6 +326,8 @@ fn set_targets(mtm: MainThreadMarker, target: &FontTarget) {
         let colors = NSColorPanel::sharedColorPanel(mtm);
         colors.setTarget(Some(target));
         colors.setAction(Some(sel!(changeColor:)));
+        // A drag in a picker is one pick (one undo step), sent when it ends.
+        colors.setContinuous(false);
         // The panel asks `validModesForFontPanel:` of the responder chain, not of the target; keep
         // whatever followed the app.
         let app = NSApplication::sharedApplication(mtm);
