@@ -4031,3 +4031,30 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
 }
+
+/// #6588: Ctrl+arrows and Ctrl+Backspace/Delete take a word with a typographic apostrophe whole,
+/// as they take `l'anno`. AutoCorrect turns the typed `'` into `’`, and `dell’Italia` then
+/// stopped at it: three steps, `dell` | `’` | `Italia`.
+#[test]
+fn word_moves_and_deletes_take_a_typographic_apostrophe() {
+    let mut a = s();
+    typ(&mut a, "Va dell'Italia bene");
+    let text = |s: &Session| s.doc.para_at(&Pos::body(0, 0)).map(|p| p.text.clone()).unwrap_or_default();
+    assert_eq!(text(&a), "Va dell’Italia bene", "AutoCorrect typed a typographic apostrophe");
+    let bene = text(&a).find("bene").unwrap();
+    run(&mut a, "caret.docStart", json!({}));
+    run(&mut a, "caret.wordRight", json!({}));
+    run(&mut a, "caret.wordRight", json!({}));
+    assert_eq!(a.sel.focus.off, bene, "Ctrl+Right goes over `dell’Italia ` in one step");
+    run(&mut a, "caret.wordLeft", json!({}));
+    assert_eq!(a.sel.focus.off, 3, "Ctrl+Left goes back to the start of `dell’Italia`");
+    run(&mut a, "caret.docEnd", json!({}));
+    run(&mut a, "text.deleteWordBack", json!({}));
+    run(&mut a, "text.deleteWordBack", json!({}));
+    assert_eq!(text(&a), "Va ", "Ctrl+Backspace deletes `dell’Italia ` whole");
+    let mut b = s();
+    typ(&mut b, "l'anno più");
+    run(&mut b, "caret.docStart", json!({}));
+    run(&mut b, "text.deleteWordForward", json!({}));
+    assert_eq!(text(&b), "più", "Ctrl+Delete deletes `l’anno ` whole");
+}
