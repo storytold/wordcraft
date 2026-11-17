@@ -1,5 +1,6 @@
 //! Bounded conversion between craft-wordmodel and WordCraft's document model.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use craft_docx::DocxError;
@@ -29,24 +30,29 @@ where
 // From Shared Model -> WordCraft Document
 // ---------------------------------------------------------------------------
 
-fn blocks_from_shared(source: craft_wordmodel::Blocks) -> Result<wordcraft_doc::Blocks, DocxError> {
+type GraphicCache = HashMap<usize, Arc<wordcraft_doc::graphic::Graphic>>;
+
+fn blocks_from_shared(source: craft_wordmodel::Blocks, graphics: &mut GraphicCache) -> Result<wordcraft_doc::Blocks, DocxError> {
     source
         .into_iter()
         .map(|block| {
             let block = Arc::try_unwrap(block).unwrap_or_else(|shared| (*shared).clone());
-            block_value_from_shared(block).map(Arc::new)
+            block_value_from_shared(block, graphics).map(Arc::new)
         })
         .collect()
 }
 
-fn block_value_from_shared(source: craft_wordmodel::Block) -> Result<wordcraft_doc::Block, DocxError> {
+fn block_value_from_shared(source: craft_wordmodel::Block, graphics: &mut GraphicCache) -> Result<wordcraft_doc::Block, DocxError> {
     match source {
-        craft_wordmodel::Block::Para(paragraph) => paragraph_value_from_shared(paragraph).map(wordcraft_doc::Block::Para),
-        craft_wordmodel::Block::Table(table) => table_value_from_shared(table).map(wordcraft_doc::Block::Table),
+        craft_wordmodel::Block::Para(paragraph) => paragraph_value_from_shared(paragraph, graphics).map(wordcraft_doc::Block::Para),
+        craft_wordmodel::Block::Table(table) => table_value_from_shared(table, graphics).map(wordcraft_doc::Block::Table),
     }
 }
 
-fn paragraph_value_from_shared(source: craft_wordmodel::para::Paragraph) -> Result<wordcraft_doc::para::Paragraph, DocxError> {
+fn paragraph_value_from_shared(
+    source: craft_wordmodel::para::Paragraph,
+    graphics: &mut GraphicCache,
+) -> Result<wordcraft_doc::para::Paragraph, DocxError> {
     let craft_wordmodel::para::Paragraph { text, runs, props, mark, objects, section, .. } = source;
     let mut paragraph = wordcraft_doc::para::Paragraph::new();
     paragraph.text = text;
@@ -54,12 +60,15 @@ fn paragraph_value_from_shared(source: craft_wordmodel::para::Paragraph) -> Resu
         runs.into_iter().map(|run| Ok(wordcraft_doc::para::Run { len: run.len, props: convert(run.props)? })).collect::<Result<_, DocxError>>()?;
     paragraph.props = convert(props)?;
     paragraph.mark = convert(mark)?;
-    paragraph.objects = objects.into_iter().map(object_value_from_shared).collect::<Result<_, _>>()?;
+    paragraph.objects = objects.into_iter().map(|o| object_value_from_shared(o, graphics)).collect::<Result<_, _>>()?;
     paragraph.section = section.map(|section| convert(*section).map(Box::new)).transpose()?;
     Ok(paragraph)
 }
 
-fn object_value_from_shared(source: craft_wordmodel::para::InlineObject) -> Result<wordcraft_doc::para::InlineObject, DocxError> {
+fn object_value_from_shared(
+    source: craft_wordmodel::para::InlineObject,
+    graphics: &mut GraphicCache,
+) -> Result<wordcraft_doc::para::InlineObject, DocxError> {
     use craft_wordmodel::para::InlineObject as Source;
     use wordcraft_doc::para::InlineObject as Target;
 
@@ -74,49 +83,79 @@ fn object_value_from_shared(source: craft_wordmodel::para::InlineObject) -> Resu
             fx: convert(fx)?,
             ole: ole.map(|o| convert(Arc::try_unwrap(o).unwrap_or_else(|s| (*s).clone())).map(Arc::new)).transpose()?,
         }),
+        Source::Graphic { w, h, alt, float, graphic } => {
+            let key = Arc::as_ptr(&graphic) as usize;
+            let graphic = if let Some(cached) = graphics.get(&key) {
+                Arc::clone(cached)
+            } else {
+                let converted: Arc<wordcraft_doc::graphic::Graphic> = Arc::new(convert(Arc::try_unwrap(graphic).unwrap_or_else(|s| (*s).clone()))?);
+                graphics.insert(key, Arc::clone(&converted));
+                converted
+            };
+            Ok(Target::Graphic { w, h, alt, float: convert(float)?, graphic })
+        }
+        // This model has no picture frame shape: DrawingML's `frame` preset is read as a
+        // rectangle, without the frame's border width.
+        mut shape @ Source::Shape { kind: craft_wordmodel::para::ShapeKind::Frame, .. } => {
+            if let Source::Shape { kind, extra, .. } = &mut shape {
+                *kind = craft_wordmodel::para::ShapeKind::Rectangle;
+                extra.corner = None;
+            }
+            convert(shape)
+        }
         Source::Group { w, h, float, ch_w, ch_h, children, canvas } => Ok(Target::Group {
             w,
             h,
             float: convert(float)?,
             ch_w,
             ch_h,
-            children: children.into_iter().map(group_child_value_from_shared).collect::<Result<_, _>>()?,
+            children: children.into_iter().map(|c| group_child_value_from_shared(c, graphics)).collect::<Result<_, _>>()?,
             canvas: canvas.map(convert).transpose()?,
         }),
         other => convert(other),
     }
 }
 
-fn group_child_value_from_shared(source: craft_wordmodel::para::GroupChild) -> Result<wordcraft_doc::para::GroupChild, DocxError> {
-    Ok(wordcraft_doc::para::GroupChild { x: source.x, y: source.y, obj: object_value_from_shared(source.obj)? })
+fn group_child_value_from_shared(
+    source: craft_wordmodel::para::GroupChild,
+    graphics: &mut GraphicCache,
+) -> Result<wordcraft_doc::para::GroupChild, DocxError> {
+    Ok(wordcraft_doc::para::GroupChild { x: source.x, y: source.y, obj: object_value_from_shared(source.obj, graphics)? })
 }
 
-fn table_value_from_shared(source: craft_wordmodel::table::Table) -> Result<wordcraft_doc::table::Table, DocxError> {
+fn table_value_from_shared(source: craft_wordmodel::table::Table, graphics: &mut GraphicCache) -> Result<wordcraft_doc::table::Table, DocxError> {
     Ok(wordcraft_doc::table::Table {
         props: convert(source.props)?,
         grid: source.grid,
-        rows: source.rows.into_iter().map(row_value_from_shared).collect::<Result<_, _>>()?,
+        rows: source.rows.into_iter().map(|r| row_value_from_shared(r, graphics)).collect::<Result<_, _>>()?,
         controls: convert(source.controls)?,
     })
 }
 
-fn row_value_from_shared(source: craft_wordmodel::table::Row) -> Result<wordcraft_doc::table::Row, DocxError> {
+fn row_value_from_shared(source: craft_wordmodel::table::Row, graphics: &mut GraphicCache) -> Result<wordcraft_doc::table::Row, DocxError> {
     Ok(wordcraft_doc::table::Row {
         props: convert(source.props)?,
-        cells: source.cells.into_iter().map(cell_value_from_shared).collect::<Result<_, _>>()?,
+        cells: source.cells.into_iter().map(|c| cell_value_from_shared(c, graphics)).collect::<Result<_, _>>()?,
         controls: convert(source.controls)?,
     })
 }
 
-fn cell_value_from_shared(source: craft_wordmodel::table::Cell) -> Result<wordcraft_doc::table::Cell, DocxError> {
-    Ok(wordcraft_doc::table::Cell { props: convert(source.props)?, blocks: blocks_from_shared(source.blocks)?, controls: convert(source.controls)? })
+fn cell_value_from_shared(source: craft_wordmodel::table::Cell, graphics: &mut GraphicCache) -> Result<wordcraft_doc::table::Cell, DocxError> {
+    Ok(wordcraft_doc::table::Cell {
+        props: convert(source.props)?,
+        blocks: blocks_from_shared(source.blocks, graphics)?,
+        controls: convert(source.controls)?,
+    })
 }
 
-fn part_value_from_shared(source: craft_wordmodel::Part) -> Result<wordcraft_doc::Part, DocxError> {
-    Ok(wordcraft_doc::Part { kind: convert(source.kind)?, blocks: blocks_from_shared(source.blocks)?, body: convert(source.body)? })
+fn part_value_from_shared(source: craft_wordmodel::Part, graphics: &mut GraphicCache) -> Result<wordcraft_doc::Part, DocxError> {
+    Ok(wordcraft_doc::Part { kind: convert(source.kind)?, blocks: blocks_from_shared(source.blocks, graphics)?, body: convert(source.body)? })
 }
 
-fn glossary_value_from_shared(source: craft_wordmodel::BuildingBlock) -> Result<wordcraft_doc::BuildingBlock, DocxError> {
+fn glossary_value_from_shared(
+    source: craft_wordmodel::BuildingBlock,
+    graphics: &mut GraphicCache,
+) -> Result<wordcraft_doc::BuildingBlock, DocxError> {
     Ok(wordcraft_doc::BuildingBlock {
         name: source.name,
         gallery: source.gallery,
@@ -126,7 +165,7 @@ fn glossary_value_from_shared(source: craft_wordmodel::BuildingBlock) -> Result<
         style: source.style,
         types: source.types,
         behaviors: source.behaviors,
-        blocks: blocks_from_shared(source.blocks)?,
+        blocks: blocks_from_shared(source.blocks, graphics)?,
     })
 }
 
@@ -138,7 +177,7 @@ fn missing_pictures_from_shared(source: craft_wordmodel::MissingPictures) -> Res
     target.part_names = source.part_names;
     target.media_parts = source.media_parts;
     for item in source.list {
-        target.push(convert(item)?);
+        target.list.push(convert(item)?);
     }
     Ok(target)
 }
@@ -176,10 +215,11 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
         ..
     } = source;
 
+    let mut graphics = GraphicCache::new();
     let mut document = wordcraft_doc::Document::new();
-    document.body = blocks_from_shared(body)?;
+    document.body = blocks_from_shared(body, &mut graphics)?;
     document.last_section = convert(last_section)?;
-    document.parts = parts.into_iter().map(|(id, part)| Ok((id, part_value_from_shared(part)?))).collect::<Result<_, DocxError>>()?;
+    document.parts = parts.into_iter().map(|(id, part)| Ok((id, part_value_from_shared(part, &mut graphics)?))).collect::<Result<_, DocxError>>()?;
     document.styles = Arc::new(convert((*styles).clone())?);
     document.numbering = Arc::new(convert((*numbering).clone())?);
     document.comments = convert(comments)?;
@@ -192,7 +232,7 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.endnote_separators = convert(endnote_separators)?;
     document.media = media;
     document.passthrough = passthrough;
-    document.glossary = glossary.into_iter().map(glossary_value_from_shared).collect::<Result<_, _>>()?;
+    document.glossary = glossary.into_iter().map(|g| glossary_value_from_shared(g, &mut graphics)).collect::<Result<_, _>>()?;
     document.missing_pictures = missing_pictures_from_shared(missing_pictures)?;
     document.fit_state = fit_state;
     Ok(document)
@@ -344,7 +384,7 @@ fn missing_pictures_to_shared(source: &wordcraft_doc::MissingPictures) -> Result
     target.part_names = source.part_names.clone();
     target.media_parts = source.media_parts.clone();
     for item in &source.list {
-        target.push(convert_ref(item)?);
+        target.list.push(convert_ref(item)?);
     }
     Ok(target)
 }
@@ -410,6 +450,110 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn doc_with(objects: Vec<craft_wordmodel::para::InlineObject>) -> craft_wordmodel::Document {
+        let mut source = craft_wordmodel::Document::new();
+        let mut para = craft_wordmodel::para::Paragraph::new();
+        para.objects = objects;
+        source.body = vec![Arc::new(craft_wordmodel::Block::Para(para))];
+        source
+    }
+
+    fn objects(doc: &wordcraft_doc::Document) -> Vec<wordcraft_doc::para::InlineObject> {
+        doc.body.first().and_then(|b| b.as_para()).map(|p| p.objects.clone()).unwrap_or_default()
+    }
+
+    fn chart_object(spec: craft_wordmodel::chart::ChartSpec) -> craft_wordmodel::para::InlineObject {
+        let graphic = craft_wordmodel::graphic::Graphic { chart: Some(Arc::new(spec)), ..Default::default() };
+        craft_wordmodel::para::InlineObject::Graphic { w: 100.0, h: 60.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) }
+    }
+
+    fn charts(doc: &wordcraft_doc::Document) -> Vec<Option<wordcraft_doc::chart::ChartSpec>> {
+        objects(doc)
+            .iter()
+            .filter_map(|o| match o {
+                wordcraft_doc::para::InlineObject::Graphic { graphic, .. } => Some(graphic.chart.as_deref().cloned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A picture frame shape opens as a rectangle instead of failing the whole document.
+    #[test]
+    fn a_frame_shape_reads_as_a_rectangle() {
+        let shape = |kind| craft_wordmodel::para::InlineObject::Shape {
+            kind,
+            w: 40.0,
+            h: 30.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float: Default::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: craft_wordmodel::connector::ShapeExtra { corner: Some(2604), ..Default::default() },
+        };
+        let doc = from_shared_model(doc_with(vec![shape(craft_wordmodel::para::ShapeKind::Frame)])).expect("from_shared_model");
+        let found = objects(&doc);
+        let [wordcraft_doc::para::InlineObject::Shape { kind, w, extra, .. }] = found.as_slice() else { panic!("{found:?}") };
+        assert_eq!((*kind, *w, extra.corner), (wordcraft_doc::para::ShapeKind::Rectangle, 40.0, None));
+    }
+
+    /// A chart's series formatting and axis settings survive the trip through this model, so
+    /// saving writes the chart part the reader read.
+    #[test]
+    fn chart_formatting_survives_the_bridge() {
+        use craft_wordmodel::chart::{ChartSpec, ChartType};
+        let mut formatted = ChartSpec::sample(ChartType::Line);
+        formatted.series[0].fill = Some(craft_wordmodel::props::Rgb(0x12, 0x34, 0x56));
+        formatted.series[0].line_w = Some(2.5);
+        formatted.series[1].smooth = true;
+        formatted.series[1].markers = Some(true);
+        formatted.series[2].labels = Some(true);
+        formatted.series[2].fmt = Some("0.0".into());
+        formatted.val_axis.title = Some("Sales".into());
+        formatted.val_axis.min = Some(0.0);
+        formatted.cat_axis.gridlines = true;
+        let mut scatter_lines = ChartSpec::sample(ChartType::Scatter);
+        scatter_lines.series[0].no_line = false;
+        let all = [formatted, ChartSpec::sample(ChartType::Scatter), ChartSpec::sample(ChartType::Pie), scatter_lines];
+        let doc = from_shared_model(doc_with(all.iter().cloned().map(chart_object).collect())).expect("from_shared_model");
+        assert!(charts(&doc).iter().all(Option::is_some));
+        let back = to_shared_model(&doc).expect("to_shared_model");
+        let back: Vec<ChartSpec> = back
+            .body
+            .first()
+            .and_then(|b| b.as_para())
+            .map(|p| {
+                p.objects
+                    .iter()
+                    .filter_map(|o| match o {
+                        craft_wordmodel::para::InlineObject::Graphic { graphic, .. } => graphic.chart.as_deref().cloned(),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(back, all);
+    }
+
+    /// A scatter chart this model makes is written as markers without lines, the same part the
+    /// shared model writes for its own new scatter chart.
+    #[test]
+    fn a_new_scatter_chart_is_written_without_lines() {
+        let local = wordcraft_doc::chart::ChartSpec::sample(wordcraft_doc::chart::ChartType::Scatter);
+        assert!(!local.series.is_empty() && local.series.iter().all(|s| s.no_line));
+        assert_eq!(
+            crate::chart_xml(&local),
+            craft_docx::chart_xml(&craft_wordmodel::chart::ChartSpec::sample(craft_wordmodel::chart::ChartType::Scatter)).into_bytes()
+        );
+        for kind in wordcraft_doc::chart::ChartType::ALL {
+            let local = wordcraft_doc::chart::ChartSpec::sample(kind);
+            let shared: craft_wordmodel::chart::ChartSpec = convert_ref(&local).expect("convert");
+            assert_eq!(shared, craft_wordmodel::chart::ChartSpec::sample(shared.kind), "{kind:?}");
+        }
+    }
 
     #[test]
     fn bridges_nested_stories_and_moves_media_both_directions() {
