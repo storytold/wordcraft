@@ -932,6 +932,26 @@ fn back_arrow_returns_to_the_page_with_accessibility_on() {
     assert!(h.state().canvas.focused, "and the page has the keyboard");
 }
 
+/// #6782: with no document open (the Start screen) the Back arrow is greyed and clicking it
+/// leaves the Start screen where it is; once a document is open the same click returns to it.
+#[test]
+fn the_back_arrow_is_off_with_no_document() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    assert!(a.start_screen(), "started with nothing to open");
+    assert!(!a.has_document());
+    let mut h = a11y_harness(a);
+    assert!(h.state().ui.backstage);
+    click_at(&mut h, egui::pos2(26.0, 32.0));
+    assert!(h.state().ui.backstage, "with no document, Back stays on the Start screen");
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().has_document(), "the new document is open");
+    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+    h.run_steps(4);
+    click_at(&mut h, egui::pos2(26.0, 32.0));
+    assert!(!h.state().ui.backstage, "with a document, Back returns to it");
+}
+
 /// #3041: clicking the plain sidebar background next to the back arrow must not also close
 /// the File page — only the chevron itself does, same scoping as the macOS chevron (#2972).
 #[test]
@@ -1054,10 +1074,14 @@ fn options_back_arrow_with_accessibility_on() {
         h.get_by_label("Display").click();
         h.run_steps(4);
         click_at(&mut h, back);
-        assert!(!h.state().ui.backstage, "mac {mac} start {start}: the arrow closes the File page");
         if start {
-            assert!(!h.state().has_document(), "mac {mac}: from the Start screen, an empty window");
+            // #6782: with no document the arrow goes back to the Start screen, not to an empty
+            // window: the File pages stay open on Home.
+            assert!(h.state().ui.backstage, "mac {mac}: the File pages stay open");
+            assert_eq!(h.state().ui.backstage_page, "home", "mac {mac}: and show the Start screen");
+            assert!(!h.state().has_document(), "mac {mac}: no document is opened");
         } else {
+            assert!(!h.state().ui.backstage, "mac {mac}: the arrow closes the File page");
             assert!(h.state().canvas.focused, "mac {mac}: and the page has the keyboard");
         }
     }

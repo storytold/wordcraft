@@ -6,6 +6,7 @@
 //! full-document serialization copy.
 //!
 //! [MS-DOC]: https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod model_bridge;
 

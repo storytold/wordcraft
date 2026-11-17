@@ -147,11 +147,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", switch_windows)
             .params(r#"{"id"?: n (make this open document the active one), "window"?: n (make this open window the active one)} → {"documents": [{"id", "title", "path", "dirty", "active"}]} in the order they were opened"#)
             .pure(),
-        CommandSpec::new("view.split", "Split", "View › Window", |s, _| {
-            s.push_ui_request(json!({"toggle": "split"}));
-            sel_result(s)
+        // View › Window › Split needs a second view of the same page, which the front end does not
+        // draw yet: the command is disabled with its reason, as Word's own greyed controls are,
+        // rather than enabled and changing nothing.
+        CommandSpec::new("view.split", "Split", "View › Window", |_, _| {
+            Err(CmdError::Disabled("splitting the window is not available yet".into()))
         })
         .key("Mod+Alt+S")
+        .when(|_| Some("splitting the window is not available yet"))
         .pure(),
         // View › Window across WordCraft windows (#322): the desktop app's native windows
         // perform these (see `Windows`), elsewhere they are disabled.

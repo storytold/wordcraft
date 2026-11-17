@@ -852,6 +852,9 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
             match next.next() {
                 Some(n) if n.is_ascii_digit() => Some(i),
                 Some('/') => next.next().is_some_and(char::is_alphabetic).then_some(i),
+                // A ruled line of hyphens breaks between them, as in Word (#6853): UAX #14's LB21
+                // forbids a break before a hyphen, which left the whole row unbreakable.
+                Some('-') => Some(i),
                 _ => None,
             }
         })
@@ -872,6 +875,24 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
     found
+}
+
+#[cfg(test)]
+mod hyphen_break_tests {
+    /// #6853: a ruled line typed as a row of hyphens breaks between two hyphens, as in Word, so
+    /// the row fills the rest of the line instead of moving down whole. UAX #14's LB21 forbids a
+    /// break before a hyphen, which left the row with no break inside it at all. A non-breaking
+    /// hyphen (U+2011) still holds its word together.
+    #[test]
+    fn a_row_of_hyphens_has_breaks_between_them() {
+        let doc = wordcraft_doc::Document::new();
+        let rp = doc.styles.resolve_para(&wordcraft_doc::props::ParaProps::default());
+        let text = "x----------y";
+        let breaks = super::break_positions(text, &rp);
+        assert!(breaks.contains(&8), "a break inside the run of hyphens: {breaks:?}");
+        let unbreakable = "x\u{2011}\u{2011}\u{2011}y";
+        assert!(!super::break_positions(unbreakable, &rp).iter().any(|&i| i > 1 && i < 5), "a non-breaking hyphen keeps the row whole");
+    }
 }
 
 #[cfg(test)]

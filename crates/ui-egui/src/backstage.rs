@@ -84,6 +84,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .show(ui, |ui| {
             // Right to left the navigation is on the right, away from the macOS traffic lights.
             let rtl = crate::rtl::on();
+            // #6782: on the Start screen the Back arrow is greyed and does nothing, there being
+            // no document behind it to return to; a page opened over the Start screen (Options,
+            // Open) still goes back to it.
+            let can_go_back = has_document || app.ui.backstage_page != "home";
+            let back_ink = if can_go_back { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
             let back = if mac {
                 // macOS (#222): the Backstage covers the title bar, so its top band is the title
                 // bar: the back button sits beside the traffic lights, centred with them and as far
@@ -104,8 +109,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     ui.painter(),
                     Rect::from_center_size(c, vec2(18.0, 18.0)),
                     if rtl { "chevronRight" } else { "chevronLeft" },
-                    egui::Color32::WHITE,
-                    egui::Color32::WHITE,
+                    back_ink,
+                    back_ink,
                 );
                 resp
             } else {
@@ -119,13 +124,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     ui.painter(),
                     Rect::from_center_size(c, vec2(18.0, 18.0)),
                     if rtl { "chevronRight" } else { "chevronLeft" },
-                    egui::Color32::WHITE,
-                    egui::Color32::WHITE,
+                    back_ink,
+                    back_ink,
                 );
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
-            if back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+            let escape = !app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if back.clicked() && can_go_back {
+                // #6782: with a document, Back returns to it; with none, it goes back to the Start
+                // screen's Home page, as Word does, instead of closing the File pages on an empty
+                // window (Escape still does that).
+                if has_document {
+                    app.ui.backstage = false;
+                    app.canvas.want_focus = true;
+                } else {
+                    app.ui.backstage_page = "home".into();
+                }
+            } else if escape {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }
