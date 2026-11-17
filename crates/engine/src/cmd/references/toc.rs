@@ -514,15 +514,20 @@ pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
     regenerate_toc(s, None, &tabs)
 }
 
-/// Whether the body's table of contents field (inline or a range) is locked.
+/// Whether the table of contents `regenerate_toc` would rebuild is locked: the first inline TOC
+/// field (`toc_range`). Another, locked TOC elsewhere doesn't stop this one's update (#6771
+/// review). Without an inline one, the range TOC `range_toc_to_field` converts is never a locked
+/// one (`convertible_toc_range`), so a locked range TOC is left alone there.
 fn toc_locked(s: &Session) -> bool {
-    let toc = |instr: &str| {
-        let f = FieldCode::parse(instr);
-        f.name == "TOC" && !f.is_table_of_figures()
-    };
-    s.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).any(|o| match o {
-        InlineObject::Field { instr, locked: true, .. } | InlineObject::FieldStart { instr, locked: true, .. } => toc(instr),
-        _ => false,
+    let Some((start, _)) = toc_range(s) else { return false };
+    s.doc.body.get(start).and_then(|b| b.as_para()).is_some_and(|p| {
+        p.objects.iter().find_map(|o| match o {
+            InlineObject::Field { instr, locked, .. } => {
+                let f = FieldCode::parse(instr);
+                (f.name == "TOC" && !f.is_table_of_figures()).then_some(*locked)
+            }
+            _ => None,
+        }) == Some(true)
     })
 }
 

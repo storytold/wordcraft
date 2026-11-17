@@ -552,6 +552,40 @@ fn update_fields_clears_a_dirty_toc_and_keeps_a_locked_one() {
     }
 }
 
+/// #6771 review: a locked table of contents further down doesn't stop Update Fields from
+/// rebuilding the first one, the one it updates, when that one is unlocked and marked dirty.
+#[test]
+fn a_locked_toc_elsewhere_doesnt_stop_the_first_toc_s_update() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Contents\nChapter One\nText\nMore"));
+    s.doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.style = Some("Heading1".into());
+    let toc = |locked: bool, dirty: bool| InlineObject::Field {
+        instr: r#"TOC \o "1-3" \h \z \u"#.into(),
+        result: String::new(),
+        locked,
+        dirty,
+        code: false,
+        form: String::new(),
+    };
+    s.doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(0, toc(false, true), &CharProps::default()).unwrap();
+    s.doc.para_mut(StoryRef::Body, &Path::top(3)).unwrap().insert_object(0, toc(true, false), &CharProps::default()).unwrap();
+    assert!(has_dirty_fields(&s.doc));
+    s.run("references.updateFields", &json!({"all": true})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body).matches("Chapter One").count(), 2, "the heading and the first TOC's entry");
+    let tocs: Vec<(bool, bool)> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            InlineObject::Field { instr, locked, dirty, .. } if instr.starts_with("TOC") => Some((*locked, *dirty)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tocs, [(false, false), (true, false)], "the first rebuilt and its mark cleared; the locked one kept");
+    assert!(!has_dirty_fields(&s.doc), "nothing asks for an update");
+}
+
 #[test]
 fn toc_tabs_ignore_nonentries() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Before\nContents\nOld\t9\nAfter"));
