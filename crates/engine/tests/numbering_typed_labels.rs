@@ -88,6 +88,7 @@ fn numbering_removes_typed_paren_dot_and_letter_labels() {
         ("1) a\n2) b", "numberedParen", vec!["a", "b"]),
         ("a. a\nb. b", "lowerLetterDot", vec!["a", "b"]),
         ("a) a\nb) b", "lowerLetter", vec!["a", "b"]),
+        ("i. a\nii. b", "lowerRoman", vec!["a", "b"]),
         ("  1. a", "numbered", vec!["a"]),
         ("1.\ta", "numbered", vec!["a"]),
     ] {
