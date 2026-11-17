@@ -31,11 +31,13 @@ wordcraft-pdf = { path = "crates/pdf" }
 wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
+craft-ssip = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
+craft-codepage = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
 
 # foundation
@@ -74,6 +76,7 @@ craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "2596b87fc5fa01f013274721c3a27e357a179269", features = ["egui"] }
 craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
 craft-docx = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
+craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
 craft-rtf = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0", features = ["doc"] }
 craft-doc-binary = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
 craft-flow = { git = "https://github.com/storytold/craft-libs", rev = "2596b87fc5fa01f013274721c3a27e357a179269", version = "=0.1.0" }
