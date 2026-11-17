@@ -100,9 +100,10 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     let template = match p::str(v, "text") {
         Some(t) => Some(t.chars().take(MAX_PAGE_TEXT).collect::<String>()),
         None if x_of_y => {
-            // The document's language, else the editing language, else English.
-            let langs = [s.doc.styles.default_chr.lang.as_deref(), s.editing_lang.as_deref()];
-            let (page, of) = langs.into_iter().flatten().find_map(page_of_words).unwrap_or(("Page", "of"));
+            // The document's language (its defaults, then the Normal style, as AutoCorrect reads
+            // it), else the editing language, else English.
+            let langs = [crate::cmd::doc_lang(&s.doc), s.editing_lang.clone()];
+            let (page, of) = langs.iter().flatten().find_map(|l| page_of_words(l)).unwrap_or(("Page", "of"));
             Some(format!("{page} {{page}} {of} {{pages}}"))
         }
         None => None,
@@ -111,12 +112,23 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
         Some(t) => template_pieces(t),
         None => vec![("", Some("PAGE"))],
     };
+    // A template is a page number: without `{page}` it would add a paragraph each time, never
+    // found again as the page number it replaces.
+    if !pieces.iter().any(|(_, field)| *field == Some("PAGE")) {
+        return Err(CmdError::Params("`text` needs {page} where the page number goes".into()));
+    }
     // The numbers of a template are bold; a lone PAGE field takes the text's formatting.
     let bold = template.is_some();
     if position == "current" {
-        let props = s.typing_props();
-        let field_props = CharProps { bold: bold.then_some(true).or(props.bold), ..props.clone() };
+        let mut props = s.typing_props();
         let mut at = delete_selection(s)?;
+        // Typed in, as `insert_text` types text (#4466 review): a new insertion under Track
+        // Changes, and never the insertion or deletion of the text at the caret, nor its
+        // formatting change.
+        props.fmt_change = None;
+        props.del = None;
+        props.ins = s.doc.settings.track_changes.then(|| crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Insert));
+        let field_props = CharProps { bold: bold.then_some(true).or(props.bold), ..props.clone() };
         for (text, field) in pieces {
             if !text.is_empty() {
                 at = s.doc.insert_text(&at, text, &props)?;

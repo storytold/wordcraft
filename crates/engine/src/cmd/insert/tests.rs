@@ -44,7 +44,48 @@ fn page_x_of_y_follows_the_document_language() {
     assert_eq!((text.as_str(), codes), ("1 pp. – p. 1", vec!["NUMPAGES".to_string(), "PAGE".into()]));
     // Hostile templates: nothing but placeholders, broken ones, and a very long one.
     assert_eq!(page_footer(&mut s, json!({"text": "{page}{pages}{page"})).0, "11{page");
-    assert_eq!(page_footer(&mut s, json!({"text": "é".repeat(10_000)})).0.chars().count(), MAX_PAGE_TEXT);
+    let long = format!("{{page}}{}", "é".repeat(10_000));
+    assert_eq!(page_footer(&mut s, json!({"text": long})).0.chars().count(), MAX_PAGE_TEXT - "{page}".len() + 1);
+    // #4466 review: a template without {page} isn't a page number, and adds nothing.
+    let before = s.doc.clone();
+    for text in ["", "no number here", "{pages} pages", "é".repeat(10_000).as_str()] {
+        assert!(s.run("insert.pageNumber", &json!({"text": text})).is_err(), "{text:.20}");
+        assert!(s.run("insert.pageNumber", &json!({"text": text, "position": "current"})).is_err(), "{text:.20}");
+    }
+    assert!(s.doc == before, "nothing added");
+}
+
+/// #4466 review: at the current position the words and fields are typed in, as text is: under
+/// Track Changes a new insertion of the author's; with it off, never another author's insertion
+/// that is at the caret.
+#[test]
+fn page_number_at_the_current_position_follows_track_changes() {
+    // The inserted words' and fields' insertion revisions (the text between "a" and "b").
+    let inserted = |s: &Session| -> Vec<Option<u32>> {
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+        let end = p.text.len() - 1;
+        p.text.char_indices().filter(|(i, _)| *i > 0 && *i < end).map(|(i, _)| p.props_of_char(i).ins).collect()
+    };
+    let x_of_y = json!({"position": "current", "format": "x of y"});
+    let mut s = Session::new(wordcraft_doc::Document::from_text("ab"));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.sel = Selection::caret(Pos::body(0, 1));
+    s.run("insert.pageNumber", &x_of_y).unwrap();
+    let ins = inserted(&s);
+    assert_eq!(ins.len(), 11, "\"Page \", PAGE, \" of \", NUMPAGES: {ins:?}");
+    let rid = ins[0].expect("an insertion");
+    assert!(ins.iter().all(|r| *r == Some(rid)), "{ins:?}");
+    let rev = &s.doc.revisions[rid as usize];
+    assert_eq!((rev.kind, rev.author.as_str()), (wordcraft_doc::RevisionKind::Insert, s.author.as_str()));
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("ab"));
+    s.doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Zed", ""));
+    for r in &mut s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().runs {
+        r.props.ins = Some(0);
+    }
+    s.sel = Selection::caret(Pos::body(0, 1));
+    s.run("insert.pageNumber", &x_of_y).unwrap();
+    assert!(inserted(&s).iter().all(Option::is_none), "{:?}", inserted(&s));
 }
 
 /// At the current position `text` and "x of y" go in at the caret too, not just a PAGE field.
