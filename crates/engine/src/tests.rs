@@ -1109,6 +1109,26 @@ fn replace_under_track_changes_skips_deleted_text() {
 }
 
 #[test]
+fn replace_reports_whether_it_replaced_and_what_it_selected() {
+    // Replace follows Word's button: the first call only selects a match. Agents read
+    // `remaining` alone as done (#6877), so the result says whether anything was replaced.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "alpha XX beta XX gamma XX"}));
+    run(&mut s, "caret.docStart", json!({}));
+    let calls: Vec<_> = (0..5).map(|_| run(&mut s, "edit.replace", json!({"text": "XX", "with": "YY"}))).collect();
+    let replaced: Vec<_> = calls.iter().map(|r| r["replaced"].clone()).collect();
+    assert_eq!(replaced, [json!(0), json!(1), json!(1), json!(1), json!(0)]);
+    let remaining: Vec<_> = calls.iter().map(|r| r["remaining"].clone()).collect();
+    assert_eq!(remaining, [json!(3), json!(2), json!(1), json!(0), json!(0)]);
+    let selected: Vec<_> = calls.iter().map(|r| (r["selected"]["start"]["off"].clone(), r["selected"]["end"]["off"].clone())).collect();
+    assert_eq!(selected[0], (json!(6), json!(8)));
+    assert_eq!(selected[1], (json!(14), json!(16)));
+    assert_eq!(selected[2], (json!(23), json!(25)));
+    assert!(calls[3]["selected"].is_null() && calls[4]["selected"].is_null(), "no match is left to select");
+    assert_eq!(text(&s), "alpha YY beta YY gamma YY");
+}
+
+#[test]
 fn find_reads_the_text_around_tracked_deletions() {
     // `edits` are (start, end) byte ranges deleted with Track Changes on, last first.
     fn tracked(text: &str, edits: &[(usize, usize)]) -> Session {
