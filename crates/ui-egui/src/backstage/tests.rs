@@ -859,6 +859,77 @@ fn save_as_page_shows_browse_and_no_open_list() {
     assert!(h.query_by_label("Recent").is_none(), "Save As has no list that opens documents");
 }
 
+/// #3467, #3535: a system dialog that never shows up doesn't leave Save As stuck: Browse in
+/// WordCraft… gives it up and saves through WordCraft's own browser.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn save_as_saves_in_wordcraft_when_the_system_dialog_never_shows() {
+    // A host that takes every request and never answers, like a portal that shows nothing.
+    let senders: std::rc::Rc<std::cell::RefCell<Vec<std::sync::mpsc::Sender<crate::FileDialogAnswer>>>> = Default::default();
+    let keep = senders.clone();
+    let services = Services {
+        file_dialog: Some(Box::new(move |_| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            keep.borrow_mut().push(tx);
+            rx
+        })),
+        ..Default::default()
+    };
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-builtin-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    a.run("text.insert", json!({"text": "Saved past a silent portal"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert!(h.state().file_dialog.is_some(), "the system dialog was asked for and never answered");
+    h.get_by_label("Browse in WordCraft…").click();
+    h.run_steps(4);
+    let a = h.state_mut();
+    assert!(a.file_dialog.is_none(), "the silent system dialog is given up");
+    let b = a.file_browser.open.as_mut().expect("WordCraft's own browser is open");
+    b.navigate(dir.clone());
+    b.name = "kept".into();
+    let crate::file_browser::Step::Pick(path) = b.accept() else { panic!("picked") };
+    a.close_file_browser(Some(path));
+    let saved = dir.join("kept.docx");
+    assert_eq!(a.session.path.as_deref(), Some(saved.as_path()));
+    let back = wordcraft_engine::io::open_path(&saved).unwrap();
+    assert!(back.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved past a silent portal"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3535: File › Export offers WordCraft's own browser as well, for its formats.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn export_page_offers_wordcrafts_own_browser() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Browse in WordCraft…").click();
+    h.run_steps(4);
+    let b = h.state().file_browser.open.as_ref().expect("WordCraft's own browser is open");
+    assert!(matches!(&b.after, crate::file_dialogs::AfterPick::Export { ext } if ext == "pdf"));
+}
+
 #[test]
 fn backstage_save_navigates_to_save_as_when_unnamed() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
@@ -1291,4 +1362,107 @@ fn rtl_template_titles_are_right_aligned() {
         wide_thumbnail.max.x,
         wide_text_right,
     );
+}
+
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_export_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Export page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_print_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-print-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "print"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Print page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A cancelled export dialog drops an earlier refusal: it is not news any more.
+#[test]
+fn cancelling_an_export_clears_its_page_error() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.export_error = "old refusal".into();
+    a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, None).unwrap();
+    assert!(a.export_error.is_empty());
+}
+
+/// The export error belongs to the window that refused the export: another window running a
+/// frame outside Backstage must not erase it while this one still shows the Export page.
+#[test]
+fn export_error_belongs_to_its_window() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-two-windows-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    // Window A (this one) is refused; window B is another window's state, outside Backstage.
+    let mut b = crate::window_ui::WindowUi::new(a.session.document_id());
+    let err = a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    assert_eq!(a.export_error, err);
+    // B's frame: swap its state in, run frames outside Backstage, swap back.
+    a.swap_window(&mut b);
+    assert!(!a.ui.backstage && a.export_error.is_empty(), "B has its own, empty, error");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.state_mut().swap_window(&mut b);
+    assert!(h.state().ui.backstage, "A is still on the Export page");
+    assert_eq!(h.state().export_error, err, "B's frames left A's message alone");
+    let _ = std::fs::remove_dir_all(&dir);
 }
