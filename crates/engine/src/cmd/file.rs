@@ -793,10 +793,16 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     let l = s.layout();
+    // A tracked-deleted box's anchor stays in the stored document, and pruning keeps its story
+    // for a rejected change, so the default view lists only the text boxes the final view still
+    // shows; `raw` asks for the stored text and lists every part. Headers, footers and footnotes
+    // have no anchor a tracked deletion can remove and always stay.
+    let shown = if raw { None } else { Some(s.doc.shown_text_boxes()) };
     let parts: Vec<Value> = s
         .doc
         .parts
         .iter()
+        .filter(|(id, p)| raw || p.kind != wordcraft_doc::PartKind::TextBox || shown.as_ref().is_some_and(|s| s.contains(id)))
         .map(|(id, p)| {
             let mut o = json!({"id": id, "kind": p.kind, "text": if raw { s.doc.plain_text(StoryRef::Part(*id)) } else { s.doc.final_text(StoryRef::Part(*id)) }});
             let mut fields = Vec::new();
@@ -903,5 +909,40 @@ mod tests {
         // The two coordinate systems are named: the deleted ranges are in stored offsets.
         let del = out["blocks"][0]["deleted"].as_array().expect("deleted ranges are reported");
         assert!(!del.is_empty(), "the deletion is reported in stored offsets");
+    }
+
+    /// A tracked-deleted text box's anchor stays in the stored document — pruning keeps the
+    /// story so a rejected change can restore it — but a reader no longer sees the box, so the
+    /// default inspection must not list the part; `raw` gives the stored parts back. Headers,
+    /// footers and footnotes have no anchor a tracked deletion can remove and always stay.
+    #[test]
+    fn a_tracked_deleted_text_box_is_not_in_the_inspection_unless_raw() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "Visible text.\n"})).unwrap();
+        s.run("insert.textBox", &json!({"text": "BOX-SECRET-TEXT"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        // Delete the box's anchor object (the caret went into the box; find the anchor in the
+        // body) with tracking on, so the stored document keeps it inside a tracked deletion.
+        let mut at = None;
+        for (i, b) in s.doc.body.iter().enumerate() {
+            if let Some(p) = b.as_para() {
+                if let Some(o) = p.text.find(OBJ) {
+                    at = Some((i, o));
+                    break;
+                }
+            }
+        }
+        let (bi, off) = at.expect("the box's anchor is in a body paragraph");
+        s.run("select.range", &json!({"anchor": {"block": bi, "off": off}, "focus": {"block": bi, "off": off + 1}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+
+        let out = s.run("document.inspect", &json!({})).unwrap();
+        let dumped = out.to_string();
+        assert!(!dumped.contains("BOX-SECRET-TEXT"), "the inspection leaks a tracked-deleted text box: {dumped}");
+        assert!(dumped.contains("Visible text."), "the visible text is still in the inspection");
+
+        let raw: Value = s.run("document.inspect", &json!({"raw": true})).unwrap();
+        assert!(raw.to_string().contains("BOX-SECRET-TEXT"), "raw gives the stored parts back");
     }
 }

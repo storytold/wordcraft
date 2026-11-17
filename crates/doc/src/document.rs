@@ -474,7 +474,7 @@ impl Document {
     /// The body, then the text boxes, footnotes and endnotes it shows (nested ones too), in
     /// document order. Headers, footers, comments and stories nothing points at aren't included.
     pub fn counted_stories(&self) -> Vec<StoryRef> {
-        self.reachable(vec![StoryRef::Body], &notes_and_boxes)
+        self.reachable(vec![StoryRef::Body], &notes_and_boxes, false)
     }
 
     /// The stories a reader sees, in reading order: the body, then the headers and footers in
@@ -488,7 +488,7 @@ impl Document {
             v.retain(|(id, _)| !followers.contains(id));
             v
         };
-        let mut out = self.reachable(vec![StoryRef::Body], &follow);
+        let mut out = self.reachable(vec![StoryRef::Body], &follow, false);
         let mut seen: std::collections::BTreeSet<StoryRef> = out.iter().copied().collect();
         let mut roots = Vec::new();
         let mut root_seen = std::collections::BTreeSet::new();
@@ -510,12 +510,33 @@ impl Document {
                 }
             }
         }
-        for st in self.reachable(roots, &follow) {
+        for st in self.reachable(roots, &follow, false) {
             if seen.insert(st) {
                 out.push(st);
             }
         }
         out
+    }
+
+    /// The text box ids the final view (tracked deletions dropped) still shows. A tracked-deleted
+    /// box's anchor stays in the stored document — pruning keeps the story so a rejected change
+    /// can restore it — so a walk over the stored objects keeps it live; this walk follows only
+    /// the objects the final view shows. Headers, footers and footnotes are always roots: no
+    /// anchor in the body text can delete them.
+    pub fn shown_text_boxes(&self) -> std::collections::BTreeSet<u32> {
+        if !self.parts.values().any(|p| p.kind == PartKind::TextBox) {
+            return Default::default();
+        }
+        let roots = std::iter::once(StoryRef::Body)
+            .chain(self.parts.iter().filter(|(_, p)| p.kind != PartKind::TextBox).map(|(id, _)| StoryRef::Part(*id)))
+            .collect();
+        self.reachable(roots, &|o| o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect(), true)
+            .into_iter()
+            .filter_map(|s| match s {
+                StoryRef::Part(id) => Some(id),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Drop the text box stories no box shows any more (a deleted or cut box's text), nested
@@ -528,7 +549,7 @@ impl Document {
         let roots = std::iter::once(StoryRef::Body)
             .chain(self.parts.iter().filter(|(_, p)| p.kind != PartKind::TextBox).map(|(id, _)| StoryRef::Part(*id)))
             .collect();
-        let live = self.reachable(roots, &|o| o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect());
+        let live = self.reachable(roots, &|o| o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect(), false);
         let before = self.parts.len();
         self.parts.retain(|id, p| p.kind != PartKind::TextBox || live.contains(&StoryRef::Part(*id)));
         let gone = before - self.parts.len();
@@ -681,7 +702,7 @@ impl Document {
 
     /// `roots`, then every story their objects lead to (`follow`: an object's story id and the
     /// part kinds that count), transitively, in the order found.
-    fn reachable(&self, roots: Vec<StoryRef>, follow: &dyn Fn(&InlineObject) -> Vec<(u32, &'static [PartKind])>) -> Vec<StoryRef> {
+    fn reachable(&self, roots: Vec<StoryRef>, follow: &dyn Fn(&InlineObject) -> Vec<(u32, &'static [PartKind])>, final_view: bool) -> Vec<StoryRef> {
         let mut out = roots;
         let mut seen: std::collections::BTreeSet<StoryRef> = out.iter().copied().collect();
         let mut i = 0;
@@ -690,7 +711,13 @@ impl Document {
             let mut found = Vec::new();
             for b in self.story(s).into_iter().flatten() {
                 edit::each_para(b, 0, &mut |p| {
-                    found.extend(p.objects.iter().flat_map(follow));
+                    if final_view {
+                        // Tracked deletions dropped: an object deleted with its run leads nowhere
+                        // (see `Paragraph::final_objects` for the cost bound).
+                        found.extend(p.final_objects().into_iter().flat_map(follow));
+                    } else {
+                        found.extend(p.objects.iter().flat_map(follow));
+                    }
                 });
             }
             for (id, kinds) in found {
