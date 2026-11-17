@@ -380,6 +380,21 @@ fn should_join_opacity_undo(changed: bool, was_dragging: bool) -> bool {
     changed && was_dragging
 }
 
+/// Update opacity undo grouping from the slider's changed/dragged state on every frame.
+fn update_opacity_undo(ui: &mut Ui, session: &mut wordcraft_engine::Session, index: usize, changed: bool, dragged: bool) {
+    let gesture = egui::Id::unique(("smart_art_opacity_gesture", index));
+    let was_dragging = ui.data(|d| d.get_temp::<bool>(gesture)).unwrap_or(false);
+    if should_join_opacity_undo(changed, was_dragging) {
+        session.join_next_undo();
+    }
+    if changed {
+        ui.data_mut(|d| d.insert_temp(gesture, dragged));
+    }
+    if !dragged {
+        ui.data_mut(|d| d.remove_temp::<bool>(gesture));
+    }
+}
+
 /// Side of an item's colour button, points.
 const SWATCH: f32 = 18.0;
 
@@ -418,20 +433,12 @@ fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
         ui.separator();
         let mut pct = opacity.unwrap_or(style_opacity);
         let slider = ui.add(egui::Slider::new(&mut pct, 0..=100).suffix("%").text(tl!("Opacity")));
-        if slider.changed() {
-            // Only the frames after a drag's first change join its undo step; a key press or a typed
-            // value starts its own.
-            let gesture = egui::Id::unique(("smart_art_opacity_gesture", i));
-            let was_dragging = ui.data(|d| d.get_temp::<bool>(gesture)).unwrap_or(false);
-            if should_join_opacity_undo(slider.changed(), was_dragging) {
-                app.session.join_next_undo();
-            }
-            ui.data_mut(|d| d.insert_temp(gesture, slider.dragged()));
+        let changed = slider.changed();
+        let dragged = slider.dragged();
+        update_opacity_undo(ui, &mut app.session, i, changed, dragged);
+        if changed {
             let hex = own.unwrap_or(Rgb(solid.r(), solid.g(), solid.b())).hex();
             let _ = app.run("smartArt.itemColor", json!({"index": i, "color": hex, "opacity": pct}));
-        }
-        if !slider.dragged() {
-            ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(("smart_art_opacity_gesture", i))));
         }
         ui.separator();
         if ui.add_enabled(own.is_some(), egui::Button::new(tl!("Style Color")).frame(false)).clicked() {
@@ -556,17 +563,21 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
             rows.push(row.response.rect);
         }
         let dragging: Option<(usize, f32)> = ui.data(|d| d.get_temp(drag_id));
-        if let (Some((src, x0)), Some(p)) = (dragging, ui.input(|inp| inp.pointer.interact_pos())) {
-            let (slot, row_slot, level) = drop_target(&g, &rows, src, p.y, p.x - x0);
+        let pointer = ui.input(|inp| inp.pointer.interact_pos());
+        let target = dragging.and_then(|(src, x0)| pointer.map(|p| (src, p, drop_target(&g, &rows, src, p.y, p.x - x0))));
+        if let Some((_, _, (_, row_slot, level))) = target {
             let y = if row_slot == 0 { rows.first().map(|r| r.top()) } else { rows.get(row_slot - 1).map(|r| r.bottom()) };
             if let (Some(y), Some(first)) = (y, rows.first()) {
                 let x = first.left() + f32::from(level) * LEVEL_INDENT;
                 ui.painter().line_segment([pos2(x, y), pos2(first.right(), y)], Stroke::new(2.0, t.accent));
             }
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-            if dropped {
-                ui.data_mut(|d| d.remove_temp::<(usize, f32)>(drag_id));
-                app.smart_art_typing = None;
+        }
+        if dropped {
+            // Clear the temporary drag even if the pointer left the window before release.
+            ui.data_mut(|d| d.remove_temp::<(usize, f32)>(drag_id));
+            app.smart_art_typing = None;
+            if let Some((src, _, (slot, _, level))) = target {
                 let end = g.descendants(src).end;
                 let len = end.saturating_sub(src);
                 let destination = slot.min(g.items.len().saturating_sub(len));
@@ -611,6 +622,39 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opacity_key_and_drag_frames_make_expected_undo_steps() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.smartArt", json!({"layout": "venn"})).unwrap();
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000"})).unwrap();
+        let ctx = egui::Context::default();
+        let frame = |a: &mut WordApp, changed: bool, dragged: bool| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                update_opacity_undo(ui, &mut a.session, 0, changed, dragged);
+            })
+            .drop_without_applying_deltas();
+        };
+
+        // Keyboard/numeric edits are not part of a previous colour-selection step.
+        frame(&mut a, true, false);
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 40})).unwrap();
+        a.run("edit.undo", json!({})).unwrap();
+        let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap();
+        assert_eq!(g.items[0].color.unwrap().hex(), "FF0000");
+        assert_eq!(g.items[0].opacity, None);
+
+        // The first changed drag frame starts a step; following drag frames join it.
+        frame(&mut a, true, true);
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 20})).unwrap();
+        frame(&mut a, true, true);
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 60})).unwrap();
+        frame(&mut a, false, false);
+        a.run("edit.undo", json!({})).unwrap();
+        let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap();
+        assert_eq!(g.items[0].color.unwrap().hex(), "FF0000");
+        assert_eq!(g.items[0].opacity, None);
+    }
 
     #[test]
     fn color_buttons_expose_item_names_and_empty_row_indices() {
