@@ -353,7 +353,15 @@ impl<'a> Flow<'a> {
         let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, room, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
-        if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
+        let next_room = pb.next_room(self.body_top);
+        // Evaluated last: the room-limited count must not move a run that Word gives up on. When
+        // the whole run is longer than a page, moving it fits nowhere and it stays where it is.
+        let whole_run_fits = |ctx: &mut Ctx| {
+            !rp.keep_next
+                || room.is_infinite()
+                || height + next_first_line(ctx, self.block, self.width, 0, f32::INFINITY, &mut ctx.counters.clone()) <= next_room
+        };
+        if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= next_room && whole_run_fits(ctx) {
             pb.advance(self.block, self.body_top);
             pb.y += rp.space_before.min(0.0);
             return rp.space_before.min(0.0);

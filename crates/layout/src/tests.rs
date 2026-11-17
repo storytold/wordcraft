@@ -10851,6 +10851,42 @@ fn keep_with_next_run_moves_with_a_middle_paragraph_that_keeps_its_lines() {
     assert_eq!(pages[..3], [1, 1, 1], "A moves with B, which does not split: {split_b} {pages:?}");
 }
 
+/// A run of kept paragraphs longer than a page is given up on, as in Word: the room-limited count
+/// must not move a paragraph whose whole run fits on no page. A is one line, B to H are ten-line
+/// paragraphs (Letter, 1 inch margins, lines of exactly 20 pt, widow control on), all kept with
+/// the next, then I. B stays on the first page with A; before the fix the shortened count moved
+/// B over and left the first page nearly empty.
+#[test]
+fn keep_with_next_run_longer_than_a_page_stays_where_it_is() {
+    crate::test_fonts();
+    let mut d = Document::new();
+    let props = |kept: bool| ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+        widow_control: Some(true),
+        keep_next: Some(kept),
+        ..Default::default()
+    };
+    let para = |text: String, kept: bool| {
+        let mut x = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+        x.props = props(kept);
+        wordcraft_doc::para_block(x)
+    };
+    let lines = |label: &str, n: usize| (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join("
+");
+    d.body.push(para("A1".to_string(), true));
+    for label in ["B", "C", "D", "E", "F", "G", "H"] {
+        d.body.push(para(lines(label, 10), true));
+    }
+    d.body.push(para(lines("I", 10), false));
+    let l = lay(&d);
+    let page = |block: usize| l.caret(&Pos::body(block, 0)).unwrap().page;
+    assert_eq!([page(0), page(1)], [0, 0], "A and B stay together on the first page");
+    // The next paragraphs follow B on the same page while they fit (C and D).
+    assert_eq!([page(2), page(3)], [0, 0], "C and D follow B on the first page");
+}
+
 /// Guard, the same before the fix: balanced columns still count a run of kept paragraphs whole
 /// (they grow to hold it) instead of cutting it at the trial height.
 #[test]
@@ -10863,12 +10899,16 @@ fn balanced_columns_hold_a_run_of_kept_paragraphs() {
             p.props.keep_next = Some(true);
         }
     }
-    let (nl, bl, nr, br, (page, after)) = column_bottoms(&lay(&d));
+    let l = lay(&d);
+    let (nl, bl, nr, br, (page, after)) = column_bottoms(&l);
     assert!(nl == 5 || nl == 6, "{nl} left, {nr} right");
-    // Pinned as before the fix (the kept paragraphs make the balance uneven, as they did).
-    assert!((bl - 221.79).abs() < 0.5 && (br - 169.2).abs() < 0.5, "columns end at {bl} and {br}");
+    // The kept paragraphs are held in one column (not cut at the trial height), whatever the
+    // font metrics: the three of them start at the same left edge.
+    let boxes = para_boxes(&l);
+    let col = |i: usize| boxes.get(i).map(|e| e.1);
+    assert!(col(3).is_some() && col(3) == col(4) && col(4) == col(5), "kept paragraphs split over columns: {:?}", boxes.get(3..6));
     assert_eq!(page, 0);
-    assert!(after >= bl - 0.5 && after < bl + 30.0, "next section at {after}, columns end at {bl}");
+    assert!(after >= bl - 0.5 && after < bl + 30.0, "next section at {after}, columns end at {bl} (right {br})");
 }
 
 /// Keep lines together on the paragraph after a kept heading: when the whole paragraph does
