@@ -7,10 +7,12 @@
 //! "params"}`) that fixes it, run with the caret at `pos` (or the object selected). The rules and
 //! their wording are our own; the contrast rule uses the WCAG 2 contrast ratio.
 
+use std::collections::{HashMap, HashSet};
+
 use serde_json::{Value, json};
 use wordcraft_doc::para::{InlineObject, OBJ};
 use wordcraft_doc::props::{CharProps, ParaProps, Rgb, TextColor, VMerge};
-use wordcraft_doc::styles::PartSet;
+use wordcraft_doc::styles::{PartSet, TableStyleProps};
 use wordcraft_doc::table::Table;
 use wordcraft_doc::{Block, Document, Paragraph, Path, Pos, StoryRef};
 
@@ -21,7 +23,7 @@ const BLANK_RUN: usize = 3;
 
 /// The checker's findings for `doc`, errors first, then warnings, then tips (each in document order).
 pub fn check(doc: &Document) -> Vec<Value> {
-    let mut c = Checker { doc, issues: Vec::new() };
+    let mut c = Checker { doc, issues: Vec::new(), tables: HashMap::new() };
     c.run();
     let rank = |v: &Value| match v["kind"].as_str() {
         Some("error") => 0,
@@ -36,6 +38,8 @@ pub fn check(doc: &Document) -> Vec<Value> {
 struct Checker<'a> {
     doc: &'a Document,
     issues: Vec<Value>,
+    /// Each table's [`TableCtx`], by the table's path, filled when a paragraph of it is first met.
+    tables: HashMap<Path, TableCtx>,
 }
 
 fn at(path: &Path, off: usize) -> Pos {
@@ -53,24 +57,51 @@ struct CellLook {
     para: Option<ParaProps>,
 }
 
-fn cell_look(doc: &Document, path: &Path) -> Option<CellLook> {
+/// What a table gives every cell's look, worked out once per table: its style with the based-on
+/// chain merged, the band sizes and the column count. Working these out per paragraph would merge
+/// the chain and walk every row once for each cell paragraph.
+struct TableCtx {
+    style: Option<TableStyleProps>,
+    sizes: (u32, u32),
+    cols: usize,
+}
+
+impl TableCtx {
+    fn of(doc: &Document, t: &Table) -> TableCtx {
+        let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
+        let sizes = style.as_ref().map_or((0, 0), |st| (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0)));
+        TableCtx { style, sizes, cols: t.cols().max(1) }
+    }
+}
+
+fn cell_look(doc: &Document, tables: &mut HashMap<Path, TableCtx>, path: &Path) -> Option<CellLook> {
     let (tp, r, c) = path.cell()?;
     let t = doc.table(StoryRef::Body, &tp)?;
     let cell = t.rows.get(r)?.cells.get(c)?;
+    if !tables.contains_key(&tp) {
+        tables.insert(tp.clone(), TableCtx::of(doc, t));
+    }
+    let tl = tables.get(&tp)?;
     let mut look = CellLook { fill: None, chr: None, para: None };
-    if let Some(st) = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id)) {
-        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+    if let Some(st) = &tl.style {
         let mut chr = CharProps::default();
         // Each part over the last, lowest precedence first (ECMA-376 §17.7.6), as the layout does.
-        for part in PartSet::of_cell(&t.props.look, sizes, (r, t.rows.len()), (t.grid_col(r, c), cell.span(), t.cols().max(1))).iter() {
+        for part in PartSet::of_cell(&t.props.look, tl.sizes, (r, t.rows.len()), (t.grid_col(r, c), cell.span(), tl.cols)).iter() {
             let f = st.part(part);
             look.fill = f.fill.or(look.fill);
             chr.overlay(&f.chr);
         }
         look.chr = Some(chr);
-        look.para = Some(st.para);
+        // Only the style's own paragraph formatting, without its parts' `align` (which the layout
+        // does apply, see `region_text`): alignment changes neither the shading nor the contrast.
+        look.para = Some(st.para.clone());
     }
     look.fill = cell.props.shading.or(look.fill);
+    // A cell with no fill of its own shows what is under it: in a table inside another table's
+    // cell, that cell's fill.
+    if look.fill.is_none() && tp.cell().is_some() {
+        look.fill = cell_look(doc, tables, &tp).and_then(|l| l.fill);
+    }
     Some(look)
 }
 
@@ -85,11 +116,12 @@ impl Checker<'_> {
         let doc = self.doc;
         let mut last_level: Option<u8> = None;
         let mut tables: Vec<Path> = Vec::new();
+        let mut seen: HashSet<Path> = HashSet::new();
         let mut blank: Vec<Path> = Vec::new();
         for path in doc.para_paths(StoryRef::Body) {
             let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
             if let Some((tp, _, _)) = path.cell()
-                && !tables.contains(&tp)
+                && seen.insert(tp.clone())
             {
                 tables.push(tp);
             }
@@ -191,7 +223,7 @@ impl Checker<'_> {
     /// the paragraph's, and the cell's own shading or else its style's.
     fn contrast(&mut self, path: &Path, p: &Paragraph) {
         let doc = self.doc;
-        let look = cell_look(doc, path);
+        let look = cell_look(doc, &mut self.tables, path);
         let table_chr = look.as_ref().and_then(|l| l.chr.as_ref());
         let para_shading = doc.styles.resolve_para_in(&p.props, look.as_ref().and_then(|l| l.para.as_ref())).shading;
         let cell = look.as_ref().and_then(|l| l.fill);
@@ -392,6 +424,58 @@ mod tests {
         // The style's own light text on white, except where the paragraph sets a dark colour.
         let light = ink(Rgb(0xCC, 0xCC, 0xCC));
         assert_eq!(flagged(TableStyleParts::default(), light, None, [None, black, None, black], [None; 4]), [(0, 0), (1, 0)]);
+    }
+
+    /// The table style is worked out once per table: each table still gets its own style's
+    /// shading, and a plain table inside a navy cell shows that navy under its text.
+    #[test]
+    fn each_table_is_checked_against_its_own_style() {
+        use wordcraft_doc::props::{CharProps, TextColor};
+        use wordcraft_doc::styles::TableStyleParts;
+        use wordcraft_doc::table::Table;
+        use wordcraft_doc::{Block, Paragraph};
+        let mut d = Document::from_text("Intro");
+        d.core.title = "T".into();
+        std::sync::Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+            id: "Navy".into(),
+            name: "Navy".into(),
+            kind: wordcraft_doc::StyleKind::Table,
+            table: Some(TableStyleParts { fill: Some(Rgb(0x1F, 0x38, 0x64)), ..Default::default() }),
+            ..Default::default()
+        });
+        let black = CharProps { color: Some(TextColor::Rgb(Rgb::BLACK)), ..Default::default() };
+        let table = |style: Option<&str>| {
+            let mut t = Table::new(2, 2, 300.0);
+            t.props.style = style.map(Into::into);
+            for row in &mut t.rows {
+                for cell in &mut row.cells {
+                    cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Some text", black.clone()))];
+                }
+            }
+            t
+        };
+        // A navy table holding a plain table in its last cell, then a plain table on its own.
+        let mut navy = table(Some("Navy"));
+        navy.rows[1].cells[1].blocks.insert(0, std::sync::Arc::new(Block::Table(table(None))));
+        d.body.push(std::sync::Arc::new(Block::Table(navy)));
+        d.body.push(std::sync::Arc::new(Block::Table(table(None))));
+        let mut s = Session::new(d);
+        let v = s.run("file.accessibility", &json!({})).unwrap();
+        let mut at: Vec<Vec<u64>> = v["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["rule"] == "contrast")
+            .map(|i| i["where"].as_array().unwrap().iter().map(|n| n.as_u64().unwrap()).collect())
+            .collect();
+        at.sort_unstable();
+        // Black on navy in the navy table's four cells and in the plain table inside one of them;
+        // the plain table on its own is on white.
+        let nested = |r, c| vec![1, 1, 1, 0, r, c, 0];
+        assert_eq!(
+            at,
+            [vec![1, 0, 0, 0], vec![1, 0, 1, 0], vec![1, 1, 0, 0], nested(0, 0), nested(0, 1), nested(1, 0), nested(1, 1), vec![1, 1, 1, 1]]
+        );
     }
 
     #[test]
