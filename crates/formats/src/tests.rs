@@ -878,6 +878,36 @@ fn block_lines_move_past_blocks_whose_words_are_not_in_the_source() {
     assert!(lines.iter().enumerate().all(|(i, &l)| l == 2 * i), "{:?}", &lines[..8]);
 }
 
+/// Blank code lines start on their own blank lines, so the blocks after a code block with two
+/// blank lines in a row keep their lines.
+#[test]
+fn block_lines_keep_blank_code_lines_on_their_own_lines() {
+    let md = "# Title\n\n```python\nimport os\n\n\ndef main():\n    pass\n```\n\nNext paragraph.\n\nLast paragraph.\n";
+    let (doc, lines) = crate::markdown::import_on_with_lines(md, &Default::default());
+    assert_eq!(doc.body.len(), 8);
+    assert_eq!(lines, [0, 3, 4, 5, 6, 7, 10, 12]);
+    // A blank first code line is the line after the opening fence.
+    let (_, lines) = crate::markdown::import_on_with_lines("```\n\nfoo\n```\n", &Default::default());
+    assert_eq!(lines, [1, 2]);
+    // The blank line before an opening fence is not a code line.
+    let (_, lines) = crate::markdown::import_on_with_lines("Intro\n\n```\n\n```\n", &Default::default());
+    assert_eq!(lines, [0, 3]);
+    // Nor is one after an indented code block, while one inside it is.
+    let (_, lines) = crate::markdown::import_on_with_lines("    a\n\n    b\n\n```\n\n```\nNext\n", &Default::default());
+    assert_eq!(lines, [0, 1, 2, 5, 7]);
+    // A tab indents code by four columns, so a fence after a tab is code.
+    let (_, lines) = crate::markdown::import_on_with_lines("\t```\n\n```\n\n```\n", &Default::default());
+    assert_eq!(lines, [0, 3]);
+    // A closing fence is not taken as the line of a block whose word is not in the source.
+    let md = "```\ncode\n```\n\n&lt;a\n\n&lt;b\n\nc\n";
+    let (_, lines) = crate::markdown::import_on_with_lines(md, &Default::default());
+    assert_eq!(lines, [1, 4, 6, 8]);
+    // A line that only looks like a fence is the paragraph it starts.
+    let (doc, lines) = crate::markdown::import_on_with_lines("```&amp;`\n\nNext\n", &Default::default());
+    assert_eq!(doc.body.len(), 2);
+    assert_eq!(lines, [0, 2]);
+}
+
 /// A document's hyperlink can be `javascript:` (WordCraft refuses to follow it); the exported
 /// HTML and Markdown must not hand it to a browser either. Web, mail, bookmark and relative links
 /// still export as links.
