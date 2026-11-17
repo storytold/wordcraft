@@ -817,6 +817,16 @@ pub fn rename_file(source: &std::path::Path, destination: &std::path::Path) -> R
     Ok(())
 }
 
+/// Whether a save to `destination` would replace an existing file: an entry (a link included)
+/// is there, the automation write root lets a save reach it, and it is not `source` spelled with
+/// different case.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn rename_would_replace(source: &std::path::Path, destination: &std::path::Path) -> bool {
+    crate::file_access::check_write(&destination.to_string_lossy()).is_ok()
+        && std::fs::symlink_metadata(destination).is_ok()
+        && !only_case_differs(source, destination)
+}
+
 /// Whether `destination` names `source` in the same directory spelled with different case, and
 /// the directory holds no entry spelled exactly as `destination`.
 #[cfg(not(target_arch = "wasm32"))]

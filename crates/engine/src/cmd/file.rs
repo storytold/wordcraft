@@ -69,6 +69,11 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
             #[cfg(not(target_arch = "wasm32"))]
             if !s.path_names_only {
                 crate::io::rename_file(path, &destination).map_err(CmdError::Failed)?;
+            } else if crate::io::rename_would_replace(path, &destination) {
+                // No file is renamed here, but a later save writes to the new path, so an existing
+                // file there is refused as `rename_file` refuses it.
+                let file = destination.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+                return Err(CmdError::Failed(format!("Could not rename document: {file} already exists")));
             }
             s.path = Some(destination);
             s.relayout();
