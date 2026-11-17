@@ -1260,8 +1260,13 @@ fn undo_right_after_a_heading_autoformat_keeps_the_enter() {
 /// Format body paragraph `block` directly the way the built-in Heading `level` formats text: its
 /// font, size, color and italic on every character, its space before and after on the paragraph.
 fn format_like_heading(s: &mut Session, block: usize, level: u8) {
+    format_like_heading_at(s, &Pos::body(block, 0), level);
+}
+
+/// [`format_like_heading`] for the paragraph at `at`, in any story or table cell.
+fn format_like_heading_at(s: &mut Session, at: &Pos, level: u8) {
     let st = s.doc.styles.get(&format!("Heading{level}")).cloned().unwrap_or_default();
-    let p = s.doc.para_mut(StoryRef::Body, &Pos::body(block, 0).path).unwrap();
+    let p = s.doc.para_mut(at.story, &at.path).unwrap();
     let len = p.len();
     p.format(0, len, &|c| {
         c.font = st.chr.font.clone();
@@ -1371,6 +1376,32 @@ fn text_that_does_not_look_exactly_like_a_heading_stays_as_typed() {
     s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.style = Some("Quote".into());
     typ(&mut s, "\n");
     assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "a Quote: {:?}", styled(&s));
+    // Text in a table cell and in a header.
+    let in_place = |s: &mut Session, at: Pos| {
+        typ(s, "Results");
+        let at = Pos { off: 0, ..at };
+        format_like_heading_at(s, &at, 1);
+        let end = s.doc.para_at(&at).map_or(0, |p| p.len());
+        s.sel = crate::Selection::caret(Pos { off: end, ..at.clone() });
+        typ(s, "\n");
+        s.doc.para_at(&at).and_then(|p| p.props.style.clone())
+    };
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    let cell = s.sel.focus.clone();
+    assert!(cell.path.cell().is_some(), "{cell:?}");
+    let style = in_place(&mut s, cell);
+    assert!(style.as_deref().is_none_or(|st| st == "Normal"), "a table cell: {style:?}");
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+    let id = s.run("insert.header", &json!({"text": ""})).unwrap()["story"].as_u64().unwrap() as u32;
+    let header = Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0 };
+    // A Normal paragraph, so only the story keeps it as typed.
+    s.doc.para_mut(header.story, &header.path).unwrap().props.style = None;
+    s.sel = crate::Selection::caret(header.clone());
+    let style = in_place(&mut s, header);
+    assert!(style.as_deref().is_none_or(|st| st == "Normal"), "a header: {style:?}");
     // Two headings that look the same: neither is applied.
     let mut s = typed_like_heading("Results", 2);
     let two = s.doc.styles.get("Heading2").cloned().unwrap_or_default();

@@ -311,8 +311,8 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   gives it that heading style, removes the direct formatting the style now gives, and leaves its
   look unchanged; the next paragraph takes the style's next style
   (`enter_after_text_formatted_like_a_heading_gives_it_the_heading_style`). No new style is
-  created and no style is changed. A paragraph in a list, of another style, with a link, a tab
-  or an object, with mixed formatting, that looks like no heading or like two, Enter inside the
+  created and no style is changed. A paragraph in a list, of another style, in a table cell or a
+  header, with a link, a tab or an object, with mixed formatting, that looks like no heading or like two, Enter inside the
   text, and formatting limited to the document's styles leave it as typed
   (`text_that_does_not_look_exactly_like_a_heading_stays_as_typed`), and so do text formatted
   like a heading whose style numbers it (`text_formatted_like_a_numbered_heading_stays_as_typed`)
