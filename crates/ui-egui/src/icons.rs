@@ -263,6 +263,12 @@ fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
             pen.fcircle(16.5, 13.5, 1.6, a);
             pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
         }
+        // The Shading buttons draw the last colour as their own bar, so this has no bar of its own.
+        "shadingNoBar" => {
+            pen.fill(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], Color32::TRANSPARENT);
+            pen.closed(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], c);
+            pen.fcircle(16.5, 13.5, 1.6, a);
+        }
         "borders" => {
             for y in [3.0, 10.0, 17.0] {
                 for x in [3.0, 6.5, 10.0, 13.5, 17.0] {
@@ -720,6 +726,12 @@ fn paint_draw_to_review(pen: &Pen, name: &str) -> bool {
             pen.text(7.0, 7.0, 8.0, "ab-", c, false);
             pen.text(9.0, 14.5, 8.0, "cd", a, false);
         }
+        "fitOnePage" => {
+            pen.page(4.0, 2.0, 16.0, 18.0);
+            pen.lines(6.5, 13.5, &[6.0, 8.5, 11.0]);
+            pen.line_c(&[(10.0, 16.5), (10.0, 13.0)], a);
+            pen.line_c(&[(8.0, 14.5), (10.0, 13.0), (12.0, 14.5)], a);
+        }
         "position" | "wrapText" => {
             pen.lines(3.0, 17.0, &[3.0, 17.0]);
             pen.lines(3.0, 6.0, &[7.0, 10.0, 13.0]);
@@ -1028,6 +1040,15 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.line(&[(12.5, 15.5), (17.0, 15.5)]);
         }
         "draft" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // A heading mark, then lines of text.
+        "markdownSource" => {
+            pen.line_c(&[(4.0, 3.0), (4.0, 9.0)], a);
+            pen.line_c(&[(7.5, 3.0), (7.5, 9.0)], a);
+            pen.line_c(&[(2.5, 5.0), (9.0, 5.0)], a);
+            pen.line_c(&[(2.5, 7.0), (9.0, 7.0)], a);
+            pen.lines(3.0, 17.0, &[12.0, 15.0]);
+            pen.lines(11.0, 17.0, &[4.0, 7.0]);
+        }
         "focus" => {
             pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
             pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);
@@ -1123,9 +1144,25 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.line_c(&[(15.0, 14.0), (12.0, 11.5)], a);
             pen.line_c(&[(5.0, 14.0), (8.0, 11.5)], a);
         }
-        "sideBySide" | "syncScroll" | "switchWindows" => {
+        "sideBySide" => {
             pen.rect(2.0, 4.0, 9.5, 16.0, c);
             pen.rect(10.5, 4.0, 18.0, 16.0, a);
+        }
+        "syncScroll" => {
+            // Two windows side by side, both scrolling down.
+            pen.rect(2.0, 3.0, 9.5, 17.0, c);
+            pen.rect(10.5, 3.0, 18.0, 17.0, c);
+            for x in [5.75, 14.25] {
+                pen.line_c(&[(x, 6.0), (x, 12.0)], a);
+                pen.fill(&[(x - 2.0, 11.0), (x + 2.0, 11.0), (x, 14.0)], a);
+            }
+        }
+        "switchWindows" => {
+            // A window behind another, with a title bar each.
+            pen.rect(2.5, 7.0, 13.0, 17.5, c);
+            pen.line_c(&[(2.5, 9.5), (13.0, 9.5)], c);
+            pen.rect(7.0, 2.5, 17.5, 13.0, a);
+            pen.line_c(&[(7.0, 5.0), (17.5, 5.0)], a);
         }
         "macros" => {
             pen.rect(3.0, 3.0, 17.0, 17.0, c);
@@ -1537,6 +1574,12 @@ fn paint_file_and_tools(pen: &Pen, name: &str) -> bool {
             pen.rect(5.0, 11.0, 15.0, 15.0, c);
             pen.line_c(&[(10.0, 15.0), (10.0, 18.5)], a);
         }
+        // A warning triangle: a document font that isn't installed (shown in another font).
+        "fontMissing" => {
+            pen.fill(&[(10.0, 2.5), (18.5, 17.5), (1.5, 17.5)], Color32::from_rgb(0xE0, 0x7B, 0x1F));
+            pen.line_c(&[(10.0, 7.5), (10.0, 12.5)], Color32::WHITE);
+            pen.fcircle(10.0, 15.0, 1.0, Color32::WHITE);
+        }
         "designMode" => {
             pen.line(&[(4.0, 16.0), (16.0, 16.0), (4.0, 4.0), (4.0, 16.0)]);
             pen.line_c(&[(4.0, 12.0), (8.0, 16.0)], a);
@@ -1602,9 +1645,19 @@ fn shape(pen: &Pen, kind: &str) -> bool {
         "triangle" => solid(&[(10.0, 3.5), (17.0, 16.5), (3.0, 16.5)]),
         "diamond" => solid(&[(10.0, 3.0), (17.0, 10.0), (10.0, 17.0), (3.0, 10.0)]),
         "line" => pen.line(&[(4.0, 16.0), (16.0, 4.0)]),
+        // The block arrow the tile inserts (#6768), from the outline the document draws it with.
         "arrow" => {
-            pen.line(&[(4.0, 16.0), (14.5, 5.5)]);
-            head((16.5, 3.5), (4.0, 16.0));
+            let (x0, y0, w, h) = (3.0, 5.0, 14.0, 10.0);
+            let pts: Vec<(f32, f32)> = wordcraft_doc::wrap::arrow_outline(wordcraft_doc::para::ShapeKind::Arrow, w, h)
+                .iter()
+                .map(|&(u, v)| (x0 + u * w, y0 + v * h))
+                .collect();
+            // Concave: the shaft and the head are tinted apart, then the outline.
+            if let [tail_top, neck_top, barb_top, tip, barb_bottom, neck_bottom, tail_bottom] = pts[..] {
+                pen.fill(&[tail_top, neck_top, neck_bottom, tail_bottom], tint);
+                pen.fill(&[barb_top, tip, barb_bottom], tint);
+            }
+            pen.closed(&pts, c);
         }
         "star" => {
             let pts: Vec<(f32, f32)> = (0..10)
@@ -1693,5 +1746,50 @@ mod tests {
     fn no_colour_highlight_icon_has_no_yellow_bar() {
         assert!(has_default_highlight_bar("highlight"));
         assert!(!has_default_highlight_bar("highlightNoColor"));
+    }
+
+    /// #4412: the Shading buttons paint the last colour as their bar, so their icon has none of its own.
+    #[test]
+    fn the_shading_button_icon_has_no_bar_of_its_own() {
+        assert!(has_default_highlight_bar("shading"));
+        assert!(!has_default_highlight_bar("shadingNoBar"));
+    }
+
+    /// #6768: the Insert › Shapes Arrow tile is the block arrow that tile inserts, outlined as the
+    /// document draws it, not a thin line with a head.
+    #[test]
+    fn the_arrow_tile_is_the_block_arrow_it_inserts() {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), "shape.arrow", Color32::BLACK, Color32::BLUE);
+        });
+        let outline: Vec<Pos2> = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                // The outline, not the tinted fills (closed too, but without a stroke).
+                Shape::Path(path) if path.closed && path.stroke.width > 0.0 => Some(path.points.clone()),
+                _ => None,
+            })
+            .expect("the arrow is outlined");
+        output.drop_without_applying_deltas();
+        let want = wordcraft_doc::wrap::arrow_outline(wordcraft_doc::para::ShapeKind::Arrow, 14.0, 10.0);
+        assert_eq!(outline.len(), want.len(), "{outline:?}");
+        for (got, (u, v)) in outline.iter().zip(want) {
+            let expected = pos2(3.0 + u * 14.0, 5.0 + v * 10.0);
+            assert!(got.distance(expected) < 0.01, "{got:?} vs {expected:?}");
+        }
+    }
+
+    /// Verify that the fitOnePage vector icon renders without panics and emits shapes.
+    #[test]
+    fn fit_one_page_icon_paints_without_panic() {
+        let ctx = egui::Context::default();
+        let key = "fitOnePage";
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), key, Color32::BLACK, Color32::BLUE);
+        });
+        assert!(!output.shapes.is_empty(), "{key} icon must emit shapes");
+        output.drop_without_applying_deltas();
     }
 }

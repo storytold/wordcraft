@@ -76,10 +76,10 @@ fn paint_style(p: &egui::Painter, r: Rect, id: &str, theme: &[Rgb]) {
 /// Our WordArt styles as a grid; a click runs `cmd` with `{"style": id}`.
 pub fn style_gallery(ui: &mut Ui, app: &mut WordApp, cmd: &str) {
     let theme = app.session.doc.settings.theme_colors.clone();
-    egui::Grid::new(("wordart-styles", cmd)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new(("wordart-styles", cmd)).spacing(vec2(4.0, 4.0)), |ui| {
         for (i, (id, label)) in ART_STYLES.iter().enumerate() {
             if cell(ui, 40.0, 36.0, label, |p, r| paint_style(p, r, id, &theme)) {
-                let _ = app.run(cmd, json!({"style": id}));
+                crate::widgets::run_from_ribbon(app, cmd, json!({"style": id}));
                 ui.close();
             }
             if i % 4 == 3 {
@@ -95,7 +95,7 @@ pub fn fill_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb]) {
     mi(ui, app, "Automatic", "format.textEffects", json!({"fill": null}));
     mi(ui, app, "No Fill", "format.textEffects", json!({"fill": "none"}));
     if let Some(hex) = color_grid(ui, theme) {
-        let _ = app.run("format.textEffects", json!({"fill": hex}));
+        crate::widgets::run_from_ribbon(app, "format.textEffects", json!({"fill": hex}));
         ui.close();
     }
     ui.add_space(4.0);
@@ -113,7 +113,7 @@ pub fn fill_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb]) {
                 }
             });
             if clicked {
-                let _ = app.run("format.textEffects", json!({"fill": {"gradient": [a.hex(), b.hex()], "angle": 90}}));
+                crate::widgets::run_from_ribbon(app, "format.textEffects", json!({"fill": {"gradient": [a.hex(), b.hex()], "angle": 90}}));
                 ui.close();
             }
         }
@@ -126,7 +126,7 @@ pub fn outline_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb], current: Opti
     mi(ui, app, "No Outline", "format.textEffects", json!({"outline": "none"}));
     let width = current.map_or(0.75, |c| c.1);
     if let Some(hex) = color_grid(ui, theme) {
-        let _ = app.run("format.textEffects", json!({"outline": {"color": hex, "width": width}}));
+        crate::widgets::run_from_ribbon(app, "format.textEffects", json!({"outline": {"color": hex, "width": width}}));
         ui.close();
     }
     ui.separator();
@@ -174,7 +174,7 @@ pub fn effects_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb], transform: bo
         ui.separator();
         ui.menu_button(crate::tl!("Glow Colors"), |ui| {
             if let Some(hex) = color_grid(ui, theme) {
-                let _ = app.run("format.textEffects", json!({"glow": {"color": hex, "size": 5.0}}));
+                crate::widgets::run_from_ribbon(app, "format.textEffects", json!({"glow": {"color": hex, "size": 5.0}}));
                 ui.close();
             }
         });
@@ -196,10 +196,10 @@ pub fn transform_menu(ui: &mut Ui, app: &mut WordApp) {
     let t = Tokens::get(ui.ctx());
     mi(ui, app, "No Transform", "wordArt.transform", json!({"preset": "none"}));
     ui.add_space(4.0);
-    egui::Grid::new("wordart-warps").spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("wordart-warps").spacing(vec2(4.0, 4.0)), |ui| {
         for (i, (id, label)) in DRAWN_WARPS.iter().enumerate() {
             if cell(ui, 46.0, 32.0, label, |p, r| paint_warp(p, r.shrink(2.0), id, t.accent)) {
-                let _ = app.run("wordArt.transform", json!({"preset": id}));
+                crate::widgets::run_from_ribbon(app, "wordArt.transform", json!({"preset": id}));
                 ui.close();
             }
             if i % 4 == 3 {

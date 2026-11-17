@@ -198,7 +198,9 @@ fn special(query: &str, o: &Opts) -> (String, bool) {
         if (o.ignore_punct && is_punct(c)) || (o.ignore_space && is_space(c)) {
             continue;
         }
-        atoms.push(lit(c));
+        // A keyboard apostrophe also finds text produced by smart quotes. Explicit character
+        // codes above, and literal/regex/wildcard searches, keep exact character matching.
+        atoms.push(if c == '\'' { "['‘’]".into() } else { lit(c) });
     }
     let filler = match (o.ignore_punct, o.ignore_space) {
         (true, true) => r"[\p{P} \t\x{A0}]*",
