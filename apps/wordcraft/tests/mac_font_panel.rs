@@ -70,6 +70,24 @@ fn main() {
     let manager = NSFontManager::sharedFontManager(mtm);
     let traits = manager.traitsOfFont(&manager.selectedFont().expect("a selected font"));
     assert!(traits.contains(NSFontTraitMask::BoldFontMask | NSFontTraitMask::ItalicFontMask), "{traits:?}");
+    // An open panel stays open after a pick: the next frame's follow() refreshes it, not closes it.
+    let face = || font_panel::Face { family: "Helvetica".into(), size: 14.0, bold: false, italic: false };
+    let fonts = objc2_app_kit::NSFontPanel::sharedFontPanel(mtm);
+    let colors = objc2_app_kit::NSColorPanel::sharedColorPanel(mtm);
+    panel.change_color_for_test(&NSColor::colorWithSRGBRed_green_blue_alpha(0.0, 1.0, 0.0, 1.0));
+    assert_eq!(panel.picks().len(), 1);
+    panel.follow(face);
+    assert!(fonts.isVisible(), "the panel the app opened stays open after a pick");
+    // A panel open before the app opened one (macOS restored it from the last quit) is closed,
+    // and so is a restored colour panel on its own.
+    let restored = FontPanel::new(mtm, || {});
+    fonts.orderOut(None);
+    colors.orderFront(None);
+    restored.follow(face);
+    assert!(!colors.isVisible(), "a restored colour panel closes");
+    fonts.orderFront(None);
+    restored.follow(face);
+    assert!(!fonts.isVisible(), "a restored font panel closes");
     println!("mac_font_panel: ok");
 }
 

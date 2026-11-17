@@ -199,13 +199,15 @@ pub struct FontPanel {
     picks: Receiver<Pick>,
     /// The font the panel shows, so it changes only when the selection's does.
     shown: RefCell<Option<Face>>,
+    /// Whether the app has opened the panel; one open before that was restored by macOS.
+    opened: Cell<bool>,
 }
 
 impl FontPanel {
     /// `wake` asks the app for a pass, in which it takes the [`picks`](Self::picks).
     pub fn new(mtm: MainThreadMarker, wake: impl Fn() + 'static) -> Self {
         let (tx, picks) = channel();
-        FontPanel { target: FontTarget::new(mtm, tx, Box::new(wake)), picks, shown: RefCell::new(None) }
+        FontPanel { target: FontTarget::new(mtm, tx, Box::new(wake)), picks, shown: RefCell::new(None), opened: Cell::new(false) }
     }
 
     /// Hides the panel's shadow controls, for an app whose text has no shadow.
@@ -218,6 +220,7 @@ impl FontPanel {
     /// Shows the panel on the selection's font.
     pub fn show(&self, face: Face) {
         let mtm = self.target.mtm();
+        self.opened.set(true);
         self.select(face);
         set_targets(mtm, &self.target);
         NSFontPanel::sharedFontPanel(mtm).orderFront(None);
@@ -228,16 +231,18 @@ impl FontPanel {
     /// then.
     pub fn follow(&self, face: impl FnOnce() -> Face) {
         let mtm = self.target.mtm();
-        if !NSFontPanel::sharedFontPanelExists(mtm) || !NSFontPanel::sharedFontPanel(mtm).isVisible() {
-            return;
-        }
-        // Open but never shown: macOS reopened the panels a quit left open (window restoration,
-        // which may come after the first frames). They open only when asked.
-        if self.shown.borrow().is_none() {
-            NSFontPanel::sharedFontPanel(mtm).orderOut(None);
-            if NSColorPanel::sharedColorPanelExists(mtm) {
+        // Before the app opens them, an open panel is one macOS restored from the last quit
+        // (window restoration, which may come after the first frames). They open only when asked.
+        if !self.opened.get() {
+            if NSFontPanel::sharedFontPanelExists(mtm) && NSFontPanel::sharedFontPanel(mtm).isVisible() {
+                NSFontPanel::sharedFontPanel(mtm).orderOut(None);
+            }
+            if NSColorPanel::sharedColorPanelExists(mtm) && NSColorPanel::sharedColorPanel(mtm).isVisible() {
                 NSColorPanel::sharedColorPanel(mtm).orderOut(None);
             }
+            return;
+        }
+        if !NSFontPanel::sharedFontPanelExists(mtm) || !NSFontPanel::sharedFontPanel(mtm).isVisible() {
             return;
         }
         let face = face();
