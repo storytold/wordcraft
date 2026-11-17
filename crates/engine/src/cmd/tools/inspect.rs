@@ -1,4 +1,4 @@
-use super::*;
+use super::{Block, CmdError, CmdResult, Document, InlineObject, Paragraph, Pos, Session, StoryRef, Value, json};
 
 pub(super) fn accessibility(s: &mut Session, _: &Value) -> CmdResult {
     let issues = crate::cmd::accessibility::check(&s.doc);

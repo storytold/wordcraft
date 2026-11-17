@@ -1,5 +1,5 @@
 use super::doc_state::{CellRange, EDIT_MARKS, Selection};
-use super::*;
+use super::{CharProps, Document, PartKind, Path, Pos, Session, StoryRef, ViewMode, untitled_name};
 
 impl Session {
     /// Remember the caret as the place of an edit, for Go Back. Edits in the same paragraph as
@@ -266,6 +266,18 @@ impl Session {
     /// Words in the document, as the status bar shows them (see [`Prefs::count_notes`]).
     pub fn word_count(&self) -> usize {
         if self.prefs.count_notes { self.doc.word_count_including_notes() } else { self.doc.word_count() }
+    }
+
+    /// The stories the Word Count dialog and the status bar count: the body plus notes and text
+    /// boxes when [`Prefs::count_notes`] is on ([`Document::counted_stories`]).
+    pub fn counted_stories(&self) -> Vec<StoryRef> {
+        if self.prefs.count_notes { self.doc.counted_stories() } else { vec![StoryRef::Body] }
+    }
+
+    /// The whole document's text the counts cover (#2797): the stories [`Session::counted_stories`]
+    /// names, joined with paragraph breaks, as the Word Count dialog counts them.
+    pub fn counted_text(&self) -> String {
+        self.counted_stories().iter().map(|st| self.doc.plain_text(*st)).collect::<Vec<_>>().join("\n")
     }
 
     /// Selected plain text.

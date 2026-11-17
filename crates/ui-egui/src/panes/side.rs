@@ -1,4 +1,4 @@
-use super::*;
+use super::{Stroke, Tokens, Ui, Value, WordApp, json, regular};
 
 /// Items collected by Copy and Cut, newest first; clicking one pastes it at the caret.
 pub(super) fn clipboard(app: &mut WordApp, ui: &mut Ui) {
@@ -31,7 +31,7 @@ pub(super) fn clipboard(app: &mut WordApp, ui: &mut Ui) {
                     let _ = app.run("edit.pasteClipboardItem", json!({"index": i}));
                     app.canvas.want_focus = true;
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                ui.with_layout(crate::rtl::far_side(ui, egui::Align::Min), |ui| {
                     if ui.small_button(tl!("Delete")).clicked() {
                         let _ = app.run("edit.deleteClipboardItem", json!({"index": i}));
                         app.canvas.want_focus = true;
@@ -72,6 +72,9 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
     if ui.selectable_label(app.session.view.style_inspector, tl!("Style Inspector")).clicked() {
         let _ = app.run("styles.inspector", json!({}));
     }
+    // A solid scroll bar takes its own room beside the list instead of floating over the a / ¶ markers.
+    // Its handle keeps the text colour: the solid default fills it like a button, white on white here.
+    ui.spacing_mut().scroll = egui::style::ScrollStyle { foreground_color: true, ..egui::style::ScrollStyle::solid() };
     ui.separator();
     let mut list: Vec<(String, String, bool, bool)> = app
         .session
@@ -87,14 +90,14 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
         for (id, name, is_char, builtin) in list {
             ui.horizontal(|ui| {
                 let r = ui.selectable_label(id == cur, &name);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new(if is_char { "a" } else { "¶" }).weak());
                 });
                 if r.clicked() {
                     let _ = app.run("para.style", json!({"style": id}));
                     app.canvas.want_focus = true;
                 }
-                r.context_menu(|ui| {
+                crate::rtl::context_menu(&r, |ui| {
                     if ui.button(tl!("Modify…")).clicked() {
                         app.dialog = crate::dialogs::Dialog::modify_style(app, &id);
                         ui.close();

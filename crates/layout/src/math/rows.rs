@@ -1,6 +1,6 @@
 use super::bx::{Bx, Cls, RunPart, St, classes, compose, finalize, gaps_between, hcat};
 use super::state::op_char;
-use super::*;
+use super::{Arg, BrkBin, BrkBinSub, Ctx, MNode, MRun, MSty, MathProps, split_number};
 
 impl Ctx {
     /// Rows stacked and centred on the math axis; `gap`: least space between rows, `min_skip`:

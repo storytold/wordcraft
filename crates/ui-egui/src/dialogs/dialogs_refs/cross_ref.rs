@@ -1,6 +1,6 @@
 use super::common::{BUILT_IN_LABELS, choice};
 use super::shell::Next;
-use super::*;
+use super::{Serialize, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Cross-reference
@@ -65,16 +65,22 @@ impl CrossRefForm {
 /// Insert.
 pub(super) fn cross_ref_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CrossRefForm) -> Next {
     let was = f.to.clone();
-    egui::Grid::new("xref_opts").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        let type_label = ui.label(tl!("Reference type:"));
-        let types = ref_types(app);
-        let types: Vec<(String, &str)> = types.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
-        choice(ui, "xref_type", &mut f.to, &types, &type_label);
-        ui.end_row();
-        let show_label = ui.label(tl!("Insert reference to:"));
-        let shows: Vec<(String, &str)> = f.shows().iter().map(|(v, l)| (v.to_string(), *l)).collect();
-        choice(ui, "xref_show", &mut f.show, &shows, &show_label);
-        ui.end_row();
+    crate::rtl::Table::new("xref_opts").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let type_label = r.cell(|ui| ui.label(tl!("Reference type:")));
+            r.cell(|ui| {
+                let types = ref_types(app);
+                let types: Vec<(String, &str)> = types.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
+                choice(ui, "xref_type", &mut f.to, &types, &type_label)
+            });
+        });
+        t.row(|r| {
+            let show_label = r.cell(|ui| ui.label(tl!("Insert reference to:")));
+            r.cell(|ui| {
+                let shows: Vec<(String, &str)> = f.shows().iter().map(|(v, l)| (v.to_string(), *l)).collect();
+                choice(ui, "xref_show", &mut f.show, &shows, &show_label)
+            });
+        });
     });
     if f.to != was {
         *f = CrossRefForm::read(app, &f.to);

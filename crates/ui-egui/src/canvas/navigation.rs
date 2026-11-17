@@ -1,5 +1,5 @@
 use super::pages::{page_screen_scale, to_screen};
-use super::*;
+use super::{DocLayout, Pos2, Rect, Ui, WordApp, pos2, vec2};
 
 /// Page index and document coordinates under a screen point.
 pub fn page_at(rects: &[Rect], layout: &DocLayout, scale: f32, p: Pos2) -> Option<(usize, f32, f32)> {

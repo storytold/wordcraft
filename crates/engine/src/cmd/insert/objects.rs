@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Block, CharProps, CmdError, CmdResult, Float, InlineObject, Paragraph, PartKind, Path, Pos, Rgb, Selection, Session, ShapeKind, StoryRef, Table,
+    Value, Wrap, delete_selection, json, p, para_block, sel_result,
+};
 
 /// Insert a block after the caret's paragraph (splitting it if the caret is mid-paragraph).
 fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError> {
@@ -68,22 +71,7 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-pub fn base64_encode(b: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
-    for ch in b.chunks(3) {
-        let n =
-            (ch.first().copied().unwrap_or(0) as u32) << 16 | (ch.get(1).copied().unwrap_or(0) as u32) << 8 | ch.get(2).copied().unwrap_or(0) as u32;
-        for i in 0..4 {
-            if i <= ch.len() {
-                out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
+pub use craft_mime::transfer::base64 as base64_encode;
 
 pub(crate) fn picture(s: &mut Session, v: &Value) -> CmdResult {
     let bytes = if let Some(d) = p::str(v, "data") {
@@ -134,7 +122,8 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let (mut w, mut h) = (natural_w, natural_h);
     if let Some(want) = width {
-        let k = want.max(4.0) / w.max(1.0);
+        // At most 22 inches, as for icons: a huge width made the height of a tall picture infinite.
+        let k = want.clamp(4.0, 1584.0) / w.max(1.0);
         w *= k;
         h *= k;
     }
@@ -142,7 +131,16 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
         h *= max_w / w;
         w = max_w;
     }
-    let obj = InlineObject::Image { media: key.clone(), w, h, alt: alt.to_string(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let obj = InlineObject::Image {
+        media: key.clone(),
+        w,
+        h,
+        alt: alt.to_string(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     // A selected Drawing Canvas takes it in.
     if let Some(i) = crate::cmd::canvas::add_member(s, obj.clone())? {
         return Ok(json!({"media": key, "canvasMember": i}));

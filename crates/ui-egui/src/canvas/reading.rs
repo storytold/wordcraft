@@ -1,5 +1,5 @@
 use super::geometry::sane_dim;
-use super::*;
+use super::{DocLayout, GAP, PX_PER_PT, Placed, Pos, Rect, StoryRef, WordApp, pos2, vec2};
 
 /// Full pagination is expensive. During a resize keep the already laid-out pages and reflow
 /// once the viewport has been stable this long (seconds).

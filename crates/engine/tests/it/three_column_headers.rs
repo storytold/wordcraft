@@ -9,6 +9,72 @@ fn table(doc: &Document, story: StoryRef) -> &Table {
     table
 }
 
+fn assert_empty_three_column_table(doc: &Document, story: StoryRef, style: &str, width: f32) {
+    let t = table(doc, story);
+    assert_eq!(t.rows.len(), 1);
+    assert_eq!(t.rows[0].cells.len(), 3);
+    assert_eq!(t.grid.len(), 3);
+    assert!((t.grid.iter().sum::<f32>() - width).abs() < 0.01);
+    assert!(t.grid.iter().all(|w| (*w - width / 3.0).abs() < 0.01));
+    assert!(t.props.fixed);
+    assert!(!t.props.borders.as_ref().unwrap().any_visible());
+    assert_ne!(t.props.style.as_deref(), Some("TableGrid"));
+    for (cell, align) in t.rows[0].cells.iter().zip([Align::Left, Align::Center, Align::Right]) {
+        let Block::Para(p) = &*cell.blocks[0] else { panic!("cell paragraph missing") };
+        assert!(p.text.is_empty());
+        assert_eq!(p.props.style.as_deref(), Some(style));
+        assert_eq!(p.props.align, Some(align));
+    }
+}
+
+fn assert_filled_three_column_table(doc: &Document, story: StoryRef, style: &str, width: f32) {
+    let t = table(doc, story);
+    assert_eq!(t.rows.len(), 1);
+    assert_eq!(t.rows[0].cells.len(), 3);
+    assert!((t.grid.iter().sum::<f32>() - width).abs() < 0.1);
+    assert!(t.props.fixed);
+    assert!(!t.props.borders.as_ref().unwrap().any_visible());
+    for ((cell, text), align) in
+        t.rows[0].cells.iter().zip(["Left text", "Middle text", "Right text"]).zip([Align::Left, Align::Center, Align::Right])
+    {
+        let Block::Para(p) = &*cell.blocks[0] else { panic!("cell lost") };
+        assert_eq!(p.text, text);
+        assert_eq!(p.props.style.as_deref(), Some(style));
+        assert_eq!(p.props.align, Some(align));
+        assert_eq!(p.props_at(0).bold == Some(true), text == "Middle text");
+    }
+}
+
+fn fill_and_check_undo(session: &mut Session, story: StoryRef) -> Document {
+    for (cell, text) in ["Left text", "Middle text", "Right text"].into_iter().enumerate() {
+        if cell > 0 {
+            session.run("text.tab", &json!({})).unwrap();
+        }
+        assert_eq!(session.sel.focus, Pos { story, path: Path(vec![0, 0, cell as u32, 0]), off: 0 });
+        session.run("text.insert", &json!({"text": text})).unwrap();
+    }
+    let filled = session.doc.clone();
+    session.run("edit.undo", &json!({})).unwrap();
+    assert!(!session.doc.plain_text(story).contains("Right text"));
+    assert!(session.doc.plain_text(story).contains("Middle text"));
+    session.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(session.doc, filled);
+    session.run("select.text", &json!({"text": "Middle text"})).unwrap();
+    session.run("format.bold", &json!({"value": true})).unwrap();
+    session.doc.clone()
+}
+
+fn assert_roundtrip(session: &Session, header: bool, style: &str, width: f32) {
+    let mut back = session.doc.clone();
+    for _ in 0..2 {
+        back = wordcraft_docx::read(&wordcraft_docx::write(&back).unwrap()).unwrap();
+        let id = if header { back.last_section.headers.default } else { back.last_section.footers.default }.unwrap();
+        let story = StoryRef::Part(id);
+        assert_filled_three_column_table(&back, story, style, width);
+        assert_eq!(back.plain_text(StoryRef::Body), "Body text");
+    }
+}
+
 #[test]
 fn three_columns_are_borderless_cells_with_the_story_style_and_section_width() {
     for (command, header, style, existing) in [
@@ -31,21 +97,7 @@ fn three_columns_are_borderless_cells_with_the_story_style_and_section_width() {
         let depth = s.undo_depth();
         let id = s.run(command, &json!({"preset": "blankThree"})).unwrap()["story"].as_u64().unwrap() as u32;
         let story = StoryRef::Part(id);
-        let t = table(&s.doc, story);
-        assert_eq!(t.rows.len(), 1);
-        assert_eq!(t.rows[0].cells.len(), 3);
-        assert_eq!(t.grid.len(), 3);
-        assert!((t.grid.iter().sum::<f32>() - width).abs() < 0.01);
-        assert!(t.grid.iter().all(|w| (*w - width / 3.0).abs() < 0.01));
-        assert!(t.props.fixed);
-        assert!(!t.props.borders.as_ref().unwrap().any_visible());
-        assert_ne!(t.props.style.as_deref(), Some("TableGrid"));
-        for (cell, align) in t.rows[0].cells.iter().zip([Align::Left, Align::Center, Align::Right]) {
-            let Block::Para(p) = &*cell.blocks[0] else { panic!("cell paragraph missing") };
-            assert!(p.text.is_empty());
-            assert_eq!(p.props.style.as_deref(), Some(style));
-            assert_eq!(p.props.align, Some(align));
-        }
+        assert_empty_three_column_table(&s.doc, story, style, width);
         assert_eq!(s.sel.focus, Pos { story, path: Path(vec![0, 0, 0, 0]), off: 0 });
         let after = s.doc.clone();
         assert_eq!(s.undo_depth(), depth + 1);
@@ -53,42 +105,8 @@ fn three_columns_are_borderless_cells_with_the_story_style_and_section_width() {
         assert_eq!(s.doc, before);
         s.run("edit.redo", &json!({})).unwrap();
         assert_eq!(s.doc, after);
-        for (cell, text) in ["Left text", "Middle text", "Right text"].into_iter().enumerate() {
-            if cell > 0 {
-                s.run("text.tab", &json!({})).unwrap();
-            }
-            assert_eq!(s.sel.focus, Pos { story, path: Path(vec![0, 0, cell as u32, 0]), off: 0 });
-            s.run("text.insert", &json!({"text": text})).unwrap();
-        }
-        let filled = s.doc.clone();
-        s.run("edit.undo", &json!({})).unwrap();
-        assert!(!s.doc.plain_text(story).contains("Right text"));
-        assert!(s.doc.plain_text(story).contains("Middle text"));
-        s.run("edit.redo", &json!({})).unwrap();
-        assert_eq!(s.doc, filled);
-        s.run("select.text", &json!({"text": "Middle text"})).unwrap();
-        s.run("format.bold", &json!({"value": true})).unwrap();
-        let mut back = s.doc.clone();
-        for _ in 0..2 {
-            back = wordcraft_docx::read(&wordcraft_docx::write(&back).unwrap()).unwrap();
-            let id = if header { back.last_section.headers.default } else { back.last_section.footers.default }.unwrap();
-            let t = table(&back, StoryRef::Part(id));
-            assert_eq!(t.rows.len(), 1);
-            assert_eq!(t.rows[0].cells.len(), 3);
-            assert!((t.grid.iter().sum::<f32>() - width).abs() < 0.1);
-            assert!(t.props.fixed);
-            assert!(!t.props.borders.as_ref().unwrap().any_visible());
-            for ((cell, text), align) in
-                t.rows[0].cells.iter().zip(["Left text", "Middle text", "Right text"]).zip([Align::Left, Align::Center, Align::Right])
-            {
-                let Block::Para(p) = &*cell.blocks[0] else { panic!("cell lost") };
-                assert_eq!(p.text, text);
-                assert_eq!(p.props.style.as_deref(), Some(style));
-                assert_eq!(p.props.align, Some(align));
-                assert_eq!(p.props_at(0).bold == Some(true), text == "Middle text");
-            }
-            assert_eq!(back.plain_text(StoryRef::Body), "Body text");
-        }
+        fill_and_check_undo(&mut s, story);
+        assert_roundtrip(&s, header, style, width);
     }
 }
 

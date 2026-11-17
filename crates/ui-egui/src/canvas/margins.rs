@@ -1,4 +1,4 @@
-use super::*;
+use super::{Hash, Pos2, Rect, Sense, Ui, WordApp, json};
 
 /// One edge of a page's text area on a ruler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

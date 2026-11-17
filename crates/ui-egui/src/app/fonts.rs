@@ -1,4 +1,4 @@
-use super::*;
+use super::{QUIT, WordApp, i18n, theme};
 
 impl WordApp {
     /// Fonts were added or removed (a command, the web shell loading stored fonts): lay out
@@ -11,7 +11,7 @@ impl WordApp {
         }
         self.font_generation = generation;
         self.session.relayout();
-        self.previews.fonts_changed(ctx, db.user_fonts().iter().flat_map(|f| f.families()));
+        self.previews.fonts_changed();
         ctx.request_repaint();
     }
 
@@ -155,7 +155,15 @@ impl WordApp {
     /// face has changed since the last install.
     pub(super) fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
-        if !self.styled || lang.prefers_hans() != self.fonts_hans || lang.prefers_korean() != self.fonts_korean || system_cjk != self.fonts_system_cjk
+        // An Arabic interface, or a screen that shows Arabic names (language picker / packs) in
+        // another interface language, asks for an installed Arabic font when none is embedded.
+        let system_arabic = lang.rtl() || self.want_system_arabic;
+        if !self.styled
+            || lang.prefers_hans() != self.fonts_hans
+            || lang.prefers_korean() != self.fonts_korean
+            || lang.prefers_hant() != self.fonts_hant
+            || system_cjk != self.fonts_system_cjk
+            || system_arabic != self.fonts_system_arabic
         {
             // Every window's borrowed faces: the fonts are the app's.
             let mut faces = self.canvas.ime_faces.clone();
@@ -166,10 +174,20 @@ impl WordApp {
                     }
                 }
             }
-            theme::install_fonts_language_extra(ctx, lang.prefers_hans(), lang.prefers_korean(), system_cjk, &faces);
+            theme::install_fonts_language_arabic(
+                ctx,
+                lang.prefers_hans(),
+                lang.prefers_korean(),
+                lang.prefers_hant(),
+                system_cjk,
+                system_arabic,
+                &faces,
+            );
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
+            self.fonts_hant = lang.prefers_hant();
             self.fonts_system_cjk = system_cjk;
+            self.fonts_system_arabic = system_arabic;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
             // egui quits on Command-Q, which is Ctrl+Q off the Mac: Word's Reset Paragraph

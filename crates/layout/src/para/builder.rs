@@ -1,11 +1,12 @@
 use super::bidi::{Dir, bidi_levels, strong_rtl, visual_order};
 use super::chars::{
-    SegKey, caps_expands, context_digit_dirs, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range, thai_run_face,
-    upper_char,
+    SegKey, caps_expands, context_digit_dirs, draws_something, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range,
+    reported_font_name, thai_run_face, upper_char,
 };
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
-use super::*;
+use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
+use wordcraft_fonts::ShapeContext;
 
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
@@ -18,6 +19,37 @@ pub(super) struct Builder<'a> {
     pub(super) levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
     pub(super) shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// Fonts asked for that aren't installed, and the faces drawn instead (see
+    /// `ParaLayout::substituted`).
+    pub(super) substituted: Vec<(String, FaceRef)>,
+}
+
+/// The fonts a run asks for that aren't installed (see [`Builder::note_missing_fonts`]).
+struct MissingFonts<'a> {
+    /// The Latin font.
+    latin: Option<&'a str>,
+    /// The complex-script font.
+    complex: Option<&'a str>,
+    /// The East Asian font the run names for its CJK text.
+    east_asian: Option<&'a str>,
+    /// The run names an East Asian font for its CJK text, installed or not.
+    names_east_asian: bool,
+}
+
+struct SegmentInput<'a> {
+    text: &'a str,
+    rc: &'a ResolvedChar,
+    rc_cs: Option<&'a Arc<ResolvedChar>>,
+    primary: FaceRef,
+    primary_cs: Option<FaceRef>,
+    primary_ea: Option<FaceRef>,
+    run_face: Option<FaceRef>,
+    ea_face: Option<FaceRef>,
+    sym: Option<SymbolRun<'a>>,
+    levels: &'a [u8],
+    lbase: usize,
+    use_levels: bool,
+    context: &'a [bool],
 }
 
 impl<'a> Builder<'a> {
@@ -28,6 +60,51 @@ impl<'a> Builder<'a> {
     fn numeral_char(&self, context: &[bool], at: usize, c: char, rtl: bool) -> char {
         let dir = if !context.is_empty() && is_numeral_digit(c) { context.get(at).copied().unwrap_or(false) } else { rtl };
         self.env.numeral.map(c, dir)
+    }
+
+    fn segment_keys(&self, input: SegmentInput<'_>) -> Vec<(usize, usize, SegKey)> {
+        let SegmentInput { text, rc, rc_cs, primary, primary_cs, primary_ea, run_face, ea_face, sym, levels, lbase, use_levels, context } = input;
+        let show = |c: char| sym.map_or(c, |m| m.show(c));
+        let mut seg_start = 0;
+        let mut cur: Option<SegKey> = None;
+        let mut segs = Vec::new();
+        for (i, c) in text.char_indices() {
+            let rtl = use_levels && levels.get(lbase + i).is_some_and(|l| l % 2 == 1);
+            let c = show(c);
+            let dc = self.numeral_char(context, i, c, rtl);
+            let mark = is_mark(c);
+            let complex = match cur {
+                Some(k) if mark => k.complex,
+                _ => rc_cs.is_some() && rc.uses_complex(dc),
+            };
+            let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
+            let face = match cur {
+                Some(k) if mark => k.face,
+                _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
+                _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
+                _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
+                Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
+                _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
+                _ => {
+                    let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
+                    wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
+                }
+            };
+            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
+            match cur {
+                Some(previous) if previous.same(&key) => {}
+                Some(previous) => {
+                    segs.push((seg_start, i, previous));
+                    seg_start = i;
+                    cur = Some(key);
+                }
+                None => cur = Some(key),
+            }
+        }
+        if let Some(previous) = cur {
+            segs.push((seg_start, text.len(), previous));
+        }
+        segs
     }
 
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
@@ -89,6 +166,60 @@ impl<'a> Builder<'a> {
         i
     }
 
+    /// Record that text asking for `font` (not installed) was drawn in `drawn`, once per pair;
+    /// at most 64 pairs a paragraph, so a hostile file can't grow the list without bound. Symbol
+    /// fonts (Symbol, Wingdings…) are drawn as their Unicode equivalents on purpose: not worth
+    /// reporting (most Word bullets would be). A blank name (a file's `w:ascii=" "`) names no font
+    /// to report.
+    fn note_substituted(&mut self, font: &str, drawn: FaceRef) {
+        if font.trim().is_empty() || wordcraft_doc::symbol_fonts::is_symbol_font(font) {
+            return;
+        }
+        let font = reported_font_name(font);
+        if !self.substituted.iter().any(|(f, d)| d.id() == drawn.id() && f == font) && self.substituted.len() < 64 {
+            self.substituted.push((font.to_string(), drawn));
+        }
+    }
+
+    /// Record the `missing` fonts the segments of `text` ask for, with the faces they are drawn
+    /// in (`primary`, the complex-script and the East Asian font's faces, or a segment's own).
+    /// Segments that draw nothing ([`draws_something`]) ask for no font.
+    fn note_missing_fonts(
+        &mut self,
+        text: &str,
+        segs: &[(usize, usize, SegKey)],
+        (primary, primary_cs, primary_ea): (FaceRef, Option<FaceRef>, Option<FaceRef>),
+        missing: &MissingFonts,
+    ) {
+        if missing.latin.is_none() && missing.complex.is_none() && missing.east_asian.is_none() {
+            return;
+        }
+        for &(a, b, key) in segs {
+            let Some(sub) = text.get(a..b).filter(|t| t.chars().any(draws_something)) else { continue };
+            let drawn = key.face.unwrap_or(if key.complex { primary_cs.unwrap_or(primary) } else { primary });
+            if key.complex {
+                if let Some(cs) = missing.complex {
+                    self.note_substituted(cs, drawn);
+                }
+                continue;
+            }
+            // The segment's CJK characters drawn in the installed East Asian font ask for nothing
+            // missing; other characters a fallback put in that same face still ask for the Latin
+            // font.
+            let in_ea_font = key.face.zip(primary_ea).is_some_and(|(f, ea)| f.id() == ea.id());
+            let latin_chars = sub.chars().any(|c| draws_something(c) && !east_asian(c));
+            // CJK text asks for the East Asian font when the run names one; the Latin font only
+            // for the other characters, or for CJK text when no East Asian font is named.
+            let asks_latin = latin_chars || (!missing.names_east_asian && !in_ea_font);
+            if let Some(f) = missing.latin.filter(|_| asks_latin) {
+                self.note_substituted(f, drawn);
+            }
+            if let Some(f) = missing.east_asian.filter(|_| !in_ea_font && sub.chars().any(east_asian)) {
+                self.note_substituted(f, drawn);
+            }
+        }
+    }
+
     /// Shape `text` (a piece of the paragraph starting at byte `base`) in one style and append clusters.
     pub(super) fn shape(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>) {
         self.shape_with(text, base, rc, kind_override, Dir::Para);
@@ -96,27 +227,46 @@ impl<'a> Builder<'a> {
 
     /// `dir`: the bidi levels `text` is shaped by (see [`Dir`]).
     pub(super) fn shape_with(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>, dir: Dir<'_>) {
+        self.shape_around(text, base, rc, kind_override, dir, ShapeContext::default());
+    }
+
+    /// `around`: the text shown beside `text`, which its first and last letters may join.
+    pub(super) fn shape_around(
+        &mut self,
+        text: &str,
+        base: usize,
+        rc: &Arc<ResolvedChar>,
+        kind_override: Option<ClKind>,
+        dir: Dir<'_>,
+        around: ShapeContext<'_>,
+    ) {
         if text.is_empty() {
             return;
         }
         // Complex-script characters (Persian, Arabic…) use the run's complex-script font, size,
         // bold and italic.
         let rc_cs: Option<Arc<ResolvedChar>> = text.chars().any(|c| rc.uses_complex(c)).then(|| Arc::new(rc.complex()));
-        let resolved = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let family = lookup_family(self.env.doc, &rc.font);
+        let resolved = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
         let primary = resolved.face;
         // Symbol-font characters are laid out as their Unicode equivalents.
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
-        let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
+        // A font isn't installed when it was substituted, or looked up as a missing roman font.
+        let resolved_cs = rc_cs.as_ref().map(|r| {
+            let family = lookup_family(self.env.doc, &r.font);
+            let resolved = wordcraft_fonts::word::resolve(family, r.bold, r.italic);
+            (resolved.face, resolved.substituted || family != r.font)
+        });
+        let primary_cs = resolved_cs.map(|(face, _)| face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
         // it is installed and has them.
-        let primary_ea = rc
+        let wanted_ea = rc
             .font_ea
-            .as_ref()
+            .as_deref()
             .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
-            .map(|f| wordcraft_fonts::word::resolve(f, rc.bold, rc.italic))
-            .filter(|r| !r.substituted)
-            .map(|r| r.face);
+            .map(|f| (f, wordcraft_fonts::word::resolve(f, rc.bold, rc.italic)));
+        let primary_ea = wanted_ea.filter(|(_, r)| !r.substituted).map(|(_, r)| r.face);
         // The levels by byte of `text`, from `lbase` on.
         let (levels, lbase): (&[u8], usize) = match dir {
             Dir::Para => (&self.levels, base),
@@ -148,54 +298,28 @@ impl<'a> Builder<'a> {
                 wordcraft_fonts::FontDb::global().fallback_for_run(&ea, primary.id(), rc.bold, rc.italic).map(|f| FaceRef::of(&f))
             }
         };
-        // Split by font coverage (fallback faces), small caps case, script formatting and direction.
-        let mut seg_start = 0;
-        let mut cur: Option<SegKey> = None;
-        let mut segs: Vec<(usize, usize, SegKey)> = Vec::new();
-        for (i, c) in text.char_indices() {
-            let rtl = use_levels && levels.get(lbase + i).is_some_and(|l| l % 2 == 1);
-            // A symbol-font character becomes its Unicode symbol (#776).
-            let c = show(c);
-            // Displayed form (Word › Numeral): one char in, one char out. Coverage and the
-            // fallback face are picked for the displayed char, so Hindi digits land in an
-            // Arabic-capable face and Western digits in a Latin one.
-            let dc = self.numeral_char(&context, i, c, rtl);
-            let mark = is_mark(c);
-            let complex = match cur {
-                Some(k) if mark => k.complex,
-                _ => rc_cs.is_some() && rc.uses_complex(dc),
-            };
-            let prim = if complex { primary_cs.unwrap_or(primary) } else { primary };
-            let face = match cur {
-                Some(k) if mark => k.face,
-                _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
-                // The run's one substitute face for a missing Thai font (#1549).
-                _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
-                _ if prim.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
-                // Stay in the fallback face the word started in while it covers the letters.
-                Some(SegKey { face: Some(f), .. }) if f.covers(dc) => Some(f),
-                // The run's unified East Asian face, when one face covers the whole run.
-                _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
-                _ => {
-                    let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
-                    wordcraft_fonts::FontDb::global().fallback_styled(dc, prim.id(), bold, italic).map(|f| FaceRef::of(&f))
-                }
-            };
-            let small = rc.small_caps && !rc.caps && c.is_lowercase();
-            let k = SegKey { face, small, complex, rtl };
-            match cur {
-                Some(p) if p.same(&k) => {}
-                Some(p) => {
-                    segs.push((seg_start, i, p));
-                    seg_start = i;
-                    cur = Some(k);
-                }
-                None => cur = Some(k),
-            }
-        }
-        if let Some(p) = cur {
-            segs.push((seg_start, text.len(), p));
-        }
+        let segs = self.segment_keys(SegmentInput {
+            text,
+            rc,
+            rc_cs: rc_cs.as_ref(),
+            primary,
+            primary_cs,
+            primary_ea,
+            run_face,
+            ea_face,
+            sym,
+            levels,
+            lbase,
+            use_levels,
+            context: &context,
+        });
+        let missing = MissingFonts {
+            latin: (resolved.substituted || family != rc.font).then_some(rc.font.as_str()),
+            complex: rc_cs.as_ref().filter(|_| resolved_cs.is_some_and(|(_, missing)| missing)).map(|r| r.font.as_str()),
+            east_asian: wanted_ea.filter(|(_, r)| r.substituted).map(|(f, _)| f),
+            names_east_asian: wanted_ea.is_some(),
+        };
+        self.note_missing_fonts(text, &segs, (primary, primary_cs, primary_ea), &missing);
         let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
@@ -264,10 +388,15 @@ impl<'a> Builder<'a> {
             let from = usize::from(rc.kerned());
             let to = if ligatures.is_some() { all.len() } else { 1 };
             let features: &[wordcraft_fonts::Feature] = all.get(from..to).unwrap_or_default();
+            // Letters join across a change of font or direction inside the run too.
+            let around = ShapeContext {
+                before: if a == 0 { around.before } else { text.get(..a).unwrap_or("") },
+                after: if b == text.len() { around.after } else { text.get(b..).unwrap_or("") },
+            };
             let shaped = if use_levels {
-                wordcraft_fonts::shape_run(&st.face, shape_text, features, map, key.rtl)
+                wordcraft_fonts::shape_run_in(&st.face, shape_text, features, map, key.rtl, around)
             } else {
-                wordcraft_fonts::shape(&st.face, shape_text, features, map)
+                wordcraft_fonts::shape_in(&st.face, shape_text, features, map, around)
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
@@ -429,16 +558,13 @@ impl<'a> Builder<'a> {
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
     /// the cluster (at least `width` wide) and raised `dy`. Returns the cluster's index.
-    #[allow(clippy::too_many_arguments)]
     fn shape_overstruck(
         &mut self,
         texts: &[&str],
-        start: usize,
-        end: usize,
+        (start, end): (usize, usize),
         rc: &Arc<ResolvedChar>,
         align: wordcraft_doc::eq::OAlign,
-        width: f32,
-        dy: f32,
+        (width, dy): (f32, f32),
     ) -> Option<usize> {
         use wordcraft_doc::eq::OAlign;
         let (c0, s0) = (self.clusters.len(), self.shown.len());
@@ -501,7 +627,7 @@ pub(super) fn overstrike(
     let shapes: Vec<EncloseShape> = o.args.iter().filter_map(|a| EncloseShape::from_symbol(a)).collect();
     let texts: Vec<&str> = o.args.iter().filter(|a| !a.is_empty() && EncloseShape::from_symbol(a).is_none()).map(String::as_str).collect();
     let Some(shape) = shapes.first().copied() else {
-        b.shape_overstruck(&texts, start, end, rc, o.align, 0.0, 0.0);
+        b.shape_overstruck(&texts, (start, end), rc, o.align, (0.0, 0.0));
         return;
     };
     let style = Enclosure::parse(instr).map(|e| e.style).unwrap_or_default();
@@ -554,7 +680,7 @@ pub(super) fn overstrike(
         rc.clone()
     };
     let pad = s * 0.05;
-    let Some(k) = b.shape_overstruck(&texts, start, end, &trc, o.align, bw + 2.0 * pad, ty - size * 0.34) else { return };
+    let Some(k) = b.shape_overstruck(&texts, (start, end), &trc, o.align, (bw + 2.0 * pad, ty - size * 0.34)) else { return };
     let adv = b.clusters.get(k).map(|c| c.adv).unwrap_or(bw);
     let kind = match shape {
         EncloseShape::Circle => ShapeKind::Ellipse,
@@ -570,17 +696,14 @@ impl Builder<'_> {
     /// One cluster for ruby `base` text (an [`InlineObject::Ruby`] at `start..end`), as wide as the
     /// wider of the base and the ruby, with the ruby text laid out over it by `align`. The line
     /// grows to fit the ruby through the cluster's `obj_h`.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn ruby(
         &mut self,
         base: &str,
         ruby: &str,
         align: RubyAlign,
         raise: f32,
-        start: usize,
-        end: usize,
-        rc: &Arc<ResolvedChar>,
-        ruby_rc: &Arc<ResolvedChar>,
+        (start, end): (usize, usize),
+        (rc, ruby_rc): (&Arc<ResolvedChar>, &Arc<ResolvedChar>),
     ) -> Option<RubyLayout> {
         self.shape_atomic(base, start, end, rc);
         let ci = self.clusters.len().checked_sub(1)?;
