@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
+use wordcraft_engine::automation;
 use wordcraft_engine::file_access::{self, AutomationRoots};
 
 /// Methods that need the desktop app.
@@ -100,7 +101,8 @@ impl Default for Headless {
 impl Backend for Headless {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let roots = self.roots.clone();
-        file_access::confine(roots.as_ref(), || self.answer(method, params))
+        // An agent's call: automation (#6101), confined to its roots.
+        automation::from_automation(|| file_access::confine(roots.as_ref(), || self.answer(method, params)))
     }
     fn has_ui(&self) -> bool {
         false

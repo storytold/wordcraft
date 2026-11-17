@@ -225,7 +225,13 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
 /// Dispatches one JSON-lines control request: commands and inspection, parity, synthetic click,
 /// drag, key, wheel and text input, screenshots and renders, resize, focus and quit, and unknown
 /// ids as commands. It refuses closing unsaved work and document operations without a document.
+/// A control request is automation's ([`wordcraft_engine::automation`], #6101).
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    wordcraft_engine::automation::from_automation(|| dispatch(app, ctx, req))
+}
+
+/// [`handle`] for automation.
+fn dispatch(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     if DOC_METHODS.contains(&req.method.as_str()) {
         match addressed(app, p) {
