@@ -272,10 +272,11 @@ impl WordApp {
         }
         // Quitting with a sheet per window (`close_every_window`): the last one answered quits,
         // even if AutoSave has meanwhile saved a document whose sheet is still up (in the window
-        // that came forward, or another).
-        let sheet_up = std::iter::once(&self.dialog)
-            .chain(self.other_windows().map(|w| &w.dialog))
-            .any(|d| matches!(d, Some(dialogs::Dialog::SaveChanges { .. })));
+        // that came forward, or another), or a sheet answered Save is still at its Save As (another
+        // window on that document can save it meanwhile).
+        let sheet_up = std::iter::once((&self.dialog, &self.file_dialog))
+            .chain(self.other_windows().map(|w| (&w.dialog, &w.file_dialog)))
+            .any(|(d, f)| matches!(d, Some(dialogs::Dialog::SaveChanges { .. })) || f.as_ref().is_some_and(|f| f.continues()));
         if self.quitting && params.get("quitting").and_then(Value::as_bool) == Some(true) && !self.has_unsaved_documents() && !sheet_up {
             self.quit_requested = true;
         }

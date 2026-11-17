@@ -103,6 +103,13 @@ pub(crate) struct PendingDialog {
     after: AfterPick,
 }
 
+impl PendingDialog {
+    /// Whether this is the Save As that "Save changes?" answered Save opened (`AfterSave::Continue`).
+    pub(crate) fn continues(&self) -> bool {
+        matches!(self.after, AfterPick::SaveAs { after: AfterSave::Continue { .. }, .. })
+    }
+}
+
 /// How asking for a file went.
 pub(crate) enum Asked {
     /// Another file dialog is still open; nothing happened.
