@@ -923,6 +923,7 @@ fn a_long_unbreakable_word_lays_out_in_linear_time() {
 
 /// A word a megabyte long lays out in a fraction of a second: it used to take half a minute.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_megabyte_long_word_lays_out_quickly() {
     let d = long_word_beside_a_float(1_000_000);
     let t = std::time::Instant::now();
@@ -1143,6 +1144,7 @@ fn a_word_with_alternating_advances_lays_out_in_linear_time() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hidden_separators_with_automatic_hyphenation_lay_out_in_linear_time() {
     crate::test_fonts();
     // "hyphenation " n times with every space hidden: one joined word of 11n letters reaches the
@@ -1175,6 +1177,7 @@ fn page_break_paragraphs(n: usize) -> Document {
 /// the section list by walking the whole body, so a document of n paragraphs paid n body-length
 /// scans: a two-megabyte file took half a minute before the first page was drawn.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_document_of_many_paragraphs_lays_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(page_break_paragraphs, 2_500, &LayoutOptions::default());
     eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
@@ -1182,6 +1185,7 @@ fn a_document_of_many_paragraphs_lays_out_in_linear_time() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn many_hidden_float_anchors_lay_out_in_linear_time() {
     crate::test_fonts();
     // n square-wrapped shapes, each anchored in its own hidden run (bold alternating, so runs do not
