@@ -3441,6 +3441,59 @@ fn save_prompt_shows_why_the_save_failed() {
     assert!(h.query_by_label("Save").is_some(), "Save again is offered");
 }
 
+/// #6844: Ctrl/Cmd+click on a link to a local document WordCraft opens asks first, naming its full
+/// path, then opens it here; Cancel opens nothing. A link to a program, to another machine or to
+/// a file that isn't there opens nothing and asks nothing.
+#[test]
+fn a_link_to_a_local_document_asks_then_opens_it() {
+    let dir = scratch("local-link");
+    let plan = dir.join("Plan.odt");
+    Session::new(wordcraft_doc::Document::from_text("The plan")).run("file.save", &json!({"path": plan.to_string_lossy()})).unwrap();
+    std::fs::write(dir.join("Setup.exe"), b"MZ").unwrap();
+    let notes = |a: &mut WordApp| a.session.path = Some(dir.join("Notes.docx"));
+    let dialogs_of = |a: WordApp| {
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                if fonts {
+                    dialogs::show(app, &ctx);
+                } else {
+                    theme::install_fonts_for(&ctx, false);
+                    fonts = true;
+                }
+            },
+            a,
+        );
+        for _ in 0..3 {
+            h.step();
+        }
+        h
+    };
+    for (button, opens) in [("Cancel", false), ("Open", true)] {
+        let mut a = app();
+        notes(&mut a);
+        crate::canvas::follow_link(&mut a, "Plan.odt".into());
+        let Some(dialogs::Dialog::OpenLinkedFile { path }) = &a.dialog else { panic!("{:?}", prompt(&a)) };
+        assert_eq!(std::path::Path::new(path), plan.as_path(), "the full path, relative to the document's folder");
+        let mut h = dialogs_of(a);
+        h.get_by_label(button).click();
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(prompt(h.state()), None, "{button} closes it");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("The plan"), opens, "{button}");
+    }
+    for link in ["Setup.exe", r"\\host\share\Plan.odt", "file://host/share/Plan.odt", "Missing.docx"] {
+        let mut a = app();
+        notes(&mut a);
+        crate::canvas::follow_link(&mut a, link.into());
+        assert_eq!(prompt(&a), None, "{link}");
+        assert!(!a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("The plan"), "{link}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Enter activates the focused prompt button; it means Save only when no button has focus.
 /// (Enter on a focused Cancel or Don't Save used to be overridden by a blanket Enter → Save.)
 #[test]

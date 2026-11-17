@@ -42,6 +42,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::About { .. } => about_dialog(ui, d),
         Dialog::DiscardRecovery { .. } => discard_recovery_dialog(app, ui, d),
         Dialog::SaveChanges { .. } => save_changes_dialog(app, ui, d),
+        Dialog::OpenLinkedFile { path } => open_linked_file_dialog(app, ui, path),
         Dialog::RecipientList { fields, rows, message, filter } => recipient_list(app, ui, fields, rows, message, filter),
         Dialog::InsertMergeField { .. } => insert_merge_field_dialog(app, ui, d),
         Dialog::Password { .. } => password_dialog(app, ui, d),
@@ -1285,6 +1286,36 @@ fn save_changes_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     app.dialog = Some(d.clone());
     let _ = app.run("ui.saveChanges", json!({"answer": answer}));
     true
+}
+
+/// Ctrl/Cmd+click on a link to a local document (#6844): its full path, then Open (focused, so
+/// Enter opens it beside this one) or Cancel (Escape).
+fn open_linked_file_dialog(app: &mut WordApp, ui: &mut Ui, path: &str) -> bool {
+    ui.label(egui::RichText::new(tl!("Open the linked document?")).font(semibold(15.0)));
+    ui.label(crate::i18n::isolate_path(path));
+    ui.add_space(8.0);
+    let (cancel, open) = ui
+        .horizontal(|ui| {
+            ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                let cancel = ui.button(tl!("Cancel"));
+                let open = ui.add(crate::widgets::primary_button(ui, tl!("Open")));
+                (cancel, open)
+            })
+            .inner
+        })
+        .inner;
+    if !cancel.has_focus() && !open.has_focus() {
+        open.request_focus();
+    }
+    let focused = cancel.has_focus() || open.has_focus();
+    if cancel.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        return true;
+    }
+    if open.clicked() || (!focused && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+        let _ = app.run("file.open", json!({"path": path}));
+        return true;
+    }
+    false
 }
 
 fn insert_merge_field_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {

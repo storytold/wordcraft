@@ -330,6 +330,11 @@ pub enum Dialog {
         id: String,
         name: String,
     },
+    /// Ctrl/Cmd+click on a link to a local document WordCraft opens (#6844): open `path`
+    /// here? A document's link never opens a file the user hasn't seen named.
+    OpenLinkedFile {
+        path: String,
+    },
     /// "Do you want to save changes?" before a user's New, Open, Close, Envelopes, Labels or
     /// Finish & Merge replaces the document (see [`WordApp::run`]); `then` runs once it is
     /// answered (`ui.saveChanges`), and only while the document it asked about
@@ -551,6 +556,7 @@ impl Dialog {
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
+            Dialog::OpenLinkedFile { .. } => "openLinkedFile",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",

@@ -44,7 +44,9 @@ pub(super) fn is_generated_bookmark_link(link: &str) -> bool {
 }
 
 /// Ctrl/⌘+click on `link` (in the text or on a picture): a place in this document takes the caret
-/// to its bookmark; a web or email address opens in the browser; any other is not followed.
+/// to its bookmark; a web or email address opens in the browser; a local document WordCraft opens
+/// (relative to this document's folder, an absolute path or a `file:` URL) opens here once the
+/// user says so (#6844); any other is not followed.
 pub(crate) fn follow_link(app: &mut WordApp, link: String) {
     if let Some(name) = link.strip_prefix('#') {
         // The caret goes to the bookmark's start, as in Word (Go To selects its text).
@@ -53,9 +55,30 @@ pub(crate) fn follow_link(app: &mut WordApp, link: String) {
         }
     } else if is_followable_link(&link) {
         app.canvas.open_url = Some(link);
+    } else if let Some(path) = linked_document(app, &link) {
+        let shown = crate::i18n::isolate_path(&path.to_string_lossy());
+        // Its symbolic links are read before anything looks for the file: looking would follow a
+        // link to another machine and send it the user's credentials (#6933 review).
+        match wordcraft_engine::io::local_path(&path) {
+            None => app.status(crate::i18n::fmt(tl!("The linked document {path} isn't on this computer"), &[("path", &shown)])),
+            // A document's link names a file: it opens only once the user has seen where.
+            Some(local) if local.is_file() => {
+                app.dialog = Some(crate::dialogs::Dialog::OpenLinkedFile { path: path.to_string_lossy().into_owned() });
+            }
+            Some(_) => app.status(crate::i18n::fmt(tl!("The linked document {path} isn't there"), &[("path", &shown)])),
+        }
     } else {
-        app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
+        app.status(tl!("Only web and email links, and links to documents WordCraft opens, can be followed"));
     }
+}
+
+/// The local document `link` names, relative to the shown document's folder (see
+/// [`wordcraft_engine::io::linked_document`]); none on the web, which has no files to open.
+fn linked_document(app: &WordApp, link: &str) -> Option<std::path::PathBuf> {
+    if cfg!(target_arch = "wasm32") {
+        return None;
+    }
+    wordcraft_engine::io::linked_document(link, app.session.path.as_deref().and_then(std::path::Path::parent))
 }
 
 /// Whether Ctrl/⌘+click may hand a document's hyperlink to the system: web and email links only,
