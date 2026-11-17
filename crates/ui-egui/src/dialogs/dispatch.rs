@@ -247,6 +247,9 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         font_sample_box(app, ui, sample_paper(app), &sample_props, (*sup, *sub), *hidden);
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
+    if (ok || cancel) && super::font::hand_back_bullet(app, d, ok) {
+        return true;
+    }
     if ok {
         apply_font(app, d);
     }
