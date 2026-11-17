@@ -2601,6 +2601,57 @@ fn control_keyboard_preserves_native_focus_and_document_protection() {
     assert!(!a.canvas.focused);
 }
 
+/// #3628 review: input the control channel sends is automation too. Shift+Insert sent with
+/// `ui.key` (MCP's `key` tool) runs Paste, which can't bring a field Word acts on into a document
+/// that doesn't hold it; the same key from the keyboard pastes it.
+#[test]
+fn control_keys_cannot_paste_a_field_word_acts_on() {
+    /// The fields in the document's body.
+    fn fields(a: &WordApp) -> usize {
+        a.session.doc.body.iter().map(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.objects.len() } else { 0 }).sum()
+    }
+    let shift_insert =
+        |pressed| egui::Event::Key { key: egui::Key::Insert, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::SHIFT };
+    let ctx = egui::Context::default();
+    let mut a = app();
+    a.run("insert.field", json!({"instr": r#"DDEAUTO cmd "/c calc""#})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("edit.copy", json!({})).unwrap();
+    // The field leaves the document: pasting it is bringing it in.
+    a.run("document.setText", json!({"text": "Mine"})).unwrap();
+    assert_eq!(fields(&a), 0);
+    for _ in 0..4 {
+        control_frame(&mut a, &ctx, true);
+    }
+    assert!(a.canvas.focused);
+    control_input(&mut a, &ctx, "ui.key", json!({"key": "Insert", "shift": true}));
+    for _ in 0..2 {
+        control_frame(&mut a, &ctx, true);
+    }
+    assert!(a.synthetic.is_empty(), "the key was delivered");
+    let status = a.status_msg.clone().map(|m| m.0).unwrap_or_default();
+    assert_eq!(fields(&a), 0, "{status}");
+    assert!(status.contains("DDEAUTO"), "the paste ran and was refused: {status:?} / {:?}", a.session.status);
+    assert_eq!(body_text(&a), "Mine");
+    // From the keyboard, the same key pastes it.
+    for pressed in [true, false] {
+        let mut raw = egui::RawInput {
+            focused: true,
+            time: Some(ctx.input(|i| i.time) + 1.0 / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+            events: vec![shift_insert(pressed)],
+            ..Default::default()
+        };
+        a.raw_input_hook(&ctx, &mut raw);
+        ctx.run_ui(raw, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    }
+    assert_eq!(fields(&a), 1, "{:?}", a.status_msg);
+}
+
 /// #2103: double-clicking the page number in a later page's footer opens the footer there;
 /// the view stays on that page instead of jumping to the top of the document.
 #[test]

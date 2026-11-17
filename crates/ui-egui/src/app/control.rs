@@ -44,7 +44,8 @@ impl WordApp {
                 log::debug!("control request {} dropped: its caller gave up", req.method);
                 continue;
             }
-            match control::handle(self, ctx, &req) {
+            // A control request is automation: no active fields (#3628).
+            match wordcraft_engine::active_fields::from_automation(|| control::handle(self, ctx, &req)) {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }

@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-11-14 · Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+> **Last updated:** 2026-11-17 · #3628: automation can't add fields Word acts on with any command, nor with the control channel's keys, text and clicks, nor in markup kept as read. Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -161,6 +161,44 @@ to an `index.json`) when starting WordCraft or `wordcraft-cli`. That index isn't
 sha256 of each archive only matches what that index says: it catches a broken download, not a
 changed pack. `proof.packs` then returns `"index_override": "<url or path>"`, and the app shows the
 test source in File › Options › Language and on the bar's Install.
+
+## Fields Word acts on
+
+An agent can be steered by text in the document it was asked to edit, so from MCP and from the
+control channel WordCraft refuses to put into a document the field types Microsoft Word acts on
+when it opens a document or updates its fields: `DDE` and `DDEAUTO` (Word offers to start another
+program) and `INCLUDETEXT`, `INCLUDEPICTURE`, `LINK`, `IMPORT`, `INCLUDE`, `DATABASE` and `RD`
+(Word fetches the target, over the network for a `\\server\share` path), also nested in another
+field's code (#3628). The control channel's input counts too: keys, text and clicks sent with
+`ui.key`, `ui.text` and `ui.click` (MCP's `key`, `type` and `click` tools), whether they reach a
+shortcut, the ribbon or a dialog.
+
+After every command run this way, no open document may hold such a field that it didn't hold
+before (for a document the command opened: that the document it was run from didn't hold), nor
+field markup WordCraft keeps as read and writes back unchanged (an element it doesn't model, a
+legacy form field's definition, the markup of an embedded object, chart or diagram), whatever
+field that markup holds. A command that breaks this is refused: the document it ran in is put back
+as it was, and a document it opened is closed. The only exceptions are opening a file by its path
+(`file.open`, `file.newFromTemplate`, and the original that `review.compare` and `review.combine`
+open), since the file already holds its fields, and Undo and Redo, which put back what the
+document held. The commands that bring content in also check before they change anything:
+
+- a field code: `insert.field`, `fields.setCode` and the mail-merge rules;
+- content brought in from elsewhere: a paste (any of the paste commands, the Spike), a file's
+  text (`insert.textFromFile`, `insert.object`), a Quick Part or AutoText entry, and a document
+  compared or combined with this one (`review.compare`, `review.combine`). A field whose very code
+  the document already has is let through, so copying the document's own fields works. One cut
+  without Track Changes has left the document, so pasting it back from automation is refused;
+- a document whose bytes the agent supplies: `file.open` and `file.newFromTemplate` with
+  `data`. When markup kept from such a file holds fields, the document loses all of its kept
+  markup and is written from what WordCraft read.
+
+The tool error reads, for example, `not available: DDEAUTO fields can't be inserted from
+automation`. The person at the keyboard can still insert them. A host that needs them from
+automation sets the environment variable `WORDCRAFT_ALLOW_ACTIVE_FIELDS=1` for the server or the
+app; no command parameter turns the check off. `wordcraft-cli run` doesn't check: whoever runs it
+can write a document's bytes directly, so the check would stop nothing. Not covered: parts of a
+supplied document that WordCraft keeps without reading and no story refers to.
 
 ## Tools
 
