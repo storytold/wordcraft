@@ -209,7 +209,10 @@ pub(super) fn formula(s: &mut Session, v: &Value) -> CmdResult {
     let t = s.doc.table(s.sel.focus.story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
     let default_lang = crate::cmd::default_lang(s);
     let instr = auto_formula_instr(t, r, c, raw, default_lang.as_deref());
-    let text = crate::cmd::table_formula::evaluate_field_with(t, Some(&s.doc), default_lang.as_deref(), r, c, &instr)?;
+    // The result takes the language of the run the field goes into, as Word formats a field's
+    // result in the field's own language (#6872).
+    let run_lang = s.typing_props().lang;
+    let text = crate::cmd::table_formula::evaluate_field_for(t, Some(&s.doc), run_lang.as_deref(), default_lang.as_deref(), r, c, &instr)?;
     let props = s.typing_props();
     let at = s.sel.focus.clone();
     let end = s.doc.insert_object(

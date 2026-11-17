@@ -1,7 +1,8 @@
 use super::{
-    BTreeMap, BTreeSet, CmdError, CmdResult, Comment, InlineObject, Paragraph, PartKind, Pos, Selection, Session, StoryRef, Value, json, now_iso, p,
+    BTreeMap, BTreeSet, CmdError, CmdResult, Comment, InlineObject, Paragraph, PartKind, Pos, Selection, Session, StoryRef, Value, json, p,
     para_block, pos_json, sel_result,
 };
+use crate::cmd::now_local_and_utc;
 
 pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     let text = p::str(v, "text").unwrap_or("").to_string();
@@ -22,19 +23,12 @@ pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     let part = s.doc.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(&text, Default::default()))])?;
     let id = comment_id(s)?;
     let initials = s.user_initials();
-    let now = now_iso();
+    // `w:date` is the local wall-clock time, as Word writes it; `dateUtc` keeps the real UTC time,
+    // both from one reading of the clock so they are the same moment (#6851).
+    let (now, utc) = now_local_and_utc();
     s.doc.comments.insert(
         id,
-        Comment {
-            author: s.author.clone(),
-            initials,
-            date: now.clone(),
-            date_utc: Some(now),
-            parent: None,
-            resolved: false,
-            part,
-            ..Default::default()
-        },
+        Comment { author: s.author.clone(), initials, date: now, date_utc: Some(utc), parent: None, resolved: false, part, ..Default::default() },
     );
     let props = Default::default();
     s.doc.insert_object(&b, InlineObject::CommentEnd { id }, &props)?;
@@ -62,14 +56,14 @@ pub(super) fn reply(s: &mut Session, v: &Value) -> CmdResult {
     let part = s.doc.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(text, Default::default()))])?;
     let id = comment_id(s)?;
     let initials = s.user_initials();
-    let now = now_iso();
+    let (now, utc) = now_local_and_utc();
     s.doc.comments.insert(
         id,
         Comment {
             author: s.author.clone(),
             initials,
-            date: now.clone(),
-            date_utc: Some(now),
+            date: now,
+            date_utc: Some(utc),
             parent: Some(parent),
             resolved: false,
             part,

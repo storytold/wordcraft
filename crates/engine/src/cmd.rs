@@ -200,7 +200,7 @@ pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
 
 /// A revision record for the current author.
 pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
-    let date = now_iso();
+    let date = now_local_iso();
     // Never one end of a move, nor the deletion a cut may still turn into one.
     let held = s.pending_move.as_ref().map(|m| m.rev);
     if let Some((i, _)) = s
@@ -561,6 +561,34 @@ pub fn now_unix() -> u64 {
 /// ISO-8601 timestamp (UTC, seconds).
 pub fn now_iso() -> String {
     iso_from_unix_secs(now_unix())
+}
+
+/// ISO-8601 timestamp (seconds) in the local wall-clock time, with the `Z` Word writes for it:
+/// `w:date` on a revision or comment is the time on the author's clock, not UTC, so Word shows
+/// the hour the edit was made (#6851). Comments keep the real UTC time in `w16cex:dateUtc`
+/// ([`now_iso`]); `docProps/core.xml` and version history use UTC too.
+pub fn now_local_iso() -> String {
+    let now = now_unix();
+    iso_from_unix_secs_local(now, local_offset_secs(now))
+}
+
+/// The local wall-clock and UTC ISO timestamps of one instant, read from the clock once so a
+/// revision or comment's `w:date` (local, as Word writes it) and `w16cex:dateUtc` (real UTC) are
+/// the same moment (#6851).
+pub fn now_local_and_utc() -> (String, String) {
+    let now = now_unix();
+    (iso_from_unix_secs_local(now, local_offset_secs(now)), iso_from_unix_secs(now))
+}
+
+/// [`now_iso`] for the local zone's offset from UTC in seconds (east positive): the civil time
+/// of `secs + offset`, written with the `Z` Word's `w:date` carries. Saturating, so a hostile clock
+/// or offset never overflows, and exact past chrono's range like [`iso_from_unix_secs`].
+pub fn iso_from_unix_secs_local(secs: u64, offset_secs: i64) -> String {
+    let local = i64::try_from(secs).unwrap_or(i64::MAX).saturating_add(offset_secs);
+    let days = local.div_euclid(86_400);
+    let t = local.rem_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
 }
 
 /// The local time zone's offset from UTC in seconds (east positive) at `unix`, daylight saving

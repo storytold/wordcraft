@@ -400,7 +400,16 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     && let Some(t) = s.doc.table(StoryRef::Body, &tp)
                 {
                     let default_lang = crate::cmd::default_lang(s);
-                    let text = match crate::cmd::table_formula::evaluate_field_with(t, Some(&s.doc), default_lang.as_deref(), r, c, instr) {
+                    let run_lang = field_lang(&s.doc, p, k);
+                    let text = match crate::cmd::table_formula::evaluate_field_for(
+                        t,
+                        Some(&s.doc),
+                        run_lang.as_deref(),
+                        default_lang.as_deref(),
+                        r,
+                        c,
+                        instr,
+                    ) {
                         Ok(text) => text,
                         Err(e) => format!("!{e}"),
                     };

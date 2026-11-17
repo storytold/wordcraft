@@ -287,6 +287,8 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 ## Revision history
 
+> 2026-11-17 · A ruled line typed as a row of hyphens breaks between two hyphens, as in Word (#6853): UAX #14's LB21 forbids a break before a hyphen, so the whole row moved down and the paragraph took a line more than Word. `layout::tests::a_row_of_hyphens_breaks_between_hyphens`
+
 > 2026-11-05 · Arabic letters join across a change of formatting and past hidden or deleted text (#4093): each run is shaped with the text shown on either side of it.
 
 > 2026-11-01 · Text in a turned text box is drawn turned with it, about its centre, on screen and in PNG and PDF export; flipped across, upside down; flipped side to side, still readable (as Word draws it). Clicks and the caret inside a turned box still go by its upright text (`layout::tests::a_turned_text_box_turns_its_text_with_it`).

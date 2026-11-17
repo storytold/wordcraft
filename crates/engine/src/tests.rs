@@ -4091,19 +4091,35 @@ fn toc_and_fields() {
     assert_eq!(s.doc.plain_text(StoryRef::Body).matches("Summary\t").count(), 1, "one TOC entry after update");
 }
 
-/// A comment or reply made here carries its UTC time as `date_utc` too, so it shows in local time
-/// and is saved as `dateUtc`.
+/// `w:date` on a revision or comment is the author's local wall-clock time, as Word writes it, and
+/// `dateUtc` keeps the real UTC time beside it (#6851).
 #[test]
-fn new_comments_and_replies_carry_their_utc_time() {
+fn local_timestamps_use_the_zones_clock() {
+    assert_eq!(crate::cmd::iso_from_unix_secs_local(0, 0), "1970-01-01T00:00:00Z");
+    assert_eq!(crate::cmd::iso_from_unix_secs_local(0, 8 * 3600), "1970-01-01T08:00:00Z");
+    assert_eq!(crate::cmd::iso_from_unix_secs_local(0, -5 * 3600), "1969-12-31T19:00:00Z", "the local day can be the one before");
+}
+
+/// A comment or reply made here writes `w:date` in local wall-clock time and carries the real UTC
+/// time as `dateUtc` too, so Word shows the hour the comment was made at any offset (#6851).
+#[test]
+fn new_comments_and_replies_carry_their_local_date_and_utc_time() {
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Some text"}));
     run(&mut s, "select.all", json!({}));
     let id = run(&mut s, "review.newComment", json!({"text": "one"}))["id"].as_u64().unwrap();
     run(&mut s, "review.reply", json!({"id": id, "text": "two"}));
     assert_eq!(s.doc.comments.len(), 2);
+    let offset = crate::cmd::local_offset_secs(crate::cmd::now_unix());
     for c in s.doc.comments.values() {
         assert!(c.date.ends_with('Z'), "{}", c.date);
-        assert_eq!(c.date_utc.as_deref(), Some(c.date.as_str()));
+        let utc = c.date_utc.as_deref().unwrap_or_default();
+        assert!(utc.ends_with('Z'), "{utc}");
+        if offset != 0 {
+            assert_ne!(c.date, utc, "the local date is not the UTC one away from UTC");
+        } else {
+            assert_eq!(c.date, utc, "in UTC the two agree");
+        }
     }
 }
 
@@ -7647,8 +7663,9 @@ fn timestamps_come_from_the_clock() {
     run(&mut s, "select.text", json!({"text": "Dated"}));
     run(&mut s, "review.newComment", json!({"text": "When?"}));
     let date = run(&mut s, "review.comments", json!({}))[0]["date"].as_str().unwrap_or_default().to_string();
-    // Fixed-width ISO strings sort by time.
-    assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
+    // `w:date` is local wall-clock time (#6851): fixed-width ISO strings sort by time.
+    let local = |t| cmd::iso_from_unix_secs_local(t, cmd::local_offset_secs(t));
+    assert!(date >= local(before) && date <= local(cmd::now_unix()), "{date}");
 }
 
 #[test]
