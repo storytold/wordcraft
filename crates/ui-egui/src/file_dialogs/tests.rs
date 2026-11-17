@@ -223,6 +223,30 @@ fn imported_word_save_controls_ask_for_docx() {
     assert_eq!(std::fs::read(&original).unwrap(), bytes);
 }
 
+#[test]
+fn pdf_import_picker_and_report_keep_the_conversion_unsaved() {
+    assert!(open_filters("document")[0].1.contains(&"pdf"));
+    let (mut app, _) = async_app();
+    let bytes = wordcraft_engine::io::save_bytes("original.pdf", &wordcraft_doc::Document::from_text("Editable in the window")).unwrap();
+    app.run("file.open", json!({"path": "original.pdf", "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})).unwrap();
+    assert!(body_text(&app).contains("Editable in the window"));
+    assert!(app.session.dirty && app.session.path.is_none());
+    assert!(matches!(&app.dialog, Some(crate::dialogs::Dialog::PdfImportReport { warnings }) if !warnings.is_empty()));
+    app.dialog = None;
+    app.run("text.insert", json!({"text": "Edited: "})).unwrap();
+    assert!(body_text(&app).starts_with("Edited: "));
+}
+
+#[test]
+fn a_script_opening_a_pdf_gets_the_warnings_without_a_dialog() {
+    let (mut app, _) = async_app();
+    let bytes = wordcraft_engine::io::save_bytes("original.pdf", &wordcraft_doc::Document::from_text("Opened by an agent")).unwrap();
+    let r = app.execute("file.open", json!({"path": "original.pdf", "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})).unwrap();
+    app.logic(&egui::Context::default());
+    assert!(app.dialog.is_none(), "programmatic calls never open dialogs");
+    assert!(r["import"]["warnings"].as_array().is_some_and(|w| !w.is_empty()));
+}
+
 /// Dialogs the fake host was asked to show, each with the channel its answer goes through.
 type Shown = Rc<RefCell<Vec<(FileDialogRequest, Sender<FileDialogAnswer>)>>>;
 
