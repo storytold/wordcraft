@@ -343,7 +343,8 @@ impl<'a> Builder<'a> {
             };
             let rc = &rc;
             let small = key.small;
-            let si = self.style(rc, key.face, small);
+            let face = key.face.or_else(|| key.complex.then_some(primary_cs).flatten());
+            let si = self.style(rc, face, small);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
             // All Caps and Small Caps draw a letter's full capital, which can be several

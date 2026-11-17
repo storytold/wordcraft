@@ -313,7 +313,6 @@ fn missing_font_with_arabic_falls_back_to_arial_chain_not_aptos() {
         eprintln!("skipped: no Arabic-capable font installed");
         return;
     }
-    let arial = wordcraft_fonts::word::resolve("Arial", false, false).face;
     let aptos = wordcraft_fonts::word::resolve(wordcraft_doc::styles::BODY_FONT, false, false).face;
     // Run with mixed Latin + Arabic + digits in a missing font (and default Aptos):
     for font in [Some("No Such Font 6958"), None] {
@@ -326,9 +325,8 @@ fn missing_font_with_arabic_falls_back_to_arial_chain_not_aptos() {
         if db.has_family("Arial") {
             assert_eq!(arabic_char.family, "Arial");
         }
-        // Digits in the Arabic-containing complex-script run use Arial (or its substitution chain),
-        // not Aptos's substitute (e.g. Carlito).
+        // Unmarked ASCII digits without a complex-script flag use the Latin face (Aptos substitute).
         let digit = faces.last().expect("digit cluster").1;
-        assert_eq!(digit.id(), arial.id(), "digits in Arabic run use Arial chain ({}), not {}", arial.family, digit.family);
+        assert_eq!(digit.id(), aptos.id(), "unmarked digits use Latin face ({}), not {}", aptos.family, digit.family);
     }
 }
