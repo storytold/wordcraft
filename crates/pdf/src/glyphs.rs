@@ -35,116 +35,206 @@ pub(crate) fn left_to_right(glyphs: &[(u32, f32, f32)]) -> bool {
 /// Thai/Lao composite vowels) when each glyph is one of the cluster's characters (through
 /// the font's character map, one glyph at most left to take the character left over), so a viewer
 /// reversing a right-to-left word puts every mark back after its letter. In Thai and Lao clusters
-/// with composite vowels (such as SARA AM `\u{0E33}` or `\u{0EB3}`), separates the base consonant
-/// to its own range so ToUnicode maps it cleanly while keeping the composite vowel glyphs sharing
-/// their range for `/ActualText` extraction. Clusters of any other script, such as a Devanagari
+/// with composite vowels (such as SARA AM `\u{0E33}` or `\u{0EB3}`), decomposes the composite
+/// vowel into NIKHAHIT and SARA AA when shaped as separate glyphs, giving each glyph its own
+/// range in the decomposed text so ToUnicode mappings are unique and do not collide with
+/// standalone SARA AA (`\u{0E32}` / `\u{0EB2}`). Clusters of any other script, such as a Devanagari
 /// pre-base vowel or a ligature drawn as two glyphs, keep their shared logical range.
-pub(crate) fn split_clusters(
-    text: &str,
+pub(crate) fn split_clusters<'a>(
+    text: &'a str,
     glyphs: &[(u32, f32, f32)],
     ranges: &[std::ops::Range<usize>],
     rev: &HashMap<u32, char>,
-) -> Vec<std::ops::Range<usize>> {
+) -> (std::borrow::Cow<'a, str>, Vec<std::ops::Range<usize>>) {
+    let has_sara_am = ranges.iter().any(|r| text.get(r.clone()).is_some_and(|t| t.contains(['\u{0E33}', '\u{0EB3}']) && r.start < r.end));
+    if !has_sara_am {
+        let mut out = ranges.to_vec();
+        let mut i = 0;
+        while i < ranges.len() {
+            let Some(r) = ranges.get(i) else { break };
+            let n = ranges.get(i..).map_or(1, |rest| rest.iter().take_while(|x| *x == r).count()).max(1);
+            let chars: Vec<(usize, char)> =
+                text.get(r.clone()).map(|t| t.char_indices().map(|(k, c)| (r.start + k, c)).collect()).unwrap_or_default();
+            let viewer_splits =
+                text.get(r.clone()).is_some_and(|t| t.chars().any(|c| wordcraft_fonts::is_rtl(c) || matches!(c, '\u{0E00}'..='\u{0EFF}')));
+            if n > 1 && chars.len() == n && viewer_splits {
+                let cluster_glyphs = glyphs.get(i..i + n).unwrap_or(&[]);
+                if let Some(cluster_out) = out.get_mut(i..i + n) {
+                    split_one_to_one_cluster(&chars, cluster_glyphs, rev, cluster_out);
+                }
+            }
+            i += n;
+        }
+        return (std::borrow::Cow::Borrowed(text), out);
+    }
+
+    let mut new_text = String::with_capacity(text.len() + 16);
     let mut out = ranges.to_vec();
+    let mut last_copied = 0;
     let mut i = 0;
     while i < ranges.len() {
         let Some(r) = ranges.get(i) else { break };
         let n = ranges.get(i..).map_or(1, |rest| rest.iter().take_while(|x| *x == r).count()).max(1);
-        if n > 1 && text.get(r.clone()).is_some_and(|t| t.contains(['\u{0E33}', '\u{0EB3}'])) {
-            let t = text.get(r.clone()).unwrap_or("");
-            if let Some(fc) = t.chars().next()
-                && fc != '\u{0E33}'
-                && fc != '\u{0EB3}'
-            {
-                let c_len = fc.len_utf8();
-                // HarfBuzz draws SARA AM as NIKHAHIT followed by SARA AA, with the cluster's
-                // other marks between them. A glyph can take only one ToUnicode mapping, and
-                // these glyphs are reused in other clusters (`นำ` and `น้ำ`), so the two vowel
-                // glyphs share the vowel's range and each mark takes its own. `glyphs()` then
-                // writes them in text order.
-                let chars: Vec<(usize, char)> = t.char_indices().collect();
-                let marks = chars.len().saturating_sub(2);
-                let nikhahit = |g: u32| matches!(rev.get(&g), Some('\u{0E4D}' | '\u{0ECD}'));
-                let sara_aa = |g: u32| matches!(rev.get(&g), Some('\u{0E32}' | '\u{0EB2}'));
-                let structure = matches!(chars.last().map(|c| c.1), Some('\u{0E33}' | '\u{0EB3}'))
-                    && if n == 2 {
-                        marks == 0
-                    } else {
-                        marks == n - 3 && glyphs.get(i + 1).is_some_and(|g| nikhahit(g.0)) && glyphs.get(i + n - 1).is_some_and(|g| sara_aa(g.0))
-                    };
-                if structure && let Some(&(vowel_off, _)) = chars.last() {
-                    let mut parts = Vec::with_capacity(n);
-                    parts.push(r.start..r.start + chars.first().map_or(0, |c| c.1.len_utf8()));
-                    let vowel = (r.start + vowel_off)..r.end;
-                    if n == 2 {
-                        parts.push(vowel);
-                    } else {
-                        parts.push(vowel.clone());
-                        for k in 0..marks {
-                            let Some(&(a, ch)) = chars.get(k + 1) else { break };
-                            let a = r.start + a;
-                            parts.push(a..a + ch.len_utf8());
-                        }
-                        parts.push(vowel);
-                    }
-                    if parts.len() == n
-                        && let Some(dst) = out.get_mut(i..i + n)
-                    {
-                        dst.clone_from_slice(&parts);
-                        i += n;
-                        continue;
-                    }
-                }
-                // The glyphs don't line up with the characters: keep one range for the marks,
-                // and let `/ActualText` carry the original text (`t`).
-                let rest_range = (r.start + c_len)..r.end;
-                if let Some(first) = out.get_mut(i) {
-                    *first = r.start..r.start + c_len;
-                }
-                for g in i + 1..i + n {
-                    if let Some(slot) = out.get_mut(g) {
-                        *slot = rest_range.clone();
-                    }
-                }
-                i += n;
-                continue;
+
+        if r.start > last_copied
+            && let Some(chunk) = text.get(last_copied..r.start)
+        {
+            new_text.push_str(chunk);
+        }
+
+        let sub = text.get(r.clone()).unwrap_or("");
+        let chars: Vec<(usize, char)> = sub.char_indices().collect();
+        let fc = chars.first().map(|c| c.1);
+
+        if n > 1 && sub.contains(['\u{0E33}', '\u{0EB3}']) && fc.is_some_and(|c| c != '\u{0E33}' && c != '\u{0EB3}') {
+            let cluster_glyphs = glyphs.get(i..i + n).unwrap_or(&[]);
+            if let Some(cluster_out) = out.get_mut(i..i + n) {
+                split_composite_vowel_cluster(sub, &chars, cluster_glyphs, rev, &mut new_text, cluster_out);
+            }
+            last_copied = last_copied.max(r.end);
+            i += n;
+            continue;
+        }
+
+        let cluster_start = new_text.len();
+        new_text.push_str(sub);
+        let cluster_range = cluster_start..new_text.len();
+        if let Some(dst) = out.get_mut(i..i + n) {
+            dst.fill(cluster_range);
+        }
+
+        let chars_mapped: Vec<(usize, char)> = chars.iter().map(|(k, c)| (cluster_start + k, *c)).collect();
+        let viewer_splits = sub.chars().any(|c| wordcraft_fonts::is_rtl(c) || matches!(c, '\u{0E00}'..='\u{0EFF}'));
+        if n > 1 && chars_mapped.len() == n && viewer_splits {
+            let cluster_glyphs = glyphs.get(i..i + n).unwrap_or(&[]);
+            if let Some(cluster_out) = out.get_mut(i..i + n) {
+                split_one_to_one_cluster(&chars_mapped, cluster_glyphs, rev, cluster_out);
             }
         }
-        let chars: Vec<(usize, char)> = text.get(r.clone()).map(|t| t.char_indices().map(|(k, c)| (r.start + k, c)).collect()).unwrap_or_default();
-        // Only clusters a viewer needs split: right-to-left marks (so the word reads in order)
-        // and Thai/Lao marks. Other scripts keep one range so `/ActualText` stays logical.
-        let viewer_splits =
-            text.get(r.clone()).is_some_and(|t| t.chars().any(|c| wordcraft_fonts::is_rtl(c) || matches!(c, '\u{0E00}'..='\u{0EFF}')));
-        if n > 1 && chars.len() == n && viewer_splits {
-            // Glyphs the character map knows take their characters; one left over (a letter's
-            // contextual form, which the map doesn't list) takes the one character left.
-            let mut used = vec![false; n];
-            let mut of: Vec<Option<usize>> = (i..i + n)
-                .map(|g| {
-                    let c = rev.get(&glyphs.get(g)?.0)?;
-                    let k = chars.iter().enumerate().position(|(k, (_, ch))| ch == c && !used.get(k).copied().unwrap_or(true))?;
-                    *used.get_mut(k)? = true;
-                    Some(k)
-                })
-                .collect();
-            let free: Vec<usize> = (0..n).filter(|k| !used.get(*k).copied().unwrap_or(true)).collect();
-            if let ([k], [slot]) = (free.as_slice(), of.iter_mut().filter(|o| o.is_none()).collect::<Vec<_>>().as_mut_slice()) {
-                **slot = Some(*k);
-            }
-            let parts: Option<Vec<std::ops::Range<usize>>> = of
-                .iter()
-                .map(|k| {
-                    let (a, ch) = chars.get((*k)?)?;
-                    Some(*a..a + ch.len_utf8())
-                })
-                .collect();
-            if let (Some(parts), Some(dst)) = (parts, out.get_mut(i..i + n)) {
-                dst.clone_from_slice(&parts);
-            }
-        }
+
+        last_copied = last_copied.max(r.end);
         i += n;
     }
-    out
+
+    if last_copied < text.len()
+        && let Some(tail) = text.get(last_copied..)
+    {
+        new_text.push_str(tail);
+    }
+
+    (std::borrow::Cow::Owned(new_text), out)
+}
+
+fn split_one_to_one_cluster(
+    chars: &[(usize, char)],
+    cluster_glyphs: &[(u32, f32, f32)],
+    rev: &HashMap<u32, char>,
+    cluster_out: &mut [std::ops::Range<usize>],
+) {
+    let n = cluster_glyphs.len();
+    let mut used = vec![false; n];
+    let mut of: Vec<Option<usize>> = cluster_glyphs
+        .iter()
+        .map(|g| {
+            let c = rev.get(&g.0)?;
+            let k = chars.iter().enumerate().position(|(k, (_, ch))| ch == c && !used.get(k).copied().unwrap_or(true))?;
+            *used.get_mut(k)? = true;
+            Some(k)
+        })
+        .collect();
+    let free: Vec<usize> = (0..n).filter(|k| !used.get(*k).copied().unwrap_or(true)).collect();
+    if let ([k], [slot]) = (free.as_slice(), of.iter_mut().filter(|o| o.is_none()).collect::<Vec<_>>().as_mut_slice()) {
+        **slot = Some(*k);
+    }
+    let parts: Option<Vec<std::ops::Range<usize>>> = of
+        .iter()
+        .map(|k| {
+            let (a, ch) = chars.get((*k)?)?;
+            Some(*a..a + ch.len_utf8())
+        })
+        .collect();
+    if let Some(parts) = parts
+        && parts.len() == cluster_out.len()
+    {
+        cluster_out.clone_from_slice(&parts);
+    }
+}
+
+fn split_composite_vowel_cluster(
+    sub: &str,
+    chars: &[(usize, char)],
+    cluster_glyphs: &[(u32, f32, f32)],
+    rev: &HashMap<u32, char>,
+    new_text: &mut String,
+    cluster_out: &mut [std::ops::Range<usize>],
+) {
+    let n = cluster_glyphs.len();
+    let c_len = chars.first().map_or(0, |c| c.1.len_utf8());
+    let marks = chars.len().saturating_sub(2);
+    let nikhahit = |g: u32| matches!(rev.get(&g), Some('\u{0E4D}' | '\u{0ECD}'));
+    let sara_aa = |g: u32| matches!(rev.get(&g), Some('\u{0E32}' | '\u{0EB2}'));
+    let is_vowel = matches!(chars.last().map(|c| c.1), Some('\u{0E33}' | '\u{0EB3}'));
+    let has_sara_aa_glyph = n > 2 && cluster_glyphs.last().is_some_and(|g| sara_aa(g.0));
+    let vowel_char = chars.last().map(|c| c.1).unwrap_or('\0');
+    let thai_structure = vowel_char == '\u{0E33}' && n >= 3 && marks == n - 3 && cluster_glyphs.get(1).is_some_and(|g| nikhahit(g.0));
+    let lao_structure = vowel_char == '\u{0EB3}';
+    let structure = is_vowel && has_sara_aa_glyph && (thai_structure || lao_structure);
+
+    if structure && let Some(&(vowel_off, _)) = chars.last() {
+        let (nikhahit_char, sara_aa_char) = if vowel_char == '\u{0E33}' { ('\u{0E4D}', '\u{0E32}') } else { ('\u{0ECD}', '\u{0EB2}') };
+        let cluster_start = new_text.len();
+        if let Some(pre_vowel) = sub.get(..vowel_off) {
+            new_text.push_str(pre_vowel);
+        }
+        let nikhahit_start = new_text.len();
+        new_text.push(nikhahit_char);
+        let sara_aa_start = new_text.len();
+        new_text.push(sara_aa_char);
+        let sara_aa_end = new_text.len();
+
+        let mut parts = Vec::with_capacity(n);
+        parts.push(cluster_start..cluster_start + c_len);
+
+        if thai_structure {
+            parts.push(nikhahit_start..sara_aa_start);
+            for k in 0..marks {
+                if let Some(&(char_off, ch)) = chars.get(k + 1) {
+                    parts.push((cluster_start + char_off)..(cluster_start + char_off + ch.len_utf8()));
+                }
+            }
+        } else {
+            let mark_range = (cluster_start + c_len)..sara_aa_start;
+            for _ in 1..n - 1 {
+                parts.push(mark_range.clone());
+            }
+        }
+        parts.push(sara_aa_start..sara_aa_end);
+
+        if parts.len() == cluster_out.len() {
+            cluster_out.clone_from_slice(&parts);
+            return;
+        }
+    }
+
+    let cluster_start = new_text.len();
+    new_text.push_str(sub);
+    let rest_range = (cluster_start + c_len)..new_text.len();
+    let is_precomposed = n == 2 && cluster_glyphs.get(1).is_some_and(|g| chars.last().map(|c| c.1).is_some_and(|v| rev.get(&g.0) == Some(&v)));
+    if is_precomposed {
+        if let Some(first) = cluster_out.first_mut() {
+            *first = cluster_start..cluster_start + c_len;
+        }
+        if let Some(second) = cluster_out.get_mut(1) {
+            *second = rest_range;
+        }
+    } else {
+        if let Some(first) = cluster_out.first_mut() {
+            *first = cluster_start..cluster_start + c_len;
+        }
+        for slot in cluster_out.iter_mut().skip(1) {
+            *slot = rest_range.clone();
+        }
+    }
 }
 
 /// Indices of a run's glyphs in visual order, left to right: its clusters (consecutive glyphs

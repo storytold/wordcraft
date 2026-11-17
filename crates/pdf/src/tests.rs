@@ -2187,7 +2187,7 @@ fn right_to_left_clusters_are_written_whole_left_to_right() {
     let ranges = [0..4, 0..4, 4..8, 4..8, 8..12, 12..14];
     let rev: std::collections::HashMap<u32, char> = [(1, 'ש'), (2, '\u{5B8}'), (6, 'ם')].into_iter().collect();
     assert!(!left_to_right(&glyphs));
-    let parts = split_clusters(text, &glyphs, &ranges, &rev);
+    let (_, parts) = split_clusters(text, &glyphs, &ranges, &rev);
     assert_eq!(parts, [2..4, 0..2, 4..8, 4..8, 8..12, 12..14]);
     // Glyph by glyph by x this would be [5, 4, 3, 2, 0, 1]: the lam-alef's glyphs swapped.
     assert_eq!(visual_order(text, &glyphs, &ranges, &parts), [5, 4, 2, 3, 0, 1]);
@@ -2204,9 +2204,11 @@ fn thai_cluster_splitting_leaves_other_scripts_alone() {
     let ranges = [0..6, 0..6, 7..16, 7..16, 7..16, 7..16];
     let rev: std::collections::HashMap<u32, char> =
         [(1, '\u{93F}'), (2, 'क'), (3, 'น'), (4, '\u{0E4D}'), (5, '\u{0E49}'), (6, '\u{0E32}')].into_iter().collect();
-    let parts = split_clusters(text, &glyphs, &ranges, &rev);
+    let (split_text, parts) = split_clusters(text, &glyphs, &ranges, &rev);
     assert_eq!(parts[..2], [0..6, 0..6], "Devanagari keeps its shared logical range");
-    assert_eq!(parts[2..], [7..10, 13..16, 10..13, 13..16], "the Thai base, tone mark and vowel split");
+    assert_eq!(parts[2..], [7..10, 13..16, 10..13, 16..19], "the Thai base, tone mark, nikhahit and sara aa split into unique ranges");
+    assert_eq!(&split_text[13..16], "\u{0E4D}", "nikhahit has its own range");
+    assert_eq!(&split_text[16..19], "\u{0E32}", "sara aa has its own range");
 }
 
 /// A font that draws SARA AM as one precomposed glyph gets the base and vowel ranges (#5883).
@@ -2216,7 +2218,21 @@ fn precomposed_sara_am_takes_its_own_range() {
     let glyphs = [(1, 0.0, 0.0), (2, 10.0, 0.0)];
     let ranges = [0..6, 0..6];
     let rev: std::collections::HashMap<u32, char> = [(1, 'น'), (2, '\u{0E33}')].into_iter().collect();
-    assert_eq!(split_clusters(text, &glyphs, &ranges, &rev), [0..3, 3..6]);
+    let (_, parts) = split_clusters(text, &glyphs, &ranges, &rev);
+    assert_eq!(parts, [0..3, 3..6]);
+}
+
+/// A font that shapes SARA AM into NIKHAHIT and SARA AA splits the cluster into
+/// base, nikhahit and sara aa ranges (#5883).
+#[test]
+fn decomposed_sara_am_splits_into_base_nikhahit_and_sara_aa() {
+    let text = "นำ";
+    let glyphs = [(1, 0.0, 0.0), (2, 5.0, 0.0), (3, 10.0, 0.0)];
+    let ranges = [0..6, 0..6, 0..6];
+    let rev: std::collections::HashMap<u32, char> = [(1, 'น'), (2, '\u{0E4D}'), (3, '\u{0E32}')].into_iter().collect();
+    let (split_text, parts) = split_clusters(text, &glyphs, &ranges, &rev);
+    assert_eq!(split_text, "น\u{0E4D}\u{0E32}");
+    assert_eq!(parts, [0..3, 3..6, 6..9]);
 }
 
 /// Glyphs that don't match the NIKHAHIT/SARA AA structure keep the shared mark range, so
@@ -2228,7 +2244,8 @@ fn unexpected_thai_glyph_order_keeps_the_shared_range() {
     let glyphs = [(1, 0.0, 0.0), (2, 10.0, 0.0), (3, 11.0, 0.0), (4, 12.0, 0.0)];
     let ranges = [0..9, 0..9, 0..9, 0..9];
     let rev: std::collections::HashMap<u32, char> = [(1, 'น'), (2, '\u{0E49}'), (3, '\u{0E4D}'), (4, '\u{0E32}')].into_iter().collect();
-    assert_eq!(split_clusters(text, &glyphs, &ranges, &rev), [0..3, 3..9, 3..9, 3..9]);
+    let (_, parts) = split_clusters(text, &glyphs, &ranges, &rev);
+    assert_eq!(parts, [0..3, 3..9, 3..9, 3..9]);
 }
 
 /// The image XObjects in a PDF: (width, height, filters, decoded samples per pixel).
@@ -3105,18 +3122,19 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
 fn thai_text_extracts_correctly() {
     let d = Document::from_text("ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่");
     let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let expected = "ห้อง ก๋วยเตี๋ยว น\u{0E49}\u{0E4D}\u{0E32} ที่นี่";
 
-    // 1. Full extraction (with ActualText and recomposition if applicable):
+    // 1. Full extraction:
     let text = extract_text(&bytes).concat();
     // No control characters or replacement characters in the extracted text (#5883).
     assert!(!text.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{text:?}");
     // Each word decodes to its own text, and specifically 'นี่' does not decode as 'น้ำ'.
     assert!(text.contains("ห้อง"), "{text:?}");
     assert!(text.contains("ก๋วยเตี๋ยว"), "{text:?}");
-    assert!(text.contains("น้ำ"), "{text:?}");
+    assert!(text.contains("น\u{0E49}\u{0E4D}\u{0E32}"), "{text:?}");
     assert!(text.contains("ที่นี่"), "{text:?}");
     assert!(!text.contains("ที่น้ำ"), "{text:?}");
-    assert_eq!(text.trim(), "ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่");
+    assert_eq!(text.trim(), expected);
 
     // 2. Raw ToUnicode extraction without ActualText or test-side vowel recomposition:
     let raw = extract_raw_tounicode_text(&bytes).concat();
@@ -3127,7 +3145,8 @@ fn thai_text_extracts_correctly() {
     assert!(raw.contains("ที่"), "{raw:?}");
     assert!(raw.contains("นี่"), "{raw:?}");
     assert!(!raw.contains("ที่น้ำ"), "{raw:?}");
-    assert!(raw.contains("น้ำ"), "{raw:?}");
+    assert!(raw.contains("น\u{0E49}\u{0E4D}\u{0E32}"), "{raw:?}");
+    assert_eq!(raw.trim(), expected);
     // Tone marks and vowels are present in ToUnicode CMap:
     assert!(raw.contains('\u{0E49}'), "ToUnicode missing MAI THO: {raw:?}");
     assert!(raw.contains('\u{0E48}'), "ToUnicode missing MAI EK: {raw:?}");
@@ -3141,21 +3160,47 @@ fn thai_text_extracts_correctly() {
 fn lao_text_extracts_correctly() {
     let d = Document::from_text("ສະບາຍດີ ນ້ຳດື່ມ");
     let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let expected = "ສະບາຍດີ ນ\u{0EC9}\u{0ECD}\u{0EB2}ດື່ມ";
+
     let text = extract_text(&bytes).concat();
     assert!(!text.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{text:?}");
     assert!(text.contains("ສະບາຍດີ"), "{text:?}");
-    assert!(text.contains("ນ້ຳດື່ມ"), "{text:?}");
-    assert_eq!(text.trim(), "ສະບາຍດີ ນ້ຳດື່ມ");
+    assert!(text.contains("ນ\u{0EC9}\u{0ECD}\u{0EB2}ດື່ມ"), "{text:?}");
+    assert_eq!(text.trim(), expected);
+
+    let raw = extract_raw_tounicode_text(&bytes).concat();
+    assert!(!raw.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{raw:?}");
+    assert!(raw.contains("ສະບາຍດີ"), "{raw:?}");
+    assert!(raw.contains("ນ\u{0EC9}\u{0ECD}\u{0EB2}ດື່ມ"), "{raw:?}");
+    assert!(!raw.contains("ນ້ຳາດື່ມ"), "SARA AA must not be duplicated: {raw:?}");
+    assert_eq!(raw.trim(), expected);
 }
 
-/// A font glyph shared by `นำ` and `น้ำ` still extracts exactly through raw ToUnicode, without
+/// A font glyph shared by `นำ` and `น้ำ` still extracts cleanly through raw ToUnicode, without
 /// `/ActualText` filling in for it (#5883).
 #[test]
 fn thai_repeated_sara_am_raw_tounicode_is_exact() {
     let d = Document::from_text("นำ น้ำ");
     let bytes = export(&d, &PdfOptions::default()).unwrap();
     let raw = extract_raw_tounicode_text(&bytes).concat();
-    assert_eq!(raw.trim(), "นำ น้ำ", "{raw:?}");
+    let expected = "น\u{0E4D}\u{0E32} น\u{0E49}\u{0E4D}\u{0E32}";
+    assert_eq!(raw.trim(), expected, "{raw:?}");
+}
+
+/// A document containing both SARA AM (`ำ`) and standalone SARA AA (`า`) (such as `ทำงาน` and `น้ำตา`)
+/// extracts cleanly without duplicating SARA AA in extractors that read ToUnicode (#5883).
+#[test]
+fn thai_sara_am_and_standalone_sara_aa_extract_cleanly() {
+    let d = Document::from_text("ทำงาน น้ำตา");
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let raw = extract_raw_tounicode_text(&bytes).concat();
+    assert!(!raw.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{raw:?}");
+    assert!(raw.contains("ท\u{0E4D}างาน"), "{raw:?}");
+    assert!(!raw.contains("ทำางาน"), "SARA AA must not be duplicated: {raw:?}");
+    assert!(raw.contains("น\u{0E49}\u{0E4D}\u{0E32}ตา"), "{raw:?}");
+    assert!(!raw.contains("น้ำาตา"), "SARA AA must not be duplicated: {raw:?}");
+    let expected = "ท\u{0E4D}างาน น\u{0E49}\u{0E4D}\u{0E32}ตา";
+    assert_eq!(raw.trim(), expected);
 }
 
 /// Verifies that mixed RTL and LTR text preserves correct visual and extraction ordering
@@ -3175,6 +3220,7 @@ fn mixed_rtl_ltr_text_extracts_correctly() {
     for w in ["Hello", "עברית", "World", "שלום", "123"] {
         assert!(words.iter().any(|x| x == w), "{w:?} not extracted intact from {words:?}");
     }
+    assert_eq!(words, ["123", "שלום", "World", "עברית", "Hello"]);
 }
 
 /// Verifies that Devanagari text with pre-base vowel signs (such as 'ि' U+093F)

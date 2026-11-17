@@ -133,12 +133,12 @@ impl Exporter<'_> {
         let upem = face.upem.max(1.0) as f32;
         let needs_reorder = is_rtl && !left_to_right(glyphs);
         let has_thai_or_lao_clusters = is_thai_or_lao && ranges.windows(2).any(|w| w[0] == w[1]);
-        let (order, ranges) = if !needs_reorder && !has_thai_or_lao_clusters {
-            ((0..glyphs.len()).collect(), ranges)
+        let (order, ranges, txt) = if !needs_reorder && !has_thai_or_lao_clusters {
+            ((0..glyphs.len()).collect(), ranges, txt)
         } else {
-            let parts = split_clusters(&txt, glyphs, &ranges, &self.cmap(face));
+            let (new_txt, parts) = split_clusters(&txt, glyphs, &ranges, &self.cmap(face));
             let order = if needs_reorder {
-                visual_order(&txt, glyphs, &ranges, &parts)
+                visual_order(&new_txt, glyphs, &ranges, &parts)
             } else if has_thai_or_lao_clusters && !is_rtl {
                 // Marks come out of shaping in visual order; write them in text order so a
                 // viewer without `/ActualText` reads the cluster as it is spelled. Right-to-left
@@ -149,7 +149,7 @@ impl Exporter<'_> {
             } else {
                 (0..glyphs.len()).collect()
             };
-            (order, Cow::Owned(parts))
+            (order, Cow::Owned(parts), new_txt)
         };
         let placed: Vec<(u32, f32, f32, std::ops::Range<usize>)> =
             order.iter().filter_map(|&i| Some((glyphs.get(i).copied()?, ranges.get(i).cloned()?))).map(|((g, x, y), r)| (g, x, y, r)).collect();
