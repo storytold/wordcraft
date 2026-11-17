@@ -1,5 +1,5 @@
 use super::doc_state::{MAX_UNDO, Selection, UNDO_LIST_MAX, Undo, next_math_session};
-use super::*;
+use super::{Arc, Document, Session};
 
 impl Session {
     /// Snapshot for undo before a change. Returns whether it took a step: typing that is
@@ -24,6 +24,11 @@ impl Session {
         // The newest step is what a joined command merges into.
         self.join_anchor = true;
         true
+    }
+
+    /// Take back the newest undo step: a command that joins an earlier step of its own.
+    pub(crate) fn drop_last_undo_step(&mut self) {
+        self.history.pop();
     }
 
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so

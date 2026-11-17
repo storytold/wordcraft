@@ -1,4 +1,4 @@
-use super::*;
+use super::{DocLayout, Pos, WordApp};
 
 /// The simple field at or just before `pos` when it shows its code (View › Field Codes, or its
 /// own toggle): where it is.
@@ -41,6 +41,21 @@ pub(super) fn field_link(obj: &wordcraft_doc::InlineObject) -> Option<String> {
 /// chose or sees, so the hover tip says where it goes instead of showing it (#2177).
 pub(super) fn is_generated_bookmark_link(link: &str) -> bool {
     link.strip_prefix("#_").is_some()
+}
+
+/// Ctrl/⌘+click on `link` (in the text or on a picture): a place in this document takes the caret
+/// to its bookmark; a web or email address opens in the browser; any other is not followed.
+pub(crate) fn follow_link(app: &mut WordApp, link: String) {
+    if let Some(name) = link.strip_prefix('#') {
+        // The caret goes to the bookmark's start, as in Word (Go To selects its text).
+        if app.run("edit.goto", serde_json::json!({"bookmark": name})).is_ok() {
+            let _ = app.run("select.collapse", serde_json::json!({}));
+        }
+    } else if is_followable_link(&link) {
+        app.canvas.open_url = Some(link);
+    } else {
+        app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
+    }
 }
 
 /// Whether Ctrl/⌘+click may hand a document's hyperlink to the system: web and email links only,

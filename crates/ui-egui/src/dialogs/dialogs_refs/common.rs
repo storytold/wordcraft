@@ -1,4 +1,4 @@
-use super::*;
+use super::{Sense, Tokens, Ui, semibold, vec2};
 
 pub(super) fn heading(ui: &mut Ui, s: &str) {
     ui.add_space(4.0);

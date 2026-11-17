@@ -1,6 +1,6 @@
 use super::arrange::{MAX_OFFSET, move_object, unalign};
 use super::select::{FROZEN, INK_GROUP, holds_ink, min_size, movable_story, object_ref, object_selection, picked_objects, selected, shown_members};
-use super::*;
+use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, Spin, Value, Wrap, json, sel_result};
 
 /// Add objects to the selection (Shift+click): the first one is selected if no object is yet;
 /// one already selected is taken out again.

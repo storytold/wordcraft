@@ -1,6 +1,6 @@
 use super::groups::command_menu;
 use super::tooltip::{keytip_badge, shortcut_text, show_hint, tooltip, tooltip_lines};
-use super::*;
+use super::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Tokens, Ui, Value, WordApp, icons, pos2, regular, vec2};
 
 /// Height of the ribbon content area (without group labels).
 pub const CONTENT_H: f32 = 66.0;
@@ -35,12 +35,19 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
 }
 
 pub(crate) fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
-    let fill = if resp.is_pointer_button_down_on() {
+    bg_if(ui, r, resp, checked, t, true);
+}
+
+/// Paints a button background with an optional hover/press response. Disabled ribbon commands
+/// pass `false` so their visual state cannot imply that they are interactive.
+pub(crate) fn bg_if(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens, on: bool) {
+    let hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered() && on);
+    let fill = if resp.is_pointer_button_down_on() && on {
         t.pressed
     } else if checked {
         t.checked
-    } else if resp.hovered() {
-        t.hover
+    } else if hover > 0.0 {
+        Color32::TRANSPARENT.lerp_to_gamma(t.hover, hover)
     } else {
         return;
     };
@@ -62,12 +69,12 @@ pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
 
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
-    big_button(ui, app, icon, label, id, params, menu, false)
+    big_button(ui, app, icon, label, id, params, BigState { menu, checked: false })
 }
 
 /// A large ribbon button for a mode that stays on (`checked` draws it pressed), run without params.
 pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, checked: bool) -> Response {
-    big_button(ui, app, icon, label, id, Value::Object(Default::default()), false, checked)
+    big_button(ui, app, icon, label, id, Value::Object(Default::default()), BigState { menu: false, checked })
 }
 
 /// Size of the drop-down marker drawn after a label or beside a split button (#659: one marker,
@@ -88,8 +95,15 @@ pub fn label_line(ui: &Ui, cx: f32, y: f32, text: &str, font: egui::FontId, colo
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, checked: bool) -> Response {
+/// How a large ribbon button behaves: `menu` adds a drop-down marker, `checked` draws it toggled.
+#[derive(Clone, Copy)]
+struct BigState {
+    menu: bool,
+    checked: bool,
+}
+
+fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, state: BigState) -> Response {
+    let BigState { menu, checked } = state;
     let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let galley_w =
@@ -98,7 +112,7 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
     keytip_badge(ui, r, id, &label.replace('\n', " "));
     let on = enabled(app, id);
-    bg(ui, r, &resp, checked, &t);
+    bg_if(ui, r, &resp, checked, &t, on);
     let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
@@ -117,7 +131,20 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
 }
 
 /// A small button: 16 px icon with an optional label; `checked` draws the toggled state.
-pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
+pub struct ButtonAction<'a> {
+    pub id: &'a str,
+    pub params: Value,
+    pub checked: bool,
+}
+
+impl<'a> ButtonAction<'a> {
+    pub fn new(id: &'a str, params: Value, checked: bool) -> Self {
+        Self { id, params, checked }
+    }
+}
+
+pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, action: ButtonAction<'_>) -> Response {
+    let ButtonAction { id, params, checked } = action;
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     // A compact group (#662) shows only the icon; the tooltip keeps the name.
     let label = label.filter(|_| !crate::ribbon_fit::compact(ui.ctx()));
@@ -126,12 +153,14 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
     keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
-    bg(ui, r, &resp, checked, &t);
-    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
+    bg_if(ui, r, &resp, checked, &t, on);
+    let rtl = crate::rtl::flows(ui);
+    let ic = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 12.0), r.center().y), vec2(17.0, 17.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
     if let Some(l) = label {
-        ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), if on { t.text } else { t.text_disabled });
+        let at = pos2(crate::rtl::lead_x(rtl, r, 24.0), r.center().y);
+        ui.painter().text(at, crate::rtl::lead_center(rtl), l, regular(11.5), if on { t.text } else { t.text_disabled });
     }
     let resp = tooltip(app, resp, tip, id);
     command_menu(&resp, app, id);
@@ -148,20 +177,19 @@ pub fn split(
     app: &mut WordApp,
     icon: &str,
     tip: &str,
-    id: &str,
-    params: Value,
-    checked: bool,
+    action: ButtonAction<'_>,
     swatch: Option<Color32>,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
-) {
+) -> Response {
+    let ButtonAction { id, params, checked } = action;
     let tip = tl!(tip);
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
     keytip_badge(ui, r, id, tip);
     let (ar, aresp) = ui.allocate_exact_size(vec2(11.0, 22.0), Sense::click());
     let on = enabled(app, id);
-    bg(ui, r, &resp, checked, &t);
-    bg(ui, ar, &aresp, false, &t);
+    bg_if(ui, r, &resp, checked, &t, on);
+    bg_if(ui, ar, &aresp, false, &t, on);
     let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
@@ -184,12 +212,13 @@ pub fn split(
     // (#3172).
     aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &arrow_title));
     if !on {
-        return;
+        return resp;
     }
-    egui::Popup::menu(&aresp).show(|ui| {
+    crate::rtl::menu(&aresp).show(|ui| {
         ui.set_min_width(180.0);
         menu(ui, app);
     });
+    resp
 }
 
 /// Whether a menu button whose menu is about command `id` is on ("" = always).
@@ -198,16 +227,22 @@ pub fn menu_enabled(app: &WordApp, id: &str) -> bool {
 }
 
 /// A button that only opens a menu (icon + label + drop-down marker).
-pub fn menu_button(
-    ui: &mut Ui,
-    app: &mut WordApp,
-    icon: &str,
-    label: Option<&str>,
-    tip: &str,
-    big_btn: bool,
-    id: &str,
-    menu: impl FnOnce(&mut Ui, &mut WordApp),
-) {
+pub struct MenuButtonOptions<'a> {
+    pub icon: &'a str,
+    pub label: Option<&'a str>,
+    pub tip: &'a str,
+    pub big_btn: bool,
+    pub id: &'a str,
+}
+
+impl<'a> MenuButtonOptions<'a> {
+    pub fn new(icon: &'a str, label: Option<&'a str>, tip: &'a str, big_btn: bool, id: &'a str) -> Self {
+        Self { icon, label, tip, big_btn, id }
+    }
+}
+
+pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_>, menu: impl FnOnce(&mut Ui, &mut WordApp)) {
+    let MenuButtonOptions { icon, label, tip, big_btn, id } = options;
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     let label = label.filter(|_| big_btn || !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
@@ -224,7 +259,7 @@ pub fn menu_button(
         let w = (galley_w + 22.0).max(44.0);
         let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
         keytip_badge(ui, r, "menu", tip);
-        bg(ui, r, &resp, false, &t);
+        bg_if(ui, r, &resp, false, &t, on);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a);
         let lines: Vec<&str> = label.unwrap_or("").split('\n').collect();
         let mut y = r.min.y + BIG_LABEL_Y;
@@ -237,12 +272,15 @@ pub fn menu_button(
         let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
         let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
         keytip_badge(ui, r, "menu", tip);
-        bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, c, a);
+        bg_if(ui, r, &resp, false, &t, on);
+        let rtl = crate::rtl::flows(ui);
+        let lead = |inset: f32| crate::rtl::lead_x(rtl, r, inset);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(lead(12.0), r.center().y), vec2(17.0, 17.0)), icon, c, a);
         if let Some(l) = label {
-            ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), text);
+            ui.painter().text(pos2(lead(24.0), r.center().y), crate::rtl::lead_center(rtl), l, regular(11.5), text);
         }
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 6.0, r.center().y), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
+        let arrow = pos2(crate::rtl::trail_x(rtl, r, 6.0), r.center().y);
+        icons::paint(ui.painter(), Rect::from_center_size(arrow, vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
         resp
     };
     let reason = if on { None } else { Some(app.session.why_disabled(id).unwrap_or("")) };
@@ -252,7 +290,7 @@ pub fn menu_button(
     if !on {
         return;
     }
-    egui::Popup::menu(&resp).show(|ui| {
+    crate::rtl::menu(&resp).show(|ui| {
         ui.set_min_width(200.0);
         menu(ui, app);
     });

@@ -1,4 +1,4 @@
-use super::*;
+use super::{ENVELOPE_SIZES, LABEL_PRODUCTS, Serialize, Ui, Value, WordApp, buttons, json, run};
 
 // ---------------------------------------------------------------------------------------------
 // Envelopes
@@ -49,7 +49,7 @@ pub(super) fn envelopes_ui(app: &mut WordApp, ui: &mut Ui, f: &mut EnvelopeForm)
     ui.add_space(8.0);
     let (mut add, mut new, mut cancel) = (false, false, false);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             cancel = ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape));
             new = ui.add_enabled(ready, egui::Button::new(tl!("New Document"))).clicked();
             add = ui.add_enabled(ready, crate::widgets::primary_button(ui, tl!("Add to Document"))).clicked();
@@ -163,15 +163,16 @@ pub(super) fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> b
         });
     });
     let (rows, cols) = LABEL_PRODUCTS.get(f.product).map_or((1, 1), |p| (p.rows, p.cols));
-    heading(ui, "Print");
-    ui.radio_value(&mut f.single, false, tl!("Full page of the same label"));
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.single, true, tl!("Single label"));
-        ui.add_enabled_ui(f.single, |ui| {
-            ui.label(tl!("Row:"));
-            ui.add(egui::DragValue::new(&mut f.row).range(1..=rows));
-            ui.label(tl!("Column:"));
-            ui.add(egui::DragValue::new(&mut f.col).range(1..=cols));
+    crate::widgets::section(ui, tl!("Print"), |ui| {
+        ui.radio_value(&mut f.single, false, tl!("Full page of the same label"));
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.single, true, tl!("Single label"));
+            ui.add_enabled_ui(f.single, |ui| {
+                ui.label(tl!("Row:"));
+                ui.add(egui::DragValue::new(&mut f.row).range(1..=rows));
+                ui.label(tl!("Column:"));
+                ui.add(egui::DragValue::new(&mut f.col).range(1..=cols));
+            });
         });
     });
     f.row = f.row.clamp(1, rows.max(1));

@@ -1,4 +1,7 @@
 use super::*;
+use std::sync::Arc;
+
+mod note_conversion;
 
 #[test]
 fn new_document_is_valid() {
@@ -16,11 +19,44 @@ fn word_count() {
     assert_eq!(count_words(" -- "), 0);
 }
 
+/// #2797: the status bar's character counts, worded like the Word Count dialog's: characters
+/// with spaces leave the paragraph breaks out, characters without spaces leave every
+/// whitespace character out.
+#[test]
+fn character_counts() {
+    assert_eq!(count_chars(""), 0);
+    assert_eq!(count_chars("Hello"), 5);
+    // Paragraph breaks join the paragraphs but aren't characters.
+    assert_eq!(count_chars("Hello\nworld\r\n"), 10);
+    assert_eq!(count_chars("a\tb"), 3, "a tab is a character");
+    // Every kind of whitespace goes, spaces, tabs and (non-ASCII) spaces between words.
+    assert_eq!(count_chars_no_spaces("Hello world"), 10);
+    assert_eq!(count_chars_no_spaces("a\tb c\u{a0}d"), 4, "including a non-breaking space");
+    assert_eq!(count_chars_no_spaces(" \n\r\t "), 0);
+    // Accented letters and emoji count as one character each, as they are.
+    assert_eq!(count_chars("café 🚀"), 6);
+    assert_eq!(count_chars_no_spaces("café 🚀"), 5);
+}
+
+/// #4547: each Han ideograph and kana counts as a word; punctuation and Hangul spacing don't change.
+#[test]
+fn word_count_counts_each_chinese_and_japanese_character() {
+    // #4547: unspaced Chinese counted as one word per run.
+    assert_eq!(count_words("我们今天去公园。"), 7);
+    assert_eq!(count_words("WordCraft是一个文字处理器，很好用！"), 1 + 11);
+    assert_eq!(count_words("ひらがなとカタカナ"), 9);
+    assert_eq!(count_words("ｶﾀｶﾅ"), 4);
+    assert_eq!(count_words("ｶﾞｷﾞ"), 2, "voiced sound marks belong to their kana");
+    assert_eq!(count_words("。、・「」"), 0);
+    // Korean is spaced: Hangul counts by tokens.
+    assert_eq!(count_words("안녕하세요 세계"), 2);
+}
+
 #[test]
 fn word_count_includes_numbered_list_labels_but_not_bullets() {
     let mut d = Document::new();
-    let num_id = d.numbering.add_list(ListKind::Numbered);
-    let bul_id = d.numbering.add_list(ListKind::Bullet);
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    let bul_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Bullet);
 
     let mut p1 = Paragraph::with_text("Apple", CharProps::default());
     p1.props.numbering = Some(props::NumRef { num: num_id, level: 0 });
@@ -44,9 +80,9 @@ fn word_count_includes_numbered_list_labels_but_not_bullets() {
 #[test]
 fn word_count_includes_numbered_labels_with_nothing_suffix() {
     let mut d = Document::new();
-    let num_id = d.numbering.add_list(ListKind::Numbered);
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let aid = d.numbering.num(num_id).expect("list num exists").abstract_id;
-    let a = d.numbering.abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
+    let a = Arc::make_mut(&mut d.numbering).abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
     a.levels[0].suffix = numbering::LevelSuffix::Nothing;
 
     let mut p1 = Paragraph::with_text("Apple", CharProps::default());
@@ -59,6 +95,23 @@ fn word_count_includes_numbered_labels_with_nothing_suffix() {
     // and label "2." and text "Banana Cherry" as 3 words (total: 5 words),
     // even though LevelSuffix::Nothing produces no visible separator between label and text.
     assert_eq!(d.word_count(), 5);
+}
+
+/// #4547: a generated CJK list label such as 第十二章 still counts as one word.
+#[test]
+fn word_count_keeps_a_cjk_list_label_one_word() {
+    let mut d = Document::new();
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    let aid = d.numbering.num(num_id).expect("list num exists").abstract_id;
+    let a = Arc::make_mut(&mut d.numbering).abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
+    a.levels[0].format = section::NumFormat::ChineseCounting;
+    a.levels[0].text = "第%1章".into();
+    a.levels[0].start = 12;
+    let mut p = Paragraph::with_text("总结", CharProps::default());
+    p.props.numbering = Some(props::NumRef { num: num_id, level: 0 });
+    d.body = vec![Arc::new(Block::Para(p))];
+    // The label 第十二章 stays one word (#4547 changed only document text); 总结 is two.
+    assert_eq!(d.word_count(), 1 + 2);
 }
 
 #[test]
@@ -154,7 +207,7 @@ fn parts_and_lists_after_the_largest_ids_take_free_ones() {
     assert_eq!(d.add_part(PartKind::Footer, Vec::new()), 3);
     assert!(parts.iter().all(|(k, p)| d.parts.get(k) == Some(p)));
 
-    let n = &mut d.numbering;
+    let n = Arc::make_mut(&mut d.numbering);
     n.add_list(ListKind::Bullet);
     n.add_list(ListKind::Bullet);
     n.abstracts[1].id = u32::MAX;
@@ -196,11 +249,11 @@ fn same_content_sees_every_change() {
     assert!(!d.same_content(&e), "the formatting changed");
     // The styles changed.
     let mut e = d.clone();
-    e.styles.get_mut("Normal").unwrap().chr.bold = Some(true);
+    Arc::make_mut(&mut e.styles).get_mut("Normal").unwrap().chr.bold = Some(true);
     assert!(!d.same_content(&e), "a style changed");
     // The lists changed.
     let mut e = d.clone();
-    e.numbering.add_list(ListKind::Numbered);
+    Arc::make_mut(&mut e.numbering).add_list(ListKind::Numbered);
     assert!(!d.same_content(&e), "a list was added");
     // The settings changed.
     let mut e = d.clone();
@@ -413,6 +466,25 @@ fn box_para(story: u32, id: u32) -> Blocks {
     let mut p = Paragraph::with_text("cell", CharProps::default());
     p.insert_object(0, shape, &CharProps::default()).unwrap();
     vec![para_block(p)]
+}
+
+#[test]
+fn adopting_relinks_lists_in_deeply_nested_tables() {
+    // As #1339: a list paragraph 20 tables down takes the list it is brought in with.
+    let mut ours = Document::from_text("ours");
+    let our_list = Arc::make_mut(&mut ours.numbering).add_list(numbering::ListKind::Bullet);
+    let mut theirs = Document::from_text("theirs");
+    let list = Arc::make_mut(&mut theirs.numbering).add_list(numbering::ListKind::Bullet);
+    assert_eq!(list, our_list);
+    let mut p = Paragraph::with_text("item", CharProps::default());
+    p.props.numbering = Some(props::NumRef { num: list, level: 0 });
+    theirs.body = nested_tables(20, vec![para_block(p)]);
+    let mut nums = Vec::new();
+    for b in &ours.adopt(theirs).blocks {
+        edit::each_para(b, 0, &mut |p| nums.extend(p.props.numbering.map(|n| n.num)));
+    }
+    assert_eq!(nums.len(), 1);
+    assert_ne!(nums[0], our_list);
 }
 
 #[test]
@@ -650,4 +722,95 @@ fn control_markers_kept_are_sorted() {
         assert!(!kept.is_empty(), "{a:?}..{b:?}");
         assert!(kept.windows(2).all(|p| p[0] < p[1]), "sorted, no repeats: {kept:?}");
     }
+}
+
+#[test]
+fn lone_table_open_markers_linear_time() {
+    let mut d = Document::new();
+    let mut t = Table::new(1, 1, 100.0);
+    const COUNT: usize = 2_000;
+    t.controls.open = (0..COUNT).map(|i| ContentControl { tag: format!("ctrl_{i}"), ..Default::default() }).collect();
+    d.body.insert(0, Arc::new(Block::Table(t)));
+
+    let mut paras = Vec::new();
+    let mut tables = Vec::new();
+    let timer = std::time::Instant::now();
+    crate::control::orphans(&d.body, &mut Vec::new(), 0, &mut paras, &mut tables);
+
+    assert_eq!(paras.len(), 0);
+    assert_eq!(tables.len(), COUNT);
+    for (i, (path, nth, is_open)) in tables.iter().enumerate() {
+        assert_eq!(*path, Path::top(0));
+        assert_eq!(*nth, i);
+        assert!(*is_open);
+    }
+
+    assert!(d.has_unbalanced_controls());
+    let removed = d.balance_controls();
+    assert_eq!(removed, COUNT);
+    assert!(!d.has_unbalanced_controls());
+    assert!(timer.elapsed().as_secs_f32() < 10.0, "{:?}", timer.elapsed());
+    let Block::Table(tbl) = &*d.body[0] else { panic!("expected table") };
+    assert!(tbl.controls.open.is_empty());
+}
+
+#[test]
+fn lone_table_open_markers_mixed_tables_and_paired() {
+    let mut d = Document::new();
+    let mut t0 = Table::new(1, 1, 100.0);
+    t0.controls.open = (0..3).map(|i| ContentControl { tag: format!("t0_{i}"), ..Default::default() }).collect();
+    t0.controls.close = 1;
+
+    let mut t1 = Table::new(1, 1, 100.0);
+    t1.controls.open = (0..2).map(|i| ContentControl { tag: format!("t1_{i}"), ..Default::default() }).collect();
+
+    d.body = vec![Arc::new(Block::Table(t0)), Arc::new(Block::Table(t1))];
+
+    let mut paras = Vec::new();
+    let mut tables = Vec::new();
+    crate::control::orphans(&d.body, &mut Vec::new(), 0, &mut paras, &mut tables);
+
+    assert_eq!(paras.len(), 0);
+    assert_eq!(tables, vec![(Path::top(0), 0, true), (Path::top(0), 1, true), (Path::top(1), 0, true), (Path::top(1), 1, true),]);
+
+    let removed = d.balance_controls();
+    assert_eq!(removed, 4);
+    assert!(!d.has_unbalanced_controls());
+
+    let Block::Table(res0) = &*d.body[0] else { panic!("expected table") };
+    assert_eq!(res0.controls.open.len(), 1);
+    assert_eq!(res0.controls.open[0].tag, "t0_2");
+    assert_eq!(res0.controls.close, 1);
+
+    let Block::Table(res1) = &*d.body[1] else { panic!("expected table") };
+    assert!(res1.controls.open.is_empty());
+    assert_eq!(res1.controls.close, 0);
+}
+
+#[test]
+fn missing_picture_names_are_capped_at_a_char_boundary() {
+    let mut d = Document::new();
+    let long: String = "é".repeat(5000);
+    d.missing_pictures.push(MissingPicture { part: long.clone(), story: long, reason: MissingPictureReason::MissingPart });
+    let item = &d.missing_pictures.list[0];
+    assert_eq!((item.part.chars().count(), item.story.chars().count()), (1024, 1024));
+}
+
+#[test]
+fn missing_pictures_are_capped_deduplicated_and_not_content() {
+    let mut d = Document::new();
+    let item = |n: usize| MissingPicture { part: format!("p{n}"), story: "word/document.xml".into(), reason: MissingPictureReason::MissingPart };
+    d.missing_pictures.push(item(0));
+    d.missing_pictures.push(item(0));
+    assert_eq!(d.missing_pictures.list.len(), 1);
+    for n in 1..MAX_MISSING_PICTURES + 3 {
+        d.missing_pictures.push(item(n));
+    }
+    assert_eq!(d.missing_pictures.list.len(), MAX_MISSING_PICTURES);
+    assert!(d.missing_pictures.truncated);
+    let e = Document::new();
+    assert_eq!(d, e);
+    assert!(d.same_content(&e));
+    assert!(!serde_json::to_string(&d).unwrap().contains("p0"));
+    assert_eq!(MissingPictureReason::ExternalTarget.label(), "external target");
 }

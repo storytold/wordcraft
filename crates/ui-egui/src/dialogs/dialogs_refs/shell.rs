@@ -3,7 +3,7 @@ use super::cross_ref::{CrossRefForm, cross_ref_ui};
 use super::index::{IndexForm, MarkForm, index_ui, mark_ui};
 use super::sources::{SourceForm, source_ui, sources_ui};
 use super::toc::{FiguresForm, TocForm, figures_ui, toc_options_ui, toc_styles_ui, toc_ui};
-use super::*;
+use super::{RefsDialog, Ui, WordApp};
 
 /// The dialog `ui.dialog` opens by `name`: `caption`, `crossReference`, `index`, `markEntry`, `toc`,
 /// `tableOfFigures`, `sourceManager` or `createSource` (which inserts a citation of the new source).

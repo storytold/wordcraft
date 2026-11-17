@@ -1,6 +1,6 @@
 use super::builder::Builder;
 use super::model::ClKind;
-use super::*;
+use super::{Arc, CharProps, Document, WrapText};
 
 /// The section's document grid as layout applies it (`w:docGrid`, ECMA-376 §17.6.5).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

@@ -1,4 +1,4 @@
-use super::*;
+use super::{MeasureExt, Serialize, Ui, Value, WordApp, buttons, fit_size, json, run, unit, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Size
@@ -147,60 +147,65 @@ pub(super) fn size_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SizeForm) -> bool 
     // typing, the field reports each keystroke as a change). The range bounds what is typed or
     // dragged only: a value already outside it (a 1 px picture is 0.75 pt) is shown as it is, not
     // clamped, which egui would report as a change and so apply unasked.
-    let length = |ui: &mut Ui, label: &str, pt: f32| {
-        let name = ui.label(tl!(label));
+    let length = |r: &mut crate::rtl::Cells, label: &str, pt: f32| {
+        let name = r.cell(|ui| ui.label(tl!(label)));
         let was = pt / k;
         let mut v = was;
         let field =
             egui::DragValue::new(&mut v).speed(1.0 / k).range(1.0 / k..=4000.0 / k).clamp_existing_to_range(false).measure(unit).max_decimals(2);
-        let changed = ui.add(field.update_while_editing(false)).labelled_by(name.id).changed();
+        let changed = r.cell(|ui| ui.add(field.update_while_editing(false)).labelled_by(name.id).changed());
         (changed && v != was).then_some(v * k)
     };
-    let percent = |ui: &mut Ui, label: &str, was: f32| {
-        let name = ui.label(tl!(label));
+    let percent = |r: &mut crate::rtl::Cells, label: &str, was: f32| {
+        let name = r.cell(|ui| ui.label(tl!(label)));
         let mut v = was;
         let field = egui::DragValue::new(&mut v).speed(1.0).range(1.0..=10_000.0).clamp_existing_to_range(false).suffix(" %").max_decimals(1);
-        let changed = ui.add(field.update_while_editing(false)).labelled_by(name.id).changed();
+        let changed = r.cell(|ui| ui.add(field.update_while_editing(false)).labelled_by(name.id).changed());
         (changed && v != was).then_some(v)
     };
-    heading(ui, "Size");
-    egui::Grid::new("size_lengths").num_columns(4).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        if let Some(h) = length(ui, "Height:", f.height) {
-            f.set_height(h);
-        }
-        if let Some(w) = length(ui, "Width:", f.width) {
-            f.set_width(w);
-        }
-        ui.end_row();
+    crate::widgets::section(ui, tl!("Size"), |ui| {
+        crate::rtl::Table::new("size_lengths").columns(4).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+            t.row(|r| {
+                if let Some(h) = length(r, "Height:", f.height) {
+                    f.set_height(h);
+                }
+                if let Some(w) = length(r, "Width:", f.width) {
+                    f.set_width(w);
+                }
+            });
+        });
     });
-    heading(ui, "Scale");
-    let (sw, sh) = f.scale();
-    egui::Grid::new("size_scale").num_columns(4).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        if let Some(p) = percent(ui, "Height:", sh) {
-            f.set_scale_height(p);
-        }
-        if let Some(p) = percent(ui, "Width:", sw) {
-            f.set_scale_width(p);
-        }
-        ui.end_row();
+    crate::widgets::section(ui, tl!("Scale"), |ui| {
+        let (sw, sh) = f.scale();
+        crate::rtl::Table::new("size_scale").columns(4).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+            t.row(|r| {
+                if let Some(p) = percent(r, "Height:", sh) {
+                    f.set_scale_height(p);
+                }
+                if let Some(w) = percent(r, "Width:", sw) {
+                    f.set_scale_width(w);
+                }
+            });
+        });
+        ui.checkbox(&mut f.lock, tl!("Lock aspect ratio"));
+        ui.add_enabled_ui(f.original.is_some(), |ui| ui.checkbox(&mut f.relative, tl!("Relative to original picture size")));
     });
-    ui.checkbox(&mut f.lock, tl!("Lock aspect ratio"));
-    ui.add_enabled(f.original.is_some(), egui::Checkbox::new(&mut f.relative, tl!("Relative to original picture size")));
     if let Some((w, h)) = f.uncropped {
-        heading(ui, "Original size");
-        ui.horizontal(|ui| {
-            ui.label(format!("{} {}", tl!("Height:"), crate::options::length(h)));
-            ui.add_space(12.0);
-            ui.label(format!("{} {}", tl!("Width:"), crate::options::length(w)));
-            if let Some((pw, ph)) = f.pixels {
+        crate::widgets::section(ui, tl!("Original size"), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(format!("{} {}", tl!("Height:"), crate::options::length(h)));
                 ui.add_space(12.0);
-                let (pw, ph) = (pw.to_string(), ph.to_string());
-                ui.weak(crate::i18n::fmt(tl!("{width} × {height} pixels"), &[("width", &pw), ("height", &ph)]));
-            }
-            ui.add_space(12.0);
-            if ui.button(tl!("Reset")).clicked() {
-                f.reset();
-            }
+                ui.label(format!("{} {}", tl!("Width:"), crate::options::length(w)));
+                if let Some((pw, ph)) = f.pixels {
+                    ui.add_space(12.0);
+                    let (pw, ph) = (pw.to_string(), ph.to_string());
+                    ui.weak(crate::i18n::fmt(tl!("{width} × {height} pixels"), &[("width", &pw), ("height", &ph)]));
+                }
+                ui.add_space(12.0);
+                if ui.button(tl!("Reset")).clicked() {
+                    f.reset();
+                }
+            });
         });
     }
     let (ok, cancel) = buttons(ui, "OK", true);
@@ -266,11 +271,12 @@ pub(super) fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumber
             ui.selectable_value(&mut f.format, v.to_string(), l);
         }
     });
-    heading(ui, "Page numbering");
-    ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.cont, false, tl!("Start at:"));
-        ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
+    crate::widgets::section(ui, tl!("Page numbering"), |ui| {
+        ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.cont, false, tl!("Start at:"));
+            ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
+        });
     });
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {

@@ -2,7 +2,9 @@ use super::face::{FALLBACK_FAMILY, FontFace};
 #[cfg(not(target_arch = "wasm32"))]
 use super::fallback_data::{CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, ranges_hold, read_fallback_file};
 use super::fallback_data::{FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order};
-use super::*;
+use super::{Arc, FontDb};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{HashMap, Ordering};
 
 impl FontDb {
     /// First face (fallback family first, then load order) that covers `c`; on native, system
