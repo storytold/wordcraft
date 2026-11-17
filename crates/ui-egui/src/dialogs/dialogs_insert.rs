@@ -64,7 +64,7 @@ impl InsertDialog {
             InsertDialog::Columns(_) => "Columns",
             InsertDialog::Symbol(_) => "Symbol",
             InsertDialog::Field(_) => "Field",
-            InsertDialog::SmartArt(_) => "Insert SmartArt",
+            InsertDialog::SmartArt(_) => "Insert Diagram",
             InsertDialog::ChartType(f) if f.change => "Change Chart Type",
             InsertDialog::ChartType(_) => "Insert Chart",
             InsertDialog::ChartData(_) => "Edit Data",

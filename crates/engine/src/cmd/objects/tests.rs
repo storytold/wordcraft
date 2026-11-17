@@ -5,9 +5,8 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     let img = image::RgbaImage::from_fn(w, h, |x, y| {
         if x > 2 && x < w - 3 && y > 2 && y < h - 3 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
     });
-    let mut b = Vec::new();
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
-    b
+
+    wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap()
 }
 /// The laid-out area of the only picture or shape (not a text box).
 fn object_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
@@ -451,8 +450,9 @@ fn remove_background_keeps_a_small_stack() {
 /// 1 × 2,000,000 picture Thick Frame asked for about 1.8 TB and aborted the process.
 #[test]
 fn picture_styles_and_borders_check_the_size_they_draw() {
-    let mut thin = Vec::new();
-    image::GrayImage::new(1, 2_000_000).write_to(&mut std::io::Cursor::new(&mut thin), image::ImageFormat::Png).unwrap();
+    let thin =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::GrayImage::new(1, 2_000_000).clone()), image::ImageFormat::Png)
+            .unwrap();
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&thin)})).unwrap();
     let media = s.doc.media.len();
@@ -526,7 +526,7 @@ fn transparency_is_absolute_from_the_original() {
         let (_, o) = selected(s).unwrap();
         let InlineObject::Image { media, .. } = o else { panic!("a picture") };
         let bytes = s.doc.media.get(&media).cloned().unwrap();
-        image::load_from_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>()
+        wordcraft_geom::picture::decode_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>()
     };
     let alpha = |s: &Session| rgba(s).iter().map(|p| p[3]).collect::<Vec<_>>();
     let orig = rgba(&s);
@@ -579,7 +579,7 @@ fn picture_edits_replace_the_file_corrections() {
         let (_, o) = selected(s).unwrap();
         let InlineObject::Image { media, fx, .. } = o else { panic!("a picture") };
         let bytes = s.doc.media.get(&media).cloned().unwrap();
-        (media, fx, image::load_from_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>())
+        (media, fx, wordcraft_geom::picture::decode_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>())
     };
     let (orig_media, _, orig) = state(&s);
     // Transparency 50%: 50% (not 75%), the file's transparency dropped, its lum kept.
@@ -670,7 +670,7 @@ fn picture_styles_borders_and_effects_replace_the_last_one() {
     let bitmap = |s: &Session| {
         let (_, o) = selected(s).unwrap();
         let InlineObject::Image { media, .. } = o else { panic!("a picture") };
-        image::load_from_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
+        wordcraft_geom::picture::decode_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
     };
     let after = |cmds: &[(&str, Value)]| {
         let mut s = picture();
@@ -1254,6 +1254,167 @@ fn header_pictures_can_be_resized_and_dragged() {
     s.run("edit.undo", &json!({})).unwrap();
     let u = s.layout().object(&selected(&s).unwrap().0, 0).expect("laid out");
     assert!((u.rect.x - 200.0).abs() < 1.0 && (u.rect.y - 60.0).abs() < 1.0, "{:?}", u.rect);
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (wordcraft_doc::para::Anchor::Page, wordcraft_doc::para::Anchor::Page));
+    assert_eq!((float.x, float.y), (200.0, 60.0));
+}
+
+/// #5812: arrange.bounds on a header picture (or after moveWithText false) keeps page anchoring
+/// and exports a page-anchored frame in .odt with coordinates relative to the page.
+#[test]
+fn arrange_bounds_on_header_picture_writes_page_anchored_odt_frame() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.editHeader", &json!({})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 0.0, "y": 0.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (0.0, 0.0));
+
+    let _z_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let styles = String::from_utf8(z.read("styles.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "frame should be page-anchored: {styles}");
+    assert!(styles.contains(r#"svg:x="0pt""#) && styles.contains(r#"svg:y="0pt""#), "offsets should be 0pt: {styles}");
+    assert!(!styles.contains(r#"text:anchor-type="paragraph""#), "frame should not be paragraph-anchored: {styles}");
+
+    // Also test after arrange.moveWithText false
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 10.0, "y": 20.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (10.0, 20.0));
+
+    let _z_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let styles = String::from_utf8(z.read("styles.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "{styles}");
+    assert!(styles.contains(r#"svg:x="10pt""#) && styles.contains(r#"svg:y="20pt""#), "{styles}");
+}
+
+/// A body picture set to stay on the page (`moveWithText` off) is still placed by its paragraph
+/// once moved: the move is the placement, and the file keeps no page number to put it back
+/// (#5705). Header and footer pictures stay page-anchored (see above).
+#[test]
+fn a_moved_body_picture_is_placed_by_its_paragraph_even_when_fixed_to_the_page() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First line of paragraph.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    // Default body float moves with text
+    let (_pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Column));
+
+    // Turn off moveWithText: fixed on the page until it is moved.
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    let (_, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Page));
+
+    s.run("arrange.bounds", &json!({"page": 0, "x": 50.0, "y": 80.0})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Paragraph));
+    assert_eq!(float.page, 0);
+    let hit = s.layout().object(&pos, 0).expect("laid out");
+    assert!((hit.rect.x - 50.0).abs() < 1.0 && (hit.rect.y - 80.0).abs() < 1.0, "dropped: {:?}", hit.rect);
+
+    let _z_bytes = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(content.contains(r#"text:anchor-type="paragraph""#), "body picture should export with paragraph anchor: {content}");
+    assert!(!content.contains("anchor-page-number"), "{content}");
+}
+
+/// Changing `moveWithText` on an object with `h_align` set preserves its horizontal
+/// anchor relation and layout position without displacement.
+#[test]
+fn move_with_text_preserves_horizontal_position_when_h_align_set() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First body paragraph with some text.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    // Set horizontal alignment to End (right)
+    let (pos, _) = selected(&s).unwrap();
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.h_align = Some(FloatAlign::End);
+        f.h_rel = Anchor::Margin;
+    })
+    .unwrap();
+    s.touch();
+
+    let hit_before = s.layout().object(&pos, 0).unwrap();
+    let x_before = hit_before.rect.x;
+
+    // Toggle moveWithText false
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.v_rel, Anchor::Page);
+    assert_eq!(float.h_align, Some(FloatAlign::End));
+    assert_eq!(float.h_rel, Anchor::Margin);
+    s.touch();
+    let hit_after = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after.rect.x, x_before);
+
+    // Toggle moveWithText true
+    s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.v_rel, Anchor::Paragraph);
+    assert_eq!(float.h_align, Some(FloatAlign::End));
+    assert_eq!(float.h_rel, Anchor::Margin);
+    s.touch();
+    let hit_after2 = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after2.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after2.rect.x, x_before);
+}
+
+/// Toggling `moveWithText` preserves horizontal anchor relations (`Margin`, `RightMargin`,
+/// `Character`, `Column`, `Page`) and offset when the object has no horizontal alignment.
+#[test]
+fn move_with_text_preserves_horizontal_anchor_relations_without_alignment() {
+    use wordcraft_doc::para::Anchor;
+    for rel in [Anchor::Margin, Anchor::RightMargin, Anchor::Character, Anchor::Column, Anchor::Page] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "A line of body text.\n"})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+        let (pos, _) = selected(&s).unwrap();
+        super::select::edit_float(&mut s, &pos, |f| {
+            f.h_align = None;
+            f.h_rel = rel;
+            f.x = 35.0;
+        })
+        .unwrap();
+        s.touch();
+
+        // Toggle moveWithText false
+        s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Page, "expected Page v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText false");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText false");
+
+        // Toggle moveWithText true
+        s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Paragraph, "expected Paragraph v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText true");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText true");
+    }
 }
 
 /// Shape Format › Text (#369): direction and alignment on the box the caret is in, then
@@ -1445,7 +1606,6 @@ fn mirrored_indents_make_no_extra_column() {
 /// A Word file whose only paragraph holds a group of a rectangle and Word's own ink (with its
 /// picture fallback).
 fn group_with_word_ink() -> Vec<u8> {
-    use std::io::Write;
     let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk""#;
     let rect = r#"<wps:wsp><wps:cNvPr id="2" name="Box"/><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp>"#;
     let ink = r#"<mc:AlternateContent><mc:Choice Requires="wpi"><w14:contentPart bwMode="auto" r:id="rInk"><w14:nvContentPartPr><w14:cNvPr id="3" name="Ink 3"/><w14:cNvContentPartPr/></w14:nvContentPartPr><w14:xfrm><a:off x="914400" y="0"/><a:ext cx="914400" cy="457200"/></w14:xfrm></w14:contentPart></mc:Choice><mc:Fallback><pic:pic><pic:nvPicPr><pic:cNvPr id="3" name="Ink 3"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rPreview"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="914400" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></mc:Fallback></mc:AlternateContent>"#;
@@ -1465,14 +1625,12 @@ fn group_with_word_ink() -> Vec<u8> {
         ),
         ("word/ink/ink1.xml", r#"<ink xmlns="http://www.w3.org/2003/InkML"><trace>0 0, 1 1</trace></ink>"#.to_string()),
     ];
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, xml) in parts {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(xml.as_bytes()).unwrap();
+        zw.add(name, xml.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.start_file("word/media/preview.png", zip::write::SimpleFileOptions::default()).unwrap();
-    zw.write_all(&png(8, 4)).unwrap();
-    zw.finish().unwrap().into_inner()
+    zw.add("word/media/preview.png", &png(8, 4), craft_zip::Compression::Deflated).unwrap();
+    zw.finish().unwrap()
 }
 
 fn ink_members(doc: &wordcraft_doc::Document) -> usize {
@@ -1492,7 +1650,6 @@ fn ink_members(doc: &wordcraft_doc::Document) -> usize {
 /// yet), so open → Ungroup → save → reopen keeps the ink in the group with its part.
 #[test]
 fn ungroup_refuses_a_group_holding_word_ink_and_the_ink_survives_saving() {
-    use std::io::Read;
     let mut s = Session::new(wordcraft_docx::read(&group_with_word_ink()).unwrap());
     assert_eq!(ink_members(&s.doc), 1, "the fixture's ink is read into the group");
     let pos = Pos::body(0, 0);
@@ -1505,16 +1662,14 @@ fn ungroup_refuses_a_group_holding_word_ink_and_the_ink_survives_saving() {
     let err = ungroup(&mut s, &json!({})).unwrap_err();
     assert!(matches!(err, CmdError::Disabled(_)), "{err:?}");
     let bytes = wordcraft_docx::write(&s.doc).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
-    let mut xml = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(xml.matches("<w14:contentPart").count(), 1, "{xml}");
     assert!(xml.contains("<mc:Fallback>"), "{xml}");
     assert_eq!(bytes, before, "the refused ungroup leaves the document unchanged");
-    let names: Vec<String> = z.file_names().map(String::from).collect();
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
     assert_eq!(names.iter().filter(|n| n.starts_with("word/ink/")).count(), 1, "{names:?}");
-    let mut rels = String::new();
-    z.by_name("word/_rels/document.xml.rels").unwrap().read_to_string(&mut rels).unwrap();
+    let rels = String::from_utf8(z.read("word/_rels/document.xml.rels", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(rels.matches("/customXml\"").count(), 1, "one ink relationship: {rels}");
     let back = wordcraft_docx::read(&bytes).unwrap();
     assert_eq!(ink_members(&back), 1);

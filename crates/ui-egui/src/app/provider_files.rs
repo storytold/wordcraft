@@ -5,6 +5,23 @@ use crate::file_providers::{Capture, Command, Host};
 use crate::{WordApp, json};
 
 impl WordApp {
+    /// Existing bindings and pending writes keep their checkpoint even after new provider choices are disabled.
+    pub(crate) fn provider_owns_save(&self, id: &str) -> bool {
+        matches!(id, "file.save" | "file.saveAs")
+            && self
+                .services
+                .file_providers
+                .as_ref()
+                .is_some_and(|host| host.bound(self.session.document_id()) || host.pending_for(self.session.document_id()))
+    }
+
+    /// A local save keeps the external checkpoint dirty for the document it actually saved.
+    pub(crate) fn preserve_provider_dirty(&mut self, dirty: bool, document: u64) {
+        if dirty && self.session.document_id() == document {
+            self.session.dirty = true;
+        }
+    }
+
     /// UI Save/Save As only. Exports, automation and ordinary local saves keep their route.
     /// Return whether the provider handled the UI request, including a reported refusal or a missing document.
     pub(crate) fn choose_provider_save(&mut self, save_as: bool) -> bool {
