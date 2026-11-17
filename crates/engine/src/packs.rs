@@ -596,6 +596,17 @@ pub fn is_region(subtag: &str) -> bool {
     (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic())) || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// The region in a canonical pack locale, after its language and optional script.
+/// Only that slot counts: variants and extension data never supply a region.
+/// Callers with a raw system/document tag first use `ProofLang::from_tag` to obtain its
+/// `PackLocale` (normalizing POSIX tails, separators and extension singletons).
+pub fn pack_region(locale: &wordcraft_proof::lang::PackLocale) -> Option<&str> {
+    let mut parts = locale.as_str().split('-').skip(1);
+    let first = parts.next()?;
+    let region = if first.len() == 4 && first.bytes().all(|b| b.is_ascii_alphabetic()) { parts.next()? } else { first };
+    is_region(region).then_some(region)
+}
+
 /// `tag` without its region subtags (`nl-NL` is `nl`, `sr-Latn-RS` is `sr-Latn`, `ca-ES-valencia`
 /// is `ca-valencia`), joined with `-` whichever of `-` and `_` separated them; the case is kept.
 /// The language itself (the first subtag) is never a region.
@@ -1103,6 +1114,32 @@ impl Backend for FixedBackend {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pack_region_uses_only_the_region_slot() {
+        use wordcraft_proof::lang::PackLocale;
+        for (tag, expected) in [
+            ("fr-419", Some("419")),
+            ("fr-Latn-419-u-ca-gregory", Some("419")),
+            ("fr-CA", Some("ca")),
+            ("FR_ca.UTF-8@euro", Some("ca")),
+            ("fr-Latn-CA-x-test", Some("ca")),
+            ("fr-Cyrl-CA", Some("ca")),
+            ("fr-CA-1996", Some("ca")),
+            ("fr", None),
+            ("fr-Latn", None),
+            ("fr-u-ca-gregory", None),
+            ("fr-Latn-u-ca-gregory", None),
+            ("fr-x-ca", None),
+            ("fr-1996-CA", None),
+            ("nl-NL", Some("nl")),
+            ("sr-Latn-RS", Some("rs")),
+            ("ca-ES-valencia", Some("es")),
+        ] {
+            let locale = PackLocale::new(tag).unwrap();
+            assert_eq!(super::pack_region(&locale), expected, "{tag}");
+        }
+    }
+
     /// CP4.4 (`cargo xtask language`): a build embeds English Language data and nothing it
     /// wasn't asked to. A Language build names the locales it embeds in `CRAFT_PROOF_EMBED`
     /// (`en` alone: English only); the default embeds the carry-over locales too, until Language
