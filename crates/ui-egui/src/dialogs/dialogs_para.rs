@@ -473,6 +473,14 @@ impl LineForm {
     }
 }
 
+/// Page Border › Apply to: `design.pageBorders`'s `applyTo` and its label, in Word's order.
+const PAGE_APPLY: [(&str, &str); 4] = [
+    ("document", "Whole document"),
+    ("section", "This section"),
+    ("firstPage", "This section – First page only"),
+    ("notFirstPage", "This section – All except first page"),
+];
+
 /// The Borders and Shading dialog's fields.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -483,8 +491,9 @@ pub struct BordersForm {
     /// Borders apply to the selected text (a character border) instead of the paragraphs.
     pub to_text: bool,
     pub page: LineForm,
-    /// Page borders apply to the whole document instead of this section.
-    pub whole_doc: bool,
+    /// Where page borders go, as Word's Apply to: `document`, `section`, or this section's
+    /// `firstPage` only or every page but it (`notFirstPage`) — `design.pageBorders`'s `applyTo`.
+    pub page_apply: String,
     /// Fill `RRGGBB`, empty for none.
     pub fill: String,
     pub fill_to_text: bool,
@@ -502,7 +511,10 @@ impl BordersForm {
             para: LineForm::read(rp.borders.as_ref()),
             to_text: false,
             page: LineForm::read(sect.page_borders.as_ref()),
-            whole_doc: true,
+            page_apply: match sect.page_borders_display.as_deref() {
+                Some(d @ ("firstPage" | "notFirstPage")) if sect.page_borders.is_some() => d.to_string(),
+                _ => "document".to_string(),
+            },
             fill: rp.shading.map(Rgb::hex).unwrap_or_default(),
             fill_to_text: false,
             basis: None,
@@ -528,9 +540,8 @@ impl BordersForm {
                 out.push(("para.borders", json!({"sides": self.para.sides_param()})));
             }
         }
-        if self.page != b.page || self.whole_doc != b.whole_doc {
-            let apply = if self.whole_doc { "document" } else { "section" };
-            out.push(("design.pageBorders", json!({"sides": self.page.sides_param(), "applyTo": apply})));
+        if self.page != b.page || self.page_apply != b.page_apply {
+            out.push(("design.pageBorders", json!({"sides": self.page.sides_param(), "applyTo": self.page_apply})));
         }
         if self.fill != b.fill || self.fill_to_text != b.fill_to_text {
             let color = Rgb::parse(&self.fill).map(|c| json!(c.hex())).unwrap_or(Value::Null);
@@ -577,8 +588,12 @@ pub fn borders(app: &mut WordApp, ui: &mut Ui, f: &mut BordersForm) -> bool {
             lines(ui, "page", &mut f.page, &theme, None, Target::Page);
             ui.horizontal(|ui| {
                 ui.label(tl!("Apply to:"));
-                ui.radio_value(&mut f.whole_doc, true, tl!("Whole document"));
-                ui.radio_value(&mut f.whole_doc, false, tl!("This section"));
+                let shown = PAGE_APPLY.iter().find(|(k, _)| *k == f.page_apply).map_or("Whole document", |(_, l)| *l);
+                craft_ui::ComboBox::from_id_salt("page_apply").selected_text(tl!(shown)).width(230.0).show_ui(ui, |ui| {
+                    for (k, label) in PAGE_APPLY {
+                        ui.selectable_value(&mut f.page_apply, k.to_string(), tl!(label));
+                    }
+                });
             });
         }
         _ => {
@@ -835,6 +850,28 @@ mod tests {
         // Unchanged, OK runs nothing.
         let f = BordersForm::read(&app, 0).unwrap_or_else(|| panic!("form"));
         assert!(f.commands().is_empty());
+    }
+
+    /// #3076: Page Border › Apply to offers Word's four choices. It opens on the section's own
+    /// (a first-page-only border shows "This section – First page only"), and a new choice alone
+    /// is a change OK applies.
+    #[test]
+    fn page_border_apply_to_reads_and_sets_the_pages() {
+        let mut app = app_with("Cover");
+        assert_eq!(PAGE_APPLY.map(|(k, _)| k), ["document", "section", "firstPage", "notFirstPage"]);
+        let f = BordersForm::read(&app, 1).unwrap_or_else(|| panic!("form"));
+        assert_eq!(f.page_apply, "document", "Whole document by default, as before");
+        let _ = app.run("design.pageBorders", json!({"kind": "box", "applyTo": "firstPage"}));
+        let mut f = BordersForm::read(&app, 1).unwrap_or_else(|| panic!("form"));
+        assert_eq!(f.page_apply, "firstPage", "opens on the section's own setting");
+        assert!(f.commands().is_empty(), "unchanged, OK runs nothing");
+        f.page_apply = "notFirstPage".into();
+        let cmds = f.commands();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds.first().map(|(id, v)| (*id, v["applyTo"].clone())), Some(("design.pageBorders", json!("notFirstPage"))));
+        f.apply(&mut app);
+        assert_eq!(app.session.doc.last_section.page_borders_display.as_deref(), Some("notFirstPage"));
+        assert!(app.session.doc.last_section.page_borders.is_some(), "the border itself stays");
     }
 
     /// #320: the Tabs dialog opens from the Paragraph dialog's command path, and the table's
