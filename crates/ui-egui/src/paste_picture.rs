@@ -51,8 +51,8 @@ pub fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u
         return Err("the clipboard picture is too large to paste".into());
     };
     let img = image::RgbaImage::from_raw(w, h, rgba).ok_or("the clipboard picture is damaged")?;
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| format!("couldn't read the clipboard picture: {e}"))?;
+    let png = wordcraft_geom::picture::encode_png(&image::DynamicImage::ImageRgba8(img))
+        .map_err(|e| format!("couldn't read the clipboard picture: {e}"))?;
     Ok(png)
 }
 
@@ -256,18 +256,18 @@ mod tests {
     /// #3623: what the Windows clipboard holds is checked from its header before it is decoded.
     #[test]
     fn windows_clipboard_pictures_are_checked_from_their_headers() {
-        let mut png = Vec::new();
-        image::RgbaImage::new(3, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let png =
+            wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbaImage::new(3, 2).clone()), image::ImageFormat::Png).unwrap();
         assert!(matches!(encoded_picture(png.clone()), ClipboardPicture::Encoded(b) if b == png));
-        let mut wide = Vec::new();
-        image::GrayImage::new(20_000, 1).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+        let wide =
+            wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::GrayImage::new(20_000, 1).clone()), image::ImageFormat::Png)
+                .unwrap();
         assert!(matches!(encoded_picture(wide), ClipboardPicture::Unreadable(e) if e.contains("too large")));
         assert!(matches!(encoded_picture(b"not a picture".to_vec()), ClipboardPicture::Unreadable(_)));
         // 8000 × 6000 passes the pixel limits, but 16-bit RGBA needs 12 bytes a pixel to decode.
-        let mut big = Vec::new();
-        image::DynamicImage::ImageRgba16(image::ImageBuffer::new(1, 1))
-            .write_to(&mut std::io::Cursor::new(&mut big), image::ImageFormat::Png)
-            .unwrap();
+        let mut big =
+            wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba16(image::ImageBuffer::new(1, 1)).clone(), image::ImageFormat::Png)
+                .unwrap();
         big[16..20].copy_from_slice(&8000u32.to_be_bytes());
         big[20..24].copy_from_slice(&6000u32.to_be_bytes());
         let mut crc = 0xFFFF_FFFFu32;
