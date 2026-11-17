@@ -3958,7 +3958,92 @@ fn a_lines_arrowheads_sit_at_its_ends() {
             _ => None,
         })
         .collect();
-    assert_eq!(tips, [(rect.x, rect.y), (rect.right(), rect.bottom())]);
+    let [(x0, y0), (x1, y1)] = tips[..] else { panic!("two arrowheads: {tips:?}") };
+    assert!((x1 - x0 - 60.0).abs() < 0.01 && (y1 - y0 - 40.0).abs() < 0.01, "tips at the frame's corners: {tips:?}");
+    // The line, drawn short of its arrowed ends (#6767), runs along the same diagonal.
+    assert!(rect.x > x0 && rect.y > y0 && rect.right() < x1 && rect.bottom() < y1, "{rect:?} between {tips:?}");
+    assert!(((rect.x - x0) / 60.0 - (rect.y - y0) / 40.0).abs() < 0.001, "{rect:?} on the diagonal from {tips:?}");
+    assert!(((x1 - rect.right()) / 60.0 - (y1 - rect.bottom()) / 40.0).abs() < 0.001, "{rect:?} on the diagonal to {tips:?}");
+}
+
+#[test]
+fn a_thick_lines_stroke_ends_inside_its_arrowheads() {
+    // #6767: the stroke stopped at each arrowhead's tip, so a thick line's body and cap stuck out
+    // of the narrow head. Each arrowed end now stops where the head is as wide as the stroke (and
+    // its cap's reach before that), for lines and every connector.
+    use wordcraft_doc::connector::{LineCap, ShapeExtra};
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+
+    let width = 6.0;
+    let kinds = [ShapeKind::Line, ShapeKind::StraightConnector, ShapeKind::ElbowConnector, ShapeKind::CurvedConnector];
+    for kind in kinds {
+        for cap in [LineCap::Flat, LineCap::Square, LineCap::Round] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 120.0,
+                h: 60.0,
+                fill: None,
+                stroke: Some(Rgb::BLACK),
+                stroke_width: width,
+                float: Float::default(),
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { arrow_start: true, arrow_end: true, cap, ..Default::default() },
+            };
+            let mut doc = Document::from_text("Scan");
+            doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+            let draws = flat(display::page_display(&doc, &lay(&doc).pages[0], &Default::default()));
+            let mut ends = Vec::new();
+            let mut heads = Vec::new();
+            for d in &draws {
+                match d {
+                    display::Draw::Shape { rect, kind: ShapeKind::Line, .. } => ends.extend([(rect.x, rect.y), (rect.right(), rect.bottom())]),
+                    display::Draw::Path { fill: None, stroke: Some(_), segs, .. } => {
+                        let point = |s: &PathSeg| match *s {
+                            PathSeg::Move(x, y) | PathSeg::Line(x, y) | PathSeg::Cubic(.., x, y) => Some((x, y)),
+                            PathSeg::Close => None,
+                        };
+                        ends.extend(segs.first().and_then(point));
+                        ends.extend(segs.last().and_then(point));
+                    }
+                    display::Draw::Path { fill: Some(_), segs, .. } => {
+                        if let [PathSeg::Move(tx, ty), PathSeg::Line(ax, ay), PathSeg::Line(bx, by), PathSeg::Close] = segs[..] {
+                            heads.push([(tx, ty), (ax, ay), (bx, by)]);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!((ends.len(), heads.len()), (2, 2), "{kind:?} {cap:?}: {draws:?}");
+            for (end, head) in ends.iter().zip(&heads) {
+                let [tip, a, b] = *head;
+                let base = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+                let len = (tip.0 - base.0).hypot(tip.1 - base.1);
+                // The head's direction, and across it.
+                let (dx, dy) = ((tip.0 - base.0) / len, (tip.1 - base.1) / len);
+                let (nx, ny) = (-dy, dx);
+                let reach = if cap == LineCap::Flat { 0.0 } else { width / 2.0 };
+                // The corners of the stroke's end, its cap included (a round cap lies inside them).
+                for side in [-1.0, 1.0] {
+                    let corner = (end.0 + dx * reach + nx * side * width / 2.0, end.1 + dy * reach + ny * side * width / 2.0);
+                    assert!(in_triangle(corner, *head), "{kind:?} {cap:?}: stroke corner {corner:?} outside the head {head:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Whether `p` lies inside (or within 0.01 pt of) triangle `t`.
+fn in_triangle(p: (f32, f32), t: [(f32, f32); 3]) -> bool {
+    let edge = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| {
+        let len = (bx - ax).hypot(by - ay);
+        ((bx - ax) * (p.1 - ay) - (by - ay) * (p.0 - ax)) / len
+    };
+    let sides = [edge(t[0], t[1]), edge(t[1], t[2]), edge(t[2], t[0])];
+    sides.iter().all(|s| *s >= -0.01) || sides.iter().all(|s| *s <= 0.01)
 }
 
 #[test]
