@@ -17,7 +17,7 @@ fn ragged_matrix_save_stays_small() {
     let mut doc = Document::new();
     doc.body = vec![para_block(p)];
     let bytes = wordcraft_docx::write(&doc).unwrap();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let size = zip.by_name("word/document.xml").unwrap().size();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let size = zip.declared_size("word/document.xml").unwrap();
     assert!(size < 1_000_000, "document.xml is {size} bytes");
 }
