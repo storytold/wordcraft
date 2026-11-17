@@ -138,3 +138,7 @@ Progress docs: `ROADMAP.md` (stage, headline numbers, progress log), `docs/targe
 - Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
 
 New workspace crates include `workspace = true` under `[lints]` in `Cargo.toml`. Production crate roots declare the crate-level lint attributes before modules; crate-level `//!` documentation may precede them.
+
+## Shared-library reuse
+
+Before implementing file formats, codecs, protocols or reusable UI components, check [storytold/craft-libs](https://github.com/storytold/craft-libs) and relevant open PRs; reuse or extend shared APIs instead of duplicating app-local implementations. Keep app-specific policy and adapters local, preserve behavior and format fidelity, security and resource limits, repository layering and regression tests, and document any shared-API gap rather than silently reducing functionality.
