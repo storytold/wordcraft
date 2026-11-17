@@ -275,7 +275,7 @@ fn dib_header_dims(dib: &[u8]) -> Option<(u32, u32)> {
     }
     // Only the first 12 header bytes are read, so only they are wrapped: this runs for DIBs too
     // big to decode, which must not be copied whole.
-    craft_image_codecs::bmp_probe::dimensions(&dib_to_bmp(dib.get(..12).unwrap_or(dib)))
+    craft_image_codecs::bmp_probe::dimensions(&bmp_probe::dib_to_bmp(dib.get(..12).unwrap_or(dib)).ok()?)
 }
 
 /// A `width` × `height` picture of `native` bytes a pixel, with its peak (see [`peak_bytes`]).
