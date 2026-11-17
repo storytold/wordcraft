@@ -3441,6 +3441,90 @@ fn save_prompt_shows_why_the_save_failed() {
     assert!(h.query_by_label("Save").is_some(), "Save again is offered");
 }
 
+/// #6771: opening a document whose fields are marked as out of date (`w:dirty`, as pandoc's
+/// `--toc` writes) asks whether to update them, as Word does. Update does, and clears the mark;
+/// Don't Update keeps the stored result. A script's open never asks.
+#[test]
+fn opening_a_document_with_fields_marked_out_of_date_asks_to_update_them() {
+    let dir = scratch("dirty-fields");
+    let path = dir.join("stale.docx");
+    let mut doc = wordcraft_doc::Document::from_text("Report");
+    doc.core.creator = "Ada".into();
+    let field = wordcraft_doc::para::InlineObject::Field {
+        instr: "AUTHOR".into(),
+        result: "stale".into(),
+        locked: false,
+        dirty: true,
+        code: false,
+        form: String::new(),
+    };
+    doc.insert_object(&wordcraft_doc::Pos::body(0, 0), field, &Default::default()).unwrap();
+    Session::new(doc).run("file.save", &json!({"path": path.to_string_lossy()})).unwrap();
+    let author = |a: &WordApp| {
+        a.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.clone()).find_map(|o| match o {
+            wordcraft_doc::para::InlineObject::Field { result, dirty, .. } => Some((result, dirty)),
+            _ => None,
+        })
+    };
+    // The dialogs alone; their theme fonts are installed on the first frame and usable from the
+    // next. `accessible`: whether every widget must have an accessible name (the Password box's
+    // field has none yet, which isn't what this test is about).
+    let dialogs_of = |a: WordApp, accessible: bool| {
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(accessible).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                if fonts {
+                    dialogs::show(app, &ctx);
+                } else {
+                    theme::install_fonts_for(&ctx, false);
+                    fonts = true;
+                }
+            },
+            a,
+        );
+        for _ in 0..3 {
+            h.step();
+        }
+        h
+    };
+    let mut a = app();
+    a.execute("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!((prompt(&a), author(&a)), (None, Some(("stale".to_string(), true))), "a script isn't asked");
+    // An Open that only starts choosing a file asks nothing about the document still shown.
+    let _ = a.run("file.open", json!({}));
+    assert_ne!(prompt(&a), Some("updateFields"), "nothing was opened yet");
+    for (button, want) in [("Don't Update", ("stale", true)), ("Update", ("Ada", false))] {
+        let mut a = app();
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(prompt(&a), Some("updateFields"));
+        let mut h = dialogs_of(a, true);
+        h.get_by_label(button).click();
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(prompt(h.state()), None, "{button} closes it");
+        assert_eq!(author(h.state()), Some((want.0.to_string(), want.1)), "{button}");
+    }
+    // A password-protected one asks once its password has opened it.
+    let locked = dir.join("locked.docx");
+    let mut s = Session::new(wordcraft_engine::io::open_path(&path).unwrap());
+    s.run("file.save", &json!({"path": locked.to_string_lossy(), "password": "sesame"})).unwrap();
+    let mut a = app();
+    a.run("file.open", json!({"path": locked.to_string_lossy()})).unwrap();
+    assert_eq!(prompt(&a), Some("password"));
+    if let Some(dialogs::Dialog::Password { password, .. }) = &mut a.dialog {
+        password.as_mut_string().push_str("sesame");
+    }
+    let mut h = dialogs_of(a, false);
+    h.get_by_label("OK").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(prompt(h.state()), Some("updateFields"), "asked after the password");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Enter activates the focused prompt button; it means Save only when no button has focus.
 /// (Enter on a focused Cancel or Don't Save used to be overridden by a blanket Enter → Save.)
 #[test]

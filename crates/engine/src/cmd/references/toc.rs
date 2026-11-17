@@ -517,9 +517,31 @@ fn bookmark_heading(s: &mut Session, path: &Path, lead: usize) -> Result<String,
 }
 
 /// Regenerate the TOC entries with page numbers (two layout passes: entries change pagination).
+/// A locked TOC (`w:fldLock`) keeps its entries, as Update Fields keeps every locked field's
+/// result (#6771 review: opening a document with a field marked dirty updates the others).
 pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
+    if toc_locked(s) {
+        return Ok(());
+    }
     let tabs = cached_toc_tabs(s);
     regenerate_toc(s, None, &tabs)
+}
+
+/// Whether the table of contents `regenerate_toc` would rebuild is locked: the first inline TOC
+/// field (`toc_range`). Another, locked TOC elsewhere doesn't stop this one's update (#6771
+/// review). Without an inline one, the range TOC `range_toc_to_field` converts is never a locked
+/// one (`convertible_toc_range`), so a locked range TOC is left alone there.
+fn toc_locked(s: &Session) -> bool {
+    let Some((start, _)) = toc_range(s) else { return false };
+    s.doc.body.get(start).and_then(|b| b.as_para()).is_some_and(|p| {
+        p.objects.iter().find_map(|o| match o {
+            InlineObject::Field { instr, locked, .. } => {
+                let f = FieldCode::parse(instr);
+                (f.name == "TOC" && !f.is_table_of_figures()).then_some(*locked)
+            }
+            _ => None,
+        }) == Some(true)
+    })
 }
 
 /// Rebuild the entries the TOC field's switches ask for. The tab leader is `leader`, or the one
@@ -532,10 +554,12 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     // that the engine's TOC shape matches `toc_span` and the DOCX writer spans the field across entries.
     if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(start)) {
         for o in &mut p.objects {
-            if let InlineObject::Field { instr, result, .. } = o {
+            if let InlineObject::Field { instr, result, dirty, .. } = o {
                 let f = FieldCode::parse(instr);
                 if f.name == "TOC" && !f.is_table_of_figures() {
                     result.clear();
+                    // Its entries are rebuilt: no longer stale (#6771 review).
+                    *dirty = false;
                 }
             }
         }

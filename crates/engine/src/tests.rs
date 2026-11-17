@@ -10951,6 +10951,30 @@ fn formula_table() -> Session {
     s
 }
 
+/// #6771 review: Update Fields on every story evaluates a table formula in a header against the
+/// header's own table, not the body's table at the same place.
+#[test]
+fn a_header_table_formula_reads_its_own_table() {
+    let mut s = formula_table();
+    run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}));
+    let before = formula_result(&s, 4, 1);
+    assert!(before.is_some());
+    // The header holds the same blocks, so its table sits where the body's does.
+    let hdr = s.doc.add_part(wordcraft_doc::PartKind::Header, s.doc.body.clone());
+    // A body number above the formula changes (1 becomes 101); the header's doesn't.
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 1, 1, 0], "off": 0}}));
+    run(&mut s, "text.insert", json!({"text": "10"}));
+    run(&mut s, "references.updateFields", json!({"all": true}));
+    let in_header = s.doc.parts.get(&hdr).and_then(|p| p.blocks.iter().find_map(|b| b.as_table())).and_then(|t| {
+        t.rows.get(4)?.cells.get(1)?.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+    });
+    assert_eq!(in_header, before, "the header's own numbers");
+    assert_ne!(formula_result(&s, 4, 1), before, "the body's changed");
+}
+
 #[test]
 fn table_formula_reads_cell_references_and_functions() {
     let mut s = formula_table();

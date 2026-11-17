@@ -394,10 +394,11 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         let mut updates: Vec<(usize, String)> = Vec::new();
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
-            // A table formula reads the cells around its own cell again.
+            // A table formula reads the cells around its own cell again, in its own story's table
+            // (a header's, not the body's table at the same place).
             if instr.trim_start().starts_with('=') {
                 if let Some((tp, r, c)) = path.cell()
-                    && let Some(t) = s.doc.table(StoryRef::Body, &tp)
+                    && let Some(t) = s.doc.table(story, &tp)
                 {
                     let default_lang = crate::cmd::default_lang(s);
                     let text = match crate::cmd::table_formula::evaluate_field_with(t, Some(&s.doc), default_lang.as_deref(), r, c, instr) {
@@ -555,6 +556,19 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
             para.touch();
         }
     }
+}
+
+/// Whether `doc` has an unlocked field marked `w:dirty` (ECMA-376 §17.16.5.35) in any story: its
+/// stored result is stale and should be updated before it is shown. Word asks to update the fields
+/// when it opens such a document, as pandoc's `--toc` writes its empty table of contents (#6771).
+pub fn has_dirty_fields(doc: &wordcraft_doc::Document) -> bool {
+    std::iter::once(StoryRef::Body).chain(doc.parts.keys().copied().map(StoryRef::Part)).any(|story| {
+        doc.para_paths(story).iter().filter_map(|path| doc.para(story, path)).any(|p| {
+            p.objects.iter().any(|o| {
+                matches!(o, InlineObject::Field { dirty: true, locked: false, .. } | InlineObject::FieldStart { dirty: true, locked: false, .. })
+            })
+        })
+    })
 }
 
 /// Resolve a field object's language through the paragraph and document defaults.

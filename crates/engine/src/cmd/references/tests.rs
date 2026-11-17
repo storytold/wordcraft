@@ -506,6 +506,98 @@ fn update_fields_all_covers_every_story() {
     s.run("references.updateFields", &json!({"all": "yes"})).unwrap();
 }
 
+/// #6771: an unlocked field marked `w:dirty` asks for an update, in a header as in the body; a
+/// locked one keeps its result and doesn't. Updating every story clears the mark.
+#[test]
+fn dirty_fields_ask_for_an_update_until_it_runs() {
+    let mark = |s: &mut Session, story: StoryRef, k: usize, lock: bool| {
+        let path = s.doc.para_paths(story).remove(0);
+        let Some(InlineObject::Field { dirty, locked, .. }) = s.doc.para_mut(story, &path).unwrap().objects.get_mut(k) else { panic!("a field") };
+        (*dirty, *locked) = (true, lock);
+    };
+    let (doc, hdr) = doc_with_header_fields();
+    let mut s = Session::new(doc);
+    assert!(!has_dirty_fields(&s.doc), "nothing is marked");
+    mark(&mut s, StoryRef::Part(hdr), 2, true);
+    assert!(!has_dirty_fields(&s.doc), "a locked field keeps its result");
+    mark(&mut s, StoryRef::Part(hdr), 0, false);
+    assert!(has_dirty_fields(&s.doc), "in a header");
+    s.run("references.updateFields", &json!({"all": true})).unwrap();
+    assert_eq!(story_fields(&s, StoryRef::Part(hdr))[0].1, "Ada");
+    assert!(!has_dirty_fields(&s.doc), "updated, so no longer stale");
+    mark(&mut s, StoryRef::Body, 0, false);
+    assert!(has_dirty_fields(&s.doc), "in the body");
+}
+
+/// #6771 review: Update Fields rebuilds a table of contents marked dirty and clears the mark, so
+/// the document doesn't ask for an update again; a locked one keeps its entries and its mark.
+#[test]
+fn update_fields_clears_a_dirty_toc_and_keeps_a_locked_one() {
+    for locked in [false, true] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Contents\nChapter One\nText"));
+        s.doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.style = Some("Heading1".into());
+        let toc = InlineObject::Field {
+            instr: r#"TOC \o "1-3" \h \z \u"#.into(),
+            result: String::new(),
+            locked,
+            dirty: true,
+            code: false,
+            form: String::new(),
+        };
+        s.doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(0, toc, &CharProps::default()).unwrap();
+        s.run("references.updateFields", &json!({"all": true})).unwrap();
+        let headings = s.doc.plain_text(StoryRef::Body).matches("Chapter One").count();
+        assert_eq!(headings, if locked { 1 } else { 2 }, "locked {locked}: the heading, and its entry unless locked");
+        let marks: Vec<bool> = s
+            .doc
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .filter_map(|o| match o {
+                InlineObject::Field { instr, dirty, .. } if instr.starts_with("TOC") => Some(*dirty),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marks, [locked], "locked {locked}: the mark");
+        assert!(!has_dirty_fields(&s.doc), "locked {locked}: nothing asks for an update");
+    }
+}
+
+/// #6771 review: a locked table of contents further down doesn't stop Update Fields from
+/// rebuilding the first one, the one it updates, when that one is unlocked and marked dirty.
+#[test]
+fn a_locked_toc_elsewhere_doesnt_stop_the_first_toc_s_update() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Contents\nChapter One\nText\nMore"));
+    s.doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.style = Some("Heading1".into());
+    let toc = |locked: bool, dirty: bool| InlineObject::Field {
+        instr: r#"TOC \o "1-3" \h \z \u"#.into(),
+        result: String::new(),
+        locked,
+        dirty,
+        code: false,
+        form: String::new(),
+    };
+    s.doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(0, toc(false, true), &CharProps::default()).unwrap();
+    s.doc.para_mut(StoryRef::Body, &Path::top(3)).unwrap().insert_object(0, toc(true, false), &CharProps::default()).unwrap();
+    assert!(has_dirty_fields(&s.doc));
+    s.run("references.updateFields", &json!({"all": true})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body).matches("Chapter One").count(), 2, "the heading and the first TOC's entry");
+    let tocs: Vec<(bool, bool)> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            InlineObject::Field { instr, locked, dirty, .. } if instr.starts_with("TOC") => Some((*locked, *dirty)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tocs, [(false, false), (true, false)], "the first rebuilt and its mark cleared; the locked one kept");
+    assert!(!has_dirty_fields(&s.doc), "nothing asks for an update");
+}
+
 #[test]
 fn toc_tabs_ignore_nonentries() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Before\nContents\nOld\t9\nAfter"));
