@@ -320,19 +320,16 @@ pub fn probe_dib(dib: Vec<u8>) -> Result<Probe<'static>, Refusal> {
     Ok(Probe { bytes: Cow::Owned(bmp), format: ImageFormat::Bmp, width, height, peak, alpha })
 }
 
+/// A DIB's width and height, read by the shared BMP probe. Header sizes other than 12 (core) and
+/// 40 or more (info) are refused here: the probe would read them as info headers.
 fn dib_header_dims(dib: &[u8]) -> Option<(u32, u32)> {
     let bi_size = u32::from_le_bytes(dib.get(0..4)?.try_into().ok()?);
-    if bi_size == 12 {
-        let w = u16::from_le_bytes(dib.get(4..6)?.try_into().ok()?);
-        let h = u16::from_le_bytes(dib.get(6..8)?.try_into().ok()?);
-        Some((u32::from(w), u32::from(h)))
-    } else if bi_size >= 40 {
-        let w = i32::from_le_bytes(dib.get(4..8)?.try_into().ok()?);
-        let h = i32::from_le_bytes(dib.get(8..12)?.try_into().ok()?);
-        Some((u32::try_from(w).ok()?, h.unsigned_abs()))
-    } else {
-        None
+    if bi_size != 12 && bi_size < 40 {
+        return None;
     }
+    // Only the first 12 header bytes are read, so only they are wrapped: this runs for DIBs too
+    // big to decode, which must not be copied whole.
+    craft_image_codecs::bmp_probe::dimensions(&dib_to_bmp(dib.get(..12).unwrap_or(dib)))
 }
 
 /// A `width` × `height` picture of `native` bytes a pixel, with its peak (see [`peak_bytes`]).
@@ -576,6 +573,68 @@ fn dib_layout(mut dib: Vec<u8>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Hand-written reader the shared probe replaced; kept as the oracle.
+    fn dib_header_dims_old(dib: &[u8]) -> Option<(u32, u32)> {
+        let bi_size = u32::from_le_bytes(dib.get(0..4)?.try_into().ok()?);
+        if bi_size == 12 {
+            let w = u16::from_le_bytes(dib.get(4..6)?.try_into().ok()?);
+            let h = u16::from_le_bytes(dib.get(6..8)?.try_into().ok()?);
+            Some((u32::from(w), u32::from(h)))
+        } else if bi_size >= 40 {
+            let w = i32::from_le_bytes(dib.get(4..8)?.try_into().ok()?);
+            let h = i32::from_le_bytes(dib.get(8..12)?.try_into().ok()?);
+            Some((u32::try_from(w).ok()?, h.unsigned_abs()))
+        } else {
+            None
+        }
+    }
+
+    fn hdr(size: u32, w: i32, h: i32, len: usize) -> Vec<u8> {
+        let mut v = [0u8; 124].to_vec();
+        v.resize(124.max(len), 0);
+        v[0..4].copy_from_slice(&size.to_le_bytes());
+        v[4..8].copy_from_slice(&w.to_le_bytes());
+        v[8..12].copy_from_slice(&h.to_le_bytes());
+        v.truncate(len);
+        v
+    }
+
+    #[test]
+    fn dib_dims_match_the_hand_written_reader() {
+        let sizes = [0u32, 11, 12, 13, 16, 39, 40, 41, 52, 108, 124, u32::MAX];
+        let dims = [(0, 0), (1, 1), (3, -2), (0, 5), (7, i32::MIN), (i32::MIN, 1), (-1, 1), (65536, 70000), (i32::MAX, i32::MAX)];
+        for &s in &sizes {
+            for &(w, h) in &dims {
+                for len in 0..=130 {
+                    let d = hdr(s, w, h, len);
+                    assert_eq!(dib_header_dims(&d), dib_header_dims_old(&d), "size {s} w {w} h {h} len {len}");
+                }
+            }
+        }
+        assert_eq!(dib_header_dims(&hdr(40, 3, -2, 40)), Some((3, 2)));
+        let mut core = hdr(12, 3, 0, 12);
+        core[6..8].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(dib_header_dims(&core), Some((3, 2)));
+    }
+
+    #[test]
+    fn dib_dims_never_panic_on_junk() {
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut buf = [0u8; 64];
+        for _ in 0..2000 {
+            for b in buf.iter_mut() {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                *b = x as u8;
+            }
+            for n in 0..=buf.len() {
+                assert_eq!(dib_header_dims(&buf[..n]), dib_header_dims_old(&buf[..n]));
+                let _ = probe_dib(buf[..n].to_vec());
+            }
+        }
+    }
 
     fn encode(img: impl Into<DynamicImage>, format: ImageFormat) -> Vec<u8> {
         let dyn_img = img.into();
