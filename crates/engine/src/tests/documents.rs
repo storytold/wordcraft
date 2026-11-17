@@ -214,6 +214,7 @@ fn read_aloud_belongs_to_its_document() {
     assert_eq!(s.read_aloud.document, Some(b));
 }
 
+/// Tests that `view.switchWindows` lists open documents, activates by document ID, and requests switching by window ID.
 #[test]
 fn switch_windows_lists_and_activates() {
     let mut s = s();
@@ -228,9 +229,22 @@ fn switch_windows_lists_and_activates() {
     assert!(list[0].get("path").is_some() && list[0].get("dirty").is_some());
     run(&mut s, "view.switchWindows", json!({"id": a}));
     assert_eq!(s.document_id(), a);
+    s.ui_requests.clear();
+    run(&mut s, "view.switchWindows", json!({"window": 1}));
+    assert_eq!(s.ui_requests, vec![json!({"windows": "switchWindow", "window": 1})]);
+    s.windows.available = true;
+    s.windows.current = Some(1);
+    s.windows.others = vec![crate::cmd::view::OtherWindow { id: 2, title: "Second".into() }];
+    s.ui_requests.clear();
+    run(&mut s, "view.switchWindows", json!({"window": 2}));
+    assert_eq!(s.ui_requests, vec![json!({"windows": "switchWindow", "window": 2})]);
+    assert!(s.run("view.switchWindows", &json!({"window": 3})).is_err(), "unknown window key fails when windows are available");
     for bad in [json!({"id": 0}), json!({"id": u64::MAX}), json!({"id": -5}), json!({"id": "1"}), json!({"id": 1e300}), json!({"id": {}})] {
         assert!(s.run("view.switchWindows", &bad).is_err(), "{bad}");
         assert_eq!(s.document_id(), a);
+    }
+    for bad in [json!({"window": "1"}), json!({"window": -1}), json!({"window": {}})] {
+        assert!(s.run("view.switchWindows", &bad).is_err(), "{bad}");
     }
     let junk = [json!(null), json!([]), json!({"id": null}), json!({"text": 5})];
     for id in ["view.switchWindows", "file.closeDocument", "file.new"] {

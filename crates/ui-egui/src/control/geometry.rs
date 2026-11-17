@@ -67,6 +67,10 @@ pub(crate) struct CaptureGeometry {
     pub(super) document: u64,
 }
 
+/// Explanation returned when a capture is attempted on a secondary viewport.
+pub(crate) const UNSUPPORTED_SECONDARY_WINDOW_ERROR: &str =
+    "capturing a secondary document window is not supported by the viewport renderer; ui.screenshot captures only the window in the root viewport";
+
 impl CaptureGeometry {
     /// Returns the document id the capture was admitted for.
     pub(crate) fn document(self) -> u64 {
@@ -85,10 +89,12 @@ impl CaptureGeometry {
         }
     }
 
-    /// Explains why the surface cannot be captured, when it is minimized or fully occluded, and
-    /// returns `None` when it can.
+    /// Explains why the surface cannot be captured: when it is in a secondary viewport that the
+    /// viewport renderer cannot capture, or when the window is minimized or fully occluded.
     pub(crate) fn unavailable_reason(self) -> Option<&'static str> {
-        if self.surface.minimized {
+        if self.viewport != egui::ViewportId::ROOT {
+            Some(UNSUPPORTED_SECONDARY_WINDOW_ERROR)
+        } else if self.surface.minimized {
             Some("the window is minimized")
         } else if self.surface.occluded {
             Some("the window is fully occluded")

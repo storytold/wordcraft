@@ -147,7 +147,8 @@ pub(super) fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, 
 }
 
 /// [`move_object`]'s one placement: move the object's character to the anchor under (x, y) on
-/// `page` and offset it from there.
+/// `page` and offset it from there. Objects in headers/footers, or on pages without anchoring
+/// text, retain page-relative anchoring; a body object is placed by its paragraph (#5705).
 fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w, h): (f32, f32)) -> Result<Pos, CmdError> {
     use wordcraft_doc::para::Anchor;
     if pos.path.depth() > 0 || !movable_story(s, pos.story) {
@@ -185,6 +186,10 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         if f.wrap == Wrap::Inline {
             f.wrap = Wrap::Square;
         }
+        // A drawing anchored to a page is on this one now.
+        if f.page > 0 {
+            f.page = u32::try_from(page).map_or(f.page, |p| p.saturating_add(1));
+        }
         f.h_rel = Anchor::Page;
         f.v_rel = Anchor::Page;
         f.h_align = None;
@@ -192,13 +197,15 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         f.x = x.clamp(-MAX_OFFSET, MAX_OFFSET);
         f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
-    if on_page {
+    if on_page || story != StoryRef::Body {
         return Ok(at);
     }
     // Then offsets from its paragraph, as laid out with the object there.
     s.touch();
     let origin = s.layout().object(&at, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?.origin;
     edit_float(s, &at, |f| {
+        // On its paragraph now: a page it was anchored to is gone, not only hidden.
+        f.page = 0;
         f.h_rel = Anchor::Column;
         f.v_rel = Anchor::Paragraph;
         f.x = (x - origin.x).clamp(-MAX_OFFSET, MAX_OFFSET);
@@ -217,16 +224,23 @@ pub(super) fn unalign(s: &mut Session) -> Result<(), CmdError> {
         return Ok(());
     }
     let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
-    let (ox, oy) = (hit.rect.x - hit.origin.x, hit.rect.y - hit.origin.y);
+    let (ox, oy) = (
+        if float.h_rel == Anchor::Page { hit.rect.x } else { hit.rect.x - hit.origin.x },
+        if float.v_rel == Anchor::Page { hit.rect.y } else { hit.rect.y - hit.origin.y },
+    );
     edit_float(s, &pos, |f| {
         if f.h_align.is_some() {
             f.h_align = None;
-            f.h_rel = Anchor::Column;
+            if f.h_rel != Anchor::Page {
+                f.h_rel = Anchor::Column;
+            }
             f.x = ox.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
         if f.v_align.is_some() {
             f.v_align = None;
-            f.v_rel = Anchor::Paragraph;
+            if f.v_rel != Anchor::Page {
+                f.v_rel = Anchor::Paragraph;
+            }
             f.y = oy.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
     })?;
