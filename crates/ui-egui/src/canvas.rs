@@ -1064,8 +1064,9 @@ fn canvas_response(ui: &mut Ui, content: Rect, scroll_target: Option<Rect>, id: 
     // chrome changes, and a new id dropped the keyboard focus, so the arrows, Page Up/Down
     // and Escape did nothing in Read Mode until the reader clicked a page (#1772).
     // It also keeps the focus when Focus hides the rulers (#1678).
-    // The id carries the window: the viewports share egui's memory, so one id in every window
-    // made them fight over one focus-lock (#5263).
+    // The id carries the window, giving each viewport's canvas its own: egui keeps its focus
+    // per viewport, so the shared id never collided — #5263's fix is the re-arm in
+    // [`crate::windows::WordApp::draw_window`].
     ui.advance_cursor_after_rect(content);
     let response = ui.interact(content, id, Sense::click_and_drag());
     if let Some(target) = scroll_target {

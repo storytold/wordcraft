@@ -161,9 +161,9 @@ fn docx_on_disk(name: &str, body: &str) -> std::path::PathBuf {
 }
 
 /// A window that gains the OS focus becomes the active one, and its canvas takes the keyboard
-/// focus: each window's canvas has its own id in the memory the viewports share (they cannot
-/// hold one focus-lock between them) and `want_focus` is re-armed when the focus arrives, so
-/// the canvas that never was OS-focused on its first frame still asks for it back (#5263).
+/// focus (egui keeps the focus per viewport): `want_focus` is re-armed when the focus arrives,
+/// so the canvas that never was OS-focused on its first frame still asks for it back (#5263),
+/// and the typing that follows goes into that window's document alone.
 #[test]
 fn a_window_that_regains_the_focus_types_into_its_canvas() {
     let ctx = backend();
