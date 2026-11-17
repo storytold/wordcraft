@@ -221,16 +221,12 @@ fn update_fields_shares_one_formula_budget() {
             *cell = wordcraft_doc::Cell::with_text("1");
         }
     }
-    for cell in t.rows[200].cells.iter_mut() {
+    for (i, cell) in t.rows[200].cells.iter_mut().enumerate() {
         let mut p = Paragraph::new();
-        let field = InlineObject::Field {
-            instr: "=SUM(A1:AX200)".into(),
-            result: "stale".into(),
-            locked: false,
-            dirty: false,
-            code: false,
-            form: String::new(),
-        };
+        // The last field asks DEFINED once earlier fields have spent the pass's budget.
+        let instr = if i == 49 { "=IF(DEFINED(B2),B2,0)" } else { "=SUM(A1:AX200)" };
+        let field =
+            InlineObject::Field { instr: instr.into(), result: "stale".into(), locked: false, dirty: false, code: false, form: String::new() };
         p.insert_object(0, field, &CharProps::default()).unwrap();
         cell.blocks = vec![wordcraft_doc::para_block(p)];
     }
@@ -240,11 +236,56 @@ fn update_fields_shares_one_formula_budget() {
     s.run("references.updateFields", &json!({})).unwrap();
     let results: Vec<String> = story_fields(&s, StoryRef::Body).into_iter().map(|(_, r)| r).collect();
     assert_eq!(results.len(), 50);
-    // Each field reads 10,000 cells, plus its own cell looked at for the language to show
-    // its result in: nine fit in the shared 100,000-cell budget.
-    assert!(results[..9].iter().all(|r| r == "10000"), "{results:?}");
-    // Once the pass budget is spent, the other fields keep their cached results.
-    assert!(results[9..].iter().all(|r| r == "stale"), "{results:?}");
+    // The budget is the base plus 16 reads per table cell, so a few more fields than the base
+    // alone fit; each reads 10,000 cells plus its own cell.
+    let done = results.iter().take_while(|r| *r == "10000").count();
+    assert!(done > 9 && done < 49, "{results:?}");
+    // Once the pass budget is spent, the other fields keep their cached results (also the one
+    // with DEFINED), are marked out of date, and the status says so.
+    assert!(results[done..].iter().all(|r| r == "stale"), "{results:?}");
+    let dirty = story_dirty(&s);
+    assert!(dirty[..done].iter().all(|d| !d) && dirty[done..].iter().all(|d| *d), "{dirty:?}");
+    assert_eq!(s.status, format!("{} table formulas weren't updated: too many cells to read", 50 - done));
+}
+
+/// The paragraph the command targets is worked out before the rest of the pass, so its formula
+/// is updated even when earlier fields (at the same object index) spend the pass's budget.
+#[test]
+fn update_fields_evaluates_the_caret_formula_first() {
+    use wordcraft_doc::{CharProps, Paragraph};
+    let formula_cell = |instr: &str| {
+        let mut p = Paragraph::new();
+        let field =
+            InlineObject::Field { instr: instr.into(), result: "stale".into(), locked: false, dirty: false, code: false, form: String::new() };
+        p.insert_object(0, field, &CharProps::default()).unwrap();
+        vec![wordcraft_doc::para_block(p)]
+    };
+    let mut big = wordcraft_doc::Table::new(201, 50, 468.0);
+    for row in big.rows.iter_mut().take(200) {
+        for cell in row.cells.iter_mut() {
+            *cell = wordcraft_doc::Cell::with_text("1");
+        }
+    }
+    for cell in big.rows[200].cells.iter_mut() {
+        cell.blocks = formula_cell("=SUM(A1:AX200)");
+    }
+    let mut small = wordcraft_doc::Table::new(3, 1, 468.0);
+    small.rows[0].cells[0] = wordcraft_doc::Cell::with_text("2");
+    small.rows[1].cells[0] = wordcraft_doc::Cell::with_text("3");
+    small.rows[2].cells[0].blocks = formula_cell("=SUM(ABOVE)");
+    let mut doc = wordcraft_doc::Document::new();
+    doc.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(big)));
+    doc.body.insert(1, std::sync::Arc::new(wordcraft_doc::Block::Table(small)));
+    let mut s = Session::new(doc);
+    let last = s.doc.para_paths(StoryRef::Body).into_iter().rfind(|p| s.doc.para(StoryRef::Body, p).is_some_and(|p| !p.objects.is_empty())).unwrap();
+    s.sel.focus.path = last.clone();
+    s.sel.anchor.path = last;
+    s.run("references.updateFields", &json!({})).unwrap();
+    let results: Vec<String> = story_fields(&s, StoryRef::Body).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(results.len(), 51);
+    assert_eq!(results[50], "5", "{results:?}");
+    // The budget was spent on the big table: some of its fields were left out of date.
+    assert!(results[..50].iter().any(|r| r == "stale"), "{results:?}");
 }
 
 /// Many ordinary tables of totals all update in one pass: looking for the language to show a
@@ -281,6 +322,18 @@ fn update_fields_updates_every_total_in_a_document_of_many_tables() {
     let results: Vec<String> = story_fields(&s, StoryRef::Body).into_iter().map(|(_, r)| r).collect();
     assert_eq!(results.len(), 1000);
     assert!(results.iter().all(|r| r == "20"), "{:?}", results.iter().find(|r| *r != "20"));
+}
+
+fn story_dirty(s: &Session) -> Vec<bool> {
+    let mut out = Vec::new();
+    for path in s.doc.para_paths(StoryRef::Body) {
+        for o in &s.doc.para(StoryRef::Body, &path).unwrap().objects {
+            if let InlineObject::Field { dirty, .. } = o {
+                out.push(*dirty);
+            }
+        }
+    }
+    out
 }
 
 fn story_fields(s: &Session, story: StoryRef) -> Vec<(String, String)> {

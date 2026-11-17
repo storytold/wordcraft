@@ -36,14 +36,26 @@ pub fn is_too_complex(e: &CmdError) -> bool {
 
 /// The cells formulas may still read (see [`MAX_CELL_VISITS`]). One budget is shared by every
 /// formula an Update Fields pass works out, so many fields can't add up to a hang.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FormulaBudget {
     visits: std::cell::Cell<usize>,
+    limit: usize,
+}
+
+impl Default for FormulaBudget {
+    fn default() -> Self {
+        Self::with_limit(MAX_CELL_VISITS)
+    }
 }
 
 impl FormulaBudget {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A budget of `limit` cell reads.
+    pub fn with_limit(limit: usize) -> Self {
+        Self { visits: std::cell::Cell::new(0), limit }
     }
 
     /// The cells read so far.
@@ -56,18 +68,18 @@ impl FormulaBudget {
         let total = self.visits.get().saturating_add(n);
         self.visits.set(total);
         // The overshoot is recorded before failing, so `is_spent` is true after a failed spend.
-        if total > MAX_CELL_VISITS { Err(CmdError::Failed(TOO_COMPLEX.into())) } else { Ok(()) }
+        if total > self.limit { Err(CmdError::Failed(TOO_COMPLEX.into())) } else { Ok(()) }
     }
 
     /// Whether the budget has been overspent.
     pub fn is_spent(&self) -> bool {
-        self.visits.get() > MAX_CELL_VISITS
+        self.visits.get() > self.limit
     }
 
     /// Charge reading `c`: one, plus one per [`MAX_NUMBER_TEXT`] bytes of its text. The text is
     /// measured only as far as what is left of the budget, so a spent budget reads nothing.
     fn charge_cell(&self, c: &Cell) -> Result<(), CmdError> {
-        let left = MAX_CELL_VISITS.saturating_sub(self.visits.get());
+        let left = self.limit.saturating_sub(self.visits.get());
         let bytes = cell_bytes(c, left.saturating_mul(MAX_NUMBER_TEXT));
         // A nested table's cells are skipped when reading the text, but walking past them is
         // work, so each one (at any depth) counts as a cell read, as far as the budget allows.
@@ -873,7 +885,11 @@ fn call(name: &str, args: &[Expr], here: &Here) -> Result<f64, CmdError> {
         },
         // DEFINED(cell) is 1 when the cell holds a value the formula can read, 0 when it doesn't.
         "DEFINED" => match args {
-            [a] => Ok(truth(eval(a, here).is_ok())),
+            [a] => match eval(a, here) {
+                // A spent cell budget is not "not defined": the formula is too complex.
+                Err(e) if is_too_complex(&e) => Err(e),
+                r => Ok(truth(r.is_ok())),
+            },
             _ => Err(CmdError::Failed("DEFINED takes one argument".into())),
         },
         "SUM" => Ok(gather(args, here)?.iter().sum()),
@@ -1114,6 +1130,15 @@ mod tests {
         assert_eq!(ev(&t, 0, 0, "=DEFINED(B1)"), Ok(0.0), "text isn't a value");
         assert_eq!(ev(&t, 0, 0, "=DEFINED(C1)"), Ok(0.0), "an empty cell isn't");
         assert_eq!(ev(&t, 0, 0, "=IF(DEFINED(C1), C1, 7)"), Ok(7.0));
+    }
+
+    #[test]
+    fn defined_reports_a_spent_budget_instead_of_zero() {
+        let t = table(&[&["5", "7"], &["3", "4"]]);
+        let budget = FormulaBudget::with_limit(4);
+        assert_eq!(evaluate_budgeted(&t, None, None, 0, 0, "=SUM(A1:B2)", &budget), Ok(19.0));
+        let r = evaluate_budgeted(&t, None, None, 0, 0, "=IF(DEFINED(B2),B2,0)", &budget);
+        assert!(matches!(&r, Err(e) if is_too_complex(e)), "{r:?}");
     }
 
     #[test]

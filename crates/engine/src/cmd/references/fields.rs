@@ -344,9 +344,19 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // REF before the SET shows the last value set, as Word's bookmark does after an update.
     let last_set = set_values(s, &paths);
     let mut set: std::collections::HashMap<String, String> = Default::default();
-    // Every table formula in this pass reads cells against one shared budget.
-    let formula_budget = crate::cmd::table_formula::FormulaBudget::new();
+    // Every table formula in this pass reads cells against one shared budget, sized to the
+    // document so it stays linear in the file's size.
+    let formula_budget = crate::cmd::table_formula::FormulaBudget::with_limit(
+        crate::cmd::table_formula::MAX_CELL_VISITS.saturating_add(count_cells(&s.doc.body).saturating_mul(FORMULA_CELLS_PER_CELL)),
+    );
+    // The paragraph the command targets (the caret's) is worked out first, so its table formulas
+    // never lose out to earlier fields.
+    let caret = (s.sel.focus.story, s.sel.focus.path.clone());
+    let mut first = caret_formulas(s, &caret.1, &formula_budget);
+    let mut skipped = 0usize;
     for (story, path) in paths {
+        let mut stale: Vec<usize> = Vec::new();
+        let is_caret = (story, &path) == (caret.0, &caret.1);
         let Some(p) = s.doc.para(story, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
             continue;
@@ -356,27 +366,15 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
             // A table formula reads the cells around its own cell again.
             if instr.trim_start().starts_with('=') {
-                if let Some((tp, r, c)) = path.cell()
-                    && let Some(t) = s.doc.table(StoryRef::Body, &tp)
-                {
-                    let default_lang = crate::cmd::default_lang(s);
-                    let used_before = formula_budget.used();
-                    let text = match crate::cmd::table_formula::evaluate_field_budgeted(
-                        t,
-                        Some(&s.doc),
-                        default_lang.as_deref(),
-                        r,
-                        c,
-                        instr,
-                        &formula_budget,
-                    ) {
-                        Ok(text) => text,
-                        // Earlier fields used up the pass's budget: this one isn't too complex
-                        // by itself, so its cached result stays as it is.
-                        Err(e) if used_before > 0 && formula_budget.is_spent() && crate::cmd::table_formula::is_too_complex(&e) => continue,
-                        Err(e) => format!("!{e}"),
-                    };
-                    updates.push((k, text));
+                let result = match if is_caret { first.remove(&k) } else { None } {
+                    Some(r) => Some(r),
+                    None => table_formula_text(s, &path, instr, &formula_budget),
+                };
+                match result {
+                    Some(Some(text)) => updates.push((k, text)),
+                    // The pass's budget ran out: the cached result stays, marked out of date.
+                    Some(None) => stale.push(k),
+                    None => {}
                 }
                 continue;
             }
@@ -469,24 +467,92 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         if core != s.doc.core {
             s.doc.core.clone_from(&core);
         }
-        if updates.is_empty() {
+        if updates.is_empty() && stale.is_empty() {
             continue;
         }
-        let para = s.doc.para_mut(story, &path)?;
-        for (k, r) in updates {
-            if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
-                // A computed result is no longer stale: Word's F9 clears `w:dirty` too.
-                *result = r;
-                *dirty = false;
+        skipped += stale.len();
+        apply_updates(s.doc.para_mut(story, &path)?, updates, &stale);
+    }
+    if in_body {
+        crate::cmd::citations::update_citations(s)?;
+        update_toc(s)?;
+    }
+    note_skipped(s, skipped);
+    Ok(())
+}
+
+/// The results of the table formulas in the paragraph at `path`, worked out ahead of the pass.
+fn caret_formulas(s: &Session, path: &Path, budget: &crate::cmd::table_formula::FormulaBudget) -> std::collections::HashMap<usize, Option<String>> {
+    let mut first = std::collections::HashMap::new();
+    let Some(p) = s.doc.para(s.sel.focus.story, path) else { return first };
+    for (k, o) in p.objects.iter().enumerate() {
+        if let InlineObject::Field { instr, locked: false, .. } = o
+            && instr.trim_start().starts_with('=')
+            && let Some(r) = table_formula_text(s, path, instr, budget)
+        {
+            first.insert(k, r);
+        }
+    }
+    first
+}
+
+/// Write the computed results `updates` into a paragraph's fields, and mark the `stale` ones out of date.
+fn apply_updates(para: &mut wordcraft_doc::Paragraph, updates: Vec<(usize, String)>, stale: &[usize]) {
+    for k in stale {
+        if let Some(InlineObject::Field { dirty, .. }) = para.objects.get_mut(*k) {
+            *dirty = true;
+        }
+    }
+    for (k, r) in updates {
+        if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
+            // A computed result is no longer stale: Word's F9 clears `w:dirty` too.
+            *result = r;
+            *dirty = false;
+        }
+    }
+    para.touch();
+}
+
+/// Tell the user that `skipped` table formulas kept their old results.
+fn note_skipped(s: &mut Session, skipped: usize) {
+    if skipped == 1 {
+        s.status = "1 table formula wasn't updated: too many cells to read".into();
+    } else if skipped > 1 {
+        s.status = format!("{skipped} table formulas weren't updated: too many cells to read");
+    }
+}
+
+/// Cells a document's table formulas may read per cell of its tables, on top of
+/// [`MAX_CELL_VISITS`](crate::cmd::table_formula::MAX_CELL_VISITS).
+const FORMULA_CELLS_PER_CELL: usize = 16;
+
+/// The cells of all the tables in `blocks`, nested ones too.
+fn count_cells(blocks: &[std::sync::Arc<wordcraft_doc::Block>]) -> usize {
+    let mut n = 0usize;
+    let mut stack: Vec<&[std::sync::Arc<wordcraft_doc::Block>]> = vec![blocks];
+    while let Some(bs) = stack.pop() {
+        for t in bs.iter().filter_map(|b| b.as_table()) {
+            for c in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                n = n.saturating_add(1);
+                stack.push(&c.blocks);
             }
         }
-        para.touch();
     }
-    if !in_body {
-        return Ok(());
-    }
-    crate::cmd::citations::update_citations(s)?;
-    update_toc(s)
+    n
+}
+
+/// The result of the table formula `instr` in the paragraph at `path`: `None` when it isn't in a
+/// table, `Some(None)` when the pass's budget ran out on other fields, so its cached result stays.
+fn table_formula_text(s: &Session, path: &Path, instr: &str, budget: &crate::cmd::table_formula::FormulaBudget) -> Option<Option<String>> {
+    let (tp, r, c) = path.cell()?;
+    let t = s.doc.table(StoryRef::Body, &tp)?;
+    let default_lang = crate::cmd::default_lang(s);
+    let used_before = budget.used();
+    Some(match crate::cmd::table_formula::evaluate_field_budgeted(t, Some(&s.doc), default_lang.as_deref(), r, c, instr, budget) {
+        Ok(text) => Some(text),
+        Err(e) if used_before > 0 && budget.is_spent() && crate::cmd::table_formula::is_too_complex(&e) => None,
+        Err(e) => Some(format!("!{e}")),
+    })
 }
 
 /// Refresh every unlocked `DATE` and `TIME` field to now, as Word does whenever it shows,
