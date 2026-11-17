@@ -1090,13 +1090,21 @@ mod tests {
         std::fs::write(&secret, b"secret").unwrap();
         let roots = crate::file_access::AutomationRoots::new(Some(&root), None).unwrap().expect("read roots");
         let blocked = root.join("blocked");
+        let opened = std::cell::RefCell::new(Vec::new());
         let error = crate::file_access::confine(Some(&roots), || {
-            open_with(&blocked, &|_| Err(io::Error::from_raw_os_error(448)), &|error| error.raw_os_error() == Some(448), &|_| -> Fallbacks {
-                Box::new(std::iter::once(secret.clone()))
-            })
+            open_with(
+                &blocked,
+                &|path| {
+                    opened.borrow_mut().push(path.to_owned());
+                    if path == blocked { Err(io::Error::from_raw_os_error(448)) } else { std::fs::File::open(path) }
+                },
+                &|error| error.raw_os_error() == Some(448),
+                &|_| -> Fallbacks { Box::new(std::iter::once(secret.clone())) },
+            )
         })
         .unwrap_err();
         assert_eq!(error.raw_os_error(), Some(448));
+        assert!(!opened.borrow().iter().any(|path| path == &secret), "the outside candidate was opened");
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(outside);
     }
