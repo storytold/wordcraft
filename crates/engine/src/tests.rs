@@ -5,6 +5,7 @@ mod czech_test_dict;
 
 use serde_json::json;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -17,6 +18,7 @@ mod fit_one_page;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod page_number_formats_in_lists;
 mod para_tools;
 mod revision_checks;
 mod typing;
@@ -1106,6 +1108,26 @@ fn replace_under_track_changes_skips_deleted_text() {
     let r = run(&mut s, "edit.replace", json!({"text": "cat", "with": "dog"}));
     assert_eq!(r["remaining"], 0);
     assert_eq!(text(&s), "one dog two dog");
+}
+
+#[test]
+fn replace_reports_whether_it_replaced_and_what_it_selected() {
+    // Replace follows Word's button: the first call only selects a match. Agents read
+    // `remaining` alone as done (#6877), so the result says whether anything was replaced.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "alpha XX beta XX gamma XX"}));
+    run(&mut s, "caret.docStart", json!({}));
+    let calls: Vec<_> = (0..5).map(|_| run(&mut s, "edit.replace", json!({"text": "XX", "with": "YY"}))).collect();
+    let replaced: Vec<_> = calls.iter().map(|r| r["replaced"].clone()).collect();
+    assert_eq!(replaced, [json!(0), json!(1), json!(1), json!(1), json!(0)]);
+    let remaining: Vec<_> = calls.iter().map(|r| r["remaining"].clone()).collect();
+    assert_eq!(remaining, [json!(3), json!(2), json!(1), json!(0), json!(0)]);
+    let selected: Vec<_> = calls.iter().map(|r| (r["selected"]["start"]["off"].clone(), r["selected"]["end"]["off"].clone())).collect();
+    assert_eq!(selected[0], (json!(6), json!(8)));
+    assert_eq!(selected[1], (json!(14), json!(16)));
+    assert_eq!(selected[2], (json!(23), json!(25)));
+    assert!(calls[3]["selected"].is_null() && calls[4]["selected"].is_null(), "no match is left to select");
+    assert_eq!(text(&s), "alpha YY beta YY gamma YY");
 }
 
 #[test]
@@ -5164,6 +5186,74 @@ fn hostile_file_params_never_panic() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Large parameters must return and lay out within a generous wall-clock budget, so a regression
+/// that loops or allocates without a cap fails here with its command id (#3720).
+#[test]
+fn hostile_large_params_stay_bounded() {
+    const BUDGET: Duration = Duration::from_secs(5);
+    let reg = cmd::registry();
+    // 1 MiB makes an uncapped copy or a quadratic scan visible without making the test itself
+    // expensive; the counts are large enough that an uncapped loop takes seconds.
+    let big = "x".repeat(1 << 20);
+    let mut deep = json!([]);
+    for _ in 0..64 {
+        deep = json!([deep]);
+    }
+    let junk = [
+        json!({
+            "text": big, "name": big, "label": big, "find": big, "replace": big,
+            "title": big, "author": big, "path": big,
+        }),
+        json!({
+            "count": 1_000_000_000u64, "copies": 1_000_000_000u64, "times": 1_000_000_000u64,
+            "cols": 1_000_000_000u64, "rows": 1_000_000_000u64, "level": 1_000_000_000u64,
+            "page": 1_000_000_000u64, "from": 1_000_000_000u64, "to": 1_000_000_000u64,
+            "id": 1_000_000_000u64,
+        }),
+        json!({"width": 3e38, "height": 3e38, "top": -3e38, "left": 3e38}),
+        json!({"path": deep}),
+    ];
+    for spec in reg.all() {
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
+            continue;
+        }
+        for j in &junk {
+            let mut s = Session::new(crate::sample::sample_document());
+            assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
+            let start = Instant::now();
+            let r = s.run(spec.id, j);
+            let elapsed = start.elapsed();
+            assert!(!caught_panic(&reg, &r), "{} panicked on large params: {r:?}", spec.id);
+            assert_within_budget(spec.id, elapsed, BUDGET);
+            // Laying the result out is not part of the command's budget; the layout tests
+            // cover long text separately. It still runs so a bad parameter reaches the layout.
+            s.clamp_selection();
+            let _ = s.layout();
+        }
+    }
+}
+
+fn assert_within_budget(id: &str, elapsed: Duration, budget: Duration) {
+    assert!(elapsed <= budget, "{id} took {elapsed:?} (budget {budget:?})");
+}
+
+/// The budget above fires: a command that runs past it is named, not ignored (#3720).
+#[test]
+#[should_panic(expected = "test.slow took")]
+fn hostile_large_param_budget_flags_a_slow_command() {
+    let budget = Duration::from_millis(1);
+    let mut s = Session::new(crate::sample::sample_document());
+    let slow = crate::CommandSpec::new("test.slow", "Slow", "", |_, _| {
+        std::thread::sleep(Duration::from_millis(20));
+        Ok(json!({}))
+    })
+    .pure();
+    s.registry = Arc::new(crate::Registry::new(vec![slow]));
+    let start = Instant::now();
+    let _ = s.run("test.slow", &json!({}));
+    assert_within_budget("test.slow", start.elapsed(), budget);
+}
+
 /// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a
 /// crash path (#3718). Only the guard's own `"{id} panicked: "` counts, not an error that echoes
 /// those words.
@@ -7672,6 +7762,81 @@ fn chart_edits_are_one_undo_step_each() {
         panic!()
     };
     assert_eq!((*w, graphic.w, graphic.h), (300.0, 300.0, 150.0));
+}
+
+/// Scatter series are drawn as markers without a line: inserted with data, changed to scatter
+/// and back, and added by Edit Data. Edit Data keeps each replaced series' formatting.
+#[test]
+fn scatter_chart_series_have_no_line_and_edit_data_keeps_formatting() {
+    let no_lines = |s: &Session| first_chart(&s.doc).unwrap().series.iter().map(|x| x.no_line).collect::<Vec<_>>();
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "scatter", "data": {"categories": [1, 2], "series": [{"name": "A", "values": [1, 2]}]}}));
+    assert_eq!(no_lines(&s), [true]);
+    run(&mut s, "chart.type", json!({"type": "line"}));
+    assert_eq!(no_lines(&s), [false]);
+    run(&mut s, "chart.type", json!({"type": "scatter"}));
+    assert_eq!(no_lines(&s), [true]);
+
+    // Formatting read from a file, set on the chart's model.
+    let set = |s: &mut Session, f: &dyn Fn(&mut wordcraft_doc::chart::ChartSpec)| {
+        let mut spec = first_chart(&s.doc).unwrap();
+        f(&mut spec);
+        let pos = Pos::body(0, 0);
+        let p = s.doc.para_mut(pos.story, &pos.path).unwrap();
+        let off = p.object_offsets()[0];
+        if let Some(wordcraft_doc::para::InlineObject::Graphic { graphic, .. }) = p.object_at_mut(off) {
+            std::sync::Arc::make_mut(graphic).chart = Some(std::sync::Arc::new(spec));
+        }
+    };
+
+    // A series' formatting stays through Edit Data; a new series gets the type's default.
+    set(&mut s, &|c| c.series[0].fill = Some(wordcraft_doc::props::Rgb(0x12, 0x34, 0x56)));
+    run(&mut s, "chart.editData", json!({"data": {"series": [{"name": "B", "values": [3, 4]}, {"name": "C", "values": [5, 6]}]}}));
+    let c = first_chart(&s.doc).unwrap();
+    assert_eq!(c.series[0].fill, Some(wordcraft_doc::props::Rgb(0x12, 0x34, 0x56)));
+    assert_eq!((c.series[0].name.as_str(), c.series[1].name.as_str()), ("B", "C"));
+    assert_eq!(no_lines(&s), [true, true]);
+
+    // A line-only series made a scatter series again gets its markers back, so it stays visible.
+    set(&mut s, &|c| c.series[0].markers = Some(false));
+    run(&mut s, "chart.type", json!({"type": "line"}));
+    run(&mut s, "chart.type", json!({"type": "scatter"}));
+    assert_eq!(first_chart(&s.doc).unwrap().series[0].markers, None);
+
+    // The chart's Data Labels setting replaces a series' own.
+    set(&mut s, &|c| c.series[1].labels = Some(true));
+    run(&mut s, "chart.dataLabels", json!({"on": false}));
+    let c = first_chart(&s.doc).unwrap();
+    assert!(!c.data_labels && c.series.iter().all(|x| x.labels.is_none()));
+}
+
+/// A pie chart changed to a column chart gets a new column chart's value axis, and back; an
+/// axis that was changed stays as it is.
+#[test]
+fn chart_type_between_round_and_axis_charts_sets_the_value_axis() {
+    use wordcraft_doc::chart::{ChartAxis, value_axis};
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "pie"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis::default());
+    run(&mut s, "chart.type", json!({"type": "column"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, value_axis());
+    run(&mut s, "chart.type", json!({"type": "doughnut"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis::default());
+
+    let mut s = self::s();
+    run(&mut s, "insert.chart", json!({"type": "column"}));
+    let pos = Pos::body(0, 0);
+    let p = s.doc.para_mut(pos.story, &pos.path).unwrap();
+    let off = p.object_offsets()[0];
+    if let Some(wordcraft_doc::para::InlineObject::Graphic { graphic, .. }) = p.object_at_mut(off) {
+        let g = std::sync::Arc::make_mut(graphic);
+        let mut spec = (**g.chart.as_ref().unwrap()).clone();
+        spec.val_axis.max = Some(50.0);
+        g.chart = Some(std::sync::Arc::new(spec));
+    }
+    run(&mut s, "chart.type", json!({"type": "pie"}));
+    run(&mut s, "chart.type", json!({"type": "bar"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis { max: Some(50.0), ..value_axis() });
 }
 
 #[test]
@@ -13079,6 +13244,80 @@ fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
     assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
 }
 
+/// A scatter chart saved as ODT (or flat ODT) and opened again is still drawn as markers without
+/// lines, and its paragraph is still written as read.
+#[test]
+fn an_odt_scatter_chart_reopens_without_lines() {
+    use wordcraft_doc::para::InlineObject;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "scatter"}));
+    let odt = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let fodt = wordcraft_formats::odt::export_flat(&s.doc).unwrap();
+    for (name, bytes) in [("t.odt", odt), ("t.fodt", fodt)] {
+        let doc = crate::io::open_bytes(name, &bytes).unwrap();
+        let c = first_chart(&doc).expect("the chart has its model");
+        assert_eq!(c.kind, wordcraft_doc::chart::ChartType::Scatter);
+        assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line), "{name}: {:?}", c.series);
+        // The drawn items are the markers-only drawing, not the one with lines between points.
+        let p = doc.para_at(&Pos::body(0, 0)).unwrap();
+        let (items, w, h) = p
+            .object_offsets()
+            .into_iter()
+            .find_map(|off| match p.object_at(off) {
+                Some(InlineObject::Graphic { graphic, w, h, .. }) if graphic.chart.is_some() => Some((graphic.items.clone(), *w, *h)),
+                _ => None,
+            })
+            .expect("the chart is drawn");
+        let theme = &doc.settings.theme_colors;
+        assert_eq!(items, crate::cmd::chart::chart_graphic(c.clone(), theme, w, h).items, "{name}");
+        let mut lines = c.clone();
+        lines.series.iter_mut().for_each(|x| x.no_line = false);
+        assert_ne!(items, crate::cmd::chart::chart_graphic(lines, theme, w, h).items, "{name}");
+    }
+    let doc = crate::io::open_bytes("t.odt", &wordcraft_formats::odt::export(&s.doc).unwrap()).unwrap();
+    let again = wordcraft_formats::odt::export(&doc).unwrap();
+    let mut z = craft_zip::Archive::open(&again, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
+}
+
+/// An undrawn scatter series with its markers turned off is not left with neither a line nor
+/// markers when an opened ODF file's scatter charts are set to markers only; other formats keep
+/// their series as read.
+#[test]
+fn an_opened_odf_scatter_series_keeps_its_markers() {
+    use std::sync::Arc;
+    use wordcraft_doc::para::InlineObject;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "scatter"}));
+    let undrawn = |doc: &wordcraft_doc::Document| {
+        let mut doc = doc.clone();
+        doc.fill_objects(&|o| matches!(o, InlineObject::Graphic { graphic, .. } if graphic.chart.is_some()), &mut |o| {
+            if let InlineObject::Graphic { graphic, .. } = o {
+                let g = Arc::make_mut(graphic);
+                if let Some(spec) = g.chart.as_deref() {
+                    let mut spec = spec.clone();
+                    for series in &mut spec.series {
+                        series.no_line = false;
+                        series.markers = Some(false);
+                    }
+                    g.chart = Some(Arc::new(spec));
+                }
+                g.items.clear();
+            }
+        });
+        doc
+    };
+    let mut odf = undrawn(&s.doc);
+    crate::io_ext::draw_charts(&mut odf, true);
+    let c = first_chart(&odf).expect("the chart has its model");
+    assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line && x.markers.is_none()), "{:?}", c.series);
+    let mut other = undrawn(&s.doc);
+    crate::io_ext::draw_charts(&mut other, false);
+    let c = first_chart(&other).expect("the chart has its model");
+    assert!(c.series.iter().all(|x| !x.no_line && x.markers == Some(false)), "{:?}", c.series);
+}
+
 /// A picture an OpenDocument file makes wider than the text (a rule across the whole page) stays
 /// that wide, and its paragraph is written as read: opening a file changes nothing in it.
 #[test]
@@ -13471,4 +13710,174 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.sections().len(), 1, "{cmd}");
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
+}
+
+/// #5616: Copy Formatting's formatting stays for every Paste Formatting, as in Word; it doesn't
+/// arm the one-shot Format Painter brush.
+#[test]
+fn copied_formatting_pastes_again_and_again() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold one two"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    assert!(s.painter.is_none());
+    for word in ["one", "two"] {
+        run(&mut s, "select.text", json!({"text": word}));
+        run(&mut s, "edit.pasteFormat", json!({}));
+        assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true), "{word}");
+    }
+    assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "Bold one two");
+}
+
+/// #5616: Copy Formatting and the Format Painter share one format buffer: each replaces the other,
+/// so a used-up brush never hands over to older copied formatting.
+#[test]
+fn copy_formatting_and_the_format_painter_replace_each_other() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold one two"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.formatPainter", json!({}));
+    assert!(s.painter.is_some());
+    run(&mut s, "edit.copyFormat", json!({}));
+    assert!(s.painter.is_none(), "Copy Formatting clears an armed brush");
+    assert!(s.copied_format.is_some());
+    run(&mut s, "edit.formatPainter", json!({}));
+    assert!(s.painter.is_some());
+    run(&mut s, "select.text", json!({"text": "one"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert!(s.painter.is_none(), "a used-up brush is gone");
+    assert!(s.copied_format.is_some(), "its pick stays for Paste Formatting");
+}
+
+/// #5616: arming and cancelling the Format Painter leaves Copy Formatting's pick; a brush's pick
+/// is what Paste Formatting applies next.
+#[test]
+fn cancelling_the_format_painter_keeps_the_copied_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold one two"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    run(&mut s, "edit.formatPainter", json!({}));
+    run(&mut s, "edit.formatPainter", json!({}));
+    assert!(s.painter.is_none());
+    run(&mut s, "select.text", json!({"text": "one"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    // A brush picked from plain text replaces the bold pick.
+    run(&mut s, "select.text", json!({"text": "two"}));
+    run(&mut s, "edit.formatPainter", json!({}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert_ne!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+}
+
+/// #5616: copied formatting carries no tracked paragraph formatting or numbering change.
+#[test]
+fn copied_paragraph_formatting_carries_no_tracked_changes() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "one\ntwo"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "one"}));
+    run(&mut s, "para.alignCenter", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    run(&mut s, "select.text", json!({"text": "one"}));
+    let f = s.sel.focus.clone();
+    assert!(s.doc.para_at(&f).unwrap().props.fmt_change.is_some(), "the source paragraph has a tracked formatting change");
+    run(&mut s, "edit.copyFormat", json!({}));
+    let (_, para) = s.copied_format.clone().unwrap();
+    assert!(para.fmt_change.is_none() && para.num_change.is_none());
+    run(&mut s, "select.text", json!({"text": "two"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let f = s.sel.focus.clone();
+    let p = s.doc.para_at(&f).unwrap().props.clone();
+    assert!(p.fmt_change.is_none() && p.num_change.is_none());
+}
+
+/// #5616: copied formatting carries no hyperlink or revision marks, even into a collapsed caret.
+#[test]
+fn copied_formatting_carries_no_hyperlink() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "source target"}));
+    run(&mut s, "select.text", json!({"text": "source"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/"}));
+    run(&mut s, "select.text", json!({"text": "so"}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    let (chr, _) = s.copied_format.clone().unwrap();
+    assert_eq!(chr.bold, Some(true));
+    assert!(chr.link.is_none() && chr.ins.is_none() && chr.del.is_none() && chr.fmt_change.is_none());
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "select.collapse", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let f = s.sel.focus.clone();
+    let link = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).link.clone());
+    assert_eq!(link, Some(None), "the target didn't become a link");
+}
+
+/// #5616: Paste Formatting at a bare caret keeps the word's own hyperlink and tracked insertion.
+#[test]
+fn a_caret_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "source target"}));
+    run(&mut s, "select.text", json!({"text": "source"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/"}));
+    run(&mut s, "select.collapse", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let at_caret = |s: &Session| {
+        let f = s.sel.focus.clone();
+        s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone()).unwrap_or_default()
+    };
+    let c = at_caret(&s);
+    assert!(c.link.is_some(), "the target kept its hyperlink");
+    assert_eq!(c.bold, Some(true));
+    // A tracked insertion stays tracked.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": " added"}));
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    run(&mut s, "caret.left", json!({}));
+    assert!(at_caret(&s).ins.is_some(), "the insertion is tracked before");
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert!(at_caret(&s).ins.is_some(), "Paste Formatting kept the insertion mark");
+}
+
+/// #5616: Paste Formatting over a selection keeps the target's hyperlink and tracked marks too.
+#[test]
+fn a_range_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "source target"}));
+    run(&mut s, "select.text", json!({"text": "source"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/"}));
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let (a, _) = s.sel.ordered();
+    let c = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
+    assert!(c.link.is_some(), "the target kept its hyperlink");
+    assert_eq!(c.bold, Some(true));
+    // A tracked insertion selected as a range stays tracked.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": " added"}));
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    run(&mut s, "select.text", json!({"text": "added"}));
+    let at_start = |s: &Session| {
+        let (a, _) = s.sel.ordered();
+        s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default()
+    };
+    assert!(at_start(&s).ins.is_some(), "the insertion is tracked before");
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let c = at_start(&s);
+    assert!(c.ins.is_some(), "Paste Formatting kept the insertion mark");
+    assert_eq!(c.bold, Some(true));
 }
