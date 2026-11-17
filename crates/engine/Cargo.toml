@@ -48,6 +48,10 @@ craft-font-catalog = { workspace = true }
 # The local time zone's offset for Insert ▸ Date & Time and date fields (#1707); the web asks the browser's Date.
 chrono = { workspace = true, features = ["clock"] }
 
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
+# Speech Dispatcher's wire framing for Read Aloud (speech/ssip.rs).
+craft-ssip = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 # O_NONBLOCK, so a path swapped for a named pipe can't block `open` (#3666).
 libc = { workspace = true }
