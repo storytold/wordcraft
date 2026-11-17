@@ -1444,6 +1444,15 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     }
 }
 
+/// The layout for anything that maps a screen point to a document position — pointer hit-testing
+/// and the accessibility tree. During a composition the shown layout is a copy holding uncommitted
+/// pre-edit text with copy-relative offsets; a hit in it must not be written back to the real
+/// document's selection, so these paths use the real document's layout instead. Only the page
+/// pixels and the caret drawn on them use the shown one (#6916).
+fn document_layout(app: &mut WordApp, shown: &std::sync::Arc<DocLayout>) -> std::sync::Arc<DocLayout> {
+    if app.canvas.ime_preview.is_some() { app.session.layout() } else { shown.clone() }
+}
+
 /// Finish the canvas frame: update scroll state, handle focus, input, accessibility, and context menus.
 fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
     let CanvasFinish {
@@ -1467,17 +1476,19 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     // A click on the page leaves the selected comment balloon.
     dismiss_balloon_on_canvas_click(app, ui, &resp);
     update_canvas_focus(app, ui, &resp, ime_geometry, ime_interrupt);
-    // Screen readers: the document under the canvas, with the caret (#488).
-    crate::a11y::expose(app, ui.ctx(), resp.id, layout, &rects, area);
+    // Screen readers and clicks describe the document, not an uncommitted composition: read and
+    // hit-test the real layout so positions never carry the pre-edit's offset (#6916).
+    let doc_layout = document_layout(app, layout);
+    crate::a11y::expose(app, ui.ctx(), resp.id, &doc_layout, &rects, area);
     // The buttons that start or stop middle-click scrolling don't also click the page.
     let middle_gesture = app.canvas.auto_scroll.blocks_input();
-    handle_primary_pointer(app, ui, &resp, &rects, layout, geo, middle_gesture);
+    handle_primary_pointer(app, ui, &resp, &rects, &doc_layout, geo, middle_gesture);
     // A click on a check box ticks it; on a list's button opens the list.
     if !middle_gesture {
         crate::content_controls::clicks(app, &resp);
     }
     let secondary_clicked = resp.secondary_clicked() && !middle_gesture;
-    handle_secondary_selection(app, &resp, &rects, layout, geo, secondary_clicked);
+    handle_secondary_selection(app, &resp, &rects, &doc_layout, geo, secondary_clicked);
     // Shift+F10 opens the same menu below the caret, for the selection or the word there (#821).
     let from_keys = std::mem::take(&mut app.canvas.context_menu_from_keys);
     // A click on the equation frame's options strip opens the equation's menu below the strip.
@@ -1743,9 +1754,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         } else {
             balloons(app, ui, &painter, &rects, &layout, geo.scale, view_rect);
         }
-        // Find › Reading Highlight. Its places are the document's, not the preview's.
-        let marks: Vec<(Pos, Pos)> =
-            if preview_sel(app).is_some() { Vec::new() } else { app.session.find_highlights().iter().take(5000).cloned().collect() };
+        // Find › Reading Highlight. Its places are the document's, not a preview's. A table preview
+        // shows a copy, and an IME composition shows a copy with the pre-edit inserted; in both the
+        // document's real offsets would highlight the wrong glyphs on the page, so hold them back
+        // until the preview ends (#6916).
+        let marks: Vec<(Pos, Pos)> = if preview_sel(app).is_some() || app.canvas.ime_preview.is_some() {
+            Vec::new()
+        } else {
+            app.session.find_highlights().iter().take(5000).cloned().collect()
+        };
         for (a, b) in &marks {
             for (pi, r) in layout.selection_rects(&app.session.doc, a, b, app.session.page_hint) {
                 if let Some(pr) = rects.get(pi) {

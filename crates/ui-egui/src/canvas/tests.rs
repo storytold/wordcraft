@@ -131,6 +131,36 @@ fn the_page_shows_the_input_method_composition_in_the_document() {
     assert!(app.canvas.ime_preview.is_none());
 }
 
+/// #6916: clicks and the accessibility tree use the document's layout, not the composition copy.
+/// A hit in the copy carries the pre-edit's byte offset, so writing it back as the real selection
+/// would move the caret past 乙 (or past the paragraph end) and land a later insert in the wrong
+/// place. The page pixels still use the copy so the text to the right reflows.
+#[test]
+fn composition_keeps_hit_testing_and_a11y_on_the_real_document() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("甲乙")), Default::default());
+    app.session.run("caret.docStart", &json!({})).unwrap();
+    app.session.run("caret.right", &json!({})).unwrap();
+
+    app.canvas.ime_preedit = "にほん".into();
+    app.canvas.ime_preedit_range = Some(1..2);
+    let shown = shown_layout(&mut app);
+    assert!(app.canvas.ime_preview.is_some());
+    let real = document_layout(&mut app, &shown);
+    assert!(
+        std::sync::Arc::ptr_eq(&real, &app.session.layout()),
+        "hits and a11y read the real document, whose offsets the session and selection use"
+    );
+    assert!(!std::sync::Arc::ptr_eq(&real, &shown), "the page pixels still reflow with the pre-edit");
+
+    // The real caret is a position the session can use, with no pre-edit offset mixed in.
+    assert!(real.caret_on(&app.session.sel.focus, 0).is_some(), "the real caret is a valid hit target");
+
+    app.canvas.ime_preedit.clear();
+    app.canvas.ime_preedit_range = None;
+    let plain = shown_layout(&mut app);
+    assert!(std::sync::Arc::ptr_eq(&document_layout(&mut app, &plain), &plain), "no composition: one layout everywhere");
+}
+
 /// A table preview takes over the page; the input method's pre-edit goes back to being an overlay
 /// rather than leaving the two previews fighting over the same raster.
 #[test]
