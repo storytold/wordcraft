@@ -118,15 +118,24 @@ fn choice_named(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &
     changed
 }
 
-/// What the preview's layout is made from besides the document's text: the revision, Print
-/// Markup, the file name and path FILENAME fields show (#6282: Save As and Rename change them
-/// without an edit), and the font database generation the app has seen (#6283:
-/// `WordApp::watch_fonts` moves it when fonts are added or removed).
-type LayoutKey = (u64, bool, (String, String), u64);
+/// The settings that decide how tracked changes and comments look in the print preview:
+/// Print Markup and Track Changes Options.
+type MarkupKey = (bool, wordcraft_layout::display::MarkupOptions);
+
+/// The [`MarkupKey`] now.
+fn markup_key(app: &WordApp) -> MarkupKey {
+    (app.session.prefs.print_markup, app.session.prefs.markup.clone())
+}
+
+/// What the preview's layout is made from besides the document's text: the document id, the
+/// revision, Print Markup and Track Changes Options, the file name and path FILENAME fields show
+/// (#6282: Save As and Rename change them without an edit), and the font database generation the
+/// app has seen (#6283: `WordApp::watch_fonts` moves it when fonts are added or removed).
+type LayoutKey = (u64, u64, MarkupKey, (String, String), u64);
 
 /// The [`LayoutKey`] now.
 fn layout_key(app: &WordApp) -> LayoutKey {
-    (app.session.rev(), app.session.prefs.print_markup, app.session.resolved_filenames(), app.font_generation)
+    (app.session.document_id(), app.session.rev(), markup_key(app), app.session.resolved_filenames(), app.font_generation)
 }
 
 /// The output layout, kept while what it is made from ([`LayoutKey`]) is unchanged.
@@ -138,36 +147,48 @@ fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     {
         return l;
     }
-    let l = app.session.export_layout_with(app.session.prefs.print_markup);
+    let l = app.session.print_layout(app.session.prefs.print_markup);
     ctx.data_mut(|d| d.insert_temp(id, (key, l.clone())));
     l
 }
 
-/// What a preview texture was drawn from: the layout, the page and the render scale's bits.
-type TextureKey = (Weak<DocLayout>, usize, u32);
+/// How the preview draws a page: tracked changes marked as the print job marks them.
+fn preview_options(app: &WordApp) -> wordcraft_render::RenderOptions {
+    let mut opts = wordcraft_render::RenderOptions::default();
+    opts.display.markup = app.session.prefs.print_markup;
+    opts.display.revisions = app.session.prefs.markup.clone();
+    opts
+}
 
-/// A bounded per-cell texture cache, drawn again when the layout, the page or the scale changes.
+/// What a preview texture was drawn from: the layout, the markup settings, the page and the
+/// render scale's bits.
+type TextureKey = (Weak<DocLayout>, MarkupKey, usize, u32);
+
+/// A bounded per-cell texture cache, drawn again when the layout, markup settings, page or scale
+/// changes.
 fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &Arc<DocLayout>, page: usize, cache_slot: usize, width: f32) -> Option<TextureHandle> {
     let id = egui::Id::unique(("print_page_texture", cache_slot));
     let pg = lay.pages.get(page)?;
     // Zoomed in, the texture stays within what the GPU takes and is stretched beyond that.
     let max_side = ctx.input(|i| i.max_texture_side) as f32 / pg.w.max(pg.h).max(1.0);
     let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
+    let markup = markup_key(app);
     // Keyed on what the page is drawn from: the layout, so whatever lays the page out again
     // draws it again (held weakly: no later layout can take its address while the key holds
-    // it), the page, and the exact scale (#6285), which also follows the GPU's texture limit
-    // (#6284).
-    if let Some(((l, p, s), t)) = ctx.data(|d| d.get_temp::<(TextureKey, TextureHandle)>(id))
+    // it), the markup settings, the page, and the exact scale (#6285), which also follows the
+    // GPU's texture limit (#6284).
+    if let Some(((l, m, p, s), t)) = ctx.data(|d| d.get_temp::<(TextureKey, TextureHandle)>(id))
         && std::ptr::eq(l.as_ptr(), Arc::as_ptr(lay))
+        && m == markup
         && p == page
         && s == scale.to_bits()
     {
         return Some(t);
     }
-    let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &Default::default());
+    let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &preview_options(app));
     let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
     let tex = ctx.load_texture("print_page_preview", color, egui::TextureOptions::LINEAR);
-    let key: TextureKey = (Arc::downgrade(lay), page, scale.to_bits());
+    let key: TextureKey = (Arc::downgrade(lay), markup, page, scale.to_bits());
     ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
     Some(tex)
 }
@@ -704,5 +725,48 @@ mod tests {
         let ppp = ctx.pixels_per_point();
         assert!(ppp > 1.0 && ppp < 1.01, "{ppp}");
         assert_eq!(texture(300.5).size()[0], (300.5 * ppp).ceil() as usize, "drawn for {ppp} pixels per point");
+    }
+
+    /// The preview pages as the print job does (#5269 review): without Print Markup tracked
+    /// deletions take no space, whatever Track Changes Options mark them with.
+    #[test]
+    fn the_preview_pages_as_the_print_job() {
+        let text: Vec<String> = (0..200).map(|i| format!("Line {i} of the old text")).collect();
+        let doc = wordcraft_doc::Document::from_text(&text.join("\n"));
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        let ctx = egui::Context::default();
+        app.run("review.trackChanges", json!({"value": true})).unwrap();
+        app.run("select.all", json!({})).unwrap();
+        app.run("text.insert", json!({"text": "Kept"})).unwrap();
+        let pages = |app: &crate::WordApp| (layout_of(app, &ctx).pages.len(), app.session.print_pdf(&json!({})).unwrap().1.chosen);
+        app.run("file.printMarkup", json!({"value": true})).unwrap();
+        let (marked, job) = pages(&app);
+        assert!(marked > 1 && marked == job, "{marked} vs {job}");
+        app.run("file.printMarkup", json!({"value": false})).unwrap();
+        assert_eq!(pages(&app), (1, 1));
+        // The cached layout follows the Delete mark option too (it changes the layout with markup).
+        app.run("file.printMarkup", json!({"value": true})).unwrap();
+        app.run("review.trackingOptions", json!({"deleteMark": "hidden"})).unwrap();
+        assert_eq!(pages(&app), (1, 1));
+        // Changing revision colours refreshes the preview texture even on the same page count.
+        let lay_before = layout_of(&app, &ctx);
+        let tex_before = page_texture(&app, &ctx, &lay_before, 0, 0, 300.0).unwrap().id();
+        app.run("review.trackingOptions", json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+        let lay_after = layout_of(&app, &ctx);
+        let tex_after = page_texture(&app, &ctx, &lay_after, 0, 0, 300.0).unwrap().id();
+        assert_ne!(tex_before, tex_after, "tracking colours refresh preview texture");
+    }
+
+    /// Two documents at the same revision drawn in one window's context (#5270 review): each
+    /// preview gets its own layout, not the other's cached one.
+    #[test]
+    fn the_preview_cache_tells_documents_apart() {
+        let long: Vec<String> = (0..200).map(|i| format!("Line {i}")).collect();
+        let app = |text: &str| crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(text)), Default::default());
+        let (long, short) = (app(&long.join("\n")), app("One line"));
+        assert_eq!(long.session.rev(), short.session.rev(), "the test needs equal revisions");
+        let ctx = egui::Context::default();
+        assert!(layout_of(&long, &ctx).pages.len() > 1);
+        assert_eq!(layout_of(&short, &ctx).pages.len(), 1);
     }
 }
