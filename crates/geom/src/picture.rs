@@ -993,20 +993,90 @@ mod tests {
         v
     }
 
+    // craft-image-codecs fixed two DIB behaviours after the cutover (craft-libs #2062); the oracle
+    // keeps the old ones, so these predicates name the inputs where the two must differ.
+
+    fn le32(d: &[u8], at: usize) -> Option<u32> {
+        d.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes)
+    }
+
+    /// A 52- or 56-byte `BI_BITFIELDS` header: its masks are inside the header, so the pixel offset
+    /// no longer counts 12 appended mask bytes. Returns the new, independently computed offset.
+    fn v2v3_bitfields_offset(d: &[u8]) -> Option<u32> {
+        let size = le32(d, 0).unwrap_or(40);
+        if !matches!(size, 52 | 56) || le32(d, 16).unwrap_or(0) != 3 {
+            return None;
+        }
+        let bpp = d.get(14..16).and_then(|b| b.try_into().ok()).map_or(24, u16::from_le_bytes);
+        let clr_used = le32(d, 32).unwrap_or(0);
+        let entries = if clr_used != 0 {
+            clr_used
+        } else if bpp <= 8 {
+            1u32 << bpp
+        } else {
+            0
+        };
+        Some(14u32.saturating_add(size).saturating_add(entries.saturating_mul(4)))
+    }
+
+    /// A V4/V5 bit-fields DIB whose 12 bytes after the header equal the masks but whose payload is
+    /// no longer than the pixel rows need: those bytes are pixels, not a copy, so a copy is inserted.
+    /// Returns the masks the shared code inserts at `size`.
+    fn exact_payload_equal_to_masks(d: &[u8]) -> Option<(usize, [u8; 12])> {
+        let size = usize::try_from(le32(d, 0).filter(|&s| s >= 108)?).ok()?;
+        if size > d.len() {
+            return None;
+        }
+        let promote = d.get(14..16) == Some(&[32, 0][..]) && le32(d, 16) == Some(0) && le32(d, 52) == Some(0xFF00_0000);
+        let mut masks: [u8; 12] = d.get(40..52)?.try_into().ok()?;
+        if promote && masks == [0; 12] {
+            masks = [0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00];
+        }
+        if !(promote || le32(d, 16) == Some(3)) || d.get(size..size + 12) != Some(masks.as_slice()) {
+            return None;
+        }
+        let w = u64::try_from(i32::from_le_bytes(d.get(4..8)?.try_into().ok()?)).ok()?;
+        let h = u64::from(i32::from_le_bytes(d.get(8..12)?.try_into().ok()?).unsigned_abs());
+        let bpp = u64::from(u16::from_le_bytes(d.get(14..16)?.try_into().ok()?));
+        let need = usize::try_from(w.checked_mul(bpp)?.div_ceil(32).checked_mul(4)?.checked_mul(h)?).ok()?;
+        (d.len() - size <= need).then_some((size, masks))
+    }
+
     #[test]
     fn dib_wrapping_is_byte_equal_to_the_local_one_it_replaced() {
-        let mut n = 0;
+        let (mut n, mut v2v3, mut exact) = (0, 0, 0);
         for d in crafted_dibs() {
             // Every truncation point of the header region, then the whole.
             let cuts = (0..=d.len().min(140)).chain([d.len()]);
             for cut in cuts {
                 let d = &d[..cut];
-                assert_eq!(dib_to_bmp(d).unwrap(), oracle_dib_to_bmp(d), "wrap, cut {cut}");
-                assert_eq!(bmp_probe::dib_layout(d.to_vec()), oracle_dib_layout(d.to_vec()), "layout, cut {cut}");
                 n += 1;
+                let (new, old) = (dib_to_bmp(d).unwrap(), oracle_dib_to_bmp(d));
+                if let Some(offset) = v2v3_bitfields_offset(d) {
+                    // New behaviour: only the offset differs, and it no longer counts the 12 mask bytes.
+                    v2v3 += 1;
+                    let mut expected = old;
+                    expected[10..14].copy_from_slice(&offset.to_le_bytes());
+                    assert_eq!(new, expected, "wrap, 52/56-byte bit fields, cut {cut}");
+                } else {
+                    assert_eq!(new, old, "wrap, cut {cut}");
+                }
+                let (new, old) = (bmp_probe::dib_layout(d.to_vec()), oracle_dib_layout(d.to_vec()));
+                if let Some((size, masks)) = exact_payload_equal_to_masks(d) {
+                    // New behaviour: the bytes after the header are pixels, so a mask copy is inserted.
+                    exact += 1;
+                    let mut expected = old;
+                    expected.splice(size..size, masks);
+                    assert_eq!(new, expected, "layout, exact payload equal to the masks, cut {cut}");
+                } else {
+                    assert_eq!(new, old, "layout, cut {cut}");
+                }
             }
         }
         assert!(n > 100_000, "{n}");
+        // The exclusions are small and present: a predicate that matched nothing would hide a regression.
+        eprintln!("DIB corpus: {n} cases, {v2v3} excluded as 52/56-byte bit fields, {exact} as exact payload equal to the masks");
+        assert!(v2v3 > 0 && exact > 0 && v2v3 + exact < n / 10, "{v2v3} {exact}");
     }
 
     #[test]
@@ -1014,6 +1084,11 @@ mod tests {
         for d in crafted_dibs() {
             for cut in [0, 4, 11, 12, 14, 40, 52, 100, 124, 130, d.len()] {
                 let d = d[..cut.min(d.len())].to_vec();
+                // The two DIB fixes change the bytes handed to the decoder; the wrapping test above pins
+                // them, so skip those inputs here.
+                if v2v3_bitfields_offset(&d).is_some() || exact_payload_equal_to_masks(&d).is_some() {
+                    continue;
+                }
                 let new = probe_dib(d.clone());
                 match (new, oracle_probe_dib(d.clone())) {
                     (Ok(p), Ok((w, h, peak, alpha, bmp))) => {
