@@ -59,7 +59,7 @@ const MAX_LINK: usize = 4096;
 /// any other scheme, a control character and an over-long link. A `#bookmark` after the path is
 /// left out. Pure: whether the file exists is the caller's question.
 pub fn linked_document(link: &str, base: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
-    use std::path::{Component, PathBuf};
+    use std::path::PathBuf;
     if link.len() > MAX_LINK || link.chars().any(char::is_control) {
         return None;
     }
@@ -97,11 +97,27 @@ pub fn linked_document(link: &str, base: Option<&std::path::Path>) -> Option<std
         return None;
     }
     let path = PathBuf::from(raw.replace(['\\', '/'], std::path::MAIN_SEPARATOR_STR));
-    let windows_absolute = raw.as_bytes().get(1) == Some(&b':') && raw.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+    // `C:\dir` or `C:/dir`; `C:dir` is relative to drive C's current folder, not to the document's
+    // or the drive's root, so it names no place we can show: refused.
+    let drive = matches!(raw.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic());
+    let windows_absolute = matches!(raw.as_bytes(), [d, b':', b'/' | b'\\', ..] if d.is_ascii_alphabetic());
+    if drive && !windows_absolute {
+        return None;
+    }
     let joined = if path.is_absolute() || windows_absolute { path } else { base?.join(path) };
-    // `.` and `..` resolved without asking the file system; past the root is refused.
+    let out = normalized(&joined)?;
+    let name = out.to_string_lossy();
+    if name.replace('\\', "/").starts_with("//") || !OPEN_EXTS.contains(&ext_of(&name).as_str()) {
+        return None;
+    }
+    Some(out)
+}
+
+/// `path` with `.` and `..` resolved without asking the file system; `None` past the root.
+fn normalized(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::path::{Component, PathBuf};
     let mut out = PathBuf::new();
-    for c in joined.components() {
+    for c in path.components() {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
@@ -112,11 +128,63 @@ pub fn linked_document(link: &str, base: Option<&std::path::Path>) -> Option<std
             other => out.push(other.as_os_str()),
         }
     }
-    let name = out.to_string_lossy();
-    if name.replace('\\', "/").starts_with("//") || !OPEN_EXTS.contains(&ext_of(&name).as_str()) {
+    Some(out)
+}
+
+/// The most symbolic links [`local_path`] follows in one path.
+const MAX_LINKS: usize = 32;
+
+/// `path` with each symbolic link and junction in it replaced by the place it names, read
+/// without going there (`read_link`), so a link to another machine is refused before anything
+/// asks that machine for the file (#6933 review): checking that the file is there would follow
+/// the link, and Windows sends the user's network credentials to that machine. Links to local
+/// places are followed, [`MAX_LINKS`] at most. `None` for a link to another machine (`\\host\…`,
+/// `\\?\UNC\…`, a device path), a link it can't read, or too many. A part of the path that isn't
+/// there ends the walk: nothing past it can be a link.
+pub fn local_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::path::{Component, PathBuf};
+    let mut path = normalized(path)?;
+    let mut links = 0;
+    'walk: loop {
+        let parts: Vec<Component> = path.components().collect();
+        let mut so_far = PathBuf::new();
+        for (i, part) in parts.iter().enumerate() {
+            so_far.push(part.as_os_str());
+            if matches!(part, Component::Prefix(_) | Component::RootDir) {
+                continue;
+            }
+            let Ok(meta) = std::fs::symlink_metadata(&so_far) else { return Some(path) };
+            if !meta.file_type().is_symlink() {
+                continue;
+            }
+            links += 1;
+            if links > MAX_LINKS {
+                return None;
+            }
+            let target = local_link_target(&std::fs::read_link(&so_far).ok()?)?;
+            let windows_absolute = matches!(target.to_string_lossy().as_bytes(), [d, b':', b'/' | b'\\', ..] if d.is_ascii_alphabetic());
+            let target = if target.is_absolute() || windows_absolute { target } else { so_far.parent()?.join(target) };
+            let rest: PathBuf = parts.get(i + 1..).unwrap_or_default().iter().collect();
+            path = normalized(&target.join(rest))?;
+            continue 'walk;
+        }
+        return Some(path);
+    }
+}
+
+/// Where a link points, as a local path: Windows' verbatim prefix (`\\?\C:\…`, `\??\C:\…`) taken
+/// off; `None` for another machine (`\\host\…`, `//host/…`, `\\?\UNC\…`) or a device (`\\.\…`).
+fn local_link_target(target: &std::path::Path) -> Option<std::path::PathBuf> {
+    let s = target.to_string_lossy().replace('\\', "/");
+    let s = match s.strip_prefix("//?/").or_else(|| s.strip_prefix("/??/")) {
+        Some(rest) if rest.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("UNC/")) => return None,
+        Some(rest) => rest.to_string(),
+        None => s,
+    };
+    if s.starts_with("//") {
         return None;
     }
-    Some(out)
+    Some(std::path::PathBuf::from(s.replace('/', std::path::MAIN_SEPARATOR_STR)))
 }
 
 /// `%XX` escapes decoded (`My%20Notes.odt`); `None` for a broken escape or bytes that aren't UTF-8.

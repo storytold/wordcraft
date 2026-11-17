@@ -56,12 +56,16 @@ pub(crate) fn follow_link(app: &mut WordApp, link: String) {
     } else if is_followable_link(&link) {
         app.canvas.open_url = Some(link);
     } else if let Some(path) = linked_document(app, &link) {
-        if path.is_file() {
+        let shown = crate::i18n::isolate_path(&path.to_string_lossy());
+        // Its symbolic links are read before anything looks for the file: looking would follow a
+        // link to another machine and send it the user's credentials (#6933 review).
+        match wordcraft_engine::io::local_path(&path) {
+            None => app.status(crate::i18n::fmt(tl!("The linked document {path} isn't on this computer"), &[("path", &shown)])),
             // A document's link names a file: it opens only once the user has seen where.
-            app.dialog = Some(crate::dialogs::Dialog::OpenLinkedFile { path: path.to_string_lossy().into_owned() });
-        } else {
-            let shown = crate::i18n::isolate_path(&path.to_string_lossy());
-            app.status(crate::i18n::fmt(tl!("The linked document {path} isn't there"), &[("path", &shown)]));
+            Some(local) if local.is_file() => {
+                app.dialog = Some(crate::dialogs::Dialog::OpenLinkedFile { path: path.to_string_lossy().into_owned() });
+            }
+            Some(_) => app.status(crate::i18n::fmt(tl!("The linked document {path} isn't there"), &[("path", &shown)])),
         }
     } else {
         app.status(tl!("Only web and email links, and links to documents WordCraft opens, can be followed"));

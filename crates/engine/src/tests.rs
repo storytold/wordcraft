@@ -13911,10 +13911,68 @@ fn a_link_names_a_local_document_only_of_a_format_wordcraft_opens() {
         "a%2.docx",
         "a%00b.docx",
         "a\u{7}.docx",
+        // Relative to drive C's current folder, not the document's (#6933 review).
+        "C:Plan.odt",
+        "file:///C:Plan.odt",
     ] {
         assert_eq!(linked_document(bad, Some(&base)), None, "{bad:?}");
+        assert_eq!(linked_document(bad, None), None, "{bad:?}, no folder");
     }
+    assert_eq!(linked_document("C:/Docs/Plan.odt", None).map(|p| p.to_string_lossy().replace('\\', "/")), Some("C:/Docs/Plan.odt".into()));
     assert_eq!(linked_document("Plan.odt", None), None, "a relative link needs the document's folder");
     assert_eq!(linked_document(&format!("{}x.docx", "../".repeat(200)), Some(&base)), None, "not past the root");
     assert_eq!(linked_document(&format!("{}.docx", "a".repeat(5000)), Some(&base)), None, "over-long");
+}
+
+/// #6933 review: a symbolic link (or junction) on the way to a linked document is read, never
+/// followed, before anything looks for the file. One to another machine is refused, directly, in
+/// a chain or as a folder; one to a local file is followed. Making links can need a privilege on
+/// Windows: without it, only what needs no link is checked.
+#[test]
+fn a_linked_document_reached_through_a_link_to_another_machine_is_refused() {
+    use crate::io::local_path;
+    let dir = std::env::temp_dir().join(format!("wc-local-path-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("Plan.docx"), b"x").unwrap();
+    // The temporary folder may itself be reached through a link (macOS's `/var`).
+    let real = local_path(&dir).unwrap();
+    let plan = real.join("Plan.docx");
+    assert_eq!(local_path(&dir.join("Plan.docx")), Some(plan.clone()), "a file with no link of its own");
+    assert_eq!(local_path(&dir.join("Missing.docx")), Some(real.join("Missing.docx")), "nothing to follow");
+    #[cfg(windows)]
+    let (remote, link_file, link_dir): (
+        &str,
+        fn(&str, &std::path::Path) -> std::io::Result<()>,
+        fn(&str, &std::path::Path) -> std::io::Result<()>,
+    ) = (r"\\host\share", |t, l| std::os::windows::fs::symlink_file(t, l), |t, l| std::os::windows::fs::symlink_dir(t, l));
+    #[cfg(unix)]
+    let (remote, link_file, link_dir): (
+        &str,
+        fn(&str, &std::path::Path) -> std::io::Result<()>,
+        fn(&str, &std::path::Path) -> std::io::Result<()>,
+    ) = ("//host/share", |t, l| std::os::unix::fs::symlink(t, l), |t, l| std::os::unix::fs::symlink(t, l));
+    #[cfg(any(windows, unix))]
+    {
+        let sep = std::path::MAIN_SEPARATOR;
+        if link_file("Plan.docx", &dir.join("Local.docx")).is_err() {
+            eprintln!("no symbolic links here: skipped");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        assert_eq!(local_path(&dir.join("Local.docx")), Some(plan.clone()), "a link to a local file");
+        link_file(&format!("{remote}{sep}Plan.docx"), &dir.join("Net.docx")).unwrap();
+        link_file("Net.docx", &dir.join("Chain.docx")).unwrap();
+        link_dir(remote, &dir.join("Share")).unwrap();
+        link_file(&format!(r"\\?\UNC\host\share{sep}Plan.docx"), &dir.join("Verbatim.docx")).unwrap();
+        for name in ["Net.docx", "Chain.docx", "Verbatim.docx"] {
+            assert_eq!(local_path(&dir.join(name)), None, "{name}");
+        }
+        assert_eq!(local_path(&dir.join("Share").join("Plan.docx")), None, "a folder linked to another machine");
+        // A loop of links ends.
+        link_file("LoopB.docx", &dir.join("LoopA.docx")).unwrap();
+        link_file("LoopA.docx", &dir.join("LoopB.docx")).unwrap();
+        assert_eq!(local_path(&dir.join("LoopA.docx")), None, "a loop");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
