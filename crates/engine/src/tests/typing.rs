@@ -4360,3 +4360,22 @@ fn caret_after_page_break_is_on_next_page() {
     assert!((typed_at.top - c.top).abs() < 0.5, "typed caret {typed_at:?} vs empty caret {c:?}");
     assert!(typed_at.x > c.x);
 }
+
+/// Up and Down from the caret after a trailing page break (drawn on the next page) are not stuck:
+/// Up reaches the text before the break.
+#[test]
+fn caret_up_down_after_page_break_is_not_stuck() {
+    let mut s = typed("one");
+    run(&mut s, "text.pageBreak", json!({}));
+    let end = s.sel.focus.clone();
+    run(&mut s, "caret.up", json!({}));
+    assert!(s.sel.focus.off < end.off, "Up stayed at {:?}", s.sel.focus);
+    let up = s.sel.focus.clone();
+    run(&mut s, "caret.down", json!({}));
+    assert_eq!(s.sel.focus, end, "Down from the text before the break");
+    run(&mut s, "caret.up", json!({}));
+    assert_eq!(s.sel.focus, up, "Up after Down");
+    // Down from the caret drawn on the next page has no line below: focus stays.
+    run(&mut s, "caret.down", json!({}));
+    assert_eq!(s.sel.focus, end);
+}
