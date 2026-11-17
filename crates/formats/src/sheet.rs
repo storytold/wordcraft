@@ -14,6 +14,9 @@ pub const MAX_CELLS: usize = 2_000_000;
 /// once in the file but copied into every cell that uses it, so a small file could otherwise
 /// ask for many gigabytes. Cells past the budget are ignored.
 pub const MAX_TEXT_BYTES: usize = 64 << 20;
+/// Most bytes of cell text made from one sheet, cells written again included: a sheet can write
+/// one cell many times, and only its last text is kept.
+pub const MAX_TEXT_MADE: usize = 2 * MAX_TEXT_BYTES;
 /// Largest zip entry inflated.
 pub const MAX_ENTRY: u64 = 64 << 20;
 /// Most bytes inflated from one workbook.
@@ -207,14 +210,17 @@ fn cells_to_rows<C>(cells: &BTreeMap<CellRef, C>, fmt: impl Fn(&C) -> String) ->
 }
 
 /// Cells kept under the caps: cells past [`MAX_ROWS`] or [`MAX_COLS`] are ignored, and once a cell
-/// would take the cells kept past [`MAX_CELLS`] (blank cells before a value in its row count) or
-/// their text past [`MAX_TEXT_BYTES`], it and every cell after it are ignored.
+/// would take the cells kept past [`MAX_CELLS`] (blank cells before a value in its row count), their
+/// text past [`MAX_TEXT_BYTES`], or the text made past [`MAX_TEXT_MADE`], its row and every cell
+/// after it are ignored.
 #[derive(Default)]
 struct Grid {
     rows: BTreeMap<u32, BTreeMap<u32, String>>,
     /// Cells the rows hold, blank ones included: each row is as wide as its last value.
     cells: usize,
     text: usize,
+    /// Bytes of text made for cells, including text a later write of the same cell replaced.
+    made: usize,
     full: bool,
 }
 
@@ -226,6 +232,11 @@ impl Grid {
             return;
         }
         let s = value();
+        self.made = self.made.saturating_add(s.len());
+        if self.made > MAX_TEXT_MADE {
+            self.fill(row);
+            return;
+        }
         if s.is_empty() {
             // A cell written again as empty is empty.
             if let Some(cols) = self.rows.get_mut(&row) {
@@ -246,13 +257,22 @@ impl Grid {
         let cells = self.cells.saturating_add((col as usize + 1).saturating_sub(width));
         let text = self.text.saturating_sub(replaced).saturating_add(s.len());
         if cells > MAX_CELLS || text > MAX_TEXT_BYTES {
-            self.full = true;
-            log::warn!("sheet: cells past {MAX_CELLS} cells or {MAX_TEXT_BYTES} bytes of text are left out of the recipient list");
+            self.fill(row);
             return;
         }
         self.cells = cells;
         self.text = text;
         self.rows.entry(row).or_default().insert(col, s);
+    }
+
+    /// Ignore every cell from now on, and the cells kept so far in `row`, so that no recipient is
+    /// left with only some of its fields.
+    fn fill(&mut self, row: u32) {
+        self.full = true;
+        self.rows.remove(&row);
+        log::warn!(
+            "sheet: cells past {MAX_CELLS} cells, {MAX_TEXT_BYTES} bytes of text or {MAX_TEXT_MADE} bytes of text made are left out of the recipient list"
+        );
     }
 
     /// The rows with a value, each as wide as its last value.
@@ -330,6 +350,40 @@ mod tests {
         grid.insert(2_000, 999, || "1".to_string());
         assert!(!grid.full);
         assert_eq!(grid.cells, 1_000);
+    }
+
+    /// Text made for a cell written again still counts, so rewriting one cell cannot copy text
+    /// without end.
+    #[test]
+    fn rewrites_of_one_cell_stay_under_the_made_text_budget() {
+        let long = "x".repeat(MAX_CELL_CHARS);
+        let mut grid = Grid::default();
+        let mut made = 0usize;
+        for _ in 0..10_000 {
+            grid.insert(0, 0, || {
+                made += long.len();
+                long.clone()
+            });
+        }
+        assert!(grid.full);
+        assert!(made <= MAX_TEXT_MADE + MAX_CELL_CHARS, "{made} bytes made");
+        // The same through a sheet that repeats one row holding one long shared string.
+        let rows: String = (0..5_000).map(|_| r#"<row r="1"><c r="A1" t="s"><v>0</v></c></row>"#).collect();
+        let book = craft_xlsx::testing::workbook(&[("S", &rows)], &[&long]);
+        let (_, rows) = read_rows(&book, Pick::Index(0)).unwrap();
+        assert!(rows.is_empty(), "{} rows", rows.len());
+    }
+
+    /// The row in which the grid fills is left out whole.
+    #[test]
+    fn the_row_that_fills_the_grid_is_left_out() {
+        let mut grid = Grid::default();
+        grid.insert(0, 0, || "a".to_string());
+        grid.insert(1, 0, || "b".to_string());
+        grid.insert(1, 1, || "x".repeat(MAX_TEXT_BYTES));
+        grid.insert(2, 0, || "c".to_string());
+        assert!(grid.full);
+        assert_eq!(grid.into_rows(), [["a"]]);
     }
 
     #[test]
