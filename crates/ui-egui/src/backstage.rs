@@ -214,7 +214,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui, enter: f32) {
                 pad.show(ui, |ui| crate::rtl::root(ui, |ui| export_page(app, ui)));
                 return;
             }
-            egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+            // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
+        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                 pad.show(ui, |ui| {
                     crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
                         "home" => home_page(app, ui),
