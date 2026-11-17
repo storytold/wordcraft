@@ -323,21 +323,23 @@ const MATH_CACHE_MAX: usize = 1024;
 /// Math names longer than this (bytes) are resolved but never remembered.
 const MATH_KEY_MAX: usize = 256;
 
-/// Resolutions tagged with the [`FontDb::generation`] they were made at.
-type MathMemo = (u64, HashMap<String, (FaceRef, Option<Arc<MathTable>>)>);
+/// Resolutions tagged with the [`FontDb::generation`] they were made at and the document whose
+/// embedded fonts they could see ([`crate::word::memo_scope`]).
+type MathMemo = ((u64, u64), HashMap<String, (FaceRef, Option<Arc<MathTable>>)>);
 
 fn math_cache() -> &'static Mutex<MathMemo> {
     static CACHE: OnceLock<Mutex<MathMemo>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new((0, HashMap::new())))
+    CACHE.get_or_init(|| Mutex::new(((0, 0), HashMap::new())))
 }
 
 /// The face to set math in: `family` when installed and it has a `MATH` table, else the first
 /// installed substitute that has one, else `family` (or its text substitute) without one.
-/// Remembered until user fonts are added or removed ([`FontDb::generation`]).
+/// Remembered until user fonts are added or removed ([`FontDb::generation`]), and per document:
+/// one document's embedded math font (often a subset) is never another's.
 pub fn resolve_math(family: &str) -> (FaceRef, Option<Arc<MathTable>>) {
     let cache = math_cache();
     let db = FontDb::global();
-    let generation = db.generation();
+    let generation = crate::word::memo_scope(db);
     {
         let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
         if c.0 != generation {
@@ -431,6 +433,33 @@ mod tests {
         assert!(table.is_some());
         db.remove_user_font(fam).unwrap();
         assert_ne!(resolve_math(fam).0.family, fam, "a removed font must stop being used");
+    }
+
+    /// A math font one document embeds is that document's only, in either order: the memo never
+    /// hands one document's embedded face (often a subset) to another laid out after it with no
+    /// font change in between, nor another's substitute to the document that embeds the font.
+    #[test]
+    fn an_embedded_math_font_is_its_documents_only() {
+        use crate::fontdb::user::tests::renamed;
+        let db = FontDb::global();
+        for (k, fam) in ["Zz Math Doc 1", "Zz Math Doc 2"].into_iter().enumerate() {
+            let (embeds, other) = (crate::DocumentFonts::new_owner(), crate::DocumentFonts::new_owner());
+            db.add_document_fonts(vec![(with_math_table(&renamed("SourceSans3-Regular.ttf", fam)), fam.to_string())], embeds);
+            let in_doc = |owner: u64| {
+                let _doc = crate::DocumentFonts::enter(owner);
+                resolve_math(fam)
+            };
+            let order = if k == 0 { [embeds, other] } else { [other, embeds] };
+            for owner in order {
+                let (face, table) = in_doc(owner);
+                if owner == embeds {
+                    assert!(face.family == fam && table.is_some(), "{fam}: the embedding document gets its font");
+                } else {
+                    // It gets an installed math font (with its own table) or a text substitute.
+                    assert_ne!(face.family, fam, "{fam}: another document doesn't get it");
+                }
+            }
+        }
     }
 
     #[test]

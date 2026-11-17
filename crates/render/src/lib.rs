@@ -293,6 +293,9 @@ pub fn render_region(doc: &Document, page: &Page, w: u32, h: u32, view: Affine, 
 
 /// [`render_region`] with an explicit pixel cap (a small one in tests).
 fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affine, opts: &RenderOptions, max_pixels: u64) -> Rendered {
+    // Text resolved while drawing (watermarks, metafile text) sees the document's embedded fonts,
+    // as layout did.
+    let _fonts = wordcraft_fonts::DocumentFonts::enter(doc.embedded_fonts.0);
     let (w, h) = (w.clamp(1, MAX_SIDE), h.clamp(1, MAX_SIDE));
     let (cw, ch) = wordcraft_geom::fit_pixels(w, h, max_pixels);
     // Over the cap the whole picture is drawn smaller, not cropped.
@@ -1158,6 +1161,7 @@ pub fn render_area(doc: &Document, page: &Page, area: wordcraft_geom::Rect, scal
 /// Draw `items` (page points) alone, on nothing, over the page `area` (points) at `scale` px/pt:
 /// no paper, no watermark. A dragged object's preview.
 pub fn render_items(doc: &Document, items: &[Draw], area: wordcraft_geom::Rect, scale: f32, opts: &RenderOptions) -> Rendered {
+    let _fonts = wordcraft_fonts::DocumentFonts::enter(doc.embedded_fonts.0);
     let wordcraft_geom::Rect { x, y, w, h } = area;
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
     let (pw, ph) = (((w * scale).ceil() as u32).clamp(1, MAX_SIDE), ((h * scale).ceil() as u32).clamp(1, MAX_SIDE));

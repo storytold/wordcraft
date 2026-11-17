@@ -213,6 +213,30 @@ fn fonts_embedded_in_one_document_are_not_used_by_another() {
     assert!((end_x(&mut first) - mono).abs() < 0.01, "the embedding document keeps its font");
 }
 
+/// Text resolved while drawing rather than in layout (a watermark) sees its own document's
+/// embedded fonts too, on screen and in the PDF: a watermark in a font only the document embeds
+/// drew in the substitute while the document's text used the font.
+#[test]
+fn a_watermark_in_a_font_only_the_document_embeds_draws_in_that_font() {
+    const FAMILY: &str = "Embedded Wmark";
+    let font = renamed("JetBrainsMono-Regular.ttf", "JetBrains Mono", FAMILY);
+    let mut doc = crate::io::open_bytes("w.docx", &docx_embedding(FAMILY, Some((&font, "{00000000-0000-0000-0000-000000000000}")), "x")).unwrap();
+    assert_ne!(doc.embedded_fonts.0, 0, "the font belongs to the document");
+    // The body in the default font, so only the watermark can bring the embedded face in.
+    doc.body = wordcraft_doc::Document::from_text("x").body;
+    doc.settings.watermark = Some(wordcraft_doc::Watermark { text: "WMWMiiil".into(), font: FAMILY.into(), ..Default::default() });
+    let lay = wordcraft_layout::layout(&doc, &mut wordcraft_layout::LayoutCache::new(), &wordcraft_layout::LayoutOptions::default());
+    // The same document with its fonts' owner forgotten: the watermark falls back.
+    let mut orphan = doc.clone();
+    orphan.embedded_fonts = wordcraft_doc::EmbeddedFontsOwner(0);
+    let screen = |d: &wordcraft_doc::Document| wordcraft_render::render_page(d, &lay.pages[0], 0.5, &Default::default()).pixels;
+    assert_ne!(screen(&doc), screen(&orphan), "on screen the watermark draws in the embedded face");
+    let pdf = |d: &wordcraft_doc::Document| wordcraft_pdf::export_layout(d, &lay, &Default::default()).unwrap();
+    let names = |b: &[u8]| b.windows(13).any(|w| w == b"JetBrainsMono");
+    assert!(names(&pdf(&doc)), "the PDF embeds the document's font for the watermark");
+    assert!(!names(&pdf(&orphan)), "without the document's fonts it doesn't");
+}
+
 /// `font.missing`'s fonts, as "font>shownAs".
 fn missing_list(s: &mut Session) -> Vec<String> {
     let m = s.run("font.missing", &json!({})).unwrap();

@@ -25,6 +25,9 @@ pub fn export_layout(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Resu
 
 /// Validate selected pages and retry embedding failures with outlined fonts.
 fn export_layout_inner(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
+    // Text resolved while drawing (watermarks, metafile text) sees the document's embedded fonts,
+    // as layout did.
+    let _fonts = wordcraft_fonts::DocumentFonts::enter(doc.embedded_fonts.0);
     let mut adjusted = opts.clone();
     adjusted.tagged &= adjusted.sheet_copies <= 1;
     let opts = &adjusted;

@@ -512,13 +512,13 @@ fn fallback_list_cache() -> &'static Mutex<FallbackListMemo> {
     CACHE.get_or_init(|| Mutex::new(FallbackListMemo::default()))
 }
 
-/// Hash and byte length of `family`, used as a compact cache key for fallback lists.
 /// What the memoised lookups depend on: the database's generation and the document whose embedded
 /// fonts this thread sees ([`crate::DocumentFonts`]; another document's are invisible to it).
-fn memo_scope(db: &FontDb) -> (u64, u64) {
+pub(crate) fn memo_scope(db: &FontDb) -> (u64, u64) {
     (db.generation(), crate::DocumentFonts::current())
 }
 
+/// Hash and byte length of `family`, used as a compact cache key for fallback lists.
 fn family_list_key(family: &str) -> (u64, usize) {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();

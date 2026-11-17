@@ -169,6 +169,8 @@ impl FontDb {
         }
         let mut f = make_face(base.bytes.clone(), base.index, base.family.clone(), style.to_string(), base.legacy_family.clone(), coords)?;
         f.local_names = base.local_names.clone();
+        // An instance of a document's font belongs to that document too.
+        f.owner = base.owner;
         let f = Arc::new(f);
         self.faces.write().unwrap_or_else(std::sync::PoisonError::into_inner).push(f.clone());
         Some(f)
