@@ -1,6 +1,6 @@
 use super::{
-    Exporter, FaceRef, Fill, FillRule, KrillaGlyph, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_id, glyph_outlines,
-    left_to_right, norm, ok, paint_of, rgb, split_clusters, visual_order,
+    Exporter, FaceRef, Fill, FillRule, KrillaGlyph, Point, Rect, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_id,
+    glyph_outlines, left_to_right, norm, ok, paint_of, rect_path, rgb, split_clusters, visual_order,
 };
 
 /// How a run of glyphs is painted: its colour, opacity and synthetic bold and italic.
@@ -181,12 +181,11 @@ impl Exporter<'_> {
     }
 
     /// Draws a metafile text run as PDF text (outlines when the font cannot be embedded). `tf` maps
-    /// the run's own space (see [`PlacedItem::Text`]) to the page.
-    pub(crate) fn vector_text(&mut self, s: &mut Surface, t: &wordcraft_metafile::Text, tf: kurbo::Affine) {
-        let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
-        let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
+    /// its text space (`craft_metafile::Text::transform`) to the page.
+    pub(crate) fn vector_text(&mut self, s: &mut Surface, t: &craft_metafile::Text, tf: kurbo::Affine) {
+        let (face, shaped) = wordcraft_layout::metafile_text_run(t);
         let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
-        let Some(lay) = t.layout(face.upem, face.ascent, face.descent, &glyphs) else { return };
+        let Some(lay) = wordcraft_layout::layout_metafile_text(t, face.upem, face.ascent, face.descent, &glyphs) else { return };
         let font = self.font(&face);
         if font.is_none() && !self.outlined.contains(&face.id()) {
             return;
@@ -199,6 +198,15 @@ impl Exporter<'_> {
         let (paint, opacity) = paint_of(t.color);
         s.push_transform(&Transform::from_row(c[0], c[1], c[2], c[3], c[4], c[5]));
         s.set_stroke(None);
+        // An opaque background mode fills the character cells first.
+        if let Some(bg) = t.background {
+            let [x0, y0, x1, y1] = lay.cell.map(|v| v as f32);
+            if let Some(cell) = rect_path(&Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }) {
+                let (paint, opacity) = paint_of(bg);
+                s.set_fill(Some(Fill { paint: paint.into(), opacity, rule: FillRule::NonZero }));
+                s.draw_path(&cell);
+            }
+        }
         s.set_fill(Some(Fill { paint: paint.into(), opacity, rule: FillRule::NonZero }));
         match font {
             Some(font) => {

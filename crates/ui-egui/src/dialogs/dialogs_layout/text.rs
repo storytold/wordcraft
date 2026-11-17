@@ -50,22 +50,31 @@ impl LineNumbersForm {
 pub(super) fn line_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LineNumbersForm) -> bool {
     ui.checkbox(&mut f.on, tl!("Add line numbering"));
     ui.add_enabled_ui(f.on, |ui| {
-        crate::rtl::grid(ui, egui::Grid::new("lnum").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-            ui.label(tl!("Start at:"));
-            ui.add(egui::DragValue::new(&mut f.start).range(1..=32_767));
-            ui.end_row();
-            ui.label(tl!("From text:"));
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut f.auto_distance, tl!("Auto"));
-                ui.add_enabled(
-                    !f.auto_distance,
-                    egui::DragValue::new(&mut f.distance).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2),
-                );
+        crate::rtl::Table::new("lnum").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Start at:")));
+                r.cell(|ui| ui.add(egui::DragValue::new(&mut f.start).range(1..=32_767)));
             });
-            ui.end_row();
-            ui.label(tl!("Count by:"));
-            ui.add(egui::DragValue::new(&mut f.count_by).range(1..=100));
-            ui.end_row();
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("From text:")));
+                r.cell(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut f.auto_distance, tl!("Auto"));
+                        ui.add_enabled(
+                            !f.auto_distance,
+                            egui::DragValue::new(&mut f.distance)
+                                .speed(0.01)
+                                .range(0.0..=22.0 * 72.0 / unit().pt_per_unit())
+                                .measure(unit())
+                                .max_decimals(2),
+                        );
+                    });
+                });
+            });
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Count by:")));
+                r.cell(|ui| ui.add(egui::DragValue::new(&mut f.count_by).range(1..=100)));
+            });
         });
         heading(ui, "Numbering:");
         for (v, l) in [("restartPage", "Restart Each Page"), ("restartSection", "Restart Each Section"), ("continuous", "Continuous")] {
@@ -112,16 +121,24 @@ impl HyphenationForm {
 pub(super) fn hyphenation_ui(app: &mut WordApp, ui: &mut Ui, f: &mut HyphenationForm) -> bool {
     ui.checkbox(&mut f.auto, tl!("Automatically hyphenate document"));
     ui.checkbox(&mut f.caps, tl!("Hyphenate words in CAPS"));
-    crate::rtl::grid(ui, egui::Grid::new("hyph").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-        ui.label(tl!("Hyphenation zone:"));
-        ui.add(egui::DragValue::new(&mut f.zone).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2));
-        ui.end_row();
-        ui.label(tl!("Limit consecutive hyphens to:"));
-        let no_limit = tl!("No limit").to_string();
-        ui.add(
-            egui::DragValue::new(&mut f.limit).range(0..=99).custom_formatter(move |n, _| if n < 0.5 { no_limit.clone() } else { format!("{n:.0}") }),
-        );
-        ui.end_row();
+    crate::rtl::Table::new("hyph").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Hyphenation zone:")));
+            r.cell(|ui| {
+                ui.add(egui::DragValue::new(&mut f.zone).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2))
+            });
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Limit consecutive hyphens to:")));
+            r.cell(|ui| {
+                let no_limit = tl!("No limit").to_string();
+                ui.add(
+                    egui::DragValue::new(&mut f.limit)
+                        .range(0..=99)
+                        .custom_formatter(move |n, _| if n < 0.5 { no_limit.clone() } else { format!("{n:.0}") }),
+                )
+            });
+        });
     });
     ui.add_space(6.0);
     let manual = ui.button(tl!("Manual…")).clicked();
@@ -303,6 +320,16 @@ pub struct LanguageForm {
     pub lang: String,
     pub no_proof: bool,
     pub detect: bool,
+    /// "Apply to the whole document": OK sends `scope: "document"` (every story), not the selection.
+    pub whole_document: bool,
+    /// The language and Do-not-check state the dialog opened with, to tell what the user changed.
+    #[serde(skip)]
+    pub initial: (String, bool),
+    /// The Do-not-check box was clicked (even back to where it started). A whole-document OK sends
+    /// `noProof` only then: the caret's value alone says nothing about runs that differ elsewhere,
+    /// but a click is a request to mark the whole document that way (#3518).
+    #[serde(skip)]
+    pub proof_touched: bool,
 }
 
 impl LanguageForm {
@@ -311,12 +338,36 @@ impl LanguageForm {
         let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.as_deref());
         let here = s.doc.styles.resolve_char(style, &s.typing_props());
         let lang = here.lang.unwrap_or_else(|| "en-US".into());
-        LanguageForm { lang, no_proof: here.no_proof, detect: s.prefs.detect_language }
+        LanguageForm {
+            initial: (lang.clone(), here.no_proof),
+            lang,
+            no_proof: here.no_proof,
+            detect: s.prefs.detect_language,
+            whole_document: false,
+            proof_touched: false,
+        }
     }
 
     /// `review.language` parameters for OK.
     pub fn params(&self) -> Value {
-        json!({"lang": self.lang, "noProof": self.no_proof, "detect": self.detect})
+        if !self.whole_document {
+            return json!({"lang": self.lang, "noProof": self.no_proof, "detect": self.detect});
+        }
+        // Whole document: the caret's values must not flatten what differs elsewhere, so send only
+        // what was changed. With no edits at all the language goes (never the engine's en-US default).
+        let (lang_changed, proof_touched) = (self.lang != self.initial.0, self.proof_touched);
+        let mut v = json!({"scope": "document", "detect": self.detect});
+        if let Some(m) = v.as_object_mut() {
+            if lang_changed || !proof_touched {
+                m.insert("lang".into(), json!(self.lang));
+            }
+            // Only a clicked box is sent: the caret's value untouched says nothing about runs that
+            // differ elsewhere, and resending it would flatten them.
+            if proof_touched {
+                m.insert("noProof".into(), json!(self.no_proof));
+            }
+        }
+        v
     }
 }
 
@@ -326,7 +377,7 @@ pub(super) fn language_name(tag: &str) -> String {
 }
 
 pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) -> bool {
-    ui.label(tl!("Mark selected text as:"));
+    ui.label(if f.whole_document { tl!("Mark the whole document as:") } else { tl!("Mark selected text as:") });
     let list = crate::ribbon::language_list(&f.lang);
     egui::Frame::NONE.stroke(egui::Stroke::new(1.0, crate::theme::Tokens::get(ui.ctx()).border_strong)).inner_margin(4.0).show(ui, |ui| {
         egui::ScrollArea::vertical().max_height(220.0).min_scrolled_height(220.0).show(ui, |ui| {
@@ -341,8 +392,11 @@ pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) 
         });
     });
     ui.add_space(4.0);
-    ui.checkbox(&mut f.no_proof, tl!("Do not check spelling or grammar"));
+    if ui.checkbox(&mut f.no_proof, tl!("Do not check spelling or grammar")).clicked() {
+        f.proof_touched = true;
+    }
     ui.checkbox(&mut f.detect, tl!("Detect language automatically"));
+    ui.checkbox(&mut f.whole_document, tl!("Apply to the whole document"));
     ui.add_space(4.0);
     let set_default = ui.button(tl!("Set As Default")).clicked();
     if set_default && run(app, "review.language", json!({"lang": f.lang, "default": true, "detect": f.detect})) {
