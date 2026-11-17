@@ -230,6 +230,7 @@ pub fn linear_to_latex(linear: &str) -> String {
 fn linear_to_latex_at(linear: &str, depth: usize) -> String {
     let chars: Vec<char> = linear.chars().collect();
     let parens = closers(&chars, '(', ')');
+    let brackets = closers(&chars, '〖', '〗');
     let mut o = String::new();
     let mut i = 0;
     let sub = |s: &str| if depth < MAX_NEST { linear_to_latex_at(s, depth + 1) } else { escape_math_text(s) };
@@ -304,6 +305,16 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
                 o.push('\\');
                 o.push(c);
             }
+            // Invisible brackets (`〖a^b〗^c`, a script base that isn't simple) only group: a TeX
+            // group. One without its partner shows nothing and is dropped.
+            '〖' => {
+                if let Some((inner, end)) = balanced(&chars, &brackets, i) {
+                    o.push_str(&format!("{{{}}}", sub(&inner)));
+                    i = end;
+                    continue;
+                }
+            }
+            '〗' => {}
             '{' => o.push_str("\\{"),
             '}' => o.push_str("\\}"),
             '~' => o.push_str("\\sim "),
@@ -327,7 +338,7 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
 
 fn escape_math_text(s: &str) -> String {
     let mut o = String::new();
-    for c in s.chars().filter(|c| !matches!(c, '{' | '}' | '\\' | '$' | '%' | '#' | '&') && !c.is_control()) {
+    for c in s.chars().filter(|c| !matches!(c, '{' | '}' | '\\' | '$' | '%' | '#' | '&' | '〖' | '〗') && !c.is_control()) {
         // Never `^^` (see `linear_to_latex_at`).
         if c == '^' && o.ends_with('^') {
             continue;

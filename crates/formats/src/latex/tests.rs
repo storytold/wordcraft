@@ -471,3 +471,25 @@ fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
     assert_eq!(t.rows.first().map(Vec::len), Some(wordcraft_doc::table::MAX_COLS));
     assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
 }
+
+#[test]
+fn a_script_on_a_script_exports_as_a_tex_group() {
+    use wordcraft_doc::math::{MNode, MRun, ScriptKind, to_linear};
+    let a = |t: &str| vec![MNode::Run(MRun::new(t))];
+    let sup = |base, s| MNode::Script { kind: ScriptKind::Sup, base, sub: Vec::new(), sup: s };
+    // sSup(sSup(a, b), c), as Word files hold it: the docx reader keeps `to_linear` of it.
+    let linear = to_linear(&[sup(vec![sup(a("a"), a("b"))], a("c"))]);
+    assert_eq!(linear, "〖a^b〗^c");
+    let mut d = Document::new();
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, wordcraft_doc::para::InlineObject::Equation { linear, display: false, math: Default::default() }, &Default::default())
+        .unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let tex = export(&d);
+    // The preamble sets up no Unicode math font, so `〖` would stop pdflatex.
+    assert!(tex.contains("${a^b}^c$") && !tex.contains('〖') && !tex.contains('〗'), "{tex}");
+    // Invisible brackets anywhere are a TeX group; one left unmatched is dropped.
+    for (linear, tex) in [("〖a+b〗^2", "{a+b}^2"), ("x^〖a〗", "x^{a}"), ("〖〖a〗^b〗^c", "{{a}^b}^c"), ("a〗b〖c", "abc")] {
+        assert_eq!(linear_to_latex(linear), tex, "{linear}");
+    }
+}

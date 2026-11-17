@@ -72,3 +72,10 @@ fn an_explicit_delimiter_as_the_base_is_kept() {
     // Grouping still leaves none.
     assert_eq!(parse_linear("〖a〗^2"), vec![sup(a("a"), a("2"))]);
 }
+
+#[test]
+fn invisible_brackets_before_a_space_stay_a_delimiter() {
+    // Only `〗` right before `^`/`_` makes them a script base; after a space they are kept as typed.
+    let n = parse_linear("〖a+b〗 ^2");
+    assert!(matches!(&n[..], [MNode::Delim { beg: None, end: None, .. }, ..]), "{n:?}");
+}
