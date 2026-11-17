@@ -48,6 +48,17 @@ fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// The heading of a proofing issue's context menu, in the interface language like the rest of
+/// the menu: a spelling issue's own message is in the text's language (craft-proof's, "Faute
+/// d'orthographe possible" for French text), so it says Possible spelling mistake instead.
+/// English grammar rules' messages are catalog keys; other languages' rules explain in their own.
+pub(crate) fn issue_heading(issue: &serde_json::Value) -> String {
+    if issue.get("kind").and_then(|k| k.as_str()) == Some("spelling") {
+        return tl!("Possible spelling mistake").to_string();
+    }
+    tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).to_string()
+}
+
 pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if app.session.math.is_some() {
         return equation_menu(app, ui);
@@ -67,8 +78,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
-        // English rules' messages are catalog keys; Polish rules already explain in Polish.
-        ui.label(egui::RichText::new(tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or(""))).small().weak());
+        ui.label(egui::RichText::new(issue_heading(&issue)).small().weak());
         if sugg.is_empty() {
             ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
         }
