@@ -7,6 +7,13 @@ use wordcraft_doc::{Path, Pos, StoryRef};
 use super::{delete_selection, find_pattern, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+/// Browsers reserve Mod+Shift+C for their inspector. Keep the desktop binding, but
+/// advertise a web alternative through the same registry/keymap as every other command.
+/// Mod+Alt+C already inserts copyright, and Mod+Alt+Shift+V is Keep Text Only.
+fn copy_format_shortcut(web: bool) -> &'static str {
+    if web { "Mod+Alt+Shift+C / Mod+Shift+C" } else { "Mod+Shift+C" }
+}
+
 /// Undo several steps at once: the Undo button's list (#701). `count` is validated here and
 /// clamped to the undo depth, so hostile numbers never reach the stack.
 fn undo_to(s: &mut Session, v: &Value) -> CmdResult {
@@ -134,7 +141,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .key(super::mac_or("Mod+Shift+G / Mod+PageUp", "Mod+PageUp"))
         .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
         .pure(),
-        CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace).params(r#"{"text": string, "with": string, …options of edit.replaceAll}"#),
+        CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace).params(
+            r#"{"text": string, "with": string, …options of edit.replaceAll} — Word's Replace button: replaces the match only when it is already selected, then selects the next one. The first call on a caret replaces nothing; call again to replace the selected match, or use edit.replaceAll for every match. Returns {"replaced": 0 | 1, "remaining": n, "selected": {start, end} | null}"#,
+        ),
         // Ctrl+H, Home › Replace: the Find and Replace dialog on its Replace tab (#712). Opening
         // it changes nothing, so it is its own command and never marks the document edited.
         CommandSpec::new("edit.findReplace", "Find and Replace", "Home › Editing", |s, v| {
@@ -165,10 +174,12 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.formatPainter", "Format Painter", "Home › Clipboard", painter).params(r#"{"sticky"?: bool}"#).pure(),
         CommandSpec::new("edit.copyFormat", "Copy Formatting", "Home › Clipboard", |s, _| {
-            painter_pick(s);
+            // One format buffer, as in Word: Copy Formatting replaces an armed Format Painter.
+            s.painter = None;
+            s.copied_format = Some(picked_format(s));
             sel_result(s)
         })
-        .key("Mod+Shift+C")
+        .key(copy_format_shortcut(cfg!(target_arch = "wasm32")))
         .pure(),
         CommandSpec::new("edit.pasteFormat", "Paste Formatting", "Home › Clipboard", paste_format).key("Mod+Shift+V"),
     ]
@@ -737,12 +748,21 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
     let (a, b) = s.sel.ordered();
-    // Replace the current match if selected, then move to the next.
+    // Replace the current match if selected, then move to the next. The result says which
+    // happened (#6877): a first call that only selects a match reads as `replaced: 0`.
+    let mut replaced = 0;
     if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
         super::paste_text(s, &f.rep.unwrap_or_default())?;
+        replaced = 1;
     }
-    let _ = step(s, 1);
-    Ok(json!({"remaining": search(s, story)?.len()}))
+    let selected = match step(s, 1) {
+        Ok(_) => {
+            let (start, end) = s.sel.ordered();
+            json!({"start": pos_json(&start), "end": pos_json(&end)})
+        }
+        Err(_) => Value::Null,
+    };
+    Ok(json!({"replaced": replaced, "remaining": search(s, story)?.len(), "selected": selected}))
 }
 
 /// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
@@ -825,11 +845,21 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-fn painter_pick(s: &mut Session) {
+/// The character and paragraph formatting at the start of the selection.
+fn picked_format(s: &Session) -> (wordcraft_doc::props::CharProps, wordcraft_doc::props::ParaProps) {
     let f = s.sel.ordered().0;
     // A symbol's own font isn't formatting to paint onto text.
-    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol()).unwrap_or_default();
-    let para = s.doc.para_at(&f).map(|p| p.props.clone()).unwrap_or_default();
+    // Formatting only: not the source's hyperlink or revision marks (#5616).
+    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol().formatting()).unwrap_or_default();
+    let para = s.doc.para_at(&f).map(|p| p.props.clone().formatting()).unwrap_or_default();
+    (chr, para)
+}
+
+fn painter_pick(s: &mut Session) {
+    let (chr, para) = picked_format(s);
+    // One format buffer, as in Word: the pick is also what the next Paste Formatting applies,
+    // and stays after the brush is used up or cancelled.
+    s.copied_format = Some((chr.clone(), para.clone()));
     s.painter = Some((chr, para, false));
 }
 
@@ -845,24 +875,28 @@ fn painter(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"active": true}))
 }
 
-/// Apply the format painter's formatting to the selection.
+/// Apply the format painter's formatting to the selection, or else what Copy Formatting picked
+/// up (which stays for the next Paste Formatting).
 fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
-    let Some((chr, para, sticky)) = s.painter.clone() else { return Err(CmdError::Failed("no formatting copied".into())) };
+    let (chr, para, sticky) = match (s.painter.clone(), s.copied_format.clone()) {
+        (Some(brush), _) => brush,
+        (None, Some((chr, para))) => (chr, para, true),
+        (None, None) => return Err(CmdError::Failed("no formatting copied".into())),
+    };
     let (a, b) = s.sel.ordered();
     if a == b {
         // No selection: apply paragraph formatting (and word formatting like Word).
         let f = s.sel.focus.clone();
         if let Some(pp) = s.doc.para_at(&f) {
             let (x, y) = pp.word_at(f.off);
-            s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: y, ..f.clone() }, &|c| *c = chr.cleared().overlaid(&chr))?;
+            // Word selection includes trailing spaces; a painter click formats just the word,
+            // matching the ordinary collapsed-caret formatting target.
+            let word_end = pp.text.get(x..y).map(|word| x + word.trim_end().len()).unwrap_or(y);
+            s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: word_end, ..f.clone() }, &|c| *c = c.cleared().overlaid(&chr))?;
         }
         s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
     } else {
-        s.doc.format_range(&a, &b, &|c| {
-            let link = c.link.clone();
-            *c = c.cleared().overlaid(&chr);
-            c.link = link;
-        })?;
+        s.doc.format_range(&a, &b, &|c| *c = c.cleared().overlaid(&chr))?;
         if a.path != b.path || a.off == 0 {
             s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
         }
@@ -871,4 +905,50 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
         s.painter = None;
     }
     sel_result(s)
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+    use crate::{KeyMap, Registry};
+
+    #[test]
+    fn copy_format_web_alias_is_unique_and_keeps_existing_shortcuts() {
+        for web in [false, true] {
+            let mut commands = super::super::registry().all().to_vec();
+            let copy = commands.iter_mut().find(|c| c.id == "edit.copyFormat").unwrap();
+            copy.shortcut = copy_format_shortcut(web);
+            let registry = Registry::new(commands);
+            let mut seen = std::collections::BTreeSet::new();
+            for command in registry.all() {
+                for key in command.shortcut.split(" / ").filter_map(crate::keymap::normalize) {
+                    assert!(seen.insert(key.clone()), "duplicate binding: {key}");
+                }
+            }
+            let keys = KeyMap::default();
+            let resolve = |key| keys.resolve(&registry, key).map(|c| c.id);
+            assert_eq!(resolve("Mod+Shift+C"), Some("edit.copyFormat"));
+            assert_eq!(resolve("Mod+Alt+Shift+C"), web.then_some("edit.copyFormat"));
+            assert_eq!(resolve("Mod+Shift+V"), Some("edit.pasteFormat"));
+            assert_eq!(resolve("Mod+Alt+Shift+V"), Some("edit.pasteText"));
+            if !cfg!(target_os = "macos") {
+                assert_eq!(resolve("Mod+Alt+C"), Some("text.copyright"));
+            }
+        }
+    }
+
+    #[test]
+    fn copy_format_web_alias_respects_user_removal_and_reassignment() {
+        let mut commands = super::super::registry().all().to_vec();
+        commands.iter_mut().find(|c| c.id == "edit.copyFormat").unwrap().shortcut = copy_format_shortcut(true);
+        let registry = Registry::new(commands);
+        let mut keys = KeyMap::default();
+        assert_eq!(keys.keys_for(&registry, "edit.copyFormat").first().map(String::as_str), Some("Mod+Alt+Shift+C"));
+        assert!(keys.remove(&registry, "edit.copyFormat", "Mod+Alt+Shift+C").unwrap());
+        assert!(keys.resolve(&registry, "Mod+Alt+Shift+C").is_none());
+        keys.assign(&registry, "format.bold", "Mod+Alt+Shift+C").unwrap();
+        let restored = KeyMap::from_value(&serde_json::to_value(&keys).unwrap());
+        assert_eq!(restored.resolve(&registry, "Mod+Alt+Shift+C").map(|c| c.id), Some("format.bold"));
+        assert_eq!(restored.resolve(&registry, "Mod+Shift+C").map(|c| c.id), Some("edit.copyFormat"));
+    }
 }
