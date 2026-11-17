@@ -6,8 +6,8 @@ use super::page::PageFrame;
 use super::placed::Placed;
 use super::table_flow::below;
 use super::{
-    Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, StoryRef, TableFloat, TextDirection,
-    Wrap, WrapText, para, table,
+    Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, Rgb, StoryRef, TableFloat,
+    TextDirection, Wrap, WrapText, para, table,
 };
 
 /// Cell identity is independent of optional table-style formatting.
@@ -329,7 +329,16 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 if above {
                     edges.up = (y + lead - prev_end).max(0.0);
                 }
+                let pushed = items.len();
                 prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
+                // In a cell, shading that reaches the text column's edge runs on over the cell
+                // margin to the cell's edge, so the cell's own fill doesn't show beside it (Word).
+                // A side with a border keeps its shading inside the border (Word).
+                if let (Some((el, er)), Some(shade)) = (cell_edges, pl.rp.shading) {
+                    let b = pl.rp.borders.unwrap_or_default();
+                    let edges = (b.left.is_none_or(|l| !l.is_visible()).then_some(el), b.right.is_none_or(|r| !r.is_visible()).then_some(er));
+                    shade_to_cell_edges(items.get_mut(pushed..).unwrap_or_default(), shade, width, edges);
+                }
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
                     let at = ObjFrame {
@@ -651,6 +660,27 @@ impl Edges {
     pub(crate) fn own(pl: &ParaLayout, l0: usize, l1: usize) -> Edges {
         let b = pl.rp.borders.unwrap_or_default();
         Edges { top: if l0 == 0 { border_room(b.top) } else { 0.0 }, bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 }, up: 0.0 }
+    }
+}
+
+/// Runs a cell paragraph's shading fills (colour `shade`) that reach the text column's edge on
+/// to the cell's edges (`None`: a side that is not run on); other fills are left alone.
+fn shade_to_cell_edges(items: &mut [Placed], shade: Rgb, width: f32, (left, right): (Option<f32>, Option<f32>)) {
+    for it in items {
+        let Placed::Fill { rect, color } = it else { continue };
+        if *color != shade {
+            continue;
+        }
+        let l = match left {
+            Some(left) if rect.x <= 0.01 => rect.x.min(left),
+            _ => rect.x,
+        };
+        let r = rect.right();
+        let r = match right {
+            Some(right) if r >= width - 0.01 => r.max(right),
+            _ => r,
+        };
+        *rect = Rect::new(l, rect.y, r - l, rect.h);
     }
 }
 
