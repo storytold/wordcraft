@@ -93,9 +93,10 @@ craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93
 miniz_oxide = "0.9"
 cfb = "0.15"
 # Legacy text encodings (GBK/GB18030, Big5, Shift_JIS, EUC-KR, single-byte code pages) for plain
-# text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause) and its
-# detector chardetng (Apache-2.0 OR MIT), both pure Rust (Firefox's).
+# text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause), pure
+# Rust (Firefox's). Detection is craft-mime's `detect` feature.
 encoding_rs = "0.8"
+# chardetng (Apache-2.0 OR MIT): only the formats test oracle for the old detector uses it directly.
 chardetng = "1"
 # Password-protected (agile-encrypted) Word documents: pure-Rust RustCrypto primitives.
 aes = "0.9"
