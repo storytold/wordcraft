@@ -92,6 +92,8 @@ struct Scan {
     j: usize,
     /// Tab cluster, stop, and x where the tab started.
     pending_tab: Option<(usize, TabStop, f32)>,
+    /// The text after a pending decimal tab looked at so far for its '.'.
+    decimal: Option<DecimalScan>,
     /// The width of the spaces so far on this line.
     space_w: f32,
     has_tab: bool,
@@ -109,21 +111,19 @@ fn has_content(pl: &ParaLayout, c0: usize, j: usize) -> bool {
 /// control's start, a bookmark) and floating objects' anchors take no room and don't count (Word:
 /// a picture a little wider than the line, after an anchor, stays on the first line rather than
 /// leaving the anchor a line of its own).
-fn takes_room(c: &Cluster) -> bool {
+pub(crate) fn takes_room(c: &Cluster) -> bool {
     c.kind != ClKind::Marker && !(matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
 }
 
-/// The width up to the first '.' of the text after the tab at `tj`, up to cluster `j`.
-fn width_to_decimal(pl: &ParaLayout, tj: usize, j: usize) -> Option<f32> {
-    let mut w = 0.0;
-    for k in tj + 1..=j {
-        let cc = pl.clusters.get(k)?;
-        if pl_text_at(cc) {
-            return Some(w);
-        }
-        w += cc.adv;
-    }
-    None
+/// How far the text after a decimal tab has been looked at for its first '.' (see
+/// [`Scan::width_to_decimal`]): the tab, the next cluster to look at, the width before it, and
+/// whether that cluster is the '.'.
+#[derive(Clone, Copy, Default)]
+struct DecimalScan {
+    tab: usize,
+    next: usize,
+    width: f32,
+    found: bool,
 }
 
 /// The objects' exclusions mirrored across a line of `width`, for a right-to-left paragraph.
@@ -279,6 +279,7 @@ impl<'e> Breaker<'e> {
             end: LineEnd::Para,
             j: self.i,
             pending_tab: None,
+            decimal: None,
             space_w: 0.0,
             has_tab: false,
             skip: false,
@@ -297,6 +298,9 @@ impl<'e> Breaker<'e> {
         };
         let end = lab.x + lab.width;
         match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
+            // An empty label (a "none" level with no text) that ends right at the left indent takes
+            // no tab: the text starts there, as in Word (#4985), and not at the next stop.
+            LevelSuffix::Tab if lab.width <= 0.01 && (end - self.rp.indent_left).abs() <= 0.01 => end,
             LevelSuffix::Tab => {
                 let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at, self.tab_origin).pos;
                 // The level's own tab stop after the number, when it comes first.
@@ -438,8 +442,10 @@ impl<'e> Breaker<'e> {
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                 } else {
                     ex.obj_asc = ex.obj_asc.max(c.obj_h);
-                    // A lowered picture reaches below the baseline.
-                    ex.obj_desc = ex.obj_desc.max(c.obj_d);
+                    // A lowered picture reaches below the baseline, with exact spacing no further
+                    // than its height (the line's box is fixed; its baseline stays where it was).
+                    let reach = if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { c.obj_d.min(c.obj_h + c.obj_d) } else { c.obj_d };
+                    ex.obj_desc = ex.obj_desc.max(reach);
                     (st.ascent, st.descent)
                 }
             } else {
@@ -912,6 +918,29 @@ impl Scan {
         false
     }
 
+    /// The width up to the first '.' of the text after the tab at `tj`, up to cluster `j`. The
+    /// text is shifted after each of its clusters, so the clusters already looked at are not
+    /// walked again: a long run without a '.' after a decimal tab is looked at once, not once
+    /// per cluster.
+    fn width_to_decimal(&mut self, pl: &ParaLayout, tj: usize, j: usize) -> Option<f32> {
+        let start = DecimalScan { tab: tj, next: tj + 1, width: 0.0, found: false };
+        let d = self.decimal.get_or_insert(start);
+        if d.tab != tj || d.next > j.saturating_add(1) {
+            *d = start;
+        }
+        while !d.found && d.next <= j {
+            crate::work::steps(1);
+            let cc = pl.clusters.get(d.next)?;
+            if pl_text_at(cc) {
+                d.found = true;
+            } else {
+                d.width += cc.adv;
+                d.next += 1;
+            }
+        }
+        d.found.then_some(d.width)
+    }
+
     /// Text after a decimal/centre/right tab shifts as it grows.
     fn shift_pending_tab(&mut self, pl: &mut ParaLayout) {
         let Some((tj, stop, tx)) = self.pending_tab else { return };
@@ -920,7 +949,7 @@ impl Scan {
             TabAlign::Right => stop.pos - tx - seg_w,
             TabAlign::Center => stop.pos - tx - seg_w / 2.0,
             // Width up to the first '.' in the segment.
-            TabAlign::Decimal => stop.pos - tx - width_to_decimal(pl, tj, self.j).unwrap_or(seg_w),
+            TabAlign::Decimal => stop.pos - tx - self.width_to_decimal(pl, tj, self.j).unwrap_or(seg_w),
             _ => 0.0,
         };
         let shift = shift.max(0.0);
