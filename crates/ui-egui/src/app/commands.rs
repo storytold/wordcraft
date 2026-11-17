@@ -417,11 +417,21 @@ impl WordApp {
             // A file newly listed here may be one moved outside WordCraft: an entry with its
             // name whose path is gone is that file's old place (#5434).
             #[cfg(not(target_arch = "wasm32"))]
-            if !self.ui.recent.contains(&p) {
+            // Only an entry whose file is confirmed gone while its folder is reachable counts;
+            // an unplugged drive, offline share or stat error keeps the entry.
+            {
                 let name = std::path::Path::new(&p).file_name().map(std::ffi::OsStr::to_os_string);
                 self.ui.recent.retain(|r| {
+                    if *r == p {
+                        return true;
+                    }
                     let r = std::path::Path::new(r);
-                    name.is_none() || r.file_name() != name.as_deref() || r.exists()
+                    if name.is_none() || r.file_name() != name.as_deref() {
+                        return true;
+                    }
+                    let gone = matches!(r.try_exists(), Ok(false));
+                    let folder_reachable = r.parent().is_some_and(|d| d.try_exists().unwrap_or(false));
+                    !(gone && folder_reachable)
                 });
             }
             self.ui.recent.retain(|r| *r != p);

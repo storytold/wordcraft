@@ -8594,3 +8594,30 @@ fn opening_a_moved_file_by_browse_replaces_its_recent_entry() {
     assert!(c.ui.recent.contains(&s(&other)), "{:?}", c.ui.recent);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn same_name_recent_entry_with_missing_folder_is_kept() {
+    let dir = scratch("unavailable-recent");
+    let (new_dir, gone_dir) = (dir.join("B"), dir.join("unplugged"));
+    std::fs::create_dir_all(&new_dir).unwrap();
+    let s = |p: &std::path::Path| p.to_string_lossy().to_string();
+    let unavailable = gone_dir.join("notes.docx");
+    let created = new_dir.join("notes.docx");
+
+    // Open a different same-name file.
+    let mut a = typed();
+    a.run("file.save", json!({"path": s(&created)})).unwrap();
+    let mut b = app();
+    b.ui.recent = vec![s(&unavailable)];
+    let document = b.session.document_id();
+    b.finish_pick(crate::file_dialogs::AfterPick::OpenDocument { document }, Some(s(&created))).unwrap();
+    assert_eq!(b.ui.recent, vec![s(&created), s(&unavailable)]);
+
+    // Save As to a new folder.
+    let mut c = typed();
+    c.ui.recent = vec![s(&unavailable)];
+    c.run("file.save", json!({"path": s(&created)})).unwrap();
+    assert_eq!(c.ui.recent, vec![s(&created), s(&unavailable)]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
