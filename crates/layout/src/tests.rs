@@ -5046,6 +5046,89 @@ fn repeated_header_moves_with_the_first_row_that_does_not_fit() {
     assert_eq!(rows_per_page(40.0), vec![vec![], vec![0, 1, 2]]);
 }
 
+/// #6870: a table whose rows can't split and are all kept with the next (keep with next on the
+/// paragraphs of every row, the usual way to keep a short table on one page) moves to the next
+/// page whole when it doesn't fit, its repeated header row with it: the header row is never left
+/// alone at the foot of a page. Swept across the page break.
+#[test]
+fn a_repeated_header_moves_on_with_rows_kept_with_the_next() {
+    let doc = |fillers: usize| {
+        let mut d = Document::new();
+        for i in 0..fillers {
+            let mut p = wordcraft_doc::Paragraph::with_text(&format!("Filler {i}"), Default::default());
+            p.props.space_after = Some(0.0);
+            d.body.push(wordcraft_doc::para_block(p));
+        }
+        let mut t = Table::new(9, 2, 468.0);
+        for (ri, row) in t.rows.iter_mut().enumerate() {
+            row.props.header = ri == 0;
+            row.props.cant_split = true;
+            for cell in &mut row.cells {
+                let mut p = wordcraft_doc::Paragraph::with_text(&format!("Row {ri}"), Default::default());
+                p.props.keep_next = Some(true);
+                cell.blocks = vec![wordcraft_doc::para_block(p)];
+            }
+        }
+        d.insert_block(StoryRef::Body, &Path::top(d.body.len()), wordcraft_doc::Block::Table(t)).unwrap();
+        d
+    };
+    // The pages the table was found on, over the sweep.
+    let mut on_pages = std::collections::BTreeSet::new();
+    for fillers in 1..60 {
+        let pages: Vec<Vec<usize>> = lay(&doc(fillers))
+            .pages
+            .iter()
+            .map(|p| p.items.iter().filter_map(|i| if let Placed::Cell { row, cell: 0, .. } = i { Some(*row) } else { None }).collect())
+            .collect();
+        for (n, rows) in pages.iter().enumerate() {
+            assert!(rows.is_empty() || rows.iter().any(|r| *r != 0), "{fillers} fillers: page {} holds only the header row: {pages:?}", n + 1);
+        }
+        let with_rows: Vec<usize> = (0..pages.len()).filter(|n| !pages[*n].is_empty()).collect();
+        let [page] = with_rows[..] else { panic!("{fillers} fillers: the kept table stays on one page: {pages:?}") };
+        assert_eq!(pages[page], (0..9).collect::<Vec<usize>>(), "{fillers} fillers: every row, once");
+        on_pages.insert(page);
+    }
+    assert_eq!(on_pages.into_iter().collect::<Vec<_>>(), [0, 1], "the sweep moves the table across the page break");
+}
+
+/// #6870 review: rows kept with the next that are taller together than a page under the
+/// repeated header can't move on whole: they still run across the pages, every row once, and no
+/// page holds only the header row.
+#[test]
+fn rows_kept_with_the_next_taller_than_a_page_still_run_across_pages() {
+    let doc = |fillers: usize| {
+        let mut d = Document::new();
+        for i in 0..fillers {
+            let mut p = wordcraft_doc::Paragraph::with_text(&format!("Filler {i}"), Default::default());
+            p.props.space_after = Some(0.0);
+            d.body.push(wordcraft_doc::para_block(p));
+        }
+        let mut t = Table::new(61, 1, 468.0);
+        for (ri, row) in t.rows.iter_mut().enumerate() {
+            row.props.header = ri == 0;
+            row.props.cant_split = true;
+            let mut p = wordcraft_doc::Paragraph::with_text(&format!("Row {ri}"), Default::default());
+            p.props.keep_next = Some(true);
+            row.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        }
+        d.insert_block(StoryRef::Body, &Path::top(d.body.len()), wordcraft_doc::Block::Table(t)).unwrap();
+        d
+    };
+    for fillers in [1, 10, 25, 40] {
+        let pages: Vec<Vec<usize>> = lay(&doc(fillers))
+            .pages
+            .iter()
+            .map(|p| p.items.iter().filter_map(|i| if let Placed::Cell { row, cell: 0, .. } = i { Some(*row) } else { None }).collect())
+            .collect();
+        for (n, rows) in pages.iter().enumerate() {
+            assert!(rows.is_empty() || rows.iter().any(|r| *r != 0), "{fillers} fillers: page {} holds only the header row: {pages:?}", n + 1);
+        }
+        let body: Vec<usize> = pages.iter().flatten().copied().filter(|r| *r != 0).collect();
+        assert_eq!(body, (1..61).collect::<Vec<usize>>(), "{fillers} fillers: every row once, in order");
+        assert!(pages.iter().filter(|r| !r.is_empty()).count() >= 2, "{fillers} fillers: across pages: {pages:?}");
+    }
+}
+
 #[test]
 fn a_repeated_header_is_never_left_alone_when_the_table_starts_mid_page() {
     // #1704: a table whose repeated header row fits at the bottom of a page while a body row
