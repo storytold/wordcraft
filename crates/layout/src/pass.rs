@@ -195,6 +195,7 @@ fn new_page_builder<'p>(
         y: 0.0,
         top: 0.0,
         page_top: 0.0,
+        framed: Default::default(),
         bottom: 0.0,
         number: 0,
         web,

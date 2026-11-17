@@ -10844,6 +10844,80 @@ fn body_text_frame_after_a_full_page_moves_to_the_next() {
     assert_eq!(at(full + 3).page, 2, "no blank page between the frame and the next section");
 }
 
+/// #2406 review: a frame at the foot of the page is out of the flow, so it doesn't push the page's
+/// footnotes into the bottom margin and onto the next page: they stay on the page.
+#[test]
+fn a_text_frame_at_the_foot_of_the_page_leaves_the_footnotes_on_the_page() {
+    let mut d = framed_doc(&["Title", "City", "2026", "After"], &[1, 2], &body_frame("bottom"));
+    let id = d.add_part(
+        wordcraft_doc::PartKind::Footnote,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("A note.", Default::default()))],
+    );
+    let note = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() };
+    d.insert_object(&Pos::body(0, 5), note, &Default::default()).unwrap();
+    let l = lay(&d);
+    let s = d.sections().first().map(|(_, s)| (*s).clone()).unwrap();
+    let foot = s.page_h - s.margin_bottom;
+    let notes: Vec<(usize, f32)> = l
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(n, p)| {
+            p.items
+                .iter()
+                .filter(move |i| matches!(i, Placed::Lines { story: StoryRef::Part(p), .. } if *p == id))
+                .map(move |i| (n, crate::notes::v_span(i).1))
+        })
+        .collect();
+    assert_eq!(l.pages.len(), 1, "{notes:?}");
+    assert!(!notes.is_empty() && notes.iter().all(|&(n, bottom)| n == 0 && bottom <= foot + 0.5), "the note on the page, above {foot}: {notes:?}");
+}
+
+/// #2406 review: a frame anchored to its paragraph that moves to the next page (it doesn't fit
+/// under the text of a full page) shows that page in its PAGE field, not the page it left.
+#[test]
+fn a_text_frame_moved_to_the_next_page_shows_that_pages_number() {
+    let frame = wordcraft_doc::props::TextFrame {
+        w: Some(200.0),
+        h_anchor: "margin".into(),
+        v_anchor: "text".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    };
+    let lines: Vec<String> = (0..80).map(|i| format!("Line {i}")).collect();
+    let plain: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let full = {
+        let l = lay(&framed_doc(&plain, &[], &frame));
+        (0..plain.len()).take_while(|&i| l.caret(&Pos::body(i, 0)).is_some_and(|c| c.page == 0)).count()
+    };
+    let mut texts: Vec<&str> = plain[..full].to_vec();
+    texts.extend(["Page ", "After"]);
+    let mut d = framed_doc(&texts, &[full], &frame);
+    let p = d.para_mut(StoryRef::Body, &Path::top(full)).unwrap();
+    let end = p.len();
+    p.insert_object(
+        end,
+        InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    let l = lay(&d);
+    let shown: Vec<(usize, String)> = l
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(n, page)| {
+            page.items.iter().filter_map(move |it| match it {
+                Placed::Lines { story: StoryRef::Body, path, para, .. } if *path == Path::top(full) => {
+                    Some((n, para.shown.iter().map(|x| x.1.clone()).collect::<String>()))
+                }
+                _ => None,
+            })
+        })
+        .collect();
+    assert_eq!(shown, [(1, "2".to_string())], "the frame on page 2, numbered 2");
+}
+
 /// A run of more than 64 paragraphs with one frame is cut into frames of 64 from its start: the
 /// 65th paragraph starts a new frame at the frame's place, and the ones after it stack under it
 /// instead of landing on one another.

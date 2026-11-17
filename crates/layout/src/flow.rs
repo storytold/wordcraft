@@ -111,6 +111,10 @@ fn place_framed_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: 
     let frame_of = |q: &Paragraph| doc.styles.resolve_para(&q.props).frame.filter(|_| !hard_break(q));
     let breaks_before = |q: &Paragraph| doc.styles.resolve_para(&q.props).page_break_before;
     let Some(fr) = frame_of(p) else { return false };
+    // Its lines are out of the flow: the text's floor (where footnotes go) leaves them out.
+    if let Ok(b) = u32::try_from(block) {
+        pb.framed.insert(b);
+    }
     // A page holding only frames is still not empty: their lines don't move `pb.y`.
     if breaks_before(p) && (!pb.at_top() || pb.has_body_content()) {
         pb.new_page(block, body_top);
@@ -177,6 +181,8 @@ fn place_framed_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: 
         };
         if moves {
             pb.advance(block, body_top);
+            // Its PAGE fields show the page it moved to (#2406 review).
+            ctx.fields.page = pb.number;
             page = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
             r = float_rect(Some(page), (pb.col_x(), pb.col_w()), pb.y, fw, h, &float);
         }
