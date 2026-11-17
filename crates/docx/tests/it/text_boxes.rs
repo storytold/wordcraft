@@ -261,5 +261,7 @@ fn story_shared_by_many_shapes_is_written_once() {
     }
     let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
     assert!(xml.len() < 2_000_000, "document.xml is {} bytes", xml.len());
-    assert_eq!(xml.matches(text.as_str()).count(), 1);
+    // The story is written for the first shape only: in its drawing and in that drawing's VML
+    // fallback. The other shapes do not repeat it.
+    assert_eq!(xml.matches(text.as_str()).count(), 2);
 }
