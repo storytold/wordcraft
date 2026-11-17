@@ -895,6 +895,88 @@ fn modify_style_font_box_finds_the_family() {
     assert_eq!(rc.font, wordcraft_doc::styles::HEADING_FONT);
 }
 
+/// #2786: Define New Bullet's Font… is this Font dialog, opened on the bullet's formatting. OK
+/// hands the font, size and bold back to Define New Bullet without formatting the text;
+/// Cancel, and the title bar's close box, go back with the form as it was.
+#[test]
+fn font_dialog_formats_a_bullet_and_hands_it_back() {
+    use crate::dialogs_bullet::DefineBulletForm;
+    use crate::dialogs_insert::InsertDialog;
+    use egui_kittest::kittest::Queryable;
+    let back = |button: &str| -> (DefineBulletForm, wordcraft_doc::props::CharProps) {
+        let mut app = app_with("Example");
+        let _ = app.run("para.bullets", json!({"kind": "▪"}));
+        let form = DefineBulletForm { font: "Arial".into(), ..DefineBulletForm::plain("▪") };
+        app.dialog = font_for_bullet(&mut app, form);
+        let Some(Dialog::Font { size, bold, bullet, .. }) = &mut app.dialog else { panic!("the Font dialog is open") };
+        assert!(bullet.is_some(), "it carries the form");
+        assert!(!*bold && size.is_empty(), "it shows the bullet's formatting, not the text's");
+        *size = "16".into();
+        *bold = true;
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                if fonts {
+                    show(app, &ctx);
+                } else {
+                    crate::theme::install_fonts_for(&ctx, false);
+                    fonts = true;
+                }
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label(button).click();
+        h.run_steps(3);
+        let app = h.state_mut();
+        let Some(Dialog::Insert(d)) = app.dialog.take() else { panic!("back to Define New Bullet") };
+        let InsertDialog::DefineBullet(f) = *d else { panic!("back to Define New Bullet") };
+        let text = app.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
+        (f, text)
+    };
+    let (f, text) = back("OK");
+    assert_eq!((f.ch.as_str(), f.font.as_str(), f.size.as_str(), f.bold), ("▪", "Arial", "16", true));
+    assert_ne!(text.bold, Some(true), "the text isn't formatted");
+    assert_ne!(text.size, Some(16.0), "the text isn't formatted");
+    for button in ["Cancel", "Close"] {
+        let (f, _) = back(button);
+        assert_eq!((f.font.as_str(), f.size.as_str(), f.bold), ("Arial", "", false), "{button} keeps the form");
+    }
+    // A bullet in the text's font (no font of its own) keeps it when OK doesn't change the
+    // font box, though the box shows the text's font (review of #2860).
+    let mut app = app_with("Example");
+    let _ = app.run("para.bullets", json!({"kind": "▪"}));
+    let Some(mut d) = font_for_bullet(&mut app, DefineBulletForm::plain("▪")) else { panic!("the Font dialog opens") };
+    if let Dialog::Font { font, .. } = &d {
+        assert!(!font.is_empty(), "the box shows the text's font");
+    }
+    if let Dialog::Font { bullet: Some(b), font, font_was, .. } = &mut d {
+        assert_eq!(font, font_was);
+        assert!(b.font.is_empty());
+    }
+    app.dialog = Some(d);
+    let mut fonts = false;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            if fonts {
+                show(app, &ctx);
+            } else {
+                crate::theme::install_fonts_for(&ctx, false);
+                fonts = true;
+            }
+        },
+        app,
+    );
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let Some(Dialog::Insert(d)) = h.state_mut().dialog.take() else { panic!("back to Define New Bullet") };
+    let InsertDialog::DefineBullet(f) = *d else { panic!("back to Define New Bullet") };
+    assert_eq!(f.font, "", "still the text's font");
+}
+
 /// A dialog was pinned by its anchor, so dragging its title bar did nothing (#732).
 #[test]
 fn dragging_a_dialog_title_bar_moves_it() {
@@ -1866,6 +1948,27 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     h.run_steps(4);
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
+}
+
+/// A tall dialog on a short screen stays inside it and scrolls.
+#[test]
+fn a_tall_dialog_fits_a_short_screen() {
+    let mut app = app_with("Some text");
+    app.dialog = Dialog::open("pageSetup", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 360.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let id = egui::Id::unique(("dialog", "Page Setup"));
+    let rect = h.ctx.memory(|m| m.area_rect(id)).expect("the dialog is open");
+    assert!(rect.height() <= 360.5, "the dialog is {}pt tall on a 360pt screen", rect.height());
 }
 
 /// #3859: a dialog is modal, as in Word. While Font is open, typing (from the frame it opens),
