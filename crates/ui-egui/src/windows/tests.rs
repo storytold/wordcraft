@@ -857,6 +857,42 @@ fn quitting_with_sheets_stops_at_cancel_on_any_of_them() {
     assert!(!a.quit_requested, "Cancel on Document1's sheet stopped the quit");
 }
 
+/// The sheets Quit shows all answer before it quits: a document AutoSave saves while its sheet
+/// is up still has that sheet to answer, so Don't Save on another doesn't quit yet.
+#[test]
+fn quitting_with_sheets_waits_for_a_sheet_whose_document_autosaved() {
+    let ctx = backend();
+    let mut a = app("One");
+    let one = a.session.document_id();
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Two"})).unwrap();
+    frames(&ctx, &mut a, 2);
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = asked.clone();
+    a.services.save_prompt = Some(Box::new(move |window, _, _| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        log.borrow_mut().push((window, tx));
+        Some(rx)
+    }));
+
+    assert!(!a.quit());
+    frames(&ctx, &mut a, 4);
+    let answer = |name: &str, choice: &str| {
+        let asked = asked.borrow();
+        let (_, tx) = asked.iter().find(|(w, _)| w.starts_with(name)).expect("asked");
+        tx.send(choice.into()).unwrap();
+    };
+    // AutoSave writes Document1 while its sheet is still up.
+    a.session.with_document(one, |s| s.dirty = false).unwrap();
+    answer("Document2", "dontSave");
+    frames(&ctx, &mut a, 4);
+    assert!(!a.quit_requested, "Document1's sheet is still up");
+    answer("Document1", "dontSave");
+    frames(&ctx, &mut a, 4);
+    assert!(a.quit_requested, "the last sheet answered quits");
+}
+
 /// Quit asks about a document with unsaved work that two windows show (View › New Window),
 /// rather than closing one of its windows and asking nothing; Don't Save then quits.
 #[test]
