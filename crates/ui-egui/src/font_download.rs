@@ -205,10 +205,12 @@ pub(crate) fn body(app: &mut WordApp, ui: &mut egui::Ui, fonts: &[Row], dont_sho
             ui.add_space(4.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 3.0;
-                let headline =
-                    crate::i18n::tn(fonts.len() as u64, "{n} font in this document isn't installed", "{n} fonts in this document aren't installed");
+                // `fonts` holds only the missing fonts that can be downloaded: the document may
+                // be missing others, so the headline counts downloads, not missing fonts.
+                let headline = crate::i18n::tn(fonts.len() as u64, "{n} missing font can be downloaded", "{n} missing fonts can be downloaded");
                 ui.label(egui::RichText::new(headline).font(semibold(15.0)));
-                let note = tl!("It is shown in other fonts, so it may not look as it was written. You can download them free of charge.");
+                let note =
+                    tl!("Text in a missing font is shown in another font, so it may not look as it was written. The downloads are free of charge.");
                 ui.label(egui::RichText::new(note).color(t.text_dim));
             });
         });

@@ -61,7 +61,9 @@ fn an_opened_document_missing_a_downloadable_font_is_told_about_once() {
     assert!(!dont_show);
     // The box says so: the font, its substitute and publisher, the download, how to add it,
     // and the opt-out.
-    assert!(h.query_by_label("1 font in this document isn't installed").is_some());
+    // The headline counts what can be downloaded, not every font the document is missing.
+    assert!(h.query_by_label("1 missing font can be downloaded").is_some());
+    assert!(h.query_by_label_contains("isn't installed").is_none(), "other fonts may be missing too");
     assert!(h.query_by_label("Aptos").is_some());
     assert!(h.query_by_label(format!("Shown as {} · Microsoft", fonts[0].shown_as.join(", ")).as_str()).is_some());
     assert!(h.query_by_label_contains("following them is up to you").is_some(), "whose part the licence is");
