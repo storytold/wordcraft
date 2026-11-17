@@ -63,7 +63,13 @@ impl std::fmt::Display for UserFontError {
         match self {
             UserFontError::Empty => write!(f, "the font file is empty"),
             UserFontError::TooLarge { bytes } => {
-                write!(f, "the font file is too large ({} MB; at most {} MB)", bytes.div_ceil(1 << 20), MAX_FONT_FILE_BYTES >> 20)
+                write!(
+                    f,
+                    "the font is too large ({} MB; file limit {} MB, unpacked limit {} MB)",
+                    bytes.div_ceil(1 << 20),
+                    MAX_FONT_FILE_BYTES >> 20,
+                    MAX_DECODED_BYTES >> 20
+                )
             }
             UserFontError::NotAFont => write!(f, "not a font file (TrueType, OpenType, TTC, WOFF or WOFF2)"),
             UserFontError::BadWebFont(e) => write!(f, "the web font couldn't be read: {e}"),
