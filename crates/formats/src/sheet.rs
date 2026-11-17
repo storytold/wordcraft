@@ -66,10 +66,11 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
         let names: Vec<String> = read.workbook.sheets.iter().map(|s| s.name.clone()).collect();
         let i = resolve(&names, pick)?;
         let sheet = &read.workbook.sheets[i];
-        let formats = &read.workbook.formats;
+        // Each cell format's number format is parsed once, not once per cell.
+        let formats: Vec<NumFmt> = read.workbook.formats.iter().take(MAX_XFS).map(|f| NumFmt::code(&f.number_format)).collect();
         let date_1904 = read.workbook.date_1904;
         let kind = |c: &craft_xls::Cell| match (&c.value, c.format.and_then(|f| formats.get(usize::from(f)))) {
-            (Value::Number(n), Some(f)) => NumFmt::Code(&f.number_format).date_kind(*n),
+            (Value::Number(n), Some(f)) => f.date_kind(*n),
             _ => None,
         };
         return Ok((names, cells_to_rows(&sheet.cells, |c| display(&c.value, kind(c), date_1904))));
@@ -270,31 +271,50 @@ fn number(x: f64) -> String {
 /// Most cell formats read from an `.xlsx` styles part.
 const MAX_XFS: usize = 65_536;
 
+/// Longest format code read, in characters; Excel's own limit is 255. A longer code reads as
+/// General.
+const MAX_FORMAT_CODE: usize = 255;
+
 /// The number format of each `.xlsx` cell format (`cellXfs`, by a cell's `s`): its custom format
-/// code, else its built-in format.
-fn xlsx_formats(styles: &craft_xlsx::Styles) -> Vec<NumFmt<'_>> {
-    let custom: HashMap<u32, &str> = styles.num_fmts.iter().map(|(id, code)| (*id, code.as_str())).collect();
-    styles
-        .cell_xfs
-        .iter()
-        .take(MAX_XFS)
-        .map(|xf| custom.get(&xf.num_fmt_id).map_or(NumFmt::Builtin(xf.num_fmt_id), |code| NumFmt::Code(code)))
-        .collect()
+/// code, else its built-in format. Each custom code is parsed once, however many cell formats
+/// name it.
+fn xlsx_formats(styles: &craft_xlsx::Styles) -> Vec<NumFmt> {
+    let custom: HashMap<u32, NumFmt> = styles.num_fmts.iter().map(|(id, code)| (*id, NumFmt::code(code))).collect();
+    styles.cell_xfs.iter().take(MAX_XFS).map(|xf| custom.get(&xf.num_fmt_id).cloned().unwrap_or(NumFmt::Builtin(xf.num_fmt_id))).collect()
 }
 
-/// A cell's number format: a built-in format (ECMA-376 Part 1 §18.8.30) or a format code.
-#[derive(Clone, Copy, Debug)]
-enum NumFmt<'a> {
+/// A cell's number format: a built-in format (ECMA-376 Part 1 §18.8.30) or the parsed numeric
+/// sections of a format code (at most three: positive, negative and zero, or conditional).
+#[derive(Clone, Debug)]
+enum NumFmt {
     Builtin(u32),
-    Code(&'a str),
+    Code(Vec<Section>),
 }
 
-impl NumFmt<'_> {
+/// One parsed section of a format code: its leading condition, if any, and whether it shows a
+/// date or time.
+#[derive(Clone, Copy, Debug)]
+struct Section {
+    condition: Option<Condition>,
+    kind: Option<DateKind>,
+}
+
+impl NumFmt {
+    /// A format code parsed into its sections. A code longer than [`MAX_FORMAT_CODE`] characters
+    /// reads as General.
+    fn code(code: &str) -> NumFmt {
+        if code.chars().nth(MAX_FORMAT_CODE).is_some() {
+            return NumFmt::Builtin(0);
+        }
+        let sections = format_sections(code);
+        NumFmt::Code(sections[..sections.len().min(3)].iter().map(|s| Section { condition: section_condition(s), kind: custom_date(s) }).collect())
+    }
+
     /// Whether the format shows `value` as a date, a time or an elapsed time.
-    fn date_kind(self, value: f64) -> Option<DateKind> {
+    fn date_kind(&self, value: f64) -> Option<DateKind> {
         match self {
-            NumFmt::Builtin(id) => builtin_date(id),
-            NumFmt::Code(code) => format_section(code, value).and_then(custom_date),
+            NumFmt::Builtin(id) => builtin_date(*id),
+            NumFmt::Code(sections) => format_section(sections, value).and_then(|s| s.kind),
         }
     }
 }
@@ -352,8 +372,29 @@ fn format_sections(code: &str) -> Vec<&str> {
     out
 }
 
-/// A section's leading condition (`[>=40000]`) applied to `value`; `None` when it has none.
-fn section_condition(section: &str, value: f64) -> Option<bool> {
+/// A section's leading condition, such as `[>=40000]`.
+#[derive(Clone, Copy, Debug)]
+struct Condition {
+    op: &'static str,
+    limit: f64,
+}
+
+impl Condition {
+    /// Whether `value` meets the condition.
+    fn holds(self, value: f64) -> bool {
+        match self.op {
+            "<=" => value <= self.limit,
+            ">=" => value >= self.limit,
+            "<>" => value != self.limit,
+            "<" => value < self.limit,
+            ">" => value > self.limit,
+            _ => value == self.limit,
+        }
+    }
+}
+
+/// A section's leading condition (`[>=40000]`); `None` when it has none.
+fn section_condition(section: &str) -> Option<Condition> {
     // The condition may follow other leading brackets, such as a color.
     let mut rest = section.trim_start();
     let inner = loop {
@@ -365,37 +406,24 @@ fn section_condition(section: &str, value: f64) -> Option<bool> {
     };
     let (op, rest) = ["<=", ">=", "<>", "<", ">", "="].iter().find_map(|op| inner.strip_prefix(op).map(|r| (*op, r)))?;
     let limit: f64 = rest.trim().parse().ok()?;
-    Some(match op {
-        "<=" => value <= limit,
-        ">=" => value >= limit,
-        "<>" => value != limit,
-        "<" => value < limit,
-        ">" => value > limit,
-        _ => value == limit,
-    })
+    Some(Condition { op, limit })
 }
 
-/// The section of a format code that shows `value` (§18.8.31): the first section whose condition
-/// holds, else the first without one, else none; with no conditions, the positive, negative and
-/// zero sections in that order.
-fn format_section(code: &str, value: f64) -> Option<&str> {
-    let sections = format_sections(code);
-    let numeric = &sections[..sections.len().min(3)];
-    if numeric.iter().any(|s| section_condition(s, value).is_some()) {
-        return numeric
-            .iter()
-            .find(|s| section_condition(s, value) == Some(true))
-            .or_else(|| numeric.iter().find(|s| section_condition(s, value).is_none()))
-            .copied();
+/// The section of a format code's numeric sections that shows `value` (§18.8.31): the first
+/// section whose condition holds, else the first without one, else none; with no conditions, the
+/// positive, negative and zero sections in that order.
+fn format_section(sections: &[Section], value: f64) -> Option<&Section> {
+    if sections.iter().any(|s| s.condition.is_some()) {
+        return sections.iter().find(|s| s.condition.is_some_and(|c| c.holds(value))).or_else(|| sections.iter().find(|s| s.condition.is_none()));
     }
-    let i = if value < 0.0 && numeric.len() > 1 {
+    let i = if value < 0.0 && sections.len() > 1 {
         1
-    } else if value == 0.0 && numeric.len() > 2 {
+    } else if value == 0.0 && sections.len() > 2 {
         2
     } else {
         0
     };
-    Some(numeric.get(i).copied().unwrap_or(code))
+    sections.get(i)
 }
 
 /// Whether a format section shows a date or time: without quoted text, escaped characters,
@@ -497,14 +525,15 @@ fn serial_date(serial: f64, date1904: bool, kind: DateKind) -> Option<String> {
         }
     };
     if let DateKind::Elapsed(unit) = kind {
-        // The whole duration in the format's largest unit.
+        // The whole duration in the format's largest unit, with at least two digits, as the
+        // hours of `clock` have, whatever the format's own layout.
         let total = days.saturating_mul(86_400).saturating_add(secs);
         return Some(match unit {
             Elapsed::Hours => clock(total),
-            Elapsed::Minutes if total % 60 == 0 && millis == 0 => (total / 60).to_string(),
-            Elapsed::Minutes => format!("{}:{}", total / 60, clock(total % 60).trim_start_matches("00:00:")),
-            Elapsed::Seconds if millis == 0 => total.to_string(),
-            Elapsed::Seconds => format!("{total}.{}", format!("{millis:03}").trim_end_matches('0')),
+            Elapsed::Minutes if total % 60 == 0 && millis == 0 => format!("{:02}", total / 60),
+            Elapsed::Minutes => format!("{:02}:{}", total / 60, clock(total % 60).trim_start_matches("00:00:")),
+            Elapsed::Seconds if millis == 0 => format!("{total:02}"),
+            Elapsed::Seconds => format!("{total:02}.{}", format!("{millis:03}").trim_end_matches('0')),
         });
     }
     let (y, m, d) = civil(days + epoch);
@@ -645,13 +674,26 @@ mod tests {
         assert_eq!(serial_date(45_356.999_999_999_9, false, DateKind::DateTime).as_deref(), Some("2024-03-06 00:00"));
         assert_eq!(builtin_date(32), Some(DateKind::Time));
         assert_eq!(builtin_date(57), Some(DateKind::Date));
-        assert_eq!(NumFmt::Code("[Red][>=40000]yyyy-mm-dd;0").date_kind(12.0), None);
-        assert_eq!(NumFmt::Code("[Red][>=40000]yyyy-mm-dd;0").date_kind(45356.0), Some(DateKind::Date));
+        assert_eq!(NumFmt::code("[Red][>=40000]yyyy-mm-dd;0").date_kind(12.0), None);
+        assert_eq!(NumFmt::code("[Red][>=40000]yyyy-mm-dd;0").date_kind(45356.0), Some(DateKind::Date));
         // The section that shows the value decides.
-        assert_eq!(NumFmt::Code("[>=40000]yyyy-mm-dd;0").date_kind(45356.0), Some(DateKind::Date));
-        assert_eq!(NumFmt::Code("[>=40000]yyyy-mm-dd;0").date_kind(12.0), None);
-        assert_eq!(NumFmt::Code("0;yyyy-mm-dd").date_kind(5.0), None);
-        assert_eq!(NumFmt::Code(r#""a;b"yyyy"#).date_kind(5.0), Some(DateKind::Date));
+        assert_eq!(NumFmt::code("[>=40000]yyyy-mm-dd;0").date_kind(45356.0), Some(DateKind::Date));
+        assert_eq!(NumFmt::code("[>=40000]yyyy-mm-dd;0").date_kind(12.0), None);
+        assert_eq!(NumFmt::code("0;yyyy-mm-dd").date_kind(5.0), None);
+        assert_eq!(NumFmt::code(r#""a;b"yyyy"#).date_kind(5.0), Some(DateKind::Date));
+    }
+
+    #[test]
+    fn elapsed_counts_have_at_least_two_digits() {
+        // As the hours do, and as every other time reads (`hh:mm`), whatever the format's layout.
+        let elapsed = |code: &str, seconds: f64| NumFmt::code(code).date_kind(1.0).and_then(|k| serial_date(seconds / 86_400.0, false, k));
+        assert_eq!(elapsed("[mm]:ss", 90.0).as_deref(), Some("01:30"));
+        assert_eq!(elapsed("[m]:ss", 90.0).as_deref(), Some("01:30"));
+        assert_eq!(elapsed("[mm]", 60.0).as_deref(), Some("01"));
+        assert_eq!(elapsed("[s]", 5.0).as_deref(), Some("05"));
+        assert_eq!(elapsed("[s]", 5.5).as_deref(), Some("05.5"));
+        assert_eq!(elapsed("[h]:mm:ss", 3_605.0).as_deref(), Some("01:00:05"));
+        assert_eq!(elapsed("[h]:mm", 1.5 * 86_400.0).as_deref(), Some("36:00"));
     }
 
     #[test]
@@ -699,9 +741,25 @@ mod tests {
 
     #[test]
     fn padding_and_unmatched_conditions_in_sections() {
-        assert_eq!(NumFmt::Code("mm_;ss").date_kind(0.5), Some(DateKind::Time));
-        assert_eq!(NumFmt::Code("[>40000]0;[=0]yyyy-mm-dd").date_kind(12.0), None);
-        assert_eq!(NumFmt::Code("[>40000]0;[=0]yyyy-mm-dd").date_kind(0.0), Some(DateKind::Date));
-        assert_eq!(NumFmt::Code("[Red] [>=40000]yyyy-mm-dd;0").date_kind(12.0), None);
+        assert_eq!(NumFmt::code("mm_;ss").date_kind(0.5), Some(DateKind::Time));
+        assert_eq!(NumFmt::code("[>40000]0;[=0]yyyy-mm-dd").date_kind(12.0), None);
+        assert_eq!(NumFmt::code("[>40000]0;[=0]yyyy-mm-dd").date_kind(0.0), Some(DateKind::Date));
+        assert_eq!(NumFmt::code("[Red] [>=40000]yyyy-mm-dd;0").date_kind(12.0), None);
+    }
+
+    #[test]
+    fn a_long_format_code_reads_as_general() {
+        // A code longer than Excel allows reads as General, so its cells keep their numbers.
+        let long = format!("yyyy-mm-dd{}", "0".repeat(MAX_FORMAT_CODE));
+        assert_eq!(NumFmt::code(&long).date_kind(45356.0), None);
+        let at_limit = format!("yyyy-mm-dd{}", " ".repeat(MAX_FORMAT_CODE - 10));
+        assert_eq!(NumFmt::code(&at_limit).date_kind(45356.0), Some(DateKind::Date));
+        // Cell formats that name the same code read alike.
+        let book = styled_workbook(
+            r#"<row r="1"><c r="A1" s="1"><v>45356</v></c><c r="B1" s="2"><v>45356</v></c><c r="C1" s="3"><v>45356</v></c></row>"#,
+            &format!(r#"<numFmt numFmtId="164" formatCode="yyyy-mm-dd"/><numFmt numFmtId="165" formatCode="{long}"/>"#),
+            r#"<xf numFmtId="0"/><xf numFmtId="164"/><xf numFmtId="164"/><xf numFmtId="165"/>"#,
+        );
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["2024-03-05", "2024-03-05", "45356"]]);
     }
 }
