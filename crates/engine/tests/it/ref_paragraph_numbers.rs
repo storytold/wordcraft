@@ -2,8 +2,6 @@
 //! Switch semantics: Microsoft MS-OI29500, Part 1 Section 17.16.5.51 (REF).
 //! All OOXML packages and document text are constructed in memory; no external documents.
 
-use std::io::Write;
-
 use serde_json::json;
 use wordcraft_doc::{InlineObject, StoryRef};
 
@@ -11,12 +9,11 @@ const W: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2
 
 /// Build an OOXML ZIP entirely in memory.
 fn zip(entries: &[(&str, &str)]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, body) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(body.as_bytes()).unwrap();
+        zw.add(name, body.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 /// One synthetic numbering level.

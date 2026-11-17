@@ -13,7 +13,7 @@ wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
 wordcraft-proof = { workspace = true }
-wordcraft-metafile = { workspace = true }
+craft-metafile = { workspace = true }
 kurbo = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-linebreak = { workspace = true }
@@ -25,6 +25,7 @@ log = { workspace = true }
 
 [dev-dependencies]
 wordcraft-doc = { workspace = true, features = ["test-support"] }
+wordcraft-fonts = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 # The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32-unknown-unknown).
