@@ -923,6 +923,7 @@ fn a_long_unbreakable_word_lays_out_in_linear_time() {
 
 /// A word a megabyte long lays out in a fraction of a second: it used to take half a minute.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_megabyte_long_word_lays_out_quickly() {
     let d = long_word_beside_a_float(1_000_000);
     let t = std::time::Instant::now();
@@ -1143,6 +1144,7 @@ fn a_word_with_alternating_advances_lays_out_in_linear_time() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hidden_separators_with_automatic_hyphenation_lay_out_in_linear_time() {
     crate::test_fonts();
     // "hyphenation " n times with every space hidden: one joined word of 11n letters reaches the
@@ -1175,6 +1177,7 @@ fn page_break_paragraphs(n: usize) -> Document {
 /// the section list by walking the whole body, so a document of n paragraphs paid n body-length
 /// scans: a two-megabyte file took half a minute before the first page was drawn.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_document_of_many_paragraphs_lays_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(page_break_paragraphs, 2_500, &LayoutOptions::default());
     eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
@@ -1182,6 +1185,7 @@ fn a_document_of_many_paragraphs_lays_out_in_linear_time() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn many_hidden_float_anchors_lay_out_in_linear_time() {
     crate::test_fonts();
     // n square-wrapped shapes, each anchored in its own hidden run (bold alternating, so runs do not
@@ -3035,8 +3039,8 @@ fn cache_reuses_unchanged_paragraphs() {
 }
 
 /// The paragraph after a heading kept with it is measured before the heading is placed. That
-/// layout goes into the cache under the key it is placed with, so it is laid out once, and the
-/// pages are those of the uncached measurement (proofing on measures without the cache).
+/// layout goes into the cache under the key it is placed with, so it is laid out once, with
+/// proofing off or on, and proofing moves nothing.
 #[test]
 fn kept_headings_measure_the_next_paragraph_through_the_cache() {
     let mut d = Document::new();
@@ -3053,7 +3057,10 @@ fn kept_headings_measure_the_next_paragraph_through_the_cache() {
     assert!(l.pages.len() > 2, "{}", l.pages.len());
     assert_eq!(c.len(), d.body.len(), "one layout per paragraph");
     assert_eq!(c.misses, d.body.len() as u64, "each paragraph laid out once");
-    let proofed = layout(&d, &mut LayoutCache::new(), &LayoutOptions { proofing: true, ..Default::default() });
+    let mut c = LayoutCache::new();
+    let proofed = layout(&d, &mut c, &LayoutOptions { proofing: true, ..Default::default() });
+    assert_eq!(c.misses, d.body.len() as u64, "each paragraph laid out once with proofing on");
+    assert!(c.hits >= 40, "each kept heading should reuse its following paragraph layout with proofing on; got {} cache hits", c.hits);
     let starts = |l: &DocLayout| (0..d.body.len()).map(|i| l.caret(&Pos::body(i, 0)).map(|c| (c.page, c.top.to_bits()))).collect::<Vec<_>>();
     assert_eq!(starts(&l), starts(&proofed));
 }
@@ -8208,6 +8215,7 @@ fn graphic_items_draw_inside_the_object() {
             bold: false,
             align: TextAlign::Center,
             font: None,
+            angle: 0.0,
         },
     ];
     let mut d = Document::from_text("Chart");
@@ -8238,6 +8246,7 @@ fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        angle: 0.0,
     };
     let items = vec![text([f32::NAN, 0.0, 10.0, 10.0], 10.0), text([0.0, 0.0, f32::INFINITY, 10.0], 10.0), text([0.0, 0.0, 10.0, 10.0], f32::NAN)];
     let graphic = Graphic { kind: GraphicKind::Diagram, items, ..Default::default() };
@@ -8246,6 +8255,45 @@ fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
     d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
     let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
     assert!(!draws.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text == "Q1")));
+}
+
+/// A chart's vertical axis title (text turned -90°) is laid out along its tall box and drawn
+/// turned about the box's center.
+#[test]
+fn turned_graphic_text_is_drawn_turned_about_its_box() {
+    crate::test_fonts();
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    let items = vec![GraphicItem::Text {
+        rect: [0.0, 20.0, 20.0, 100.0],
+        text: "Sales".into(),
+        size: 10.0,
+        color: Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font: None,
+        angle: -90.0,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+    let turned = draws
+        .iter()
+        .find_map(|x| match x {
+            display::Draw::Rotated { cx, cy, spin, items } => Some((*cx, *cy, *spin, items)),
+            _ => None,
+        })
+        .expect("the title is turned");
+    let (cx, cy, spin, items) = turned;
+    assert_eq!(spin.deg, 270.0);
+    let Some(display::Draw::Glyphs { glyphs, text, .. }) = items.first() else { panic!("{items:?}") };
+    assert_eq!(text, "Sales");
+    // Laid out level across the box's 100 pt height, centered on the box's center.
+    let (first, last) = (glyphs[0].1, glyphs[glyphs.len() - 1].1);
+    assert!(first > cx - 50.0 && last < cx + 50.0 && first < cx && last > cx, "{first} {last} about {cx}");
+    assert!((glyphs[0].2 - cy).abs() < 10.0, "baseline {} near {cy}", glyphs[0].2);
 }
 
 #[test]
@@ -8268,6 +8316,7 @@ fn chart_text_the_font_lacks_is_drawn_in_a_fallback_face() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        angle: 0.0,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
     let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
