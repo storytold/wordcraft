@@ -13125,15 +13125,78 @@ fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
     assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
 }
 
-/// A scatter chart saved as ODT and opened again is still drawn as markers without lines.
+/// A scatter chart saved as ODT (or flat ODT) and opened again is still drawn as markers without
+/// lines, and its paragraph is still written as read.
 #[test]
 fn an_odt_scatter_chart_reopens_without_lines() {
+    use wordcraft_doc::para::InlineObject;
     let mut s = Session::new(wordcraft_doc::Document::new());
     run(&mut s, "insert.chart", json!({"type": "scatter"}));
+    let odt = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let fodt = wordcraft_formats::odt::export_flat(&s.doc).unwrap();
+    for (name, bytes) in [("t.odt", odt), ("t.fodt", fodt)] {
+        let doc = crate::io::open_bytes(name, &bytes).unwrap();
+        let c = first_chart(&doc).expect("the chart has its model");
+        assert_eq!(c.kind, wordcraft_doc::chart::ChartType::Scatter);
+        assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line), "{name}: {:?}", c.series);
+        // The drawn items are the markers-only drawing, not the one with lines between points.
+        let p = doc.para_at(&Pos::body(0, 0)).unwrap();
+        let (items, w, h) = p
+            .object_offsets()
+            .into_iter()
+            .find_map(|off| match p.object_at(off) {
+                Some(InlineObject::Graphic { graphic, w, h, .. }) if graphic.chart.is_some() => Some((graphic.items.clone(), *w, *h)),
+                _ => None,
+            })
+            .expect("the chart is drawn");
+        let theme = &doc.settings.theme_colors;
+        assert_eq!(items, crate::cmd::chart::chart_graphic(c.clone(), theme, w, h).items, "{name}");
+        let mut lines = c.clone();
+        lines.series.iter_mut().for_each(|x| x.no_line = false);
+        assert_ne!(items, crate::cmd::chart::chart_graphic(lines, theme, w, h).items, "{name}");
+    }
     let doc = crate::io::open_bytes("t.odt", &wordcraft_formats::odt::export(&s.doc).unwrap()).unwrap();
-    let c = first_chart(&doc).expect("the chart has its model");
-    assert_eq!(c.kind, wordcraft_doc::chart::ChartType::Scatter);
-    assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line), "{:?}", c.series);
+    let again = wordcraft_formats::odt::export(&doc).unwrap();
+    let mut z = craft_zip::Archive::open(&again, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
+}
+
+/// An undrawn scatter series with its markers turned off is not left with neither a line nor
+/// markers when an opened ODF file's scatter charts are set to markers only; other formats keep
+/// their series as read.
+#[test]
+fn an_opened_odf_scatter_series_keeps_its_markers() {
+    use std::sync::Arc;
+    use wordcraft_doc::para::InlineObject;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "scatter"}));
+    let undrawn = |doc: &wordcraft_doc::Document| {
+        let mut doc = doc.clone();
+        doc.fill_objects(&|o| matches!(o, InlineObject::Graphic { graphic, .. } if graphic.chart.is_some()), &mut |o| {
+            if let InlineObject::Graphic { graphic, .. } = o {
+                let g = Arc::make_mut(graphic);
+                if let Some(spec) = g.chart.as_deref() {
+                    let mut spec = spec.clone();
+                    for series in &mut spec.series {
+                        series.no_line = false;
+                        series.markers = Some(false);
+                    }
+                    g.chart = Some(Arc::new(spec));
+                }
+                g.items.clear();
+            }
+        });
+        doc
+    };
+    let mut odf = undrawn(&s.doc);
+    crate::io_ext::draw_charts(&mut odf, true);
+    let c = first_chart(&odf).expect("the chart has its model");
+    assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line && x.markers.is_none()), "{:?}", c.series);
+    let mut other = undrawn(&s.doc);
+    crate::io_ext::draw_charts(&mut other, false);
+    let c = first_chart(&other).expect("the chart has its model");
+    assert!(c.series.iter().all(|x| !x.no_line && x.markers == Some(false)), "{:?}", c.series);
 }
 
 /// A picture an OpenDocument file makes wider than the text (a rule across the whole page) stays
