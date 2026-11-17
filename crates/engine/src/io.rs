@@ -109,7 +109,7 @@ pub fn wrong_password(err: &str) -> bool {
 /// can't be read: opening it says why.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_empty_file(path: &std::path::Path) -> bool {
-    crate::file_access::check_read(&path.to_string_lossy()).is_ok() && metadata_for_read(path).is_ok_and(|m| m.is_file() && m.len() == 0)
+    metadata_for_read(path).is_ok_and(|m| m.is_file() && m.len() == 0)
 }
 
 /// [`is_empty_file`]: on the web files come through the browser, never by path.
@@ -507,7 +507,6 @@ const MAX_DOCUMENT: u64 = 2 << 30;
 /// opens a file whose name isn't valid Unicode through `file.open`'s `data` (#1440).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_document(path: &std::path::Path) -> Result<Vec<u8>, String> {
-    crate::file_access::check_read(&path.to_string_lossy())?;
     let meta = metadata_for_read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
         return Err(format!("{}: not a file", path.display()));
@@ -740,6 +739,12 @@ fn fallback_paths(path: &std::path::Path) -> Fallbacks {
     Box::new(by_hand.into_iter().chain(canonical))
 }
 
+/// A refusal from the automation read root as the open/metadata error callers already handle.
+#[cfg(not(target_arch = "wasm32"))]
+fn unauthorized(reason: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::PermissionDenied, reason)
+}
+
 /// [`open_for_read`] with each step injectable, for tests: `open` opens a path, `retry` says whether
 /// an error is worth another route, and `fallbacks` lists those routes lazily.
 #[cfg(any(windows, test))]
@@ -749,10 +754,13 @@ fn open_with(
     retry: &dyn Fn(&std::io::Error) -> bool,
     fallbacks: &dyn Fn(&std::path::Path) -> Fallbacks,
 ) -> std::io::Result<std::fs::File> {
-    let first = match open(path) {
-        Ok(file) => return Ok(file),
-        Err(error) if retry(&error) => error,
-        Err(error) => return Err(error),
+    let first = match crate::file_access::check_read(&path.to_string_lossy()) {
+        Ok(()) => match open(path) {
+            Ok(file) => return Ok(file),
+            Err(error) if retry(&error) => error,
+            Err(error) => return Err(error),
+        },
+        Err(reason) => unauthorized(reason),
     };
     for candidate in fallbacks(path) {
         if candidate != path
@@ -787,21 +795,23 @@ fn open_for_read(path: &std::path::Path) -> std::io::Result<std::fs::File> {
 /// Metadata of `path`, retrying through [`fallback_paths`] when Windows refuses the traversal.
 #[cfg(not(target_arch = "wasm32"))]
 fn metadata_for_read(path: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
-    match std::fs::metadata(path) {
-        Ok(meta) => Ok(meta),
-        Err(error) if refuses_traversal(&error) => {
-            for candidate in fallback_paths(path) {
-                if candidate != path
-                    && crate::file_access::check_read(&candidate.to_string_lossy()).is_ok()
-                    && let Ok(meta) = std::fs::metadata(&candidate)
-                {
-                    return Ok(meta);
-                }
-            }
-            Err(error)
+    let original_error = match crate::file_access::check_read(&path.to_string_lossy()) {
+        Ok(()) => match std::fs::metadata(path) {
+            Ok(meta) => return Ok(meta),
+            Err(error) if !refuses_traversal(&error) => return Err(error),
+            Err(error) => error,
+        },
+        Err(reason) => unauthorized(reason),
+    };
+    for candidate in fallback_paths(path) {
+        if candidate != path
+            && crate::file_access::check_read(&candidate.to_string_lossy()).is_ok()
+            && let Ok(meta) = std::fs::metadata(&candidate)
+        {
+            return Ok(meta);
         }
-        Err(error) => Err(error),
     }
+    Err(original_error)
 }
 
 /// The regular file at `path`, opened once, with the opened handle's metadata. The path is
@@ -853,7 +863,6 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
 /// and the read stops past `max`, so a file swapped or grown after the check is refused too (#3666).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file_capped(path: &str, max: u64, what: &str) -> Result<Vec<u8>, String> {
-    crate::file_access::check_read(path)?;
     let too_large = || format!("{path}: the {what} is larger than {} MB", max >> 20);
     let (file, meta) = open_regular_file(std::path::Path::new(path))?;
     if meta.len() > max {
@@ -872,7 +881,6 @@ pub fn read_file_capped(path: &str, max: u64, what: &str) -> Result<Vec<u8>, Str
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file_head(path: &str, max: u64) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    crate::file_access::check_read(path)?;
     let (file, _) = open_regular_file(std::path::Path::new(path))?;
     let mut head = Vec::new();
     file.take(max).read_to_end(&mut head).map_err(|e| format!("{path}: {e}"))?;
@@ -924,7 +932,6 @@ pub fn list_dir(path: &std::path::Path, max: usize) -> Result<(Vec<DirEntry>, bo
 /// bytes; at most `max_part` bytes of the part are read), inside the automation read root.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn package_title(path: &std::path::Path, max_file: u64, max_part: u64) -> Option<String> {
-    crate::file_access::check_read(&path.to_string_lossy()).ok()?;
     let (file, meta) = open_regular_file(path).ok()?;
     if meta.len() > max_file {
         return None;
@@ -1080,6 +1087,27 @@ mod tests {
         let link = base.join("loop");
         let resolved = follow_links(&link, &|_| Some(link.clone()));
         assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn a_confined_read_reaches_a_fallback_inside_the_root() {
+        use std::io::Read;
+        let root = scratch("fallback-inside-root");
+        let outside = scratch("fallback-inside-outside");
+        let inside = root.join("inside.txt");
+        let blocked = outside.join("blocked.txt");
+        std::fs::write(&inside, b"inside").unwrap();
+        std::fs::write(&blocked, b"outside").unwrap();
+        let roots = crate::file_access::AutomationRoots::new(Some(&root), None).unwrap().expect("read roots");
+        let mut file = crate::file_access::confine(Some(&roots), || {
+            open_with(&blocked, &|path| std::fs::File::open(path), &|_| false, &|_| -> Fallbacks { Box::new(std::iter::once(inside.clone())) })
+        })
+        .expect("the permitted fallback opens");
+        let mut text = String::new();
+        file.read_to_string(&mut text).unwrap();
+        assert_eq!(text, "inside");
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
     }
 
     #[test]
