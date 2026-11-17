@@ -276,9 +276,75 @@ impl Paragraph {
     pub fn insert_object(&mut self, off: usize, obj: InlineObject, props: &CharProps) -> Result<()> {
         self.check(off)?;
         let k = self.objects_before(off);
+        // What the insertion moves: the text and the objects after it.
+        crate::work::steps(self.text.len().saturating_sub(off).saturating_add(self.objects.len().saturating_sub(k)));
         self.text.insert(off, OBJ);
         self.objects.insert(k.min(self.objects.len()), obj);
         self.insert_run(off, OBJ.len_utf8(), props.clone());
+        self.touch();
+        Ok(())
+    }
+
+    /// Insert many objects, all with `props`, in one walk of the paragraph: what calling
+    /// [`Paragraph::insert_object`] for each would do, from the last offset back, without moving
+    /// the rest of the paragraph once per object (k objects in one paragraph cost its length plus
+    /// k, not k times its length). Each item is an offset into the text as it is now, and the
+    /// object to put there; objects at one offset go in in the order `items` gives them. Nothing
+    /// changes when an offset isn't a character boundary of the text.
+    pub fn insert_objects(&mut self, mut items: Vec<(usize, InlineObject)>, props: &CharProps) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        items.sort_by_key(|(off, _)| *off);
+        for (off, _) in &items {
+            self.check(*off)?;
+        }
+        // Runs that cover the text exactly, so they can be cut where the objects go.
+        self.normalize();
+        crate::work::steps(self.text.len().saturating_add(self.objects.len()).saturating_add(self.runs.len()).saturating_add(items.len()));
+        let w = OBJ.len_utf8();
+        let mut text = String::with_capacity(self.text.len().saturating_add(items.len().saturating_mul(w)));
+        let mut objects = Vec::with_capacity(self.objects.len().saturating_add(items.len()));
+        let mut runs = Vec::with_capacity(self.runs.len().saturating_add(items.len().saturating_mul(2)));
+        let mut old_objects = std::mem::take(&mut self.objects).into_iter();
+        let mut old_runs = std::mem::take(&mut self.runs).into_iter();
+        // The part of an old run not written yet, and where it starts.
+        let (mut run, mut run_start) = (old_runs.next(), 0usize);
+        let mut at = 0usize;
+        for (off, obj) in items {
+            let piece = self.text.get(at..off).unwrap_or_default();
+            objects.extend(old_objects.by_ref().take(piece.chars().filter(|c| *c == OBJ).count()));
+            text.push_str(piece);
+            text.push(OBJ);
+            objects.push(obj);
+            at = off;
+            // The runs before `off`, the one it falls in cut there.
+            while let Some(r) = run.as_mut() {
+                let end = run_start.saturating_add(r.len);
+                if end <= off {
+                    runs.extend(run.take());
+                    run = old_runs.next();
+                    run_start = end;
+                } else {
+                    if run_start < off {
+                        let left = off - run_start;
+                        runs.push(Run { len: left, props: r.props.clone() });
+                        r.len -= left;
+                        run_start = off;
+                    }
+                    break;
+                }
+            }
+            runs.push(Run { len: w, props: props.clone() });
+        }
+        text.push_str(self.text.get(at..).unwrap_or_default());
+        objects.extend(old_objects);
+        runs.extend(run);
+        runs.extend(old_runs);
+        self.text = text;
+        self.objects = objects;
+        self.runs = runs;
+        self.normalize();
         self.touch();
         Ok(())
     }
@@ -636,6 +702,48 @@ mod tests {
 
     fn bold() -> CharProps {
         CharProps { bold: Some(true), ..Default::default() }
+    }
+
+    /// A field object named `instr`.
+    fn field(instr: &str) -> InlineObject {
+        InlineObject::Field { instr: instr.into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() }
+    }
+
+    /// `insert_objects` leaves the paragraph as `insert_object` for each item, from the last
+    /// offset back, does: at the start and the end, at a run's edge and inside a run, several at
+    /// one offset (in their order), between existing objects, after multi-byte characters, with
+    /// the items unsorted. A bad offset changes nothing.
+    #[test]
+    fn insert_objects_is_insert_object_for_each() {
+        let hidden = CharProps { hidden: Some(true), ..Default::default() };
+        let mut base = Paragraph::with_text("añb ", CharProps::default());
+        base.insert_text(base.len(), "bold €", &bold()).unwrap();
+        base.insert_text(base.len(), " tail", &CharProps::default()).unwrap();
+        base.insert_object(1, field("OLD 1"), &CharProps::default()).unwrap();
+        base.insert_object(base.len(), field("OLD 2"), &bold()).unwrap();
+        let ends = |p: &Paragraph| p.runs.iter().scan(0, |e, r| Some(std::mem::replace(e, *e + r.len) + r.len)).collect::<Vec<_>>();
+        let bold_end = base.text.find(" tail").unwrap();
+        assert!(ends(&base).contains(&bold_end), "an offset at a run's edge");
+        let offs = [base.len(), 0, bold_end, bold_end + 2, 6, 0, base.len(), 1, bold_end, 4];
+        let items: Vec<(usize, InlineObject)> = offs.iter().enumerate().map(|(i, &o)| (o, field(&format!("NEW {i}")))).collect();
+        let mut one_by_one = base.clone();
+        // The last offset first; at one offset, the last item first, so they end up in order.
+        let mut order: Vec<usize> = (0..items.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse((offs[i], i)));
+        for i in order {
+            one_by_one.insert_object(offs[i], items[i].1.clone(), &hidden).unwrap();
+        }
+        let mut at_once = base.clone();
+        at_once.insert_objects(items, &hidden).unwrap();
+        assert_eq!(at_once.text, one_by_one.text);
+        assert_eq!(at_once.objects, one_by_one.objects);
+        assert_eq!(at_once.runs, one_by_one.runs);
+
+        let mut bad = base.clone();
+        assert!(bad.insert_objects(vec![(0, field("A")), (2, field("B"))], &hidden).is_err(), "inside `ñ`");
+        assert_eq!(bad, base);
+        assert!(bad.insert_objects(vec![(base.len() + 1, field("C"))], &hidden).is_err());
+        assert_eq!(bad, base);
     }
 
     #[test]
