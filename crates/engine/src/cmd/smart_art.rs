@@ -179,7 +179,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"index": item to move (with the items under it), "slot": position among the other items, "level": the item's new level}"#)
         .when(has_smart_art),
-        CommandSpec::new("smartArt.reset","Reset Graphic", "SmartArt Design › Reset", |s, _| {
+        CommandSpec::new("smartArt.reset", "Reset Graphic", "SmartArt Design › Reset", |s, _| {
             edit(s, |g| {
                 g.colors = SmartArtColors::default();
                 g.clear_custom_colors();
