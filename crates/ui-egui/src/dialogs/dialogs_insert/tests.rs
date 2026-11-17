@@ -149,6 +149,141 @@ fn field_dialog_builds_the_instruction() {
     assert!(f.params().is_none());
 }
 
+/// Text fields take a capitalization Format: each choice writes its `\*` switch before
+/// `\* MERGEFORMAT`, after the field's own arguments and switches, and (none) writes none.
+#[test]
+fn field_dialog_text_format_writes_its_switch() {
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("AUTHOR");
+    assert_eq!(f.text_format, "");
+    assert_eq!(f.instruction(), r"AUTHOR \* MERGEFORMAT");
+    for v in ["Upper", "Lower", "FirstCap", "Caps"] {
+        f.text_format = v.into();
+        assert_eq!(f.instruction(), format!(r"AUTHOR \* {v} \* MERGEFORMAT"));
+    }
+    let labels: Vec<&str> = field::TEXT_FORMATS.iter().map(|(_, l)| *l).collect();
+    assert_eq!(labels, ["(none)", "Uppercase", "Lowercase", "First capital", "Title case"]);
+    f.select("REF");
+    f.target = "intro".into();
+    f.text_format = "Upper".into();
+    assert_eq!(f.instruction(), r"REF intro \h \* Upper \* MERGEFORMAT");
+    f.select("STYLEREF");
+    f.style_switches = "l".into();
+    f.text_format = "Caps".into();
+    f.preserve = false;
+    assert_eq!(f.instruction(), r#"STYLEREF "Heading 1" \l \* Caps"#);
+    f.select("MERGEFIELD");
+    f.target = "City".into();
+    f.text_format = "Lower".into();
+    assert_eq!(f.params().unwrap(), json!({"instr": r"MERGEFIELD City \* Lower", "result": "«City»"}));
+    // Choosing another field starts from (none).
+    f.select("TITLE");
+    assert_eq!((f.text_format.as_str(), f.instruction().as_str()), ("", "TITLE"));
+}
+
+/// The list is offered for the text fields only; date, number, PAGEREF, SEQ and TOC keep their
+/// own options and never take a capitalization switch from it.
+#[test]
+fn field_dialog_text_format_is_for_text_fields_only() {
+    for name in ["AUTHOR", "COMMENTS", "FILENAME", "KEYWORDS", "LASTSAVEDBY", "SUBJECT", "TITLE", "REF", "STYLEREF", "MERGEFIELD"] {
+        assert!(field::takes_text_format(name), "{name}");
+    }
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    for name in ["DATE", "PAGE", "NUMPAGES", "PAGEREF", "SEQ", "TOC"] {
+        assert!(!field::takes_text_format(name), "{name}");
+        f.select(name);
+        let before = f.instruction();
+        f.text_format = "Upper".into();
+        assert_eq!(f.instruction(), before, "{name}");
+    }
+}
+
+/// Hide Codes sets the Format list from the typed code's last capitalization switch outside
+/// quotes, and to (none) when the code has none.
+#[test]
+fn field_dialog_text_format_follows_the_typed_code() {
+    assert_eq!(field::text_formats(r#"AUTHOR "a \* Lower" \* upper \* Caps \* MERGEFORMAT"#), ["Upper", "Caps"]);
+    assert!(field::text_formats(r#"MERGEFIELD "x \* FirstCap""#).is_empty());
+    assert!(field::text_formats(r"PAGE \* roman").is_empty());
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("SUBJECT");
+    f.toggle_codes();
+    assert_eq!(f.code, r"SUBJECT \* MERGEFORMAT");
+    f.code = r"SUBJECT \* FIRSTCAP \* MERGEFORMAT".into();
+    f.toggle_codes();
+    assert!(!f.codes);
+    assert_eq!(f.instruction(), r"SUBJECT \* FirstCap \* MERGEFORMAT");
+    f.toggle_codes();
+    f.code = "SUBJECT".into();
+    f.toggle_codes();
+    assert_eq!(f.text_format, "");
+    // A code for another field leaves the list as it was.
+    f.text_format = "Lower".into();
+    f.toggle_codes();
+    f.code = r"TITLE \* Upper".into();
+    f.toggle_codes();
+    assert_eq!(f.text_format, "Lower");
+}
+
+/// Hide Codes keeps every capitalization switch of the typed code, in order, so the inserted field
+/// shows what the typed code shows; choosing another Format writes that one switch only.
+#[test]
+fn field_dialog_text_format_keeps_every_typed_case_switch() {
+    use wordcraft_layout::fields::apply_case_switch;
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("SUBJECT");
+    f.toggle_codes();
+    f.code = r"SUBJECT \* Lower \* Caps".into();
+    let typed = apply_case_switch(&f.code, "WEEKLY REPORT".into());
+    assert_eq!(typed, "Weekly Report");
+    f.toggle_codes();
+    assert_eq!(f.text_format, "Caps");
+    assert_eq!(f.final_code(), r"SUBJECT \* Lower \* Caps \* MERGEFORMAT");
+    assert_eq!(apply_case_switch(&f.final_code(), "WEEKLY REPORT".into()), typed);
+    // Field Codes shows the same switches again.
+    f.toggle_codes();
+    assert_eq!(f.code, r"SUBJECT \* Lower \* Caps \* MERGEFORMAT");
+    f.toggle_codes();
+    // A Format the user chooses replaces the typed switches, and choosing Title case again
+    // does not bring them back.
+    f.choose_text_format("Upper");
+    assert_eq!(f.final_code(), r"SUBJECT \* Upper \* MERGEFORMAT");
+    f.choose_text_format("Caps");
+    assert_eq!(f.final_code(), r"SUBJECT \* Caps \* MERGEFORMAT");
+    f.choose_text_format("");
+    assert_eq!(f.final_code(), r"SUBJECT \* MERGEFORMAT");
+    // Choosing another field forgets them.
+    f.toggle_codes();
+    f.code = r"SUBJECT \* Lower \* Caps".into();
+    f.toggle_codes();
+    f.select("SUBJECT");
+    f.text_format = "Caps".into();
+    assert_eq!(f.final_code(), r"SUBJECT \* Caps \* MERGEFORMAT");
+}
+
+/// A typed `MERGEFIELD` code's type ends at a quote as well as a space, as mail merge reads it.
+#[test]
+fn field_dialog_reads_a_typed_merge_field_with_no_space_before_its_quote() {
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("MERGEFIELD");
+    f.toggle_codes();
+    f.code = r#"MERGEFIELD"City" \* Lower"#.into();
+    assert_eq!(f.params().unwrap()["result"], "«City»");
+    f.toggle_codes();
+    assert_eq!(f.text_format, "Lower");
+    // Another field whose name only starts the same way is not this one.
+    f.choose_text_format("");
+    f.toggle_codes();
+    f.code = r"MERGEFIELDX \* Lower".into();
+    f.toggle_codes();
+    assert_eq!(f.text_format, "");
+}
+
 /// The Field dialog lists Word's document information fields, and the counts take a number
 /// format.
 #[test]
@@ -165,4 +300,156 @@ fn field_dialog_lists_the_document_information_fields() {
     assert_eq!(f.instruction(), r"REVNUM \* ROMAN");
     f.select("SUBJECT");
     assert_eq!(f.instruction(), "SUBJECT");
+}
+
+/// The Date & Time dialog uses the saved pt-BR editing language when present in UI preferences.
+#[test]
+fn date_time_dialog_uses_saved_pt_br_language() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.ui.date_time_language = "pt-BR".into();
+    let InsertDialog::DateTime(mut f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
+    assert_eq!(f.format, "dd/MM/yyyy");
+    assert_eq!(f.params()["language"], "pt-BR");
+    assert!(!f.update);
+    f.update = false;
+    assert_eq!(f.params()["update"], false);
+}
+
+/// Language tags with primary subtag `pt` (such as `pt_BR` or `pt-PT`) are normalized to `pt-BR`.
+#[test]
+fn date_time_dialog_normalizes_portuguese_language_tags() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.ui.date_time_language = "pt_BR".into();
+    let InsertDialog::DateTime(f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
+    assert_eq!(f.language, "pt-BR");
+    assert_eq!(f.format, "dd/MM/yyyy");
+
+    a.ui.date_time_language = "pt-PT".into();
+    let InsertDialog::DateTime(f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
+    assert_eq!(f.language, "pt-BR");
+}
+
+/// Click the real egui language menu, date picture, checkbox and OK; ensure the resulting
+/// document contains pt-BR fixed text with the language on its run, not just JSON params.
+#[test]
+fn date_time_dialog_controls_insert_portuguese_fixed_text() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.ui.language = "en".into();
+    app.ui.date_time_language = "en-US".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("ui.dialog", json!({"name": "dateTime"})).unwrap();
+    h.run_steps(4);
+
+    // Go through the actual language combo box and then select a long Portuguese date.
+    // Scope the click to this dialog: the ribbon has another English-language button.
+    // The popup choice has a plain accessible label; the main ribbon uses a different control.
+    h.get_by_role_and_label(Role::Window, "Date and Time").get_by_role(Role::ComboBox).click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Portuguese (Brazil)").click();
+    h.run_steps(3);
+    let sample = wordcraft_engine::cmd::insert::format_date_in("d 'de' MMMM 'de' yyyy", Some("pt-BR"));
+    h.get_by_label(&sample).click();
+    h.run_steps(2);
+    // By default, update is unchecked (false). Toggle it on and off to verify the checkbox.
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if !f.update)
+    ));
+    h.get_by_label("Update automatically").click();
+    h.run_steps(2);
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.update)
+    ));
+    h.get_by_label("Update automatically").click();
+    h.run_steps(2);
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.language == "pt-BR" && f.format == "d 'de' MMMM 'de' yyyy" && !f.update)
+    ));
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "successful insertion closes the dialog");
+    let doc = &h.state().session.doc;
+    assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), sample);
+    let para = doc.para_at(&doc.start_of(wordcraft_doc::StoryRef::Body)).expect("inserted paragraph");
+    assert_eq!(para.props_of_char(0).lang.as_deref(), Some("pt-BR"));
+    assert!(para.objects.iter().all(|o| !matches!(o, wordcraft_doc::para::InlineObject::Field { .. })));
+}
+
+/// Checking 'Update automatically' inserts a refreshable dynamic DATE field.
+#[test]
+fn date_time_dialog_controls_insert_dynamic_field() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.ui.language = "en".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("ui.dialog", json!({"name": "dateTime"})).unwrap();
+    h.run_steps(4);
+
+    h.get_by_label("Update automatically").click();
+    h.run_steps(2);
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.update)
+    ));
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "successful insertion closes the dialog");
+    let doc = &h.state().session.doc;
+    let para = doc.para_at(&doc.start_of(wordcraft_doc::StoryRef::Body)).expect("inserted paragraph");
+    assert!(para.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::Field { .. })));
+}
+
+/// An invalid saved picture is reported in the modal, not silently dismissed when OK is clicked.
+#[test]
+fn date_time_dialog_keeps_open_and_displays_invalid_picture_error() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.ui.language = "en".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("ui.dialog", json!({"name": "dateTime"})).unwrap();
+    if let Some(crate::dialogs::Dialog::Insert(d)) = h.state_mut().dialog.as_mut()
+        && let InsertDialog::DateTime(f) = &mut **d
+    {
+        f.format = "invalid\\picture".into();
+    } else {
+        panic!("date/time dialog expected");
+    }
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(3);
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.error.as_deref().is_some_and(|e| e.contains("invalid date picture")))
+    ));
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "");
 }

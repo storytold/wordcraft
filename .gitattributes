@@ -1,1 +1,5 @@
+# Text lives in the repository with LF. A Windows checkout once committed 50 files with CRLF
+# (#6537) and `cargo fmt --check` still passed, so the gate could not see it. Normalise on add.
+* text=auto
+
 craft-i18n.rev text eol=lf
