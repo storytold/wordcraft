@@ -782,6 +782,7 @@ fn open_for_read(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     }
     #[cfg(not(windows))]
     {
+        crate::file_access::check_read(&path.to_string_lossy()).map_err(unauthorized)?;
         let mut open = std::fs::OpenOptions::new();
         open.read(true);
         // A path swapped for a named pipe since the check above would block `open`; non-blocking
@@ -801,6 +802,7 @@ fn metadata_for_read(path: &std::path::Path) -> std::io::Result<std::fs::Metadat
             Err(error) if !refuses_traversal(&error) => return Err(error),
             Err(error) => error,
         },
+        Err(reason) if !cfg!(windows) => return Err(unauthorized(reason)),
         Err(reason) => unauthorized(reason),
     };
     for candidate in fallback_paths(path) {
