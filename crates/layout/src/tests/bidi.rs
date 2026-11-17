@@ -480,7 +480,8 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
 
 /// A right-to-left table (`w:bidiVisual`, #362): the first logical column stands at the right
 /// edge, the table is start-aligned against the right margin, and each cell's start (left)
-/// margin and border are drawn on its right. Clicks find cells by where they are drawn.
+/// border is drawn on its right. Its left margin stays on its left, as Word for Windows lays it
+/// out (`w:left` and `w:start` alike). Clicks find cells by where they are drawn.
 #[test]
 fn rtl_table_lays_its_columns_out_right_to_left() {
     crate::test_fonts();
@@ -489,7 +490,7 @@ fn rtl_table_lays_its_columns_out_right_to_left() {
     let mut d = Document::from_text("before\nafter");
     let mut t = Table::new(1, 3, 300.0);
     t.props.bidi_visual = true;
-    // Start margin 10pt, end margin 2pt.
+    // Left margin 10pt, right margin 2pt.
     t.props.cell_margins = Some([0.0, 10.0, 0.0, 2.0]);
     for (i, c) in t.rows[0].cells.iter_mut().enumerate() {
         c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("c{i}"), Default::default()))];
@@ -508,10 +509,11 @@ fn rtl_table_lays_its_columns_out_right_to_left() {
     assert!(c0.x > c1.x && c1.x > c2.x, "{c0:?} {c1:?} {c2:?}");
     assert!((c1.right() - c0.x).abs() < 0.01 && (c2.right() - c1.x).abs() < 0.01);
     assert!((c2.x - (right - 300.0)).abs() < 2.0, "{c2:?}");
-    // The first cell's text sits its end margin (2pt) in from the cell's left edge.
+    // The first cell's text sits its left margin (10pt) in from the cell's left edge, not its
+    // right margin (2pt): Word doesn't mirror the margins (measured in Word for Windows).
     let text_x =
         items.iter().find_map(|i| if let Placed::Lines { path, x, .. } = i { (path.0 == [1, 0, 0, 0]).then_some(*x) } else { None }).unwrap();
-    assert!((text_x - (c0.x + 2.0)).abs() < 0.5, "text at {text_x}, cell {c0:?}");
+    assert!((text_x - (c0.x + 10.0)).abs() < 0.5, "text at {text_x}, cell {c0:?}");
     // The thick start border is drawn on the cell's right edge.
     let thick: Vec<f32> = items
         .iter()
