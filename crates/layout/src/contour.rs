@@ -307,7 +307,7 @@ fn decode_alpha(bytes: &[u8], decoded: &mut u64) -> Result<Option<Alpha>, OverBu
 fn alpha_in_crop(img: &Alpha, crop: [f32; 4]) -> Option<Vec<(f32, f32)>> {
     let (iw, ih) = (img.w, img.h);
     // The part the renderers draw (#1899): a sliver keeps its partly covered pixels.
-    let [cl, ct, vw, vh] = craft_metafile::crop_window(crop);
+    let [cl, ct, vw, vh] = crate::crop_window(crop);
     let (fw, fh) = (f64::from(iw), f64::from(ih));
     let x0 = ((fw * cl) as u32).min(iw);
     let y0 = ((fh * ct) as u32).min(ih);

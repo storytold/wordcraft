@@ -39,7 +39,7 @@ pub struct Prefs {
     pub region: Option<String>,
     /// A folder searched for Hunspell dictionaries before the system locations (File › Options ›
     /// Language, #1063): an app started from Finder or the Dock doesn't see
-    /// `WORDCRAFT_DICTIONARIES`. `None` searches the system locations only.
+    /// `WORDCRAFT_DICTIONARIES`. `None` means no configured folder.
     pub dictionaries_folder: Option<String>,
     /// The user templates folder File › New lists personal templates from and Save as Word
     /// Template starts in (File › Options › Advanced › File locations, #2852). `None`: the app's

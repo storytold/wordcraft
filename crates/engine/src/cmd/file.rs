@@ -90,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O / Mod+F12 / Mod+Alt+F2")
-            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word or OpenDocument text file)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
@@ -100,7 +100,7 @@ pub fn specs() -> Vec<CommandSpec> {
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
-            .params(r#"{"password": string (Word documents are saved encrypted with it) | null or "" (saved unencrypted)}"#)
+            .params(r#"{"password": string (Word packages and OpenDocument text files (.odt, .ott) are saved encrypted with it) | null or "" (saved unencrypted)}"#)
             .pure(),
         CommandSpec::new("file.exportPdf", "Export PDF", "File › Export", |s, v| {
             // No path (the command search, say): the app asks where to save, as File › Export
@@ -368,8 +368,8 @@ fn close_document(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"closed": id, "active": s.document_id(), "documents": s.documents()}))
 }
 
-/// File › Info › Protect Document › Encrypt with Password: the password Word documents are saved
-/// with from now on, or none.
+/// File › Info › Protect Document › Encrypt with Password: the password Word packages and
+/// OpenDocument text files (.odt, .ott) are saved with from now on, or none.
 fn encrypt(s: &mut Session, v: &Value) -> CmdResult {
     let password = match v.get("password") {
         Some(Value::Null) => None,
