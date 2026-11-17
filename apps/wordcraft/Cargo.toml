@@ -86,7 +86,7 @@ clipboard-win = { version = "5.4", features = ["std"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # At the same craft-libs commit as the workspace's crates: `printer_queues`, the printer list that
 # asks no driver (#5710, storytold/craft-libs#618), and `submit_cancellable` (storytold/craft-libs#622).
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "453b0da782ccef39be9a6dac8d27c80b553ef1cc" }
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "beeea92451a7542cf8ef50cccde597a421dd98d0" }
 rfd = { workspace = true }
 # Waits for an `rfd::AsyncFileDialog` on a background thread (the dialogs don't block the UI, #94);
 # rfd itself already depends on it.
