@@ -58,6 +58,8 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
+    const YU_MINCHO: &[&str] = &["YuMincho", "Yu Mincho", "游明朝", "游明朝体"];
+    const YU_GOTHIC: &[&str] = &["YuGothic", "Yu Gothic", "游ゴシック", "游ゴシック体"];
     // Word's symbol fonts (Symbol, Wingdings…) are proprietary: their characters are drawn as their
     // Unicode equivalents (`wordcraft_doc::symbol_fonts`) from these faces or any face that has them.
     const SYMBOL: &[&str] = &["Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols", "Noto Sans Symbols 2", "Source Sans 3"];
@@ -148,6 +150,8 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         "times new roman" | "times" => (TIMES, true),
         "courier new" | "courier" | "consolas" | "lucida console" | "cascadia code" | "cascadia mono" => (MONO, true),
         "symbol" | "wingdings" | "wingdings 2" | "wingdings 3" | "segoe ui symbol" | "webdings" => (SYMBOL, true),
+        _ if f.starts_with("yu mincho") || f.starts_with("yumincho") || f.starts_with("游明朝") => (YU_MINCHO, true),
+        _ if f.starts_with("yu gothic") || f.starts_with("yugothic") || f.starts_with("游ゴシック") => (YU_GOTHIC, true),
         // Serif faces with no open clone of their own: the generic serif list, as for any font.
         "cambria"
         | "cambria math"
@@ -224,6 +228,27 @@ const METRIC_TWINS: &[&[&str]] = &[
     &["Palatino Linotype", "Palatino", "Book Antiqua", "TeX Gyre Pagella", "P052", "URW Palladio L", "Palladio"],
 ];
 
+/// Platform-specific family names for the same font (Windows vs macOS Yu Mincho / Yu Gothic).
+/// Resolving an alias selects the installed face itself (`substituted = false`), not a substitute.
+const FAMILY_ALIASES: &[&[&str]] = &[
+    &["Yu Mincho", "YuMincho", "游明朝", "游明朝体"],
+    &["Yu Mincho Demibold", "YuMincho Demibold", "游明朝 Demibold", "游明朝体 Demibold"],
+    &["Yu Mincho Light", "YuMincho Light", "游明朝 Light", "游明朝体 Light"],
+    &["Yu Gothic", "YuGothic", "游ゴシック", "游ゴシック体"],
+    &["Yu Gothic Medium", "YuGothic Medium", "游ゴシック Medium", "游ゴシック体 Medium"],
+    &["Yu Gothic Light", "YuGothic Light", "游ゴシック Light", "游ゴシック体 Light"],
+];
+
+/// Other platform names for `family` ([`FAMILY_ALIASES`]), without `family` itself.
+pub fn family_aliases(family: &str) -> impl Iterator<Item = &'static str> + '_ {
+    let f = family.trim();
+    FAMILY_ALIASES
+        .iter()
+        .filter(move |g| g.iter().any(|t| t.eq_ignore_ascii_case(f)))
+        .flat_map(|g| g.iter().copied())
+        .filter(move |t| !t.eq_ignore_ascii_case(f))
+}
+
 /// The fonts that measure like `family` ([`METRIC_TWINS`]), in the order they are tried, without
 /// `family` itself.
 fn metric_twins(family: &str) -> impl Iterator<Item = &'static str> + '_ {
@@ -235,13 +260,15 @@ fn metric_twins(family: &str) -> impl Iterator<Item = &'static str> + '_ {
         .filter(move |t| !t.eq_ignore_ascii_case(f))
 }
 
-/// Whether `substitute` was made to measure like `family` ([`METRIC_TWINS`]), so text drawn in it
-/// wraps and paginates as in `family`.
+/// Whether `substitute` was made to measure like `family` ([`METRIC_TWINS`] or [`FAMILY_ALIASES`]),
+/// so text drawn in it wraps and paginates as in `family`.
 pub fn metric_compatible(family: &str, substitute: &str) -> bool {
     let s = substitute.trim();
     family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| {
         let base = charset_base_family(f);
-        base.eq_ignore_ascii_case(s) || metric_twins(base).any(|t| t.eq_ignore_ascii_case(s))
+        base.eq_ignore_ascii_case(s)
+            || family_aliases(base).any(|a| a.eq_ignore_ascii_case(s))
+            || metric_twins(base).any(|t| t.eq_ignore_ascii_case(s))
     })
 }
 
@@ -395,11 +422,12 @@ struct ListClass {
 /// [`ListClass`] of the semicolon-separated `family`, memoised by its text.
 fn list_class(family: &str) -> ListClass {
     let key = family_list_key(family);
-    let generation = FontDb::global().generation();
+    let db = FontDb::global();
+    let stamp = (db.id(), db.generation());
     {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if c.generation != generation {
-            *c = FallbackListMemo { generation, ..Default::default() };
+        if (c.db_id, c.generation) != stamp {
+            *c = FallbackListMemo { db_id: stamp.0, generation: stamp.1, ..Default::default() };
         } else if let Some((cached, class)) = c.classes.get(&key)
             && cached == family
         {
@@ -408,7 +436,7 @@ fn list_class(family: &str) -> ListClass {
     }
     let class = ListClass { thai: classify_thai(family), named: classify_named(family) };
     let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if c.generation == generation {
+    if (c.db_id, c.generation) == stamp {
         if c.classes.len() >= FAMILY_CACHE_MAX {
             c.classes.clear();
         }
@@ -493,9 +521,11 @@ const FAMILY_KEY_MAX: usize = 256;
 /// for candidate names not present in [`FontDb::families`].
 const MAX_DIRECT_CANDIDATE_PROBES: usize = 32;
 
-/// Memoised fallback-list resolutions and installed-family lookups for the current [`FontDb::generation`].
+/// Memoised fallback-list resolutions and installed-family lookups for the current
+/// `(db_id, generation)` stamp.
 #[derive(Default)]
 struct FallbackListMemo {
+    db_id: u64,
     generation: u64,
     families: std::collections::HashSet<String>,
     probed: HashMap<String, bool>,
@@ -525,12 +555,12 @@ fn candidate_has_family(db: &FontDb, cand: &str, direct_probes: &mut usize) -> b
     if cand.is_empty() || cand.len() > FAMILY_KEY_MAX {
         return false;
     }
-    let generation = db.generation();
+    let stamp = (db.id(), db.generation());
     let lower = cand.to_ascii_lowercase();
     {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if c.generation != generation {
-            *c = FallbackListMemo { generation, ..Default::default() };
+        if (c.db_id, c.generation) != stamp {
+            *c = FallbackListMemo { db_id: stamp.0, generation: stamp.1, ..Default::default() };
         }
         if c.families.is_empty() {
             c.families = db.families().into_iter().map(|f| f.to_ascii_lowercase()).collect();
@@ -548,7 +578,7 @@ fn candidate_has_family(db: &FontDb, cand: &str, direct_probes: &mut usize) -> b
     *direct_probes -= 1;
     let hit = db.has_family(cand);
     let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if c.generation == generation {
+    if (c.db_id, c.generation) == stamp {
         if c.probed.len() >= FAMILY_CACHE_MAX {
             c.probed.clear();
         }
@@ -558,9 +588,9 @@ fn candidate_has_family(db: &FontDb, cand: &str, direct_probes: &mut usize) -> b
 }
 
 /// Record a resolved `(family, substituted)` pair for a semicolon-separated fallback list.
-fn remember_list_resolution(generation: u64, key: (u64, usize), family: &str, result: (String, bool)) -> (String, bool) {
+fn remember_list_resolution(stamp: (u64, u64), key: (u64, usize), family: &str, result: (String, bool)) -> (String, bool) {
     let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if c.generation == generation {
+    if (c.db_id, c.generation) == stamp {
         if c.lists.len() >= FAMILY_CACHE_MAX {
             c.lists.clear();
         }
@@ -570,24 +600,26 @@ fn remember_list_resolution(generation: u64, key: (u64, usize), family: &str, re
 }
 
 /// Resolve a single family or semicolon-separated fallback list to `(family_name, substituted)`.
-fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
+pub(crate) fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     if !family.contains(';') {
         let base = if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) };
         return if db.has_family(family) {
             (family.to_string(), false)
         } else if base != family && db.has_family(base) {
             (base.to_string(), false)
+        } else if let Some(alias) = family_aliases(base).find(|a| db.has_family(a)) {
+            (alias.to_string(), false)
         } else {
             (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
         };
     }
 
-    let generation = db.generation();
+    let stamp = (db.id(), db.generation());
     let list_key = family_list_key(family);
     {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if c.generation != generation {
-            *c = FallbackListMemo { generation, ..Default::default() };
+        if (c.db_id, c.generation) != stamp {
+            *c = FallbackListMemo { db_id: stamp.0, generation: stamp.1, ..Default::default() };
         } else if let Some((cached_family, r)) = c.lists.get(&list_key)
             && cached_family == family
         {
@@ -597,19 +629,23 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
 
     let candidates: Vec<&str> = family.split(';').map(str::trim).filter(|s| !s.is_empty() && s.len() <= FAMILY_KEY_MAX).collect();
     if candidates.is_empty() {
-        return remember_list_resolution(generation, list_key, family, (crate::FALLBACK_FAMILY.to_string(), true));
+        return remember_list_resolution(stamp, list_key, family, (crate::FALLBACK_FAMILY.to_string(), true));
     }
 
     let mut direct_probes = MAX_DIRECT_CANDIDATE_PROBES;
+    let mut alias_probes = MAX_DIRECT_CANDIDATE_PROBES;
 
-    // 1. First installed family in the list:
+    // 1. First installed family (or same-font platform alias) in the list:
     for &cand in &candidates {
         let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
         if candidate_has_family(db, cand, &mut direct_probes) {
-            return remember_list_resolution(generation, list_key, family, (cand.to_string(), false));
+            return remember_list_resolution(stamp, list_key, family, (cand.to_string(), false));
         }
         if base != cand && candidate_has_family(db, base, &mut direct_probes) {
-            return remember_list_resolution(generation, list_key, family, (base.to_string(), false));
+            return remember_list_resolution(stamp, list_key, family, (base.to_string(), false));
+        }
+        if let Some(alias) = family_aliases(base).find(|a| candidate_has_family(db, a, &mut alias_probes)) {
+            return remember_list_resolution(stamp, list_key, family, (alias.to_string(), false));
         }
     }
 
@@ -620,11 +656,11 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
         if is_thai_family(base)
             && let Some(sub) = substitute(db, base)
         {
-            return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
+            return remember_list_resolution(stamp, list_key, family, (sub.to_string(), true));
         }
         let mut twin_probes = MAX_DIRECT_CANDIDATE_PROBES;
         if let Some(twin) = metric_twins(base).find(|t| candidate_has_family(db, t, &mut twin_probes)) {
-            return remember_list_resolution(generation, list_key, family, (twin.to_string(), true));
+            return remember_list_resolution(stamp, list_key, family, (twin.to_string(), true));
         }
     }
 
@@ -635,7 +671,7 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
         if (named || is_thai_family(base) || subs != SANS)
             && let Some(sub) = substitute(db, base)
         {
-            return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
+            return remember_list_resolution(stamp, list_key, family, (sub.to_string(), true));
         }
     }
 
@@ -643,11 +679,11 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     if let Some(&first) = candidates.first() {
         let base = if first.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(first) };
         if let Some(sub) = substitute(db, base) {
-            return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
+            return remember_list_resolution(stamp, list_key, family, (sub.to_string(), true));
         }
     }
 
-    remember_list_resolution(generation, list_key, family, (crate::FALLBACK_FAMILY.to_string(), true))
+    remember_list_resolution(stamp, list_key, family, (crate::FALLBACK_FAMILY.to_string(), true))
 }
 
 /// Resolve `family` with bold/italic to a face (memoised until user fonts are added or removed,
@@ -655,7 +691,7 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
 pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     let cache = resolve_cache();
     let db = FontDb::global();
-    let generation = db.generation();
+    let stamp = (db.id(), db.generation());
     let cacheable = family.len() <= FAMILY_KEY_MAX;
     let key = (if cacheable { family.to_string() } else { String::new() }, bold, italic);
     let long_key = (!cacheable && family.contains(';')).then(|| {
@@ -664,8 +700,8 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     });
     {
         let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if c.0 != generation {
-            *c = (generation, HashMap::new());
+        if c.0 != stamp.1 {
+            *c = (stamp.1, HashMap::new());
         }
         if cacheable && let Some(r) = c.1.get(&key) {
             return *r;
@@ -673,8 +709,8 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     }
     if let Some(lk) = long_key {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if c.generation != generation {
-            *c = FallbackListMemo { generation, ..Default::default() };
+        if (c.db_id, c.generation) != stamp {
+            *c = FallbackListMemo { db_id: stamp.0, generation: stamp.1, ..Default::default() };
         } else if let Some((cached_family, r)) = c.long_resolved.get(&lk)
             && cached_family == family
         {
@@ -686,7 +722,7 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     let r = Resolved { synth_bold: bold && face.weight < 600.0, synth_italic: italic && !face.italic, substituted, face: FaceRef::of(&face) };
     if cacheable {
         let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if c.0 == generation {
+        if c.0 == stamp.1 {
             if c.1.len() >= FAMILY_CACHE_MAX {
                 c.1.clear();
             }
@@ -694,7 +730,7 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
         }
     } else if let Some(lk) = long_key {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if c.generation == generation {
+        if (c.db_id, c.generation) == stamp {
             if c.long_resolved.len() >= FAMILY_CACHE_MAX {
                 c.long_resolved.clear();
             }
@@ -798,10 +834,32 @@ mod tests {
         assert!(metric_compatible(" arial ", "Liberation Sans"));
         assert!(metric_compatible("Arial CE", "Helvetica"));
         assert!(metric_compatible("Book Antiqua", "TeX Gyre Pagella"));
+        assert!(metric_compatible("游明朝", "YuMincho"));
+        assert!(metric_compatible("Yu Mincho", "YuMincho"));
+        assert!(metric_compatible("Yu Mincho", "游明朝体"));
+        assert!(metric_compatible("游明朝 Demibold", "YuMincho Demibold"));
+        assert!(metric_compatible("游ゴシック", "YuGothic"));
+        assert!(metric_compatible("Yu Gothic", "YuGothic"));
         assert!(!metric_compatible("Calibri", "Helvetica Neue"));
         assert!(!metric_compatible("Open Sans", "Carlito"));
         assert!(!metric_compatible("Times New Roman", "Times"));
         assert_eq!(metric_twins("arial").collect::<Vec<_>>(), ["Liberation Sans", "Helvetica", "Arimo"]);
+        assert_eq!(family_aliases("游明朝").collect::<Vec<_>>(), ["Yu Mincho", "YuMincho", "游明朝体"]);
+    }
+
+    #[test]
+    fn yu_mincho_alias_resolves_before_later_fallback_candidate() {
+        // When `Source Serif 4` stands in for a known alias via an installed face, or when
+        // resolving against the bundled db, `family_aliases` covers every Windows/macOS pair
+        // without pulling in unrelated metric substitutes.
+        assert_eq!(family_aliases("Yu Mincho").collect::<Vec<_>>(), ["YuMincho", "游明朝", "游明朝体"]);
+        assert_eq!(family_aliases("YuGothic").collect::<Vec<_>>(), ["Yu Gothic", "游ゴシック", "游ゴシック体"]);
+        // Verify candidate-level alias resolution on a fresh database when only an alias is present:
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let (fam, sub) = resolve_family(&db, "游明朝; Source Serif 4");
+        // Neither `游明朝` nor `YuMincho` is bundled, so it moves on to `Source Serif 4`.
+        assert_eq!((fam.as_str(), sub), ("Source Serif 4", false));
     }
 
     #[test]
