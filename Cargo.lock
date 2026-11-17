@@ -1283,6 +1283,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mcp-server"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=beeea92451a7542cf8ef50cccde597a421dd98d0#beeea92451a7542cf8ef50cccde597a421dd98d0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-metadata"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=beeea92451a7542cf8ef50cccde597a421dd98d0#beeea92451a7542cf8ef50cccde597a421dd98d0"
@@ -7538,6 +7546,7 @@ dependencies = [
 name = "wordcraft-mcp"
 version = "0.18.1"
 dependencies = [
+ "craft-mcp-server",
  "log",
  "serde_json",
  "wordcraft-control-key",
