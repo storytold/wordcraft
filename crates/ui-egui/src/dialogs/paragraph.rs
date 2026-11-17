@@ -134,7 +134,15 @@ pub(super) fn para_special(r: &mut crate::rtl::Cells, first: &mut f32, mixed: &m
             // Typed values count once committed: the 0 of "0.25" would otherwise turn Special
             // to (none) and disable the box mid-typing.
             let mut by = first.abs();
-            let field = egui::DragValue::new(&mut by).speed(3.6 / unit.pt_per_unit()).max_decimals(2).update_while_editing(false).measure(unit);
+            // By stops at 0 when dragged down instead of turning negative for a frame (which the
+            // `abs` below would flip back), and at Word's 22".
+            let field = egui::DragValue::new(&mut by)
+                .speed(3.6 / unit.pt_per_unit())
+                .range(0.0..=1584.0 / unit.pt_per_unit())
+                .clamp_existing_to_range(false)
+                .max_decimals(2)
+                .update_while_editing(false)
+                .measure(unit);
             if ui.add(field).labelled_by(by_label.id).changed() {
                 mixed.remove("indentFirst");
             }

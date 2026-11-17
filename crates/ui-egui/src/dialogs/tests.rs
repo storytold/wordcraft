@@ -736,6 +736,19 @@ fn paragraph_dialog_sets_first_line_and_hanging_indents() {
     assert_eq!(first(&h), -0.75, "the typed By counts once committed");
     pick(&mut h, "First line");
     assert_eq!(first(&h), 0.75, "switching kinds keeps By");
+    // By has a range, 0 to Word's 22": a larger value stops there (and dragging down stops at 0).
+    by_box(&h).click();
+    h.run_steps(2);
+    by_box(&h).type_text("30");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(first(&h), 22.0, "By stops at 22\"");
+    by_box(&h).click();
+    h.run_steps(2);
+    by_box(&h).type_text("0.75");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(first(&h), 0.75);
     pick(&mut h, "Hanging");
     ok(&mut h);
     assert_eq!(props(h.state()).indent_first, Some(-54.0), "a hanging indent of 0.75\"");
