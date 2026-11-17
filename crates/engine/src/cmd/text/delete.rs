@@ -237,3 +237,20 @@ pub(super) fn delete_word_fwd(s: &mut Session, v: &Value) -> CmdResult {
     crate::cmd::controls::restore_placeholder(s)?;
     sel_result(s)
 }
+
+/// Delete to the current sentence start, or the preceding sentence when exactly at its boundary.
+/// Sentence boundaries match Select Sentence. Never remove a paragraph or cell boundary.
+pub(super) fn delete_sentence_back(s: &mut Session, v: &Value) -> CmdResult {
+    if !s.sel.is_collapsed() {
+        return backspace(s, v);
+    }
+    let mut f = s.sel.focus.clone();
+    let Some(para) = s.doc.para_at(&f) else { return sel_result(s) };
+    f.off = para.clamp(f.off);
+    let Some((previous, _)) = para.text.get(..f.off).and_then(|text| text.char_indices().next_back()) else { return sel_result(s) };
+    let start = para.sentence_at(previous).0;
+    s.sel = Selection { anchor: Pos { off: start, ..f.clone() }, focus: f };
+    delete_selection(s)?;
+    crate::cmd::controls::restore_placeholder(s)?;
+    sel_result(s)
+}
