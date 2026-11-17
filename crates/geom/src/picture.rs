@@ -9,7 +9,7 @@ use std::borrow::Cow;
 
 use craft_image_codecs::{
     ChannelLayout, CodecError, DecodeOptions, EncodeOptions, Format as CodecFormat, Image as CodecImage, Limits as CodecLimits, RasterColorType,
-    SampleType, decode_as_with, detect, encode as codec_encode, inspect_raster, probe_size,
+    SampleType, bmp_probe, decode_as_with, detect, encode as codec_encode, inspect_raster, probe_size,
 };
 use image::{DynamicImage, ImageBuffer, ImageFormat};
 
@@ -259,50 +259,26 @@ fn png_chunks(bytes: &[u8]) -> Option<(u32, u32, u64, bool)> {
     Some((width, height, channels * if depth == 16 { 2 } else { 1 }, alpha))
 }
 
-/// Prepend a 14-byte `BITMAPFILEHEADER` to a normalized DIB so `craft-image-codecs` can inspect and decode it as BMP.
-fn dib_to_bmp(dib: &[u8]) -> Vec<u8> {
-    let u16_at = |at: usize| dib.get(at..at + 2).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes);
-    let u32_at = |at: usize| dib.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
-    let bi_size = u32_at(0).unwrap_or(40);
-    let offset = if bi_size == 12 {
-        let bpp = u16_at(10).unwrap_or(24);
-        let palette = if bpp <= 8 { (1u32 << bpp) * 3 } else { 0 };
-        14 + bi_size + palette
-    } else {
-        let bpp = u16_at(14).unwrap_or(24);
-        let compression = u32_at(16).unwrap_or(0);
-        let clr_used = u32_at(32).unwrap_or(0);
-        let palette_entries = if clr_used != 0 {
-            clr_used
-        } else if bpp <= 8 {
-            1u32 << bpp
-        } else {
-            0
-        };
-        let masks = if compression == 3 && bi_size >= 40 { 12 } else { 0 };
-        14u32.saturating_add(bi_size).saturating_add(masks).saturating_add(palette_entries.saturating_mul(4))
-    };
-    let file_size = u32::try_from(14 + dib.len()).unwrap_or(u32::MAX);
-    let mut bmp = Vec::with_capacity(14 + dib.len());
-    bmp.extend_from_slice(b"BM");
-    bmp.extend_from_slice(&file_size.to_le_bytes());
-    bmp.extend_from_slice(&[0u8; 4]);
-    bmp.extend_from_slice(&offset.to_le_bytes());
-    bmp.extend_from_slice(dib);
-    bmp
+/// [`bmp_probe::dib_to_bmp`], its failure (the BMP's bytes can't be allocated) as the refusal a
+/// picture too large to hold gets, with the size its header declares (0 × 0 when it can't be read).
+fn dib_to_bmp(dib: &[u8]) -> Result<Vec<u8>, Refusal> {
+    bmp_probe::dib_to_bmp(dib).map_err(|_| {
+        let (width, height) = dib_header_dims(dib).unwrap_or((0, 0));
+        Refusal::TooLarge { width, height }
+    })
 }
 
 /// Read a DIB's header: a BMP without its 14-byte file header, as the Windows clipboard holds
 /// one (`CF_DIB`, `CF_DIBV5`). Its layout is first made the one the decoder reads (see
-/// [`dib_layout`]).
+/// [`bmp_probe::dib_layout`]).
 ///
 /// # Errors
 ///
 /// Returns `Refusal::Broken` for an invalid DIB header and `Refusal::TooLarge` on size arithmetic
 /// overflow.
 pub fn probe_dib(dib: Vec<u8>) -> Result<Probe<'static>, Refusal> {
-    let dib = dib_layout(dib);
-    let bmp = dib_to_bmp(&dib);
+    let dib = bmp_probe::dib_layout(dib);
+    let bmp = dib_to_bmp(&dib)?;
     let (width, height, native, alpha) = match inspect_raster(&bmp) {
         Ok(Some(info)) => {
             let native = u64::from(info.channels.max(1)) * u64::from(info.bits_per_sample.max(8) / 8);
@@ -540,37 +516,6 @@ fn worst_coefficients(bytes: &[u8]) -> u64 {
 /// the decoder keeps the last copy, so a harmless first one must not hide a JPEG one after it.
 fn tiff_compression(bytes: &[u8]) -> Option<u16> {
     craft_tiff::probe::first_image_compression(bytes)
-}
-
-/// A DIB with a V4 or V5 header in the layout the decoder reads. A 32-bit one whose alpha mask
-/// is set but whose compression says `BI_RGB` is marked `BI_BITFIELDS` (with the usual colour
-/// masks when it gives none), so its alpha is kept as Windows programs mean it; arboard makes the
-/// same change. Bit fields then need the colour masks after the header too, where Windows puts a
-/// copy and the decoder skips them; a DIB without that copy (arboard writes one) gets it.
-fn dib_layout(mut dib: Vec<u8>) -> Vec<u8> {
-    let u32_at = |d: &[u8], at: usize| d.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
-    let Some(size) = u32_at(&dib, 0).filter(|&s| s >= 108).and_then(|s| usize::try_from(s).ok()) else { return dib };
-    let put = |d: &mut Vec<u8>, at: usize, v: u32| {
-        if let Some(b) = d.get_mut(at..at + 4) {
-            b.copy_from_slice(&v.to_le_bytes());
-        }
-    };
-    if dib.get(14..16) == Some(&[32, 0]) && u32_at(&dib, 16) == Some(0) && u32_at(&dib, 52) == Some(0xFF00_0000) {
-        put(&mut dib, 16, 3);
-        if (40..52).step_by(4).all(|at| u32_at(&dib, at) == Some(0)) {
-            put(&mut dib, 40, 0x00FF_0000);
-            put(&mut dib, 44, 0x0000_FF00);
-            put(&mut dib, 48, 0x0000_00FF);
-        }
-    }
-    if u32_at(&dib, 16) == Some(3)
-        && size <= dib.len()
-        && let Some(masks) = dib.get(40..52).map(<[u8]>::to_vec)
-        && dib.get(size..size + 12) != Some(masks.as_slice())
-    {
-        dib.splice(size..size, masks);
-    }
-    dib
 }
 
 #[cfg(test)]
@@ -837,6 +782,185 @@ mod tests {
         lying[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
         for d in [short, lying] {
             assert!(probe_dib(d).and_then(|p| p.decode(1 << 20)).is_err());
+        }
+    }
+
+    // The local DIB wrapping before it moved to `craft_image_codecs::bmp_probe` (#778), kept as the oracle.
+    /// Prepend a 14-byte `BITMAPFILEHEADER` to a normalized DIB so `craft-image-codecs` can inspect and decode it as BMP.
+    fn oracle_dib_to_bmp(dib: &[u8]) -> Vec<u8> {
+        let u16_at = |at: usize| dib.get(at..at + 2).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes);
+        let u32_at = |at: usize| dib.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+        let bi_size = u32_at(0).unwrap_or(40);
+        let offset = if bi_size == 12 {
+            let bpp = u16_at(10).unwrap_or(24);
+            let palette = if bpp <= 8 { (1u32 << bpp) * 3 } else { 0 };
+            14 + bi_size + palette
+        } else {
+            let bpp = u16_at(14).unwrap_or(24);
+            let compression = u32_at(16).unwrap_or(0);
+            let clr_used = u32_at(32).unwrap_or(0);
+            let palette_entries = if clr_used != 0 {
+                clr_used
+            } else if bpp <= 8 {
+                1u32 << bpp
+            } else {
+                0
+            };
+            let masks = if compression == 3 && bi_size >= 40 { 12 } else { 0 };
+            14u32.saturating_add(bi_size).saturating_add(masks).saturating_add(palette_entries.saturating_mul(4))
+        };
+        let file_size = u32::try_from(14 + dib.len()).unwrap_or(u32::MAX);
+        let mut bmp = Vec::with_capacity(14 + dib.len());
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&file_size.to_le_bytes());
+        bmp.extend_from_slice(&[0u8; 4]);
+        bmp.extend_from_slice(&offset.to_le_bytes());
+        bmp.extend_from_slice(dib);
+        bmp
+    }
+
+    /// A DIB with a V4 or V5 header in the layout the decoder reads. A 32-bit one whose alpha mask
+    /// is set but whose compression says `BI_RGB` is marked `BI_BITFIELDS` (with the usual colour
+    /// masks when it gives none), so its alpha is kept as Windows programs mean it; arboard makes the
+    /// same change. Bit fields then need the colour masks after the header too, where Windows puts a
+    /// copy and the decoder skips them; a DIB without that copy (arboard writes one) gets it.
+    fn oracle_dib_layout(mut dib: Vec<u8>) -> Vec<u8> {
+        let u32_at = |d: &[u8], at: usize| d.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+        let Some(size) = u32_at(&dib, 0).filter(|&s| s >= 108).and_then(|s| usize::try_from(s).ok()) else { return dib };
+        let put = |d: &mut Vec<u8>, at: usize, v: u32| {
+            if let Some(b) = d.get_mut(at..at + 4) {
+                b.copy_from_slice(&v.to_le_bytes());
+            }
+        };
+        if dib.get(14..16) == Some(&[32, 0]) && u32_at(&dib, 16) == Some(0) && u32_at(&dib, 52) == Some(0xFF00_0000) {
+            put(&mut dib, 16, 3);
+            if (40..52).step_by(4).all(|at| u32_at(&dib, at) == Some(0)) {
+                put(&mut dib, 40, 0x00FF_0000);
+                put(&mut dib, 44, 0x0000_FF00);
+                put(&mut dib, 48, 0x0000_00FF);
+            }
+        }
+        if u32_at(&dib, 16) == Some(3)
+            && size <= dib.len()
+            && let Some(masks) = dib.get(40..52).map(<[u8]>::to_vec)
+            && dib.get(size..size + 12) != Some(masks.as_slice())
+        {
+            dib.splice(size..size, masks);
+        }
+        dib
+    }
+
+    /// The size and peak `probe_dib` reported before the cutover, as `(width, height, peak, alpha, bytes)`.
+    fn oracle_probe_dib(dib: Vec<u8>) -> Result<(u32, u32, u64, bool, Vec<u8>), Refusal> {
+        let dib = oracle_dib_layout(dib);
+        let bmp = oracle_dib_to_bmp(&dib);
+        let (width, height, native, alpha) = match inspect_raster(&bmp) {
+            Ok(Some(info)) => {
+                let native = u64::from(info.channels.max(1)) * u64::from(info.bits_per_sample.max(8) / 8);
+                (info.width, info.height, native, matches!(info.color_type, RasterColorType::GrayAlpha | RasterColorType::Rgba))
+            }
+            Ok(None) => return Err(Refusal::Broken("its DIB header can't be read".into())),
+            Err(CodecError::LimitExceeded(_)) => {
+                let (w, h) = dib_header_dims(&dib).ok_or_else(|| Refusal::Broken("its DIB header can't be read".into()))?;
+                (w, h, 4, false)
+            }
+            Err(e) => return Err(broken(e)),
+        };
+        let (width, height, peak) = sized(width, height, native, 0)?;
+        Ok((width, height, peak, alpha, bmp))
+    }
+
+    /// A DIB with a header of `size` bytes (12, 40, 52, 56, 64, 108 or 124), `bpp`, `compression`
+    /// and `clr_used`, followed by `tail` bytes.
+    fn dib_with(size: u32, bpp: u16, compression: u32, clr_used: u32, alpha_mask: u32, tail: &[u8]) -> Vec<u8> {
+        let mut d = vec![0u8; usize::try_from(size).unwrap()];
+        d[0..4].copy_from_slice(&size.to_le_bytes());
+        if size == 12 {
+            d[4..6].copy_from_slice(&3u16.to_le_bytes());
+            d[6..8].copy_from_slice(&2u16.to_le_bytes());
+            d[8..10].copy_from_slice(&1u16.to_le_bytes());
+            d[10..12].copy_from_slice(&bpp.to_le_bytes());
+        } else {
+            d[4..8].copy_from_slice(&3i32.to_le_bytes());
+            d[8..12].copy_from_slice(&2i32.to_le_bytes());
+            d[12..14].copy_from_slice(&1u16.to_le_bytes());
+            d[14..16].copy_from_slice(&bpp.to_le_bytes());
+            d[16..20].copy_from_slice(&compression.to_le_bytes());
+            d[32..36].copy_from_slice(&clr_used.to_le_bytes());
+            if size >= 56 {
+                d[52..56].copy_from_slice(&alpha_mask.to_le_bytes());
+            }
+            if size >= 52 {
+                for (at, m) in [(40, 0x00FF_0000u32), (44, 0x0000_FF00), (48, 0x0000_00FF)] {
+                    d[at..at + 4].copy_from_slice(&m.to_le_bytes());
+                }
+            }
+        }
+        d.extend_from_slice(tail);
+        d
+    }
+
+    fn crafted_dibs() -> Vec<Vec<u8>> {
+        let px = [[0u8, 0, 255, 128]; 6].concat();
+        let masks = [0x00u8, 0, 0xFF, 0, 0, 0xFF, 0, 0, 0xFF, 0, 0, 0];
+        let mut v = Vec::new();
+        for size in [12u32, 40, 52, 56, 64, 108, 124] {
+            for bpp in [1u16, 4, 8, 16, 24, 32] {
+                for compression in [0u32, 1, 2, 3, 6] {
+                    for clr_used in [0u32, 2, 300, u32::MAX] {
+                        for alpha_mask in [0u32, 0xFF00_0000] {
+                            for tail in [&[][..], &px[..], &masks[..], &[&masks[..], &px[..]].concat()[..]] {
+                                v.push(dib_with(size, bpp, compression, clr_used, alpha_mask, tail));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Clipboard layouts: the V5 helper's three, and a lying header size.
+        let q = [[0, 0, 255, 128], [255, 0, 0, 255]];
+        for (bitfields, copy) in [(false, false), (true, false), (true, true)] {
+            v.push(dib(2, 1, 0xFF00_0000, bitfields, copy, &q));
+            v.push(dib(2, 1, 0, bitfields, copy, &q));
+        }
+        v.push(dib(60_000, 60_000, 0xFF00_0000, false, false, &[]));
+        let mut lying = dib(2, 1, 0xFF00_0000, true, false, &q);
+        lying[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        v.push(lying);
+        v
+    }
+
+    #[test]
+    fn dib_wrapping_is_byte_equal_to_the_local_one_it_replaced() {
+        let mut n = 0;
+        for d in crafted_dibs() {
+            // Every truncation point of the header region, then the whole.
+            let cuts = (0..=d.len().min(140)).chain([d.len()]);
+            for cut in cuts {
+                let d = &d[..cut];
+                assert_eq!(dib_to_bmp(d).unwrap(), oracle_dib_to_bmp(d), "wrap, cut {cut}");
+                assert_eq!(bmp_probe::dib_layout(d.to_vec()), oracle_dib_layout(d.to_vec()), "layout, cut {cut}");
+                n += 1;
+            }
+        }
+        assert!(n > 100_000, "{n}");
+    }
+
+    #[test]
+    fn probe_dib_is_unchanged_by_the_shared_wrapping() {
+        for d in crafted_dibs() {
+            for cut in [0, 4, 11, 12, 14, 40, 52, 100, 124, 130, d.len()] {
+                let d = d[..cut.min(d.len())].to_vec();
+                let new = probe_dib(d.clone());
+                match (new, oracle_probe_dib(d.clone())) {
+                    (Ok(p), Ok((w, h, peak, alpha, bmp))) => {
+                        assert_eq!((p.width, p.height, p.peak, p.alpha), (w, h, peak, alpha), "{d:02x?}");
+                        assert_eq!(&*p.bytes, bmp.as_slice());
+                    }
+                    (Err(a), Err(b)) => assert_eq!(a, b, "{d:02x?}"),
+                    (a, b) => panic!("{d:02x?}: {:?} vs {:?}", a.map(|p| p.width), b.map(|o| o.0)),
+                }
+            }
         }
     }
 }
