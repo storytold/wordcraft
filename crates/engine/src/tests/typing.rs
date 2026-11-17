@@ -1749,6 +1749,30 @@ fn indic_and_khmer_backspace_removes_one_character() {
     assert_eq!(paras(&s)[0].0, "a");
 }
 
+/// #6766: a haraka typed after a letter of right-to-left text that came from a file (its runs
+/// marked right to left, as a reopened DOCX has them) goes into the letter's run, so the font
+/// places it on the letter. Typed text takes its direction from its own letters (#1543), but a
+/// combining mark has none: it took no direction, landed in a run of its own, and was shaped
+/// apart from its letter, drawn beside it instead of on it.
+#[test]
+fn a_typed_haraka_joins_the_run_of_its_letter() {
+    let mut s = typed("\u{0628}\u{064E}");
+    let path = s.sel.focus.path.clone();
+    for r in &mut s.doc.para_mut(StoryRef::Body, &path).unwrap().runs {
+        r.props.rtl = Some(true);
+    }
+    typ(&mut s, "\u{8}");
+    typ(&mut s, "\u{0650}");
+    let p = s.doc.para(StoryRef::Body, &path).unwrap();
+    assert_eq!(p.text, "\u{0628}\u{0650}");
+    assert_eq!(p.runs.len(), 1, "the mark is in its letter's run: {:?}", p.runs);
+    assert_eq!(p.props_of_char("\u{0628}".len()).rtl, Some(true));
+    // Typed letters still take their direction from themselves (#1543): Latin isn't right to left.
+    typ(&mut s, "a");
+    let p = s.doc.para(StoryRef::Body, &path).unwrap();
+    assert_eq!(p.props_of_char(p.text.len() - 1).rtl, None, "a typed Latin letter");
+}
+
 /// Arabic vowel and Quranic marks are individually editable without retyping their base (#4757).
 #[test]
 fn arabic_backspace_removes_one_mark_and_keeps_the_base() {

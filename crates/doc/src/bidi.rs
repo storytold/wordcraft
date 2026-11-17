@@ -32,6 +32,15 @@ pub fn is_word_char(c: char) -> bool {
         || matches!(u32::from(c), 0x200C | 0x200D | 0x0640 | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06DC | 0x06DF..=0x06E8 | 0x06EA..=0x06ED | 0x08D3..=0x08FF | 0x0300..=0x036F)
 }
 
+/// A character that attaches to the one before it in one grapheme cluster (a combining mark:
+/// Arabic harakat, Hebrew points, accents; a joiner). It has no direction of its own, so it takes
+/// the direction of the letter it is typed after (#6766).
+pub fn attaches_to_previous(c: char) -> bool {
+    use unicode_segmentation::UnicodeSegmentation;
+    let pair: String = ['a', c].iter().collect();
+    pair.graphemes(true).count() == 1
+}
+
 /// Does `text` contain a right-to-left character?
 pub fn has_rtl(text: &str) -> bool {
     text.chars().any(is_rtl_script)
@@ -60,6 +69,18 @@ pub fn first_strong_is_rtl(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #6766: combining marks attach to the character before them; letters, digits, spaces and
+    /// punctuation don't.
+    #[test]
+    fn combining_marks_attach_to_the_previous_character() {
+        for c in ['\u{064E}', '\u{0650}', '\u{0651}', '\u{0670}', '\u{05B4}', '\u{0301}', '\u{200D}'] {
+            assert!(attaches_to_previous(c), "U+{:04X}", u32::from(c));
+        }
+        for c in ['\u{0628}', '\u{05D0}', 'a', '1', ' ', '.', '\u{0640}'] {
+            assert!(!attaches_to_previous(c), "U+{:04X}", u32::from(c));
+        }
+    }
 
     #[test]
     fn classifies_persian_and_latin() {
