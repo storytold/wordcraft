@@ -13,108 +13,96 @@ pub mod units;
 /// group hierarchies.
 const MAX_DML_GROUP_DEPTH: usize = 64;
 
-fn normalize_deep_groups_xml(xml: &str) -> Option<String> {
-    if !xml.contains("wpg:wgp") && !xml.contains("wpg:grpSp") {
-        return None;
-    }
-    let mut reader = quick_xml::Reader::from_str(xml);
-    let mut writer = quick_xml::Writer::new(Vec::with_capacity(xml.len()));
-    let mut buf = Vec::new();
-    let mut group_depth = 0usize;
-    let mut skip_grp_meta_depth = 0usize;
-    let mut changed = false;
+const ZIP_LIMITS: craft_zip::Limits = craft_zip::Limits { max_entries: 10_000, max_total_bytes: 256 << 20 };
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(e)) => {
-                let name = e.name();
-                let is_grp = name.as_ref() == b"wpg:wgp" || name.as_ref() == b"wpg:grpSp";
-                if skip_grp_meta_depth > 0 {
-                    skip_grp_meta_depth += 1;
-                } else if is_grp {
-                    group_depth += 1;
-                    if group_depth <= 8 {
-                        writer.write_event(quick_xml::events::Event::Start(e)).ok()?;
-                    } else {
+fn normalize_deep_groups_el(el: &mut craft_xml::El, group_depth: usize) -> bool {
+    let mut changed = false;
+    let old_children = std::mem::take(&mut el.children);
+    let mut new_children = Vec::with_capacity(old_children.len());
+    for node in old_children {
+        match node {
+            craft_xml::Node::El(mut child) => {
+                let is_grp = child.name == "wpg:wgp" || child.name == "wpg:grpSp";
+                if is_grp {
+                    let next_depth = group_depth + 1;
+                    if next_depth > MAX_DML_GROUP_DEPTH + 1 {
+                        changed = true;
+                        continue;
+                    }
+                    if normalize_deep_groups_el(&mut child, next_depth) {
                         changed = true;
                     }
-                } else if (group_depth > 8 && (name.as_ref() == b"wpg:cNvGrpSpPr" || name.as_ref() == b"wpg:grpSpPr"))
-                    || group_depth > MAX_DML_GROUP_DEPTH + 1
-                {
-                    skip_grp_meta_depth = 1;
-                    changed = true;
-                } else {
-                    writer.write_event(quick_xml::events::Event::Start(e)).ok()?;
-                }
-            }
-            Ok(quick_xml::events::Event::Empty(e)) => {
-                let name = e.name();
-                let is_grp = name.as_ref() == b"wpg:wgp" || name.as_ref() == b"wpg:grpSp";
-                if skip_grp_meta_depth > 0
-                    || (is_grp && group_depth >= 8)
-                    || (group_depth > 8 && (name.as_ref() == b"wpg:cNvGrpSpPr" || name.as_ref() == b"wpg:grpSpPr"))
-                    || group_depth > MAX_DML_GROUP_DEPTH + 1
-                {
-                    changed = true;
-                } else {
-                    writer.write_event(quick_xml::events::Event::Empty(e)).ok()?;
-                }
-            }
-            Ok(quick_xml::events::Event::End(e)) => {
-                let name = e.name();
-                let is_grp = name.as_ref() == b"wpg:wgp" || name.as_ref() == b"wpg:grpSp";
-                if skip_grp_meta_depth > 0 {
-                    skip_grp_meta_depth -= 1;
-                } else if is_grp {
-                    if group_depth <= 8 {
-                        writer.write_event(quick_xml::events::Event::End(e)).ok()?;
+                    if next_depth > 8 {
+                        changed = true;
+                        for grand in child.children {
+                            if let craft_xml::Node::El(ref g) = grand
+                                && (g.name == "wpg:cNvGrpSpPr" || g.name == "wpg:grpSpPr")
+                            {
+                                continue;
+                            }
+                            new_children.push(grand);
+                        }
+                    } else {
+                        new_children.push(craft_xml::Node::El(child));
                     }
-                    group_depth = group_depth.saturating_sub(1);
                 } else {
-                    writer.write_event(quick_xml::events::Event::End(e)).ok()?;
+                    if normalize_deep_groups_el(&mut child, group_depth) {
+                        changed = true;
+                    }
+                    new_children.push(craft_xml::Node::El(child));
                 }
             }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Ok(ev) => {
-                if skip_grp_meta_depth == 0 && group_depth <= MAX_DML_GROUP_DEPTH + 1 {
-                    writer.write_event(ev).ok()?;
-                }
-            }
-            Err(_) => return None,
+            other => new_children.push(other),
         }
-        buf.clear();
     }
-    if changed { String::from_utf8(writer.into_inner()).ok() } else { None }
+    el.children = new_children;
+    changed
+}
+
+fn normalize_deep_groups_xml(data: &[u8]) -> Option<Vec<u8>> {
+    let s = std::str::from_utf8(data).ok()?;
+    if !s.contains("wpg:wgp") && !s.contains("wpg:grpSp") {
+        return None;
+    }
+    let mut root = craft_xml::parse(data).ok()?;
+    if !normalize_deep_groups_el(&mut root, 0) {
+        return None;
+    }
+    let mut out = String::with_capacity(data.len());
+    out.push_str(craft_xml::DECL_STANDALONE);
+    root.write_xml(&mut out);
+    Some(out.into_bytes())
 }
 
 fn preprocess_deep_groups(bytes: &[u8]) -> Option<Vec<u8>> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
+    let mut archive = craft_zip::Archive::open(bytes, ZIP_LIMITS).ok()?;
     let mut any_changed = false;
     let mut entries = Vec::with_capacity(archive.len());
     for idx in 0..archive.len() {
-        let mut file = archive.by_index(idx).ok()?;
-        let name = file.name().to_string();
-        let mut data = Vec::new();
-        std::io::Read::read_to_end(&mut file, &mut data).ok()?;
+        let name = archive.entry_name(idx).ok()??;
+        if archive.entry_is_dir(idx).ok()?? {
+            continue;
+        }
+        let stored = archive.is_stored(&name).unwrap_or(false);
+        let mut data = archive.read(&name, craft_docx::MAX_XML_FILE as u64).ok()??;
         if name.starts_with("word/")
             && name.ends_with(".xml")
-            && let Ok(xml) = std::str::from_utf8(&data)
-            && let Some(rewritten) = normalize_deep_groups_xml(xml)
+            && let Some(rewritten) = normalize_deep_groups_xml(&data)
         {
-            data = rewritten.into_bytes();
+            data = rewritten;
             any_changed = true;
         }
-        entries.push((name, data));
+        let comp = if stored { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated };
+        entries.push((name, data, comp));
     }
     if !any_changed {
         return None;
     }
-    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(bytes.len())));
-    for (name, data) in entries {
-        out.start_file(name, zip::write::SimpleFileOptions::default()).ok()?;
-        std::io::Write::write_all(&mut out, &data).ok()?;
+    let mut out = craft_zip::Writer::new();
+    for (name, data, comp) in entries {
+        out.add(&name, &data, comp).ok()?;
     }
-    Some(out.finish().ok()?.into_inner())
+    out.finish().ok()
 }
 
 pub use craft_docx::{
