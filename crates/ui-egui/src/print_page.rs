@@ -3,7 +3,7 @@
 //! Page range and parity shape the PDF. Native printer settings and copy collation go to
 //! the shared spooler; browser printing and saved print PDFs retain copies in the PDF.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use egui::{Rect, Sense, Stroke, TextureHandle, Ui, pos2, vec2};
 use serde_json::{Value, json};
@@ -118,38 +118,56 @@ fn choice_named(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &
     changed
 }
 
-/// The output layout, kept while the document and Print Markup setting are unchanged.
+/// What the preview's layout is made from besides the document's text: the revision, Print
+/// Markup, the file name and path FILENAME fields show (#6282: Save As and Rename change them
+/// without an edit), and the font database generation the app has seen (#6283:
+/// `WordApp::watch_fonts` moves it when fonts are added or removed).
+type LayoutKey = (u64, bool, (String, String), u64);
+
+/// The [`LayoutKey`] now.
+fn layout_key(app: &WordApp) -> LayoutKey {
+    (app.session.rev(), app.session.prefs.print_markup, app.session.resolved_filenames(), app.font_generation)
+}
+
+/// The output layout, kept while what it is made from ([`LayoutKey`]) is unchanged.
 fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     let id = egui::Id::unique("print_page_layout");
-    let rev = app.session.rev();
-    let markup = app.session.prefs.print_markup;
-    if let Some((r, m, l)) = ctx.data(|d| d.get_temp::<(u64, bool, Arc<DocLayout>)>(id))
-        && r == rev
-        && m == markup
+    let key = layout_key(app);
+    if let Some((k, l)) = ctx.data(|d| d.get_temp::<(LayoutKey, Arc<DocLayout>)>(id))
+        && k == key
     {
         return l;
     }
-    let l = app.session.export_layout_with(markup);
-    ctx.data_mut(|d| d.insert_temp(id, (rev, markup, l.clone())));
+    let l = app.session.export_layout_with(app.session.prefs.print_markup);
+    ctx.data_mut(|d| d.insert_temp(id, (key, l.clone())));
     l
 }
 
-/// A bounded per-cell texture cache, refreshed when the page, scale or Print Markup changes.
-fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, cache_slot: usize, width: f32) -> Option<TextureHandle> {
+/// What a preview texture was drawn from: the layout, the page and the render scale's bits.
+type TextureKey = (Weak<DocLayout>, usize, u32);
+
+/// A bounded per-cell texture cache, drawn again when the layout, the page or the scale changes.
+fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &Arc<DocLayout>, page: usize, cache_slot: usize, width: f32) -> Option<TextureHandle> {
     let id = egui::Id::unique(("print_page_texture", cache_slot));
-    let key = (app.session.rev(), app.session.prefs.print_markup, page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
-    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, bool, usize, u32, u32), TextureHandle)>(id))
-        && k == key
-    {
-        return Some(t);
-    }
     let pg = lay.pages.get(page)?;
     // Zoomed in, the texture stays within what the GPU takes and is stretched beyond that.
     let max_side = ctx.input(|i| i.max_texture_side) as f32 / pg.w.max(pg.h).max(1.0);
     let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
+    // Keyed on what the page is drawn from: the layout, so whatever lays the page out again
+    // draws it again (held weakly: no later layout can take its address while the key holds
+    // it), the page, and the exact scale (#6285), which also follows the GPU's texture limit
+    // (#6284).
+    if let Some(((l, p, s), t)) = ctx.data(|d| d.get_temp::<(TextureKey, TextureHandle)>(id))
+        && std::ptr::eq(l.as_ptr(), Arc::as_ptr(lay))
+        && p == page
+        && s == scale.to_bits()
+    {
+        return Some(t);
+    }
     let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &Default::default());
     let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
     let tex = ctx.load_texture("print_page_preview", color, egui::TextureOptions::LINEAR);
+    let key: TextureKey = (Arc::downgrade(lay), page, scale.to_bits());
     ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
     Some(tex)
 }
@@ -170,6 +188,18 @@ fn return_prints(ctx: &egui::Context) -> bool {
         })
 }
 
+/// Per window: what the Print page needs to know about the last job's message.
+#[derive(Default)]
+pub struct Memo {
+    /// The viewport and pass the page was last drawn in: a gap means it was just opened.
+    pass: Option<(egui::ViewportId, u64)>,
+    /// The generation (`WordApp::print_gen`) of the job result this window has already said, in
+    /// its status bar or on this page: a result of the same text from a later job is another one.
+    pub(crate) said: Option<u64>,
+    /// The generation of the result held back on this opening of the page.
+    hidden: Option<u64>,
+}
+
 /// The Print page: settings on the left, the preview on the right.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -178,6 +208,30 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let total = lay.pages.len();
     let current = app.session.current_pages(&lay);
     app.ui.print.preview = app.ui.print.preview.min(total.saturating_sub(1));
+    // Opened afresh, the page doesn't repeat how the last job went when this window already said
+    // it (its status bar, or this page): `printing.message` itself stays, as `ui.printSettings`
+    // and other windows still report it. What the printers are doing (finding them, none found)
+    // always shows. Passes are counted per viewport, so the marker is per window.
+    let here = (ctx.viewport_id(), ctx.cumulative_pass_nr());
+    let opened = app.print_memo.pass.is_none_or(|(viewport, last)| viewport != here.0 || last.saturating_add(1) < here.1);
+    app.print_memo.pass = Some(here);
+    let result = |m: &Option<crate::printing::Feedback>| {
+        matches!(m, Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped))
+    };
+    let message = app.printing.message.clone();
+    let generation = app.print_gen;
+    if opened {
+        app.print_memo.hidden = (result(&message) && app.print_memo.said == Some(generation)).then_some(generation);
+    }
+    // A later message (a job started again, then failed the same way) is shown afresh.
+    if app.print_memo.hidden != Some(generation) {
+        app.print_memo.hidden = None;
+    }
+    let hide_message = app.print_memo.hidden.is_some();
+    if !hide_message {
+        // Shown here, so the next opening needn't repeat it.
+        app.print_memo.said = result(&message).then_some(generation);
+    }
 
     let settings = |app: &mut WordApp, ui: &mut Ui| {
         {
@@ -206,7 +260,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 if native {
                     if let Some(discover) = &app.services.printers {
-                        crate::printing::show(&mut app.printing, ui, discover, |label| crate::i18n::t(label).to_owned());
+                        crate::printing::show(&mut app.printing, ui, discover, hide_message, |label| crate::i18n::t(label).to_owned());
                     }
                     // A job can wait long on a sleeping printer's driver; Cancel frees the page.
                     if app.printing.busy() && app.services.cancel_print.is_some() && ui.button(tl!("Cancel printing")).clicked() {
@@ -359,7 +413,7 @@ fn zoom_step(z: f32, up: bool) -> f32 {
 
 /// The preview (#1156): the page fills the pane, a bar below pages through the document and
 /// zooms; zoomed in, the page scrolls both ways.
-fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout) {
+fn preview(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let sheets = match wordcraft_engine::print::sheets(&app.ui.print.params(), lay, app.session.current_pages(lay)) {
@@ -454,27 +508,70 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout) {
 /// The export "format" of a Word 2003 XML Document: an `.xml` file saved with `format: "wordml2003"`.
 pub(crate) const EXPORT_WORD_2003: &str = "wordml2003";
 
+/// The "save a copy" formats as (label, format), also the built-in browser's types when exporting.
+pub(crate) const EXPORT_FORMATS: &[(&str, &str)] = &[
+    ("PDF document (*.pdf)", "pdf"),
+    ("Word document (*.docx)", "docx"),
+    ("Word XML Document (*.xml)", "xml"),
+    ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
+    ("OpenDocument Text (*.odt)", "odt"),
+    ("OpenDocument Text Template (*.ott)", "ott"),
+    ("Flat OpenDocument Text (*.fodt)", "fodt"),
+    ("Rich Text Format (*.rtf)", "rtf"),
+    ("Web page (*.html)", "html"),
+    ("Markdown (*.md)", "md"),
+    ("LaTeX (*.tex)", "tex"),
+    ("Plain text (*.txt)", "txt"),
+    ("Page image (*.png)", "png"),
+];
+
+/// The file extension an export format writes.
+pub(crate) fn export_file_ext(format: &str) -> &str {
+    if format == EXPORT_WORD_2003 { "xml" } else { format }
+}
+
+/// Is `ext` an extension of a document or export type (the Export types, plus the older `.doc`
+/// and `.htm`)? Such an extension on a typed name gives way to the chosen type's; any other
+/// (`notes.v2`) is part of the name.
+pub(crate) fn is_document_ext(ext: &str) -> bool {
+    ["doc", "htm"].iter().any(|e| e.eq_ignore_ascii_case(ext)) || EXPORT_FORMATS.iter().any(|&(_, f)| export_file_ext(f).eq_ignore_ascii_case(ext))
+}
+
+/// The name an export to `format` is saved under: the chosen type's extension replaces a known
+/// document extension (`notes.docx` as plain text is `notes.txt`) and is added to any other name.
+pub(crate) fn export_name(name: &str, format: &str) -> String {
+    let want = export_file_ext(format);
+    let path = std::path::Path::new(name);
+    // A dotfile name (`.docx`) has no extension for `Path::extension`, which the engine's save also
+    // reads, so it is a stem and gets one (`.docx.xml`); a bare extension would be refused.
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(e) if e.eq_ignore_ascii_case(want) => name.to_string(),
+        Some(e) if is_document_ext(e) => path.with_extension(want).to_string_lossy().into_owned(),
+        // `a.` has an empty extension: its dot is dropped before the type's is added.
+        _ => format!("{}.{want}", name.trim_end_matches('.')),
+    }
+}
+
 /// The "save a copy" formats (File › Export, and below the settings on the Print page).
 pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
-    for (label, ext) in [
-        ("PDF document (*.pdf)", "pdf"),
-        ("Word document (*.docx)", "docx"),
-        ("Word XML Document (*.xml)", "xml"),
-        ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
-        ("OpenDocument Text (*.odt)", "odt"),
-        ("OpenDocument Text Template (*.ott)", "ott"),
-        ("Flat OpenDocument Text (*.fodt)", "fodt"),
-        ("Rich Text Format (*.rtf)", "rtf"),
-        ("Web page (*.html)", "html"),
-        ("Markdown (*.md)", "md"),
-        ("LaTeX (*.tex)", "tex"),
-        ("Plain text (*.txt)", "txt"),
-        ("Page image (*.png)", "png"),
-    ] {
+    // A refused or failed export, said here because Backstage hides the status bar (Export and Print pages both draw this).
+    if !app.export_error.is_empty() {
+        ui.label(egui::RichText::new(&app.export_error).color(ui.visuals().error_fg_color));
+        ui.add_space(6.0);
+    }
+    for &(label, ext) in EXPORT_FORMATS {
         if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             app.export_dialog(ext);
         }
         ui.add_space(4.0);
+    }
+    // Linux and the BSDs (#3535): WordCraft's own browser when the system dialog doesn't appear.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    {
+        ui.add_space(8.0);
+        if ui.add(egui::Button::new(egui::RichText::new(tl!("Browse in WordCraft…")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+            let _ = app.run("ui.fileBrowser", json!({"purpose": "export"}));
+        }
     }
 }
 
@@ -512,5 +609,100 @@ mod tests {
             assert_eq!(app.session.rev(), rev);
             assert_eq!(app.session.dirty, dirty);
         }
+    }
+
+    /// A one-page synthetic document in a fresh preview.
+    fn synthetic_app() -> (WordApp, egui::Context) {
+        let session = Session::new(wordcraft_doc::Document::from_text("Synthetic print preview"));
+        (WordApp::new(session, Services::default()), egui::Context::default())
+    }
+
+    /// Rename (and Save As) change what a FILENAME field shows without an edit (#6282): the
+    /// preview lays the page out and draws it again.
+    #[test]
+    fn preview_follows_the_name_a_filename_field_shows() {
+        let mut doc = wordcraft_doc::Document::new();
+        let mut p = wordcraft_doc::Paragraph::new();
+        let field = wordcraft_doc::InlineObject::Field {
+            instr: "FILENAME".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        p.insert_object(0, field, &Default::default()).unwrap();
+        doc.body = vec![wordcraft_doc::para_block(p)];
+        let mut app = WordApp::new(Session::new(doc), Services::default());
+        let ctx = egui::Context::default();
+        let shown = |l: &DocLayout| -> String {
+            l.pages[0]
+                .items
+                .iter()
+                .filter_map(|it| {
+                    if let wordcraft_layout::Placed::Lines { para, .. } = it {
+                        Some(para.shown.iter().map(|s| s.1.as_str()).collect::<String>())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        let before = layout_of(&app, &ctx);
+        assert_eq!(shown(&before), app.session.resolved_filenames().0, "the untitled document's name");
+        let texture = page_texture(&app, &ctx, &before, 0, 0, 300.0).unwrap().id();
+        let rev = app.session.rev();
+        app.session.run("file.rename", &json!({"name": "Quarterly report"})).unwrap();
+        assert_eq!(app.session.rev(), rev, "renaming is no edit");
+        let after = layout_of(&app, &ctx);
+        assert_eq!(shown(&after), "Quarterly report");
+        assert_ne!(page_texture(&app, &ctx, &after, 0, 0, 300.0).unwrap().id(), texture);
+    }
+
+    /// Fonts added or removed change the layout without an edit (#6283): once the app has seen the
+    /// font database move, the preview lays the page out and draws it again.
+    #[test]
+    fn preview_follows_the_fonts() {
+        let (mut app, ctx) = synthetic_app();
+        let before = layout_of(&app, &ctx);
+        let texture = page_texture(&app, &ctx, &before, 0, 0, 300.0).unwrap().id();
+        // What `watch_fonts` records when a font is added: not the shared database itself, which
+        // tests running alongside change.
+        app.font_generation = app.font_generation.wrapping_add(1);
+        let after = layout_of(&app, &ctx);
+        assert!(!Arc::ptr_eq(&before, &after), "laid out again with the new fonts");
+        assert!(Arc::ptr_eq(&after, &layout_of(&app, &ctx)), "and kept while the fonts stay");
+        assert_ne!(page_texture(&app, &ctx, &after, 0, 0, 300.0).unwrap().id(), texture);
+    }
+
+    /// The GPU's texture limit changes with the GPU, as when the window moves to a display on
+    /// another one (#6284): a page drawn under the old limit is drawn again under the new one.
+    #[test]
+    fn preview_texture_follows_the_gpu_texture_limit() {
+        let (app, ctx) = synthetic_app();
+        let layout = layout_of(&app, &ctx);
+        let wide = page_texture(&app, &ctx, &layout, 0, 0, 1200.0).unwrap();
+        assert!(wide.size()[1] > 1024, "{:?}", wide.size());
+        // 1024: egui's font atlas takes no less.
+        ctx.run_pass(egui::RawInput { max_texture_side: Some(1024), ..Default::default() }, |_| {}).textures_delta.clear();
+        let capped = page_texture(&app, &ctx, &layout, 0, 0, 1200.0).unwrap();
+        assert!(capped.size().iter().all(|side| *side <= 1024), "{:?}", capped.size());
+    }
+
+    /// The texture is keyed on the exact width and pixels per point (#6285): a fraction of a point
+    /// wider, or a slightly denser display, draws the page again at its own resolution.
+    #[test]
+    fn preview_texture_follows_the_exact_width_and_pixels_per_point() {
+        let (app, ctx) = synthetic_app();
+        let layout = layout_of(&app, &ctx);
+        let texture = |width: f32| page_texture(&app, &ctx, &layout, 0, 0, width).unwrap();
+        assert_ne!(texture(300.2).id(), texture(300.8).id(), "less than a point wider");
+        assert_eq!(texture(300.5).size()[0], 301);
+        let mut input = egui::RawInput::default();
+        input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { native_pixels_per_point: Some(1.004), ..Default::default() });
+        ctx.run_pass(input, |_| {}).textures_delta.clear();
+        let ppp = ctx.pixels_per_point();
+        assert!(ppp > 1.0 && ppp < 1.01, "{ppp}");
+        assert_eq!(texture(300.5).size()[0], (300.5 * ppp).ceil() as usize, "drawn for {ppp} pixels per point");
     }
 }
