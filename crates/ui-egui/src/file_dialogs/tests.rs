@@ -465,6 +465,103 @@ fn export_pdf_without_a_path_asks_where_to_save() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A synchronous web save failure must not stamp a save that never reached its destination.
+#[test]
+fn failed_web_saves_restore_the_save_stamps() {
+    for id in ["file.save", "file.saveAs"] {
+        for (name, hosted, dirty, expected_calls) in [
+            ("draft.unsupported", false, true, vec![]),
+            ("draft.docx", false, true, vec!["download"]),
+            ("draft.docx", true, true, vec!["host"]),
+            ("draft.docx", false, false, vec!["download"]),
+        ] {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            let downloaded = calls.clone();
+            let host_calls = calls.clone();
+            let services = Services {
+                download: Some(Box::new(move |_, _| {
+                    downloaded.borrow_mut().push("download");
+                    Err("download refused".into())
+                })),
+                host_save: hosted.then(|| {
+                    Box::new(move |_: &str, _: &[u8], _: bool| {
+                        host_calls.borrow_mut().push("host");
+                        Err("host refused".into())
+                    }) as crate::HostSaveFn
+                }),
+                ..Default::default()
+            };
+            let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text(UNSAVED)), services);
+            a.session.dirty = dirty;
+            a.session.path = Some("original.docx".into());
+            a.session.view.zoom = 1.37;
+            a.session.doc.core.created.clear();
+            a.session.doc.core.modified = "2020-01-02T03:04:05Z".into();
+            a.session.doc.core.last_modified_by = "Previous author".into();
+            a.session.doc.core.revision = 7;
+            let path_before = a.session.path.clone();
+            let core_before = a.session.doc.core.clone();
+            let zoom_before = a.session.doc.settings.zoom;
+            let undo_before = a.session.undo_depth();
+            assert!(a.run(id, json!({"path": name})).is_err(), "{id}: {name}");
+            assert_eq!(*calls.borrow(), expected_calls, "{id}: {name}");
+            assert_eq!(a.session.doc.core, core_before, "{id}: {name}");
+            assert_eq!(a.session.doc.settings.zoom, zoom_before, "{id}: {name}");
+            assert_eq!(a.session.undo_depth(), undo_before, "{id}: {name}");
+            assert_eq!(a.session.dirty, dirty, "{id}: {name}");
+            assert_eq!(a.session.path, path_before, "{id}: {name}");
+        }
+        let services = Services {
+            download: Some(Box::new(|_, bytes| {
+                assert!(bytes.starts_with(b"PK"));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text(UNSAVED)), services);
+        a.session.dirty = true;
+        let revision_before = a.session.doc.core.revision;
+        assert_eq!(a.run(id, json!({"path": "draft.docx"})).unwrap()["downloaded"], "draft.docx");
+        assert_eq!(a.session.doc.core.revision, revision_before.saturating_add(1));
+        assert_eq!(a.session.doc.core.last_modified_by, a.session.author);
+        assert!(!a.session.doc.core.created.is_empty() && !a.session.doc.core.modified.is_empty());
+        assert!(!a.session.dirty);
+    }
+}
+
+/// An explicit web PDF export keeps an existing PDF suffix regardless of ASCII case.
+#[test]
+fn web_pdf_export_keeps_an_existing_suffix_in_any_case() {
+    let downloaded = Rc::new(RefCell::new(Vec::new()));
+    let captured = downloaded.clone();
+    let services = Services {
+        download: Some(Box::new(move |name, bytes| {
+            captured.borrow_mut().push((name.to_string(), bytes.starts_with(b"%PDF")));
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    for (name, expected) in [
+        ("Report.pdf", "Report.pdf"),
+        ("Report.PDF", "Report.PDF"),
+        ("Résumé.PdF", "Résumé.PdF"),
+        ("😀.PDF", "😀.PDF"),
+        (".hidden.PDF", ".hidden.PDF"),
+        ("Report..PDF", "Report..PDF"),
+        ("é", "é.pdf"),
+        ("😀", "😀.pdf"),
+        ("Report.pdf.exe", "Report.pdf.exe.pdf"),
+        ("Report.ＰＤＦ", "Report.ＰＤＦ.pdf"),
+        ("Report.pdf.", "Report.pdf..pdf"),
+        ("Report", "Report.pdf"),
+    ] {
+        let result = a.execute("file.exportPdf", json!({"path": name})).unwrap();
+        assert_eq!(result["downloaded"], expected, "{name}");
+        assert_eq!(downloaded.borrow().last().cloned(), Some((expected.to_string(), true)), "{name}");
+    }
+}
+
 /// Open, Save As and Export PNG from the command search (no path) ask for a file the same way.
 #[test]
 fn file_commands_without_a_path_ask_for_one() {
