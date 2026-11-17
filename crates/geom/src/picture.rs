@@ -9,7 +9,7 @@ use std::borrow::Cow;
 
 use craft_image_codecs::{
     ChannelLayout, CodecError, DecodeOptions, EncodeOptions, Format as CodecFormat, Image as CodecImage, Limits as CodecLimits, RasterColorType,
-    SampleType, bmp_probe, decode_as_with, detect, encode as codec_encode, inspect_raster, probe_size,
+    SampleType, bmp_probe, decode_as_with, detect, encode as codec_encode, inspect_raster, jpeg_worst_case_coefficients, probe_size,
 };
 use image::{DynamicImage, ImageBuffer, ImageFormat};
 
@@ -197,7 +197,7 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
     let format = from_codec_format(codec_fmt).ok_or(Refusal::NotAPicture)?;
     let held = match format {
         ImageFormat::Png | ImageFormat::Gif | ImageFormat::WebP | ImageFormat::Bmp => 0,
-        ImageFormat::Jpeg => jpeg_coefficients(bytes),
+        ImageFormat::Jpeg => jpeg_worst_case_coefficients(bytes),
         ImageFormat::Tiff => {
             if !tiff_compression(bytes).is_some_and(|c| TIFF_COMPRESSIONS.contains(&c)) {
                 return Err(Refusal::Unsupported("TIFF pictures with JPEG or an unknown compression can't be read"));
@@ -453,64 +453,6 @@ fn peak_bytes(width: u32, height: u32, native: u64, held: u64) -> Option<u64> {
     Some(decoding.max(converting).max(premultiplying))
 }
 
-/// Bytes of DCT coefficients a progressive JPEG's decoder keeps for the whole picture while it
-/// reads the scans: zune-jpeg holds an `i16` per coefficient of every component, in whole MCUs.
-/// 0 for a baseline JPEG, decoded an MCU row at a time. Each frame header before the first scan
-/// counts and the largest wins; headers this can't follow are charged as the costliest frame.
-fn jpeg_coefficients(bytes: &[u8]) -> u64 {
-    let mut at = 2;
-    let mut most = 0u64;
-    loop {
-        if bytes.get(at) != Some(&0xFF) {
-            return worst_coefficients(bytes).max(most);
-        }
-        while bytes.get(at) == Some(&0xFF) {
-            at += 1;
-        }
-        let Some(&code) = bytes.get(at) else { return worst_coefficients(bytes).max(most) };
-        at += 1;
-        match code {
-            // Markers without a length: start of image, TEM, restarts.
-            0xD8 | 0x01 | 0xD0..=0xD7 => continue,
-            // End of image, start of scan: every frame header is behind.
-            0xD9 | 0xDA => return most,
-            _ => {}
-        }
-        let len = match (bytes.get(at), bytes.get(at + 1)) {
-            (Some(&hi), Some(&lo)) => usize::from(u16::from_be_bytes([hi, lo])),
-            _ => 0,
-        };
-        let Some(segment) = bytes.get(at + 2..at + len).filter(|_| len >= 2) else { return worst_coefficients(bytes).max(most) };
-        // SOF2, SOF6, SOF10 and SOF14 are the progressive frames.
-        if matches!(code, 0xC2 | 0xC6 | 0xCA | 0xCE) {
-            let Some(held) = frame_coefficients(segment) else { return worst_coefficients(bytes).max(most) };
-            most = most.max(held);
-        }
-        at += len;
-    }
-}
-
-/// [`jpeg_coefficients`] of one progressive frame header (after its length): the components'
-/// blocks per MCU (horizontal × vertical sampling) times the MCUs that cover the picture.
-fn frame_coefficients(sof: &[u8]) -> Option<u64> {
-    let height = u64::from(u16::from_be_bytes([*sof.get(1)?, *sof.get(2)?]));
-    let width = u64::from(u16::from_be_bytes([*sof.get(3)?, *sof.get(4)?]));
-    let n = usize::from(*sof.get(5)?);
-    let sampling: Vec<(u64, u64)> =
-        sof.get(6..6 + 3 * n)?.as_chunks::<3>().0.iter().map(|&[_, s, _]| (u64::from(s >> 4).clamp(1, 4), u64::from(s & 15).clamp(1, 4))).collect();
-    let (h_max, v_max) = sampling.iter().fold((1, 1), |(h, v), &(a, b)| (h.max(a), v.max(b)));
-    let mcus = width.div_ceil(8 * h_max).checked_mul(height.div_ceil(8 * v_max))?;
-    sampling.iter().try_fold(0u64, |sum, &(h, v)| sum.checked_add(mcus.checked_mul(2 * 64 * h * v)?))
-}
-
-/// The coefficients of the costliest progressive frame of the size the image crate reads from
-/// `bytes`: four components, each sampled 4 × 4, in MCUs of 32 pixels a side.
-fn worst_coefficients(bytes: &[u8]) -> u64 {
-    let Some((w, h)) = dimensions(bytes) else { return 0 };
-    let mcus = u64::from(w).div_ceil(32) * u64::from(h).div_ceil(32);
-    mcus.saturating_mul(2 * 64 * 16 * 4)
-}
-
 /// The compression of a classic TIFF's first image (the one the image crate decodes): 1 when the
 /// tag is missing. None when the header can't be read, or when the tag appears more than once:
 /// the decoder keeps the last copy, so a harmless first one must not hide a JPEG one after it.
@@ -654,33 +596,120 @@ mod tests {
         assert_eq!(probe(&baseline).unwrap().peak_bytes(), 64 * 64 * 8);
     }
 
+    /// A JPEG's headers up to the first scan: frames `(marker, precision, w, h, components)`, then
+    /// a scan of `scan` components (none: no scan, the end of the image).
+    fn jpeg_headers(frames: &[(u8, u8, u16, u16, &[u8])], scan: Option<u8>) -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0];
+        for &(marker, prec, w, h, comps) in frames {
+            b.extend_from_slice(&[0xFF, marker]);
+            #[expect(clippy::cast_possible_truncation, reason = "Fixtures hold at most four components.")]
+            let (n, len) = ((comps.len() / 3) as u8, (8 + comps.len()) as u16);
+            b.extend(len.to_be_bytes());
+            b.push(prec);
+            b.extend(h.to_be_bytes());
+            b.extend(w.to_be_bytes());
+            b.push(n);
+            b.extend_from_slice(comps);
+        }
+        if let Some(n) = scan {
+            b.extend_from_slice(&[0xFF, 0xDA, 0, 6 + 2 * n, n]);
+            (1..=n).for_each(|c| b.extend_from_slice(&[c, 0]));
+            b.extend_from_slice(&[0, 63, 0]);
+        }
+        b.extend_from_slice(&[0xFF, 0xD9]);
+        b
+    }
+
+    const C444: &[u8] = &[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0];
+    const C420: &[u8] = &[1, 0x22, 0, 2, 0x11, 0, 3, 0x11, 0];
+    const GREY: &[u8] = &[1, 0x11, 0];
+
+    /// The JPEG budget before the cutover to the shared rule, as the oracle: the shared charge is
+    /// never less, and is equal wherever it adds nothing.
     #[test]
-    fn coefficients_follow_sampling_and_mcu_padding() {
-        // P, height, width, components (id, sampling, table).
-        let sof = |w: u16, h: u16, comps: &[u8]| {
-            let mut s = vec![8];
-            s.extend(h.to_be_bytes());
-            s.extend(w.to_be_bytes());
-            #[expect(clippy::cast_possible_truncation, reason = "These fixtures contain at most four three-byte component records.")]
-            s.push((comps.len() / 3) as u8);
-            s.extend(comps);
-            s
-        };
-        // Four components, no subsampling: 2 bytes a coefficient, 8 a pixel.
-        assert_eq!(frame_coefficients(&sof(64, 64, &[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0])), Some(64 * 64 * 8));
-        // 4:2:0: MCUs of 16 × 16 holding 4 + 1 + 1 blocks; a 1-pixel-wide picture still takes one.
-        assert_eq!(frame_coefficients(&sof(1, 16, &[1, 0x22, 0, 2, 0x11, 0, 3, 0x11, 0])), Some(128 * 6));
-        let mut short = sof(1, 16, &[1, 0x22, 0, 2, 0x11, 0]);
-        short[5] = 3;
-        assert_eq!(frame_coefficients(&short), None, "three components declared, two there");
-        // A marker walk over SOI, an APP0 segment, SOF2, then the scan.
-        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2];
-        let f = sof(64, 64, &[1, 0x11, 0]);
-        #[expect(clippy::cast_possible_truncation, reason = "This fixture's nine-byte frame header and length field fit u16.")]
-        jpeg.extend(((f.len() + 2) as u16).to_be_bytes());
-        jpeg.extend(&f);
-        jpeg.extend([0xFF, 0xDA]);
-        assert_eq!(jpeg_coefficients(&jpeg), 64 * 64 * 2);
+    fn jpeg_charge_is_never_less_than_the_local_one_it_replaced() {
+        let wide = &[1, 0xFF, 0, 2, 0xFF, 0, 3, 0xFF, 0];
+        let cmyk = &[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0];
+        let zero = &[1, 0x00, 0, 2, 0x00, 0, 3, 0x00, 0];
+        // (case, whether the shared rule is expected to charge more).
+        let cases: Vec<(Vec<u8>, bool)> = vec![
+            (jpeg_headers(&[(0xC0, 8, 640, 480, C420)], Some(3)), false),
+            (jpeg_headers(&[(0xC0, 8, 640, 480, GREY)], Some(1)), false),
+            (jpeg_headers(&[(0xC0, 8, 640, 480, C444)], Some(1)), true),
+            (jpeg_headers(&[(0xC1, 8, 640, 480, C420)], Some(2)), true),
+            (jpeg_headers(&[(0xC0, 8, 640, 480, C444)], None), false),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, C420)], Some(1)), false),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, C444)], Some(3)), false),
+            (jpeg_headers(&[(0xC2, 12, 640, 480, C444)], Some(1)), false),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, cmyk)], Some(1)), false),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, wide)], None), true),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, zero)], None), false),
+            (jpeg_headers(&[(0xC6, 8, 640, 480, C444)], None), false),
+            (jpeg_headers(&[(0xCA, 8, 640, 480, C444)], None), false),
+            (jpeg_headers(&[(0xCE, 8, 640, 480, C444)], None), false),
+            (jpeg_headers(&[(0xC0, 8, 64, 64, GREY), (0xC2, 8, 6000, 4000, C444), (0xC2, 8, 100, 100, C444)], Some(1)), false),
+            (jpeg_headers(&[(0xC2, 8, 65535, 65535, cmyk)], None), false),
+            (jpeg_headers(&[], None), false),
+            (vec![0xFF, 0xD8], false),
+            (vec![], false),
+            (b"not a jpeg at all".to_vec(), false),
+        ];
+        let mut grew = 0;
+        for (b, expect_more) in &cases {
+            let (old, new) = (oracle_jpeg_coefficients(b), jpeg_worst_case_coefficients(b));
+            assert!(new >= old, "{b:02x?}: {new} < {old}");
+            assert_eq!(new > old, *expect_more, "{b:02x?}: {old} -> {new}");
+            grew += usize::from(new > old);
+        }
+        assert_eq!(grew, 3);
+        // Every prefix of a frame with a cut header, and pseudo-random damage: never less.
+        let full = jpeg_headers(&[(0xC2, 8, 3000, 2000, C420), (0xC0, 8, 100, 100, C444)], Some(1));
+        for n in 0..=full.len() {
+            assert!(jpeg_worst_case_coefficients(&full[..n]) >= oracle_jpeg_coefficients(&full[..n]), "prefix {n}");
+        }
+        let mut seed = 0x9e37_79b9u32;
+        for _ in 0..3000 {
+            let mut f = full.clone();
+            for _ in 0..3 {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let (i, v) = ((seed >> 8) as usize % f.len(), (seed >> 24) as u8);
+                f[i] = v;
+            }
+            assert!(jpeg_worst_case_coefficients(&f) >= oracle_jpeg_coefficients(&f), "{f:02x?}");
+        }
+    }
+
+    #[test]
+    fn a_baseline_jpeg_with_a_short_first_scan_is_charged_its_coefficients() {
+        // 3-component 4:4:4 SOF0 of 8000 x 8000 (64 Mpx) whose first scan has one component: the
+        // decoder holds 2 bytes a coefficient of all three until the other scans, 6 bytes a pixel.
+        let b = jpeg_headers(&[(0xC0, 8, 8000, 8000, C444)], Some(1));
+        let (old, new) = (oracle_jpeg_coefficients(&b), jpeg_worst_case_coefficients(&b));
+        assert_eq!((old, new), (0, 8000 * 8000 * 6));
+        // 3 + 6 bytes a pixel beside the output passes the 512 MiB budget; it fit as 7 (the RGBA8 conversion).
+        let (before, after) = (peak_bytes(8000, 8000, 3, old), peak_bytes(8000, 8000, 3, new));
+        assert_eq!((before, after), (Some(8000 * 8000 * 8), Some(8000 * 8000 * 9)));
+        assert!(before.is_some_and(|p| p <= crate::MAX_DECODED_BYTES) && after.is_some_and(|p| p > crate::MAX_DECODED_BYTES));
+        // The same through `probe`, on a real JPEG whose headers are made so.
+        let mut jpeg = encode(image::RgbImage::from_pixel(16, 16, image::Rgb([200, 30, 30])), ImageFormat::Jpeg);
+        let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+        jpeg[sof + 5..sof + 7].copy_from_slice(&8000u16.to_be_bytes());
+        jpeg[sof + 7..sof + 9].copy_from_slice(&8000u16.to_be_bytes());
+        (0..3).for_each(|c| jpeg[sof + 11 + 3 * c] = 0x11);
+        let sos = jpeg.windows(2).position(|m| m == [0xFF, 0xDA]).unwrap();
+        jpeg.splice(sos..sos + 14, [0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 63, 0]);
+        let p = probe(&jpeg).unwrap();
+        assert_eq!((p.width, p.height, p.peak_bytes()), (8000, 8000, 8000 * 8000 * 9));
+        assert!(!p.fits(crate::MAX_DECODED_BYTES));
+    }
+
+    #[test]
+    fn jpeg_coefficients_follow_a_marker_walk() {
+        // SOI, an APP0 segment, SOF2, then the scan.
+        let jpeg = jpeg_headers(&[(0xC2, 8, 64, 64, GREY)], Some(1));
+        assert_eq!(jpeg_worst_case_coefficients(&jpeg), 64 * 64 * 2);
+        // 4:2:0: MCUs of 16 x 16 holding 4 + 1 + 1 blocks; a 1-pixel-wide picture still takes one.
+        assert_eq!(jpeg_worst_case_coefficients(&jpeg_headers(&[(0xC2, 8, 1, 16, C420)], None)), 128 * 6);
     }
 
     /// A little-endian TIFF header whose first IFD holds just a compression tag.
@@ -783,6 +812,70 @@ mod tests {
         for d in [short, lying] {
             assert!(probe_dib(d).and_then(|p| p.decode(1 << 20)).is_err());
         }
+    }
+
+    // The local JPEG budget before it moved to `craft_image_codecs::jpeg_worst_case_coefficients` (#778), kept as the oracle.
+    /// Bytes of DCT coefficients a progressive JPEG's decoder keeps for the whole picture while it
+    /// reads the scans: zune-jpeg holds an `i16` per coefficient of every component, in whole MCUs.
+    /// 0 for a baseline JPEG, decoded an MCU row at a time. Each frame header before the first scan
+    /// counts and the largest wins; headers this can't follow are charged as the costliest frame.
+    fn oracle_jpeg_coefficients(bytes: &[u8]) -> u64 {
+        let mut at = 2;
+        let mut most = 0u64;
+        loop {
+            if bytes.get(at) != Some(&0xFF) {
+                return oracle_worst_coefficients(bytes).max(most);
+            }
+            while bytes.get(at) == Some(&0xFF) {
+                at += 1;
+            }
+            let Some(&code) = bytes.get(at) else { return oracle_worst_coefficients(bytes).max(most) };
+            at += 1;
+            match code {
+                // Markers without a length: start of image, TEM, restarts.
+                0xD8 | 0x01 | 0xD0..=0xD7 => continue,
+                // End of image, start of scan: every frame header is behind.
+                0xD9 | 0xDA => return most,
+                _ => {}
+            }
+            let len = match (bytes.get(at), bytes.get(at + 1)) {
+                (Some(&hi), Some(&lo)) => usize::from(u16::from_be_bytes([hi, lo])),
+                _ => 0,
+            };
+            let Some(segment) = bytes.get(at + 2..at + len).filter(|_| len >= 2) else { return oracle_worst_coefficients(bytes).max(most) };
+            // SOF2, SOF6, SOF10 and SOF14 are the progressive frames.
+            if matches!(code, 0xC2 | 0xC6 | 0xCA | 0xCE) {
+                let Some(held) = oracle_frame_coefficients(segment) else { return oracle_worst_coefficients(bytes).max(most) };
+                most = most.max(held);
+            }
+            at += len;
+        }
+    }
+
+    /// `oracle_jpeg_coefficients` of one progressive frame header (after its length): the components'
+    /// blocks per MCU (horizontal × vertical sampling) times the MCUs that cover the picture.
+    fn oracle_frame_coefficients(sof: &[u8]) -> Option<u64> {
+        let height = u64::from(u16::from_be_bytes([*sof.get(1)?, *sof.get(2)?]));
+        let width = u64::from(u16::from_be_bytes([*sof.get(3)?, *sof.get(4)?]));
+        let n = usize::from(*sof.get(5)?);
+        let sampling: Vec<(u64, u64)> = sof
+            .get(6..6 + 3 * n)?
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&[_, s, _]| (u64::from(s >> 4).clamp(1, 4), u64::from(s & 15).clamp(1, 4)))
+            .collect();
+        let (h_max, v_max) = sampling.iter().fold((1, 1), |(h, v), &(a, b)| (h.max(a), v.max(b)));
+        let mcus = width.div_ceil(8 * h_max).checked_mul(height.div_ceil(8 * v_max))?;
+        sampling.iter().try_fold(0u64, |sum, &(h, v)| sum.checked_add(mcus.checked_mul(2 * 64 * h * v)?))
+    }
+
+    /// The coefficients of the costliest progressive frame of the size the image crate reads from
+    /// `bytes`: four components, each sampled 4 × 4, in MCUs of 32 pixels a side.
+    fn oracle_worst_coefficients(bytes: &[u8]) -> u64 {
+        let Some((w, h)) = dimensions(bytes) else { return 0 };
+        let mcus = u64::from(w).div_ceil(32) * u64::from(h).div_ceil(32);
+        mcus.saturating_mul(2 * 64 * 16 * 4)
     }
 
     // The local DIB wrapping before it moved to `craft_image_codecs::bmp_probe` (#778), kept as the oracle.
