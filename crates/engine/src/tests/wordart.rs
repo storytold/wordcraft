@@ -200,3 +200,12 @@ fn wordart_reflection_and_outline_none_options() {
     assert_eq!(outline.color, None);
     assert_eq!(outline.width, 1.5);
 }
+
+#[test]
+fn descriptive_feature_labels_keep_existing_command_ids() {
+    let s = Session::new(Document::new());
+    for (id, label) in [("insert.smartArt", "Diagram"), ("insert.wordArt", "Decorative Text"), ("wordArt.style", "Decorative Text Styles")] {
+        assert_eq!(s.registry.get(id).map(|spec| spec.label), Some(label));
+    }
+    assert!(s.registry.get("smartArt.colors").unwrap().location.starts_with("SmartArt Design › "));
+}
