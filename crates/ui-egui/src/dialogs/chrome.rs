@@ -67,6 +67,16 @@ fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
     }
 }
 
+/// Behind a modal window, whose `backdrop` has the pointer, the app still moves by its title bar,
+/// as in Word for Mac (#5124); not from just inside the window's edge, where it reaches over the
+/// title bar.
+pub(crate) fn drag_by_title_bar(ctx: &egui::Context, backdrop: &egui::Response, window: egui::Rect) {
+    let origin = ctx.input(|i| i.pointer.press_origin()).filter(|p| !window.contains(*p));
+    if backdrop.drag_started() && origin.is_some_and(|p| crate::chrome::title_drag_rect(ctx).is_some_and(|r| r.contains(p))) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
 /// Makes `window` modal (#3859): the document gives up the keyboard now, and from the next frame
 /// nothing beneath the window takes the pointer or Tab. A press beside it nudges it ([`nudge`]).
 pub(crate) fn block_behind(app: &WordApp, ctx: &egui::Context, window: &egui::Response) {
@@ -81,6 +91,7 @@ pub(crate) fn block_behind(app: &WordApp, ctx: &egui::Context, window: &egui::Re
         .inner;
     // The backdrop also has the pointer just inside the window's edge (egui's hit radius).
     let beside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !window.rect.contains(p)));
+    drag_by_title_bar(ctx, &backdrop, window.rect);
     ctx.move_to_top(layer);
     ctx.memory_mut(|m| m.set_modal_layer(layer));
     ctx.accesskit_node_builder(window.id, |node| node.set_modal());
@@ -214,7 +225,21 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let held = (app.file_browser_open() || app.colors.is_some()).then(|| ctx.input_mut(|i| std::mem::take(&mut i.events)));
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
-        close = crate::rtl::root(ui, |ui| body(app, ui, &mut d));
+        // Scrolls only when the last frame's body was taller than the screen.
+        let room = (ui.ctx().content_rect().height() - 110.0).max(160.0);
+        let key = id.with("body_height");
+        let tall = ui.ctx().data(|data| data.get_temp::<f32>(key)).is_some_and(|h| h > room);
+        let mut content = |ui: &mut egui::Ui| {
+            let top = ui.cursor().min.y;
+            close = crate::rtl::root(ui, |ui| body(app, ui, &mut d));
+            let height = ui.min_rect().max.y - top;
+            ui.ctx().data_mut(|data| data.insert_temp(key, height));
+        };
+        if tall {
+            egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, content);
+        } else {
+            content(ui);
+        }
     });
     if let Some(events) = held {
         ctx.input_mut(|i| i.events = events);

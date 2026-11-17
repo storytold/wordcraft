@@ -71,6 +71,7 @@ pub(crate) fn poll(app: &mut WordApp, _ctx: &egui::Context) {
     };
     let w = &mut app.session.windows;
     w.available = native;
+    w.current = Some(key);
     w.others = others;
     w.side_by_side = partner;
     w.sync_scroll = sync;
@@ -99,6 +100,11 @@ pub(crate) fn request(app: &mut WordApp, req: &Value) {
     let key = app.windows.shown;
     let id = |k: &str| req.get(k).and_then(Value::as_u64);
     match what {
+        "switchWindow" => {
+            if let Some(w) = id("window") {
+                app.show_window(w);
+            }
+        }
         "sideBySide" => {
             app.canvas.sync_in = 0.0;
             if id("off").is_some() {
