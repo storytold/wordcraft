@@ -419,6 +419,9 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
                 }
                 for e in entries.get(range).unwrap_or(&[]) {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), b.selected.as_ref() == Some(&e.path), &e.name)
+                    });
                     if b.selected.as_ref() == Some(&e.path) {
                         ui.painter().rect_filled(r, 2.0, t.checked);
                     } else if resp.hovered() {
@@ -763,6 +766,54 @@ mod tests {
             false,
         );
         assert!(crate::keytips::suppressed(&a, &ctx));
+    }
+
+    /// Drawn entries have names and selection state, and choosing one still picks its path.
+    #[test]
+    fn entries_expose_names_selection_and_picking() {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let dir = scratch("entry_accessibility");
+        let folder = dir.join("Drafts");
+        let file = dir.join("chapter.docx");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(&file, b"x").unwrap();
+        let browser =
+            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        // Font changes take effect next frame; the buttons need the named semibold family.
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(760.0, 520.0)).build_ui_state(
+            move |ui, state: &mut (FileBrowser, Option<Option<PathBuf>>)| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                if let Some(picked) = body(ui, &mut state.0, &t) {
+                    state.1 = Some(picked);
+                }
+            },
+            (browser, None),
+        );
+        h.run_steps(4);
+        for name in ["Drafts", "chapter.docx"] {
+            assert_eq!(h.get_by_role_and_label(Role::Button, name).accesskit_node().toggled(), Some(Toggled::False));
+        }
+        h.get_by_role_and_label(Role::Button, "Drafts").click();
+        h.run_steps(2);
+        assert_eq!(h.state().0.selected.as_ref(), Some(&folder));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Drafts").accesskit_node().toggled(), Some(Toggled::True));
+        h.get_by_role_and_label(Role::Button, "chapter.docx").click();
+        h.run_steps(2);
+        assert_eq!(h.state().0.selected.as_ref(), Some(&file));
+        assert_eq!(h.state().0.name, "chapter.docx");
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Drafts").accesskit_node().toggled(), Some(Toggled::False));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "chapter.docx").accesskit_node().toggled(), Some(Toggled::True));
+        h.get_by_role_and_label(Role::Button, "Open").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1, Some(Some(file)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// #3535: exporting offers File › Export's formats as the types; the chosen one is the format,
