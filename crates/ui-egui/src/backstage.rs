@@ -130,59 +130,79 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 app.canvas.want_focus = true;
             }
             ui.add_space(if mac { 12.0 } else { 6.0 });
-            for (id, label, icon) in PAGES {
-                // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
-                let on = has_document || works_without_document(id);
-                let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tl!(label)));
-                let active = app.ui.backstage_page == id;
-                if active {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
-                } else if on && resp.hovered() {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
-                }
-                let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
-                icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 31.0), r.center().y), vec2(18.0, 18.0)),
-                    icon,
-                    ink,
-                    ink,
-                );
-                ui.painter().text(
-                    pos2(crate::rtl::lead_x(rtl, r, 52.0), r.center().y),
-                    crate::rtl::lead_center(rtl),
-                    tl!(label),
-                    if active { semibold(14.0) } else { medium(14.0) },
-                    ink,
-                );
-                if on
-                    && app.ui.keytips == crate::keytips::Phase::Backstage
-                    && let Some(letter) = keytip_letter(id)
-                {
-                    crate::keytips::badge(ui, Rect::from_min_size(pos2(r.min.x + 16.0, r.min.y), vec2(20.0, 16.0)), letter);
-                }
-                if resp.clicked() {
-                    go_to_page(app, id);
-                }
-            }
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in bottom_links(app) {
-                    let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
-                    if resp.hovered() {
+            // A window too short for the whole menu scrolls it below the back button (#6639).
+            // When the menu fits, About and the community link stay at the bottom.
+            let links = bottom_links(app);
+            let spacing = ui.spacing().item_spacing.y;
+            let links_h = (32.0 + spacing) * links.len() as f32 - spacing;
+            let fits = ui.available_height();
+            egui::ScrollArea::vertical().id_salt("backstage_nav_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                let top = ui.cursor().top();
+                for (id, label, icon) in PAGES {
+                    // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
+                    let on = has_document || works_without_document(id);
+                    let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tl!(label)));
+                    // A row reached with Tab scrolls into view.
+                    if resp.gained_focus() {
+                        resp.scroll_to_me(None);
+                    }
+                    let active = app.ui.backstage_page == id;
+                    if active {
+                        ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
+                    } else if on && resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                     }
-                    let at = pos2(crate::rtl::lead_x(rtl, r, 22.0), r.center().y);
-                    ui.painter().text(at, crate::rtl::lead_center(rtl), tl!(label), regular(13.0), egui::Color32::WHITE);
+                    let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 31.0), r.center().y), vec2(18.0, 18.0)),
+                        icon,
+                        ink,
+                        ink,
+                    );
+                    ui.painter().text(
+                        pos2(crate::rtl::lead_x(rtl, r, 52.0), r.center().y),
+                        crate::rtl::lead_center(rtl),
+                        tl!(label),
+                        if active { semibold(14.0) } else { medium(14.0) },
+                        ink,
+                    );
+                    if on
+                        && app.ui.keytips == crate::keytips::Phase::Backstage
+                        && let Some(letter) = keytip_letter(id)
+                    {
+                        crate::keytips::badge(ui, Rect::from_min_size(pos2(r.min.x + 16.0, r.min.y), vec2(20.0, 16.0)), letter);
+                    }
                     if resp.clicked() {
-                        if id == "discord" {
-                            let _ = app.run("ui.discord", json!({}));
-                        } else {
-                            app.dialog = crate::dialogs::Dialog::open("about", app);
-                        }
+                        go_to_page(app, id);
                     }
                 }
+                let gap = top + fits - ui.cursor().top() - links_h;
+                if gap > 0.0 {
+                    ui.add_space(gap);
+                }
+                ui.allocate_ui_with_layout(vec2(200.0, links_h), egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    for (label, id) in links {
+                        let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
+                        if resp.gained_focus() {
+                            resp.scroll_to_me(None);
+                        }
+                        if resp.hovered() {
+                            ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
+                        }
+                        let at = pos2(crate::rtl::lead_x(rtl, r, 22.0), r.center().y);
+                        ui.painter().text(at, crate::rtl::lead_center(rtl), tl!(label), regular(13.0), egui::Color32::WHITE);
+                        if resp.clicked() {
+                            if id == "discord" {
+                                let _ = app.run("ui.discord", json!({}));
+                            } else {
+                                app.dialog = crate::dialogs::Dialog::open("about", app);
+                            }
+                        }
+                    }
+                });
             });
         });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(0, 30))).show(ui, |ui| {
