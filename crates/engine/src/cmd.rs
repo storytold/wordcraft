@@ -318,7 +318,7 @@ pub fn join_paras(s: &mut Session, story: StoryRef, gone: &[wordcraft_doc::Path]
             let p = match Arc::try_unwrap(b).unwrap_or_else(|a| (*a).clone()) {
                 Block::Para(p) => p,
                 other => {
-                    debug_assert!(false, "a joined paragraph mark is followed by a table");
+                    // Never reached (a run only grows while a paragraph follows), but nothing is dropped.
                     out.extend(chain.drain(..).map(para_block));
                     out.push(Arc::new(other));
                     continue;
@@ -345,8 +345,17 @@ pub fn join_paras(s: &mut Session, story: StoryRef, gone: &[wordcraft_doc::Path]
             let sect = tail.section.take();
             let revs = (tail.mark.ins, tail.mark.del);
             rest.push(tail);
+            // As in `Document::delete_range`: an empty paragraph doesn't impose its style or mark
+            // formatting on what follows, so they come from the first non-empty paragraph of the
+            // run (the tail when all are empty).
+            let style =
+                if head.is_empty() { rest.iter().find(|p| !p.is_empty()).or(rest.last()).map(|p| (p.props.clone(), p.mark.clone())) } else { None };
             head.append_all(rest);
             head.section = sect;
+            if let Some((props, mark)) = style {
+                head.props = props;
+                head.mark = mark;
+            }
             (head.mark.ins, head.mark.del) = revs;
             if top && !breaks.is_empty() {
                 breaks.reverse();

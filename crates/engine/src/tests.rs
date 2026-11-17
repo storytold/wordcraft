@@ -13852,6 +13852,7 @@ fn tracked_words_doc(n: usize, accept: bool) -> Session {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the time ratio")]
 fn accept_and_reject_all_join_many_paragraph_marks_in_linear_time() {
     // #3658: every joined mark used to re-copy the growing tail of the story (quadratic). The
     // cost is compared with resolving one tracked word in each of as many paragraphs (linear),
@@ -14326,9 +14327,47 @@ fn accepting_a_move_joins_its_source_paragraphs() {
         s0.mark = from.clone();
         let mut s1 = Paragraph::with_text("Tail ", italic.clone());
         s1.insert_text(s1.len(), "plain", &CharProps::default()).unwrap();
-        s.doc.body = vec![para_block(d0), para_block(d1), para_block(s0), para_block(s1)];
+        // A styled paragraph moved whole: emptied by the resolution, it must not give its style
+        // or mark formatting to the paragraph its mark joins.
+        s.doc.revisions.extend([rev(RevisionKind::Delete), rev(RevisionKind::Insert)]);
+        s.doc.revisions[2].move_name = Some("n".into());
+        s.doc.revisions[3].move_name = Some("n".into());
+        let heading = |text: &str, c: CharProps| {
+            let mut p = Paragraph::with_text(text, c.clone());
+            p.props.style = Some("Heading1".into());
+            p.mark = CharProps { bold: Some(true), ..c };
+            p
+        };
+        let normal = |text: &str| Paragraph::with_text(text, CharProps::default());
+        let from2 = CharProps { del: Some(2), ..Default::default() };
+        let to2 = CharProps { ins: Some(3), ..Default::default() };
+        s.doc.body = vec![
+            para_block(d0),
+            para_block(d1),
+            para_block(s0),
+            para_block(s1),
+            para_block(heading("Gone", from2)),
+            para_block(normal("After")),
+            para_block(heading("Gone", to2)),
+            para_block(normal("After2")),
+        ];
         s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 2 });
         run(&mut s, if accept { "review.accept" } else { "review.reject" }, json!({}));
+        s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(5), off: 2 });
+        run(&mut s, if accept { "review.accept" } else { "review.reject" }, json!({}));
+        // Only the moved paragraph's own copy goes; its neighbour keeps its style and mark.
+        let tail: Vec<_> = (s.doc.body.len() - 3..s.doc.body.len())
+            .map(|i| {
+                let p = s.doc.para(StoryRef::Body, &Path::top(i)).unwrap();
+                (p.text.clone(), p.props.style.clone(), p.mark.bold)
+            })
+            .collect();
+        let h = |t: &str| (t.to_string(), Some("Heading1".to_string()), Some(true));
+        let n = |t: &str| (t.to_string(), None, None);
+        let want_tail = if accept { vec![n("After"), h("Gone"), n("After2")] } else { vec![h("Gone"), n("After"), n("After2")] };
+        assert_eq!(tail, want_tail, "{accept}: styled moved paragraph");
+        let keep = s.doc.body.len() - 3;
+        s.doc.body.truncate(keep);
         let paras: Vec<(String, Vec<(usize, usize, Option<bool>, Option<bool>)>)> = (0..s.doc.body.len())
             .map(|i| {
                 let p = s.doc.para(StoryRef::Body, &Path::top(i)).unwrap();
