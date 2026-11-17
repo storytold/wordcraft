@@ -253,6 +253,18 @@ pub struct CanvasState {
     pub(crate) v_pressed: bool,
     /// The modifiers last held with Mod, for a Mod+V whose Mod is released before V.
     pub(crate) paste_mods: Option<egui::Modifiers>,
+    /// The modifiers a paste event is read with: those of Mod+V's press or a Mod change, until an
+    /// unrelated key, a pointer press or a focus change. (`paste_mods` also serves the release path.)
+    pub(crate) paste_event_mods: Option<egui::Modifiers>,
+    /// On the web, Mod+Shift+V pasted formatting from its key press: the browser's paste event
+    /// that follows is the same keystroke and pastes nothing (#5616). Any other key press clears it.
+    pub(crate) ignore_next_paste: bool,
+    /// When `ignore_next_paste` was set (input time, seconds): the browser's paired paste comes
+    /// with the key, so the wait ends after `PASTE_WAIT` and a later paste isn't dropped.
+    pub(crate) paste_wait_since: Option<f64>,
+    /// The platform sends a paste event after Mod+Shift+V's key (a browser does; a desktop shell
+    /// doesn't). Only then does the key leave a paste event to ignore or to let paste text.
+    pub(crate) paste_event_follows_chord: bool,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
@@ -436,6 +448,10 @@ impl Default for CanvasState {
             pasted: false,
             v_pressed: false,
             paste_mods: None,
+            paste_event_mods: None,
+            ignore_next_paste: false,
+            paste_wait_since: None,
+            paste_event_follows_chord: cfg!(target_arch = "wasm32"),
             swallow_text: false,
             ime_join_text: None,
             ime_reset: false,
@@ -678,11 +694,12 @@ struct ScrollMotion {
     middle: egui::Vec2,
 }
 
+/// Computes this frame's scroll motion from mouse wheel/touchpad input, edge autoscroll, and middle-drag.
 fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> ScrollMotion {
     // Read Mode's centred columns leave margins at the sides; the wheel turns pages over them too.
     let wheel_area = if app.session.view.read_mode { full } else { view.area };
     let hovered = wheel_hovered(ui.rect_contains_pointer(wheel_area), ui.ctx().dragged_id().is_some(), app.canvas.drag_selecting());
-    let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
+    let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT) * app.ui.scroll_speed.wheel_factor();
     let wheel_delta = if app.session.view.read_mode {
         let turns = ui.input(|i| read_wheel_turns(&i.events, hovered, &mut app.canvas.read_wheel_accum));
         for _ in 0..turns.unsigned_abs() {

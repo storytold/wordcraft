@@ -200,7 +200,6 @@ fn enter_on_an_empty_nested_item_moves_it_up_a_level_first() {
 /// up a level and then ends the list, as with direct numbering.
 #[test]
 fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
-    use std::io::Write;
     let w = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
     let style = |id: &str, name: &str, ilvl: u8| {
         format!(
@@ -227,8 +226,7 @@ fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
     let doc_rels =
         format!("<Relationships {rels_ns}>{}{}</Relationships>", rel("rId1", "styles", "styles.xml"), rel("rId2", "numbering", "numbering.xml"));
     let ct = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default();
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [
         ("[Content_Types].xml", ct),
         ("_rels/.rels", main.as_str()),
@@ -237,10 +235,9 @@ fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
         ("word/styles.xml", styles.as_str()),
         ("word/numbering.xml", numbering.as_str()),
     ] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let doc = crate::io::open_bytes("t.docx", &z.finish().unwrap().into_inner()).unwrap();
+    let doc = crate::io::open_bytes("t.docx", &z.finish().unwrap()).unwrap();
     let mut s = Session::new(doc);
     // The list level each paragraph shows, wherever its numbering comes from.
     let levels = |s: &Session| -> Vec<Option<u8>> {
@@ -2433,12 +2430,11 @@ fn two_section_docx(kind: &str) -> Vec<u8> {
             ),
         ),
     ];
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, data) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, data.as_bytes()).unwrap();
+        zip.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// #2127: Backspace just after a section break, or Delete just before it, removes the break, as
@@ -2504,12 +2500,11 @@ fn break_on_the_last_paragraph_docx(then: Option<&str>) -> Vec<u8> {
             ),
         ),
     ];
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, data) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, data.as_bytes()).unwrap();
+        zip.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// #2127: Delete at the end of the last paragraph removes a section break on its mark too,
