@@ -14,6 +14,7 @@ impl Session {
             doc: self.doc.clone(),
             sel: self.sel.clone(),
             pending: self.pending.clone(),
+            pending_at: self.pending_at.clone(),
             column: self.column.clone(),
         }));
         if self.history.len() > MAX_UNDO {
@@ -34,7 +35,14 @@ impl Session {
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
     /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
     pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
-        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone(), column: None }));
+        self.history.push(Arc::new(Undo {
+            label: label.to_string(),
+            doc,
+            sel,
+            pending: self.pending.clone(),
+            pending_at: self.pending_at.clone(),
+            column: None,
+        }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;
@@ -194,6 +202,7 @@ impl Session {
             doc: std::mem::replace(&mut self.doc, u.doc),
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
+            pending_at: std::mem::replace(&mut self.pending_at, u.pending_at),
             column: std::mem::replace(&mut self.column, u.column),
         };
         self.redo.push(Arc::new(cur));
@@ -220,6 +229,7 @@ impl Session {
             doc: std::mem::replace(&mut self.doc, u.doc),
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
+            pending_at: std::mem::replace(&mut self.pending_at, u.pending_at),
             column: std::mem::replace(&mut self.column, u.column),
         };
         self.history.push(Arc::new(cur));

@@ -23,6 +23,7 @@ impl Session {
         self.math = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
+        self.pending_at = None;
         self.typing = None;
         self.also_selected.clear();
         self.member = None;
@@ -72,6 +73,7 @@ impl Session {
             sel,
             view: _,
             pending: _,
+            pending_at: _,
             last_highlight: _,
             path: _,
             file_name: _,

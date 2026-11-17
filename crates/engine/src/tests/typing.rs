@@ -1861,6 +1861,88 @@ fn ctrl_backspace_at_the_document_start_keeps_waiting_formatting() {
     assert!(!bold_at(&s, 2));
 }
 
+/// #6518 review: what Backspace carries over is for typing where the character was deleted. A
+/// paste leaves the next typed text the formatting where it lands, and pasted text never takes it.
+#[test]
+fn backspace_formatting_is_not_kept_past_a_paste() {
+    // "hello wrld World", "World" bold: copy it, Backspace the plain r, paste, then ! is bold
+    // like the pasted text to its left.
+    let mut s = with_bold("hello wrld World", 11, 16, 0);
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 11}, "focus": {"block": 0, "off": 16}}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 8}}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.paste", json!({}));
+    typ(&mut s, "!");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "hello wWorld!ld World");
+    assert!(bold_at(&s, 7) && bold_at(&s, 12), "! takes the pasted bold, not the deleted plain r");
+    // "ab Cd", "C" bold: Backspace the bold C, paste plain text: it takes the plain space before
+    // it, and so does ! after it.
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.paste", json!({"text": "zz"}));
+    typ(&mut s, "!");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab zz!d");
+    assert!((3..6).all(|i| !bold_at(&s, i)), "pasted text and ! are plain");
+}
+
+/// #6518 review: Find, Go To and a click elsewhere move the caret without the caret commands;
+/// the formatting Backspace carried over stays behind. Observed in Word for Windows: typing over
+/// a found word takes that word's formatting, and a Find with no match keeps the carried one.
+#[test]
+fn backspace_formatting_is_not_kept_past_find_or_go_to() {
+    // "Xy plain word", "X" bold: Backspace the bold X, Find "word" and type over it: Q is plain.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.find", json!({"text": "word"}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "y plain Q");
+    assert!(!bold_at(&s, 8));
+    // Go To a paragraph puts a caret before a plain word: Q is plain.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Xy plain\nword"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 1}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 1}}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.goto", json!({"paragraph": 2}));
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(1, 0)));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "Qword");
+    assert_ne!(s.doc.para_at(&Pos::body(1, 0)).unwrap().props_of_char(0).bold, Some(true));
+    // A caret the front end puts elsewhere itself (a right-click in the text): Q is plain.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    s.sel = crate::Selection::caret(Pos::body(0, 8));
+    assert_ne!(s.typing_props().bold, Some(true));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "y plain Qword");
+    assert!(!bold_at(&s, 8));
+    // A Find with no match leaves the caret where it was, and the formatting with it: Q is bold.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.find", json!({"text": "zzz"}));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Qy plain word");
+    assert!(bold_at(&s, 0));
+}
+
+/// #6518: the carried formatting goes on with the typing that follows, and Undo of that typing
+/// brings it back where it was, so typing again there takes it once more.
+#[test]
+fn backspace_formatting_follows_typing_and_comes_back_with_undo() {
+    // "ab Cd", "C" bold: Backspace the bold C, then Y and X are both bold (Word).
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}YX");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab YXd");
+    assert!(bold_at(&s, 3) && bold_at(&s, 4) && !bold_at(&s, 5));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab d");
+    typ(&mut s, "Z");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab Zd");
+    assert!(bold_at(&s, 3));
+}
+
 /// Myanmar (#604): typed in memory order (consonant, medial, then the prevowel ေ that is drawn
 /// before it), the caret steps over whole syllables and Backspace removes one sign at a time.
 #[test]
