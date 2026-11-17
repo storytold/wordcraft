@@ -107,7 +107,8 @@ fn condition(s: &Session, t: &str, row: usize) -> (bool, Vec<String>) {
     let op: String = rest.trim_start().chars().take_while(|c| matches!(c, '<'..='>')).collect();
     let mut texts = field_words(rest).into_iter().filter(|(_, q)| *q).map(|(w, _)| w);
     let cmp = texts.next().unwrap_or_default();
-    let v = value(s, row, &field);
+    let tested = t.split_once('{').and_then(|(_, r)| r.split('}').next()).unwrap_or("");
+    let v = wordcraft_layout::fields::apply_case_switch(tested, value(s, row, &field));
     // Numbers compare as numbers (Word: "7" = "7.0"), everything else as text.
     let ord = match (v.trim().parse::<f64>(), cmp.trim().parse::<f64>()) {
         (Ok(a), Ok(b)) => a.partial_cmp(&b),
@@ -134,7 +135,7 @@ fn keyword(instr: &str) -> String {
 fn act(s: &Session, instr: &str, row: usize) -> Option<Act> {
     let t = instr.trim();
     if let Some(n) = mergefield_name(t) {
-        return Some(Act::Text(value(s, row, &n)));
+        return Some(Act::Text(wordcraft_layout::fields::apply_case_switch(t, value(s, row, &n))));
     }
     Some(match keyword(t).as_str() {
         "ADDRESSBLOCK" => Act::Text(address_block(s, row)),

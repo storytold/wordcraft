@@ -5,6 +5,7 @@ mod czech_test_dict;
 
 use serde_json::json;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -17,6 +18,7 @@ mod fit_one_page;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod page_number_formats_in_lists;
 mod para_tools;
 mod revision_checks;
 mod typing;
@@ -1106,6 +1108,26 @@ fn replace_under_track_changes_skips_deleted_text() {
     let r = run(&mut s, "edit.replace", json!({"text": "cat", "with": "dog"}));
     assert_eq!(r["remaining"], 0);
     assert_eq!(text(&s), "one dog two dog");
+}
+
+#[test]
+fn replace_reports_whether_it_replaced_and_what_it_selected() {
+    // Replace follows Word's button: the first call only selects a match. Agents read
+    // `remaining` alone as done (#6877), so the result says whether anything was replaced.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "alpha XX beta XX gamma XX"}));
+    run(&mut s, "caret.docStart", json!({}));
+    let calls: Vec<_> = (0..5).map(|_| run(&mut s, "edit.replace", json!({"text": "XX", "with": "YY"}))).collect();
+    let replaced: Vec<_> = calls.iter().map(|r| r["replaced"].clone()).collect();
+    assert_eq!(replaced, [json!(0), json!(1), json!(1), json!(1), json!(0)]);
+    let remaining: Vec<_> = calls.iter().map(|r| r["remaining"].clone()).collect();
+    assert_eq!(remaining, [json!(3), json!(2), json!(1), json!(0), json!(0)]);
+    let selected: Vec<_> = calls.iter().map(|r| (r["selected"]["start"]["off"].clone(), r["selected"]["end"]["off"].clone())).collect();
+    assert_eq!(selected[0], (json!(6), json!(8)));
+    assert_eq!(selected[1], (json!(14), json!(16)));
+    assert_eq!(selected[2], (json!(23), json!(25)));
+    assert!(calls[3]["selected"].is_null() && calls[4]["selected"].is_null(), "no match is left to select");
+    assert_eq!(text(&s), "alpha YY beta YY gamma YY");
 }
 
 #[test]
@@ -5162,6 +5184,74 @@ fn hostile_file_params_never_panic() {
     let rejected = refused(&mut s, at(&outside, "new.docx"));
     assert!(rejected.contains("automation path rejected"), "{rejected}");
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Large parameters must return and lay out within a generous wall-clock budget, so a regression
+/// that loops or allocates without a cap fails here with its command id (#3720).
+#[test]
+fn hostile_large_params_stay_bounded() {
+    const BUDGET: Duration = Duration::from_secs(5);
+    let reg = cmd::registry();
+    // 1 MiB makes an uncapped copy or a quadratic scan visible without making the test itself
+    // expensive; the counts are large enough that an uncapped loop takes seconds.
+    let big = "x".repeat(1 << 20);
+    let mut deep = json!([]);
+    for _ in 0..64 {
+        deep = json!([deep]);
+    }
+    let junk = [
+        json!({
+            "text": big, "name": big, "label": big, "find": big, "replace": big,
+            "title": big, "author": big, "path": big,
+        }),
+        json!({
+            "count": 1_000_000_000u64, "copies": 1_000_000_000u64, "times": 1_000_000_000u64,
+            "cols": 1_000_000_000u64, "rows": 1_000_000_000u64, "level": 1_000_000_000u64,
+            "page": 1_000_000_000u64, "from": 1_000_000_000u64, "to": 1_000_000_000u64,
+            "id": 1_000_000_000u64,
+        }),
+        json!({"width": 3e38, "height": 3e38, "top": -3e38, "left": 3e38}),
+        json!({"path": deep}),
+    ];
+    for spec in reg.all() {
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
+            continue;
+        }
+        for j in &junk {
+            let mut s = Session::new(crate::sample::sample_document());
+            assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
+            let start = Instant::now();
+            let r = s.run(spec.id, j);
+            let elapsed = start.elapsed();
+            assert!(!caught_panic(&reg, &r), "{} panicked on large params: {r:?}", spec.id);
+            assert_within_budget(spec.id, elapsed, BUDGET);
+            // Laying the result out is not part of the command's budget; the layout tests
+            // cover long text separately. It still runs so a bad parameter reaches the layout.
+            s.clamp_selection();
+            let _ = s.layout();
+        }
+    }
+}
+
+fn assert_within_budget(id: &str, elapsed: Duration, budget: Duration) {
+    assert!(elapsed <= budget, "{id} took {elapsed:?} (budget {budget:?})");
+}
+
+/// The budget above fires: a command that runs past it is named, not ignored (#3720).
+#[test]
+#[should_panic(expected = "test.slow took")]
+fn hostile_large_param_budget_flags_a_slow_command() {
+    let budget = Duration::from_millis(1);
+    let mut s = Session::new(crate::sample::sample_document());
+    let slow = crate::CommandSpec::new("test.slow", "Slow", "", |_, _| {
+        std::thread::sleep(Duration::from_millis(20));
+        Ok(json!({}))
+    })
+    .pure();
+    s.registry = Arc::new(crate::Registry::new(vec![slow]));
+    let start = Instant::now();
+    let _ = s.run("test.slow", &json!({}));
+    assert_within_budget("test.slow", start.elapsed(), budget);
 }
 
 /// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a
@@ -13471,4 +13561,174 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.sections().len(), 1, "{cmd}");
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
+}
+
+/// #5616: Copy Formatting's formatting stays for every Paste Formatting, as in Word; it doesn't
+/// arm the one-shot Format Painter brush.
+#[test]
+fn copied_formatting_pastes_again_and_again() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold one two"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    assert!(s.painter.is_none());
+    for word in ["one", "two"] {
+        run(&mut s, "select.text", json!({"text": word}));
+        run(&mut s, "edit.pasteFormat", json!({}));
+        assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true), "{word}");
+    }
+    assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "Bold one two");
+}
+
+/// #5616: Copy Formatting and the Format Painter share one format buffer: each replaces the other,
+/// so a used-up brush never hands over to older copied formatting.
+#[test]
+fn copy_formatting_and_the_format_painter_replace_each_other() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold one two"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.formatPainter", json!({}));
+    assert!(s.painter.is_some());
+    run(&mut s, "edit.copyFormat", json!({}));
+    assert!(s.painter.is_none(), "Copy Formatting clears an armed brush");
+    assert!(s.copied_format.is_some());
+    run(&mut s, "edit.formatPainter", json!({}));
+    assert!(s.painter.is_some());
+    run(&mut s, "select.text", json!({"text": "one"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert!(s.painter.is_none(), "a used-up brush is gone");
+    assert!(s.copied_format.is_some(), "its pick stays for Paste Formatting");
+}
+
+/// #5616: arming and cancelling the Format Painter leaves Copy Formatting's pick; a brush's pick
+/// is what Paste Formatting applies next.
+#[test]
+fn cancelling_the_format_painter_keeps_the_copied_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold one two"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    run(&mut s, "edit.formatPainter", json!({}));
+    run(&mut s, "edit.formatPainter", json!({}));
+    assert!(s.painter.is_none());
+    run(&mut s, "select.text", json!({"text": "one"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    // A brush picked from plain text replaces the bold pick.
+    run(&mut s, "select.text", json!({"text": "two"}));
+    run(&mut s, "edit.formatPainter", json!({}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert_ne!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+}
+
+/// #5616: copied formatting carries no tracked paragraph formatting or numbering change.
+#[test]
+fn copied_paragraph_formatting_carries_no_tracked_changes() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "one\ntwo"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "one"}));
+    run(&mut s, "para.alignCenter", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    run(&mut s, "select.text", json!({"text": "one"}));
+    let f = s.sel.focus.clone();
+    assert!(s.doc.para_at(&f).unwrap().props.fmt_change.is_some(), "the source paragraph has a tracked formatting change");
+    run(&mut s, "edit.copyFormat", json!({}));
+    let (_, para) = s.copied_format.clone().unwrap();
+    assert!(para.fmt_change.is_none() && para.num_change.is_none());
+    run(&mut s, "select.text", json!({"text": "two"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let f = s.sel.focus.clone();
+    let p = s.doc.para_at(&f).unwrap().props.clone();
+    assert!(p.fmt_change.is_none() && p.num_change.is_none());
+}
+
+/// #5616: copied formatting carries no hyperlink or revision marks, even into a collapsed caret.
+#[test]
+fn copied_formatting_carries_no_hyperlink() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "source target"}));
+    run(&mut s, "select.text", json!({"text": "source"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/"}));
+    run(&mut s, "select.text", json!({"text": "so"}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    let (chr, _) = s.copied_format.clone().unwrap();
+    assert_eq!(chr.bold, Some(true));
+    assert!(chr.link.is_none() && chr.ins.is_none() && chr.del.is_none() && chr.fmt_change.is_none());
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "select.collapse", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let f = s.sel.focus.clone();
+    let link = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).link.clone());
+    assert_eq!(link, Some(None), "the target didn't become a link");
+}
+
+/// #5616: Paste Formatting at a bare caret keeps the word's own hyperlink and tracked insertion.
+#[test]
+fn a_caret_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "source target"}));
+    run(&mut s, "select.text", json!({"text": "source"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/"}));
+    run(&mut s, "select.collapse", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let at_caret = |s: &Session| {
+        let f = s.sel.focus.clone();
+        s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone()).unwrap_or_default()
+    };
+    let c = at_caret(&s);
+    assert!(c.link.is_some(), "the target kept its hyperlink");
+    assert_eq!(c.bold, Some(true));
+    // A tracked insertion stays tracked.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": " added"}));
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    run(&mut s, "caret.left", json!({}));
+    assert!(at_caret(&s).ins.is_some(), "the insertion is tracked before");
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert!(at_caret(&s).ins.is_some(), "Paste Formatting kept the insertion mark");
+}
+
+/// #5616: Paste Formatting over a selection keeps the target's hyperlink and tracked marks too.
+#[test]
+fn a_range_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "source target"}));
+    run(&mut s, "select.text", json!({"text": "source"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/"}));
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let (a, _) = s.sel.ordered();
+    let c = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
+    assert!(c.link.is_some(), "the target kept its hyperlink");
+    assert_eq!(c.bold, Some(true));
+    // A tracked insertion selected as a range stays tracked.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": " added"}));
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    run(&mut s, "select.text", json!({"text": "added"}));
+    let at_start = |s: &Session| {
+        let (a, _) = s.sel.ordered();
+        s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default()
+    };
+    assert!(at_start(&s).ins.is_some(), "the insertion is tracked before");
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let c = at_start(&s);
+    assert!(c.ins.is_some(), "Paste Formatting kept the insertion mark");
+    assert_eq!(c.bold, Some(true));
 }
