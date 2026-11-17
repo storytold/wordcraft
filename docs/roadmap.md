@@ -99,3 +99,10 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 | 2026-10-10 | major | Created: milestones moved from ROADMAP.md with remaining hours; Current focus from gaps.md; M15–M16 added |
 | 2026-10-10 | trivial | M11: ink pens and eraser landed (#307) |
 | 2026-10-11 | trivial | M11: lasso, Add Pen, Ink to Shape and Ink Replay landed (#395) |
+
+
+### Thai alignment — 2026-11-06
+
+Stored Thai Distributed and its capped spacing are isolated from dictionary wrapping. See [Thai alignment](thai-alignment.md).
+
+Validation is recorded in the pull request; no change to readiness estimates.
