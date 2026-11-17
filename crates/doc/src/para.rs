@@ -352,6 +352,7 @@ impl Paragraph {
         let mut seen = 0usize;
         let mut drop: Vec<usize> = Vec::new();
         for (i, _) in self.text.match_indices(OBJ) {
+            crate::work::steps(1);
             if seen >= keep {
                 drop.push(i);
             }
@@ -376,9 +377,11 @@ impl Paragraph {
         let mut d = 0usize;
         let mut start = 0usize;
         for r in &mut self.runs {
+            crate::work::steps(1);
             let re = start + r.len;
             let mut cut = 0usize;
             while let Some(&off) = drop.get(d) {
+                crate::work::steps(1);
                 if off >= re {
                     break;
                 }

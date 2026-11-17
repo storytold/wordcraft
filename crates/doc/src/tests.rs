@@ -845,6 +845,23 @@ fn normalize_runs_reconciles_objects_with_markers() {
     // Deleting the first marker keeps B on the second.
     p.delete(1, 4).unwrap();
     assert_eq!(p.objects, vec![fs("B")]);
+    // The cost is linear: the markers and runs `reconcile_objects` walks (`crate::work`), not a
+    // timing. 8x the unmatched markers cost about 8x the steps, far more if each removal rescans.
+    let reconcile = |extra: usize| {
+        let mut p = Paragraph::default();
+        p.objects = vec![fs("A")];
+        p.text = format!("\u{FFFC}{}x", "\u{FFFC}".repeat(extra));
+        p.runs = vec![Run { len: p.text.len(), props: c.clone() }];
+        crate::work::count(|| {
+            p.reconcile_objects();
+            assert_eq!(p.text, "\u{FFFC}x");
+            std::hint::black_box(&p);
+        })
+    };
+    let (s1, s8) = (reconcile(2_000), reconcile(16_000));
+    assert!(s1 > 0, "no steps counted, so the walk this test watches no longer counts them (crate::work)");
+    let ratio = s8 as f64 / s1 as f64;
+    assert!(ratio <= 12.0, "8x the markers cost {ratio:.1}x the steps ({s1} -> {s8})");
 }
 
 #[test]
