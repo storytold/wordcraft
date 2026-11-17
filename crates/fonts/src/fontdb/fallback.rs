@@ -1,7 +1,9 @@
 use super::face::{FALLBACK_FAMILY, FontFace};
 #[cfg(not(target_arch = "wasm32"))]
 use super::fallback_data::{CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, ranges_hold, read_fallback_file};
-use super::fallback_data::{FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order};
+use super::fallback_data::{
+    DiagramFallbackKey, FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order,
+};
 use super::{Arc, FontDb};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{HashMap, Ordering};
@@ -253,7 +255,8 @@ impl FontDb {
 
     /// First face covering all characters in `chars`, preferring faces matching `prefer_serif`
     /// (so a diagram maintains a consistent fallback face across its nodes matching the
-    /// diagram's primary style, #5672). Does not alter body text fallback ordering.
+    /// diagram's primary style, #5672). Does not alter body text fallback ordering. Cached until
+    /// the loaded faces or font database generation changes, so page redraws do not repeat system scans.
     pub fn fallback_for_diagram(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> Option<Arc<FontFace>> {
         if chars.is_empty() {
             return None;
@@ -261,7 +264,38 @@ impl FontDb {
         let mut set: Vec<char> = chars.to_vec();
         set.sort_unstable();
         set.dedup();
-        let (found, _) = self.search_diagram(&set, exclude, prefer_serif);
+        let key: DiagramFallbackKey = (set, exclude, prefer_serif);
+        let generation = self.generation();
+        let n = self.read_faces().len();
+        {
+            let cache = self.diagram_fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache.faces == n
+                && cache.generation == generation
+                && let Some(hit) = cache.map.get(&key)
+            {
+                return hit.clone();
+            }
+        }
+        let (found, n) = self.search_diagram(&key.0, exclude, prefer_serif);
+        if n != self.read_faces().len() || generation != self.generation() || key.0.len() > RUN_FALLBACK_CACHE_CHARS {
+            return found;
+        }
+        let mut cache = self.diagram_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
+        if cache.faces != n
+            || cache.generation != generation
+            || cache.map.len() >= RUN_FALLBACK_CACHE_MAX
+            || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS
+        {
+            cache.map.clear();
+            cache.faces = n;
+            cache.generation = generation;
+            cache.chars = 0;
+        }
+        cache.chars = cache.chars.saturating_add(key.0.len());
+        cache.map.insert(key, found.clone());
         found
     }
 
@@ -270,8 +304,10 @@ impl FontDb {
     /// classification, checks system font candidates and retains the loaded face only when no
     /// matching candidate covers the full set (#5672).
     fn search_diagram(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> (Option<Arc<FontFace>>, usize) {
+        #[cfg(test)]
+        self.diagram_searches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-        let (mut base, mut checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+        let (mut base, _) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
         #[cfg(not(target_arch = "wasm32"))]
         if base.is_none() || base.as_ref().is_some_and(|f| f.is_serif() != prefer_serif) {
             let initial = base.clone();
@@ -280,8 +316,7 @@ impl FontDb {
                     continue;
                 }
                 if self.system_fallback_matching(*c, Some((exclude, prefer_serif))) {
-                    let (cand, n) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
-                    checked = n;
+                    let (cand, _) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
                     if let Some(f) = cand {
                         let matching = f.is_serif() == prefer_serif;
                         if matching || base.is_none() {
@@ -295,8 +330,7 @@ impl FontDb {
             }
             if base.as_ref().is_none_or(|f| f.is_serif() != prefer_serif) {
                 self.indexed_run_fallback_matching(chars, Some((exclude, prefer_serif)));
-                let (cand, n) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
-                checked = n;
+                let (cand, _) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
                 if let Some(f) = cand
                     && (f.is_serif() == prefer_serif || base.is_none())
                 {
@@ -307,7 +341,7 @@ impl FontDb {
                 base = initial;
             }
         }
-        (base, checked)
+        (base, self.read_faces().len())
     }
 
     /// The first face covering every char in `chars`, preferring matching `prefer_serif`,

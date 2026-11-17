@@ -222,6 +222,20 @@ pub(super) struct RunFallbackCache {
     pub(super) map: HashMap<RunFallbackKey, Option<Arc<FontFace>>>,
 }
 
+/// What a diagram-level fallback lookup is keyed by: sorted, deduplicated chars, excluded face,
+/// serif preference.
+pub(super) type DiagramFallbackKey = (Vec<char>, u32, bool);
+
+/// [`FontDb::fallback_for_diagram`] results, valid while the loaded face count and generation match.
+#[derive(Default)]
+pub(super) struct DiagramFallbackCache {
+    pub(super) faces: usize,
+    pub(super) generation: u64,
+    /// Chars held in the keys (bounds memory: diagram text can be long).
+    pub(super) chars: usize,
+    pub(super) map: HashMap<DiagramFallbackKey, Option<Arc<FontFace>>>,
+}
+
 /// Most cached run-level fallbacks, and most chars in their keys, before the cache is reset.
 pub(super) const RUN_FALLBACK_CACHE_MAX: usize = 4096;
 

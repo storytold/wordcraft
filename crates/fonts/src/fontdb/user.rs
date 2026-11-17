@@ -560,6 +560,7 @@ impl FontDb {
         self.generation.fetch_add(1, Ordering::AcqRel);
         self.fallbacks.write().unwrap_or_else(|e| e.into_inner()).map.clear();
         *self.run_fallbacks.write().unwrap_or_else(|e| e.into_inner()) = super::RunFallbackCache::default();
+        *self.diagram_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = super::DiagramFallbackCache::default();
     }
 
     /// Remove the user fonts that added `family` (a typographic or legacy family name): their

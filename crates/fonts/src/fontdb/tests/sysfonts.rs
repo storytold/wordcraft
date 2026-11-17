@@ -851,3 +851,37 @@ fn diagram_fallback_checks_system_fonts_when_loaded_face_mismatches_serif() {
     db.remove_document_fonts(&["Load Mincho 1"]);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn diagram_fallback_caches_a_mismatched_loaded_face_after_system_search() {
+    let dir = font_dir("diag-fallback-cache");
+    let regular = "SourceSans3-Regular.ttf";
+    std::fs::write(dir.join("CacheGothic.ttf"), mapping(regular, "Cache Gothic1", 0xF_0030, 0xF_0031)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    db.add_document_fonts(vec![(mapping(regular, "Loaded Gothic", 0xF_0030, 0xF_0031), "Loaded Gothic".to_string())]);
+    let primary = db.face("Source Serif 4", "Regular");
+    let run = ['\u{F0030}', '\u{F0031}'];
+
+    let first = db.fallback_for_diagram(&run, primary.id(), true).unwrap();
+    assert_eq!(first.family, "Loaded Gothic", "retain the loaded mismatched face when no serif face covers the run");
+    let reads = db.coverage.lock().unwrap().reads;
+    assert!(reads > 0, "the initial search reaches the system-font coverage index");
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+    assert_eq!(db.fallback_for_diagram(&run, primary.id(), true).unwrap().id(), first.id());
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), 1, "the redraw reuses the diagram fallback");
+    assert_eq!(db.coverage.lock().unwrap().reads, reads);
+
+    db.install_font("UserMincho.ttf", &mapping(regular, "User Mincho 1", 0xF_0030, 0xF_0031)).unwrap();
+    assert_eq!(db.fallback_for_diagram(&run, primary.id(), true).unwrap().family, "User Mincho 1");
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), 2, "adding a user font invalidates the cached result");
+
+    let face_count = db.read_faces().len();
+    db.remove_user_font("User Mincho 1").unwrap();
+    db.install_font("UserMincho.ttf", &mapping(regular, "User Mincho 2", 0xF_0030, 0xF_0031)).unwrap();
+    assert_eq!(db.read_faces().len(), face_count);
+    assert_eq!(db.fallback_for_diagram(&run, primary.id(), true).unwrap().family, "User Mincho 2");
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), 3, "generation invalidates the cache when face count stays unchanged");
+
+    let _ = std::fs::remove_dir_all(dir);
+}

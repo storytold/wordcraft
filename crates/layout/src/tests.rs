@@ -8394,6 +8394,7 @@ fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
             bold: false,
             align: TextAlign::Center,
             font: Some("Source Sans 3".into()),
+            angle: 0.0,
         })
         .collect();
     let sans_graphic = Graphic { kind: GraphicKind::Diagram, items: sans_items, ..Default::default() };
@@ -8435,6 +8436,7 @@ fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
             bold: false,
             align: TextAlign::Center,
             font: Some("Source Serif 4".into()),
+            angle: 0.0,
         })
         .collect();
     let serif_graphic = Graphic { kind: GraphicKind::Diagram, items: serif_items, ..Default::default() };
@@ -8475,6 +8477,7 @@ fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
                 bold: false,
                 align: TextAlign::Center,
                 font: None,
+                angle: 0.0,
             })
             .collect();
         let real_graphic = Graphic { kind: GraphicKind::Diagram, items: real_items, ..Default::default() };
@@ -8529,6 +8532,7 @@ fn mixed_font_diagram_uses_covering_fallback_for_later_missing_characters() {
         bold: false,
         align: TextAlign::Center,
         font,
+        angle: 0.0,
     })
     .collect();
     let graphic = Graphic { kind: GraphicKind::Diagram, items, ..Default::default() };
