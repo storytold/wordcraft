@@ -204,6 +204,7 @@ impl WordApp {
     /// clean ones close and each one with unsaved work asks on its own window. The app quits once
     /// the last of them has closed (`{"quitting": true}`); Cancel on any of them keeps it open.
     pub(crate) fn close_every_window(&mut self) {
+        self.quitting = true;
         let shown = self.session.document_id();
         for d in self.session.documents() {
             if d.id != shown && Some(d.id) != self.no_document {

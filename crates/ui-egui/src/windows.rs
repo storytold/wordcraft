@@ -448,7 +448,8 @@ impl WordApp {
     /// Whether command `id` (File › Close) closes the drawn window alone, asking nothing: other
     /// windows show its document. Quitting closes documents, not windows.
     pub(crate) fn closes_only_its_window(&self, id: &str, params: &Value) -> bool {
-        id == "file.close" && params.get("quit").and_then(Value::as_bool) != Some(true) && self.other_window_on_document().is_some()
+        let quitting = ["quit", "quitting"].iter().any(|k| params.get(k).and_then(Value::as_bool) == Some(true));
+        id == "file.close" && !quitting && self.other_window_on_document().is_some()
     }
 
     /// Close the drawn window alone: other windows show its document, which stays open as it is.

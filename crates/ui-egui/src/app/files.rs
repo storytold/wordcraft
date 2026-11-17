@@ -49,6 +49,7 @@ impl WordApp {
             },
         };
         if !go {
+            self.quitting = false;
             return Ok(json!({"done": false}));
         }
         self.execute_held_back(&then, params).map(|r| json!({"done": true, "result": r}))
@@ -270,7 +271,7 @@ impl WordApp {
             self.ui.backstage = false;
         }
         // Quitting with a sheet per window (`close_every_window`): the last one answered quits.
-        if params.get("quitting").and_then(Value::as_bool) == Some(true) && !self.has_unsaved_documents() {
+        if self.quitting && params.get("quitting").and_then(Value::as_bool) == Some(true) && !self.has_unsaved_documents() {
             self.quit_requested = true;
         }
         Ok(json!({"closed": true}))

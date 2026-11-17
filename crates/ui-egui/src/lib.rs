@@ -786,6 +786,9 @@ pub struct WordApp {
     /// Escape may leave full screen. Read before anything handles the frame's keys.
     escape_free: bool,
     pub quit_requested: bool,
+    /// Quit is asking in every window at once ([`WordApp::close_every_window`]); Cancel in any
+    /// of them clears it, so a later answer doesn't quit.
+    pub(crate) quitting: bool,
     pub autosave: bool,
     /// The document's fonts that aren't installed, for the status bar and the font box, and the
     /// layout they were read from.

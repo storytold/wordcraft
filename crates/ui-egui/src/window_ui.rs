@@ -214,6 +214,7 @@ impl WordApp {
             applied_animations: _,
             frame_ms: _,
             quit_requested: _,
+            quitting: _,
             autosave: _,
             zotero: _,
             ctx: _,

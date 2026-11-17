@@ -146,6 +146,7 @@ impl WordApp {
             applied_animations: None,
             frame_ms: 0.0,
             quit_requested: false,
+            quitting: false,
             autosave: true,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
