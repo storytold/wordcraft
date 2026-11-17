@@ -209,6 +209,7 @@ impl FontPanel {
     }
 
     /// Hides the panel's shadow controls, for an app whose text has no shadow.
+    #[allow(dead_code)] // apps with a text shadow keep the controls
     pub fn hide_shadow(&self) {
         let modes = self.target.ivars().modes.get();
         self.target.ivars().modes.set(modes.difference(NSFontPanelModeMask::ModeMaskShadowEffect));
