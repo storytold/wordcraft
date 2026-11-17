@@ -24,7 +24,12 @@ fn main() {
     let woken = std::rc::Rc::new(std::cell::Cell::new(0));
     let w = woken.clone();
     let panel = FontPanel::new(mtm, move || w.set(w.get() + 1));
+    // A drag in a colour picker is one pick (one undo step), sent when it ends, even if something
+    // else had the colour panel send its action continuously.
+    let colors = objc2_app_kit::NSColorPanel::sharedColorPanel(mtm);
+    colors.setContinuous(true);
     panel.show_for_test("Helvetica", 14.0, true, false);
+    assert!(!colors.isContinuous(), "the colour panel sends its colour when a drag ends");
     // What the panel sends when the user picks: with nothing changed there, nothing to format.
     panel.change_font_for_test();
     assert_eq!(panel.picks(), vec![]);
