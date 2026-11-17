@@ -1653,6 +1653,26 @@ fn paste_merge_formatting_keeps_rtf_deletions() {
 }
 
 #[test]
+fn paste_merge_formatting_keeps_bold_and_italic_in_a_complex_script_run() {
+    // #4852 review: with the caret in a run marked `w:cs` (Thai from a WPS or Word file), the
+    // pasted text takes `cs` too, so its bold and italic must be the complex-script ones as well.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "ภาษาไทย"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.set", json!({"props": {"cs": true}}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.pasteMerge", json!({"rtf": r"{\rtf1{\b bold}{\i slant}\par}"}));
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let at = |word: &str| p.props_of_char(p.text.find(word).unwrap() + 1).clone();
+    let (b, i) = (at("bold"), at("slant"));
+    assert_eq!((b.cs, b.bold, b.bold_cs), (Some(true), Some(true), Some(true)), "{b:?}");
+    assert_eq!((i.cs, i.italic, i.italic_cs), (Some(true), Some(true), Some(true)), "{i:?}");
+    assert_ne!(b.italic, Some(true));
+    let r = s.doc.styles.resolve_char(None, &b);
+    assert!(r.bold_cs, "drawn bold as complex script");
+}
+
+#[test]
 fn pasted_rtf_sections_link_their_headers_to_the_previous() {
     // #1378: the RTF's own header part ids mean nothing in this document; a pasted section
     // break keeps its page but links its headers and footers to the previous section.
@@ -12861,6 +12881,13 @@ fn style_set_keeps_imported_styles_latent_styles_and_defaults() {
     let mut s = s();
     run(&mut s, "design.styleSet", json!({ "name": "title" }));
     assert_eq!(s.doc.styles.get("Title").unwrap().chr.size, Some(36.0));
+    // #4852 review: the sets that make headings bold or italic do it in both scripts, so a Thai
+    // heading in a run marked `w:cs` is drawn bold or italic too.
+    let cs = wordcraft_doc::props::CharProps { cs: Some(true), ..Default::default() };
+    run(&mut s, "design.styleSet", json!({ "name": "basic" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading1"), &cs).bold_cs, "basic");
+    run(&mut s, "design.styleSet", json!({ "name": "casual" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading2"), &cs).italic_cs, "casual");
 }
 
 fn style_size(s: &Session, id: &str) -> f32 {
