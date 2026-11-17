@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-17 · **Change:** trivial (progress log: tables in a file with no default table style have no cell margins unless they or their style set some; previously minor: added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-17: Tables: a file with no default table style (no styles part, or none marked `w:default`) gives its tables no cell margins unless they or their style set some, as in Word (checked in Word 2013 mode) and its PDFs of the docxide-pdf fixtures; a cell that sets only its right margin no longer gets 5.4 pt on its left (a regression from #2434, docxide-pdf `case212`–`case219`; the reader change is craft-libs#1278).
 - 2026-11-17: File formats, codecs and protocols now come from the shared libraries (storytold/craft-libs#778): legacy code pages (craft-codepage, #6785), plain-text encoding detection (craft-mime, #6950), the ZIP entry-count guard (craft-zip, #6948), Read Aloud's Speech Dispatcher wire format (craft-ssip, #6951), picture probes for clipboard DIBs, JPEG memory, PNG and WebP (craft-image-codecs, #6949, #6955) and the MCP stdio server (craft-mcp-server, #6956), all with craft-libs pinned at main `93dac78c` (#6954, #6960). Opening documents and pictures behaves as before, except that large non-interleaved JPEGs are refused sooner (a 4:4:4 picture from about 60 Mpx, was 67 Mpx), invalid PNGs are refused more strictly, a lossless WebP's transparency is now seen, and MCP clients get tool errors for unknown or mistyped arguments and a 1,000-message batch cap (docs/mcp.md). The old code stays as test-only references the shared code is checked against.
 - 2026-11-15: Get the Missing Fonts. A document opened from a file that is missing fonts their publisher gives away (Microsoft's Aptos family, the default in recent Word documents; Cascadia Code and Mono) brings up a box naming each font, the font drawn instead, the publisher's download page and how to install the download, with Don't show this again. `font.missing` reports the same page, so agents get it without the box. WordCraft links to the page only; it downloads and bundles nothing.
 - 2026-10-30: Track Changes: a list item deleted whole, text and paragraph mark, shows its number as deleted text, in the deletion's colour and with its mark (struck through by default, or caret, #, bold, italic, underline), and hides it with No Markup or when Track Changes Options hide deletions (#4828). Readiness unchanged.
@@ -1462,6 +1463,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
 | 2026-11-03 | trivial | Progress log: a line breaks after a hyphen before a slash (#3408) |
 | 2026-11-12 | minor | Progress log: layout.fitOnePage condenses a multi-page document by one page while preserving typography hierarchy (#6433) |
+| 2026-11-17 | trivial | Progress log: tables in a file with no default table style have no cell margins unless they or their style set some |
 
 ### Format Painter integration refresh, 2026-10-30
 
