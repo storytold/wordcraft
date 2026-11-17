@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-17: GOST 7.32-2017 report template landed (File › New and `file.new {"template":"gost-report"}`): A4 with 30/15/20/20 mm fields, Times New Roman 14 pt, one-and-a-half spacing, title page, РЕФЕРАТ, СОДЕРЖАНИЕ, numbered sections, conclusion and sources, and a centred bottom page number; the template's own heading styles stay black and keep РЕФЕРАТ/СОДЕРЖАНИЕ out of the TOC.
 - 2026-10-30: Track Changes: a list item deleted whole, text and paragraph mark, shows its number as deleted text, in the deletion's colour and with its mark (struck through by default, or caret, #, bold, italic, underline), and hides it with No Markup or when Track Changes Options hide deletions (#4828). Readiness unchanged.
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
