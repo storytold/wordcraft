@@ -516,7 +516,8 @@ impl FontDb {
             let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
             let fresh: Vec<_> = new
                 .iter()
-                .filter(|f| !faces.iter().any(|g| g.family.eq_ignore_ascii_case(&f.family) && g.style.eq_ignore_ascii_case(&f.style)))
+                // A document's embedded copy doesn't count: other documents can't see it.
+                .filter(|f| !faces.iter().any(|g| g.owner == 0 && g.family.eq_ignore_ascii_case(&f.family) && g.style.eq_ignore_ascii_case(&f.style)))
                 .cloned()
                 .collect();
             faces.extend(fresh.iter().cloned());

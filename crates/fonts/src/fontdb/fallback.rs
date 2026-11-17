@@ -25,7 +25,12 @@ impl FontDb {
             (true, false) => "Bold",
             _ => "Italic",
         };
-        let styled = self.face(&base.family, style);
+        // Shared faces only: the choice is cached for every document, and a document's embedded
+        // bold or italic is its own.
+        let styled = {
+            let _shared = crate::DocumentFonts::enter(0);
+            self.face(&base.family, style)
+        };
         Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
     }
 
@@ -72,8 +77,11 @@ impl FontDb {
         if c != '\u{25CF}' {
             return None;
         }
-        // Word uses this text face for an uncovered black circle, before a UI sans.
+        // Word uses this text face for an uncovered black circle, before a UI sans. Shared faces
+        // only: the choice is cached for every document, so a document's embedded Times New Roman
+        // must not answer.
         const FAMILY: &str = "Times New Roman";
+        let _shared = crate::DocumentFonts::enter(0);
         let find = || self.find(FAMILY, "Regular").filter(|f| f.id != exclude && f.covers(c));
         if let Some(face) = find() {
             return Some(face);
@@ -213,7 +221,11 @@ impl FontDb {
             (true, false) => "Bold",
             _ => "Italic",
         };
-        let styled = self.face(&base.family, style);
+        // Shared faces only, as for the base: the run's choice is cached for every document.
+        let styled = {
+            let _shared = crate::DocumentFonts::enter(0);
+            self.face(&base.family, style)
+        };
         let face = if styled.family.eq_ignore_ascii_case(&base.family) && chars.iter().all(|c| styled.covers(*c)) && styled.id != exclude {
             styled
         } else {
