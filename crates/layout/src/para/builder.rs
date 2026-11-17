@@ -4,7 +4,7 @@ use super::chars::{
     reported_font_name, thai_run_face, upper_char,
 };
 use super::grid::east_asian;
-use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
+use super::model::{ClKind, Cluster, Enclosed, FaceRun, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 use wordcraft_fonts::ShapeContext;
 
@@ -19,9 +19,33 @@ pub(super) struct Builder<'a> {
     pub(super) levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
     pub(super) shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// Those of them drawn in more than one face (see `ParaLayout::faces`).
+    pub(super) faces: Vec<(usize, Vec<FaceRun>)>,
     /// Fonts asked for that aren't installed, and the faces drawn instead (see
     /// `ParaLayout::substituted`).
     pub(super) substituted: Vec<(String, FaceRef)>,
+}
+
+/// The face runs of `clusters`' glyphs (`faces` holding those already known to mix faces), or
+/// none when they all share one face.
+fn face_runs(clusters: &[(usize, Cluster)], faces: &[(usize, Vec<FaceRun>)]) -> Vec<FaceRun> {
+    let mut runs: Vec<FaceRun> = Vec::new();
+    for (k, c) in clusters {
+        let own = match faces.binary_search_by_key(k, |(i, _)| *i) {
+            Ok(i) => faces.get(i).map(|(_, r)| r.clone()).unwrap_or_default(),
+            Err(_) => vec![FaceRun { style: c.style, glyphs: c.g0..c.g1 }],
+        };
+        for r in own.into_iter().filter(|r| r.glyphs.start < r.glyphs.end) {
+            match runs.last_mut() {
+                Some(last) if last.style == r.style && last.glyphs.end == r.glyphs.start => last.glyphs.end = r.glyphs.end,
+                _ => runs.push(r),
+            }
+        }
+    }
+    if runs.windows(2).all(|w| w.first().map(|a| a.style) == w.get(1).map(|b| b.style)) {
+        runs.clear();
+    }
+    runs
 }
 
 /// The fonts a run asks for that aren't installed (see [`Builder::note_missing_fonts`]).
@@ -505,6 +529,9 @@ impl<'a> Builder<'a> {
         let before = self.clusters.len();
         self.shape_with(text, start, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) });
         let added: Vec<Cluster> = self.clusters.drain(before..).collect();
+        // Shaping picks a face per character (an East Asian font, a fallback): the merged cluster
+        // keeps which glyphs are in which face (#2491).
+        let runs = face_runs(&added.iter().cloned().map(|c| (usize::MAX, c)).collect::<Vec<_>>(), &[]);
         let Some(first) = added.first() else {
             let si = self.style(rc, None, false);
             let g = self.glyphs.len() as u32;
@@ -553,6 +580,9 @@ impl<'a> Builder<'a> {
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
+        if !runs.is_empty() {
+            self.faces.push((self.clusters.len(), runs));
+        }
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
     }
 
@@ -567,12 +597,17 @@ impl<'a> Builder<'a> {
         (width, dy): (f32, f32),
     ) -> Option<usize> {
         use wordcraft_doc::eq::OAlign;
-        let (c0, s0) = (self.clusters.len(), self.shown.len());
+        let (c0, s0, f0) = (self.clusters.len(), self.shown.len(), self.faces.len());
         for t in texts {
             self.shape_atomic(t, start, end, rc);
         }
         let added: Vec<Cluster> = self.clusters.drain(c0..).collect();
         let shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)> = self.shown.drain(s0..).collect();
+        let faces: Vec<(usize, Vec<FaceRun>)> = self.faces.drain(f0..).collect();
+        let runs = face_runs(
+            &added.iter().cloned().enumerate().map(|(i, c)| (c0 + i, c)).filter(|(_, c)| c.kind == ClKind::Text).collect::<Vec<_>>(),
+            &faces,
+        );
         let adv = added.iter().filter(|c| c.kind == ClKind::Text).map(|c| c.adv).fold(width.max(0.0), f32::max);
         let (mut text, mut ranges) = (String::new(), Vec::new());
         let (mut g0, mut g1) = (u32::MAX, 0u32);
@@ -602,6 +637,9 @@ impl<'a> Builder<'a> {
         let k = self.clusters.len();
         if !text.is_empty() {
             self.shown.push((k, text, ranges));
+        }
+        if !runs.is_empty() {
+            self.faces.push((k, runs));
         }
         self.clusters.push(Cluster { start, end, adv, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
         Some(k)
@@ -633,7 +671,7 @@ pub(super) fn overstrike(
     let style = Enclosure::parse(instr).map(|e| e.style).unwrap_or_default();
     let s = rc.size.clamp(1.0, 1638.0);
     // The widest text at the run's own size.
-    let (c0, g0, s0) = (b.clusters.len(), b.glyphs.len(), b.shown.len());
+    let (c0, g0, s0, f0) = (b.clusters.len(), b.glyphs.len(), b.shown.len(), b.faces.len());
     for t in &texts {
         b.shape_atomic(t, start, end, rc);
     }
@@ -641,6 +679,7 @@ pub(super) fn overstrike(
     b.clusters.truncate(c0);
     b.glyphs.truncate(g0);
     b.shown.truncate(s0);
+    b.faces.truncate(f0);
     // The shape's box (`bw` × `bh`, centred `cy` above the baseline) and the text's size.
     let cy = s * 0.34;
     let (bw, bh, size) = match style {

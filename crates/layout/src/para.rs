@@ -39,7 +39,9 @@ pub use grid::{Exclusion, Grid, is_east_asian};
 #[cfg(test)]
 use lines::break_lines;
 pub(crate) use lines::takes_room;
-pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
+pub use model::{
+    CellText, ClKind, Cluster, Enclosed, FaceRun, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl,
+};
 pub use paragraph::layout_para;
 #[cfg(test)]
 pub(crate) use paragraph::word_widths;
@@ -96,6 +98,10 @@ pub struct ParaLayout {
     /// equations) rather than for the paragraph's own text, by cluster index, sorted, with each of
     /// the cluster's glyphs' byte range in that text (a ligature's glyph spans its letters).
     pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// Clusters standing for an object whose glyphs come from more than one face (a field result
+    /// mixing Latin and Chinese text, #2491), by cluster index, sorted: each face's style and its
+    /// glyphs. A glyph id only means something in its own face, so each run is drawn in its own.
+    pub faces: Vec<(usize, Vec<FaceRun>)>,
     /// Shapes drawn around overstruck field text (enclosed characters, `EQ \o`), by cluster index.
     pub enclosures: Vec<(usize, Enclosed)>,
     /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
