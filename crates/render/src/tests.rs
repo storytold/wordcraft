@@ -2009,7 +2009,7 @@ fn undecodable_pictures_keep_their_grey_box_pixels() {
 fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
     use craft_metafile::{ClipPath, Tile};
     let segs = |n: usize| vec![Seg::Line(0.0, 0.0); n];
-    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
     let base = crate::media::geometry_bytes(&pic(vec![]));
     let tile = Arc::new(Tile { width: 1000, height: 1000, rgba: vec![0; 4_000_000], cell: [1.0, 1.0], origin: [0.0, 0.0] });
     let pattern = |tile: &Arc<Tile>| Item::Pattern { segs: segs(1000), even_odd: false, tile: tile.clone(), region: None, clips: vec![] };
@@ -2042,7 +2042,7 @@ fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
 #[test]
 fn geometry_bytes_charges_the_capacity_of_segment_and_dash_vectors() {
     use craft_metafile::LineStyle;
-    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
     let path = |segs: Vec<Seg>, dash: Vec<f32>| Item::Path {
         segs,
         fill: None,
@@ -2066,7 +2066,7 @@ fn geometry_bytes_charges_the_capacity_of_segment_and_dash_vectors() {
 #[test]
 fn geometry_bytes_counts_dash_arrays_and_text_records() {
     use craft_metafile::{Font, HAlign, LineStyle, Text, VAlign};
-    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
     let path = |dash: usize| Item::Path {
         segs: vec![Seg::Line(0.0, 0.0); 2],
         fill: None,
