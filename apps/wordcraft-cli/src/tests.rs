@@ -267,19 +267,19 @@ fn render_rejects_missing_or_invalid_page_and_scale() {
     assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--page", "-1"])), Err("render: invalid --page `-1`: not a valid integer".into()));
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "0"])),
-        Err("render: invalid --scale `0`: scale must be a positive number".into())
+        Err("render: invalid --scale `0`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "-2"])),
-        Err("render: invalid --scale `-2`: scale must be a positive number".into())
+        Err("render: invalid --scale `-2`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "NaN"])),
-        Err("render: invalid --scale `NaN`: scale must be a positive number".into())
+        Err("render: invalid --scale `NaN`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "inf"])),
-        Err("render: invalid --scale `inf`: scale must be a positive number".into())
+        Err("render: invalid --scale `inf`: scale must be a finite positive number".into())
     );
 
     // Duplicate options
@@ -322,19 +322,19 @@ fn run_rejects_missing_or_invalid_page_and_scale() {
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "0"])),
-        Err("run: invalid --scale `0`: scale must be a positive number".into())
+        Err("run: invalid --scale `0`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "-1"])),
-        Err("run: invalid --scale `-1`: scale must be a positive number".into())
+        Err("run: invalid --scale `-1`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "NaN"])),
-        Err("run: invalid --scale `NaN`: scale must be a positive number".into())
+        Err("run: invalid --scale `NaN`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "inf"])),
-        Err("run: invalid --scale `inf`: scale must be a positive number".into())
+        Err("run: invalid --scale `inf`: scale must be a finite positive number".into())
     );
 
     // Duplicate options
