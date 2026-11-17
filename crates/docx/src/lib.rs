@@ -85,7 +85,7 @@ pub fn write(doc: &wordcraft_doc::Document) -> Result<Vec<u8>, DocxError> {
 /// Write a document with a specific package flavor.
 pub fn write_as(doc: &wordcraft_doc::Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
     let shared = to_shared_model(doc)?;
-    craft_docx::write_as(&shared, flavor)
+    craft_docx::write_as(&shared, flavor).map(|bytes| pic_fidelity::apply_write_extras(doc, bytes))
 }
 
 /// Write a document as a Flat OPC XML file.

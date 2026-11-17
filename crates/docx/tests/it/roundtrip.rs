@@ -2933,7 +2933,7 @@ fn drop_cap_options_round_trip() {
 }
 
 #[test]
-fn linked_pictures_out_of_unit_crops_effect_alpha_mods_and_deep_groups_round_trip() {
+fn picture_outline_effects_and_out_of_unit_crops_round_trip() {
     let mut group_xml = r#"<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp>"#.to_string();
     for _ in 0..4 {
         group_xml = format!(
@@ -2941,21 +2941,20 @@ fn linked_pictures_out_of_unit_crops_effect_alpha_mods_and_deep_groups_round_tri
         );
     }
     let doc_xml = format!(
-        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/><wp:docPr id="1" name="Pic"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Pic"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:srcRect l="-25000" t="150000" r="-10000" b="25000"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:effectLst><a:outerShdw blurRad="50800" dist="25400" dir="5400000"><a:srgbClr val="112233"><a:alpha val="80000"/><a:alphaMod val="50000"/><a:alphaOff val="10000"/></a:srgbClr></a:outerShdw></a:effectLst></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r><w:r><w:drawing><wp:inline><wp:extent cx="127000" cy="127000"/><wp:docPr id="2" name="DeepGroup"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup">{group_xml}</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/><wp:docPr id="1" name="Pic"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="image1.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic" r:link="rIdLink"/><a:srcRect l="-25000" t="150000" r="-10000" b="25000"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:effectLst><a:outerShdw blurRad="50800" dist="25400" dir="5400000"><a:srgbClr val="112233"><a:alpha val="80000"/><a:alphaMod val="50000"/><a:alphaOff val="10000"/></a:srgbClr></a:outerShdw></a:effectLst></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing><w:drawing><wp:inline><wp:extent cx="127000" cy="127000"/><wp:docPr id="2" name="Group"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup">{group_xml}</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#
     );
     let rels_xml = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdPic" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>"#;
     let root_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="main" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, val) in [
         ("word/document.xml", doc_xml.as_bytes()),
         ("word/_rels/document.xml.rels", rels_xml.as_bytes()),
         ("word/media/image1.png", &[137, 80, 78, 71, 13, 10, 26, 10]),
         ("_rels/.rels", root_rels.as_bytes()),
     ] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, val).unwrap();
+        zip.add(name, val, craft_zip::Compression::Deflated).unwrap();
     }
-    let bytes = zip.finish().unwrap().into_inner();
+    let bytes = zip.finish().unwrap();
     let d = wordcraft_docx::read(&bytes).unwrap();
     let r = rt(&d);
     let objs = &paras(&r)[0].objects;
@@ -2967,12 +2966,82 @@ fn linked_pictures_out_of_unit_crops_effect_alpha_mods_and_deep_groups_round_tri
             assert_eq!(sh.color, Rgb(0x11, 0x22, 0x33));
             assert!((sh.transparency - 50.0).abs() < 0.01, "expected 50% transparency, got {}", sh.transparency);
         }
-        other => panic!("expected linked Image, got {other:?}"),
+        other => panic!("expected Image, got {other:?}"),
     }
     match &objs[1] {
         InlineObject::Group { children, .. } => {
             assert_eq!(children.len(), 1, "grouped member preserved");
         }
         other => panic!("expected Group, got {other:?}"),
+    }
+}
+
+#[test]
+fn picture_extras_align_across_linked_vml_textbox_and_ole_images() {
+    // 1. Linked-only picture (r:link without r:embed) -> skipped by craft-docx
+    // 2. VML picture (w:pict/v:shape/v:imagedata) -> becomes an Image with no pic:pic
+    // 3. TextBox shape inside mc:AlternateContent (with a duplicate VML fallback) containing a picture with an outline
+    // 4. Body picture with out-of-unit crop, outline, and softEdge
+    let linked_pic = r#"<w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/><wp:docPr id="1" name="LinkedLogo"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="logo.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:link="rIdExt"/><a:srcRect l="99000" t="0" r="0" b="0"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="50800"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#;
+    let vml_pic = r#"<w:pict><v:shape id="vml1" style="width:72pt;height:36pt"><v:imagedata r:id="rIdPic"/></v:shape></w:pict>"#;
+    let txbx_pic = r#"<w:drawing><wp:inline><wp:extent cx="457200" cy="457200"/><wp:docPr id="2" name="TxbxPic"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="image1.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="457200" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="19050"><a:solidFill><a:srgbClr val="AA00BB"/></a:solidFill></a:ln></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#;
+    let txbx_ac = format!(
+        r#"<mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="3" name="Box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r>{txbx_pic}</w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback><w:pict><v:rect style="width:72pt;height:72pt"><v:textbox><w:txbxContent><w:p><w:r>{txbx_pic}</w:r></w:p></w:txbxContent></v:textbox></v:rect></w:pict></mc:Fallback></mc:AlternateContent>"#
+    );
+    let body_pic = r#"<w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/><wp:docPr id="4" name="BodyPic"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="image1.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:srcRect l="-20000" t="10000" r="0" b="0"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:ln><a:effectLst><a:softEdge rad="38100"/></a:effectLst></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#;
+    let ole_obj = r#"<w:object><v:shape id="ole1" style="width:50pt;height:50pt"><v:imagedata r:id="rIdPic"/></v:shape><o:OLEObject Type="Embed" ProgID="Excel.Sheet.12" ShapeID="ole1" DrawAspect="Content" ObjectID="_1" r:id="rIdOle"/></w:object>"#;
+    let doc_xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r>{linked_pic}{vml_pic}{txbx_ac}{ole_obj}{body_pic}</w:r></w:p></w:body></w:document>"#
+    );
+    let rels_xml = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdPic" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/><Relationship Id="rIdExt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.com/logo.png" TargetMode="External"/><Relationship Id="rIdOle" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="embeddings/oleObject1.bin"/></Relationships>"#;
+    let root_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="main" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let mut zip = craft_zip::Writer::new();
+    for (name, val) in [
+        ("word/document.xml", doc_xml.as_bytes()),
+        ("word/_rels/document.xml.rels", rels_xml.as_bytes()),
+        ("word/media/image1.png", &[137, 80, 78, 71, 13, 10, 26, 10]),
+        ("word/embeddings/oleObject1.bin", &[1, 2, 3, 4]),
+        ("_rels/.rels", root_rels.as_bytes()),
+    ] {
+        zip.add(name, val, craft_zip::Compression::Deflated).unwrap();
+    }
+    let bytes = zip.finish().unwrap();
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    // Save via both write() and write_as() to verify both preserve picture extras across VML/textbox/OLE:
+    for saved in [wordcraft_docx::write(&d).unwrap(), wordcraft_docx::write_as(&d, wordcraft_docx::Flavor::Template).unwrap()] {
+        let r = wordcraft_docx::read(&saved).unwrap();
+        let objs = &paras(&r)[0].objects;
+        // objs: [0] = VML image (converted to DrawingML on save), [1] = TextBox shape, [2] = OLE image, [3] = BodyPic
+        assert_eq!(objs.len(), 4, "{objs:?}");
+        match &objs[0] {
+            InlineObject::Image { crop, float, .. } => {
+                assert_eq!(*crop, [0.0; 4]);
+                assert_eq!(float.pic_stroke, None);
+            }
+            other => panic!("expected VML image, got {other:?}"),
+        }
+        match &objs[1] {
+            InlineObject::Shape { story: Some(sid), .. } => {
+                let tb_part = r.parts.get(sid).expect("textbox part");
+                let tb_objs = &tb_part.blocks[0].as_para().unwrap().objects;
+                match &tb_objs[0] {
+                    InlineObject::Image { float, .. } => {
+                        assert_eq!(float.pic_stroke, Some(Rgb(0xAA, 0x00, 0xBB)));
+                        assert!((float.pic_stroke_width - 1.5).abs() < 0.01);
+                    }
+                    other => panic!("expected textbox image, got {other:?}"),
+                }
+            }
+            other => panic!("expected TextBox shape, got {other:?}"),
+        }
+        match &objs[3] {
+            InlineObject::Image { crop, float, .. } => {
+                assert_eq!(*crop, [-0.2, 0.1, 0.0, 0.0]);
+                assert_eq!(float.pic_stroke, Some(Rgb(0x11, 0x22, 0x33)));
+                assert!((float.pic_stroke_width - 2.0).abs() < 0.01);
+                assert_eq!(float.pic_effects.soft_edge, Some(3.0));
+            }
+            other => panic!("expected body image, got {other:?}"),
+        }
     }
 }
