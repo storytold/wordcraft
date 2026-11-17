@@ -217,6 +217,8 @@ const PINNED_PARTS: &[&str] = &[
     "word/styles.xml",
     "word/settings.xml",
     "word/theme/theme1.xml",
+    // The fonts the document uses, with their families: it brings no font table of its own.
+    "word/fontTable.xml",
     "docProps/core.xml",
     "docProps/app.xml",
 ];
