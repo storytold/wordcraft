@@ -47,6 +47,76 @@ fn finishing_a_merge_to_a_file_is_not_an_edit() {
 }
 
 #[test]
+fn csv_delimiter_reads_complete_header_record() {
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            // All candidate separators and doubled quotes occur on both sides of the newline.
+            // The real separators follow the closing quote, beyond the first physical line.
+            let header = format!("Name,;\t \"given\"{newline}family,;\t \"last\"");
+            let quoted = header.replace('"', "\"\"");
+            let text = format!("\"{quoted}\"{sep}City{sep}{sep}\r\nAda{sep}Paris{sep}{sep}\nBo{sep}Oslo{sep}{sep}");
+            assert_eq!(
+                parse_csv(&text),
+                vec![vec![header.as_str(), "City", "", ""], vec!["Ada", "Paris", "", ""], vec!["Bo", "Oslo", "", ""]],
+                "separator {sep:?}, embedded newline {newline:?}"
+            );
+            // A multiline field after an ordinary column must not end detection either.
+            let text = format!("ID{sep}\"{quoted}\"{sep}City\n1{sep}Ada{sep}Paris\n2{sep}Bo{sep}Oslo");
+            assert_eq!(parse_csv(&text), vec![vec!["ID", header.as_str(), "City"], vec!["1", "Ada", "Paris"], vec!["2", "Bo", "Oslo"]]);
+        }
+    }
+}
+
+#[test]
+fn csv_delimiter_reads_multiline_headers_after_blank_lines() {
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            let header = format!("Given{newline}Family");
+            for prefix in ["\n\r\n", "\r", "\r\r"] {
+                let text = format!("{prefix}\"{header}\"{sep}City\rAda{sep}Paris");
+                assert_eq!(parse_csv(&text), vec![vec![header.as_str(), "City"], vec!["Ada", "Paris"]]);
+            }
+        }
+    }
+}
+
+#[test]
+fn recipient_csv_blank_prefix_keeps_columns_without_dropping_literal_records() {
+    let mut s = Session::new(Document::new());
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            let header = format!("First{newline}Name");
+            let csv = format!(" \t{newline}\"{header}\"{sep}Email{newline}Ada{sep}ada@example.com");
+            let result = s.run("mailings.recipients", &json!({"csv": csv})).unwrap();
+            assert_eq!(result, json!({"fields": [header, "Email"], "records": 1}));
+            assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([["Ada", "ada@example.com"]]));
+        }
+    }
+    s.run("mailings.recipients", &json!({"csv": " \nName,Email\nAda,ada@example.com", "headers": false})).unwrap();
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([[" ", ""], ["Name", "Email"], ["Ada", "ada@example.com"]]));
+    s.run("mailings.recipients", &json!({"csv": "\" \",Email\nAda,ada@example.com"})).unwrap();
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([["Ada", "ada@example.com"]]));
+    let rows = s.merge.rows.clone();
+    assert!(s.run("mailings.recipients", &json!({"csv": " \t\r\n \r"})).is_err());
+    assert_eq!(s.merge.rows, rows, "an empty headered list must not replace existing recipients");
+    assert_eq!(parse_csv(" \nName,Email\nAda,ada@example.com")[0], vec![" "], "the shared CSV reader keeps literal whitespace rows");
+}
+
+#[test]
+fn csv_delimiter_keeps_record_boundaries_and_ties() {
+    // Later records cannot choose the header's delimiter.
+    assert_eq!(parse_csv("Name;City\rAda;Paris,,,,\rBo;Oslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris,,,,"], vec!["Bo", "Oslo"]]);
+    // Existing ties prefer tab, then semicolon, then comma.
+    assert_eq!(parse_csv("A,B;C\n1,2;3"), vec![vec!["A,B", "C"], vec!["1,2", "3"]]);
+    assert_eq!(parse_csv("A;B\tC\n1;2\t3"), vec![vec!["A;B", "C"], vec!["1;2", "3"]]);
+    assert_eq!(parse_csv("Name\nAda,Paris;Oslo"), vec![vec!["Name"], vec!["Ada,Paris;Oslo"]]);
+    assert!(parse_csv("").is_empty());
+    assert_eq!(parse_csv("\nName\nAda"), vec![vec!["Name"], vec!["Ada"]]);
+    // The reader remains permissive about an unterminated quoted cell.
+    assert_eq!(parse_csv("Name,City\nAda,\"Paris\nOslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris\nOslo"]]);
+}
+
+#[test]
 fn csv_delimiter_ignores_quoted_text() {
     let r = parse_csv("\"Name, first, last\";City\nAnn;Paris\n");
     assert_eq!(r, vec![vec!["Name, first, last", "City"], vec!["Ann", "Paris"]]);
@@ -119,22 +189,19 @@ fn merge_end_to_end() {
 /// A typed list (#240) keeps its column order, and rows may be arrays in that order.
 #[test]
 fn recipients_from_a_workbook_ask_for_the_sheet_when_there_are_several() {
-    use std::io::Write;
     let cell = |t: &str| format!(r#"<table:table-cell office:value-type="string"><text:p>{t}</text:p></table:table-cell>"#);
     let row = |cells: &[&str]| format!("<table:table-row>{}</table:table-row>", cells.iter().map(|c| cell(c)).collect::<String>());
     let content = format!(
-        r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet><table:table table:name="Notes">{}</table:table><table:table table:name="Guests">{}{}{}</table:table></office:spreadsheet></office:body></office:document-content>"#,
+        r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="Notes">{}</table:table><table:table table:name="Guests">{}{}{}</table:table></office:spreadsheet></office:body></office:document-content>"#,
         row(&["n"]),
         row(&["Name", "", "Name"]),
         row(&["Ada", "London", "A"]),
         row(&["Alan", "Wilmslow", "B"]),
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (name, body) in [("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content.as_str())] {
-        z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        z.write_all(body.as_bytes()).unwrap();
-    }
-    let data = super::super::insert::base64_encode(&z.finish().unwrap().into_inner());
+    let mut z = craft_zip::Writer::new();
+    z.add("mimetype", b"application/vnd.oasis.opendocument.spreadsheet", craft_zip::Compression::Stored).unwrap();
+    z.add("content.xml", content.as_bytes(), craft_zip::Compression::Deflated).unwrap();
+    let data = super::super::insert::base64_encode(&z.finish().unwrap());
     let mut s = Session::new(Document::new());
     // Two sheets and none chosen: the names come back and nothing loads.
     let r = s.run("mailings.recipients", &json!({"data": data})).unwrap();
@@ -305,6 +372,29 @@ fn if_rule_previews_its_result() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Selected");
     s.run("mailings.finish", &json!({})).unwrap();
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Selected\nOther");
+}
+
+/// #3681: quotes and backslashes in a rule's texts and field name stay in them.
+#[test]
+fn rule_texts_keep_their_quotes() {
+    let mut s = Session::new(Document::new());
+    let rows = json!([{"Say \"hi\"": "a\\b", "Name": "O\"Neil"}, {"Say \"hi\"": "no", "Name": "Plain"}]);
+    s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+    s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+    let rule = json!({"rule": "IF", "field": "Say \"hi\"", "value": "a\\b", "then": "Dear \"friend\"", "else": "C:\\dir\\"});
+    s.run("mailings.rules", &rule).unwrap();
+    s.run("mailings.preview", &json!({"value": true})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Dear \"friend\"");
+    s.run("mailings.next", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "C:\\dir\\");
+    // SKIPIF compares with the value as typed.
+    let mut s = Session::new(Document::new());
+    s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+    s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+    s.run("mailings.rules", &json!({"rule": "SKIPIF", "field": "Name", "value": "O\"Neil"})).unwrap();
+    s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+    s.run("mailings.finish", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Plain");
 }
 
 /// #430: merge fields in headers and footers are previewed and merged; each letter gets its
@@ -500,8 +590,7 @@ fn recipients_from_an_xls_workbook() {
     let book = wordcraft_formats::sheet::xls_fixture(&[(
         "收件人",
         vec![row(&["姓名", "城市", "数量"]), row(&["张三", "北京", "12"]), row(&["李四", "上海", "2"])],
-    )])
-    .unwrap();
+    )]);
     let mut s = Session::new(Document::new());
     let r = s.run("mailings.recipients", &json!({"path": "名单.xls", "data": b64(&book)})).unwrap();
     assert_eq!(r, json!({"fields": ["姓名", "城市", "数量"], "records": 2, "sheet": "收件人"}));

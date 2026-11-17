@@ -2,6 +2,7 @@
 //! commands on Persian text, arrow keys in bidirectional text, DOCX save and open.
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_doc::props::Align;
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -118,9 +119,9 @@ fn font_commands_override_inherited_complex_script_properties_explicitly() {
     use wordcraft_doc::props::CharProps;
 
     let mut s = session("שלום ABC", true);
-    s.doc.styles.default_chr.size_cs = Some(30.0);
-    s.doc.styles.default_chr.bold_cs = Some(true);
-    s.doc.styles.default_chr.italic_cs = Some(true);
+    Arc::make_mut(&mut s.doc.styles).default_chr.size_cs = Some(30.0);
+    Arc::make_mut(&mut s.doc.styles).default_chr.bold_cs = Some(true);
+    Arc::make_mut(&mut s.doc.styles).default_chr.italic_cs = Some(true);
     run(&mut s, "select.all", json!({}));
     run(&mut s, "format.bold", json!({"value": false}));
     run(&mut s, "format.italic", json!({"value": false}));
@@ -272,10 +273,15 @@ fn typing_kurdish_in_new_document_advances_caret_smoothly() {
 
 /// The runs of the first paragraph in a saved DOCX: (has `w:rtl`, text).
 fn saved_runs(s: &Session) -> Vec<(bool, String)> {
-    use std::io::Read;
     let bytes = crate::io::save_bytes("x.docx", &s.doc).unwrap();
-    let mut xml = String::new();
-    zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap().by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+    let xml = String::from_utf8(
+        craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 })
+            .unwrap()
+            .read("word/document.xml", 16 << 20)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     let para = xml.split("<w:body>").nth(1).unwrap().split("</w:p>").next().unwrap().to_string();
     para.split("<w:r>")
         .skip(1)

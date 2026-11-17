@@ -38,6 +38,7 @@ fn kai_contours_include_complete_character_body() {
     }
 }
 
+use super::face::FlipPen;
 use super::*;
 
 #[test]
@@ -90,6 +91,67 @@ fn run_fallback_is_cached_per_char_set() {
     drop(cache);
     db.set_system_fallback(false);
     assert!(db.run_fallbacks.read().unwrap().map.is_empty());
+}
+
+#[test]
+fn screen_hinting_puts_horizontal_edges_on_whole_pixels_and_moves_nothing_sideways() {
+    let db = FontDb::global();
+    let face = db.face(FALLBACK_FAMILY, "Regular");
+    let x = face.glyph_for('x');
+    // 11 pt at 100 % zoom on a 145 % desktop: a fractional size, as on most screens.
+    let ppem = 11.0 * 96.0 / 72.0 * 1.45;
+    let hinted = db.hinted_outline(&face, x, ppem).expect("Source Sans 3 can be hinted");
+    let plain = db.outline(&face, x);
+    let k = f64::from(ppem) / face.upem;
+    let (h, u) = (kurbo::Shape::bounding_box(&*hinted), kurbo::Shape::bounding_box(&*plain));
+    // The x-height (the top, y-down) and the baseline sit on the pixel grid…
+    assert!((h.y0 - h.y0.round()).abs() < 0.02, "x-height at {}", h.y0);
+    assert!((h.y1 - h.y1.round()).abs() < 0.02, "baseline at {}", h.y1);
+    assert!((u.y0 * k - (u.y0 * k).round()).abs() > 0.02, "the unhinted x-height is off the grid: {}", u.y0 * k);
+    // …and the sides stay where the font puts them, so advances and line breaks don't change.
+    assert!((h.x0 - u.x0 * k).abs() < 0.01 && (h.x1 - u.x1 * k).abs() < 0.01, "{h:?} vs {:?}", u.scale_from_origin(k));
+    // Cached per size.
+    assert!(Arc::ptr_eq(&hinted, &db.hinted_outline(&face, x, ppem).expect("cached")));
+}
+
+#[test]
+fn screen_hinting_uses_the_autohinter_even_for_fonts_with_their_own_instructions() {
+    // FreeType's light hinting (`hintslight`, Firefox on Linux) runs its autohinter on
+    // TrueType outlines and ignores their instructions: measured against Firefox, the
+    // instructions drew Arial's rows elsewhere and heavier.
+    let db = FontDb::global();
+    let face = db.face(FALLBACK_FAMILY, "Regular");
+    let font = face.skrifa().unwrap();
+    let outlines = font.outline_glyphs();
+    assert!(outlines.prefer_interpreter(), "Source Sans 3 carries TrueType instructions (ttfautohint)");
+    let ppem = 11.0 * 96.0 / 72.0 * 1.45;
+    let target = Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true };
+    let drawn = |engine: Engine, gid: u32| {
+        let h = HintingInstance::new(&outlines, Size::new(ppem), face.location(), HintingOptions { engine, target }).unwrap();
+        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false, hinted: true };
+        outlines.get(GlyphId::new(gid)).unwrap().draw(DrawSettings::hinted(&h, false), &mut pen).unwrap();
+        pen.path
+    };
+    let mut differs = false;
+    for c in "Every Thursday".chars().filter(|c| !c.is_whitespace()) {
+        let gid = face.glyph_for(c);
+        let ours = db.hinted_outline(&face, gid, ppem).unwrap();
+        assert_eq!(*ours, drawn(Engine::Auto(None), gid), "{c}: the autohinter's outline");
+        differs |= *ours != drawn(Engine::Interpreter, gid);
+    }
+    assert!(differs, "the font's own instructions would draw it differently");
+}
+
+#[test]
+fn screen_hinting_refuses_hostile_sizes() {
+    let db = FontDb::global();
+    let face = db.face(FALLBACK_FAMILY, "Regular");
+    let x = face.glyph_for('x');
+    for ppem in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -12.0, 0.0, 1.0, 3.99, 96.01, 1e9] {
+        assert!(db.hinted_outline(&face, x, ppem).is_none(), "{ppem}");
+    }
+    // A glyph id past the font's glyphs has no outline to hint.
+    assert!(db.hinted_outline(&face, u32::MAX, 20.0).is_none_or(|o| o.elements().is_empty()));
 }
 
 /// The issue's run (#1549): Thai letters and digits, Latin letters, digits and the baht sign.
@@ -245,15 +307,24 @@ fn postscript_names_select_faces() {
 /// A variable font holding just `name` and `fvar` tables: family "Var Test", one `wght` axis
 /// and `instances` named instances, each with its own style name.
 fn variable_font(instances: u16) -> Vec<u8> {
-    let mut names: Vec<(u16, String)> = vec![(1, "Var Test".into()), (2, "Regular".into())];
-    names.extend((0..instances).map(|i| (256 + i, format!("Style {i}"))));
+    variable_font_named("Var Test", &[], instances)
+}
+
+/// [`variable_font`] with family `family`, and family names in other languages `local`
+/// (Windows language ids).
+fn variable_font_named(family: &str, local: &[(u16, &str)], instances: u16) -> Vec<u8> {
+    let mut names: Vec<(u16, u16, String)> = vec![(0x409, 1, family.into()), (0x409, 2, "Regular".into())];
+    names.extend(local.iter().map(|(lang, n)| (*lang, 1, n.to_string())));
+    names.extend((0..instances).map(|i| (0x409, 256 + i, format!("Style {i}"))));
+    // Records sorted by language, then name id.
+    names.sort_by_key(|(lang, id, _)| (*lang, *id));
     let mut name = vec![0, 0];
     name.extend_from_slice(&(names.len() as u16).to_be_bytes());
     name.extend_from_slice(&(6 + 12 * names.len() as u16).to_be_bytes());
     let mut strings = Vec::new();
-    for (id, text) in &names {
+    for (lang, id, text) in &names {
         let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
-        for v in [3, 1, 0x409, *id, utf16.len() as u16, strings.len() as u16] {
+        for v in [3, 1, *lang, *id, utf16.len() as u16, strings.len() as u16] {
             name.extend_from_slice(&v.to_be_bytes());
         }
         strings.extend(utf16);
@@ -355,6 +426,27 @@ fn the_draw_that_turns_hinting_off_is_redrawn_unhinted_for_the_outline_cache() {
     // And what the cache keeps is that outline.
     let db = FontDb::with_font_dirs(vec![]);
     assert_eq!(db.outline(&face, gid).elements(), tripping.path.elements());
+}
+
+#[test]
+fn long_names_are_cut_before_faces_copy_them() {
+    // A name record can hold 64K characters, and every named instance copies the family and its
+    // localized names: the names are cut when read, so the copies stay small.
+    let long = "W".repeat(14_000);
+    let local = "Ж".repeat(14_000);
+    let font = variable_font_named(&long, &[(0x419, &local)], 32);
+    let faces = font_faces(&skrifa::FontRef::new(&font).unwrap(), 0);
+    assert_eq!(faces.len(), 32);
+    for f in &faces {
+        assert_eq!(f.family.chars().count(), MAX_NAME_CHARS);
+        assert!(f.legacy.chars().count() <= MAX_NAME_CHARS + " Style 31".len(), "{}", f.legacy.len());
+        assert_eq!(f.local.len(), 1);
+        assert_eq!(f.local[0].name.chars().count(), MAX_NAME_CHARS);
+        assert_eq!(f.local[0].english, f.family);
+    }
+    // Short names are kept whole.
+    let faces = font_faces(&skrifa::FontRef::new(&variable_font_named("Var Test", &[(0x419, "Вар Тест")], 2)).unwrap(), 0);
+    assert_eq!((faces[0].family.as_str(), faces[0].local[0].name.as_str()), ("Var Test", "Вар Тест"));
 }
 
 #[test]
