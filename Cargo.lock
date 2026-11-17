@@ -7385,6 +7385,7 @@ name = "wordcraft-doc"
 version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
+ "craft-zip",
  "log",
  "proptest",
  "serde",
@@ -7468,6 +7469,7 @@ dependencies = [
  "harfrust 0.13.3",
  "kurbo",
  "log",
+ "serde_json",
  "skrifa 0.47.0",
  "unicode-bidi",
  "unicode-script",
