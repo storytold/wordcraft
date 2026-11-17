@@ -25,6 +25,7 @@ craft-ods = { workspace = true }
 craft-xls = { workspace = true }
 craft-xlsx = { workspace = true }
 craft-zip = { workspace = true }
+craft-epub = { workspace = true }
 wordcraft-geom = { workspace = true, features = ["image"] }
 craft-metafile = { workspace = true }
 encoding_rs = { workspace = true }

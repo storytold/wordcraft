@@ -1099,6 +1099,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-epub"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa1c659f271d8605303c#41fb227542efb8a7748caa1c659f271d8605303c"
+dependencies = [
+ "craft-xml",
+ "craft-zip",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-flow"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=41fb227542efb8a7748caa1c659f271d8605303c#41fb227542efb8a7748caa1c659f271d8605303c"
@@ -7387,6 +7397,7 @@ version = "0.18.1"
 dependencies = [
  "chardetng",
  "chrono",
+ "craft-epub",
  "craft-flow",
  "craft-html",
  "craft-image-codecs",
