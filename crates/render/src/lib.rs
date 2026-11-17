@@ -856,7 +856,7 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         return;
     };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
-    let [cl, ct, vis_w, vis_h] = craft_metafile::crop_window(*crop);
+    let [cl, ct, vis_w, vis_h] = wordcraft_layout::crop_window(*crop);
     let sx = r.width() / (pw * vis_w);
     let sy = r.height() / (ph * vis_h);
     ctx.set_transform(view);
