@@ -1002,6 +1002,28 @@ fn backspace_and_delete() {
     assert_eq!(text(&s), "");
 }
 
+/// #6588: Ctrl+arrows and Ctrl+Backspace/Delete take a word with a typographic apostrophe (’)
+/// whole, as they take `l'anno`: `dell’Italia` stopped at the `’`.
+#[test]
+fn word_moves_and_deletes_take_a_typographic_apostrophe() {
+    let mut a = s();
+    run(&mut a, "text.insert", json!({"text": "Va dell’Italia bene", "raw": true}));
+    let bene = text(&a).find("bene").unwrap();
+    run(&mut a, "caret.docStart", json!({}));
+    run(&mut a, "caret.wordRight", json!({}));
+    assert_eq!(run(&mut a, "caret.wordRight", json!({}))["focus"]["off"], bene);
+    assert_eq!(run(&mut a, "caret.wordLeft", json!({}))["focus"]["off"], 3);
+    run(&mut a, "caret.docEnd", json!({}));
+    run(&mut a, "text.deleteWordBack", json!({}));
+    run(&mut a, "text.deleteWordBack", json!({}));
+    assert_eq!(text(&a), "Va ");
+    let mut b = s();
+    run(&mut b, "text.insert", json!({"text": "l’anno più", "raw": true}));
+    run(&mut b, "caret.docStart", json!({}));
+    run(&mut b, "text.deleteWordForward", json!({}));
+    assert_eq!(text(&b), "più");
+}
+
 /// Backspace at the start of the paragraph after a table nested in a cell goes into the nested
 /// table's last cell, not into the last cell of the table around it.
 #[test]
