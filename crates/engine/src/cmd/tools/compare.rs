@@ -54,7 +54,9 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let (revised, plain_revised) = if let Some(t) = p::str(v, "text") {
         (Document::from_text(t), true)
     } else if let Some(path) = p::str(v, "path") {
-        (crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?, false)
+        let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
+        s.claim_fonts_of(&doc);
+        (doc, false)
     } else {
         return Err(CmdError::Params("`path` or `text` of the revised document is required".into()));
     };
@@ -64,6 +66,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     }
     if let Some(path) = p::str(v, "original") {
         let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
+        s.claim_fonts_of(&doc);
         s.doc = doc;
         s.doc.ensure_nonempty();
         s.note_body_replaced();
