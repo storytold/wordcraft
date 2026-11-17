@@ -27,10 +27,7 @@ struct RowRev {
 }
 
 fn rev_attr(el: &El) -> RevAttr {
-    RevAttr {
-        author: el.attr_or_plain("w:author").unwrap_or_default().to_string(),
-        date: el.attr_or_plain("w:date").map(str::to_string),
-    }
+    RevAttr { author: el.attr_or_plain("w:author").unwrap_or_default().to_string(), date: el.attr_or_plain("w:date").map(str::to_string) }
 }
 
 fn collect_tables_revs(el: &El, tables: &mut Vec<Vec<RowRev>>) {
@@ -159,30 +156,16 @@ fn change_attr_vec(doc: &Document, rev: u32, next_id: &mut u32) -> Vec<(String, 
 fn tblprex_inner_children(t: &TableProps) -> Vec<Node> {
     if let Some(p) = t.width_pct {
         let w = ((p.clamp(0.0, 1000.0) * 50.0).round() as i64).to_string();
-        vec![Node::El(El {
-            name: "w:tblW".into(),
-            attrs: vec![("w:w".into(), w), ("w:type".into(), "pct".into())],
-            children: Vec::new(),
-        })]
+        vec![Node::El(El { name: "w:tblW".into(), attrs: vec![("w:w".into(), w), ("w:type".into(), "pct".into())], children: Vec::new() })]
     } else if let Some(v) = t.width {
         let w = wordcraft_geom::to_twips(v).to_string();
-        vec![Node::El(El {
-            name: "w:tblW".into(),
-            attrs: vec![("w:w".into(), w), ("w:type".into(), "dxa".into())],
-            children: Vec::new(),
-        })]
+        vec![Node::El(El { name: "w:tblW".into(), attrs: vec![("w:w".into(), w), ("w:type".into(), "dxa".into())], children: Vec::new() })]
     } else {
         Vec::new()
     }
 }
 
-fn patch_tables_el(
-    el: &mut El,
-    doc: &Document,
-    tables: &[&wordcraft_doc::table::Table],
-    t_idx: &mut usize,
-    next_id: &mut u32,
-) -> bool {
+fn patch_tables_el(el: &mut El, doc: &Document, tables: &[&wordcraft_doc::table::Table], t_idx: &mut usize, next_id: &mut u32) -> bool {
     if el.name == "w:tbl" {
         let idx = *t_idx;
         *t_idx += 1;
@@ -207,11 +190,7 @@ fn patch_tables_el(
                 ex_el.children.push(Node::El(El {
                     name: "w:tblPrExChange".into(),
                     attrs,
-                    children: vec![Node::El(El {
-                        name: "w:tblPrEx".into(),
-                        attrs: Vec::new(),
-                        children: inner,
-                    })],
+                    children: vec![Node::El(El { name: "w:tblPrEx".into(), attrs: Vec::new(), children: inner })],
                 }));
                 changed = true;
             }
