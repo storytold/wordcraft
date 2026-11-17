@@ -1,17 +1,16 @@
 //! The document default font size (`w:docDefaults/w:rPrDefault/w:rPr/w:sz`) across a save and
 //! reopen. An unset default is resolved as `DEFAULT_FONT_SIZE`; the writer must say so, because
 //! the reader reads an omitted size as 10 pt.
-use std::io::{Read, Write};
+use std::sync::Arc;
 use wordcraft_doc::Document;
 use wordcraft_doc::props::{CharProps, DEFAULT_FONT_SIZE};
 fn resolved(d: &Document) -> f32 {
     d.styles.resolve_char(None, &CharProps::default()).size
 }
 fn styles_xml(bytes: &[u8]) -> String {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    archive.by_name("word/styles.xml").unwrap().read_to_string(&mut xml).unwrap();
-    xml
+    let mut archive = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(archive.read("word/styles.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 fn defaults(xml: &str) -> &str {
     xml.split("<w:docDefaults>").nth(1).unwrap().split("</w:docDefaults>").next().unwrap()
@@ -19,7 +18,7 @@ fn defaults(xml: &str) -> &str {
 #[test]
 fn an_unset_default_size_keeps_its_effective_size_across_save_and_reopen() {
     let mut d = Document::new();
-    d.styles.default_chr.size = None;
+    Arc::make_mut(&mut d.styles).default_chr.size = None;
     assert_eq!(resolved(&d), DEFAULT_FONT_SIZE);
     let bytes = wordcraft_docx::write(&d).unwrap();
     assert!(defaults(&styles_xml(&bytes)).contains(r#"<w:sz w:val="22"/>"#));
@@ -33,7 +32,7 @@ fn an_unset_default_size_keeps_its_effective_size_across_save_and_reopen() {
 fn an_explicit_default_size_is_written_as_it_is() {
     for size in [8.0, 10.0, 11.0, 12.5, 18.0] {
         let mut d = Document::new();
-        d.styles.default_chr.size = Some(size);
+        Arc::make_mut(&mut d.styles).default_chr.size = Some(size);
         let bytes = wordcraft_docx::write(&d).unwrap();
         assert_eq!(resolved(&wordcraft_docx::read(&bytes).unwrap()), size);
     }
@@ -46,12 +45,11 @@ fn a_file_that_omits_the_default_size_is_still_read_as_ten_points() {
     let doc = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>x</w:t></w:r></w:p></w:body></w:document>"#;
     let styles = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr/></w:rPrDefault></w:docDefaults></w:styles>"#;
     let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, body) in [("_rels/.rels", root), ("word/document.xml", doc), ("word/_rels/document.xml.rels", rels), ("word/styles.xml", styles)] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(body.as_bytes()).unwrap();
+        zw.add(name, body.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let d = wordcraft_docx::read(&zw.finish().unwrap().into_inner()).unwrap();
+    let d = wordcraft_docx::read(&zw.finish().unwrap()).unwrap();
     assert_eq!(d.styles.default_chr.size, Some(10.0));
 }
 #[test]
@@ -59,8 +57,8 @@ fn an_unset_default_size_does_not_take_a_styles_size() {
     // The written default is the resolver's own fallback, not what the Normal style resolves to,
     // so a style that sets a size keeps it and one that does not still falls back to the default.
     let mut d = Document::new();
-    d.styles.default_chr.size = None;
-    if let Some(normal) = d.styles.get_mut("Normal") {
+    Arc::make_mut(&mut d.styles).default_chr.size = None;
+    if let Some(normal) = Arc::make_mut(&mut d.styles).get_mut("Normal") {
         normal.chr.size = Some(14.0);
     }
     let reopened = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();

@@ -1,6 +1,6 @@
 use super::{
     Block, Blocks, CmdError, CmdResult, Document, InlineObject, Paragraph, Part, PartKind, SectionProps, SectionStart, Session, StoryRef, Value,
-    json, p, para_block,
+    field_words, json, p, para_block,
 };
 
 pub(super) fn step(s: &mut Session, d: i64) -> CmdResult {
@@ -41,9 +41,7 @@ pub(super) fn mergefield_name(instr: &str) -> Option<String> {
     if !kind.eq_ignore_ascii_case("MERGEFIELD") {
         return None;
     }
-    let rest = rest.trim();
-    let name = if let Some(r) = rest.strip_prefix('"') { r.split('"').next().unwrap_or("") } else { rest.split_whitespace().next().unwrap_or("") };
-    Some(name.to_string())
+    Some(field_words(rest).into_iter().next().map(|(name, _)| name).unwrap_or_default())
 }
 
 /// Which columns hold address parts.
@@ -103,17 +101,17 @@ fn rule_field(t: &str) -> Option<String> {
 
 /// Comparison of a rule condition `{ MERGEFIELD X } op "value" …` (IF, SKIPIF, NEXTIF) for
 /// `row`: whether it holds, and the quoted texts after the value (IF's true / false text).
-fn condition<'a>(s: &Session, t: &'a str, row: usize) -> (bool, Vec<&'a str>) {
+fn condition(s: &Session, t: &str, row: usize) -> (bool, Vec<String>) {
     let field = rule_field(t).unwrap_or_default();
     let rest = t.split_once('}').map(|(_, r)| r).unwrap_or("");
     let op: String = rest.trim_start().chars().take_while(|c| matches!(c, '<'..='>')).collect();
-    let mut quoted = rest.split('"').skip(1).step_by(2);
-    let cmp = quoted.next().unwrap_or("");
+    let mut texts = field_words(rest).into_iter().filter(|(_, q)| *q).map(|(w, _)| w);
+    let cmp = texts.next().unwrap_or_default();
     let v = value(s, row, &field);
     // Numbers compare as numbers (Word: "7" = "7.0"), everything else as text.
     let ord = match (v.trim().parse::<f64>(), cmp.trim().parse::<f64>()) {
         (Ok(a), Ok(b)) => a.partial_cmp(&b),
-        _ => Some(v.as_str().cmp(cmp)),
+        _ => Some(v.as_str().cmp(cmp.as_str())),
     };
     use std::cmp::Ordering::{Equal, Greater, Less};
     let holds = match op.as_str() {
@@ -124,7 +122,7 @@ fn condition<'a>(s: &Session, t: &'a str, row: usize) -> (bool, Vec<&'a str>) {
         ">=" => matches!(ord, Some(Greater | Equal)),
         _ => ord == Some(Equal),
     };
-    (holds, quoted.collect())
+    (holds, texts.collect())
 }
 
 /// The first word of a field instruction, upper-cased.
@@ -149,7 +147,7 @@ fn act(s: &Session, instr: &str, row: usize) -> Option<Act> {
         // IF { MERGEFIELD X } = "v" "then" "else" (an IF on other fields isn't ours to touch).
         "IF" if rule_field(t).is_some() => {
             let (holds, texts) = condition(s, t, row);
-            Act::Text(texts.get(if holds { 0 } else { 1 }).copied().unwrap_or("").to_string())
+            Act::Text(texts.get(if holds { 0 } else { 1 }).cloned().unwrap_or_default())
         }
         _ => return None,
     })

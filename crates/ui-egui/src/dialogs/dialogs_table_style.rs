@@ -288,6 +288,7 @@ fn edge_glyph(ui: &mut Ui, edges: &str) {
 fn align_button(ui: &mut Ui, (v, h): (VAlign, Align), on: bool, tip: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tip));
     let resp = resp.on_hover_text(tip);
     let p = ui.painter_at(r);
     let bg = if on {
@@ -469,32 +470,39 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
         .collect();
     let base_name = styles.iter().find(|(i, _)| i == based_on).map(|(_, n)| n.clone()).unwrap_or_else(|| based_on.clone());
     let mut rebased = false;
-    egui::Grid::new("tstyle").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        let name_label = ui.label(tl!("Name:"));
-        ui.text_edit_singleline(name).labelled_by(name_label.id);
-        ui.end_row();
-        let base_label = ui.label(tl!("Style based on:"));
-        let base = craft_ui::ComboBox::from_id_salt("tstyle_base").width(200.0).selected_text(base_name).show_ui(ui, |ui| {
-            for (sid, sname) in &styles {
-                if ui.selectable_label(sid == based_on, sname).clicked() && sid != based_on {
-                    *based_on = sid.clone();
-                    rebased = true;
-                }
-            }
+    crate::rtl::Table::new("tstyle").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let name_label = r.cell(|ui| ui.label(tl!("Name:")));
+            r.cell(|ui| ui.text_edit_singleline(name).labelled_by(name_label.id));
         });
-        base.response.labelled_by(base_label.id);
-        ui.end_row();
-        let region_label = ui.label(tl!("Apply formatting to:"));
-        let part = craft_ui::ComboBox::from_id_salt("tstyle_region")
-            .width(200.0)
-            .selected_text(tl!(PARTS.get(*region).map_or("Whole Table", |(_, l)| *l)))
-            .show_ui(ui, |ui| {
-                for (i, (_, n)) in PARTS.iter().enumerate() {
-                    ui.selectable_value(region, i, tl!(*n));
-                }
+        t.row(|r| {
+            let base_label = r.cell(|ui| ui.label(tl!("Style based on:")));
+            r.cell(|ui| {
+                let base = craft_ui::ComboBox::from_id_salt("tstyle_base").width(200.0).selected_text(base_name).show_ui(ui, |ui| {
+                    for (sid, sname) in &styles {
+                        if ui.selectable_label(sid == based_on, sname).clicked() && sid != based_on {
+                            *based_on = sid.clone();
+                            rebased = true;
+                        }
+                    }
+                });
+                base.response.labelled_by(base_label.id);
             });
-        part.response.labelled_by(region_label.id);
-        ui.end_row();
+        });
+        t.row(|r| {
+            let region_label = r.cell(|ui| ui.label(tl!("Apply formatting to:")));
+            r.cell(|ui| {
+                let part = craft_ui::ComboBox::from_id_salt("tstyle_region")
+                    .width(200.0)
+                    .selected_text(tl!(PARTS.get(*region).map_or("Whole Table", |(_, l)| *l)))
+                    .show_ui(ui, |ui| {
+                        for (i, (_, n)) in PARTS.iter().enumerate() {
+                            ui.selectable_value(region, i, tl!(*n));
+                        }
+                    });
+                part.response.labelled_by(region_label.id);
+            });
+        });
     });
     // A new style shows its new base's formatting; a modified one keeps its own.
     if rebased && id.is_none() {
@@ -516,9 +524,9 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
             }
             let size = ui.add(egui::TextEdit::singleline(&mut r.size).desired_width(36.0));
             size.on_hover_text(tl!("Size:")).accessible_name(tl!("Size:"));
-            ui.toggle_value(&mut r.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold"));
-            ui.toggle_value(&mut r.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic"));
-            ui.toggle_value(&mut r.underline, egui::RichText::new("U").underline()).on_hover_text(tl!("Underline"));
+            ui.toggle_value(&mut r.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold")).accessible_name(tl!("Bold"));
+            ui.toggle_value(&mut r.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic")).accessible_name(tl!("Italic"));
+            ui.toggle_value(&mut r.underline, egui::RichText::new("U").underline()).on_hover_text(tl!("Underline")).accessible_name(tl!("Underline"));
             ui.push_id("tstyle_color", |ui| {
                 ui.label(tl!("Font color:"));
                 color_menu(ui, &theme, &mut r.color);
@@ -567,7 +575,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
             });
             ui.add_space(12.0);
             ui.label(tl!("Alignment:"));
-            egui::Grid::new("tstyle_align").spacing(vec2(1.0, 1.0)).show(ui, |ui| {
+            crate::rtl::grid(ui, egui::Grid::new("tstyle_align").spacing(vec2(1.0, 1.0)), |ui| {
                 for (i, ((n, v, h), tip)) in CELL_ALIGNS.iter().zip(ALIGN_TIPS).enumerate() {
                     let on = r.align == *n;
                     if align_button(ui, (*v, *h), on, tl!(tip)).clicked() {
@@ -654,6 +662,42 @@ mod tests {
     use egui_kittest::kittest::Queryable;
     use wordcraft_engine::Session;
 
+    /// Alignment choices expose their names and current selection, and can be toggled.
+    #[test]
+    fn alignment_buttons_expose_names_selection_and_clicks() {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::kittest::NodeT;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(200.0, 120.0)).build_ui_state(
+            |ui, selected: &mut Option<usize>| {
+                for (i, align, label) in
+                    [(0, (VAlign::Top, Align::Left), "Align Top Left"), (1, (VAlign::Bottom, Align::Right), "Align Bottom Right")]
+                {
+                    let on = *selected == Some(i);
+                    if align_button(ui, align, on, label).clicked() {
+                        *selected = if on { None } else { Some(i) };
+                    }
+                }
+                ui.add_enabled_ui(false, |ui| {
+                    align_button(ui, (VAlign::Center, Align::Center), false, "Align Center");
+                });
+            },
+            Some(0usize),
+        );
+        h.run_steps(2);
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Top Left").accesskit_node().toggled(), Some(Toggled::True));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Bottom Right").accesskit_node().toggled(), Some(Toggled::False));
+        assert!(h.get_by_role_and_label(Role::Button, "Align Center").accesskit_node().is_disabled());
+        h.get_by_role_and_label(Role::Button, "Align Bottom Right").click();
+        h.run_steps(2);
+        assert_eq!(*h.state(), Some(1));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Top Left").accesskit_node().toggled(), Some(Toggled::False));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Bottom Right").accesskit_node().toggled(), Some(Toggled::True));
+        h.get_by_role_and_label(Role::Button, "Align Bottom Right").click();
+        h.run_steps(2);
+        assert_eq!(*h.state(), None);
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Bottom Right").accesskit_node().toggled(), Some(Toggled::False));
+    }
+
     fn steps(h: &mut egui_kittest::Harness<'_, WordApp>) {
         for _ in 0..4 {
             h.step();
@@ -664,11 +708,15 @@ mod tests {
     /// even banded rows) and no other.
     #[test]
     fn the_part_picker_edits_the_part_it_shows() {
+        use egui::accesskit::Toggled;
+        use egui_kittest::kittest::NodeT;
         let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
         app.run("insert.table", json!({"rows": 4, "cols": 3})).unwrap();
         app.run("table.newStyle", json!({"name": "Parts"})).unwrap();
         app.dialog = Dialog::open("modifyTableStyle", &mut app);
         assert!(matches!(app.dialog, Some(Dialog::TableStyle { .. })));
+        // Keep the background ribbon's character controls out of the dialog's label queries.
+        app.ui.tab = "Insert".into();
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
@@ -684,15 +732,25 @@ mod tests {
         h.get_by_label("Even Banded Rows").click();
         steps(&mut h);
         assert!(matches!(&h.state().dialog, Some(Dialog::TableStyle { region, .. }) if *region == part_index(TablePart::Band2Horz)));
-        h.get_by_label("B").click();
-        steps(&mut h);
+        for label in ["Bold", "Italic", "Underline"] {
+            assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::False));
+            h.get_by_label(label).click();
+            steps(&mut h);
+            assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True));
+        }
         h.get_by_label("OK").click();
         steps(&mut h);
         assert!(h.state().dialog.is_none(), "OK closes the dialog");
         let st = h.state().session.doc.styles.get("Parts").cloned().unwrap();
-        assert_eq!(st.table_part(TablePart::Band2Horz).chr.bold, Some(true));
+        let chr = st.table_part(TablePart::Band2Horz).chr;
+        assert_eq!(chr.bold, Some(true));
+        assert_eq!(chr.italic, Some(true));
+        assert!(chr.underline.is_some_and(|u| u != Underline::None));
         for other in [TablePart::WholeTable, TablePart::Band1Horz, TablePart::FirstRow, TablePart::Band2Vert] {
-            assert_ne!(st.table_part(other).chr.bold, Some(true), "{}", other.ooxml());
+            let chr = st.table_part(other).chr;
+            assert_ne!(chr.bold, Some(true), "{}", other.ooxml());
+            assert_ne!(chr.italic, Some(true), "{}", other.ooxml());
+            assert!(!chr.underline.is_some_and(|u| u != Underline::None), "{}", other.ooxml());
         }
     }
 

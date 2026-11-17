@@ -13,6 +13,7 @@ mod changes;
 mod comments;
 mod proofing;
 
+pub(crate) use changes::StyleTarget;
 pub use changes::{
     DELETION_TEXT_CHARS, DeletionBalloon, deletion_balloons, format_changes, has_deletions, has_format_changes, move_changes, tracking_json,
 };
@@ -27,12 +28,12 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("review.newComment", "New Comment", "Review › Comments", new_comment).key(super::mac_or("Mod+Alt+A / Mod+Alt+M", "Mod+Alt+M")).params(r#"{"text": string}"#),
         CommandSpec::new("review.reply", "Reply", "Review › Comments", reply)
-            .params(r#"{"id": non-negative JSON integer, "text": string}"#)
+            .params(r#"{"id": non-negative 32-bit JSON integer, "text": string}"#)
             .when(comments_change),
         CommandSpec::new("review.editComment", "Edit Comment", "Review › Comments", edit_comment)
-            .params(r#"{"id": non-negative JSON integer, "text": string}"#)
+            .params(r#"{"id": non-negative 32-bit JSON integer, "text": string}"#)
             .when(comments_change),
-        CommandSpec::new("review.deleteComment", "Delete", "Review › Comments", delete_comment).params(r#"{"id"?: non-negative JSON integer (omit to use the caret), "all"?: bool}"#),
+        CommandSpec::new("review.deleteComment", "Delete", "Review › Comments", delete_comment).params(r#"{"id"?: non-negative 32-bit JSON integer (omit to use the caret), "all"?: bool}"#),
         CommandSpec::new("review.resolveComment", "Resolve", "Review › Comments", |s, v| {
             validate_comment_id(v)?;
             let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("`id` required".into()))?;
@@ -40,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
             c.resolved = p::bool(v, "value").unwrap_or(!c.resolved);
             sel_result(s)
         })
-        .params(r#"{"id"?: non-negative JSON integer (omit to use the caret), "value"?: bool (omit to toggle)}"#),
+        .params(r#"{"id"?: non-negative 32-bit JSON integer (omit to use the caret), "value"?: bool (omit to toggle)}"#),
         CommandSpec::new("review.nextComment", "Next", "Review › Comments", |s, _| nav_comment(s, 1)).pure(),
         CommandSpec::new("review.previousComment", "Previous", "Review › Comments", |s, _| nav_comment(s, -1)).pure(),
         CommandSpec::new("review.comments", "Show Comments", "Review › Comments", list_comments).pure(),
@@ -80,6 +81,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
         CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue)
             .key(super::mac_or("F7 / Alt+F7 / Mod+Alt+L", "F7 / Alt+F7"))
+            .params(r#"{"wrap"?: bool (default true; false stops at the end of the current story)}"#)
             .pure(),
         CommandSpec::new("review.issues", "Proofing Issues", "Review › Proofing", all_issues).pure(),
         CommandSpec::new("review.suggestions", "Spelling Suggestions", "Review › Proofing", suggestions).params(r#"{"pos"?: Pos}"#).pure(),

@@ -6,17 +6,16 @@
 //! direction changes and marks the right-to-left pieces `w:rtl`, as Word does with text typed
 //! in a right-to-left paragraph.
 
-use std::io::Read;
+use std::sync::Arc;
 
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, Paragraph, para_block};
 
 /// `word/document.xml` of a written package.
 fn document_xml(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 /// The runs of the first paragraph of `xml`: (has `w:rtl`, text with `w:br` as `\n`).
@@ -189,6 +188,6 @@ fn a_language_the_run_already_has_is_kept() {
 #[test]
 fn an_inherited_bidi_language_is_not_repeated() {
     let mut d = doc_of("سلام WordCraft دنیا", true, arial());
-    d.styles.default_chr.lang_bidi = Some("fa-IR".into());
+    Arc::make_mut(&mut d.styles).default_chr.lang_bidi = Some("fa-IR".into());
     assert_eq!(langs(&d), vec![(true, None), (false, None), (true, None)]);
 }
