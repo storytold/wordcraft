@@ -11,13 +11,15 @@
 //! An exception to the workspace's no-`unsafe` rule (AGENTS.md): receiving those messages needs an
 //! Objective-C class (`define_class!`), and setting the panels' targets is marked unsafe.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
-use objc2_app_kit::{NSColor, NSColorPanel, NSColorSpace, NSFont, NSFontManager, NSFontPanel, NSFontTraitMask};
+use objc2_app_kit::{
+    NSApplication, NSColor, NSColorPanel, NSColorSpace, NSFont, NSFontManager, NSFontPanel, NSFontPanelModeMask, NSFontTraitMask, NSResponder,
+};
 use objc2_foundation::{NSDictionary, NSNumber, NSString, ns_string};
 
 /// An underline or strikethrough, as the panel sets it.
@@ -99,11 +101,13 @@ struct Ivars {
     wake: Box<dyn Fn()>,
     /// The font the panel converts: the selection's, then each pick.
     current: RefCell<Retained<NSFont>>,
+    /// The panel's controls the app takes picks from.
+    modes: Cell<NSFontPanelModeMask>,
 }
 
 define_class!(
-    // SAFETY: NSObject has no subclassing requirements, and `FontTarget` doesn't implement Drop.
-    #[unsafe(super(NSObject))]
+    // SAFETY: NSResponder has no subclassing requirements, and `FontTarget` doesn't implement Drop.
+    #[unsafe(super(NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "CraftFontTarget"]
     #[ivars = Ivars]
@@ -128,6 +132,12 @@ define_class!(
             }
         }
 
+        // SAFETY: `validModesForFontPanel:` takes the panel and returns its mode mask.
+        #[unsafe(method(validModesForFontPanel:))]
+        fn valid_modes(&self, _panel: &NSFontPanel) -> NSFontPanelModeMask {
+            self.ivars().modes.get()
+        }
+
         // SAFETY: `changeColor:` takes the sender (the colour panel) and returns nothing.
         #[unsafe(method(changeColor:))]
         fn change_color(&self, _sender: Option<&AnyObject>) {
@@ -140,8 +150,13 @@ define_class!(
 #[allow(unsafe_code)]
 impl FontTarget {
     fn new(mtm: MainThreadMarker, picks: Sender<Pick>, wake: Box<dyn Fn()>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { picks, wake, current: RefCell::new(NSFont::systemFontOfSize(12.0)) });
-        // SAFETY: NSObject's designated initializer, on a freshly allocated object.
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            picks,
+            wake,
+            current: RefCell::new(NSFont::systemFontOfSize(12.0)),
+            modes: Cell::new(NSFontPanelModeMask::ModesMaskStandardModes),
+        });
+        // SAFETY: NSResponder's designated initializer, on a freshly allocated object.
         unsafe { msg_send![super(this), init] }
     }
 
@@ -191,6 +206,12 @@ impl FontPanel {
     pub fn new(mtm: MainThreadMarker, wake: impl Fn() + 'static) -> Self {
         let (tx, picks) = channel();
         FontPanel { target: FontTarget::new(mtm, tx, Box::new(wake)), picks, shown: RefCell::new(None) }
+    }
+
+    /// Hides the panel's shadow controls, for an app whose text has no shadow.
+    pub fn hide_shadow(&self) {
+        let modes = self.target.ivars().modes.get();
+        self.target.ivars().modes.set(modes.difference(NSFontPanelModeMask::ModeMaskShadowEffect));
     }
 
     /// Shows the panel on the selection's font.
@@ -271,14 +292,22 @@ impl FontPanel {
 
 #[allow(unsafe_code)]
 fn set_targets(mtm: MainThreadMarker, target: &FontTarget) {
-    // SAFETY: the target answers the font manager's actions (`changeFont:`, `changeAttributes:`) and
-    // the colour panel's (`changeColor:`), and `FontPanel` keeps it alive for as long as the app runs,
-    // so the panels' unretained references stay valid.
+    // SAFETY: the target answers the font manager's actions (`changeFont:`, `changeAttributes:`), the
+    // colour panel's (`changeColor:`) and the panel's `validModesForFontPanel:`, and `FontPanel` keeps
+    // it alive for as long as the app runs, so the panels' and the app's unretained references stay
+    // valid.
     unsafe {
         NSFontManager::sharedFontManager(mtm).setTarget(Some(target));
         let colors = NSColorPanel::sharedColorPanel(mtm);
         colors.setTarget(Some(target));
         colors.setAction(Some(sel!(changeColor:)));
+        // The panel asks `validModesForFontPanel:` of the responder chain, not of the target; keep
+        // whatever followed the app.
+        let app = NSApplication::sharedApplication(mtm);
+        if !app.nextResponder().is_some_and(|next| std::ptr::eq(&*next, &**target)) {
+            target.setNextResponder(app.nextResponder().as_deref());
+            app.setNextResponder(Some(target));
+        }
     }
 }
 
