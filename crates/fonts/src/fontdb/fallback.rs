@@ -1,7 +1,9 @@
 use super::face::{FALLBACK_FAMILY, FontFace};
 #[cfg(not(target_arch = "wasm32"))]
-use super::fallback_data::{CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, ranges_hold, read_fallback_file};
-use super::fallback_data::{FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order};
+use super::fallback_data::{
+    CoverageIndex, IndexedFile, RTL_FALLBACKS, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, ranges_hold, read_fallback_file,
+};
+use super::fallback_data::{FALLBACK_CACHE_MAX, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, fallback_order, rtl_rank};
 use super::{Arc, FontDb};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{HashMap, Ordering};
@@ -113,13 +115,14 @@ impl FontDb {
         let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
         // Right-to-left letters prefer a font made for the script, so a word isn't split across
         // fonts (that breaks Arabic joining). Emoji prefer a colour emoji font.
+        let rtl = crate::is_rtl(c) || crate::is_arabic(c);
         let rank = |f: &FontFace| {
-            if crate::is_rtl(c) || arabic_block(c) {
-                RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len())
+            if rtl {
+                rtl_rank(Some(c), true, &f.family)
             } else if crate::is_emoji(c) {
-                crate::fallback_rank(c, &f.family)
+                (0, crate::fallback_rank(c, &f.family))
             } else {
-                0
+                (0, 0)
             }
         };
         // Complex scripts (Myanmar, Khmer, Indic…): a font with OpenType layout tables, preferring
@@ -226,7 +229,7 @@ impl FontDb {
     /// faces it was chosen from.
     fn loaded_covering(&self, chars: &[char], exclude: u32) -> (Option<Arc<FontFace>>, usize) {
         let faces = self.read_faces();
-        let rtl = chars.iter().any(|c| crate::is_rtl(*c) || arabic_block(*c));
+        let rtl = chars.iter().any(|c| crate::is_rtl(*c) || crate::is_arabic(*c));
         // A complex-script character picks the families its script prefers (the lowest one: the
         // run's characters come sorted).
         let complex = chars.iter().copied().find(|c| crate::needs_layout_tables(*c));
@@ -250,7 +253,7 @@ impl FontDb {
         }
         let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c));
         let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
-        let rtl = crate::is_rtl(c) || arabic_block(c);
+        let rtl = crate::is_rtl(c) || crate::is_arabic(c);
         let preferred = RTL_FALLBACKS.iter().filter(|_| rtl);
         for fam in crate::script_fallbacks(c).iter().chain(preferred).chain(SYSTEM_FALLBACKS.iter()) {
             // Each family is tried once: one that fails to load isn't read again per character.

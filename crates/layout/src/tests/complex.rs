@@ -304,3 +304,31 @@ fn khmer_ignores_the_ligature_setting() {
     assert_eq!(gids(Some(hd)), gids(None));
     assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
 }
+
+#[test]
+fn missing_font_with_arabic_falls_back_to_arial_chain_not_aptos() {
+    crate::test_fonts();
+    let db = wordcraft_fonts::FontDb::global();
+    if db.fallback_for('م', 0).is_none() {
+        eprintln!("skipped: no Arabic-capable font installed");
+        return;
+    }
+    let arial = wordcraft_fonts::word::resolve("Arial", false, false).face;
+    let aptos = wordcraft_fonts::word::resolve(wordcraft_doc::styles::BODY_FONT, false, false).face;
+    // Run with mixed Latin + Arabic + digits in a missing font (and default Aptos):
+    for font in [Some("No Such Font 6958"), None] {
+        let faces = cluster_faces("Hello مرحبا 123", font);
+        let hello: Vec<_> = faces.iter().filter(|(at, _)| *at < 5).collect();
+        assert_eq!(hello.len(), 5, "{faces:?}");
+        assert!(hello.iter().all(|(_, f)| f.id() == aptos.id()), "Latin stays in Aptos substitute, not {hello:?}");
+        let arabic_char = faces.iter().find(|(at, _)| *at == 6).expect("Arabic cluster").1;
+        assert!(arabic_char.covers('م'), "Arabic glyph covered by {}", arabic_char.family);
+        if db.has_family("Arial") {
+            assert_eq!(arabic_char.family, "Arial");
+        }
+        // Digits in the Arabic-containing complex-script run use Arial (or its substitution chain),
+        // not Aptos's substitute (e.g. Carlito).
+        let digit = faces.last().expect("digit cluster").1;
+        assert_eq!(digit.id(), arial.id(), "digits in Arabic run use Arial chain ({}), not {}", arial.family, digit.family);
+    }
+}
