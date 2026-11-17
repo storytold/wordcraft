@@ -9,9 +9,10 @@ use wordcraft_doc::props::{HeightRule, VMerge};
 use wordcraft_doc::table::{MAX_COLS, MAX_ROWS};
 use wordcraft_doc::{Block, Cell, Path, Pos, StoryRef, Table, para_block};
 use wordcraft_geom::Rect;
-use wordcraft_layout::{DocLayout, Placed};
+use wordcraft_layout::DocLayout;
 
 use super::sel_result;
+use super::table_resize::Reach;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 /// A drag shorter than this (points) both ways isn't a rectangle.
@@ -29,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"page": n, "x0": pt, "y0": pt, "x1": pt, "y1": pt, "story"?: StoryRef} (a pen stroke in page points, 0-based page: a rectangle at least 12 pt each way outside any table inserts a one-cell table of that size at the paragraph under its start; a straight vertical or horizontal line inside a table splits the cells it crosses there. In the app the button turns the pen on.)"#,
         ),
         CommandSpec::new("table.eraser", "Eraser", "Table Layout › Draw", eraser).params(
-            r#"{"page": n, "x": pt, "y": pt} (removes the border between two cells within 4 pt of the point: cells that make one rectangle merge, including cells merged down the same rows; otherwise the border is hidden along the whole edge. In the app the button turns the eraser on.)"#,
+            r#"{"page": n, "x": pt, "y": pt, "story"?: StoryRef} (removes the border between two cells within 4 pt of the point, of a table in `story` (default: the caret's; a header's or footer's while one is edited): cells that make one rectangle merge, including cells merged down the same rows; otherwise the border is hidden along the whole edge. In the app the button turns the eraser on.)"#,
         ),
     ]
 }
@@ -55,16 +56,12 @@ struct CellBox {
     cell: usize,
 }
 
-fn cell_boxes(l: &DocLayout, page: usize) -> Vec<CellBox> {
-    let Some(pg) = l.pages.get(page) else { return Vec::new() };
-    pg.items
-        .iter()
-        .filter_map(|it| match it {
-            Placed::Cell { rect, table, row, cell, story, .. } => {
-                Some(CellBox { rect: *rect, table: table.clone(), story: *story, row: *row, cell: *cell })
-            }
-            _ => None,
-        })
+/// The table cells on a page the pen and eraser reach ([`Reach`]: a header's and footer's while
+/// one of them is edited, #5558).
+fn cell_boxes(l: &DocLayout, page: usize, reach: Reach) -> Vec<CellBox> {
+    super::table_resize::cell_boxes_in(l, page, reach)
+        .into_iter()
+        .map(|b| CellBox { rect: b.rect, table: b.table, story: b.story, row: b.row, cell: b.cell })
         .collect()
 }
 
@@ -79,13 +76,22 @@ fn table_at(boxes: &[CellBox], x: f32, y: f32) -> Option<(StoryRef, Path)> {
 
 /// Classify a pen stroke: a straight line inside a table, a rectangle outside one, else `None`.
 pub fn stroke(l: &DocLayout, page: usize, x0: f32, y0: f32, x1: f32, y1: f32) -> Option<Stroke> {
+    stroke_in(l, page, Reach::Body, x0, y0, x1, y1)
+}
+
+/// [`stroke`] while `editing` is edited: across a header's or footer's tables then (#5558).
+pub fn stroke_in(l: &DocLayout, page: usize, tables: Reach, x0: f32, y0: f32, x1: f32, y1: f32) -> Option<Stroke> {
+    stroke_among(&cell_boxes(l, page, tables), x0, y0, x1, y1)
+}
+
+/// [`stroke`] across the tables of `boxes`.
+fn stroke_among(boxes: &[CellBox], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<Stroke> {
     if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
         return None;
     }
     let (dx, dy) = ((x1 - x0).abs(), (y1 - y0).abs());
-    let boxes = cell_boxes(l, page);
     let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    if table_at(&boxes, x0, y0).is_some() || table_at(&boxes, mx, my).is_some() {
+    if table_at(boxes, x0, y0).is_some() || table_at(boxes, mx, my).is_some() {
         if dy >= dx && dy >= MIN_LINE && dx <= MIN_RECT.max(dy * 0.2) {
             return Some(Stroke::Vertical { x: mx, y0: y0.min(y1), y1: y0.max(y1) });
         }
@@ -95,6 +101,19 @@ pub fn stroke(l: &DocLayout, page: usize, x0: f32, y0: f32, x1: f32, y1: f32) ->
         return None;
     }
     (dx >= MIN_RECT && dy >= MIN_RECT).then(|| Stroke::Rect(Rect::new(x0.min(x1), y0.min(y1), dx, dy)))
+}
+
+/// The cells a pen or eraser command reaches: those of the tables its `story` (default: the
+/// caret's) reaches ([`Reach`]), and of those only `story`'s own when the command names one: a
+/// caller that names a story means its tables, not a table of another drawn there.
+fn command_boxes(s: &Session, l: &DocLayout, v: &Value, page: usize) -> Vec<CellBox> {
+    let story = super::story_param(s, v);
+    let boxes = cell_boxes(l, page, Reach::of(l, &s.doc, story, page));
+    let named = v.get("story").and_then(|x| serde_json::from_value::<StoryRef>(x.clone()).ok());
+    match named {
+        Some(named) => boxes.into_iter().filter(|b| b.story == named).collect(),
+        None => boxes,
+    }
 }
 
 fn page_param(v: &Value) -> Result<usize, CmdError> {
@@ -108,10 +127,11 @@ fn draw(s: &mut Session, v: &Value) -> CmdResult {
     if l.pages.get(page).is_none() {
         return Err(CmdError::Params(format!("no page {page}")));
     }
-    match stroke(&l, page, x0, y0, x1, y1) {
+    let boxes = command_boxes(s, &l, v, page);
+    match stroke_among(&boxes, x0, y0, x1, y1) {
         Some(Stroke::Rect(r)) => draw_table(s, v, &l, page, (x0, y0), r),
-        Some(Stroke::Vertical { x, y0, y1 }) => split_columns(s, &l, page, x, (y0, y1)),
-        Some(Stroke::Horizontal { y, x0, x1 }) => split_rows(s, &l, page, y, (x0, x1)),
+        Some(Stroke::Vertical { x, y0, y1 }) => split_columns(s, &boxes, x, (y0, y1)),
+        Some(Stroke::Horizontal { y, x0, x1 }) => split_rows(s, &boxes, y, (x0, x1)),
         None => Err(CmdError::Failed(
             "draw a rectangle (at least 12 pt each way) outside a table, or a straight horizontal or vertical line across table cells".into(),
         )),
@@ -276,13 +296,12 @@ fn hide_edge(t: &mut Table, vertical: bool, line: usize, (lo, hi): (usize, usize
 }
 
 /// A vertical line at page `x`: split each crossed cell into two columns there.
-fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): (f32, f32)) -> CmdResult {
-    let boxes = cell_boxes(l, page);
+fn split_columns(s: &mut Session, boxes: &[CellBox], x: f32, (ya, yb): (f32, f32)) -> CmdResult {
     let hit = |r: &Rect| {
         let overlap = yb.min(r.bottom()) - ya.max(r.y);
         x > r.x + SNAP && x < r.right() - SNAP && overlap >= r.h * 0.5
     };
-    let Some((story, tp, cells)) = crossed(&boxes, (x, (ya + yb) / 2.0), hit) else {
+    let Some((story, tp, cells)) = crossed(boxes, (x, (ya + yb) / 2.0), hit) else {
         return Err(CmdError::Failed("the line doesn't cross a table cell".into()));
     };
     let Some(&(r0, c0, rect0)) = cells.first() else { return Err(CmdError::Failed("the line doesn't cross a table cell".into())) };
@@ -372,13 +391,12 @@ fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): 
 
 /// A horizontal line at page `y`: split the row it crosses there. Crossed cells become two;
 /// the row's other cells span both rows (a vertical merge).
-fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f32, f32)) -> CmdResult {
-    let boxes = cell_boxes(l, page);
+fn split_rows(s: &mut Session, boxes: &[CellBox], y: f32, (xa, xb): (f32, f32)) -> CmdResult {
     let hit = |r: &Rect| {
         let overlap = xb.min(r.right()) - xa.max(r.x);
         y > r.y + SNAP && y < r.bottom() - SNAP && overlap >= r.w * 0.5
     };
-    let Some((story, tp, cells)) = crossed(&boxes, ((xa + xb) / 2.0, y), hit) else {
+    let Some((story, tp, cells)) = crossed(boxes, ((xa + xb) / 2.0, y), hit) else {
         return Err(CmdError::Failed("the line doesn't cross a table cell".into()));
     };
     let Some(&(r, c0, _)) = cells.first() else { return Err(CmdError::Failed("the line doesn't cross a table cell".into())) };
@@ -459,17 +477,26 @@ pub struct EraseTarget {
 
 /// The border between two cells nearest page point (`x`, `y`), within [`ERASER_REACH`].
 pub fn erase_target(l: &DocLayout, page: usize, x: f32, y: f32) -> Option<EraseTarget> {
+    erase_target_in(l, page, Reach::Body, x, y)
+}
+
+/// [`erase_target`] while `editing` is edited: a header's or footer's tables then (#5558).
+pub fn erase_target_in(l: &DocLayout, page: usize, tables: Reach, x: f32, y: f32) -> Option<EraseTarget> {
+    erase_among(&cell_boxes(l, page, tables), x, y)
+}
+
+/// [`erase_target`] among the tables of `boxes`.
+fn erase_among(boxes: &[CellBox], x: f32, y: f32) -> Option<EraseTarget> {
     if !x.is_finite() || !y.is_finite() {
         return None;
     }
-    let boxes = cell_boxes(l, page);
     let mut best: Option<(f32, usize, EraseTarget)> = None;
     let mut offer = |d: f32, depth: usize, e: EraseTarget| {
         if d <= ERASER_REACH && best.as_ref().is_none_or(|(bd, bdepth, _)| d < *bd - 0.01 || (d <= *bd + 0.01 && depth > *bdepth)) {
             best = Some((d, depth, e));
         }
     };
-    for a in &boxes {
+    for a in boxes {
         let (ar, ab) = (a.rect.right(), a.rect.bottom());
         let same = |b: &&CellBox| b.story == a.story && b.table == a.table;
         // The border on a's right, shared with the next cell of its row.
@@ -518,7 +545,7 @@ fn eraser(s: &mut Session, v: &Value) -> CmdResult {
     if l.pages.get(page).is_none() {
         return Err(CmdError::Params(format!("no page {page}")));
     }
-    let e = erase_target(&l, page, x, y).ok_or_else(|| CmdError::Failed("there's no border between two cells there".into()))?;
+    let e = erase_among(&command_boxes(s, &l, v, page), x, y).ok_or_else(|| CmdError::Failed("there's no border between two cells there".into()))?;
     let (story, tp) = (e.story, e.table.clone());
     let t = s.doc.table_mut(story, &tp)?;
     let ((r, c), (r2, c2)) = (e.first, e.second);
@@ -581,6 +608,7 @@ fn eraser(s: &mut Session, v: &Value) -> CmdResult {
 mod tests {
     use super::*;
     use serde_json::json;
+    use wordcraft_layout::Placed;
 
     /// Each row's cell spans.
     fn shape(t: &Table) -> Value {
