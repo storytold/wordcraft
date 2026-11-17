@@ -29,13 +29,16 @@ impl CompareOptions {
     }
 }
 
-/// Context and tracking counters for diffing paragraph contents.
+/// Context and tracking counters for diffing document blocks and paragraph contents.
 struct DiffCtx<'a> {
     ins: u32,
     del: u32,
     opts: &'a CompareOptions,
+    author: &'a str,
+    date: &'a str,
     budget: &'a mut u64,
     char_fallbacks: &'a mut usize,
+    changes: usize,
     plain_revised: bool,
 }
 
@@ -82,109 +85,55 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
-    // Adopt the revised document's media into the original document: media with identical
-    // bytes reuses the original's key (deduplicated by content), while replaced or new media
-    // receives a fresh key in s.doc.media so both media parts are preserved in the result (#6086).
-    let mut media_map = std::collections::BTreeMap::new();
-    for (key, data) in &revised.media {
-        let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("bin");
-        let new_key = s.doc.add_media((**data).clone(), ext);
-        media_map.insert(key.clone(), new_key);
-    }
+    // Adopt media referenced by the revised body and reachable text boxes into the original
+    // document: identical bytes reuse the original's key (deduplicated by content), while
+    // replaced or new media receives a fresh key in s.doc.media so both media parts are
+    // preserved in the result (#6086). Unreferenced media in uncompared parts (e.g. headers
+    // and footers) is not imported.
     let mut revised = revised;
-    for b in &mut revised.body {
-        remap_block_media(Arc::make_mut(b), &media_map);
-    }
-    for part in revised.parts.values_mut() {
-        for b in &mut part.blocks {
-            remap_block_media(Arc::make_mut(b), &media_map);
-        }
-    }
+    let mut raw_media = std::mem::take(&mut revised.media);
+    let mut media_map = BTreeMap::new();
     let old: Vec<Arc<Block>> = s.doc.body.clone();
     let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
+        let mut frag = revised.body_fragment();
+        for b in &mut frag.blocks {
+            remap_block_media(b, &mut |k| adopt_media_key(&mut s.doc, &mut raw_media, &mut media_map, k));
+        }
+        for part in frag.parts.values_mut() {
+            for b in &mut part.blocks {
+                remap_block_media(Arc::make_mut(b), &mut |k| adopt_media_key(&mut s.doc, &mut raw_media, &mut media_map, k));
+            }
+        }
         // The revised document's text boxes get stories of their own in the result, so its
         // boxes never show a story of the original's (or none at all).
-        s.doc.adopt_fragment(&revised.body_fragment()).into_iter().map(Arc::new).collect()
+        s.doc.adopt_fragment(&frag).into_iter().map(Arc::new).collect()
     } else {
-        revised.body.clone()
+        for b in &mut revised.body {
+            remap_block_media(Arc::make_mut(b), &mut |k| adopt_media_key(&mut s.doc, &mut raw_media, &mut media_map, k));
+        }
+        revised.body
     };
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone(), move_name: None });
     let ins = (s.doc.revisions.len() - 1) as u32;
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
     let del = (s.doc.revisions.len() - 1) as u32;
-    let key = |b: &Arc<Block>| match &**b {
-        Block::Para(p) => opts.key(&p.plain_text()),
-        // Tables match as a whole, by their text.
-        Block::Table(_) => format!("\u{0}table\u{0}{}", opts.key(&block_text(b, 0))),
-    };
     let mut budget = MAX_COMPARE_CELLS;
     let mut char_fallbacks = 0usize;
-    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut budget);
-    let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks, plain_revised };
-    let mut out: Vec<Arc<Block>> = Vec::new();
-    let (mut i, mut j) = (0usize, 0usize);
-    let mut changes = 0usize;
-    let mut k = 0;
-    while k < ops.len() {
-        match ops.get(k) {
-            Some(Op::Same) => {
-                let (a, b) = (old.get(i), new.get(j));
-                // The revised block, with its formatting changes tracked.
-                if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
-                    if !same_objects(&s.doc, pa, pb) {
-                        // Same text, but objects (text boxes, pictures…) differ: diffed, so the
-                        // original's objects aren't lost.
-                        out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx)));
-                        changes += 1;
-                        i += 1;
-                        j += 1;
-                        k += 1;
-                        continue;
-                    }
-                    let mut p = pb.clone();
-                    if opts.formatting && pa.text == pb.text {
-                        let before = s.doc.revisions.len();
-                        crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut s.doc.revisions, &author, &date);
-                        if s.doc.revisions.len() > before || p != *pb {
-                            changes += 1;
-                        }
-                    }
-                    out.push(para_block(p));
-                } else if let Some(x) = b.or(a) {
-                    out.push(x.clone());
-                }
-                i += 1;
-                j += 1;
-                k += 1;
-            }
-            Some(_) => {
-                // A run of deletions and insertions: changed paragraphs pair up and are diffed
-                // word by word (or by character); the rest are deleted or inserted whole.
-                let run = ops.get(k..).unwrap_or_default().iter().take_while(|o| **o != Op::Same).count();
-                let dels = ops.get(k..k + run).unwrap_or_default().iter().filter(|o| **o == Op::Del).count();
-                let inss = run - dels;
-                for x in 0..dels.max(inss) {
-                    let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
-                    match (a.map(|x| &**x), b.map(|x| &**x)) {
-                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx))),
-                        _ => {
-                            if let Some(x) = a {
-                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
-                            }
-                            if let Some(x) = b {
-                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ins), 0)));
-                            }
-                        }
-                    }
-                    changes += 1;
-                }
-                i += dels;
-                j += inss;
-                k += run.max(1);
-            }
-            None => break,
-        }
-    }
+    let (out, changes) = {
+        let mut ctx = DiffCtx {
+            ins,
+            del,
+            opts: &opts,
+            author: &author,
+            date: &date,
+            budget: &mut budget,
+            char_fallbacks: &mut char_fallbacks,
+            changes: 0,
+            plain_revised,
+        };
+        let out = diff_blocks(&mut s.doc, &old, &new, &mut ctx, 0);
+        (out, ctx.changes)
+    };
     s.doc.body = out;
     s.doc.ensure_nonempty();
     s.note_body_replaced();
@@ -214,26 +163,191 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     }))
 }
 
-/// Rewrites media keys in an inline object and all nested group children according to `media_map`.
-pub(super) fn remap_object_media(root: &mut InlineObject, media_map: &BTreeMap<String, String>) {
+/// Compare two block slices (`old` vs `new`) at table nesting `depth`, emitting tracked changes.
+fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: &mut DiffCtx<'_>, depth: usize) -> Vec<Arc<Block>> {
+    let key = |b: &Arc<Block>| match &**b {
+        Block::Para(p) => ctx.opts.key(&p.plain_text()),
+        // Tables match as a whole, by their text.
+        Block::Table(_) => format!("\u{0}table\u{0}{}", ctx.opts.key(&block_text(b, depth))),
+    };
+    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), ctx.budget);
+    let mut out: Vec<Arc<Block>> = Vec::new();
+    let (mut i, mut j, mut k) = (0usize, 0usize, 0usize);
+    while k < ops.len() {
+        match ops.get(k) {
+            Some(Op::Same) => {
+                let (a, b) = (old.get(i), new.get(j));
+                // The revised block, with its formatting and object changes tracked.
+                if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
+                    if !same_objects(doc, pa, pb) {
+                        // Same text, but objects (text boxes, pictures…) differ: diffed, so the
+                        // original's objects aren't lost.
+                        out.push(para_block(word_diff(doc, pa, pb, ctx)));
+                        ctx.changes = ctx.changes.saturating_add(1);
+                    } else {
+                        let mut p = pb.clone();
+                        if ctx.opts.formatting && pa.text == pb.text {
+                            let before = doc.revisions.len();
+                            crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut doc.revisions, ctx.author, ctx.date);
+                            if doc.revisions.len() > before || p != *pb {
+                                ctx.changes = ctx.changes.saturating_add(1);
+                            }
+                        }
+                        out.push(para_block(p));
+                    }
+                } else if let (Some(Block::Table(ta)), Some(Block::Table(tb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
+                    if ta == tb {
+                        if let Some(x) = b {
+                            out.push(x.clone());
+                        }
+                    } else if depth < wordcraft_doc::table::MAX_TABLE_DEPTH && same_table_cells(ta, tb) {
+                        out.push(Arc::new(Block::Table(diff_table(doc, ta, tb, ctx, depth))));
+                    } else {
+                        if let Some(x) = a {
+                            out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del), depth)));
+                        }
+                        if let Some(x) = b {
+                            out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins), depth)));
+                        }
+                        ctx.changes = ctx.changes.saturating_add(1);
+                    }
+                } else if let Some(x) = b.or(a) {
+                    out.push(x.clone());
+                }
+                i += 1;
+                j += 1;
+                k += 1;
+            }
+            Some(_) => {
+                // A run of deletions and insertions: changed paragraphs pair up and are diffed
+                // word by word (or by character); the rest are deleted or inserted whole.
+                let run = ops.get(k..).unwrap_or_default().iter().take_while(|o| **o != Op::Same).count();
+                let dels = ops.get(k..k + run).unwrap_or_default().iter().filter(|o| **o == Op::Del).count();
+                let inss = run - dels;
+                for x in 0..dels.max(inss) {
+                    let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
+                    match (a.map(|x| &**x), b.map(|x| &**x)) {
+                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(doc, pa, pb, ctx))),
+                        _ => {
+                            if let Some(x) = a {
+                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del), depth)));
+                            }
+                            if let Some(x) = b {
+                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins), depth)));
+                            }
+                        }
+                    }
+                    ctx.changes = ctx.changes.saturating_add(1);
+                }
+                i += dels;
+                j += inss;
+                k += run.max(1);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+/// Whether two tables have matching row counts, cell counts, spans and vertical merges so their
+/// cells can be diffed 1-to-1 without losing structural layout changes.
+fn same_table_cells(a: &wordcraft_doc::table::Table, b: &wordcraft_doc::table::Table) -> bool {
+    a.rows.len() == b.rows.len()
+        && a.rows.iter().zip(&b.rows).all(|(ra, rb)| {
+            ra.cells.len() == rb.cells.len()
+                && ra.cells.iter().zip(&rb.cells).all(|(ca, cb)| ca.span() == cb.span() && ca.props.vmerge == cb.props.vmerge)
+        })
+}
+
+/// Diff two tables with matching cell counts cell by cell, tracking cell content and picture edits.
+fn diff_table(
+    doc: &mut Document,
+    a: &wordcraft_doc::table::Table,
+    b: &wordcraft_doc::table::Table,
+    ctx: &mut DiffCtx<'_>,
+    depth: usize,
+) -> wordcraft_doc::table::Table {
+    let mut t = b.clone();
+    for (ra, rb) in a.rows.iter().zip(&mut t.rows) {
+        for (ca, cb) in ra.cells.iter().zip(&mut rb.cells) {
+            if ca.props.picture != cb.props.picture {
+                let fmt_rev = format_revision(doc, ctx.author, ctx.date);
+                let old =
+                    wordcraft_doc::props::CellProps { fmt_change: None, span: 0, vmerge: wordcraft_doc::props::VMerge::None, ..ca.props.clone() };
+                cb.props.fmt_change = wordcraft_doc::props::PropChange::boxed(fmt_rev, old);
+                ctx.changes = ctx.changes.saturating_add(1);
+            }
+            if ca.blocks != cb.blocks {
+                cb.blocks = diff_blocks(doc, &ca.blocks, &cb.blocks, ctx, depth + 1);
+                if cb.blocks.is_empty() {
+                    cb.blocks.push(para_block(Paragraph::new()));
+                }
+            }
+        }
+    }
+    t
+}
+
+/// Find or create the formatting revision entry for `author` and `date`.
+fn format_revision(doc: &mut Document, author: &str, date: &str) -> u32 {
+    if let Some(i) = doc.revisions.iter().rposition(|r| r.kind == RevisionKind::Format && r.author == author && r.date == date) {
+        return u32::try_from(i).unwrap_or(u32::MAX);
+    }
+    doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Format, author: author.to_string(), date: date.to_string(), move_name: None });
+    u32::try_from(doc.revisions.len().saturating_sub(1)).unwrap_or(u32::MAX)
+}
+
+/// Adopt `old_key` from `raw_media` into `doc` on first use, reusing the existing buffer without
+/// cloning when uniquely owned, and memoizing the resulting media key in `media_map`.
+fn adopt_media_key(
+    doc: &mut Document,
+    raw_media: &mut BTreeMap<String, Arc<Vec<u8>>>,
+    media_map: &mut BTreeMap<String, String>,
+    old_key: &str,
+) -> Option<String> {
+    if let Some(k) = media_map.get(old_key) {
+        return Some(k.clone());
+    }
+    let data = raw_media.remove(old_key)?;
+    let ext = old_key.rsplit_once('.').map(|(_, e)| e).unwrap_or("bin");
+    let new_key = doc.add_media(Arc::unwrap_or_clone(data), ext);
+    media_map.insert(old_key.to_string(), new_key.clone());
+    Some(new_key)
+}
+
+/// Rewrites media keys in an inline object and all nested group children via `map`, returning
+/// whether any media key changed.
+pub(super) fn remap_object_media(root: &mut InlineObject, map: &mut dyn FnMut(&str) -> Option<String>) -> bool {
+    let mut changed = false;
     let mut todo = vec![root];
     while let Some(o) = todo.pop() {
         match o {
             InlineObject::Image { media, .. } => {
-                if let Some(k) = media_map.get(media) {
-                    *media = k.clone();
+                if let Some(k) = map(media)
+                    && k != *media
+                {
+                    *media = k;
+                    changed = true;
                 }
             }
             InlineObject::Graphic { graphic, .. } => {
-                let mapped = |m: &str| media_map.get(m).filter(|k| *k != m);
-                if graphic.items.iter().any(|i| matches!(i, wordcraft_doc::graphic::GraphicItem::Image { media, .. } if mapped(media).is_some())) {
+                let mut any = false;
+                for i in &graphic.items {
+                    if let wordcraft_doc::graphic::GraphicItem::Image { media, .. } = i
+                        && map(media).is_some_and(|k| k != *media)
+                    {
+                        any = true;
+                    }
+                }
+                if any {
                     for i in &mut Arc::make_mut(graphic).items {
                         if let wordcraft_doc::graphic::GraphicItem::Image { media, .. } = i
-                            && let Some(k) = media_map.get(media.as_str())
+                            && let Some(k) = map(media.as_str())
                         {
-                            *media = k.clone();
+                            *media = k;
                         }
                     }
+                    changed = true;
                 }
             }
             InlineObject::Group { children, .. } => {
@@ -244,25 +358,30 @@ pub(super) fn remap_object_media(root: &mut InlineObject, media_map: &BTreeMap<S
             _ => {}
         }
     }
+    changed
 }
 
-/// Rewrites media keys in all paragraphs and table cells within `b` according to `media_map`.
-fn remap_block_media(b: &mut Block, media_map: &BTreeMap<String, String>) {
+/// Rewrites media keys in all paragraphs and table cells within `b` via `map`.
+fn remap_block_media(b: &mut Block, map: &mut dyn FnMut(&str) -> Option<String>) {
     let mut todo = vec![b];
     while let Some(b) = todo.pop() {
         match b {
             Block::Para(p) => {
+                let mut changed = false;
                 for o in &mut p.objects {
-                    remap_object_media(o, media_map);
+                    changed |= remap_object_media(o, map);
+                }
+                if changed {
+                    p.touch();
                 }
             }
             Block::Table(t) => {
                 for row in &mut t.rows {
                     for cell in &mut row.cells {
                         if let Some(pic) = &mut cell.props.picture
-                            && let Some(k) = media_map.get(&pic.media)
+                            && let Some(k) = map(&pic.media)
                         {
-                            pic.media = k.clone();
+                            pic.media = k;
                         }
                         todo.extend(cell.blocks.iter_mut().map(Arc::make_mut));
                     }
@@ -276,7 +395,7 @@ fn remap_block_media(b: &mut Block, media_map: &BTreeMap<String, String>) {
 fn block_text(b: &Block, depth: usize) -> String {
     match b {
         Block::Para(p) => p.plain_text(),
-        Block::Table(t) if depth < 16 => {
+        Block::Table(t) if depth < wordcraft_doc::table::MAX_TABLE_DEPTH => {
             t.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()).map(|x| block_text(x, depth + 1)).collect::<Vec<_>>().join("\t")
         }
         Block::Table(_) => String::new(),
@@ -295,7 +414,7 @@ fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
         }
         Block::Table(t) => {
             let mut t = t.clone();
-            if depth < 16 {
+            if depth < wordcraft_doc::table::MAX_TABLE_DEPTH {
                 for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
                     c.blocks = c.blocks.iter().map(|x| Arc::new(mark_block(x, f, depth + 1))).collect();
                 }
