@@ -1486,6 +1486,115 @@ impl Document {
         blocks
     }
 
+    /// Make the list references of `blocks`, which come from another document whose lists are
+    /// `src`, name lists of this document (#6900: Compare puts the revised document's
+    /// paragraphs in the original). A list of `src` whose definition this document has too
+    /// (the same levels, start overrides and level overrides, as two versions of one document
+    /// have) takes this document's list, the one of the same id first, so their numbers
+    /// continue; each list here is taken once at most, so two lists of `src` keep counting
+    /// apart. Any other is copied here with free ids of its own, its definition reused when this
+    /// document has it. A reference to a list `src` doesn't have, or to one whose definition it
+    /// lacks, names none (`0`), as it showed no numbers there. Every paragraph is changed, in
+    /// tables too, and the old numbering of a tracked paragraph change with it.
+    pub fn adopt_lists(&mut self, src: &crate::numbering::Numbering, blocks: &mut [Arc<Block>]) {
+        let mut used = std::collections::BTreeSet::new();
+        for b in blocks.iter() {
+            each_para(b, 0, &mut |p| {
+                let old = p.props.fmt_change.as_ref().and_then(|c| c.old.numbering);
+                used.extend(p.props.numbering.iter().chain(old.iter()).map(|n| n.num).filter(|n| *n != 0));
+            });
+        }
+        if used.is_empty() {
+            return;
+        }
+        // A definition apart from its own id.
+        let same_abs = |a: &crate::numbering::AbstractNum, b: &crate::numbering::AbstractNum| {
+            a.levels == b.levels && a.name == b.name && a.nsid == b.nsid && a.tmpl == b.tmpl && a.multi_level_type == b.multi_level_type
+        };
+        let mut map: BTreeMap<u32, u32> = BTreeMap::new();
+        // A list here is taken by one list of `src` at most, so two lists there keep counting
+        // apart here. Those of the same id go first, so a list both have keeps its own.
+        let mut taken = std::collections::BTreeSet::new();
+        for same_id in [true, false] {
+            for &id in &used {
+                if map.contains_key(&id) {
+                    continue;
+                }
+                let Some(n) = src.nums.iter().find(|n| n.id == id) else {
+                    map.insert(id, 0);
+                    continue;
+                };
+                let abs = src.abstracts.iter().find(|a| a.id == n.abstract_id);
+                let same_list = |m: &crate::numbering::Num| {
+                    m.start_overrides == n.start_overrides
+                        && m.level_overrides == n.level_overrides
+                        && match (abs, self.numbering.abstracts.iter().find(|a| a.id == m.abstract_id)) {
+                            (Some(x), Some(y)) => same_abs(x, y),
+                            (None, None) => true,
+                            _ => false,
+                        }
+                };
+                let here =
+                    self.numbering.nums.iter().filter(|m| (!same_id || m.id == id) && !taken.contains(&m.id) && same_list(m)).map(|m| m.id).min();
+                if let Some(here) = here {
+                    map.insert(id, here);
+                    taken.insert(here);
+                    continue;
+                }
+                if same_id {
+                    continue;
+                }
+                // A list whose definition `src` lacks shows no numbers there: none here either,
+                // rather than a definition of this document that has the same id.
+                let Some(a) = abs else {
+                    map.insert(id, 0);
+                    continue;
+                };
+                let abstracts = &self.numbering.abstracts;
+                let abstract_id = match abstracts.iter().find(|b| same_abs(a, b)) {
+                    Some(b) => Some(b.id),
+                    None => crate::parts::free_id(abstracts.iter().map(|b| b.id).max(), abstracts.iter().map(|b| b.id), 0).inspect(|fresh| {
+                        Arc::make_mut(&mut self.numbering).abstracts.push(crate::numbering::AbstractNum { id: *fresh, ..a.clone() });
+                    }),
+                };
+                let nums = &self.numbering.nums;
+                let fresh = crate::parts::free_id(nums.iter().map(|m| m.id).max(), nums.iter().map(|m| m.id), 1);
+                // Every id taken: no list rather than another's.
+                let (Some(abstract_id), Some(fresh)) = (abstract_id, fresh) else {
+                    map.insert(id, 0);
+                    continue;
+                };
+                Arc::make_mut(&mut self.numbering).nums.push(crate::numbering::Num { id: fresh, abstract_id, ..n.clone() });
+                map.insert(id, fresh);
+                taken.insert(fresh);
+            }
+        }
+        if map.iter().all(|(a, b)| a == b) {
+            return;
+        }
+        let remap = |n: &mut Option<crate::props::NumRef>| {
+            if let Some(n) = n.as_mut()
+                && let Some(to) = map.get(&n.num)
+            {
+                n.num = *to;
+            }
+        };
+        for b in blocks.iter_mut() {
+            let mut refers = false;
+            each_para(b, 0, &mut |p| refers |= p.props.numbering.is_some_and(|n| n.num != 0) || p.props.fmt_change.is_some());
+            if !refers {
+                continue;
+            }
+            each_para_mut(Arc::make_mut(b), 0, &mut |p| {
+                remap(&mut p.props.numbering);
+                if let Some(c) = p.props.fmt_change.as_mut() {
+                    remap(&mut c.old.numbering);
+                }
+                p.touch();
+            });
+        }
+    }
+
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
         let mut media_remap = BTreeMap::new();

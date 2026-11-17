@@ -81,13 +81,16 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
     let old: Vec<Arc<Block>> = s.doc.body.clone();
-    let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
+    let mut new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
         // The revised document's text boxes get stories of their own in the result, so its
         // boxes never show a story of the original's (or none at all).
         s.doc.adopt_fragment(&revised.body_fragment()).into_iter().map(Arc::new).collect()
     } else {
         revised.body.clone()
     };
+    // Its paragraphs name the revised document's lists: they name the result's (the original's
+    // where the definitions match), so a copied paragraph keeps its list and its number (#6900).
+    s.doc.adopt_lists(&revised.numbering, &mut new);
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone(), move_name: None });
     let ins = (s.doc.revisions.len() - 1) as u32;
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
