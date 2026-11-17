@@ -56,7 +56,7 @@ fn docx_styleref_header_shows_each_page_s_chapter() {
     );
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, text) in [
         ("_rels/.rels", root),
         ("word/document.xml", body.as_str()),
@@ -64,10 +64,9 @@ fn docx_styleref_header_shows_each_page_s_chapter() {
         ("word/header1.xml", header.as_str()),
         ("word/styles.xml", styles.as_str()),
     ] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+        zw.add(name, text.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let bytes = zw.finish().unwrap().into_inner();
+    let bytes = zw.finish().unwrap();
     let headers = |s: &mut Session| -> Vec<String> {
         s.layout()
             .pages
@@ -781,12 +780,11 @@ fn output_numbers_text_box_captions_where_their_boxes_are_anchored() {
     let body: String = paras.iter().map(|p| format!("<w:p>{p}</w:p>")).collect();
     let document = format!("<w:document {ns}><w:body>{body}<w:sectPr/></w:body></w:document>");
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, text) in [("_rels/.rels", root), ("word/document.xml", document.as_str())] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+        zw.add(name, text.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let s = Session::new(crate::io::open_bytes("boxes.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    let s = Session::new(crate::io::open_bytes("boxes.docx", &zw.finish().unwrap()).unwrap());
     let out = crate::cmd::references::output_fields(&s.doc).expect("fresh numbers");
     // The SEQ and REF results in reading order, text boxes where they are anchored.
     let mut results = Vec::new();
@@ -841,12 +839,11 @@ fn output_shows_references_to_bookmarks_outside_the_body() {
         ("word/endnotes.xml", endnotes),
         ("word/comments.xml", comments),
     ];
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, text) in &files {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+        zw.add(name, text.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    let s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap()).unwrap());
     let out = crate::cmd::references::output_fields(&s.doc).expect("fresh references");
     let mut results = Vec::new();
     for path in out.para_paths(StoryRef::Body) {
@@ -858,6 +855,45 @@ fn output_shows_references_to_bookmarks_outside_the_body() {
     }
     let expected: Vec<String> = names.iter().map(|n| format!("Target {n}")).collect();
     assert_eq!(results, expected);
+}
+
+/// Printed or exported, a locked SEQ keeps its result but still counts, its `\r` too, and a SEQ
+/// in a tracked deletion keeps its result and doesn't count (measured in Word for Windows,
+/// exporting with markup shown and hidden: Del 1, 9, 2; Lock 1, 7, 3; R 7, 6).
+#[test]
+fn output_counts_locked_seq_fields_and_not_deleted_ones() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(""));
+    let fields_in = ["SEQ Del", "SEQ Del", "SEQ Del", "SEQ Lock", "SEQ Lock", "SEQ Lock", "SEQ R \\r 5", "SEQ R"];
+    for instr in fields_in {
+        s.run("insert.field", &json!({"instr": instr, "result": "9"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let top = wordcraft_doc::Path::top(0);
+    let para = s.doc.para_mut(StoryRef::Body, &top).unwrap();
+    for (k, o) in para.objects.iter_mut().enumerate() {
+        if let InlineObject::Field { result, locked, .. } = o {
+            *locked = matches!(k, 4 | 6);
+            *result = if *locked { "7" } else { "9" }.into();
+        }
+    }
+    para.touch();
+    // The second Del field is a tracked deletion.
+    let off = s.doc.para(StoryRef::Body, &top).unwrap().object_offsets()[1];
+    let at = |off| Pos { story: StoryRef::Body, path: top.clone(), off };
+    s.doc.format_range(&at(off), &at(off + '\u{FFFC}'.len_utf8()), &|c| c.del = Some(1)).unwrap();
+    let out = output_fields(&s.doc).expect("the stale results change");
+    let shown: Vec<String> = out
+        .para(StoryRef::Body, &top)
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown, ["1", "9", "2", "1", "7", "3", "7", "6"]);
+    assert!(fields(&s).iter().all(|f| f.1 == "9" || f.1 == "7"), "the document keeps its results");
 }
 
 /// Printed or exported, a REF to a bookmark the document doesn't have shows Word's error

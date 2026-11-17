@@ -307,6 +307,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     let mut out = Vec::with_capacity(runs.len());
     for (face, s, shaped) in runs {
         let k = scale(face);
+        let ranges = crate::missing::cluster_ranges(s, &shaped);
         let mut glyphs = Vec::with_capacity(shaped.len());
         for g in &shaped {
             glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
@@ -324,7 +325,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
             synth_italic: false,
             text: s.to_string(),
             link: None,
-            ranges: Vec::new(),
+            ranges,
             text_bg: None,
             x_scale: 1.0,
         });
@@ -487,8 +488,9 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
 /// `obj_h` above the baseline and `obj_d` below it): inside the room kept for its effects.
 /// A rotated one's unrotated frame, centred in that room.
 ///
-/// `line` is the room a horizontal rule is placed in, from `cx`.
-pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, (obj_h, obj_d): (f32, f32), line: f32) -> Rect {
+/// `line` is the room a horizontal rule is placed in, from `cx`; `modern`: Word 2013+ layout
+/// (see [`wordcraft_doc::para::Float::line_pad`]).
+pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, (obj_h, obj_d): (f32, f32), line: f32, modern: bool) -> Rect {
     let frame = obj.and_then(InlineObject::frame);
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
     // Lowered further than its height, it is drawn with its top on the baseline (Word).
@@ -503,9 +505,9 @@ pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f
         return Rect::new(hr.left(room.x, line, rw), room.y, rw, room.h);
     }
     let Some((w, h, float)) = frame.filter(|(_, _, f)| f.rot != 0.0) else { return room };
-    // The room is the rotated bounds of the frame: undo the rotation.
+    // The room is what the line kept for the turned frame: undo that.
     let (w, h) = (wordcraft_geom::finite(w).clamp(1.0, 4000.0), wordcraft_geom::finite(h).clamp(1.0, 4000.0));
-    let (bw, _) = float.spin().extent(w, h);
+    let bw = w + 2.0 * float.line_pad(w, h, modern).0;
     let k = if bw > 0.0 { room.w / bw } else { 1.0 };
     let (fw, fh) = (w * k, h * k);
     Rect::new(room.x + (room.w - fw) / 2.0, room.y + (room.h - fh) / 2.0, fw, fh)

@@ -1,6 +1,5 @@
 //! Hand-written minimal WordprocessingML fixtures (written for these tests from the spec).
 
-use std::io::Write;
 use std::sync::Arc;
 
 use wordcraft_doc::fill::Fill;
@@ -13,12 +12,11 @@ const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingm
 const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
 pub fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn rels(list: &[(&str, &str, &str)]) -> String {
@@ -1483,10 +1481,9 @@ fn word_watermark_survives_save() {
     };
     assert_eq!(headers(&d2), headers(&d));
     assert_eq!(headers(&d2)[0], vec!["Header label".to_string(), "Second line".to_string()]);
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
     for name in ["word/header1.xml", "word/header2.xml"] {
-        let mut xml = String::new();
-        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut xml).unwrap();
+        let xml = String::from_utf8(z.read(name, 16 << 20).unwrap().unwrap()).unwrap();
         assert_eq!(xml.matches("<v:shape ").count(), 1, "{name}");
     }
 
@@ -1662,14 +1659,12 @@ fn chart_docx() -> Vec<u8> {
 
 /// The entries of a zip, by name.
 fn unzip(bytes: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
-    use std::io::Read;
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
     let mut out = std::collections::BTreeMap::new();
-    for i in 0..z.len() {
-        let mut f = z.by_index(i).unwrap();
-        let mut b = Vec::new();
-        f.read_to_end(&mut b).unwrap();
-        out.insert(f.name().to_string(), b);
+    for name in names {
+        let b = z.read(&name, 16 << 20).unwrap().unwrap();
+        out.insert(name, b);
     }
     out
 }
@@ -2174,9 +2169,8 @@ fn formatting_revisions_round_trip() {
 
     // Written back: each change is the last child of its parent, and reads back the same.
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     for (tag, parent) in [
         ("w:rPrChange", "</w:rPr></w:rPrChange></w:rPr>"),
         ("w:pPrChange", "</w:pPr></w:pPrChange></w:pPr>"),
@@ -2432,10 +2426,9 @@ fn note_separators_and_continuation_notice_round_trip() {
 
     let out = wordcraft_docx::write(&d).unwrap();
     let part = |name: &str| {
-        let mut z = zip::ZipArchive::new(std::io::Cursor::new(&out)).unwrap();
-        let mut xml = String::new();
-        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut xml).unwrap();
-        xml
+        let mut z = craft_zip::Archive::open(&out, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+        String::from_utf8(z.read(name, 16 << 20).unwrap().unwrap()).unwrap()
     };
     let notes = part("word/footnotes.xml");
     for (kind, id) in [("separator", "-1"), ("continuationSeparator", "0"), ("continuationNotice", "1")] {
@@ -2558,13 +2551,12 @@ fn includepicture_keeps_its_embedded_picture() {
         let bytes = docx(&format!("<w:p>{field}</w:p><w:sectPr/>"), &[("rIdPic", "image", "media/picture.png")], &[]);
         let bytes = {
             // `docx` takes text parts; add the picture bytes as a binary part.
-            let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+            let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
             let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-            for i in 0..z.len() {
-                let mut f = z.by_index(i).unwrap();
-                let mut v = Vec::new();
-                std::io::Read::read_to_end(&mut f, &mut v).unwrap();
-                entries.push((f.name().to_string(), v));
+            for name in names {
+                let v = z.read(&name, 16 << 20).unwrap().unwrap();
+                entries.push((name, v));
             }
             entries.push(("word/media/picture.png".into(), png.to_vec()));
             zip(&entries.iter().map(|(n, v)| (n.as_str(), v.as_slice())).collect::<Vec<_>>())
@@ -2678,9 +2670,8 @@ fn rounded_rectangle_corners_are_read_and_saved() {
     let d = read_body(&format!("<w:p>{body}</w:p>"));
     assert_eq!(corners(&d), expected);
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut xml = String::new();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 3565"/></a:avLst></a:prstGeom>"#), "{xml}");
     assert_eq!(corners(&wordcraft_docx::read(&bytes).unwrap()), expected);
 }
@@ -2745,9 +2736,8 @@ fn arrowheads_keep_their_kind_and_size() {
     let d = read_body(&format!("<w:p>{body}</w:p>"));
     assert_eq!(ends(&d), expected);
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut xml = String::new();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<a:headEnd type="stealth" w="sm" len="lg"/>"#), "{xml}");
     assert!(xml.contains(r#"<a:tailEnd type="diamond" w="lg" len="sm"/>"#), "{xml}");
     assert_eq!(ends(&wordcraft_docx::read(&bytes).unwrap()), expected);
@@ -2870,9 +2860,8 @@ fn vml_preset_shape_survives_saving() {
         r##"<w:p><w:r><w:pict>{VML_RIGHT_ARROW_TYPE}<v:shape type="#_x0000_t13" style="width:120pt;height:40pt" fillcolor="#ffa500"/></w:pict></w:r></w:p>"##
     );
     let saved = wordcraft_docx::write(&read_body(&body)).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(saved.as_slice())).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&saved, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"prst="rightArrow""#), "{xml}");
     let again = wordcraft_docx::read(&saved).unwrap();
     assert!(
@@ -2898,9 +2887,8 @@ fn vml_preset_shape_survives_saving() {
 fn vml_nearest_preset_shape_survives_saving() {
     let body = r##"<w:p><w:r><w:pict><v:shape type="#_x0000_t66" style="width:60pt;height:20pt" fillcolor="#ffa500"/></w:pict></w:r></w:p>"##;
     let saved = wordcraft_docx::write(&read_body(body)).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(saved.as_slice())).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&saved, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"prst="leftArrow""#), "{xml}");
     let again = wordcraft_docx::read(&saved).unwrap();
     assert!(
@@ -3047,9 +3035,8 @@ fn drawingml_shapes_survive_saving() {
     let again = wordcraft_docx::read(&bytes).unwrap();
     assert_eq!(shapes(&again), read, "every shape survives saving");
     assert_eq!(part_text_box(&again), "Floating text box");
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes[..], craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(xml.matches("<wps:wsp>").count(), 7);
     for p in presets.iter().chain(&["straightConnector1"]) {
         assert!(xml.contains(&format!(r#"<a:prstGeom prst="{p}">"#)), "{p} is written");
@@ -3947,6 +3934,33 @@ fn bidi_theme_slots_follow_the_theme_font_language() {
     }
 }
 
+/// A `w:rFonts` fallback list longer than the reader keeps is cut at the last complete family
+/// within the bound, so the family a real list would pick survives while a hostile list cannot
+/// cost its whole length in every piece of text drawn in it.
+#[test]
+fn a_hostile_fallback_list_keeps_its_leading_families() {
+    let candidates: Vec<String> = (0..500).map(|i| format!("MissingCandidateFont{i}")).collect();
+    let list = format!("{};Source Serif 4", candidates.join(";"));
+    let body = format!(r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="{list}" w:hAnsi="{list}"/></w:rPr><w:t>x</w:t></w:r></w:p>"#);
+    let d = read_body(&body);
+    let c = &d.body[0].as_para().unwrap().runs[0].props;
+    let kept = c.font.as_deref().expect("the leading families are kept");
+    assert!(kept.len() <= 256, "{} bytes kept", kept.len());
+    assert!(kept.starts_with("MissingCandidateFont0"), "{kept}");
+    // Every kept entry is a whole family name: the cut lands on a `;`, never inside a name.
+    assert!(kept.split(';').all(|f| f.starts_with("MissingCandidateFont") || f.contains("Source Serif")), "{kept}");
+    assert!(!kept.ends_with(';'), "no dangling separator: {kept}");
+}
+
+/// A real LibreOffice fallback list is read whole: a few families, well under any bound.
+#[test]
+fn a_real_fallback_list_is_read_whole() {
+    let body = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Liberation Sans;Arial" w:hAnsi="Liberation Sans;Arial"/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let c = &d.body[0].as_para().unwrap().runs[0].props;
+    assert_eq!(c.font.as_deref(), Some("Liberation Sans;Arial"));
+}
+
 /// The font table's family classes: Word draws a missing roman font in a serif face.
 #[test]
 fn roman_fonts_are_read_from_the_font_table() {
@@ -3954,6 +3968,15 @@ fn roman_fonts_are_read_from_the_font_table() {
     let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
     let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
     assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
+}
+
+/// Semicolon-separated roman font fallback lists in `fontTable.xml` register each candidate family.
+#[test]
+fn roman_fonts_split_fallback_lists() {
+    let fonts = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Liberation Serif;Times New Roman"><w:family w:val="roman"/></w:font></w:fonts>"#;
+    let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
+    let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
+    assert_eq!(d.settings.roman_fonts, ["Liberation Serif", "Times New Roman"]);
 }
 
 /// `w:doNotUseHTMLParagraphAutoSpacing` in the settings' `w:compat`: paragraph spacing adds up.
@@ -4008,20 +4031,19 @@ fn hyperlink_with_empty_target_is_no_link() {
     let bytes = docx(body, &[("rId2", "hyperlink", "https://x"), ("rId3", "hyperlink", "mailto:a@example.com")], &[]);
     // Blank the first target and mark the mailto one external (the helper only does that for http).
     let bytes = {
-        let mut zr = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut zr = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+        let names: Vec<String> = zr.names().map(|n| n.into_owned()).collect();
         let mut entries = Vec::new();
-        for i in 0..zr.len() {
-            let mut f = zr.by_index(i).unwrap();
-            let mut buf = Vec::new();
-            std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
-            if f.name() == "word/_rels/document.xml.rels" {
+        for name in names {
+            let mut buf = zr.read(&name, 16 << 20).unwrap().unwrap();
+            if name == "word/_rels/document.xml.rels" {
                 buf = String::from_utf8(buf)
                     .unwrap()
                     .replace("Target=\"https://x\"", "Target=\"\"")
                     .replace("a@example.com\"", "a@example.com\" TargetMode=\"External\"")
                     .into_bytes();
             }
-            entries.push((f.name().to_string(), buf));
+            entries.push((name, buf));
         }
         let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
         zip(&refs)
@@ -4354,6 +4376,54 @@ fn zero_effects_stay_zero_rotated() {
     }
 }
 
+/// A turned picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`) is
+/// marked so its line keeps to its frame as in Word, and saves that way; one with the room keeps
+/// its rotated bounds.
+#[test]
+fn bare_turns_are_kept_through_a_save() {
+    let pic = |effects: &str| {
+        format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1524000" cy="762000"/>{effects}<wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="2700000"><a:off x="0" y="0"/><a:ext cx="1524000" cy="762000"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let read =
+        |body: &str| wordcraft_docx::read(&docx(body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")])).unwrap();
+    let bare = |d: &Document| paras(d)[0].objects[0].frame().unwrap().2.bare_turn;
+    for effects in ["", r#"<wp:effectExtent l="0" t="0" r="0" b="0"/>"#] {
+        let d = read(&pic(effects));
+        assert!(bare(&d), "{effects:?}");
+        let out = wordcraft_docx::write(&d).unwrap();
+        let body = text(&unzip(&out), "word/document.xml");
+        assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
+        assert!(bare(&wordcraft_docx::read(&out).unwrap()));
+    }
+    // 120 × 60 pt at 45°: Word's rotated-bounds room, 3.64 pt wider and 33.64 pt taller each side.
+    let d = read(&pic(r#"<wp:effectExtent l="46210" t="427210" r="46210" b="427210"/>"#));
+    assert!(!bare(&d));
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.set_spin(wordcraft_geom::Spin::new(30.0, false, false));
+    assert!(!f.bare_turn, "turned here: the rotated bounds again");
+    // A shadow's room added later: saved, and so laid out, with the turn's room again.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.effect = [2.0; 4];
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    // Made floating: saved with the turn's room, so it opens again as an ordinary turn.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.wrap = wordcraft_doc::para::Wrap::Square;
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    assert!(!bare(&wordcraft_docx::read(&out).unwrap()));
+    // Only inline ones: a floating one keeps text clear of its rotated bounds as before.
+    let anchored = pic("").replace("<wp:inline>", "<wp:anchor>").replace("</wp:inline>", "</wp:anchor>");
+    assert!(!bare(&read(&anchored)));
+}
+
 /// The math namespace, declared on the math element itself (the fixture root doesn't).
 const M_NS: &str = r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""#;
 
@@ -4491,7 +4561,7 @@ fn shape_gradients_and_transparency_are_read_and_survive_saving() {
             rot_with_shape: false,
             flip: GradientFlip::Xy,
         }))),
-        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(0x20, 0x40, 0x60), 0.0)], lin(90.0, false), true)),
+        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(44, 92, 140), 0.0)], lin(90.0, false), true)),
         Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, black, 0.0)], centre, true)),
         None,
     ];
