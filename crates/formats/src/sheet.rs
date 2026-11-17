@@ -632,6 +632,7 @@ mod tests {
             ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
             ("xl/styles.xml", styles.as_bytes()),
         ])
+        .expect("test workbook")
     }
 
     #[test]
