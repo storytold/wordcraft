@@ -1280,10 +1280,12 @@ fn anchor_stacking_order_is_read_and_kept() {
         paras(d)[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(float.z) } else { None }).collect()
     };
     let d = read_body(&body);
-    assert_eq!(zs(&d), [251660288, 251657214, 0]);
+    // The shared reader keeps one more than the file's `relativeHeight` (so a file's 0 is the
+    // lowest order, not "none") and the writer writes one less.
+    assert_eq!(zs(&d), [251660289, 251657215, 0]);
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     let z = zs(&again);
-    assert_eq!(&z[..2], &[251660288, 251657214]);
+    assert_eq!(&z[..2], &[251660289, 251657215]);
     assert!(z[2] > 0, "an object without one gets an order on saving: {z:?}");
 }
 
