@@ -1,7 +1,5 @@
 //! Run and style properties that must survive repeated DOCX saves.
 
-use std::io::{Read, Write};
-
 fn docx(body: &str, styles: &str) -> Vec<u8> {
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
@@ -9,24 +7,22 @@ fn docx(body: &str, styles: &str) -> Vec<u8> {
         r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr/></w:body></w:document>"#
     );
     let styles = format!(r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{styles}</w:styles>"#);
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, xml) in [
         ("_rels/.rels", root.to_string()),
         ("word/document.xml", document),
         ("word/_rels/document.xml.rels", rels.to_string()),
         ("word/styles.xml", styles),
     ] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(xml.as_bytes()).unwrap();
+        zip.add(name, xml.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 fn part(bytes: &[u8], name: &str) -> String {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    zip.by_name(name).unwrap().read_to_string(&mut xml).unwrap();
-    xml
+    let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(zip.read(name, 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 #[test]
