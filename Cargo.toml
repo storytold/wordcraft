@@ -3,6 +3,16 @@ resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
+[workspace.metadata.cl]
+# Port build loop (craft-ui-port-kit): every member but xtask, so the baseline covers the
+# non-UI crates whose framework dependencies the next pin moves too.
+selection = ["wordcraft", "wordcraft-ui-egui", "wordcraft-web", "wordcraft-cli", "wordcraft-control-key", "wordcraft-doc", "wordcraft-docbin", "wordcraft-docx", "wordcraft-engine", "wordcraft-fonts", "wordcraft-formats", "wordcraft-geom", "wordcraft-layout", "wordcraft-mcp", "wordcraft-pdf", "wordcraft-render", "wordcraft-zotero"]
+tracked = ["egui", "eframe", "wordcraft-ui-egui"]
+unset_env = ["CARGO_INCREMENTAL", "WORDCRAFT_REQUIRE_WINRES", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_REQUIRED", "CRAFT_PROOF_EMBED"]
+set_env = { CRAFT_I18N_DIR = "../craft-i18n", CRAFT_FONTS_DIR = "../craft-fonts" }
+run_slots = 3
+test_threads = 4
+
 [workspace.package]
 version = "0.18.1"
 edition = "2024"
@@ -73,7 +83,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "4
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0", default-features = false, features = ["write"] }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", features = ["ui"] }
 craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-docx = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
@@ -156,20 +166,4 @@ codegen-units = 16
 debug = 0
 
 # Required by craft-pdf: the backend rejects writers that failed during unwinding.
-[patch.crates-io]
-krilla = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe" }
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+
