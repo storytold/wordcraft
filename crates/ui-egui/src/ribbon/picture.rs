@@ -1,7 +1,7 @@
 use super::arrange::{align_menu, group_menu, rotate_menu, rotation_field, wrap_menu};
-use super::common::{esc_cancelled, mi, stack};
+use super::common::{mi, size_field, stack};
 use super::shape::alt_text_group;
-use super::{MeasureExt, Target, Ui, WordApp, big, group, json, menu_button, small};
+use super::{Target, Ui, WordApp, big, group, json, menu_button, small};
 
 /// Draws the Picture Format tab's Adjust, Picture Styles, Accessibility (Alt Text), Arrange and
 /// Size groups.
@@ -130,36 +130,12 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             _ => (String::new(), 0, 0.0, 0.0, [0.0; 4], String::new()),
         };
         // `picture.size` locks the aspect ratio unless told otherwise, so one dimension suffices.
-        // The fields show the interface unit and take a size typed in any unit, pixels too
-        // (`300 px`, #1901), applied once typed (Enter, Tab or a click elsewhere; Esc cancels),
-        // never per keystroke; a drag applies as it goes, one undo step.
-        let unit = crate::options::unit();
-        let k = unit.pt_per_unit();
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 for (label, key, pt) in [("W:", "width", w0), ("H:", "height", h0)] {
-                    let name = ui.label(egui::RichText::new(tl!(label)).small());
-                    let was = pt / k;
-                    let mut v = was;
-                    // Not `clamp_existing_to_range`: egui would clamp a size outside the range (a 1 px
-                    // picture is 0.75 pt) and report it as a change, resizing the picture unasked.
-                    let field = egui::DragValue::new(&mut v)
-                        .speed(1.0 / k)
-                        .range(1.0 / k..=4000.0 / k)
-                        .clamp_existing_to_range(false)
-                        .measure(unit)
-                        .max_decimals(2);
-                    let r = ui.add(field.update_while_editing(false)).labelled_by(name.id).on_hover_text(tl!(
-                        "Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions."
-                    ));
-                    // While typing, the field reports each keystroke as a change; only a new
-                    // value (Enter, Tab, a click elsewhere, a drag) resizes, and Esc cancels.
-                    let cancelled = esc_cancelled(ui, &r, egui::Id::unique(("picture_size_field", key)));
-                    if r.changed() && v != was && !cancelled {
-                        if r.dragged() && !r.drag_started() {
-                            app.session.join_next_undo();
-                        }
-                        let _ = app.run("picture.size", json!({key: v * k}));
+                    let hint = tl!("Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.");
+                    if let Some(v) = size_field(ui, app, label, pt, egui::Id::unique(("picture_size_field", key)), hint) {
+                        let _ = app.run("picture.size", json!({key: v}));
                     }
                 }
                 rotation_field(ui, app);

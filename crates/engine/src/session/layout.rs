@@ -27,7 +27,10 @@ impl Session {
         let deleted = (hide_deleted, self.prefs.markup.hidden_deletions(), self.revisions_in_balloons());
         let outline = (mode == ViewMode::Outline).then(|| self.view.outline.view());
         let shown = (self.view.marks || self.prefs.marks.hidden, self.view.field_codes);
-        let (rev, proofing, numeral) = (self.rev, self.view.proofing, self.view.numeral);
+        // A dictionary or Language pack installed, removed or edited (in this document's window or
+        // any other) proofs it again, open or parked.
+        let rev = (self.rev, wordcraft_proof::dictionary_generation());
+        let (proofing, numeral) = (self.view.proofing, self.view.numeral);
         let fits = |e: &Option<LayoutEntry>| {
             e.as_ref().is_some_and(|(r, w, h, m, sp, _, pf, o, hd, n, t, sh)| {
                 *r == rev
@@ -74,10 +77,8 @@ impl Session {
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         let [newest, _] = std::mem::take(&mut self.layout);
-        self.layout = [
-            Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)),
-            newest,
-        ];
+        self.layout =
+            [Some((rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)), newest];
         l
     }
 
@@ -160,8 +161,15 @@ impl Session {
     }
 
     /// [`Session::export_layout`]; with `markup` (Print Markup) each page also has the markup
-    /// area with the comments in balloons.
+    /// area with the comments in balloons. Fields Word fills in for output show their fresh
+    /// results ([`crate::cmd::references::output_fields`]).
     pub fn export_layout_with(&self, markup: bool) -> Arc<DocLayout> {
+        let out = crate::cmd::references::output_fields(&self.doc);
+        self.export_layout_of(out.as_ref().unwrap_or(&self.doc), markup)
+    }
+
+    /// [`Session::export_layout_with`] of `doc`, this document as it is output.
+    pub(crate) fn export_layout_of(&self, doc: &Document, markup: bool) -> Arc<DocLayout> {
         let (fn_name, fn_path) = self.resolved_filenames();
         let opts = LayoutOptions {
             view: ViewMode::Print,
@@ -171,7 +179,7 @@ impl Session {
             filepath: Some(Arc::from(fn_path.as_str())),
             ..Default::default()
         };
-        Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))
+        Arc::new(wordcraft_layout::layout(doc, &mut LayoutCache::new(), &opts))
     }
 
     /// Invalidate the cached layout (fonts changed etc.).
@@ -198,7 +206,7 @@ impl Session {
         self.editing_lang = tag;
         let untouched = self.path.is_none() && !self.dirty && self.history.is_empty() && self.redo.is_empty();
         if untouched && self.doc.plain_text(StoryRef::Body).trim().is_empty() && self.doc.paragraph_count() <= 1 {
-            self.doc.styles.default_chr.lang = Some(self.editing_lang.clone().unwrap_or_else(|| "en-US".into()));
+            Arc::make_mut(&mut self.doc.styles).default_chr.lang = Some(self.editing_lang.clone().unwrap_or_else(|| "en-US".into()));
             self.rev = self.rev.wrapping_add(1);
             // Not an edit: the document is as untouched as it was.
             if self.made_rev == self.rev.wrapping_sub(1) {
