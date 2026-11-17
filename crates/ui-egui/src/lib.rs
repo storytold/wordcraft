@@ -449,6 +449,24 @@ pub const DEFAULT_TAB: &str = "Home";
 
 /// ⌘Q, which only the Mac sends: quit.
 const QUIT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q);
+/// Ctrl+Shift+0 (⌘⇧0): back to the Auto interface size (#4030). Not Ctrl+Alt+0, which is AltGr+0
+/// on some layouts and types a character there (#3424).
+const RESET_INTERFACE_SIZE: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::Num0);
+
+/// Consume Ctrl+Shift+0 (⌘⇧0), matched on the key the layout types and exactly these modifiers.
+/// Where Shift+0 types `=` (German, Swiss and Nordic layouts) the press is Ctrl+Shift+=, which
+/// stays Superscript; an extra Alt (AltGr+Shift+0) doesn't match.
+fn consume_reset_interface_size(input: &mut egui::InputState) -> bool {
+    let mut found = false;
+    input.events.retain(|e| {
+        let hit = matches!(e, egui::Event::Key { key: egui::Key::Num0, pressed: true, modifiers, .. }
+            if modifiers.matches_exact(RESET_INTERFACE_SIZE.modifiers));
+        found |= hit;
+        !hit
+    });
+    found
+}
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.
@@ -638,6 +656,9 @@ pub struct WordApp {
     pub clipboard_published: bool,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
+    /// Which job message is current: bumped when a job starts and whenever the message changes,
+    /// so a window can tell a new result from one it already said even when the text is the same.
+    print_gen: u64,
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
@@ -730,6 +751,12 @@ pub struct WordApp {
     /// The display scale (native pixels per point) seen in the last frame, 1.0 before the first;
     /// `ui.interfaceSize` reports the size Auto draws at with it.
     native_scale: f32,
+    /// The most pixels per point Auto may draw at on this screen ([`theme::auto_scale_limit`], #4030).
+    auto_scale_limit: f32,
+    /// The zoom factor in force during the previous frame's `logic`: egui-winit turns each
+    /// window's monitor size into points with the zoom of the frame before a pending change is
+    /// applied, so the physical size is that size times this zoom ([`theme::auto_scale_limit_over`]).
+    monitor_zoom: f32,
     /// A pre-#822 interface size (percent on top of the display scale) waiting for the first frame
     /// that knows the display's scale, to become the absolute size it drew at
     /// ([`theme::migrate_legacy_interface_size`]).
@@ -759,8 +786,13 @@ pub struct WordApp {
     /// The document's fonts that aren't installed, for the status bar and the font box, and the
     /// layout they were read from.
     pub missing_fonts: crate::chrome::MissingFontsMemo,
+    /// This window's refused or failed export, shown on its Export and Print pages; see [`WordApp::fail_export`].
+    pub export_error: String,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
+    /// What this window's Print page knows of the last job's message (the viewport and pass it was
+    /// last drawn in, and the generations of the result it said and holds back); per window.
+    print_memo: crate::print_page::Memo,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,

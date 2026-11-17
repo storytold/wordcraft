@@ -1,8 +1,10 @@
 //! Table row/cell tracked insertion, deletion, and `w:tblPrExChange` preservation around `craft-docx`.
 
-use quick_xml::events::{BytesStart, Event};
+use craft_xml::{El, Node};
 use wordcraft_doc::props::{PropChange, TableProps};
 use wordcraft_doc::{Block, Document, Revision, RevisionKind};
+
+const ZIP_LIMITS: craft_zip::Limits = craft_zip::Limits { max_entries: 10_000, max_total_bytes: 256 << 20 };
 
 #[derive(Clone, Debug, Default)]
 struct RevAttr {
@@ -24,112 +26,60 @@ struct RowRev {
     cells: Vec<CellRev>,
 }
 
-fn attr_str(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
-    for a in e.attributes().flatten() {
-        if a.key.as_ref() == key || a.key.local_name().as_ref() == key {
-            return String::from_utf8(a.value.into_owned()).ok();
-        }
-    }
-    None
-}
-
-fn rev_attr(e: &BytesStart<'_>) -> RevAttr {
+fn rev_attr(el: &El) -> RevAttr {
     RevAttr {
-        author: attr_str(e, b"w:author").or_else(|| attr_str(e, b"author")).unwrap_or_default(),
-        date: attr_str(e, b"w:date").or_else(|| attr_str(e, b"date")),
+        author: el.attr_or_plain("w:author").unwrap_or_default().to_string(),
+        date: el.attr_or_plain("w:date").map(str::to_string),
     }
 }
 
-fn parse_table_revs(xml: &str) -> Vec<Vec<RowRev>> {
-    if !xml.contains("w:tbl") {
-        return Vec::new();
-    }
-    let mut reader = quick_xml::Reader::from_str(xml);
-    let mut buf = Vec::new();
-    let mut tables: Vec<Vec<RowRev>> = Vec::new();
-    let mut cur_table: Option<Vec<RowRev>> = None;
-    let mut cur_row: Option<RowRev> = None;
-    let mut cur_cell: Option<CellRev> = None;
-    let mut in_trpr = false;
-    let mut in_tcpr = false;
-    let mut in_tblprex_change: Option<(RevAttr, TableProps)> = None;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => match e.name().as_ref() {
-                b"w:tbl" => cur_table = Some(Vec::new()),
-                b"w:tr" => cur_row = Some(RowRev::default()),
-                b"w:tc" => cur_cell = Some(CellRev::default()),
-                b"w:trPr" => in_trpr = true,
-                b"w:tcPr" => in_tcpr = true,
-                b"w:tblPrExChange" if cur_row.is_some() => {
-                    in_tblprex_change = Some((rev_attr(e), TableProps::default()));
-                }
-                b"w:tblW" if in_tblprex_change.is_some() => {
-                    if let Some((_, tp)) = &mut in_tblprex_change {
-                        let w_type = attr_str(e, b"w:type").or_else(|| attr_str(e, b"type")).unwrap_or_default();
-                        if let Some(w) = attr_str(e, b"w:w").or_else(|| attr_str(e, b"w")).and_then(|s| s.parse::<f32>().ok()) {
-                            if w_type == "pct" {
-                                tp.width_pct = Some(w / 50.0);
-                            } else {
-                                tp.width = Some(w / 20.0);
-                            }
+fn collect_tables_revs(el: &El, tables: &mut Vec<Vec<RowRev>>) {
+    if el.name == "w:tbl" {
+        let mut rows = Vec::new();
+        for tr in el.children("w:tr") {
+            let mut r = RowRev::default();
+            if let Some(ex_ch) = tr.child("w:tblPrEx").and_then(|e| e.child("w:tblPrExChange")).or_else(|| tr.find("w:tblPrExChange")) {
+                let mut tp = TableProps::default();
+                if let Some(tblw) = ex_ch.find("w:tblW") {
+                    let w_type = tblw.attr_or_plain("w:type").unwrap_or_default();
+                    if let Some(w) = tblw.attr_or_plain("w:w").and_then(|s| s.parse::<f32>().ok()) {
+                        if w_type == "pct" {
+                            tp.width_pct = Some(w / 50.0);
+                        } else {
+                            tp.width = Some(w / 20.0);
                         }
                     }
                 }
-                b"w:ins" if in_trpr => {
-                    if let Some(r) = &mut cur_row {
-                        r.ins = Some(rev_attr(e));
+                r.ex_change = Some((rev_attr(ex_ch), tp));
+            }
+            if let Some(trpr) = tr.child("w:trPr") {
+                if let Some(ins) = trpr.child("w:ins") {
+                    r.ins = Some(rev_attr(ins));
+                }
+                if let Some(del) = trpr.child("w:del") {
+                    r.del = Some(rev_attr(del));
+                }
+            }
+            for tc in tr.children("w:tc") {
+                let mut c = CellRev::default();
+                if let Some(tcpr) = tc.child("w:tcPr") {
+                    if let Some(ins) = tcpr.child("w:cellIns") {
+                        c.ins = Some(rev_attr(ins));
+                    }
+                    if let Some(del) = tcpr.child("w:cellDel") {
+                        c.del = Some(rev_attr(del));
                     }
                 }
-                b"w:del" if in_trpr => {
-                    if let Some(r) = &mut cur_row {
-                        r.del = Some(rev_attr(e));
-                    }
-                }
-                b"w:cellIns" if in_tcpr => {
-                    if let Some(c) = &mut cur_cell {
-                        c.ins = Some(rev_attr(e));
-                    }
-                }
-                b"w:cellDel" if in_tcpr => {
-                    if let Some(c) = &mut cur_cell {
-                        c.del = Some(rev_attr(e));
-                    }
-                }
-                _ => {}
-            },
-            Ok(Event::End(ref e)) => match e.name().as_ref() {
-                b"w:trPr" => in_trpr = false,
-                b"w:tcPr" => in_tcpr = false,
-                b"w:tblPrExChange" => {
-                    if let (Some(r), Some(ch)) = (&mut cur_row, in_tblprex_change.take()) {
-                        r.ex_change = Some(ch);
-                    }
-                }
-                b"w:tc" => {
-                    if let (Some(r), Some(c)) = (&mut cur_row, cur_cell.take()) {
-                        r.cells.push(c);
-                    }
-                }
-                b"w:tr" => {
-                    if let (Some(t), Some(r)) = (&mut cur_table, cur_row.take()) {
-                        t.push(r);
-                    }
-                }
-                b"w:tbl" => {
-                    if let Some(t) = cur_table.take() {
-                        tables.push(t);
-                    }
-                }
-                _ => {}
-            },
-            Ok(Event::Eof) | Err(_) => break,
-            _ => {}
+                r.cells.push(c);
+            }
+            rows.push(r);
         }
-        buf.clear();
+        tables.push(rows);
+        return;
     }
-    tables
+    for ch in el.elements() {
+        collect_tables_revs(ch, tables);
+    }
 }
 
 fn push_rev(doc: &mut Document, kind: RevisionKind, attr: &RevAttr) -> u32 {
@@ -139,17 +89,23 @@ fn push_rev(doc: &mut Document, kind: RevisionKind, attr: &RevAttr) -> u32 {
 }
 
 pub(crate) fn apply_read_table_revs(bytes: &[u8], doc: &mut Document) {
-    let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
+    let Ok(mut archive) = craft_zip::Archive::open(bytes, ZIP_LIMITS) else {
         return;
     };
-    let Ok(mut file) = archive.by_name("word/document.xml") else {
+    let Some(doc_xml) = archive.read("word/document.xml", craft_docx::MAX_XML_FILE as u64).ok().flatten() else {
         return;
     };
-    let mut xml = String::new();
-    if std::io::Read::read_to_string(&mut file, &mut xml).is_err() {
+    let Ok(s) = std::str::from_utf8(&doc_xml) else {
+        return;
+    };
+    if !s.contains("w:tbl") {
         return;
     }
-    let parsed = parse_table_revs(&xml);
+    let Ok(root) = craft_xml::parse(&doc_xml) else {
+        return;
+    };
+    let mut parsed = Vec::new();
+    collect_tables_revs(&root, &mut parsed);
     if parsed.is_empty() {
         return;
     }
@@ -188,31 +144,129 @@ pub(crate) fn apply_read_table_revs(bytes: &[u8], doc: &mut Document) {
     doc.body = new_body;
 }
 
-fn fmt_change_attrs(doc: &Document, rev: u32, next_id: &mut u32) -> String {
+fn change_attr_vec(doc: &Document, rev: u32, next_id: &mut u32) -> Vec<(String, String)> {
     let id = *next_id;
     *next_id += 1;
     let r = doc.revisions.get(rev as usize);
-    let author = r.map(|x| x.author.as_str()).unwrap_or("Unknown");
-    let esc_author = quick_xml::escape::escape(author);
-    match r.map(|x| x.date.as_str()).filter(|d| !d.is_empty()) {
-        Some(d) => format!(r#"w:id="{id}" w:author="{esc_author}" w:date="{}""#, quick_xml::escape::escape(d)),
-        None => format!(r#"w:id="{id}" w:author="{esc_author}""#),
+    let author = r.map_or("Unknown", |x| x.author.as_str());
+    let mut attrs = vec![("w:id".into(), id.to_string()), ("w:author".into(), author.to_string())];
+    if let Some(d) = r.map(|x| x.date.as_str()).filter(|d| !d.is_empty()) {
+        attrs.push(("w:date".into(), d.to_string()));
     }
+    attrs
 }
 
-fn fmt_tblprex_inner(t: &TableProps) -> String {
-    let mut s = String::new();
+fn tblprex_inner_children(t: &TableProps) -> Vec<Node> {
     if let Some(p) = t.width_pct {
-        let w = (p.clamp(0.0, 1000.0) * 50.0).round() as i64;
-        s.push_str(&format!(r#"<w:tblW w:w="{w}" w:type="pct"/>"#));
+        let w = ((p.clamp(0.0, 1000.0) * 50.0).round() as i64).to_string();
+        vec![Node::El(El {
+            name: "w:tblW".into(),
+            attrs: vec![("w:w".into(), w), ("w:type".into(), "pct".into())],
+            children: Vec::new(),
+        })]
     } else if let Some(v) = t.width {
-        let w = wordcraft_geom::to_twips(v);
-        s.push_str(&format!(r#"<w:tblW w:w="{w}" w:type="dxa"/>"#));
+        let w = wordcraft_geom::to_twips(v).to_string();
+        vec![Node::El(El {
+            name: "w:tblW".into(),
+            attrs: vec![("w:w".into(), w), ("w:type".into(), "dxa".into())],
+            children: Vec::new(),
+        })]
+    } else {
+        Vec::new()
     }
-    s
 }
 
-fn rewrite_table_xml(xml: &str, doc: &Document) -> Option<String> {
+fn patch_tables_el(
+    el: &mut El,
+    doc: &Document,
+    tables: &[&wordcraft_doc::table::Table],
+    t_idx: &mut usize,
+    next_id: &mut u32,
+) -> bool {
+    if el.name == "w:tbl" {
+        let idx = *t_idx;
+        *t_idx += 1;
+        let Some(tbl) = tables.get(idx) else {
+            return false;
+        };
+        let mut changed = false;
+        let mut r_idx = 0usize;
+        for tr in el.elements_mut() {
+            if tr.name != "w:tr" {
+                continue;
+            }
+            let Some(row) = tbl.rows.get(r_idx) else {
+                r_idx += 1;
+                continue;
+            };
+            if let Some(ch) = row.props.exceptions.as_ref().and_then(|x| x.fmt_change.as_ref())
+                && let Some(ex_el) = tr.child_mut("w:tblPrEx")
+            {
+                let attrs = change_attr_vec(doc, ch.rev, next_id);
+                let inner = tblprex_inner_children(&ch.old);
+                ex_el.children.push(Node::El(El {
+                    name: "w:tblPrExChange".into(),
+                    attrs,
+                    children: vec![Node::El(El {
+                        name: "w:tblPrEx".into(),
+                        attrs: Vec::new(),
+                        children: inner,
+                    })],
+                }));
+                changed = true;
+            }
+            if row.props.ins.is_some() || row.props.del.is_some() {
+                if tr.child("w:trPr").is_none() {
+                    let pos = tr.children.iter().position(|n| matches!(n, Node::El(c) if c.name == "w:tc")).unwrap_or(0);
+                    tr.children.insert(pos, Node::El(El { name: "w:trPr".into(), attrs: Vec::new(), children: Vec::new() }));
+                }
+                if let Some(trpr) = tr.child_mut("w:trPr") {
+                    if let Some(ins) = row.props.ins {
+                        let attrs = change_attr_vec(doc, ins, next_id);
+                        trpr.children.push(Node::El(El { name: "w:ins".into(), attrs, children: Vec::new() }));
+                        changed = true;
+                    }
+                    if let Some(del) = row.props.del {
+                        let attrs = change_attr_vec(doc, del, next_id);
+                        trpr.children.push(Node::El(El { name: "w:del".into(), attrs, children: Vec::new() }));
+                        changed = true;
+                    }
+                }
+            }
+            let mut c_idx = 0usize;
+            for tc in tr.elements_mut() {
+                if tc.name != "w:tc" {
+                    continue;
+                }
+                if let Some(cell) = row.cells.get(c_idx)
+                    && let Some(tcpr) = tc.child_mut("w:tcPr")
+                {
+                    if let Some(ins) = cell.props.ins {
+                        let attrs = change_attr_vec(doc, ins, next_id);
+                        tcpr.children.push(Node::El(El { name: "w:cellIns".into(), attrs, children: Vec::new() }));
+                        changed = true;
+                    } else if let Some(del) = cell.props.del {
+                        let attrs = change_attr_vec(doc, del, next_id);
+                        tcpr.children.push(Node::El(El { name: "w:cellDel".into(), attrs, children: Vec::new() }));
+                        changed = true;
+                    }
+                }
+                c_idx += 1;
+            }
+            r_idx += 1;
+        }
+        return changed;
+    }
+    let mut changed = false;
+    for ch in el.elements_mut() {
+        if patch_tables_el(ch, doc, tables, t_idx, next_id) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn rewrite_table_xml(data: &[u8], doc: &Document) -> Option<Vec<u8>> {
     let tables: Vec<&wordcraft_doc::table::Table> = doc.body.iter().filter_map(|b| b.as_table()).collect();
     let has_any = tables.iter().any(|t| {
         t.rows.iter().any(|r| {
@@ -225,161 +279,52 @@ fn rewrite_table_xml(xml: &str, doc: &Document) -> Option<String> {
     if !has_any {
         return None;
     }
-
-    let mut reader = quick_xml::Reader::from_str(xml);
-    let mut writer = quick_xml::Writer::new(Vec::with_capacity(xml.len() + 512));
-    let mut buf = Vec::new();
+    let mut root = craft_xml::parse(data).ok()?;
     let mut t_idx = 0usize;
-    let mut r_idx = 0usize;
-    let mut c_idx = 0usize;
-    let mut in_tbl = false;
-    let mut in_tr = false;
-    let mut tr_had_trpr = false;
     let mut next_id = 100u32;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                let name = e.name();
-                match name.as_ref() {
-                    b"w:tbl" => {
-                        in_tbl = true;
-                        r_idx = 0;
-                    }
-                    b"w:tr" if in_tbl => {
-                        in_tr = true;
-                        tr_had_trpr = false;
-                        c_idx = 0;
-                    }
-                    b"w:trPr" if in_tr => {
-                        tr_had_trpr = true;
-                    }
-                    b"w:tc" if in_tr => {
-                        if !tr_had_trpr
-                            && let Some(row) = tables.get(t_idx).and_then(|t| t.rows.get(r_idx))
-                            && (row.props.ins.is_some() || row.props.del.is_some())
-                        {
-                            let mut trpr = String::from("<w:trPr>");
-                            if let Some(ins) = row.props.ins {
-                                trpr.push_str(&format!("<w:ins {}/>", fmt_change_attrs(doc, ins, &mut next_id)));
-                            }
-                            if let Some(del) = row.props.del {
-                                trpr.push_str(&format!("<w:del {}/>", fmt_change_attrs(doc, del, &mut next_id)));
-                            }
-                            trpr.push_str("</w:trPr>");
-                            writer.get_mut().extend_from_slice(trpr.as_bytes());
-                            tr_had_trpr = true;
-                        }
-                    }
-                    _ => {}
-                }
-                writer.write_event(Event::Start(e)).ok()?;
-            }
-            Ok(Event::End(e)) => {
-                let name = e.name();
-                match name.as_ref() {
-                    b"w:tblPrEx" if in_tr => {
-                        if let Some(ch) = tables
-                            .get(t_idx)
-                            .and_then(|t| t.rows.get(r_idx))
-                            .and_then(|r| r.props.exceptions.as_ref())
-                            .and_then(|x| x.fmt_change.as_ref())
-                        {
-                            let attrs = fmt_change_attrs(doc, ch.rev, &mut next_id);
-                            let inner = fmt_tblprex_inner(&ch.old);
-                            let snippet = format!("<w:tblPrExChange {attrs}><w:tblPrEx>{inner}</w:tblPrEx></w:tblPrExChange>");
-                            writer.get_mut().extend_from_slice(snippet.as_bytes());
-                        }
-                    }
-                    b"w:trPr" if in_tr => {
-                        if let Some(row) = tables.get(t_idx).and_then(|t| t.rows.get(r_idx)) {
-                            if let Some(ins) = row.props.ins {
-                                let snippet = format!("<w:ins {}/>", fmt_change_attrs(doc, ins, &mut next_id));
-                                writer.get_mut().extend_from_slice(snippet.as_bytes());
-                            }
-                            if let Some(del) = row.props.del {
-                                let snippet = format!("<w:del {}/>", fmt_change_attrs(doc, del, &mut next_id));
-                                writer.get_mut().extend_from_slice(snippet.as_bytes());
-                            }
-                        }
-                    }
-                    b"w:tcPr" if in_tr => {
-                        if let Some(cell) = tables.get(t_idx).and_then(|t| t.rows.get(r_idx)).and_then(|r| r.cells.get(c_idx)) {
-                            if let Some(ins) = cell.props.ins {
-                                let snippet = format!("<w:cellIns {}/>", fmt_change_attrs(doc, ins, &mut next_id));
-                                writer.get_mut().extend_from_slice(snippet.as_bytes());
-                            } else if let Some(del) = cell.props.del {
-                                let snippet = format!("<w:cellDel {}/>", fmt_change_attrs(doc, del, &mut next_id));
-                                writer.get_mut().extend_from_slice(snippet.as_bytes());
-                            }
-                        }
-                    }
-                    b"w:tc" if in_tr => {
-                        c_idx += 1;
-                    }
-                    b"w:tr" if in_tr => {
-                        in_tr = false;
-                        r_idx += 1;
-                    }
-                    b"w:tbl" if in_tbl => {
-                        in_tbl = false;
-                        t_idx += 1;
-                    }
-                    _ => {}
-                }
-                writer.write_event(Event::End(e)).ok()?;
-            }
-            Ok(Event::Eof) => break,
-            Ok(ev) => writer.write_event(ev).ok()?,
-            Err(_) => return None,
-        }
-        buf.clear();
+    if !patch_tables_el(&mut root, doc, &tables, &mut t_idx, &mut next_id) {
+        return None;
     }
-    String::from_utf8(writer.into_inner()).ok()
+    let mut out = String::with_capacity(data.len() + 512);
+    out.push_str(craft_xml::DECL_STANDALONE);
+    root.write_xml(&mut out);
+    Some(out.into_bytes())
 }
 
 pub(crate) fn apply_write_table_revs(doc: &Document, bytes: Vec<u8>) -> Vec<u8> {
-    let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())) else {
+    let Ok(mut archive) = craft_zip::Archive::open(&bytes, ZIP_LIMITS) else {
         return bytes;
     };
     let mut entries = Vec::with_capacity(archive.len());
     let mut changed = false;
     for idx in 0..archive.len() {
-        let (name, mut data) = {
-            let Ok(mut file) = archive.by_index(idx) else {
-                drop(archive);
-                return bytes;
-            };
-            let name = file.name().to_string();
-            let mut data = Vec::new();
-            if std::io::Read::read_to_end(&mut file, &mut data).is_err() {
-                drop(file);
-                drop(archive);
-                return bytes;
-            }
-            (name, data)
+        let Some(name) = archive.entry_name(idx).ok().flatten() else {
+            return bytes;
+        };
+        if archive.entry_is_dir(idx).ok().flatten().unwrap_or(false) {
+            continue;
+        }
+        let stored = archive.is_stored(&name).unwrap_or(false);
+        let Some(mut data) = archive.read(&name, craft_docx::MAX_XML_FILE as u64).ok().flatten() else {
+            return bytes;
         };
         if name == "word/document.xml"
-            && let Ok(xml) = std::str::from_utf8(&data)
-            && let Some(rewritten) = rewrite_table_xml(xml, doc)
+            && let Some(rewritten) = rewrite_table_xml(&data, doc)
         {
-            data = rewritten.into_bytes();
+            data = rewritten;
             changed = true;
         }
-        entries.push((name, data));
+        let comp = if stored { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated };
+        entries.push((name, data, comp));
     }
-    drop(archive);
     if !changed {
         return bytes;
     }
-    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(bytes.len() + 512)));
-    for (name, data) in entries {
-        if out.start_file(name, zip::write::SimpleFileOptions::default()).is_err() {
-            return bytes;
-        }
-        if std::io::Write::write_all(&mut out, &data).is_err() {
+    let mut out = craft_zip::Writer::new();
+    for (name, data, comp) in entries {
+        if out.add(&name, &data, comp).is_err() {
             return bytes;
         }
     }
-    out.finish().map(|c| c.into_inner()).unwrap_or(bytes)
+    out.finish().unwrap_or(bytes)
 }
