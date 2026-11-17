@@ -13881,3 +13881,40 @@ fn a_range_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
     assert!(c.ins.is_some(), "Paste Formatting kept the insertion mark");
     assert_eq!(c.bold, Some(true));
 }
+
+/// #6844: a hyperlink names a local document to open when it is a path relative to the
+/// document's folder, an absolute path or a host-less `file:` URL to a format WordCraft opens.
+/// Programs, other files, other machines and other schemes are refused.
+#[test]
+fn a_link_names_a_local_document_only_of_a_format_wordcraft_opens() {
+    use crate::io::linked_document;
+    let base = std::env::temp_dir().join("wc-links");
+    let here = |name: &str| Some(base.join(name));
+    assert_eq!(linked_document("Plan.odt", Some(&base)), here("Plan.odt"));
+    assert_eq!(linked_document("sub/../Notes.DOCX", Some(&base)), here("Notes.DOCX"));
+    assert_eq!(linked_document("./sub/To%20do.md#today", Some(&base)), Some(base.join("sub").join("To do.md")));
+    let abs = base.join("Report.rtf");
+    assert_eq!(linked_document(&abs.to_string_lossy(), None), Some(abs.clone()));
+    let slashes = abs.to_string_lossy().replace('\\', "/");
+    let url = if slashes.starts_with('/') { format!("file://{slashes}") } else { format!("file:///{slashes}") };
+    assert_eq!(linked_document(&url, None), Some(abs.clone()));
+    assert_eq!(linked_document(&url.replacen("file://", "file://localhost", 1), None), Some(abs));
+    for bad in [
+        "Setup.exe",
+        "run.sh",
+        "Plan",
+        "javascript:alert(1)//x.docx",
+        "ms-word:ofe|u|x.docx",
+        r"\\host\share\a.docx",
+        "//host/share/a.docx",
+        "file://host/share/a.docx",
+        "a%2.docx",
+        "a%00b.docx",
+        "a\u{7}.docx",
+    ] {
+        assert_eq!(linked_document(bad, Some(&base)), None, "{bad:?}");
+    }
+    assert_eq!(linked_document("Plan.odt", None), None, "a relative link needs the document's folder");
+    assert_eq!(linked_document(&format!("{}x.docx", "../".repeat(200)), Some(&base)), None, "not past the root");
+    assert_eq!(linked_document(&format!("{}.docx", "a".repeat(5000)), Some(&base)), None, "over-long");
+}

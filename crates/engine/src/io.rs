@@ -47,6 +47,96 @@ fn ext_of(name: &str) -> String {
     file.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// The longest hyperlink [`linked_document`] reads.
+const MAX_LINK: usize = 4096;
+
+/// The local document a hyperlink names, for Ctrl/⌘+click to open in WordCraft (#6844): a path
+/// relative to the document's folder `base` (none for a document never saved), an absolute path
+/// (`/home/…`, `C:\…`) or a `file:` URL with no host, `%`-escapes decoded and `.`/`..` resolved.
+/// Only a format WordCraft opens ([`OPEN_EXTS`]) counts, so a link never names a program or a
+/// file the system would hand to another one. Another machine's path (`\\host\…`, `//host/…`, a
+/// `file://host/…` URL) is refused, as following it leaks the user's network credentials; so is
+/// any other scheme, a control character and an over-long link. A `#bookmark` after the path is
+/// left out. Pure: whether the file exists is the caller's question.
+pub fn linked_document(link: &str, base: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    use std::path::{Component, PathBuf};
+    if link.len() > MAX_LINK || link.chars().any(char::is_control) {
+        return None;
+    }
+    let target = link.split('#').next()?.trim();
+    let decoded = percent_decode(target)?;
+    let lower = decoded.to_ascii_lowercase();
+    let raw = if lower.starts_with("file:") {
+        let rest = decoded.get(5..)?;
+        match rest.strip_prefix("//") {
+            // `file:///path` or `file://localhost/path`; any other host is another machine.
+            Some(after) => {
+                let (host, path) = after.split_at(after.find('/').unwrap_or(after.len()));
+                if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) {
+                    return None;
+                }
+                // `/C:/dir` is Windows' `C:/dir`.
+                let drive = path
+                    .strip_prefix('/')
+                    .filter(|p| p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic));
+                drive.unwrap_or(path).to_string()
+            }
+            None => rest.to_string(),
+        }
+    } else {
+        // A scheme: letters, then `:` (one letter is a Windows drive, not a scheme).
+        if let Some((scheme, _)) = decoded.split_once(':')
+            && scheme.len() > 1
+            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        {
+            return None;
+        }
+        decoded
+    };
+    if raw.is_empty() || raw.replace('\\', "/").starts_with("//") {
+        return None;
+    }
+    let path = PathBuf::from(raw.replace(['\\', '/'], std::path::MAIN_SEPARATOR_STR));
+    let windows_absolute = raw.as_bytes().get(1) == Some(&b':') && raw.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+    let joined = if path.is_absolute() || windows_absolute { path } else { base?.join(path) };
+    // `.` and `..` resolved without asking the file system; past the root is refused.
+    let mut out = PathBuf::new();
+    for c in joined.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    let name = out.to_string_lossy();
+    if name.replace('\\', "/").starts_with("//") || !OPEN_EXTS.contains(&ext_of(&name).as_str()) {
+        return None;
+    }
+    Some(out)
+}
+
+/// `%XX` escapes decoded (`My%20Notes.odt`); `None` for a broken escape or bytes that aren't UTF-8.
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        if b == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok().filter(|t| !t.chars().any(char::is_control))
+}
+
 /// Is `ext` one of Word's package formats (.docx/.docm/.dotx/.dotm), which save without loss?
 pub fn is_word_package(ext: &str) -> bool {
     wordcraft_docx::Flavor::from_ext(ext).is_some()
