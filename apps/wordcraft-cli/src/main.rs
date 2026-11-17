@@ -35,10 +35,11 @@ USAGE:
                                               --strict writes nothing and exits 3 if a character on the
                                               page can't be drawn or a picture is missing or undecodable
                                               (report on stderr, as for convert --strict)
-  wordcraft-cli run [--file F | --template T] [--script FILE|-] --cmd 'id={json}' [--cmd …]
-                    [--save OUT] [--print] [--author NAME]
+  wordcraft-cli run [--file F | --template T] [--script FILE|-] [--cmd 'id={json}' …]
+                    [--save OUT] [--page N] [--scale S] [--print] [--author NAME]
                                               run commands headlessly, then save (--author names
                                               who tracked changes and comments are by).
+                                              PNG saves use --page (1-based, default 1) and --scale (default 2).
                                               --script runs a JSON file (- is stdin) first:
                                               {\"file\"?, \"template\"?, \"commands\": [{\"command\": id,
                                               \"params\"?: {…}} | id, …], \"save\"?: [OUT, …]}; save
@@ -602,6 +603,11 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             write_stdout(|o| writeln!(o, "{r}"))
         }
         "run" => {
+            for (i, arg) in rest.iter().enumerate() {
+                if arg == "--cmd" && rest.get(i + 1).is_none_or(|value| value.starts_with("--")) {
+                    return Err("--cmd needs a value".into());
+                }
+            }
             validate_options("run", &rest, RUN_OPTIONS)?;
             let page = parse_page_arg("run", &rest)?;
             let scale = parse_scale_arg("run", &rest)?;
@@ -635,7 +641,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let mut i = 0;
             while i < rest.len() {
                 if rest.get(i).map(String::as_str) == Some("--cmd") {
-                    let spec = rest.get(i + 1).ok_or("--cmd needs a value")?;
+                    let spec = rest.get(i + 1).filter(|value| !value.starts_with("--")).ok_or("--cmd needs a value")?;
                     let (id, params) = match spec.split_once('=') {
                         Some((id, p)) => {
                             (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| engine_error(format!("{id}: bad JSON params: {e}")))?)
