@@ -632,7 +632,8 @@ mod tests {
         let frame = |a: &mut WordApp, changed: bool, dragged: bool| {
             ctx.run_ui(egui::RawInput::default(), |ui| {
                 update_opacity_undo(ui, &mut a.session, 0, changed, dragged);
-            }).drop_without_applying_deltas();
+            })
+            .drop_without_applying_deltas();
         };
 
         // Keyboard/numeric edits are not part of a previous colour-selection step.
