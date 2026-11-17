@@ -30,7 +30,8 @@ fn substitutes(family: &str) -> &'static [&'static str] {
 
 /// Does `family` have substitutes of its own, picked by its name (a metric-compatible clone such
 /// as Liberation Serif for Times New Roman, or the same design under another name), rather than
-/// the generic lists any unknown font gets?
+/// the generic lists any unknown font gets? A name the [`SubstituteProvider`] has a list for
+/// counts whether or not any of its candidates is installed, as the built-in named lists do.
 pub fn has_named_substitutes(family: &str) -> bool {
     if family.contains(';') {
         return list_class(family).named;
@@ -641,9 +642,12 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     }
 
     // 2. None installed: fall back to an installed substitute for an entry in the list rather than generic Carlito.
-    // Try Thai substitutes before metric twins of later candidates:
+    // Try the application's and Thai substitutes before metric twins of later candidates:
     for &cand in &candidates {
         let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
+        if let Some(sub) = provided(cand).and_then(|list| list.iter().copied().find(|s| db.has_family(s))) {
+            return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
+        }
         if is_thai_family(base)
             && let Some(sub) = substitute(db, cand, base)
         {
@@ -862,6 +866,18 @@ mod tests {
         assert_eq!(resolve("Wc Provided Serif", false, false).face, resolve("Wc Missing Serif", false, false).face);
         assert_ne!(resolve("Wc Provided Serif", false, false).face, resolve("Wc Unknown Face", false, false).face);
         assert!(!has_named_substitutes("Wc Unknown Face"));
+        // A provided candidate comes before a later candidate's metric twin (`仿宋_GB2312;Arial`
+        // with FangSong installed but not Arial is FangSong, not Liberation Sans). Checked with a
+        // later candidate that is missing here while its twin is installed, if there is one.
+        let db = FontDb::global();
+        let twinned = ["Liberation Sans", "Arimo", "Arial", "Helvetica", "Liberation Serif", "Tinos", "Times New Roman", "Carlito", "Calibri"]
+            .into_iter()
+            .find(|f| !db.has_family(f) && metric_twins(f).any(|t| db.has_family(t)));
+        if let Some(later) = twinned {
+            let list = format!("Wc Provided Face;{later}");
+            let r = resolve(&list, false, false);
+            assert!(r.substituted && r.face == inter, "{list}");
+        }
     }
 
     #[test]
