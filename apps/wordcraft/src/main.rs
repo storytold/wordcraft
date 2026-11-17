@@ -52,6 +52,50 @@ struct App(
     #[cfg(target_os = "macos")] Option<std::rc::Rc<font_panel::FontPanel>>,
 );
 
+/// The selection's font, as the ribbon's Font group shows it.
+#[cfg(target_os = "macos")]
+fn selection_face(app: &mut WordApp) -> font_panel::Face {
+    let st = app.session.run("format.state", &serde_json::json!({})).unwrap_or_default();
+    font_panel::Face {
+        family: st["font"].as_str().unwrap_or("").into(),
+        size: st["size"].as_f64().unwrap_or(12.0),
+        bold: st["bold"] == true,
+        italic: st["italic"] == true,
+    }
+}
+
+/// Formats the selection with what the user changed in the font panel, as the ribbon's Font group
+/// and the Font dialog do.
+#[cfg(target_os = "macos")]
+fn apply_font_pick(app: &mut WordApp, pick: &font_panel::Pick) {
+    use font_panel::Line;
+    use serde_json::json;
+    let family = pick.family.as_ref().map(|f| app.previews.font_stored(f));
+    let underline = |line: Line| match line {
+        Line::None => json!({"value": false}),
+        Line::Single => json!({"style": "single"}),
+        Line::Double => json!({"style": "double"}),
+    };
+    // Single and double strikethrough are separate properties; one is set, the other cleared.
+    let strike = |line: Line| [("format.strikethrough", line == Line::Single), ("format.doubleStrikethrough", line == Line::Double)];
+    let runs = [
+        family.map(|name| ("format.font", json!({"name": name}))),
+        pick.size.map(|size| ("format.size", json!({"size": size}))),
+        pick.bold.map(|value| ("format.bold", json!({"value": value}))),
+        pick.italic.map(|value| ("format.italic", json!({"value": value}))),
+        pick.color.map(|[r, g, b]| ("format.color", json!({"color": format!("{r:02X}{g:02X}{b:02X}")}))),
+        pick.underline.map(|line| ("format.underline", underline(line))),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(pick.strike.into_iter().flat_map(strike).map(|(id, value)| (id, json!({"value": value}))));
+    for (id, params) in runs {
+        if let Err(e) = app.run(id, params) {
+            log::warn!("font panel: {id}: {e}");
+        }
+    }
+}
+
 impl eframe::App for App {
     /// Advances one desktop frame: polls Finder events on macOS, runs the app and its file dialogs,
     /// fits or rescues the window and maximizes it after opening, then gates a close or quit request
@@ -62,9 +106,9 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.6 {
             for pick in panel.picks() {
-                font_panel::apply(&mut self.0, &pick);
+                apply_font_pick(&mut self.0, &pick);
             }
-            panel.follow(&mut self.0);
+            panel.follow(|| selection_face(&mut self.0));
         }
         self.0.logic(ctx);
         self.3.show(frame);
@@ -631,10 +675,15 @@ fn main() -> eframe::Result {
             session.system_region = region;
             let mut app = WordApp::new(session, services(file_dialog, cancel_file_dialog, &cc.egui_ctx));
             #[cfg(target_os = "macos")]
-            let fonts = objc2::MainThreadMarker::new().map(|mtm| std::rc::Rc::new(font_panel::FontPanel::new(mtm)));
+            let fonts = objc2::MainThreadMarker::new().map(|mtm| {
+                let wake = cc.egui_ctx.clone();
+                std::rc::Rc::new(font_panel::FontPanel::new(mtm, move || wake.request_repaint()))
+            });
             #[cfg(target_os = "macos")]
             if let Some(panel) = fonts.clone() {
-                app.services.show_fonts = Some(Box::new(move |family, size, bold, italic| panel.show(family, size, bold, italic)));
+                app.services.show_fonts = Some(Box::new(move |family, size, bold, italic| {
+                    panel.show(font_panel::Face { family: family.into(), size, bold, italic });
+                }));
             }
             app.set_startup_update_check(true);
             load_prefs(&mut app);
@@ -872,5 +921,27 @@ mod prefs_tests {
         assert!(write_prefs(&path, b"newer").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod font_pick_tests {
+    use super::*;
+    use font_panel::{Line, Pick};
+
+    #[test]
+    fn a_pick_formats_with_only_what_changed() {
+        use wordcraft_doc::{Rgb, TextColor, props::Underline};
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let before = selection_face(&mut app);
+        let pick = Pick { color: Some([0x12, 0xAB, 0xEF]), underline: Some(Line::Double), strike: Some(Line::Double), ..Pick::default() };
+        apply_font_pick(&mut app, &pick);
+        let c = app.session.caret_props();
+        assert_eq!(c.color, Some(TextColor::Rgb(Rgb(0x12, 0xAB, 0xEF))));
+        assert_eq!((c.underline, c.strike, c.double_strike), (Some(Underline::Double), Some(false), Some(true)));
+        assert_eq!(selection_face(&mut app), before, "family, size, bold and italic are untouched");
+        apply_font_pick(&mut app, &Pick { underline: Some(Line::None), strike: Some(Line::Single), ..Pick::default() });
+        let c = app.session.caret_props();
+        assert_eq!((c.underline, c.strike, c.double_strike), (Some(Underline::None), Some(true), Some(false)));
     }
 }
