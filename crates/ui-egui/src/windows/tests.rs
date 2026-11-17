@@ -790,3 +790,23 @@ fn secondary_viewport_syncs_touchpad_scroll_speed_without_control_input() {
     assert_eq!(touchpad, crate::scroll::ScrollSpeed::Fast);
     assert_eq!(wheel, crate::scroll::ScrollSpeed::Fast);
 }
+
+/// A composition that borrows a fallback face installs the fonts again; the faces another window
+/// borrowed stay in them, as a full install keeps them. That window does not ask for its face
+/// again, so a dropped one would stay missing there.
+#[test]
+fn a_composition_keeps_the_faces_another_window_borrowed() {
+    let ctx = backend();
+    let mut a = app("A");
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+    let face = wordcraft_fonts::FontDb::global().face("Source Sans 3", "Regular");
+    let (id, name) = (face.id(), format!("fallback {} {} {}", face.family, face.style, face.id()));
+    let other = a.windows.open.iter_mut().find_map(|w| w.ui.as_mut()).expect("the other window's state");
+    other.canvas.ime_faces.push(face);
+    assert!(!a.canvas.ime_faces.iter().any(|f| f.id() == id), "this window has not borrowed it");
+    a.install_ui_fonts_with_ime_faces(&ctx);
+    ctx.run_ui(RawInput::default(), |_| {}).drop_without_applying_deltas();
+    assert!(ctx.fonts(|f| f.definitions().font_data.contains_key(&name)), "the other window's face is still installed");
+}

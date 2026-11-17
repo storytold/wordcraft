@@ -535,8 +535,9 @@ fn your_view(app: &mut WordApp, index: &[Pack], installed: &[packs::Installed]) 
 /// File › Options › Language › Your languages: the languages in use and installed, each with
 /// where its proofing comes from and what can be done, and Add a language….
 pub(crate) fn your_languages_section(app: &mut WordApp, ui: &mut Ui) {
-    // Language names include Arabic and other scripts; ask for a system Arabic face when none is embedded.
+    // Language names include Arabic, Hebrew and other scripts; ask for those faces when none is embedded.
     app.want_system_arabic = true;
+    app.want_system_hebrew = true;
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Your languages")).font(semibold(15.0)));
     ui.add_space(2.0);
@@ -743,8 +744,9 @@ pub(crate) fn add_language_window(app: &mut WordApp, ctx: &egui::Context) {
     if !app.packs_rt.picker {
         return;
     }
-    // Pack names include Arabic and other scripts.
+    // Pack names include Arabic, Hebrew and other scripts.
     app.want_system_arabic = true;
+    app.want_system_hebrew = true;
     let t = Tokens::get(ctx);
     let mut open = true;
     egui::Window::new(tl!("Add a language"))
@@ -1299,6 +1301,21 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(packs::is_installed("pl"));
+    }
+
+    /// Your languages lists every language's own name, including עברית, from an English interface.
+    #[test]
+    fn your_languages_in_english_asks_for_a_hebrew_face() {
+        crate::i18n::open_english_screen(super::your_languages_section);
+    }
+
+    /// Add a language lists pack names in their own scripts, including Hebrew, from an English interface.
+    #[test]
+    fn add_a_language_in_english_asks_for_a_hebrew_face() {
+        crate::i18n::open_english_screen(|app, ui| {
+            app.packs_rt.picker = true;
+            super::add_language_window(app, ui.ctx());
+        });
     }
 
     // ---- Options › Language: Your languages, Add a language (CP4.3) ----
