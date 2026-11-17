@@ -56,8 +56,8 @@ fn grip(app: &mut WordApp, ui: &Ui, layout: &DocLayout, zone: Rect, column: bool
     } else {
         ("ruler_row", tl!("Table Row Height"), egui::CursorIcon::ResizeRow)
     };
-    let r = ui.interact(zone, ui.id().with((name, i)), Sense::drag()).on_hover_cursor(cursor);
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, label));
+    let r = ui.interact(zone, ui.scope_id().with((name, i)), Sense::drag()).on_hover_cursor(cursor);
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Splitter, true, label));
     let r = if r.dragged() { r } else { r.on_hover_text(label) };
     if r.drag_started() {
         crate::table_resize::grab(app, layout, at.0, at.1, at.2);
@@ -103,7 +103,8 @@ pub(crate) fn columns(app: &mut WordApp, ui: &Ui, layout: &DocLayout, page: usiz
     }
     for (mid, w) in widths(app, ui.ctx(), layout, page) {
         let at = pos2(x0 + mid * scale, bar.center().y);
-        let text = painter.layout_no_wrap(wordcraft_geom::Unit::default().format(w), crate::theme::regular(9.5), t.text);
+        // In the File › Options unit, written the region's way (#5231), like the ruler's numbers.
+        let text = painter.layout_no_wrap(app.session.format_length(w), crate::theme::regular(9.5), t.text);
         painter.rect_filled(Rect::from_center_size(at, text.size() + vec2(4.0, 0.0)), 1.0, t.ruler);
         painter.galley(at - text.size() / 2.0, text, t.text);
     }

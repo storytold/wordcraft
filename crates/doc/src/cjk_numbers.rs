@@ -238,7 +238,7 @@ pub(crate) fn ideograph_zodiac_traditional(n: u32) -> String {
 
 /// The `n`th (1-based) item of a sequence, or decimal past its end.
 fn nth(set: &[char], n: u32) -> String {
-    n.checked_sub(1).and_then(|i| set.get(i as usize)).map(|c| c.to_string()).unwrap_or_else(|| n.to_string())
+    n.checked_sub(1).and_then(|i| set.get(i as usize)).map(ToString::to_string).unwrap_or_else(|| n.to_string())
 }
 
 /// Code points `first..` enclosing 1 to `count`, decimal beyond.
