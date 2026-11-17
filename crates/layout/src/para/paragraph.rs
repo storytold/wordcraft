@@ -887,16 +887,23 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
 /// before an opening quote (“ ‘) and after a closing one (” ’). Kinsoku then removes those a line
 /// may not take (a closing mark starting the next line).
 fn curly_quote_breaks(text: &str) -> Vec<usize> {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let east_asian = |k: Option<&(usize, char)>| k.is_some_and(|(_, c)| super::grid::is_east_asian(*c));
     let mut out = Vec::new();
-    for (k, &(i, c)) in chars.iter().enumerate() {
-        let (before, after) = (k.checked_sub(1).and_then(|j| chars.get(j)), chars.get(k + 1));
+    if !text.contains(['“', '‘', '”', '’']) {
+        return out;
+    }
+    // Halfwidth katakana counts as East Asian here too, as it does for kinsoku, though the
+    // character grid doesn't place it on its pitch.
+    let east_asian = |c: Option<char>| c.is_some_and(|c| super::grid::is_east_asian(c) || crate::kinsoku::is_east_asian(c));
+    let mut before = None;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let after = chars.peek().map(|&(_, c)| c);
         match c {
-            '“' | '‘' if k > 0 && east_asian(before) && east_asian(after) => out.push(i),
+            '“' | '‘' if east_asian(before) && east_asian(after) => out.push(i),
             '”' | '’' if east_asian(before) && east_asian(after) => out.push(i + c.len_utf8()),
             _ => {}
         }
+        before = Some(c);
     }
     out
 }
