@@ -5412,6 +5412,36 @@ reviewer. Otherwise nothing is outstanding in the branch: the PR answers
 `MERGEABLE` with an empty `reviewDecision` and needs the re-review, then a
 maintainer's approve and merge.
 
+### 5.58 The branch takes origin/main and the PR is MERGEABLE again (2026-11-17 13:08Z)
+
+**The conflict.** The PR answered `CONFLICTING`, 80 commits behind `origin/main`
+`1a56d041` (craft-libs main at `453b0da782`). `git merge-tree` named exactly two
+files, `Cargo.lock` and `apps/wordcraft-web/Cargo.toml`; the merge produced the
+same two and took the rest automatically (§5.53's files included).
+
+- `apps/wordcraft-web/Cargo.toml`: `craft-web-api` takes main's craft-libs
+  revision `453b0da782`; `craft-web-host` keeps `7666e2b1`, the ADR-0016 §3 pin —
+  `453b0da782`'s `crates/web-host` has no `session`, `session-state`, `presence`,
+  `commit` or `committed` (checked in the craft-libs checkout).
+- `Cargo.lock`: main's graph plus the collaboration crates (axum, JSON Web Token
+  and their trees), both `matchit` and `maybe-owned` kept; the two `craft-web-*`
+  sources follow the manifest. `cargo metadata --locked` reads it back rc 0.
+
+**Gate** on host `agents`, merged working tree (`ae1542cc`): `metadata --locked`
+rc 0, `fmt --all -- --check` rc 0, `clippy --workspace --exclude wordcraft-web
+--exclude wordcraft-collab-web --all-targets -- -D warnings` rc 0,
+`test --lib --tests` with `CRAFT_I18N_DIR`/`CRAFT_FONTS_DIR` **5650 passed, 1
+failed, 10 ignored**, `check --target wasm32-unknown-unknown` for the two web
+crates rc 0. The red is `wordcraft-pdf
+tests::chart_and_equation_text_keep_their_pdf_bytes` (the math-italic `𝑥`
+ToUnicode pair is absent); it reproduces on a clean `origin/main` `1a56d041`
+worktree in 0.02 s, so it is main's after the craft-libs bump, not the merge.
+Without those two env dirs the run also names the §5.50 hyphenation red.
+
+**Delivered.** `ae1542cc` is pushed to `fork/feature/realtime-collaboration`; the
+PR head answers `MERGEABLE` (`mergeStateStatus` `BLOCKED`, no review decision).
+Left: the re-review, the CI deferral thread, then a maintainer's approve/merge.
+
 ## 6. Where things live
 
 | Concern | File |
