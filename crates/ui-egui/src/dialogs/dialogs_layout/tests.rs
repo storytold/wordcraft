@@ -93,6 +93,72 @@ fn page_numbers_dialog_sets_the_format_and_start() {
     assert_eq!((f.section, f.format.as_str(), f.start), (1, "lowerRoman", 9));
 }
 
+/// #4911: zero is an explicit start, distinct from continuing the previous section.
+#[test]
+fn page_numbers_dialog_preserves_zero_and_continue() {
+    let mut a = app();
+    a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+    assert!(f.cont);
+    assert_eq!(f.start, 1, "unspecified numbering still defaults to one");
+    for start in [0, 1, 100_000] {
+        a.run("layout.pageNumberFormat", json!({"start": start})).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(start));
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+        assert!(!f.cont);
+        assert_eq!(f.start, start);
+        assert_eq!(f.params()["start"], json!(start));
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(start));
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+        assert!(!f.cont);
+        assert_eq!(f.start, start, "reopening preserves the explicit start");
+        f.cont = true;
+        assert_eq!(f.params()["start"], serde_json::Value::Null);
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, None);
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+        assert!(f.cont);
+        assert_eq!(f.start, 1, "continuing does not become an explicit zero");
+    }
+}
+
+/// #4911: typing zero in Start at and pressing OK restarts numbering from zero.
+#[test]
+fn page_numbers_dialog_accepts_typed_zero() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut a = app();
+    a.run("ui.language", json!({"value": "en"})).unwrap();
+    a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    // The dialog's existing numeric input and format picker lack accessible names.
+    let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Start at:").click();
+    h.run_steps(2);
+    h.get_by_role(Role::SpinButton).click();
+    h.run_steps(2);
+    h.get_by_role(Role::SpinButton).type_text("0");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc.last_section.page_num_start, None, "typing does not apply before OK");
+
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    assert_eq!(h.state().session.doc.last_section.page_num_start, Some(0));
+}
+
 /// #755: the Line Numbers "From text" distance and the Hyphenation zone follow the
 /// File › Options unit (centimeters here); `params` sends points whatever the unit.
 #[test]
