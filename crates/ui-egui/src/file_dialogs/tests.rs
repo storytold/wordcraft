@@ -40,7 +40,6 @@ fn legacy_word_bytes() -> Vec<u8> {
 
 /// A minimal valid EPUB 3 package: one chapter whose body is `chapter_text`.
 fn minimal_epub_bytes(chapter_text: &str) -> Vec<u8> {
-    use std::io::{Cursor, Write};
     let container = br#"<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
 <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
@@ -52,13 +51,11 @@ fn minimal_epub_bytes(chapter_text: &str) -> Vec<u8> {
 <spine><itemref idref="c1"/></spine>
 </package>"#;
     let chapter = format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{chapter_text}</p></body></html>"#);
-    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("META-INF/container.xml", &container[..]), ("OEBPS/content.opf", &opf[..]), ("OEBPS/chapter1.xhtml", chapter.as_bytes())] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data).unwrap();
+        z.add(name, data, craft_zip::Compression::Deflated).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 /// #3117: Save on an imported EPUB asks for DOCX, preserving the import on Cancel (the same
