@@ -23,6 +23,7 @@ mod graphics;
 mod logging;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod portal_save;
+mod prefs_merge;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -222,31 +223,44 @@ fn user_dict_path() -> Option<std::path::PathBuf> {
     wordcraft_control_key::settings_dir().map(|b| b.join(wordcraft_engine::Session::USER_DICT_FILE))
 }
 
-fn load_user_dictionary(app: &mut WordApp) {
-    if !prefs_enabled() {
-        return;
-    }
-    if let Some(p) = user_dict_path() {
-        wordcraft_proof::load_user_dictionary(&p);
-        app.session.user_dict_path = Some(p);
-    }
-}
-
 /// Runs without preferences (`WORDCRAFT_NO_PREFS`, agents' test runs) neither read nor write them.
 fn prefs_enabled() -> bool {
     std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
 }
 
+/// The preferences as this process last loaded or saved them, which `save_prefs` compares with
+/// to write only what this process changed since (#3773, see `prefs_merge`).
+static LOADED_PREFS: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+
+/// Apply the saved preferences (`ui.json`) and the user dictionary to `app`, and remember the
+/// result for `save_prefs`. Runs without preferences neither read nor keep them.
 fn load_prefs(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
     }
-    if let Some(p) = prefs_path()
-        && let Ok(bytes) = std::fs::read(&p)
+    let loaded = load_prefs_from(app, prefs_path().as_deref(), user_dict_path());
+    if let Ok(mut slot) = LOADED_PREFS.lock() {
+        *slot = loaded;
+    }
+}
+
+/// Apply the preferences saved at `prefs` to `app`, then load the user dictionary at `dict`
+/// (`custom-dictionary.txt`, #40), and give back the preferences as `prefs()` does after both:
+/// the words only the dictionary file has are part of what was loaded, so a word another process
+/// removes from `ui.json` isn't written back as one added here (#3773).
+fn load_prefs_from(app: &mut WordApp, prefs: Option<&std::path::Path>, dict: Option<std::path::PathBuf>) -> Option<serde_json::Value> {
+    if let Some(p) = prefs
+        && let Ok(bytes) = std::fs::read(p)
         && let Some(ui) = UiState::from_json(&bytes)
     {
         app.apply_prefs(ui);
     }
+    if let Some(p) = dict {
+        wordcraft_proof::load_user_dictionary(&p);
+        app.session.user_dict_path = Some(p);
+    }
+    // As `prefs()` gives them back, so a setting nobody touched compares equal at exit.
+    serde_json::to_value(app.prefs()).ok()
 }
 
 /// Fonts the user added (#582) live in `fonts` in the settings folder: load them, and store fonts
@@ -332,6 +346,8 @@ fn x11_libraries() -> Result<(), String> {
     if missing.is_empty() { Ok(()) } else { Err(missing.join("; ")) }
 }
 
+/// Write `app`'s preferences to `ui.json`, merged with what other processes saved since this one
+/// loaded it (`merged_prefs`).
 fn save_prefs(app: &WordApp) {
     if let Err(e) = try_save_prefs(app) {
         log::warn!("preferences: {e}");
@@ -348,9 +364,77 @@ fn try_save_prefs(app: &WordApp) -> Result<bool, String> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
-    let bytes = serde_json::to_vec_pretty(&app.prefs()).map_err(|e| format!("cannot serialize: {e}"))?;
-    write_prefs(&p, &bytes).map_err(|e| format!("cannot save {}: {e}", p.display()))?;
+    let ours = serde_json::to_value(app.prefs()).map_err(|e| format!("cannot serialize: {e}"))?;
+    let mut base = LOADED_PREFS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    save_merged(&p, &mut base, ours)?;
     Ok(true)
+}
+
+/// Writes `ours` to `path`, merged with what other WordCraft processes saved there since this one
+/// loaded or saved `base` (`merged_prefs`), and makes `ours` the new `base`: a setting changed here
+/// before this save and by another process after it then takes the other's value at the next save.
+/// Holds `lock_prefs` from the read to the rename.
+fn save_merged(path: &std::path::Path, base: &mut Option<serde_json::Value>, ours: serde_json::Value) -> Result<(), String> {
+    let _lock = lock_prefs(path);
+    let merged = merged_prefs(path, base.as_ref(), ours.clone());
+    let bytes = serde_json::to_vec_pretty(&merged).map_err(|e| format!("cannot serialize: {e}"))?;
+    write_prefs(path, &bytes).map_err(|e| format!("cannot save {}: {e}", path.display()))?;
+    *base = Some(ours);
+    Ok(())
+}
+
+/// `ours` with what other WordCraft processes saved to `path` since this one loaded or saved
+/// `base`, for the settings this one left alone (#3773, see `prefs_merge`). `ours` as it is when
+/// there's no `base`, or the file is missing or isn't preferences now.
+fn merged_prefs(path: &std::path::Path, base: Option<&serde_json::Value>, ours: serde_json::Value) -> serde_json::Value {
+    let Some(base) = base else { return ours };
+    let disk = match std::fs::read(path) {
+        Ok(bytes) => prefs_merge::as_read(&bytes),
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::debug!("preferences: cannot read {} to merge, saving this process's: {e}", path.display());
+            }
+            return ours;
+        }
+    };
+    match disk {
+        Some(disk) => prefs_merge::merge(base, ours, &disk),
+        None => {
+            log::debug!("preferences: {} isn't preferences, saving this process's", path.display());
+            ours
+        }
+    }
+}
+
+/// How long a save waits for another process's save to finish before going ahead anyway: a save
+/// takes milliseconds, and a process stuck holding the lock mustn't stop this one from saving.
+const PREFS_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// An advisory lock beside `path` (`.ui.json.lock`), held while it is returned, so that two
+/// processes saving at once (logging out closes every window together) take turns at reading,
+/// merging and replacing `ui.json` instead of one losing the other's changes. `None` (save
+/// unlocked) when the lock file can't be opened or the lock isn't free within [`PREFS_LOCK_WAIT`].
+fn lock_prefs(path: &std::path::Path) -> Option<std::fs::File> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "ui.json".into());
+    let lock = path.with_file_name(format!(".{name}.lock"));
+    let file = match std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock) {
+        Ok(f) => f,
+        Err(e) => {
+            log::debug!("preferences: cannot open {}, saving without it: {e}", lock.display());
+            return None;
+        }
+    };
+    let start = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < PREFS_LOCK_WAIT => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(e) => {
+                log::warn!("preferences: {} is held, saving without it: {e}", lock.display());
+                return None;
+            }
+        }
+    }
 }
 
 /// Writes `bytes` to a sibling temporary file and renames it over `path`, so a failed or
@@ -626,7 +710,6 @@ fn main() -> eframe::Result {
             if updates_unsafe {
                 app.disable_self_update();
             }
-            load_user_dictionary(&mut app);
             // Language packs from the suite's font store; an Install click is the person's own.
             wordcraft_engine::packs::use_font_store(true);
             // A region chosen in File › Options replaces the system's for the first blank
@@ -839,7 +922,72 @@ mod launch_arg_tests {
 
 #[cfg(test)]
 mod prefs_tests {
-    use super::write_prefs;
+    use serde_json::{Value, json};
+    use wordcraft_ui_egui::{UiState, theme::Appearance};
+
+    use super::{load_prefs_from, lock_prefs, prefs_merge, save_merged, write_prefs};
+
+    /// The preferences saved with `theme` (every other setting at its default).
+    fn with_theme(theme: &str) -> Value {
+        prefs_merge::as_read(&serde_json::to_vec(&json!({"theme": theme})).unwrap()).unwrap()
+    }
+
+    /// The theme the next process loads from `path`.
+    fn saved_theme(path: &std::path::Path) -> Appearance {
+        UiState::from_json(&std::fs::read(path).unwrap()).unwrap().theme
+    }
+
+    #[test]
+    fn a_setting_changed_by_another_process_after_a_save_here_keeps_its_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui.json");
+        std::fs::write(&path, serde_json::to_vec(&with_theme("light")).unwrap()).unwrap();
+        // A loads Light, switches to Dark and saves before exiting (taking a document off the
+        // recent list does).
+        let mut a = Some(with_theme("light"));
+        save_merged(&path, &mut a, with_theme("dark")).unwrap();
+        assert_eq!(saved_theme(&path), Appearance::Dark);
+        // B starts, loads Dark, switches to Light and exits.
+        save_merged(&path, &mut Some(with_theme("dark")), with_theme("light")).unwrap();
+        // A exits without touching the theme since its save: B's choice, made later, stays.
+        save_merged(&path, &mut a, with_theme("dark")).unwrap();
+        assert_eq!(saved_theme(&path), Appearance::Light);
+    }
+
+    #[test]
+    fn the_loaded_preferences_include_the_words_of_the_dictionary_file() {
+        // A word only `custom-dictionary.txt` has is loaded, not added here: if another process
+        // removes it from `ui.json`, this one mustn't write it back.
+        let dir = tempfile::tempdir().unwrap();
+        let (prefs, dict) = (dir.path().join("ui.json"), dir.path().join("custom-dictionary.txt"));
+        std::fs::write(&prefs, br#"{"dictionary": ["zqxinjson"]}"#).unwrap();
+        std::fs::write(&dict, "zqxinfile\n").unwrap();
+        let mut app = wordcraft_ui_egui::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let loaded = load_prefs_from(&mut app, Some(&prefs), Some(dict)).unwrap();
+        let words = loaded["dictionary"].as_array().unwrap();
+        for word in ["zqxinjson", "zqxinfile"] {
+            assert!(words.contains(&json!(word)), "{word}: {words:?}");
+        }
+        wordcraft_engine::proof::remove_word("zqxinjson");
+        wordcraft_engine::proof::remove_word("zqxinfile");
+    }
+
+    #[test]
+    fn a_save_waits_for_another_process_saving_at_the_same_moment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui.json");
+        // Another process is between reading and replacing `ui.json`.
+        let held = lock_prefs(&path).expect("the lock is free");
+        let saver = {
+            let path = path.clone();
+            std::thread::spawn(move || save_merged(&path, &mut None, with_theme("dark")))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!path.exists(), "saved while another process held the lock");
+        drop(held);
+        saver.join().unwrap().unwrap();
+        assert_eq!(saved_theme(&path), Appearance::Dark);
+    }
 
     #[test]
     fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {
