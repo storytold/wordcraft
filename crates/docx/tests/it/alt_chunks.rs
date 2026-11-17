@@ -1,8 +1,6 @@
 //! Alternative format chunks (`w:altChunk`, ECMA-376 §17.17.2.1): content in another format that
 //! is brought in where the chunk stands. All markup here is synthetic.
 
-use std::io::Write;
-
 use wordcraft_doc::{Block, Document, InlineObject, StoryRef};
 use wordcraft_docx::{AltChunk, ReadOptions, read, read_with};
 
@@ -46,12 +44,11 @@ fn package_styled(body: &str, chunk: Option<(&str, &str, &[u8])>, styles: Option
     }
     types.push_str(r#"<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#);
     files.push(("[Content_Types].xml".into(), types.into_bytes()));
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in files {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(&bytes).unwrap();
+        zw.add(&name, &bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 const CHUNK: &str = r#"<w:altChunk r:id="rIdC"/>"#;
@@ -144,12 +141,11 @@ fn package_with_stories(body: &str, stories: &[(&str, &str, String)], chunk: Opt
     if let Some(c) = chunk {
         files.push(("word/afchunk.docx".into(), c.to_vec()));
     }
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in files {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(&bytes).unwrap();
+        zw.add(&name, &bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 /// A paragraph `text` that comment `id` (in the file) is anchored around.
@@ -395,17 +391,16 @@ fn inner_with_dropped_pictures(n: usize, external: bool) -> Vec<u8> {
         (0..n).map(image).collect::<String>()
     );
     let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in [
         ("[Content_Types].xml", types.as_bytes()),
         ("_rels/.rels", ROOT_RELS.as_bytes()),
         ("word/document.xml", doc.as_bytes()),
         ("word/_rels/document.xml.rels", rels.as_bytes()),
     ] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 /// A picture the chunk's own reader dropped is the file's too (#6005), named by the chunk part.

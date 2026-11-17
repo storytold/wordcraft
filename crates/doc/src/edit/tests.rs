@@ -326,7 +326,7 @@ fn fan_out(story: Vec<Arc<Block>>, refs: usize) -> Fragment {
     }
     let mut parts = BTreeMap::new();
     parts.insert(1, crate::Part { kind: PartKind::TextBox, blocks: story, body: Default::default() });
-    Fragment { blocks: vec![Block::Para(p)], parts }
+    Fragment { blocks: vec![Block::Para(p)], parts, ..Default::default() }
 }
 
 #[test]
@@ -910,4 +910,116 @@ fn an_adopted_notes_text_box_gets_a_story_of_its_own() {
     let part = &ours.parts[&story];
     assert_eq!(part.kind, PartKind::TextBox);
     assert!(matches!(part.blocks.first().map(|b| &**b), Some(Block::Para(p)) if p.text == "their box"));
+}
+
+#[test]
+fn media_of_blocks_collects_graphic_and_group_images() {
+    let mut d = doc(&["test"]);
+    d.media.insert("graphic_img.png".into(), Arc::new(vec![1, 2, 3]));
+    d.media.insert("group_img.png".into(), Arc::new(vec![4, 5, 6]));
+
+    let graphic = crate::graphic::Graphic {
+        kind: crate::graphic::GraphicKind::Diagram,
+        items: vec![crate::graphic::GraphicItem::Image { rect: [0.0, 0.0, 10.0, 10.0], media: "graphic_img.png".into() }],
+        ..Default::default()
+    };
+    let group = InlineObject::Group {
+        w: 50.0,
+        h: 50.0,
+        float: Default::default(),
+        ch_w: 50.0,
+        ch_h: 50.0,
+        canvas: None,
+        children: vec![crate::para::GroupChild {
+            x: 0.0,
+            y: 0.0,
+            obj: InlineObject::Image {
+                media: "group_img.png".into(),
+                w: 10.0,
+                h: 10.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+        }],
+    };
+    let mut p = Paragraph::with_text(&crate::para::OBJ.to_string(), CharProps::default());
+    p.objects.push(InlineObject::Graphic { w: 100.0, h: 100.0, float: Default::default(), alt: String::new(), graphic: Arc::new(graphic) });
+    p.objects.push(group);
+    let blocks = vec![Block::Para(p)];
+    let collected = d.media_of_blocks(&blocks);
+    assert!(collected.contains_key("graphic_img.png"));
+    assert!(collected.contains_key("group_img.png"));
+}
+
+#[test]
+fn insert_fragment_remaps_conflicting_media_keys() {
+    let mut d = doc(&["destination"]);
+    d.media.insert("image1.png".into(), Arc::new(vec![1, 1, 1]));
+
+    let mut frag_media = std::collections::BTreeMap::new();
+    frag_media.insert("image1.png".into(), Arc::new(vec![2, 2, 2]));
+
+    let mut p = Paragraph::with_text(&crate::para::OBJ.to_string(), CharProps::default());
+    p.objects.push(InlineObject::Image {
+        media: "image1.png".into(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    let frag = Fragment { blocks: vec![Block::Para(p)], parts: Default::default(), media: frag_media };
+
+    let pos = Pos::body(0, 0);
+    d.insert_fragment(&pos, &frag).unwrap();
+    // The original destination media is preserved.
+    assert_eq!(d.media["image1.png"].as_slice(), &[1, 1, 1]);
+    // A second media key was created for the conflicting fragment media.
+    assert_eq!(d.media.len(), 2);
+    let other_key = d.media.keys().find(|k| k.as_str() != "image1.png").unwrap();
+    assert_eq!(d.media[other_key].as_slice(), &[2, 2, 2]);
+    // The inserted paragraph references the remapped key.
+    let para = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    let remapped = para.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
+    assert_eq!(remapped, other_key);
+}
+
+/// #6788: splitting a paragraph after its first letters leaves the drop cap on the first
+/// paragraph only; the new one (also when it is empty) is plain. A split at offset 0 is unchanged.
+#[test]
+fn split_paragraph_keeps_the_drop_cap_on_the_first_paragraph_only() {
+    let drop_cap = |d: &Document, i: usize| {
+        let p = d.body.get(i).and_then(|b| b.as_para()).map(|p| p.props.clone()).unwrap_or_default();
+        (p.drop_cap, p.drop_cap_margin, p.drop_cap_distance, p.drop_cap_font)
+    };
+    let capped = |text: &str| {
+        let mut d = doc(&[text]);
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(0)) {
+            p.props.drop_cap = Some(3);
+            p.props.drop_cap_margin = Some(true);
+            p.props.drop_cap_distance = Some(4.0);
+            p.props.drop_cap_font = Some("Serif".into());
+        }
+        d
+    };
+    let cap = (Some(3), Some(true), Some(4.0), Some("Serif".to_string()));
+    let plain = (None, None, None, None);
+
+    let mut d = capped("Sugar and knowledge");
+    d.split_paragraph(&Pos::body(0, 10)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), plain.clone()));
+
+    let mut d = capped("Sugar");
+    d.split_paragraph(&Pos::body(0, 5)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), plain.clone()));
+
+    // At offset 0 nothing changes: both paragraphs keep the properties, as before.
+    let mut d = capped("Sugar");
+    d.split_paragraph(&Pos::body(0, 0)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), cap));
 }
