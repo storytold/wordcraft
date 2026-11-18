@@ -1828,6 +1828,42 @@ fn links_language_and_revision_marks_of_the_lead_in_are_not_repeated() {
     assert_eq!((c.bold, c.ins, c.fmt_change.is_none()), (Some(true), None, true));
 }
 
+/// A list in a table cell repeats the lead-in as one in the body does, and an apostrophe inside a
+/// word is the punctuation that ends a lead-in.
+#[test]
+fn a_list_item_in_a_table_cell_and_an_apostrophe_lead_in() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "+--------+\n* Label: explanation");
+    assert!(s.sel.focus.path.cell().is_some(), "the caret is in the cell");
+    run(&mut s, "select.text", json!({"text": "Label"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "caret.end", json!({}));
+    typ(&mut s, "\nNext: more");
+    let Some(wordcraft_doc::Block::Table(t)) = s.doc.body.first().map(|b| &**b) else { panic!("no table: {:?}", paras(&s)) };
+    let next = t.rows[0].cells[0].blocks.get(1).and_then(|b| b.as_para()).unwrap_or_else(|| panic!("no second item"));
+    assert_eq!(next.text, "Next: more");
+    assert_eq!((next.props_of_char(0).bold, next.props_of_char(6).bold), (Some(true), None));
+
+    // AutoCorrect may make the apostrophe a typographic one; either is punctuation.
+    let apostrophe_end = |s: &Session, block: usize| {
+        let text = s.doc.para_at(&Pos::body(block, 0)).map(|p| p.text.clone()).unwrap_or_default();
+        text.char_indices()
+            .find(|(_, c)| matches!(c, '\'' | '\u{2019}'))
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or_else(|| panic!("no apostrophe in {text:?}"))
+    };
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Don't do this");
+    let text = s.doc.para_at(&Pos::body(0, 0)).map(|p| p.text.clone()).unwrap_or_default();
+    let lead = apostrophe_end(&s, 0);
+    format_then_end(&mut s, &text[..lead], "format.bold", json!({}), 0);
+    typ(&mut s, "\nCan't: stop");
+    // "Can'" is the lead-in: the apostrophe ends it.
+    let cut = apostrophe_end(&s, 1);
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 2).bold), (Some(true), Some(true)));
+    assert_eq!(char_at(&s, 1, cut).bold, None);
+}
+
 #[test]
 fn an_item_without_punctuation_is_all_lead_in() {
     // With no punctuation, the whole item is the lead-in: bold on its first word only is not on
