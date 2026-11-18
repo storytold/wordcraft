@@ -616,8 +616,26 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
         }
         egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) => {
             if text.len() <= MAX_IME_PREEDIT_BYTES {
+                // On Windows egui-winit replaces a `0..0` cursor range with `None` (a workaround
+                // for the Korean IME reporting the cursor at the start by mistake). With the
+                // pre-edit unchanged and a cursor we were already tracking, that `None` means
+                // the caret reached the *start* of the composition: `preedit_cursor_chars`
+                // would otherwise fall back to its end, jumping from before the first letter to
+                // after the last one, then sticking there until a right press reports a range
+                // again (#6916). A composition that never reported a cursor keeps that fallback:
+                // winit says no range means no caret hint, and the end is the usual position.
+                let range = match active_range_chars {
+                    Some(r) => Some(r),
+                    None if !text.is_empty()
+                        && app.canvas.ime_preedit.as_str() == text.as_str()
+                        && app.canvas.ime_preedit_range.is_some() =>
+                    {
+                        Some(0..0)
+                    }
+                    None => None,
+                };
                 app.canvas.ime_preedit = text;
-                app.canvas.ime_preedit_range = active_range_chars;
+                app.canvas.ime_preedit_range = range;
             } else {
                 log::warn!("ignoring an IME pre-edit of {} bytes", text.len());
                 app.canvas.ime_preedit.clear();

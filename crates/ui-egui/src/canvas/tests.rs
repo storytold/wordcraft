@@ -383,8 +383,10 @@ fn stale_platform_events_after_a_click_are_neither_painted_nor_committed() {
 #[test]
 fn a_commit_in_the_press_batch_is_discarded_with_the_composition() {
     let (mut h, at) = composing_harness();
-    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
-    h.event(primary_button(at, true));
+    // `Harness::event` gives every queued event its own frame; a real raw input batch can hold
+    // both. Push them straight into the next frame's input so they really share a batch.
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.input_mut().events.push(primary_button(at, true));
     h.step();
     h.event(primary_button(at, false));
     h.step();
@@ -397,9 +399,10 @@ fn a_commit_in_the_press_batch_is_discarded_with_the_composition() {
 #[test]
 fn only_one_commit_is_quarantined_after_a_press() {
     let (mut h, at) = composing_harness();
-    h.event(primary_button(at, true));
-    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
-    h.event(egui::Event::Ime(egui::ImeEvent::Commit("あ".into())));
+    // One raw batch, not three frames: `Harness::event` would give each event its own frame.
+    h.input_mut().events.push(primary_button(at, true));
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Commit("あ".into())));
     h.step();
     h.event(primary_button(at, false));
     h.step();
@@ -4739,8 +4742,8 @@ fn the_ime_fixture_draws_kana_without_a_japanese_font() {
 }
 
 /// While an input method composes, the caret and the candidate window sit at its cursor inside
-/// the composition: the end of the range it reports, or the end of the text with no range. The
-/// range comes from the OS and is clamped, whatever it holds.
+/// the composition: the end of the range it reports, or the end of the text when it never reports
+/// a range. The range comes from the OS and is clamped, whatever it holds.
 #[test]
 fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -4770,9 +4773,10 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     };
     let before = compose(Some(0..0));
     assert_eq!(before, start, "a cursor at the composition's start is the caret before composing");
-    let end = compose(None);
     let mid = compose(Some(1..1));
+    let end = compose(Some(3..3));
     assert!(end > mid && mid > before, "the cursor moves through the composition: {before} {mid} {end}");
+    assert_eq!(compose(None), before, "Windows collapses 0..0 to None: the caret stays at the start");
     assert_eq!(compose(Some(0..99)), end, "a range past the text ends at its end");
     assert_eq!(compose(Some(std::ops::Range { start: 5, end: 1 })), mid, "a reversed range uses its end");
     assert_eq!(compose(Some(usize::MAX..usize::MAX)), end);
@@ -4780,6 +4784,52 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     h.step();
     assert_eq!(h.state().canvas.ime_preedit_range, None, "the commit clears the range");
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("にほん"));
+}
+
+/// #6916: egui-winit turns a Windows `0..0` cursor range into `None` (a Korean IME workaround).
+/// Moving left through a pinyin pre-edit used to jump from before the first letter to after the
+/// last one, then get stuck; moving right jumped back to the first letter. A composition that
+/// never reported a cursor still starts at its end.
+#[test]
+fn moving_left_inside_a_composition_stops_at_its_start() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "The"})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(kana_test_glyphs)
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    let ime_x = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.cursor_rect.min.x);
+    let start = ime_x(&h).expect("the canvas places the candidate window");
+    let mut compose = |text: &str, range: Option<std::ops::Range<usize>>| {
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: range }));
+        h.step();
+        h.step();
+        ime_x(&h).expect("the canvas places the candidate window")
+    };
+    let x4 = compose("abcd", Some(4..4));
+    let x3 = compose("abcd", Some(3..3));
+    let x2 = compose("abcd", Some(2..2));
+    let x1 = compose("abcd", Some(1..1));
+    assert!(x4 > x3 && x3 > x2 && x2 > x1 && x1 > start, "left presses walk the caret through the pre-edit: {start} {x1} {x2} {x3} {x4}");
+    // The fourth left press reaches 0, which Windows reports as no range at all.
+    assert_eq!(compose("abcd", None), start, "the caret sits before the first letter, not after the last");
+    assert_eq!(compose("abcd", None), start, "another left press leaves it at the start");
+    assert_eq!(compose("abcd", Some(1..1)), x1, "a right press moves it to the first letter again");
+    // A fresh composition with no cursor hint still puts the caret at its end.
+    let fresh = compose("xy", None);
+    assert!(fresh > start, "a composition that never reported a cursor keeps the end fallback: {start} {fresh}");
+    assert_eq!(h.state().canvas.ime_preedit_range, None);
 }
 
 /// The outgoing IME descriptor is built from settled, visible logical text. A pre-edit does
