@@ -106,8 +106,11 @@ pub enum Draw {
         corner: Option<u32>,
     },
     /// An ink stroke: a line through `pts` (page points) with round ends and joins, `width`
-    /// wide, in `color` at opacity `alpha`.
-    Ink { pts: Vec<(f32, f32)>, color: Rgb, width: f32, alpha: f32 },
+    /// wide, in `color` at opacity `alpha`. `pen` marks a pen, pencil or highlighter stroke with
+    /// no arrowhead: on a dark page it may keep its own colour. Other strokes (open freeform
+    /// lines, and ink ending in an arrowhead) are mapped like every outline, so the line and its
+    /// arrowhead match.
+    Ink { pts: Vec<(f32, f32)>, color: Rgb, width: f32, alpha: f32, pen: bool },
     /// A vector path (a chart's or diagram's polygons, slices, lines): filled, then stroked.
     Path { segs: Vec<PathSeg>, fill: Option<Paint>, stroke: Option<Rgb>, stroke_width: f32, dash: Vec<f32>, cap: wordcraft_doc::connector::LineCap },
     /// An inline chart, diagram or described shape's draws, as one figure with its alt text (for

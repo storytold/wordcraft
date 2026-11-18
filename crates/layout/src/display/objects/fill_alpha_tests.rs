@@ -60,6 +60,33 @@ fn freeform_fill_has_own_alpha() {
     assert!(matches!(out.as_slice(), [Draw::Ink { alpha, .. }] if *alpha == 0.5));
 }
 
+/// #6548: only a pen stroke without an arrowhead is marked `pen` (a dark page may keep its own
+/// colour). An open freeform line, or ink ending in an arrowhead, is mapped like the arrowhead
+/// (a path) so the two match.
+#[test]
+fn only_ink_without_an_arrowhead_is_a_pen_stroke() {
+    let rect = Rect::new(4.0, 4.0, 24.0, 24.0);
+    let ink = Freeform::ink(InkTool::Pen, 24.0, 24.0, vec![[0.0, 0.0], [24.0, 24.0]]);
+    let line = Freeform { w: 24.0, h: 24.0, paths: vec![FreePath { pts: vec![[0.0, 0.0], [24.0, 24.0]], closed: false }], ..Default::default() };
+    for (freeform, arrow_end, pen) in [(&ink, false, true), (&ink, true, false), (&line, false, false), (&line, true, false)] {
+        let extra = ShapeExtra { arrow_end, ..Default::default() };
+        let look = ShapeLook {
+            kind: ShapeKind::Freeform,
+            fill: None,
+            stroke: Some(Rgb::WHITE),
+            stroke_width: 2.0,
+            effects: Default::default(),
+            freeform: Some(freeform),
+            extra: &extra,
+        };
+        let mut out = Vec::new();
+        shape_draws(rect, &look, &DisplayOptions::default(), &mut out);
+        let strokes: Vec<bool> = out.iter().filter_map(|d| if let Draw::Ink { pen, .. } = d { Some(*pen) } else { None }).collect();
+        assert_eq!(strokes, [pen], "ink {} with arrow {arrow_end}", freeform.is_ink());
+        assert_eq!(out.iter().any(|d| matches!(d, Draw::Path { .. })), arrow_end, "arrowhead drawn");
+    }
+}
+
 #[test]
 fn other_path_alpha_defaults() {
     let rect = Rect::new(4.0, 4.0, 24.0, 24.0);

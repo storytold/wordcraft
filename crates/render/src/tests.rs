@@ -784,12 +784,13 @@ fn dark_page_inverts_lightness() {
 #[test]
 fn dark_page_ink_stays_readable() {
     let dark = RenderOptions { dark: true, ..Default::default() };
-    let stroke = |c: Rgb| {
-        let items = [Draw::Ink { pts: vec![(4.0, 16.0), (28.0, 16.0)], color: c, width: 4.0, alpha: 1.0 }];
-        let img = render_items(&Document::new(), &items, wordcraft_geom::Rect::new(0.0, 0.0, 32.0, 32.0), 4.0, &dark);
+    let drawn = |d: &Document, c: Rgb, pen: bool| {
+        let items = [Draw::Ink { pts: vec![(4.0, 16.0), (28.0, 16.0)], color: c, width: 4.0, alpha: 1.0, pen }];
+        let img = render_items(d, &items, wordcraft_geom::Rect::new(0.0, 0.0, 32.0, 32.0), 4.0, &dark);
         let [r, g, b, _] = img.pixel(64, 64);
         Rgb(r, g, b)
     };
+    let stroke = |c: Rgb| drawn(&Document::new(), c, true);
     let paper = Rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER);
     for (pen, want) in [
         (Rgb::WHITE, Rgb::WHITE),
@@ -802,8 +803,24 @@ fn dark_page_ink_stays_readable() {
         assert_eq!(got, want, "pen {pen:?}");
         assert!(contrast(got, paper) >= 4.5, "pen {pen:?} drawn {got:?} is hard to see on the dark paper");
     }
+    // A black Page Color turns white on a dark page, so white ink there turns the dark grey
+    // instead of vanishing into it, and a light pen takes whichever colour stands out more.
+    let mut black_page = Document::new();
+    black_page.settings.page_color = Some(Rgb::BLACK);
+    let white_paper = dark.paper_of(&black_page);
+    assert_eq!(white_paper, Rgb::WHITE);
+    let got = drawn(&black_page, Rgb::WHITE, true);
+    assert_eq!(got, paper, "white ink on a black page");
+    assert!(contrast(got, white_paper) >= 4.5, "white ink drawn {got:?} is hard to see on the page");
+    let mint = Rgb(0x90, 0xEE, 0x90);
+    assert_eq!(drawn(&black_page, mint, true), dark.ink(mint), "mint ink on a black page turns dark green");
+    assert_eq!(drawn(&black_page, Rgb::BLACK, true), Rgb::BLACK, "black ink on a black page stays black");
+    // A stroke that isn't a pen's (an open freeform line, or ink ending in an arrowhead) is
+    // mapped like its arrowhead and every other outline.
+    assert_eq!(drawn(&Document::new(), Rgb::WHITE, false), paper);
+    assert_eq!(drawn(&Document::new(), Rgb(0x90, 0xEE, 0x90), false), dark.ink(Rgb(0x90, 0xEE, 0x90)));
     // A light page draws every pen as it is.
-    assert_eq!(RenderOptions::default().ink_stroke(Rgb(0x90, 0xEE, 0x90)), Rgb(0x90, 0xEE, 0x90));
+    assert_eq!(RenderOptions::default().ink_stroke(Rgb(0x90, 0xEE, 0x90), Rgb::WHITE), Rgb(0x90, 0xEE, 0x90));
 }
 
 /// #2534: legacy font effects are drawn: outlined letters are hollow; shadowed and embossed
