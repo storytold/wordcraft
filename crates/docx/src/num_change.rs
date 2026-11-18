@@ -51,18 +51,19 @@ pub(crate) struct SnapshotStore {
     /// every `numberingChange` *without* an entry as unresolved rather than falling back to
     /// cache inference.
     pub complete: bool,
-    /// Hash of the ordered `(loc, original)` pairs for every `numberingChange` at the time the
-    /// document was saved. The reader recomputes this from the shared model and invalidates all
-    /// overrides when the document was changed externally (e.g., another editor inserted a
-    /// paragraph, shifting block positions so entries land on the wrong paragraphs).
+    /// Hash of the ordered `(loc, original)` pairs for every `numberingChange` in the document
+    /// and each override's snapshot list identity at the time the document was saved. The reader
+    /// recomputes this from the shared model and invalidates all overrides when the document was
+    /// changed externally (e.g., another editor inserted a paragraph or renumbered lists).
     pub fingerprint: Option<u64>,
 }
 
 /// Serialize `entries` as the namespaced custom XML store.
 ///
 /// `fingerprint` is a hash of the ordered `(loc, original)` pairs for every `numberingChange`
-/// in the document (not just overrides). The reader verifies it against the shared model on
-/// import and invalidates all overrides when the document was changed externally.
+/// in the document and each override's snapshot list identity in `w:numbering`. The reader
+/// verifies it against the shared model on import and invalidates all overrides when the
+/// document was changed externally.
 ///
 /// When the full set exceeds `MAX_ENTRIES` or `MAX_STORE_BYTES`, a small stub with
 /// `complete="false"` is written instead so the reader treats every `numberingChange` without
@@ -333,59 +334,24 @@ fn fnv1a_pair(h: &mut u64, loc: &str, original: &str) {
     fnv1a_bytes(h, original.as_bytes());
 }
 
-/// Hash of every `numberingChange` paragraph's `(loc, original)` in the shared model (write side).
-///
-/// When the document is later opened, `fingerprint_shared_model` recomputes this from the
-/// `craft_wordmodel::Document` and the reader invalidates all overrides if the hash differs.
-pub(crate) fn fingerprint_doc(source: &wordcraft_doc::Document, shared: &craft_wordmodel::Document) -> u64 {
-    let mut h = FNV1A_OFFSET;
-    fn walk(blocks: &wordcraft_doc::Blocks, prefix: &str, numbering: &wordcraft_doc::numbering::Numbering, h: &mut u64, depth: usize) {
-        if depth > MAX_DEPTH {
-            return;
-        }
-        for (i, block) in blocks.iter().enumerate() {
-            let loc = format!("{prefix}:{i}");
-            match block.as_ref() {
-                wordcraft_doc::Block::Para(p) => {
-                    if let Some(nc) = p.props.num_change.as_deref() {
-                        let original = if !nc.original.is_empty() {
-                            nc.original.clone()
-                        } else if let Some(nr) = nc.snapshot {
-                            numbering.change_original(nr.num, nr.level).unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
-                        fnv1a_pair(h, &loc, &original);
-                    }
-                }
-                wordcraft_doc::Block::Table(t) => {
-                    for (r, row) in t.rows.iter().enumerate() {
-                        for (c, cell) in row.cells.iter().enumerate() {
-                            walk(&cell.blocks, &format!("{loc}/{r}/{c}"), numbering, h, depth + 1);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    walk(&source.body, "b", source.numbering.as_ref(), &mut h, 0);
-    if source.parts.values().any(|part| blocks_have_num_change(&part.blocks, 0)) {
-        let labels = part_labels(shared);
-        let mut labeled: Vec<(&str, &wordcraft_doc::Part)> =
-            source.parts.iter().filter_map(|(&id, part)| labels.get(&id).map(|l| (l.as_str(), part))).collect();
-        labeled.sort_by_key(|(label, _)| *label);
-        for (label, part) in labeled {
-            walk(&part.blocks, label, source.numbering.as_ref(), &mut h, 0);
-        }
-    }
-    for (i, g) in source.glossary.iter().enumerate() {
-        walk(&g.blocks, &format!("g{i}"), source.numbering.as_ref(), &mut h, 0);
-    }
-    h
+fn fnv1a_u32(h: &mut u64, val: u32) {
+    fnv1a_bytes(h, &val.to_le_bytes());
 }
 
-/// Recompute the fingerprint from a `craft_wordmodel::Document` (read side) for verification.
-pub(crate) fn fingerprint_shared_model(source: &craft_wordmodel::Document) -> u64 {
+fn fnv1a_u8(h: &mut u64, val: u8) {
+    fnv1a_bytes(h, &[val]);
+}
+
+/// Recompute the fingerprint from a `craft_wordmodel::Document` for verification or serialization.
+///
+/// Hashes:
+/// 1. Ordered `(loc, original)` pairs for every `numberingChange` in the document, detecting
+///    external paragraph insertions, deletions, reordering, and `w:original` edits.
+/// 2. For each snapshot override entry (sorted by `loc`):
+///    `loc`, `original`, and its snapshot list identity in `source.numbering` (abstract definition
+///    ID, template text, format, and start index), detecting external list renumbering, swapping
+///    of `w:numId`s, or abstract definition edits.
+pub(crate) fn fingerprint_shared_model<'a>(source: &craft_wordmodel::Document, overrides: impl IntoIterator<Item = &'a SnapshotEntry>) -> u64 {
     let mut h = FNV1A_OFFSET;
     fn walk(blocks: &craft_wordmodel::Blocks, prefix: &str, h: &mut u64, depth: usize) {
         if depth > MAX_DEPTH {
@@ -420,6 +386,53 @@ pub(crate) fn fingerprint_shared_model(source: &craft_wordmodel::Document) -> u6
     for (i, g) in source.glossary.iter().enumerate() {
         walk(&g.blocks, &format!("g{i}"), &mut h, 0);
     }
+
+    let mut sorted_overrides: Vec<&SnapshotEntry> = overrides.into_iter().collect();
+    sorted_overrides.sort_by_key(|e| &e.loc);
+    for entry in sorted_overrides {
+        fnv1a_pair(&mut h, &entry.loc, &entry.original);
+        match entry.snapshot {
+            Some(nr) => {
+                fnv1a_u8(&mut h, 1);
+                fnv1a_u32(&mut h, nr.num);
+                fnv1a_u8(&mut h, nr.level);
+                if let Some(num) = source.numbering.num(nr.num) {
+                    fnv1a_u8(&mut h, 1);
+                    fnv1a_u32(&mut h, num.abstract_id);
+                    if let Some(abs) = source.numbering.abstract_of(nr.num) {
+                        fnv1a_u8(&mut h, 1);
+                        fnv1a_u32(&mut h, abs.id);
+                        if let Some(nsid) = abs.nsid.as_deref() {
+                            fnv1a_bytes(&mut h, nsid.as_bytes());
+                        }
+                    } else {
+                        fnv1a_u8(&mut h, 0);
+                    }
+                    for lvl_idx in 0..=nr.level {
+                        if let Some(lvl) = source.numbering.level(nr.num, lvl_idx) {
+                            fnv1a_u8(&mut h, 1);
+                            fnv1a_u8(&mut h, lvl_idx);
+                            fnv1a_bytes(&mut h, lvl.text.as_bytes());
+                            fnv1a_bytes(&mut h, lvl.format.ooxml().as_bytes());
+                            if let Some((_, start)) = num.start_overrides.iter().find(|(l, _)| *l == lvl_idx) {
+                                fnv1a_u32(&mut h, *start);
+                            } else {
+                                fnv1a_u32(&mut h, lvl.start);
+                            }
+                        } else {
+                            fnv1a_u8(&mut h, 0);
+                        }
+                    }
+                } else {
+                    fnv1a_u8(&mut h, 0);
+                }
+            }
+            None => {
+                fnv1a_u8(&mut h, 0);
+            }
+        }
+    }
+
     h
 }
 

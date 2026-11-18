@@ -268,9 +268,10 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
         let parsed_ok = if let Some(xml_bytes) = source.passthrough.get(&key) {
             if let Some(store) = crate::num_change::read_from_bytes(xml_bytes) {
                 // Verify the document fingerprint: if another editor changed the structure
-                // (e.g. inserted a paragraph), block positions shifted and all overrides
-                // are invalid. Drop them all and fall back to cache inference.
-                let doc_fp = crate::num_change::fingerprint_shared_model(&source);
+                // (e.g. inserted a paragraph or renumbered lists), block positions or list
+                // identities shifted and all overrides are invalid. Drop them all and fall
+                // back to cache inference.
+                let doc_fp = crate::num_change::fingerprint_shared_model(&source, store.entries.values());
                 if store.fingerprint.is_some_and(|fp| fp != doc_fp) {
                     // Fingerprint mismatch: document was modified externally. Ignore all
                     // overrides to avoid attaching paragraphs to the wrong lists.
@@ -588,7 +589,7 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
 
     crate::num_change::remove_custom_xml_part(&mut document.passthrough, crate::num_change::PART);
     let overrides = crate::num_change::collect_overrides(source, &document);
-    let fingerprint = crate::num_change::fingerprint_doc(source, &document);
+    let fingerprint = crate::num_change::fingerprint_shared_model(&document, &overrides);
     if let Some(xml) = crate::num_change::write(&overrides, fingerprint)? {
         crate::num_change::insert_custom_xml_part(&mut document.passthrough, crate::num_change::PART, xml);
     }
@@ -1016,7 +1017,7 @@ mod tests {
 
         // Build shared model and replace its store with an incomplete stub (`complete="false"`).
         let mut shared = to_shared_model(&doc).expect("to_shared_model");
-        let fp = crate::num_change::fingerprint_shared_model(&shared);
+        let fp = crate::num_change::fingerprint_shared_model(&shared, &[]);
         let stub = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?><wordcraftNumChange xmlns="urn:wordcraft:numchange" kind="wordcraft-numchange-v1" complete="false" fp="{fp}"><entries>[]</entries></wordcraftNumChange>"#
         )
@@ -1026,6 +1027,88 @@ mod tests {
         let reopened = from_shared_model(shared).expect("from_shared_model");
         let nc = reopened.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc");
         assert_eq!(nc.snapshot, None, "incomplete store must fail closed and not infer List 1");
+    }
+
+    /// When another editor swaps w:numIds without moving any paragraph, the fingerprint
+    /// mismatch invalidates all overrides so paragraphs do not attach to the wrong list.
+    #[test]
+    fn swapping_num_ids_in_shared_model_invalidates_all_overrides() {
+        use wordcraft_doc::numbering::{AbstractNum, Level, Num, Numbering};
+        use wordcraft_doc::props::{NumChange, NumRef};
+
+        let mut numbering = Numbering::default();
+        numbering.abstracts.push(AbstractNum { id: 10, levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        numbering.abstracts.push(AbstractNum { id: 20, levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
+
+        // Para 0: list A item, changed from list 1 → list 2 (snapshot list 1).
+        let mut p0 = wordcraft_doc::para::Paragraph::with_text("Item in list A", Default::default());
+        p0.props.numbering = Some(NumRef { num: 2, level: 0 });
+        p0.props.num_change = Some(Box::new(NumChange { rev: 0, original: String::new(), snapshot: Some(NumRef { num: 1, level: 0 }) }));
+
+        // Para 1: list B item, changed from list 2 → list 1 (snapshot list 2).
+        let mut p1 = wordcraft_doc::para::Paragraph::with_text("Item in list B", Default::default());
+        p1.props.numbering = Some(NumRef { num: 1, level: 0 });
+        p1.props.num_change = Some(Box::new(NumChange { rev: 0, original: String::new(), snapshot: Some(NumRef { num: 2, level: 0 }) }));
+
+        let mut doc = wordcraft_doc::Document::new();
+        doc.numbering = Arc::new(numbering);
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Para(p0)), Arc::new(wordcraft_doc::Block::Para(p1))];
+
+        let bytes = crate::write(&doc).expect("write docx");
+
+        // Read back as shared model and swap the two nums' IDs without moving paragraphs.
+        let mut shared = craft_docx::read(&bytes).expect("read shared model");
+        assert_eq!(shared.numbering.nums.len(), 2);
+        let id0 = shared.numbering.nums[0].id;
+        let id1 = shared.numbering.nums[1].id;
+        let numbering = Arc::make_mut(&mut shared.numbering);
+        numbering.nums[0].id = id1;
+        numbering.nums[1].id = id0;
+
+        let reopened = from_shared_model(shared).expect("from_shared_model");
+        let nc0 = reopened.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc0");
+        assert_eq!(nc0.snapshot, None, "swapping num IDs must invalidate overrides and fail closed to None");
+        let nc1 = reopened.body[1].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc1");
+        assert_eq!(nc1.snapshot, None, "swapping num IDs must invalidate overrides and fail closed to None");
+    }
+
+    /// On an unedited file, the custom XML store fingerprint exactly matches the shared model
+    /// fingerprint computed on read.
+    #[test]
+    fn fingerprint_matches_on_unedited_roundtrip() {
+        use wordcraft_doc::numbering::{AbstractNum, Level, Num, Numbering};
+        use wordcraft_doc::props::{NumChange, NumRef};
+
+        let mut numbering = Numbering::default();
+        numbering.abstracts.push(AbstractNum { id: 10, levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        numbering.abstracts.push(AbstractNum { id: 20, levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
+
+        let mut p0 = wordcraft_doc::para::Paragraph::with_text("Item 1", Default::default());
+        p0.props.numbering = Some(NumRef { num: 2, level: 0 });
+        p0.props.num_change = Some(Box::new(NumChange { rev: 0, original: String::new(), snapshot: Some(NumRef { num: 1, level: 0 }) }));
+
+        let mut doc = wordcraft_doc::Document::new();
+        doc.numbering = Arc::new(numbering);
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Para(p0))];
+
+        let bytes = crate::write(&doc).expect("write docx");
+        let shared = craft_docx::read(&bytes).expect("read shared model");
+
+        // Extract the store from passthrough and verify the written fingerprint matches
+        // the reader's recomputed fingerprint.
+        let raw = shared.passthrough.get(crate::num_change::PART).expect("store part exists");
+        let store = crate::num_change::read_from_bytes(raw).expect("store parses");
+        let doc_fp = crate::num_change::fingerprint_shared_model(&shared, store.entries.values());
+        assert_eq!(store.fingerprint, Some(doc_fp), "written fingerprint must match read-side recomputed fingerprint");
+
+        // Verify full reopen restores snapshot properly
+        let reopened = from_shared_model(shared).expect("from_shared_model");
+        let nc = reopened.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc");
+        assert_eq!(nc.snapshot, Some(NumRef { num: 1, level: 0 }));
     }
 
     /// A foreign `customxml/` part that happens to contain `wordcraft-numchange-v1` in its
