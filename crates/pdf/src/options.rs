@@ -50,6 +50,10 @@ pub struct PdfOptions {
     /// How [`export`] shows digits (the Numeral setting; callers resolve `System`, see
     /// [`NumeralMode::resolve`]). [`export_layout`] keeps the layout it is given.
     pub numeral: NumeralMode,
+    /// What [`export`] shows for a page reference to a bookmark the document doesn't have, in the
+    /// interface language (`None`: Word's English "Error! Bookmark not defined."). [`export_layout`]
+    /// keeps the layout it is given.
+    pub bookmark_error: Option<std::sync::Arc<str>>,
 }
 
 /// How many characters of the watermark text the PDF draws.
@@ -70,12 +74,15 @@ impl PdfOptions {
         }
     }
 
-    /// How [`crate::export`] lays a document out for these options.
+    /// How [`crate::export`] lays a document out for these options. Page references in the body
+    /// show their bookmarks' pages, as Word's export fills them in.
     pub fn layout_options(&self) -> wordcraft_layout::LayoutOptions {
         wordcraft_layout::LayoutOptions {
             hide_deleted: !self.include_markup,
             comment_balloons: self.comments,
             numeral: self.numeral,
+            output_page_refs: true,
+            bookmark_error: self.bookmark_error.clone(),
             ..Default::default()
         }
     }
@@ -98,6 +105,7 @@ impl Default for PdfOptions {
             links: true,
             paper: None,
             numeral: NumeralMode::Arabic,
+            bookmark_error: None,
         }
     }
 }
