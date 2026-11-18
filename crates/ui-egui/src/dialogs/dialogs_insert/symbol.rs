@@ -7,7 +7,7 @@ use craft::ui::contract::{
     Bind, CollectionEvent, ColumnKey, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
-use craft::ui::display::Text;
+use craft::ui::display::{Kbd, Text};
 use craft::ui::form::Field;
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{ListRow, ThumbAspect};
@@ -533,9 +533,8 @@ fn special_table(ui: &mut Ui, form: &mut SymbolForm) -> bool {
             let shown = if c.is_whitespace() || matches!(*c, '\u{00AD}' | '\u{200B}' | '\u{2060}') { String::new() } else { c.to_string() };
             let row = ListRow::new(shown).cells(icx.cells()).cell(name.clone(), word(label));
             // The chord comes from the framework's command chords, as the ribbon's.
-            // PLAN: assumed `CommandRef::from(&str)` and `ListRow::cell_chord(ColumnKey, Chord)` (ribbon-w8 chord rule).
-            match command.and_then(|id| craft::ui::runtime::commands::chord(&ctx, &craft::ui::runtime::commands::CommandRef::from(*id))) {
-                Some(chord) => row.cell_chord(keys.clone(), chord),
+            match command.and_then(|id| craft::ui::runtime::commands::chord(&ctx, &craft::ui::runtime::commands::CommandRef::from(id))) {
+                Some(chord) => row.cell_field(keys.clone(), Kbd::chord(chord), |_| ()),
                 None => row,
             }
         })

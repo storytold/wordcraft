@@ -45,7 +45,7 @@ fn settle_zoom(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
             let _ = app.run("view.zoom", json!({"value": value}));
             Settle::Done
         }
-        Some(DialogResult::Cancel) => Settle::Done,
+        Some(_) => Settle::Done,
         None => Settle::Keep,
     }
 }
@@ -94,7 +94,7 @@ impl StackDialog for WordCountDialog {
                 FieldGroup::new(tl!("Counts").to_string()).show(ui, |ui, _| {
                     for (label, key) in ROWS {
                         let text = stats.get(key).map(Value::to_string).unwrap_or_default();
-                        Field::new(tl!(label).to_string()).show(ui, |ui, _| Text::new(Label::from(text)).show(ui));
+                        Field::new(tl!(label).to_string()).show(ui, |ui, _| Text::new(Label::from(text.clone())).show(ui));
                     }
                 });
                 let toggled = Checkbox::new(Bind::given(*include))

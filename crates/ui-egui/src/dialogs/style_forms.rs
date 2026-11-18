@@ -95,7 +95,7 @@ pub(crate) struct ModifyStyleDialog {
 /// name and for an unknown style (TOC1–TOC9 may be absent).
 pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     match name {
-        NEW_KEY => Some(open_new_with(app, "Normal", parent)),
+        NEW_KEY => open_new_with(app, "Normal", parent),
         MODIFY_KEY => {
             let id = params.get("style")?.as_str()?;
             let dialog = modify_dialog(app, id)?;
@@ -143,16 +143,21 @@ fn body(ui: &mut Ui, form: &mut ModifyStyleForm, catalog: &Arc<Catalog>, setting
             requests.push(Request::AddFont);
         }
     });
+    // The form keeps a number; a cleared box leaves the value as it was.
+    let (mut size, mut before, mut after) = (Some(form.size), Some(form.before), Some(form.after));
     Field::new(label(tl!("Size:"))).show(ui, |ui, _| {
-        NumberField::new(label(tl!("Size:")), Bind::bound(&mut form.size)).range(1.0..=1638.0).step(0.5).show(ui)
+        NumberField::new(label(tl!("Size:")), Bind::bound(&mut size)).range(1.0..=1638.0).step(0.5).show(ui)
     });
     Field::new(label(tl!("Color:"))).show(ui, |ui, _| TextField::new(label(tl!("Color:")), Bind::bound(&mut form.color)).show(ui));
     Field::new(label(tl!("Space before/after:"))).show(ui, |ui, _| {
         Row::new().show(ui, |ui, _| {
-            NumberField::new(label(tl!("Space before")), Bind::bound(&mut form.before)).range(0.0..=1584.0).id_salt("before").show(ui);
-            NumberField::new(label(tl!("Space after")), Bind::bound(&mut form.after)).range(0.0..=1584.0).id_salt("after").show(ui);
+            NumberField::new(label(tl!("Space before")), Bind::bound(&mut before)).range(0.0..=1584.0).id_salt("before").show(ui);
+            NumberField::new(label(tl!("Space after")), Bind::bound(&mut after)).range(0.0..=1584.0).id_salt("after").show(ui);
         });
     });
+    form.size = size.unwrap_or(form.size);
+    form.before = before.unwrap_or(form.before);
+    form.after = after.unwrap_or(form.after);
     Row::new().show(ui, |ui, _| {
         Checkbox::new(Bind::bound(&mut form.bold)).label(label(tl!("Bold"))).id_salt("bold").show(ui);
         Checkbox::new(Bind::bound(&mut form.italic)).label(label(tl!("Italic"))).id_salt("italic").show(ui);
@@ -254,20 +259,21 @@ fn modify_settle(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
 }
 
 /// Opens New Style based on the style named `based_on`, over `parent` (Manage Styles).
-pub(crate) fn open_new_child(app: &mut WordApp, based_on: &str, parent: DialogId) -> DialogId {
+pub(crate) fn open_new_child(app: &mut WordApp, based_on: &str, parent: DialogId) -> Option<DialogId> {
     open_new_with(app, based_on, Some(parent))
 }
 
 /// Opens New Style based on Normal.
-pub(crate) fn open_new(app: &mut WordApp) -> DialogId {
+pub(crate) fn open_new(app: &mut WordApp) -> Option<DialogId> {
     open_new_with(app, "Normal", None)
 }
 
-fn open_new_with(app: &mut WordApp, based_on: &str, parent: Option<DialogId>) -> DialogId {
+/// `None` before the first frame: the dialog reads its remembered values through the egui context.
+fn open_new_with(app: &mut WordApp, based_on: &str, parent: Option<DialogId>) -> Option<DialogId> {
+    let ctx = app.ctx.clone()?;
     let fields = DialogFields::from_pairs([("name", "Style1"), ("basedOn", based_on)]);
     let (name_default, based_default) = ("Style1".to_string(), based_on.to_string());
-    // PLAN: assumed `WordApp::ctx(&self) -> &egui::Context` (app-hub); `HostedParamDialog::command` needs it to read remembered values.
-    let dialog = HostedParamDialog::command(app.ctx(), NEW_KEY, fields, move |_| {
+    let dialog = HostedParamDialog::command(&ctx, NEW_KEY, fields, move |_| {
         let params = vec![
             Param::new("name", label(tl!("Name:")), ParamKind::text(name_default.clone())),
             Param::new("basedOn", label(tl!("Style based on:")), ParamKind::text(based_default.clone())),
@@ -276,7 +282,7 @@ fn open_new_with(app: &mut WordApp, based_on: &str, parent: Option<DialogId>) ->
             .footer_note(label(tl!("The new style takes the formatting of the current paragraph.")))
     })
     .held_ok();
-    open_with(app, parent, dialog, DialogHooks { prepare: None, settle: new_settle })
+    Some(open_with(app, parent, dialog, DialogHooks { prepare: None, settle: new_settle }))
 }
 
 /// Runs `styles.create` for the held OK, answers it, and selects the created style in Manage Styles when that is the parent.

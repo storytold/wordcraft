@@ -207,7 +207,7 @@ impl WordForm for DefineBulletForm {
         let entries: Vec<Entry<String>> = ALIGNMENTS.iter().map(|(k, n)| Entry::new((*k).to_string(), Label::from(tl!(n)))).collect();
         let current = if self.align.is_empty() { "left".to_string() } else { self.align.clone() };
         FieldGroup::new(Label::from(tl!("Alignment:"))).show(ui, |ui, _| {
-            let group = RadioGroup::new(Label::from(tl!("Alignment:")), Bind::given(current)).show(ui, |ui, _| {
+            let group = RadioGroup::new(Label::from(tl!("Alignment:")), Bind::given(current.clone())).show(ui, |ui, _| {
                 Row::new().show(ui, |ui, _| {
                     for e in &entries {
                         if let (Some(id), label) = (e.value(), e.label()) {

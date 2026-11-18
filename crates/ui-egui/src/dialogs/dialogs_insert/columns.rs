@@ -52,8 +52,7 @@ pub struct DropCapForm {
 impl DropCapForm {
     /// The paragraph's drop cap; `None` where it can't take one (Word greys the button out).
     pub fn read(app: &WordApp) -> Option<DropCapForm> {
-        // PLAN: assumed `WordApp::command_enabled(id)`, shell-w6's replacement of `widgets::enabled`.
-        if !app.command_enabled("insert.dropCap") {
+        if !crate::app::command_board::command_enabled(app, "insert.dropCap") {
             return None;
         }
         let st = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);

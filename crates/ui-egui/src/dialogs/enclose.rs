@@ -2,7 +2,7 @@
 //! (`format.enclose`).
 
 use craft::ui::choice::{Radio, RadioGroup};
-use craft::ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::DialogId;
 use craft::ui::display::Picture;
 use craft::ui::form::{Field, FieldGroup};

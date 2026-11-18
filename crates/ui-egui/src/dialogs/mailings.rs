@@ -509,11 +509,10 @@ fn recipient_body(ui: &mut egui::Ui, d: &mut RecipientDraft, editing: &mut bool,
 fn filter_section(ui: &mut egui::Ui, fields: &[String], filter: &mut RecipientFilter) {
     let names: Vec<String> = fields.iter().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
     let offered = RecipientFields { names: names.clone() };
-    let group = filter.conditions();
-    if let Some(edited) =
-        ConditionBuilder::new(tl!("Filter"), Bind::given(group), &offered).layout(ConditionLayout::Joined).max_rules(64).show(ui).value().cloned()
-    {
-        filter.set_conditions(&edited, fields);
+    let mut group = filter.conditions();
+    let built = ConditionBuilder::new(tl!("Filter"), Bind::bound(&mut group), &offered).layout(ConditionLayout::Joined).max_rules(64).show(ui);
+    if built.changed {
+        filter.set_conditions(&group, fields);
     }
     if Button::new(tl!("Clear All")).show(ui).clicked() {
         filter.rules.clear();

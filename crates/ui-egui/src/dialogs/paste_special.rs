@@ -73,7 +73,7 @@ impl WordForm for PasteSpecialForm {
             Stack::new().show(ui, |ui, cx| {
                 for (at, f) in formats.iter().enumerate() {
                     let label = wordcraft_engine::cmd::paste::FORMATS.iter().find(|(id, _)| id == f).map(|(_, l)| *l).unwrap_or(f.as_str());
-                    cx.labelled(ui, at, Label::from(tl!(label)), SideLabel::new().layout(FieldLayout::After), Radio::new(at));
+                    cx.labelled(ui, at, Label::from(tl!(label).to_owned()), SideLabel::new().layout(FieldLayout::After), Radio::new(at));
                 }
             });
         });
