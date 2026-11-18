@@ -223,6 +223,22 @@ fn selecting_a_long_endnote_takes_linear_time() {
     assert_linear_steps("endnote selection", 20, laid, |(d, l, (a, b))| drop(std::hint::black_box(l.selection_rects(d, a, b, 0))));
 }
 
+/// One paragraph of `n` lines (a line break after each word), so it runs over many pages.
+fn many_lines(n: usize) -> Document {
+    let mut d = Document::from_text("");
+    d.body = vec![wordcraft_doc::para_block(Paragraph::with_text(&"x\n".repeat(n), CharProps::default()))];
+    d
+}
+
+/// The piece of a long paragraph on each page looked through every line of the paragraph for the
+/// pictures and shapes to draw with it (#6757).
+#[test]
+fn a_paragraph_over_many_pages_lays_out_in_linear_time() {
+    let pages = lay(&many_lines(SCALE * 400), &LayoutOptions::default()).pages.len();
+    assert!(pages > 40, "the paragraph runs over many pages: {pages}");
+    assert_layout_linear("a paragraph over many pages", 400, many_lines, &LayoutOptions::default());
+}
+
 /// A table of `n` rows of 60 cells, each row exactly half a point high, so every cell clips its
 /// (empty) paragraph and the whole table fits on the first page.
 fn clipped_table(n: usize) -> Document {
@@ -481,4 +497,26 @@ fn selecting_a_header_on_the_hinted_page_does_not_walk_every_page() {
     let (small, big) = (steps(20), steps(160));
     eprintln!("hinted header: {small} steps for 20 pages, {big} for 160");
     assert!(small > 0 && big <= small + 8, "the pages aren't walked: {small} → {big}");
+}
+
+/// A paragraph of a decimal tab at 200 pt followed by `text`.
+fn after_decimal_tab(text: &str) -> Document {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let mut d = Document::from_text(&format!("\t{text}"));
+    let at = Pos::body(0, 0);
+    d.format_paragraphs(&at, &at, &|p| p.tabs = Some(vec![TabStop { pos: 200.0, align: TabAlign::Decimal, leader: Default::default() }])).unwrap();
+    d
+}
+
+/// The text after a decimal tab was looked at again from the tab for its '.' after each of its
+/// clusters, so a long run of clusters without a '.' (soft hyphens take no room, so they stay on
+/// one line) took quadratic time.
+#[test]
+fn text_after_a_decimal_tab_is_looked_at_once() {
+    let opts = LayoutOptions::default();
+    // The text after the tab still ends at the stop, where it ended before.
+    let l = lay(&after_decimal_tab("12.5"), &opts);
+    let (Some(end), Some(start)) = (l.caret(&Pos::body(0, 5)), l.caret(&Pos::body(0, 0))) else { panic!("no carets") };
+    assert!((end.x - start.x - 200.0).abs() < 1.0, "the text ends at the stop: {} from {}", end.x, start.x);
+    assert_layout_linear("decimal tab", 2000, |n| after_decimal_tab(&format!("1{}", "\u{AD}".repeat(n))), &opts);
 }

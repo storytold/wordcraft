@@ -10,6 +10,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod animations;
+#[cfg(target_os = "linux")]
+mod appimage_env;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod clipboard;
@@ -18,7 +20,12 @@ mod default_apps;
 mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
+#[cfg(any(target_os = "linux", test))]
+mod linux_gpu;
 mod logging;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod portal_save;
+mod prefs_merge;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -27,7 +34,7 @@ mod traffic_lights;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
-    window_geometry::{RawWindowState, WindowGeometry, take_rescue},
+    window_geometry::{RawWindowState, WindowGeometry, reachable, take_rescue},
 };
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
@@ -54,13 +61,21 @@ impl eframe::App for App {
         apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
         self.3.show(frame);
-        let window = self.4;
+        let mut window = self.4;
+        // Only until the off-screen check below has run: it is the one reader.
+        if self.1.is_some() {
+            let (on_a_monitor, primary_monitor_rect) = monitor_geometry(frame, ctx.pixels_per_point());
+            window.on_a_monitor = on_a_monitor;
+            window.primary_monitor_rect = primary_monitor_rect;
+        }
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
         // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
         // knows the monitor: the off-screen check below takes the pending geometry then.
         if let Some((pos, size)) = self.1.and_then(|g| g.fit_on_monitor(&window)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+            let b = self.0.window_builder().clone().with_inner_size(size);
+            self.0.set_window_builder(b);
         }
         // The geometry saved for the next start is the active window's.
         let prev = self.0.ui.window;
@@ -123,7 +138,39 @@ impl eframe::App for App {
         if let Some(key_file) = &self.2 {
             key_file.remove();
         }
+        self.0.start_pending_update();
     }
+}
+
+/// Whether a grippable part of the window is on a monitor, and the primary monitor bounds.
+/// Winit reports physical pixels; egui positions use points. `None` where the platform cannot
+/// report the window or primary monitor (Wayland, headless).
+fn monitor_geometry(frame: &eframe::Frame, pixels_per_point: f32) -> (Option<bool>, Option<egui::Rect>) {
+    let Some(w) = frame.winit_window() else {
+        return (None, None);
+    };
+    if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
+        return (None, None);
+    }
+    let Some(pos) = w.outer_position().ok() else {
+        return (None, None);
+    };
+    let size = w.outer_size();
+    let physical_rect = |(x, y): (i32, i32), (width, height): (u32, u32)| {
+        egui::Rect::from_min_size(egui::pos2(x as f32, y as f32), egui::vec2(width as f32, height as f32))
+    };
+    let monitors: Vec<egui::Rect> =
+        w.available_monitors().map(|m| physical_rect((m.position().x, m.position().y), (m.size().width, m.size().height))).collect();
+    let on_a_monitor = (!monitors.is_empty()).then(|| reachable(physical_rect((pos.x, pos.y), (size.width, size.height)), &monitors));
+    let primary_monitor_rect = w.primary_monitor().map(|m| {
+        let pos = m.position();
+        let size = m.size();
+        egui::Rect::from_min_size(
+            egui::pos2(pos.x as f32, pos.y as f32) / pixels_per_point,
+            egui::vec2(size.width as f32, size.height as f32) / pixels_per_point,
+        )
+    });
+    (on_a_monitor, primary_monitor_rect)
 }
 
 /// Quit the way Command-Q does, on the next turn of the main queue.
@@ -151,6 +198,8 @@ fn schedule_macos_terminate(app: &mut WordApp, key_file: Option<&control_server:
     if let Some(key_file) = key_file {
         key_file.remove();
     }
+    // `terminate:` ends the process without dropping the app, so a ready update's helper starts here.
+    app.start_pending_update();
     dispatch2::DispatchQueue::main().exec_async(|| {
         if let Some(mtm) = objc2::MainThreadMarker::new() {
             objc2_app_kit::NSApplication::sharedApplication(mtm).terminate(None);
@@ -176,31 +225,44 @@ fn user_dict_path() -> Option<std::path::PathBuf> {
     wordcraft_control_key::settings_dir().map(|b| b.join(wordcraft_engine::Session::USER_DICT_FILE))
 }
 
-fn load_user_dictionary(app: &mut WordApp) {
-    if !prefs_enabled() {
-        return;
-    }
-    if let Some(p) = user_dict_path() {
-        wordcraft_proof::load_user_dictionary(&p);
-        app.session.user_dict_path = Some(p);
-    }
-}
-
 /// Runs without preferences (`WORDCRAFT_NO_PREFS`, agents' test runs) neither read nor write them.
 fn prefs_enabled() -> bool {
     std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
 }
 
+/// The preferences as this process last loaded or saved them, which `save_prefs` compares with
+/// to write only what this process changed since (#3773, see `prefs_merge`).
+static LOADED_PREFS: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+
+/// Apply the saved preferences (`ui.json`) and the user dictionary to `app`, and remember the
+/// result for `save_prefs`. Runs without preferences neither read nor keep them.
 fn load_prefs(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
     }
-    if let Some(p) = prefs_path()
-        && let Ok(bytes) = std::fs::read(&p)
+    let loaded = load_prefs_from(app, prefs_path().as_deref(), user_dict_path());
+    if let Ok(mut slot) = LOADED_PREFS.lock() {
+        *slot = loaded;
+    }
+}
+
+/// Apply the preferences saved at `prefs` to `app`, then load the user dictionary at `dict`
+/// (`custom-dictionary.txt`, #40), and give back the preferences as `prefs()` does after both:
+/// the words only the dictionary file has are part of what was loaded, so a word another process
+/// removes from `ui.json` isn't written back as one added here (#3773).
+fn load_prefs_from(app: &mut WordApp, prefs: Option<&std::path::Path>, dict: Option<std::path::PathBuf>) -> Option<serde_json::Value> {
+    if let Some(p) = prefs
+        && let Ok(bytes) = std::fs::read(p)
         && let Some(ui) = UiState::from_json(&bytes)
     {
         app.apply_prefs(ui);
     }
+    if let Some(p) = dict {
+        wordcraft_proof::load_user_dictionary(&p);
+        app.session.user_dict_path = Some(p);
+    }
+    // As `prefs()` gives them back, so a setting nobody touched compares equal at exit.
+    serde_json::to_value(app.prefs()).ok()
 }
 
 /// Fonts the user added (#582) live in `fonts` in the settings folder: load them, and store fonts
@@ -216,33 +278,163 @@ fn load_user_fonts() {
     }
 }
 
-/// The saved window geometry, read before the window opens (`load_prefs` runs after).
-fn saved_window() -> Option<WindowGeometry> {
+/// The saved preferences, read before the window opens for its geometry and, on Linux and the
+/// BSDs, the display server (`load_prefs` runs after).
+fn saved_ui() -> Option<UiState> {
     if !prefs_enabled() {
         return None;
     }
     let bytes = std::fs::read(prefs_path()?).ok()?;
-    UiState::from_json(&bytes)?.window?.sanitized()
+    UiState::from_json(&bytes)
 }
 
-fn save_prefs(app: &WordApp) {
-    if !prefs_enabled() {
-        return;
-    }
-    if let Some(p) = prefs_path() {
-        if let Some(dir) = p.parent()
-            && let Err(e) = std::fs::create_dir_all(dir)
-        {
-            log::warn!("preferences: cannot create {}: {e}", dir.display());
-            return;
+/// Whether the window runs through XWayland (X11) rather than native Wayland, and the log line
+/// saying why. `WORDCRAFT_WAYLAND` wins (`0`, `false`, `no` or `off` asks for X11, any other value
+/// for Wayland), then File › Options › Advanced › Linux display server (#2184). Automatic is X11
+/// whenever there's an X server: winit has no file drag-and-drop on Wayland, so dropping files from
+/// the file manager showed a "no" cursor. X11 is only forced with an X server (`DISPLAY`), and
+/// unforced winit picks Wayland when it's there and X11 otherwise, so a choice that isn't
+/// available falls back to the other instead of failing to start. The X11 libraries are only
+/// recommended by the packages, so when `x11_libraries` reports some missing (it's asked only when
+/// X11 would be forced) the app stays on Wayland: forced X11 without them failed to start, and
+/// winit panicked without libxkbcommon-x11.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn uses_x11(
+    setting: wordcraft_ui_egui::DisplayServer,
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    x11_libraries: impl FnOnce() -> Result<(), String>,
+) -> (bool, String) {
+    use wordcraft_ui_egui::DisplayServer;
+    let set = |name: &str| env(name).is_some_and(|v| !v.is_empty());
+    let (wanted, by) = match env("WORDCRAFT_WAYLAND") {
+        Some(v) if matches!(v.to_string_lossy().trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off") => {
+            (DisplayServer::X11, "WORDCRAFT_WAYLAND")
         }
-        match serde_json::to_vec_pretty(&app.prefs()) {
-            Ok(bytes) => {
-                if let Err(e) = write_prefs(&p, &bytes) {
-                    log::warn!("preferences: cannot save {}: {e}", p.display());
-                }
+        Some(_) => (DisplayServer::Wayland, "WORDCRAFT_WAYLAND"),
+        None => (setting, "the setting"),
+    };
+    let missing = if wanted != DisplayServer::Wayland && set("DISPLAY") { x11_libraries().err() } else { None };
+    let x11 = wanted != DisplayServer::Wayland && set("DISPLAY") && missing.is_none();
+    let wayland = set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET");
+    let runs = if x11 {
+        "X11"
+    } else if wayland {
+        "native Wayland"
+    } else if set("DISPLAY") {
+        "X11 (no Wayland)"
+    } else {
+        "neither (no Wayland or X server found)"
+    };
+    let mut why = format!("display: {runs}; {} asks for {}", by, wanted.code());
+    if let Some(missing) = missing {
+        why += &format!("; not X11 because its libraries are missing: {missing}");
+    }
+    (x11, why)
+}
+
+/// `Err` naming the libraries winit's X11 backend opens at startup that can't be loaded: libX11,
+/// libXcursor, libX11-xcb (which brings in libxcb), libXi, and libxkbcommon-x11 for the keyboard.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn x11_libraries() -> Result<(), String> {
+    use x11_dl::{xcursor::Xcursor, xinput2::XInput2, xlib::Xlib, xlib_xcb::Xlib_xcb};
+    let mut missing: Vec<String> = [Xlib::open().err(), Xcursor::open().err(), Xlib_xcb::open().err(), XInput2::open().err()]
+        .into_iter()
+        .flatten()
+        .map(|e| e.to_string())
+        .collect();
+    if xkbcommon_dl::x11::xkbcommon_x11_option().is_none() {
+        missing.push("libxkbcommon-x11.so.0 could not be loaded".into());
+    }
+    if missing.is_empty() { Ok(()) } else { Err(missing.join("; ")) }
+}
+
+/// Write `app`'s preferences to `ui.json`, merged with what other processes saved since this one
+/// loaded it (`merged_prefs`).
+fn save_prefs(app: &WordApp) {
+    if let Err(e) = try_save_prefs(app) {
+        log::warn!("preferences: {e}");
+    }
+}
+
+/// Saves the preferences and says why when it could not. `Ok(false)`: nothing was written
+/// because preferences are switched off or there is no settings folder.
+fn try_save_prefs(app: &WordApp) -> Result<bool, String> {
+    if !prefs_enabled() {
+        return Ok(false);
+    }
+    let Some(p) = prefs_path() else { return Ok(false) };
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    let ours = serde_json::to_value(app.prefs()).map_err(|e| format!("cannot serialize: {e}"))?;
+    let mut base = LOADED_PREFS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    save_merged(&p, &mut base, ours)?;
+    Ok(true)
+}
+
+/// Writes `ours` to `path`, merged with what other WordCraft processes saved there since this one
+/// loaded or saved `base` (`merged_prefs`), and makes `ours` the new `base`: a setting changed here
+/// before this save and by another process after it then takes the other's value at the next save.
+/// Holds `lock_prefs` from the read to the rename.
+fn save_merged(path: &std::path::Path, base: &mut Option<serde_json::Value>, ours: serde_json::Value) -> Result<(), String> {
+    let _lock = lock_prefs(path);
+    let merged = merged_prefs(path, base.as_ref(), ours.clone());
+    let bytes = serde_json::to_vec_pretty(&merged).map_err(|e| format!("cannot serialize: {e}"))?;
+    write_prefs(path, &bytes).map_err(|e| format!("cannot save {}: {e}", path.display()))?;
+    *base = Some(ours);
+    Ok(())
+}
+
+/// `ours` with what other WordCraft processes saved to `path` since this one loaded or saved
+/// `base`, for the settings this one left alone (#3773, see `prefs_merge`). `ours` as it is when
+/// there's no `base`, or the file is missing or isn't preferences now.
+fn merged_prefs(path: &std::path::Path, base: Option<&serde_json::Value>, ours: serde_json::Value) -> serde_json::Value {
+    let Some(base) = base else { return ours };
+    let disk = match std::fs::read(path) {
+        Ok(bytes) => prefs_merge::as_read(&bytes),
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::debug!("preferences: cannot read {} to merge, saving this process's: {e}", path.display());
             }
-            Err(e) => log::warn!("preferences: cannot serialize: {e}"),
+            return ours;
+        }
+    };
+    match disk {
+        Some(disk) => prefs_merge::merge(base, ours, &disk),
+        None => {
+            log::debug!("preferences: {} isn't preferences, saving this process's", path.display());
+            ours
+        }
+    }
+}
+
+/// How long a save waits for another process's save to finish before going ahead anyway: a save
+/// takes milliseconds, and a process stuck holding the lock mustn't stop this one from saving.
+const PREFS_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// An advisory lock beside `path` (`.ui.json.lock`), held while it is returned, so that two
+/// processes saving at once (logging out closes every window together) take turns at reading,
+/// merging and replacing `ui.json` instead of one losing the other's changes. `None` (save
+/// unlocked) when the lock file can't be opened or the lock isn't free within [`PREFS_LOCK_WAIT`].
+fn lock_prefs(path: &std::path::Path) -> Option<std::fs::File> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "ui.json".into());
+    let lock = path.with_file_name(format!(".{name}.lock"));
+    let file = match std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock) {
+        Ok(f) => f,
+        Err(e) => {
+            log::debug!("preferences: cannot open {}, saving without it: {e}", lock.display());
+            return None;
+        }
+    };
+    let start = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < PREFS_LOCK_WAIT => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(e) => {
+                log::warn!("preferences: {} is held, saving without it: {e}", lock.display());
+                return None;
+            }
         }
     }
 }
@@ -263,11 +455,13 @@ fn write_prefs(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// through the system spooler (`print`), the system clipboard's text, formatted copies,
 /// pictures and format names (`clipboard`, #45, #584, #687, #833), the system's animation setting
 /// (`animations`), and making WordCraft the default app for Word documents (`default_apps`, #295).
-fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
+fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::CancelHandle, ctx: &egui::Context) -> Services {
     Services {
         file_dialog: Some(file_dialog),
+        cancel_file_dialog: Some(Box::new(move || cancel_file_dialog.cancel())),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        cancel_print: Some(print::cancel()),
         clipboard_picture: Some(Box::new(clipboard::picture)),
         make_default_app: default_apps::hook(),
         // Personal templates live in `Templates` in the settings folder (#2852), made on first save.
@@ -275,9 +469,12 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         animations_enabled: Some(animations::hook(ctx)),
         clipboard_text: Some(Box::new(clipboard::text)),
         clipboard_html: Some(Box::new(clipboard::html)),
-        set_clipboard_html: Some(Box::new(clipboard::set_html)),
+        set_clipboard_rich: Some(Box::new(clipboard::set_rich)),
+        set_clipboard_image: Some(Box::new(clipboard::set_image)),
+        clipboard_is_own: Some(Box::new(clipboard::is_own)),
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
+        save_prefs: Some(Box::new(try_save_prefs)),
         ..Default::default()
     }
 }
@@ -351,14 +548,15 @@ fn without_launch_args(args: Vec<String>) -> Vec<String> {
 
 /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
 /// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
-/// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB.
+/// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB. A Word
+/// template starts a new document instead ([`WordApp::open_from_platform`]), which has no path.
 fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     let name = path.to_string_lossy();
     let opened = wordcraft_engine::io::read_document(path)
-        .and_then(|bytes| app.run("file.open", serde_json::json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})));
+        .and_then(|bytes| app.open_from_platform(&name, Some(&wordcraft_engine::cmd::insert::base64_encode(&bytes))));
     match opened {
         // Not when it waits for a password: that open names the document itself.
-        Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
+        Ok(r) if r.get("pending").is_none() && !wordcraft_ui_egui::documents::is_word_template(&name) => app.session.path = Some(path.into()),
         Ok(_) => {}
         Err(e) => {
             app.report_open_failure(&name, &e);
@@ -370,14 +568,31 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 /// geometry, opens requested documents or the Start screen, starts the control server when
 /// asked, and runs the eframe event loop.
 fn main() -> eframe::Result {
+    #[cfg(windows)]
+    if let Some(code) = print::isolated::helper_mode() {
+        std::process::exit(code);
+    }
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
+    // Linux: before anything reads another program's AppImage variables, or a thread starts (#5653).
+    #[cfg(target_os = "linux")]
+    let start_over_failed = appimage_env::drop_inherited();
+    // Still carrying them, this process must never update itself: the update would replace the
+    // other program's file.
+    #[cfg(target_os = "linux")]
+    let updates_unsafe = start_over_failed.is_some();
+    #[cfg(not(target_os = "linux"))]
+    let updates_unsafe = false;
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     logging::install_panic_hook();
+    #[cfg(target_os = "linux")]
+    if let Some(e) = start_over_failed {
+        log::error!("couldn't start again without another program's AppImage variables, so the self-update is off in this window: {e}");
+    }
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
@@ -449,25 +664,35 @@ fn main() -> eframe::Result {
     // FXC, which needs no DLL of ours (#603; see graphics.rs).
     #[cfg(target_os = "windows")]
     graphics::configure(&mut options, eframe::wgpu::Backends::from_env());
-    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652).
+    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652). An x86_64
+    // build under Rosetta on Apple silicon keeps them (#5199).
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     load_user_fonts();
     // Windows opened for further documents start like the first one, before its saved place.
     let window_builder = options.viewport.clone();
-    let restored = saved_window();
+    let saved = saved_ui();
+    let restored = saved.as_ref().and_then(|ui| ui.window?.sanitized());
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
     }
     #[cfg(all(unix, not(target_os = "macos")))]
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; WORDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("WORDCRAFT_WAYLAND").is_none() {
-        options.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
+    {
+        let (x11, why) = uses_x11(saved.as_ref().map(|ui| ui.display_server).unwrap_or_default(), |name| std::env::var_os(name), x11_libraries);
+        log::info!("{why}");
+        if x11 {
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::x11::EventLoopBuilderExtX11;
+                b.with_x11();
+            }));
+        }
+    }
+    // egui-wgpu draws on the discrete GPU by default; on a laptop whose integrated GPU drives the
+    // panel, that wakes the discrete GPU whenever the window redraws. Draw on the GPU that drives
+    // the screen; `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` still decide (see linux_gpu.rs).
+    #[cfg(target_os = "linux")]
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+        setup.native_adapter_selector = Some(std::sync::Arc::new(linux_gpu::pick_adapter));
     }
     // Registered before the event loop starts, so it catches the Finder event that launched us as
     // well as later ones. Lives until the event loop returns; the app creator only borrows it.
@@ -484,19 +709,26 @@ fn main() -> eframe::Result {
             let region = region::system();
             let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
+            let cancel_file_dialog = dialogs.cancel_handle();
             let mut session = Session::new(doc);
             session.system_region = region;
-            let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
+            let mut app = WordApp::new(session, services(file_dialog, cancel_file_dialog, &cc.egui_ctx));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
-            load_user_dictionary(&mut app);
+            // After the preferences, so the reason it gives is in the interface language.
+            if updates_unsafe {
+                app.disable_self_update();
+            }
+            // Language packs from the suite's font store; an Install click is the person's own.
+            wordcraft_engine::packs::use_font_store(true);
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {
                 let doc = app.session.blank_document();
-                app.session.set_document(doc);
+                app.replace_startup_document(doc);
             }
             app.watch_desktop_theme(&cc.egui_ctx);
+            app.tell_about_font_downloads();
             if prefs_enabled()
                 && let Some(dir) = wordcraft_control_key::settings_dir()
             {
@@ -526,8 +758,9 @@ fn main() -> eframe::Result {
             if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
                 app.start_screen();
             }
+            // A Word template named here starts a new document based on it (#3433).
             for f in files {
-                if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
+                if let Err(e) = app.open_from_platform(&f, None) {
                     app.report_open_failure(&f, &e);
                 }
             }
@@ -577,6 +810,62 @@ mod tests {
         open_non_unicode(&mut app, &dir.join(std::ffi::OsString::from_vec(b"gon\xe9.txt".to_vec())));
         assert_eq!(app.session.path.as_deref(), Some(path.as_path()));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #2184: `WORDCRAFT_WAYLAND` beats the setting, Automatic keeps XWayland where there's an X
+    /// server, and a choice that isn't available falls back to the other.
+    #[test]
+    fn the_display_server_follows_the_variable_then_the_setting() {
+        use wordcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
+        let x11 = |setting, vars: &[(&str, &str)]| {
+            uses_x11(setting, |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| std::ffi::OsString::from(v)), || Ok(())).0
+        };
+        let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
+        assert!(x11(Auto, &both), "Automatic keeps XWayland, for file drag-and-drop");
+        assert!(x11(X11, &both));
+        assert!(!x11(Wayland, &both));
+        for (value, wants_x11) in [("1", false), ("", false), ("yes", false), ("0", true), (" Off ", true), ("FALSE", true), ("no", true)] {
+            let vars = [both[0], both[1], ("WORDCRAFT_WAYLAND", value)];
+            for setting in [Auto, Wayland, X11] {
+                assert_eq!(x11(setting, &vars), wants_x11, "WORDCRAFT_WAYLAND={value:?} beats {setting:?}");
+            }
+        }
+        // Without an X server X11 isn't forced: winit connects to Wayland instead of failing.
+        let wayland_only = [("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", "")];
+        assert!(!x11(X11, &wayland_only) && !x11(Auto, &wayland_only));
+        // Without Wayland, Wayland isn't forced either: unforced winit picks X11.
+        let (forced, why) = uses_x11(Wayland, |name| (name == "DISPLAY").then(|| ":0".into()), || Ok(()));
+        assert!(!forced && why.contains("X11 (no Wayland)"), "{why}");
+    }
+
+    /// Without the X11 libraries (the packages only recommend them) X11 isn't forced, whatever asks
+    /// for it: forced X11 failed to start, and winit panicked without libxkbcommon-x11. The check
+    /// runs only when X11 would be forced.
+    #[test]
+    fn missing_x11_libraries_leave_the_app_on_wayland() {
+        use wordcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
+        let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
+        for (setting, variable) in [(Auto, None), (X11, None), (Wayland, Some("0"))] {
+            let env = |name: &str| {
+                both.iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| (*v).into())
+                    .or_else(|| (name == "WORDCRAFT_WAYLAND").then_some(variable).flatten().map(Into::into))
+            };
+            let (x11, why) = uses_x11(setting, env, || Err("libxkbcommon-x11.so.0 could not be loaded".into()));
+            assert!(!x11, "{setting:?} with WORDCRAFT_WAYLAND={variable:?}: {why}");
+            assert!(why.contains("native Wayland") && why.contains("libxkbcommon-x11"), "{why}");
+        }
+        let checked = std::cell::Cell::new(false);
+        let (x11, _) = uses_x11(
+            Wayland,
+            |name| both.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).into()),
+            || {
+                checked.set(true);
+                Ok(())
+            },
+        );
+        assert!(!x11 && !checked.get(), "asked for Wayland, the libraries aren't checked");
     }
 
     /// A named pipe or a device under such a name is a warning, not a read: the pipe blocked
@@ -643,7 +932,72 @@ mod launch_arg_tests {
 
 #[cfg(test)]
 mod prefs_tests {
-    use super::write_prefs;
+    use serde_json::{Value, json};
+    use wordcraft_ui_egui::{UiState, theme::Appearance};
+
+    use super::{load_prefs_from, lock_prefs, prefs_merge, save_merged, write_prefs};
+
+    /// The preferences saved with `theme` (every other setting at its default).
+    fn with_theme(theme: &str) -> Value {
+        prefs_merge::as_read(&serde_json::to_vec(&json!({"theme": theme})).unwrap()).unwrap()
+    }
+
+    /// The theme the next process loads from `path`.
+    fn saved_theme(path: &std::path::Path) -> Appearance {
+        UiState::from_json(&std::fs::read(path).unwrap()).unwrap().theme
+    }
+
+    #[test]
+    fn a_setting_changed_by_another_process_after_a_save_here_keeps_its_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui.json");
+        std::fs::write(&path, serde_json::to_vec(&with_theme("light")).unwrap()).unwrap();
+        // A loads Light, switches to Dark and saves before exiting (taking a document off the
+        // recent list does).
+        let mut a = Some(with_theme("light"));
+        save_merged(&path, &mut a, with_theme("dark")).unwrap();
+        assert_eq!(saved_theme(&path), Appearance::Dark);
+        // B starts, loads Dark, switches to Light and exits.
+        save_merged(&path, &mut Some(with_theme("dark")), with_theme("light")).unwrap();
+        // A exits without touching the theme since its save: B's choice, made later, stays.
+        save_merged(&path, &mut a, with_theme("dark")).unwrap();
+        assert_eq!(saved_theme(&path), Appearance::Light);
+    }
+
+    #[test]
+    fn the_loaded_preferences_include_the_words_of_the_dictionary_file() {
+        // A word only `custom-dictionary.txt` has is loaded, not added here: if another process
+        // removes it from `ui.json`, this one mustn't write it back.
+        let dir = tempfile::tempdir().unwrap();
+        let (prefs, dict) = (dir.path().join("ui.json"), dir.path().join("custom-dictionary.txt"));
+        std::fs::write(&prefs, br#"{"dictionary": ["zqxinjson"]}"#).unwrap();
+        std::fs::write(&dict, "zqxinfile\n").unwrap();
+        let mut app = wordcraft_ui_egui::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let loaded = load_prefs_from(&mut app, Some(&prefs), Some(dict)).unwrap();
+        let words = loaded["dictionary"].as_array().unwrap();
+        for word in ["zqxinjson", "zqxinfile"] {
+            assert!(words.contains(&json!(word)), "{word}: {words:?}");
+        }
+        wordcraft_engine::proof::remove_word("zqxinjson");
+        wordcraft_engine::proof::remove_word("zqxinfile");
+    }
+
+    #[test]
+    fn a_save_waits_for_another_process_saving_at_the_same_moment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui.json");
+        // Another process is between reading and replacing `ui.json`.
+        let held = lock_prefs(&path).expect("the lock is free");
+        let saver = {
+            let path = path.clone();
+            std::thread::spawn(move || save_merged(&path, &mut None, with_theme("dark")))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!path.exists(), "saved while another process held the lock");
+        drop(held);
+        saver.join().unwrap().unwrap();
+        assert_eq!(saved_theme(&path), Appearance::Dark);
+    }
 
     #[test]
     fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {
