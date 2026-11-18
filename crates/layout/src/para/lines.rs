@@ -500,7 +500,13 @@ impl<'e> Breaker<'e> {
         // 10 pt, 30. Not on a line lowered further than the picture's height, which layout limits
         // to that height where Word's line keeps growing.
         let spacing = if let LineSpacing::Multiple(m) = rp.line_spacing { Some(m) } else { None };
-        let pictures_alone = !text && obj_asc + obj_desc > 0.0 && spacing.is_some();
+        // At-least spacing too, off the document grid: pictures alone take their own height (or
+        // the spacing's), the paragraph mark's descent not added below them (Word for Mac
+        // 16.114.4, Georgia 11 pt at least 12 pt: an 80 pt picture alone takes 80 pt).
+        // A list label is text on the line: its descent stays.
+        let labelled = self.first && pl.label.is_some();
+        let at_least = matches!(rp.line_spacing, LineSpacing::AtLeast(_)) && self.grid.is_none() && !labelled;
+        let pictures_alone = !text && obj_asc + obj_desc > 0.0 && (spacing.is_some() || at_least);
         let below = if pictures_alone { obj_desc } else { desc };
         let text_pictures = if pictures_alone {
             obj_asc + obj_desc

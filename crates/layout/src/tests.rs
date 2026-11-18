@@ -15573,6 +15573,36 @@ fn a_line_of_only_pictures_takes_no_descent() {
     assert!(para.lines.len() == 2 && (para.lines[0].height - 30.0).abs() < 0.01, "picture, then a line break: {}", para.lines[0].height);
 }
 
+/// At-least spacing: a line of only pictures is as tall as they are (or the spacing), the
+/// paragraph mark's descent not added below them; beside text the text's descent is. Word for
+/// Mac 16.114.4, Georgia 11 pt at least 12 pt: an 80 pt picture alone in its paragraph moves the
+/// next line down 80 pt, not 80 pt plus the font's 2.4 pt descent (`cargo xtask word-compare`,
+/// probe `picture-atleast-12`).
+#[test]
+fn a_line_of_only_pictures_takes_no_descent_at_least_spaced() {
+    use wordcraft_doc::props::LineSpacing;
+    let line_of = |lead: &str, least: f32| {
+        let mut d = Document::from_text(lead);
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.line_spacing = Some(LineSpacing::AtLeast(least));
+            let at = p.len();
+            p.insert_object(at, picture(60.0, 30.0, Default::default()), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].height, para.lines[0].baseline - para.lines[0].top, para.styles[0].descent)
+    };
+    for lead in ["", "    "] {
+        let (h, base, _) = line_of(lead, 12.0);
+        assert!((h - 30.0).abs() < 0.01 && (base - 30.0).abs() < 0.01, "{lead:?}: line {h}, baseline {base}");
+        // Spacing taller than the picture: the line takes it, the picture on its bottom.
+        let (h, base, _) = line_of(lead, 50.0);
+        assert!((h - 50.0).abs() < 0.01 && (base - 50.0).abs() < 0.01, "{lead:?} at least 50: line {h}, baseline {base}");
+    }
+    let (h, base, desc) = line_of("Text ", 12.0);
+    assert!((h - (30.0 + desc)).abs() < 0.01 && (base - 30.0).abs() < 0.01, "with text: line {h}, baseline {base}");
+}
+
 /// A kept-together paragraph starting a continuous section low on a page, with room there for
 /// one of its lines, moves whole to the next page, where it fits (#3907 review).
 #[test]
