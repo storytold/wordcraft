@@ -134,8 +134,7 @@ impl WordApp {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
         crate::font_download::tick(self);
-        zotero::show_question(self, ctx);
-        zotero::show_alert(self, ctx);
+        zotero::show_question(self);
         // PLAN: assumed `updates_ui::run(app: &mut WordApp)` (shell-w13, sh.A20) opens the updater's dialogs on the host.
         updates_ui::run(self);
         crate::dialogs::host::prepare(self);

@@ -82,7 +82,7 @@ impl WordApp {
 mod tests {
     use std::collections::BTreeSet;
 
-    use craft_ui::fonts::{Sample, missing_glyphs};
+    use craft::ui::fonts::{Sample, missing_glyphs};
 
     use super::*;
 

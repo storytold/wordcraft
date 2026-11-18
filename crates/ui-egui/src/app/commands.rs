@@ -3,8 +3,9 @@ use craft::platform::default_app::{DefaultApp, DefaultAppError};
 use craft::quit::{CloseAnswer, CloseScope};
 
 use super::command_board::command_enabled;
+use crate::colors;
 use super::{
-    MAX_RECENT, SaveInFlight, Value, WordApp, applied_font, chrome, colors, crop, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
+    MAX_RECENT, SaveInFlight, Value, WordApp, applied_font, chrome, crop, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
     paste_picture, printing, push_recent_font, system_clipboard, table_pen, theme, zotero,
 };
 
@@ -735,9 +736,9 @@ impl WordApp {
                         }
                         "discard" => {
                             if let Some(prompt) =
-                                self.dialog_host.get_mut_by_id::<dialogs::host::Keyed<craft::ui::panels::dialog::StandardPrompt>>(id)
+                                self.dialog_host.get_mut_by_id::<dialogs::host::Keyed<craft::ui::dialog::StandardPrompt>>(id)
                             {
-                                prompt.inner_mut().set_choice(craft::ui::panels::dialog::PromptChoice::Proceed);
+                                prompt.inner_mut().set_choice(craft::ui::dialog::PromptChoice::Proceed);
                             }
                             self.dialog_host.confirm_by_id(&ctx, id);
                         }

@@ -1,5 +1,4 @@
-// PLAN(app-hub): craft facade path of the framework's clipboard handle
-use craft::ui::runtime::commands::clipboard::ClipboardHandle;
+use craft::ui::runtime::commands::ClipboardHandle;
 
 use super::{Value, WordApp, json};
 

@@ -398,7 +398,8 @@ mod tests {
 
     use craft::pages::ui::access::MAX_NODES;
     use craft::ui::runtime::access::Role;
-    use craft::ui::testing::{AccessTree, Fixture, NodeKey};
+    use craft::ui::testing::Fixture;
+    use craft::ui::testing::access::{AccessTree, NodeKey};
     use egui::accesskit;
     use serde_json::json;
 
