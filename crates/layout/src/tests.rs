@@ -10186,6 +10186,57 @@ fn columns_before_a_continuous_break_are_balanced() {
     }
 }
 
+/// #6829: in balanced columns, the last lines of a paragraph begun on the page before stay with
+/// the paragraph after it when the paragraph is kept with the next (Word 16.0, compatibility
+/// mode 15: three columns, exact 14 pt lines, the tail P4–P5 and Q all in column 1).
+#[test]
+fn balanced_columns_keep_a_continued_tail_with_the_next_paragraph() {
+    crate::test_fonts();
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let lb = wordcraft_doc::para::LINE_BREAK;
+    let filler = 135;
+    let mut text: Vec<String> = (0..filler).map(|i| format!("F{i}")).collect();
+    text.push("P1".into());
+    text.push("Q".into());
+    text.push("After".into());
+    let mut d = Document::from_text(&text.join("\n"));
+    for block in &mut d.body {
+        if let Block::Para(para) = Arc::make_mut(block) {
+            para.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+            para.props.space_before = Some(0.0);
+            para.props.space_after = Some(0.0);
+        }
+    }
+    let p = d.para_mut(StoryRef::Body, &Path::top(filler)).unwrap();
+    p.insert_text(2, &format!("{lb}P2{lb}P3{lb}P4{lb}P5"), &Default::default()).unwrap();
+    p.props.keep_next = Some(true);
+    let mut s = SectionProps::default();
+    s.columns.count = 3;
+    d.para_mut(StoryRef::Body, &Path::top(filler + 1)).unwrap().section = Some(Box::new(s));
+    d.last_section.start = SectionStart::Continuous;
+    let l = lay(&d);
+    // P's pieces: (page, x, top, line count).
+    let pieces: Vec<(usize, f32, f32, usize)> = l
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(pi, pg)| {
+            pg.items.iter().filter_map(move |it| match it {
+                Placed::Lines { story: StoryRef::Body, path, l0, l1, x, y, .. } if path.0[..] == [filler as u32] => Some((pi, *x, *y, l1 - l0)),
+                _ => None,
+            })
+        })
+        .collect();
+    assert_eq!(pieces.len(), 2, "P begins on page 1 and ends on page 2: {pieces:?}");
+    let (tail_page, tail_x, tail_top, tail_lines) = pieces[1];
+    assert_eq!((pieces[0].0, tail_page, tail_lines), (0, 1, 2), "P4 and P5 on page 2: {pieces:?}");
+    let q = para_boxes(&l)[filler + 1];
+    assert_eq!(q.0, 1, "Q on page 2: {q:?}");
+    assert!((q.1 - tail_x).abs() < 0.5, "Q in the column of P4 and P5: Q {q:?}, P {pieces:?}");
+    assert!((q.2 - (tail_top + 28.0)).abs() < 0.5, "Q right under P5: Q {q:?}, P {pieces:?}");
+}
+
 #[test]
 fn columns_before_a_page_break_or_a_column_break_are_not_balanced() {
     crate::test_fonts();

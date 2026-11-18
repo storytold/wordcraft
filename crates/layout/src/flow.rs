@@ -474,6 +474,27 @@ impl<'a> Flow<'a> {
         true
     }
 
+    /// Keep with next for the end of a paragraph begun in an earlier column (#6829): in columns
+    /// being balanced, the piece holding its last line must leave room below for the next
+    /// paragraph to start (as [`Self::keep_together`] asks of a paragraph's start), or its last
+    /// lines (two under widow/orphan control) go over with that paragraph, as in Word. All of
+    /// them going over returns `l0`, and the caller moves on even from a column's top: the
+    /// balancing pass then runs onto another page and the columns are tried taller.
+    fn kept_tail_end(&self, ctx: &mut Ctx, pb: &PageBuilder, rooms: Rooms, fit: &Fit) -> usize {
+        let (rp, n, l0) = (&self.pl.rp, self.n(), self.l0);
+        let balancing = pb.balance.is_some_and(|(page, _)| page + 1 == pb.pages.len());
+        if l0 == 0 || fit.l1 < n || fit.forced.is_some() || !rp.keep_next || !balancing || pb.web {
+            return fit.l1;
+        }
+        let (Some(first), Some(last)) = (self.pl.lines.get(l0), self.pl.lines.last()) else { return fit.l1 };
+        let tail = last.top + last.height - first.top + rooms.bottom;
+        let need = tail + next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone());
+        if pb.y + need <= pb.bottom + 0.01 {
+            return fit.l1;
+        }
+        n.saturating_sub(if rp.widow_control { 2 } else { 1 }).max(l0)
+    }
+
     /// The end of the lines on this page after widow/orphan control, and keeping the rows beside
     /// floating objects together.
     fn settled_end(&self, pb: &PageBuilder, fit: &Fit) -> usize {
@@ -855,11 +876,14 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let notes = para_notes(ctx.doc, p, &f.pl);
         let mut fit = f.fit_lines(ctx, pb, &notes, lead);
         fit.l1 = f.settled_end(pb, &fit);
+        let settled = fit.l1;
+        fit.l1 = f.kept_tail_end(ctx, pb, rooms, &fit);
+        let kept_over = fit.l1 < settled;
         if f.settle_late(pb, fit.l1) {
             continue;
         }
         if fit.l1 == f.l0 {
-            if !pb.fresh() {
+            if !pb.fresh() || kept_over {
                 f.move_on(ctx, pb);
                 continue;
             }
