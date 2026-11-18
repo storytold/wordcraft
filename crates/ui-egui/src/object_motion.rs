@@ -254,13 +254,16 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
             if seen.rev == rev && seen.pose.same(&pose) {
                 st.seen = Some(seen);
             } else {
+                // The old motion ends here. If the new one cannot be drawn (the object is too
+                // big for a picture), the solid object shows at once.
+                let old = if seen.pose.same(&pose) { None } else { st.live.take() };
                 if !seen.pose.same(&pose)
                     && fits(ctx, bounds, scale)
                     && let Some(o) = &subject
                     && let Some(tex) = crate::objects::preview(app, ctx, layout, o, scale)
                 {
                     // A motion cut short by another change goes on from where it was drawn.
-                    let from = st.live.take().map_or(seen.pose, |l| l.tween.pose(l.drawn.min(now)));
+                    let from = old.map_or(seen.pose, |l| l.tween.pose(l.drawn.min(now)));
                     st.live = Some(Live {
                         page_hidden: (o.page, key.clone()),
                         tween: Tween { from, to: pose, start: now, secs: SECS },
@@ -275,6 +278,10 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
             }
         }
         (Some((key, pose, bounds)), _) => {
+            // Another object is selected: it does not take over the motion of the first.
+            if st.live.as_ref().is_some_and(|l| l.page_hidden.1 != key) {
+                st.live = None;
+            }
             st.seen = Some(Seen { key, rev, pose, bounds, tex: None });
         }
         (None, _) => {}
