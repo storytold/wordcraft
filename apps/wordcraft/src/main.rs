@@ -34,7 +34,7 @@ mod traffic_lights;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
-    window_geometry::{RawWindowState, WindowGeometry, reachable, take_rescue},
+    window_geometry::{RawWindowState, WindowGeometry, reachable, take_rescue, usable_zoom, waiting_for_maximize},
 };
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
@@ -48,9 +48,16 @@ struct App(
     file_dialogs::Launcher,
     // The host's answer for this frame. `InputState` still describes the last painted frame on
     // a hidden logic tick.
-    RawWindowState,
+    WindowFrame,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
 );
+
+struct WindowFrame {
+    state: RawWindowState,
+    input_zoom: f32,
+    painted: bool,
+    maximize_attempts: u8,
+}
 
 impl eframe::App for App {
     /// Advances one desktop frame: polls Finder events on macOS, runs the app and its file dialogs,
@@ -61,20 +68,30 @@ impl eframe::App for App {
         apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
         self.3.show(frame);
-        let mut window = self.4;
+        let mut window = self.4.state;
         // Only until the off-screen check below has run: it is the one reader.
         if self.1.is_some() {
-            let (on_a_monitor, primary_monitor_rect) = monitor_geometry(frame, ctx.pixels_per_point());
+            let (on_a_monitor, primary_monitor_rect) = monitor_geometry(frame);
             window.on_a_monitor = on_a_monitor;
             window.primary_monitor_rect = primary_monitor_rect;
+        }
+        let zoom = usable_zoom(ctx.zoom_factor());
+        let (waiting, maximize) = waiting_for_maximize(self.1, self.4.painted, &mut window, &mut self.4.maximize_attempts);
+        if waiting {
+            if let Some(command) = maximize {
+                ctx.send_viewport_cmd(command);
+            }
+            if window.minimized != Some(true) && window.fullscreen != Some(true) {
+                ctx.request_repaint();
+            }
         }
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
         // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
         // knows the monitor: the off-screen check below takes the pending geometry then.
         if let Some((pos, size)) = self.1.and_then(|g| g.fit_on_monitor(&window)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
-            let b = self.0.window_builder().clone().with_inner_size(size);
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size / zoom));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos / zoom));
+            let b = self.0.window_builder().clone().with_inner_size(size / zoom);
             self.0.set_window_builder(b);
         }
         // The geometry saved for the next start is the active window's.
@@ -85,17 +102,15 @@ impl eframe::App for App {
         let tracked = if active == egui::ViewportId::ROOT {
             window
         } else {
-            ctx.input_for(active, |i| RawWindowState::from_viewport(Some(i.viewport()), Some(i.viewport_rect())))
+            ctx.input_for(active, |i| RawWindowState::from_viewport(Some(i.viewport()), Some(i.viewport_rect()))).in_system_points(self.4.input_zoom)
         };
-        self.0.ui.window = WindowGeometry::track(prev, &tracked);
-        // The first frame, once the monitor is known (as `take_rescue` waits for): maximize a
-        // window that opened at its normal size so it never flashed on screen half-opened.
-        let maximize = self.1.and_then(|g| g.maximize_after_open()).filter(|_| window.monitor_size.is_some());
-        if let Some(pos) = take_rescue(&mut self.1, &window) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+        if !waiting {
+            self.0.ui.window = WindowGeometry::track(prev, &tracked);
         }
-        if let Some(command) = maximize {
-            ctx.send_viewport_cmd(command);
+        // Once the monitor is known and the initial state is acknowledged, rescue the position
+        // exactly once.
+        if !waiting && let Some(pos) = take_rescue(&mut self.1, &window) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos / zoom));
         }
         // The window's close button: with other windows open only this window closes (the app
         // handles that while drawing it); the last one quits, asking first about unsaved changes
@@ -124,12 +139,14 @@ impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // Keep this frame's native window state. `logic` must not read the last painted
         // `InputState` when a hidden Wayland tick reports no fresh inner rect.
-        self.4 = RawWindowState::from_raw(raw);
+        self.4.input_zoom = usable_zoom(ctx.zoom_factor());
+        self.4.state = RawWindowState::from_raw(raw).in_system_points(self.4.input_zoom);
         self.0.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
         self.3.show(frame);
+        self.4.painted = true;
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -145,10 +162,11 @@ impl eframe::App for App {
 /// Whether a grippable part of the window is on a monitor, and the primary monitor bounds.
 /// Winit reports physical pixels; egui positions use points. `None` where the platform cannot
 /// report the window or primary monitor (Wayland, headless).
-fn monitor_geometry(frame: &eframe::Frame, pixels_per_point: f32) -> (Option<bool>, Option<egui::Rect>) {
+fn monitor_geometry(frame: &eframe::Frame) -> (Option<bool>, Option<egui::Rect>) {
     let Some(w) = frame.winit_window() else {
         return (None, None);
     };
+    let pixels_per_point = w.scale_factor() as f32;
     if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
         return (None, None);
     }
@@ -773,7 +791,7 @@ fn main() -> eframe::Result {
                 Some(restored.unwrap_or_default()),
                 key_file,
                 dialogs,
-                RawWindowState::default(),
+                WindowFrame { state: RawWindowState::default(), input_zoom: 1.0, painted: false, maximize_attempts: 8 },
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
             )))
