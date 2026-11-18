@@ -36,7 +36,8 @@ const DESKTOP_ID: &str = "ai.storyteller.wordcraft.desktop";
 
 /// The types the button makes WordCraft the default for on Linux and BSD: Word documents and
 /// templates (also macro-enabled and legacy), RTF and ODT. The same set the Windows installer
-/// lists under WordCraft's Capabilities; Markdown and plain text are only offered under Open With.
+/// lists under WordCraft's Capabilities; Markdown is only offered under Open With, and plain
+/// text only on Windows and macOS (the `.desktop` file leaves it out, #4137).
 /// Every one is in the `.desktop` file's `MimeType=` (a test checks).
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
 const WORD_MIME_TYPES: &[&str] = &[
@@ -162,6 +163,16 @@ mod tests {
             assert!(declared.contains(t), "{t} missing from MimeType=");
         }
         assert!(entry.lines().any(|l| l == "Exec=wordcraft %F"), "files are passed on the command line");
+    }
+
+    /// Declaring `text/plain` makes WordCraft a handler for every config, script and log on systems with no default set.
+    #[test]
+    fn the_desktop_entry_does_not_declare_plain_text() {
+        let entry = include_str!("../../../packaging/linux/ai.storyteller.wordcraft.desktop");
+        let declared: Vec<&str> =
+            entry.lines().find_map(|l| l.strip_prefix("MimeType=")).map(|v| v.split(';').filter(|s| !s.is_empty()).collect()).unwrap_or_default();
+        assert!(!declared.is_empty(), "MimeType= line not found");
+        assert!(!declared.contains(&"text/plain"), "text/plain must not be declared");
     }
 
     #[cfg(unix)]

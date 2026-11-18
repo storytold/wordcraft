@@ -5,8 +5,6 @@
 //! Engine reordering, e.g. U+1031 ေ drawn before its consonant) from the run's script, so text
 //! mixing scripts in one face must be shaped one script at a time.
 
-#![allow(clippy::single_range_in_vec_init)] // one run is a list of runs
-
 use unicode_script::{Script, UnicodeScript};
 
 /// The script of `c` for itemisation: `None` for characters that take the script of the text
@@ -20,11 +18,33 @@ fn real_script(c: char) -> Option<Script> {
     }
 }
 
+/// Whether `c` belongs to a script whose letters join their neighbours (Arabic, Syriac, Mongolian…),
+/// so a letter's form depends on the text on either side of it.
+pub fn joins_cursively(c: char) -> bool {
+    c >= '\u{0600}'
+        && matches!(
+            c.script(),
+            Script::Adlam
+                | Script::Arabic
+                | Script::Chorasmian
+                | Script::Hanifi_Rohingya
+                | Script::Mandaic
+                | Script::Manichaean
+                | Script::Mongolian
+                | Script::Nko
+                | Script::Old_Uyghur
+                | Script::Phags_Pa
+                | Script::Psalter_Pahlavi
+                | Script::Sogdian
+                | Script::Syriac
+        )
+}
+
 /// Maximal single-script byte ranges of `text`. Characters of no particular script join the run
 /// before them (or, at the start, the first run), so the ranges cover `text` exactly.
 pub(crate) fn script_runs(text: &str) -> Vec<std::ops::Range<usize>> {
     if text.is_ascii() {
-        return vec![0..text.len()];
+        return std::iter::once(0..text.len()).collect();
     }
     let mut runs = Vec::new();
     let mut cur: Option<Script> = None;

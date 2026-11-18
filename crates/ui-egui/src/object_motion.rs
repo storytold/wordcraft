@@ -15,10 +15,10 @@
 //! document position, so pictures and other objects can join by being offered by
 //! [`crate::objects::motion_subject`].
 //!
-//! No motion when: animation effects are off (File ▸ Options ▸ Advanced, or the system's
-//! reduced-motion setting under "Use system setting"), egui's `animation_time` is 0 (the headless
-//! harness and `ui_shot`), the object moved by a drag of the user (they saw it move), or it
-//! changed page.
+//! No motion when: animation effects are off (File ▸ Options ▸ Advanced; the system's
+//! reduced-motion setting counts only while that is "Use system setting"), egui's
+//! `animation_time` is 0 (the headless harness and `ui_shot`), or the picture of the object
+//! would not fit a GPU texture.
 
 use egui::{Color32, Pos2};
 use wordcraft_doc::Pos;
@@ -141,6 +141,8 @@ struct Live {
     /// Made this frame, which laid the page out again and drew it without the object: that time
     /// is not part of the motion, so the clock starts with the next frame.
     fresh: bool,
+    /// When it was last drawn: a motion cut short goes on from the pose drawn then.
+    drawn: f64,
 }
 
 #[derive(Clone, Default)]
@@ -158,7 +160,7 @@ const WAS: f32 = 0.35;
 const TARGET: f32 = 0.45;
 
 fn state_id() -> egui::Id {
-    egui::Id::new("object_motion")
+    egui::Id::unique("object_motion")
 }
 
 fn quad(tex: &egui::TextureHandle, pts: [Pos2; 4], alpha: f32) -> egui::Shape {
@@ -216,10 +218,16 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
     if st.live.as_ref().is_some_and(|l| l.tween.done(now)) {
         st.live = None;
     }
+    // A shape deleted while it moves leaves no copies behind.
+    if st.live.as_ref().is_some_and(|l| layout.object(&l.page_hidden.1, l.page_hidden.0).is_none()) {
+        st.live = None;
+    }
 
     if let Some(drag) = crate::objects::motion_drag(app) {
         // Only an object with a picture of its original can be taken off its page.
-        let known = st.seen.as_ref().is_some_and(|s| s.key == drag.key && s.tex.is_some());
+        // A turn of a box with no pixels of its own to show keeps the solid original in place.
+        let shows = drag.pixels || drag.resize;
+        let known = shows && st.seen.as_ref().is_some_and(|s| s.key == drag.key && s.tex.is_some());
         st.dragged = known.then_some((drag.page, drag.key));
         st.live = None;
         ctx.data_mut(|d| d.insert_temp(id, st));
@@ -233,10 +241,15 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
     let subject = crate::objects::motion_subject(app, layout);
     let current = subject.as_ref().map(|o| (o.pos(), Pose { page: o.page, rect: o.rect, deg: o.spin.deg }, o.bounds()));
     match (current, st.seen.take()) {
-        // Moving a shape through the text can anchor it to another paragraph: its position then
-        // changes, and the old one holds no object any more.
+        // Moving a shape to another page anchors it to another paragraph: its position then
+        // changes. It is the same object when the old position holds none any more and the
+        // frame has the same size (a deleted shape with another selected is not a move).
         (Some((key, pose, bounds)), Some(seen))
-            if seen.key == key || (seen.rev != rev && layout.object(&seen.key, app.session.page_hint).is_none()) =>
+            if seen.key == key
+                || (seen.rev != rev
+                    && (seen.pose.rect.w - pose.rect.w).abs() < EPS
+                    && (seen.pose.rect.h - pose.rect.h).abs() < EPS
+                    && layout.object(&seen.key, seen.pose.page).is_none()) =>
         {
             if seen.rev == rev && seen.pose.same(&pose) {
                 st.seen = Some(seen);
@@ -247,7 +260,7 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
                     && let Some(tex) = crate::objects::preview(app, ctx, layout, o, scale)
                 {
                     // A motion cut short by another change goes on from where it was drawn.
-                    let from = st.live.take().map_or(seen.pose, |l| l.tween.pose(now));
+                    let from = st.live.take().map_or(seen.pose, |l| l.tween.pose(l.drawn.min(now)));
                     st.live = Some(Live {
                         page_hidden: (o.page, key.clone()),
                         tween: Tween { from, to: pose, start: now, secs: SECS },
@@ -255,6 +268,7 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
                         bounds,
                         tex,
                         fresh: true,
+                        drawn: now,
                     });
                 }
                 st.seen = Some(Seen { key, rev, pose, bounds, tex: None });
@@ -281,11 +295,11 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
 pub fn paint(app: &WordApp, painter: &egui::Painter, pages: &[egui::Rect], scale: f32) {
     let ctx = painter.ctx();
     let id = state_id();
-    let Some(st) = ctx.data(|d| d.get_temp::<State>(id)) else { return };
+    let Some(mut st) = ctx.data(|d| d.get_temp::<State>(id)) else { return };
     let now = ctx.input(|i| i.time);
     if let Some(drag) = crate::objects::motion_drag(app) {
         // The original, faint where it was (the page is drawn without it).
-        if let Some(s) = &st.seen
+        if let Some(s) = st.seen.as_ref().filter(|s| s.key == drag.key && (drag.pixels || drag.resize))
             && let Some(tex) = &s.tex
             && let Some(page) = pages.get(s.pose.page)
         {
@@ -320,6 +334,10 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, pages: &[egui::Rect], scale
         };
         painter.add(quad(&l.tex, pts, WAS));
         ctx.request_repaint();
+        if let Some(l) = st.live.as_mut() {
+            l.drawn = now;
+        }
+        ctx.data_mut(|d| d.insert_temp(id, st));
     }
 }
 

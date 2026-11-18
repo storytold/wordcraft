@@ -59,7 +59,8 @@ pub fn format_result(v: f64) -> String {
 }
 
 /// The text a formula field shows: its result under its `\#` numeric picture when it has one (see
-/// [`format_picture`]), otherwise as [`format_result`] shows it.
+/// [`format_picture`]), otherwise as [`format_result`] shows it, and then under its `\*` switches:
+/// a number format such as `\* CardText`, then a capitalization switch such as `\* Upper`.
 pub fn evaluate_field(t: &Table, r: usize, c: usize, instr: &str) -> Result<String, CmdError> {
     evaluate_field_with(t, None, None, r, c, instr)
 }
@@ -74,7 +75,7 @@ pub fn evaluate_field_with(
 ) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
     let value = evaluate_with(t, doc, default_lang, r, c, formula)?;
-    Ok(match switch.and_then(picture_of) {
+    let text = match switch.and_then(picture_of) {
         Some(picture) => format_picture(value, &picture),
         None => {
             let out_lang = doc
@@ -97,21 +98,63 @@ pub fn evaluate_field_with(
                 .or_else(|| default_lang.map(str::to_string));
             wordcraft_doc::locale_number::format_number(value, out_lang.as_deref())
         }
+    };
+    Ok(match switch {
+        Some(switch) => format_switches(switch, value, text),
+        None => text,
     })
 }
 
-/// Splits a field's `\#` switch off its formula: `=SUM(ABOVE) \# "0.00"` gives the formula and the
-/// switch text (from the `\#` on).
+/// The text of a formula result under the field's `\*` switches, where `text` is `value` formatted
+/// with the `\#` picture, or in the cell's language when there is no picture. A number format such
+/// as `\* CardText`, `\* OrdText` or `\* roman` writes a whole number the format covers (up to
+/// 999,999 for CardText and OrdText, 1 to 50,000 for roman, 1 to 780 for alphabetic), in lowercase
+/// for CardText and OrdText. `\* Hex` writes a whole number from 0 to 4,294,967,295 in uppercase
+/// hexadecimal digits. `\* DollarText` writes a result from 0 to 999,999.99 in lowercase cardinal
+/// text with its first two decimals (rounded) over 100 (see
+/// [`wordcraft_layout::fields::dollar_text`]). Any other result keeps its digits. The capitalization
+/// switches (`\* Upper`, `\* Lower`, `\* Caps`, `\* FirstCap`) then apply to the text in order. Other
+/// `\*` switches leave the text as it is. Quoted text, such as a `\#` picture, is not a switch.
+fn format_switches(switches: &str, value: f64, text: String) -> String {
+    use wordcraft_doc::section::NumFormat;
+    let unquoted = switches.split('"').step_by(2).collect::<Vec<_>>().join(" ");
+    let fmt = wordcraft_layout::fields::format_switch(&unquoted).filter(|f| *f != NumFormat::Decimal);
+    match fmt {
+        Some(NumFormat::DollarText) => {
+            let text = wordcraft_layout::fields::dollar_text(value).unwrap_or(text);
+            wordcraft_layout::fields::apply_case_switch(switches, text)
+        }
+        Some(fmt) if number_format_covers(fmt, value) => wordcraft_layout::fields::field_number(switches, fmt, value as u32),
+        _ => wordcraft_layout::fields::apply_case_switch(switches, text),
+    }
+}
+
+/// Whether the `\*` number format `fmt` writes `value`: a whole number up to 999,999 for CardText
+/// and OrdText, 1 to 50,000 for roman, 1 to 780 for alphabetic, and 0 to `u32::MAX` otherwise.
+pub(crate) fn number_format_covers(fmt: wordcraft_doc::section::NumFormat, value: f64) -> bool {
+    use wordcraft_doc::section::NumFormat;
+    let range = match fmt {
+        NumFormat::CardinalText | NumFormat::OrdinalText => 0.0..=999_999.0,
+        NumFormat::LowerRoman | NumFormat::UpperRoman => 1.0..=50_000.0,
+        NumFormat::LowerLetter | NumFormat::UpperLetter => 1.0..=780.0,
+        _ => 0.0..=f64::from(u32::MAX),
+    };
+    value.fract() == 0.0 && range.contains(&value)
+}
+
+/// Splits a field's switches (`\#` and `\*`) off its formula: `=SUM(ABOVE) \# "0.00"` gives the
+/// formula and the switch text (from the first switch on).
 pub fn split_switch(instr: &str) -> (&str, Option<&str>) {
-    match instr.find("\\#") {
+    match [instr.find("\\#"), instr.find("\\*")].into_iter().flatten().min() {
         Some(at) => (instr[..at].trim_end(), Some(&instr[at..])),
         None => (instr, None),
     }
 }
 
-/// The picture a `\#` switch names: a quoted one (`"#,##0.00"`) or a single word.
+/// The picture of the `\#` switch in a field's switch text: a quoted one (`"#,##0.00"`) or a
+/// single word.
 fn picture_of(switch: &str) -> Option<String> {
-    let rest = switch.strip_prefix("\\#")?.trim_start();
+    let rest = switch[switch.find("\\#")? + 2..].trim_start();
     let picture = match rest.strip_prefix('"') {
         Some(quoted) => quoted.split('"').next().unwrap_or_default(),
         None => rest.split_whitespace().next().unwrap_or_default(),
@@ -881,6 +924,33 @@ mod tests {
     #[test]
     fn numbers_read_currency_and_separators_but_not_letters() {
         assert_eq!(parse_number("$1,200", None), Some(1200.0));
+        assert_eq!(parse_number("B/. 1,234.50", None), Some(1234.5), "the Panamanian balboa");
+        assert_eq!(parse_number("1,234.50 B/.", None), Some(1234.5));
+        assert_eq!(parse_number("(B/. 1,234.50)", None), Some(-1234.5), "an accounting negative");
+        assert_eq!(parse_number("B/.1,234.50", None), None, "Word needs a space after the sign");
+        assert_eq!(parse_number("1/.5", None), None, "a fraction is not a balboa amount");
+        // The formula reads the cell in the document's language. With the document's default text
+        // as es-PA and the editing language as pl-PL the choice is observable: `1,250.50` is a
+        // number under es-PA and not under pl-PL (whose decimal separator is `,`).
+        let balboa = table(&[&["B/. 1,234.50"], &["(B/. 1,234.50)"], &[""]]);
+        let mut doc = wordcraft_doc::Document::new();
+        std::sync::Arc::make_mut(&mut doc.styles).default_chr.lang = Some("es-PA".into());
+        assert_eq!(
+            evaluate_with(&balboa, Some(&doc), Some("pl-PL"), 2, 0, "=SUM(ABOVE)"),
+            Ok(0.0),
+            "a balboa cell sums in the document's language, and its negative in parentheses cancels it",
+        );
+        assert_eq!(evaluate_with(&balboa, Some(&doc), Some("pl-PL"), 2, 0, "=COUNT(ABOVE)"), Ok(2.0), "both balboa cells are numbers",);
+        // And the other way around: a balboa cell written with Polish separators is read only when
+        // the document language reaches the parser, not when it falls back to English.
+        let mut polish = wordcraft_doc::Document::new();
+        std::sync::Arc::make_mut(&mut polish.styles).default_chr.lang = Some("pl-PL".into());
+        let balboa_pl = table(&[&["B/. 1 250,50"], &[""]]);
+        assert_eq!(
+            evaluate_with(&balboa_pl, Some(&polish), Some("en-US"), 1, 0, "=SUM(ABOVE)"),
+            Ok(1250.5),
+            "the cell's language selects the separators; English does not read `1 250,50`",
+        );
         assert_eq!(parse_number(" 12% ", None), Some(12.0));
         assert_eq!(parse_number("(5)", None), Some(-5.0));
         assert_eq!(parse_number("x9", None), None);
@@ -952,6 +1022,46 @@ mod tests {
         assert_eq!(shown("=A1"), "1234.50");
         assert_eq!(shown("=A1 \\# 0"), "1235", "a bare picture word");
         assert_eq!(shown("=A1 \\# \"\""), "1234.50", "an empty picture is none");
+    }
+
+    #[test]
+    fn a_format_switch_writes_the_result_as_text_and_sets_its_capitals() {
+        let t = table(&[&["790"], &["1.5"], &[""]]);
+        assert_eq!(split_switch("=A1 \\* Caps \\# 0"), ("=A1", Some("\\* Caps \\# 0")));
+        let shown = |f: &str| evaluate_field(&t, 2, 0, f).unwrap_or_else(|e| panic!("{f}: {e}"));
+        assert_eq!(shown("=A1 \\* CardText"), "seven hundred ninety");
+        assert_eq!(shown("=A1 \\* CardText \\* Caps"), "Seven Hundred Ninety");
+        assert_eq!(shown("=A1 \\* OrdText \\* FirstCap"), "Seven hundred ninetieth");
+        assert_eq!(shown("=A1 \\* roman"), "dccxc");
+        assert_eq!(shown("=A1 \\* MERGEFORMAT"), "790", "a switch that formats nothing");
+        assert_eq!(shown("=A1 \\# \"#,##0.00\" \\* MERGEFORMAT"), "790.00");
+        assert_eq!(shown("=A1 \\* MERGEFORMAT \\# 0.0"), "790.0", "a picture after a format switch");
+        assert_eq!(shown("=A1 \\# \"0 \\* CardText items\""), "790 \\* CardText items", "a switch inside the picture is text");
+        assert_eq!(shown("=A2 \\* CardText"), "1.50", "a fraction keeps its digits");
+        assert_eq!(shown("=A1-800 \\* CardText"), "-10", "a negative number keeps its digits");
+        assert_eq!(shown("=A1*1266 \\* CardText"), "1000140", "a number past CardText keeps its digits");
+        assert_eq!(shown("=A1*1266 \\* OrdText \\* Upper"), "1000140");
+        assert_eq!(shown("=A1*64 \\* roman"), "50560", "a number past roman keeps its digits");
+        assert_eq!(shown("=A1-790 \\* roman"), "0", "roman has no zero");
+        assert_eq!(shown("=A1 \\* alphabetic"), "790", "a number past alphabetic keeps its digits");
+    }
+
+    #[test]
+    fn dollar_text_and_hex_switches_write_the_result() {
+        let t = table(&[&["9.20", "5.35"], &["458", "-1"], &["", ""]]);
+        let shown = |f: &str| evaluate_field(&t, 2, 0, f).unwrap_or_else(|e| panic!("{f}: {e}"));
+        assert_eq!(shown("= 9.20 + 5.35 \\* DollarText \\* Upper"), "FOURTEEN AND 55/100");
+        assert_eq!(shown("=A1+B1 \\* DollarText"), "fourteen and 55/100");
+        assert_eq!(shown("=A2 \\* DollarText \\* FirstCap"), "Four hundred fifty-eight and 00/100");
+        assert_eq!(shown("=0.999 \\* DollarText"), "one and 00/100");
+        assert_eq!(shown("=A2 \\* Hex"), "1CA");
+        assert_eq!(shown("=A2 \\* Hex \\* Lower"), "1ca");
+        assert_eq!(shown("=A2*0 \\* Hex"), "0");
+        assert_eq!(shown("=B2 \\* DollarText"), shown("=B2"), "a negative number keeps its digits");
+        assert_eq!(shown("=B2 \\* Hex"), shown("=B2"));
+        assert_eq!(shown("=A2/4 \\* Hex"), shown("=A2/4"), "a fraction keeps its digits");
+        assert_eq!(shown("=A2*2200 \\* DollarText"), shown("=A2*2200"), "a number past DollarText keeps its digits");
+        assert_eq!(shown("=A2 \\* ArabicDash"), "- 458 -");
     }
 
     #[test]
