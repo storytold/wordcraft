@@ -5,6 +5,7 @@ use super::flow::again;
 use super::headers::{header_items_cap, header_table_areas, placed_cost};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
+use super::para::MIN_SPAN;
 use super::placed::Placed;
 use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
 
@@ -338,8 +339,8 @@ const MAX_TABLE_SPACE: f32 = 1584.0;
 
 /// Place floating table `tl` (`w:tblpPr`): at its own position, which takes no room in the text
 /// flow; the text after it wraps around it. `None` once placed; for a table placed relative to the
-/// paragraph that would run off the page, nothing is placed and its left edge and top are
-/// returned: the caller runs it on in the text from there.
+/// paragraph that would run off the page and leaves no usable width beside it, nothing is placed
+/// and its left edge and top are returned: the caller runs it on in the text from there.
 fn place_floating_table(
     ctx: &mut Ctx,
     pb: &mut PageBuilder,
@@ -371,14 +372,24 @@ fn place_floating_table(
             h_area.0,
             &obstacles,
         );
+        let area = r.inset(-dl, -dt, -dr, -db);
         // A table placed relative to the paragraph that would run off the page runs on across the
-        // pages in the text from where it stands, as Word does (#2359). One placed on the page or
-        // margin moves to the next page with its anchor, like Word, when it would cover the text
-        // already on the page and doesn't fit below it.
+        // pages in the text from where it stands when it leaves no usable width beside it, as Word
+        // does (#2359). Narrower ones keep the move-to-the-next-page rule until split pieces can
+        // float, so the following text still wraps beside them. One placed on the page or margin
+        // moves to the next page with its anchor, like Word, when it would cover the text already
+        // on the page and doesn't fit below it.
         if attempt == 0 && !pb.at_top() {
             if f.v_rel == Anchor::Paragraph {
                 if r.bottom() > pb.bottom + 0.01 {
-                    return Some((r.x, r.y));
+                    let col_left = pb.col_x();
+                    let col_right = col_left + pb.col_w();
+                    let side_room = (area.x.min(col_right) - col_left).max(col_right - area.right().max(col_left));
+                    if side_room < MIN_SPAN {
+                        return Some((r.x, r.y));
+                    }
+                    pb.advance(block, body_top);
+                    continue;
                 }
             } else if pb.y + h > pb.bottom + 0.01 && pb.page().is_some_and(|page| page.items.iter().any(|item| placed_intersects(item, &r))) {
                 pb.advance(block, body_top);
@@ -397,7 +408,6 @@ fn place_floating_table(
             }
             pg.float_tables.push(Path::top(block));
         }
-        let area = r.inset(-dl, -dt, -dr, -db);
         pb.excl.push((area, false, None, WrapText::BothSides, true));
         pb.float_tables.push(area);
         return None;

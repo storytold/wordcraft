@@ -7531,21 +7531,28 @@ fn a_page_anchored_floating_table_after_a_full_page_moves_to_the_next() {
     assert_eq!(page_of(&|p| p.0 == [25]), vec![1]);
 }
 
-/// #2359: a table placed relative to the paragraph (`w:tblpPr w:vertAnchor="text"`) that doesn't
-/// fit in the rest of the page starts where it stands and runs on across pages like a table in
-/// the text, as in Word, instead of moving whole to the next page and leaving page 1 half empty.
-/// The text after it follows below it, not beside it.
+/// #2359: a table placed relative to the paragraph (`w:tblpPr w:vertAnchor="text"`) that leaves
+/// no usable width beside it and doesn't fit in the rest of the page starts where it stands and
+/// runs on across pages like a table in the text, as in Word, instead of moving whole to the next
+/// page and leaving page 1 half empty. The text after it follows below it, not beside it.
 #[test]
 fn a_paragraph_anchored_floating_table_that_doesnt_fit_runs_on_to_the_next_page() {
     use wordcraft_doc::para::Anchor;
     use wordcraft_doc::props::TableFloat;
     let text: Vec<String> = (0..18).map(|i| format!("Paragraph {i} before the table.")).collect();
     let mut d = Document::from_text(&(text.join("\n") + "\nAfter the table."));
-    let mut t = Table::new(30, 1, 300.0);
+    let mut t = Table::new(30, 1, 450.0);
     for (i, r) in t.rows.iter_mut().enumerate() {
         r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
     }
-    t.props.float = Some(TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 0.05, overlap: false, ..Default::default() });
+    t.props.float = Some(TableFloat {
+        h_rel: Anchor::Column,
+        v_rel: Anchor::Paragraph,
+        y: 0.05,
+        dist: [9.0, 0.0, 9.0, 0.0],
+        overlap: false,
+        ..Default::default()
+    });
     d.insert_block(StoryRef::Body, &Path::top(18), wordcraft_doc::Block::Table(t)).unwrap();
     let l = lay(&d);
     let placed = |want: &dyn Fn(&Path) -> bool| -> Vec<(usize, f32)> {
@@ -7585,6 +7592,65 @@ fn a_paragraph_anchored_floating_table_that_doesnt_fit_runs_on_to_the_next_page(
     );
 }
 
+/// #2359 review: a narrow paragraph-anchored table near the page bottom moves whole to the next
+/// page so the text after it still wraps beside it, instead of running on with an empty column.
+#[test]
+fn a_narrow_paragraph_anchored_floating_table_near_page_bottom_moves_and_wraps_beside() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let text: Vec<String> = (0..18).map(|i| format!("Paragraph {i} before the table.")).collect();
+    let mut d = Document::from_text(&(text.join("\n") + "\nAfter the table."));
+    let mut t = Table::new(15, 1, 144.0);
+    for (i, r) in t.rows.iter_mut().enumerate() {
+        r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
+    }
+    t.props.float = Some(TableFloat {
+        h_rel: Anchor::Column,
+        v_rel: Anchor::Paragraph,
+        y: 0.05,
+        dist: [9.0, 0.0, 9.0, 0.0],
+        overlap: false,
+        ..Default::default()
+    });
+    d.insert_block(StoryRef::Body, &Path::top(18), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let cells: Vec<(usize, Rect)> = l
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| p.items.iter().map(move |it| (i, it)))
+        .filter_map(|(i, it)| match it {
+            Placed::Cell { story: StoryRef::Body, table, rect, .. } if *table == Path::top(18) => Some((i, *rect)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cells.len(), 15, "{cells:?}");
+    assert!(cells.iter().all(|(pg, _)| *pg == 1), "narrow table moves whole to page 2: {cells:?}");
+    let first_cell = cells[0].1;
+    let last_bottom = cells.iter().fold(0.0f32, |m, (_, r)| m.max(r.bottom()));
+    let after: Vec<(usize, f32, f32)> = l
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| p.items.iter().map(move |it| (i, it)))
+        .filter_map(|(i, it)| match it {
+            Placed::Lines { story: StoryRef::Body, path, para, l0, x, y, .. } if path.0 == [19] => {
+                let line = &para.lines[*l0];
+                Some((i, *x + line.left, *y + line.top))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(after.len(), 1, "{after:?}");
+    let (pg, ax, ay) = after[0];
+    assert_eq!(pg, 1, "following text is on page 2: {after:?}");
+    assert!(ay >= 72.0 - 0.01 && ay < last_bottom - 1.0, "following text wraps beside the table ({first_cell:?}..{last_bottom}): {after:?}");
+    assert!(
+        ax >= first_cell.right() + 9.0 - 0.5,
+        "following text sits to the right of the table and its distance from text: {after:?}, {first_cell:?}"
+    );
+}
+
 /// #2359 review: running on, a paragraph-anchored table keeps its vertical offset: it starts that
 /// far below the text before it, as it would where it fits.
 #[test]
@@ -7594,7 +7660,7 @@ fn a_paragraph_anchored_table_running_on_keeps_its_vertical_offset() {
     let first_row_y = |offset: f32| {
         let text: Vec<String> = (0..18).map(|i| format!("Paragraph {i} before the table.")).collect();
         let mut d = Document::from_text(&(text.join("\n") + "\nAfter the table."));
-        let mut t = Table::new(30, 1, 300.0);
+        let mut t = Table::new(30, 1, 468.0);
         for (i, r) in t.rows.iter_mut().enumerate() {
             r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
         }
@@ -7626,7 +7692,7 @@ fn a_paragraph_anchored_table_running_on_keeps_where_clearing_put_it() {
     let text: Vec<String> = (0..18).map(|i| format!("Paragraph {i} before the tables.")).collect();
     let mut d = Document::from_text(&(text.join("\n") + "\nAfter the tables."));
     let table = |rows: usize, dist_left: f32| {
-        let mut t = Table::new(rows, 1, 300.0);
+        let mut t = Table::new(rows, 1, 450.0);
         for (i, r) in t.rows.iter_mut().enumerate() {
             r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
         }
