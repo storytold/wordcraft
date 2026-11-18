@@ -15573,8 +15573,9 @@ fn a_line_of_only_pictures_takes_no_descent() {
     assert!(para.lines.len() == 2 && (para.lines[0].height - 30.0).abs() < 0.01, "picture, then a line break: {}", para.lines[0].height);
 }
 
-/// At-least spacing: a line of only pictures is as tall as they are (or the spacing), the
-/// paragraph mark's descent not added below them; beside text the text's descent is. Word for
+/// At-least spacing: a line of only pictures is as tall as the largest of their extent, the
+/// font's height and the spacing, the paragraph mark's descent not added below them; beside text
+/// the text's descent is. Word for
 /// Mac 16.114.4, Georgia 11 pt at least 12 pt: an 80 pt picture alone in its paragraph moves the
 /// next line down 80 pt, not 80 pt plus the font's 2.4 pt descent (`cargo xtask word-compare`,
 /// probe `picture-atleast-12`).
@@ -15601,6 +15602,41 @@ fn a_line_of_only_pictures_takes_no_descent_at_least_spaced() {
     }
     let (h, base, desc) = line_of("Text ", 12.0);
     assert!((h - (30.0 + desc)).abs() < 0.01 && (base - 30.0).abs() < 0.01, "with text: line {h}, baseline {base}");
+    // Lowered 25 pt, the picture reaches 5 above the baseline and 25 below: 30 pt in all, the
+    // font's height (ascent plus its own descent) only a floor.
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::AtLeast(12.0));
+        let props = wordcraft_doc::CharProps { position: Some(-25.0), ..Default::default() };
+        p.insert_object(0, picture(60.0, 30.0, Default::default()), &props).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    assert!((para.lines[0].height - 30.0).abs() < 0.01, "lowered 25 pt: line {}", para.lines[0].height);
+}
+
+/// A numbered paragraph opening with a page break has its label on the line after the break:
+/// a picture there keeps the descent below it under at-least spacing, as beside text.
+#[test]
+fn a_labelled_picture_line_after_an_opening_page_break_keeps_its_descent() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text("Before\n\u{000C}");
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    let p = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    p.props.line_spacing = Some(LineSpacing::AtLeast(12.0));
+    p.props.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+    let at = p.len();
+    p.insert_object(at, picture(60.0, 30.0, Default::default()), &Default::default()).unwrap();
+    let l = lay(&d);
+    let para = l
+        .pages
+        .iter()
+        .flat_map(|pg| pg.items.iter())
+        .filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None })
+        .find(|para| para.lines.len() == 2)
+        .unwrap();
+    let desc = para.styles[0].descent;
+    assert!((para.lines[1].height - (30.0 + desc)).abs() < 0.01, "picture line under the label: {} (want {})", para.lines[1].height, 30.0 + desc);
 }
 
 /// A kept-together paragraph starting a continuous section low on a page, with room there for

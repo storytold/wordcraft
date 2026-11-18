@@ -308,7 +308,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-18 | trivial | At-least line spacing: a line of only pictures is as tall as they are (or the spacing), the paragraph mark's descent not added below them; a list label keeps it (Word for Mac 16.114.4, `word-compare` probe `picture-atleast-12`: an 80 pt picture alone takes 80 pt, not 82.4) |
+| 2026-11-18 | trivial | At-least line spacing: a line of only pictures is as tall as the largest of their extent, the font's height and the spacing, the paragraph mark's descent not added below them (off the document grid); a list label keeps it (Word for Mac 16.114.4, `word-compare` probe `picture-atleast-12`: an 80 pt picture alone takes 80 pt, not 82.4) |
 | 2026-10-29 | trivial | A list item deleted whole under Track Changes shows its number in the deletion's colour and with its mark (struck through by default) with markup, and not at all without (#4828) |
 | 2026-11-04 | trivial | Headers, footers and note separators of the second and later sections are measured with their own section's document grid and SECTION/SECTIONPAGES values, not the previous section's; a regression from the #4501 refactor (#4683). `layout::tests::pages::a_sections_header_is_measured_without_the_previous_sections_grid` |
 | 2026-11-08 | trivial | Turned inline pictures with no recorded effect extent keep their line to the frame (exchanged near a quarter turn in Word 2013+ layout) and overhang it, cut at the line's top and bottom, as in Word |

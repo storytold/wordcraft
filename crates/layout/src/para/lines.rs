@@ -500,11 +500,18 @@ impl<'e> Breaker<'e> {
         // 10 pt, 30. Not on a line lowered further than the picture's height, which layout limits
         // to that height where Word's line keeps growing.
         let spacing = if let LineSpacing::Multiple(m) = rp.line_spacing { Some(m) } else { None };
-        // At-least spacing too, off the document grid: pictures alone take their own height (or
-        // the spacing's), the paragraph mark's descent not added below them (Word for Mac
-        // 16.114.4, Georgia 11 pt at least 12 pt: an 80 pt picture alone takes 80 pt).
-        // A list label is text on the line: its descent stays.
-        let labelled = self.first && pl.label.is_some();
+        // At-least spacing too, off the document grid: pictures alone take the largest of their
+        // own extent, the font's height and the spacing, the paragraph mark's descent not added
+        // below them (Word for Mac 16.114.4, Georgia 11 pt at least 12 pt: an 80 pt picture alone
+        // takes 80 pt). A list label is text on the line: its descent stays. The label is on the
+        // first line, or the second when the paragraph opens with a page break (`label_line`).
+        let label_here = self.first
+            || (self.lines.len() == 1
+                && self.lines.first().is_some_and(|l| {
+                    l.end == LineEnd::PageBreak
+                        && pl.clusters.get(l.c0..l.c1).is_some_and(|cs| cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker)))
+                }));
+        let labelled = label_here && pl.label.is_some();
         let at_least = matches!(rp.line_spacing, LineSpacing::AtLeast(_)) && self.grid.is_none() && !labelled;
         let pictures_alone = !text && obj_asc + obj_desc > 0.0 && (spacing.is_some() || at_least);
         let below = if pictures_alone { obj_desc } else { desc };
@@ -546,7 +553,8 @@ impl<'e> Breaker<'e> {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
             (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures + (m - 1.0).max(0.0) * text_natural), false),
-            (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
+            // Pictures alone: the font's own height is the floor, not a lowered picture's reach.
+            (LineSpacing::AtLeast(v), None) => ((if pictures_alone { text_natural } else { natural }).max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
         let baseline = if centred {
