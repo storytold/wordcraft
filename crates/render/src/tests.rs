@@ -1,4 +1,5 @@
 use super::*;
+use crate::media::fit_cache;
 use wordcraft_layout::display::page_display;
 use wordcraft_layout::{LayoutCache, LayoutOptions, layout};
 
@@ -353,10 +354,11 @@ fn rotated_or_mirrored_views_are_not_hinted() {
 
 #[test]
 fn page_picture_is_painted_behind_the_text() {
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 200, 30, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 200, 30, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     let mut d = Document::new();
     d.media.insert("bg.png".into(), Arc::new(png));
     for kind in ["tile", "frame"] {
@@ -387,10 +389,11 @@ fn page_picture_is_painted_behind_the_text() {
 /// picture on screen, in the raster and under the caret; the text keeps its color on Sepia.
 #[test]
 fn read_paper_replaces_the_page_background() {
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 200, 30, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 200, 30, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     let mut d = Document::from_text("Hello WordCraft");
     d.media.insert("bg.png".into(), Arc::new(png));
     d.settings.page_color = Some(Rgb(0x10, 0x10, 0x40));
@@ -469,16 +472,14 @@ fn ihdr_only_png(w: u32, h: u32) -> Vec<u8> {
 
 #[test]
 fn decode_budget_is_checked_from_the_header() {
-    let mut buf = Vec::new();
     let img = image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([x as u8, y as u8, 9, 255]));
-    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
+    let buf = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap();
     // Decode, the RGBA conversion and the premultiplied copy are charged: two buffers at peak.
     assert!(decode_pixmap_within(&buf, wordcraft_doc::picfx::PicFx::default(), 1024).is_some());
     assert!(decode_pixmap_within(&buf, wordcraft_doc::picfx::PicFx::default(), 1023).is_none());
     // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 copy: 12 bytes a pixel.
-    let mut wide = Vec::new();
     let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
-    image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+    let wide = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba16(img16).clone(), image::ImageFormat::Png).unwrap();
     assert!(decode_pixmap_within(&wide, wordcraft_doc::picfx::PicFx::default(), 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
     assert!(decode_pixmap_within(&wide, wordcraft_doc::picfx::PicFx::default(), 1536).is_some());
     // A header (valid CRC) claiming 60000x60000 with no pixel data reads fine, then the budget refuses it.
@@ -532,8 +533,8 @@ fn hostile_scale_is_clamped() {
 /// A JPEG whose headers say progressive (SOF2, a DC-only first scan) and `w` × `h`, its three
 /// components unsubsampled, with no pixel data that size.
 fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
-    let mut jpeg = Vec::new();
-    image::RgbImage::new(16, 16).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let mut jpeg =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbImage::new(16, 16).clone()), image::ImageFormat::Jpeg).unwrap();
     let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
     jpeg[sof + 1] = 0xC2;
     jpeg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
@@ -554,8 +555,8 @@ fn progressive_jpeg_coefficients_count_toward_the_decode_budget() {
     let jpeg = progressive_jpeg_header(7900, 7900);
     assert!(wordcraft_geom::decode_fits(7900, 7900, wordcraft_geom::MAX_DECODED_BYTES));
     assert!(decode_pixmap(&jpeg).is_none());
-    let mut baseline = Vec::new();
-    image::RgbImage::new(64, 64).write_to(&mut std::io::Cursor::new(&mut baseline), image::ImageFormat::Jpeg).unwrap();
+    let baseline =
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbImage::new(64, 64).clone()), image::ImageFormat::Jpeg).unwrap();
     assert!(decode_pixmap(&baseline).is_some(), "other JPEGs still draw");
 }
 
@@ -593,8 +594,11 @@ fn shrinking_averages_premultiplied_pixels() {
 #[test]
 fn dimmed_header_image_renders() {
     let mut d = Document::from_text("body");
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     let media = d.add_media(png, "png");
     let mut hp = wordcraft_doc::Paragraph::new();
     let obj = wordcraft_doc::para::InlineObject::Image {
@@ -624,10 +628,11 @@ fn picture_brightness_contrast_transparency() {
     use wordcraft_doc::para::{Anchor, Float, InlineObject, Wrap};
     use wordcraft_doc::picfx::PicFx;
     let mut d = Document::from_text("");
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(4, 4, image::Rgba([100, 100, 100, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    let png = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(4, 4, image::Rgba([100, 100, 100, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     let media = d.add_media(png, "png");
     let pic = |fx: PicFx, x: f32| InlineObject::Image {
         media: media.clone(),
@@ -1037,15 +1042,400 @@ fn metafile_picture_is_drawn_as_vectors() {
     assert!(left[..3].iter().all(|c| *c > 200), "left half should be paper, not the grey box: {left:?}");
 }
 
+/// An EMF whose only record is one `w` x `h` 1 bpp black and white bitmap over the whole picture.
+fn emf_with_1bpp_bitmap(w: i32, h: i32) -> Vec<u8> {
+    let mut hdr = vec![0u8; 88];
+    hdr[0..4].copy_from_slice(&1u32.to_le_bytes());
+    hdr[4..8].copy_from_slice(&88u32.to_le_bytes());
+    hdr[8..24].copy_from_slice(&le32(&[0, 0, 100, 100]));
+    hdr[24..40].copy_from_slice(&le32(&[0, 0, 2500, 2500]));
+    hdr[40..44].copy_from_slice(&0x464D_4520u32.to_le_bytes());
+    hdr[72..88].copy_from_slice(&le32(&[1000, 1000, 250, 250]));
+    let stride = (w as usize).div_ceil(32) * 4;
+    let mut payload = vec![0u8; 16];
+    payload.extend(le32(&[0, 0, 0, 0, w, h, 80, 48, 128, (stride * h as usize) as i32, 0, 0x00CC_0020, 100, 100]));
+    payload.extend(le32(&[40, w, h, 1 | (1 << 16), 0, 0, 0, 0, 0, 0]));
+    payload.extend([0, 0, 0, 0, 255, 255, 255, 0]);
+    payload.extend((0..stride * h as usize).map(|i| (i * 31) as u8));
+    [hdr, emf_rec(81, &payload), emf_rec(14, &[0; 12])].concat()
+}
+
+/// #5482: a metafile whose bitmaps are past the whole cache budget was parsed and decoded again on
+/// every repaint, because the cache refused it. It is now kept (its bitmaps at a smaller size).
+#[test]
+fn a_metafile_with_a_huge_bitmap_is_parsed_once() {
+    // 8000 x 5000 is 160 MB of RGBA, past the 128 MB cache, from a 5 MB file.
+    let mut d = Document::new();
+    // A key of its own: the vector cache is global and tests running in threads share `image1.emf`.
+    let key = "huge-parsed-once.emf";
+    d.media.insert(key.to_string(), Arc::new(emf_with_1bpp_bitmap(8000, 5000)));
+    let first = vector_for(&d, key).expect("the metafile reads");
+    let again = vector_for(&d, key).expect("the metafile reads");
+    assert!(Arc::ptr_eq(&first, &again), "the second repaint reuses the parsed picture");
+    assert!(first.bytes() <= CACHE_BYTES / 8, "{} bytes", first.bytes());
+}
+
+/// Several huge metafiles on screen together (zoomed-out pages, thumbnails) sit side by side in the
+/// cache instead of clearing it, so a small metafile drawn with them stays a hit.
+#[test]
+fn huge_metafiles_do_not_push_a_small_one_out_of_the_cache() {
+    let mut d = Document::new();
+    let small = "evict-small.emf";
+    d.media.insert(small.to_string(), Arc::new(emf_with_1bpp_bitmap(64, 64)));
+    let huge: Vec<String> = (0..4).map(|n| format!("evict-huge-{n}.emf")).collect();
+    for (n, k) in huge.iter().enumerate() {
+        // Distinct bytes per file (the width differs; 8000 x 5000 is the most pixels a metafile decodes), so each is its own cache entry.
+        d.media.insert(k.clone(), Arc::new(emf_with_1bpp_bitmap(8000 - n as i32, 5000)));
+    }
+    let small_first = vector_for(&d, small).expect("the small metafile reads");
+    for round in 0..2 {
+        for k in &huge {
+            assert!(vector_for(&d, k).is_some(), "round {round}");
+        }
+    }
+    let kept: Vec<_> = huge.iter().map(|k| vector_for(&d, k).unwrap()).collect();
+    let again: Vec<_> = huge.iter().map(|k| vector_for(&d, k).unwrap()).collect();
+    for (a, b) in kept.iter().zip(&again) {
+        assert!(Arc::ptr_eq(a, b), "a huge metafile is parsed once while four are drawn together");
+    }
+    assert!(Arc::ptr_eq(&small_first, &vector_for(&d, small).unwrap()), "the small metafile is still cached");
+}
+
+/// Time of three repaints of a picture with a 160 MB bitmap:
+/// `cargo test -p wordcraft-render --release -- --ignored --nocapture huge_metafile_repaint_time`.
+#[test]
+#[ignore = "timing only"]
+fn huge_metafile_repaint_time() {
+    let mut d = Document::new();
+    let key = d.add_media(emf_with_1bpp_bitmap(8000, 5000), "emf");
+    for n in 1..=4 {
+        let t = std::time::Instant::now();
+        assert!(vector_for(&d, &key).is_some());
+        eprintln!("repaint {n}: vector_for {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+}
+
+#[test]
+fn bitmaps_are_shrunk_in_proportion_only_when_the_picture_is_past_the_cache() {
+    let px = vello_cpu::color::PremulRgba8 { r: 1, g: 2, b: 3, a: 255 };
+    let pm = |w: u16, h: u16| Some(Pixmap::from_parts(vec![px; usize::from(w) * usize::from(h)], w, h));
+    let bytes = |v: &[Option<Pixmap>]| v.iter().flatten().map(|p| usize::from(p.width()) * usize::from(p.height()) * 4).sum::<usize>();
+    // Within the budget: untouched.
+    let kept = fit_cache(vec![pm(1000, 1000), None, pm(2000, 2000)], 1_000_000);
+    assert_eq!(kept.iter().flatten().map(|p| (p.width(), p.height())).collect::<Vec<_>>(), [(1000, 1000), (2000, 2000)]);
+    assert!(kept[1].is_none(), "a path item keeps its place in the list");
+    // A 144 MB and a 36 MB bitmap: both shrink by the same factor.
+    let fit = fit_cache(vec![pm(6000, 6000), pm(3000, 3000)], 4_000_000);
+    assert!(bytes(&fit) + 4_000_000 <= CACHE_BYTES / 8, "{} bytes", bytes(&fit));
+    let (a, b) = (fit[0].as_ref().unwrap(), fit[1].as_ref().unwrap());
+    assert_eq!((a.width(), b.width()), (1500, 750), "each bitmap keeps its share of the pixels that fit");
+    assert!(a.data().iter().all(|p| (p.r, p.g, p.b, p.a) == (1, 2, 3, 255)), "flat stays flat");
+}
+
+/// Geometry of an eighth of the budget or more leaves the bitmaps a positive allowance, so the
+/// picture is still kept (and reused) when it fits the whole budget after shrinking; one whose
+/// geometry alone fills the budget stays uncached.
+#[test]
+fn heavy_geometry_still_leaves_the_bitmaps_a_cacheable_size() {
+    let px = vello_cpu::color::PremulRgba8 { r: 1, g: 2, b: 3, a: 255 };
+    let pm = |w: u16, h: u16| Some(Pixmap::from_parts(vec![px; usize::from(w) * usize::from(h)], w, h));
+    let bytes = |v: &[Option<Pixmap>]| v.iter().flatten().map(|p| usize::from(p.width()) * usize::from(p.height()) * 4).sum::<usize>();
+    let geometry = CACHE_BYTES / 8 + 4_000_000;
+    let fit = fit_cache(vec![pm(6000, 6000)], geometry);
+    let size = bytes(&fit);
+    assert!(size > 0 && size < 6000 * 6000 * 4, "shrunk, not dropped: {size} bytes");
+    assert!(size + geometry <= CACHE_BYTES, "{size} bytes");
+    // The shrunk picture is accepted by the cache and hit again.
+    let src = Arc::new(vec![0u8; 1]);
+    let mut c: MediaCache<u8> = MediaCache { map: Default::default(), bytes: 0 };
+    c.insert("heavy", &src, 7, size + geometry);
+    assert_eq!(c.get("heavy", &src), Some(7));
+    // Just under and just over the eighth: both shrink the bitmap to a positive size, none to nothing.
+    for g in [CACHE_BYTES / 8 - 1, CACHE_BYTES / 8, CACHE_BYTES / 8 + 1] {
+        let size = bytes(&fit_cache(vec![pm(6000, 6000)], g));
+        assert!(size > 0 && size < 6000 * 6000 * 4 && size + g <= CACHE_BYTES / 4, "geometry {g}: {size} bytes");
+    }
+    // Geometry that takes the whole budget leaves nothing to shrink to: the bitmap stays as it is.
+    let full = fit_cache(vec![pm(6000, 6000)], CACHE_BYTES);
+    assert_eq!(bytes(&full), 6000 * 6000 * 4);
+}
+
+/// #6636: an EMF+ only file (no plain EMF drawing records) whose EmfPlusDrawImage draws a
+/// 32bppPARGB bitmap over the right half: the bitmap's pixels are drawn.
+#[test]
+fn emf_plus_only_bitmap_is_drawn() {
+    // EmfPlusObject 0, an image (type 5): a 2 × 1 bitmap in PixelFormat32bppPARGB, opaque red
+    // and then red at half opacity (premultiplied BGRA 0, 0, 128, 128).
+    let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, 2, 1, 8, 0x000E_200B, 0]);
+    image.extend([0u8, 0, 255, 255, 0, 0, 128, 128]);
+    let object = plus_rec(0x4008, 0x0500, &image);
+    // EmfPlusDrawImage of image 0: the whole bitmap (pixel units) into x 50..100, y 0..100.
+    let mut draw = le32(&[-1, 2]);
+    draw.extend([0.0f32, 0.0, 2.0, 1.0, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+    let emf = emf_plus_file(&[object, plus_rec(0x401A, 0, &draw)]);
+
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let at = |fx: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * 0.5) as u32);
+    let (opaque, half, left) = (at(0.6), at(0.9), at(0.25));
+    assert!(is_red(opaque), "the bitmap's opaque red is drawn on the right half: {opaque:?}");
+    // Premultiplied half-opacity red over white paper is (255, 127, 127); read as straight
+    // color it would be about (191, 127, 127).
+    assert!(half[0] > 235 && (110..145).contains(&half[1]) && (110..145).contains(&half[2]), "half-opacity red: {half:?}");
+    assert!(is_paper(left), "left half should be paper: {left:?}");
+}
+
+/// #6636: EmfPlusDrawImage draws a bitmap in PixelFormat32bppARGB, 24bppRGB and 32bppRGB, and a
+/// compressed PNG or JPEG bitmap, in an EMF+ only file.
+#[test]
+fn emf_plus_only_bitmap_formats_are_drawn() {
+    let encoded = |png: bool| {
+        let red = [255u8, 0, 0].repeat(64);
+        if png {
+            let img = image::RgbImage::from_raw(8, 8, red).unwrap();
+            wordcraft_geom::picture::encode_png(&image::DynamicImage::from(img)).unwrap()
+        } else {
+            wordcraft_geom::picture::encode_jpeg(&red, 8, 8, 100).unwrap()
+        }
+    };
+    // Name, width, height, stride, pixel format, bitmap type (0 pixels, 1 compressed) and data.
+    let cases: [(&str, i32, i32, i32, u32, i32, Vec<u8>); 5] = [
+        ("32bppARGB", 2, 1, 8, 0x0026_200A, 0, [0u8, 0, 255, 255].repeat(2)),
+        ("24bppRGB", 2, 1, 8, 0x0002_1808, 0, vec![0, 0, 255, 0, 0, 255, 0, 0]),
+        ("32bppRGB", 2, 1, 8, 0x0002_2009, 0, [0u8, 0, 255, 0].repeat(2)),
+        ("PNG", 8, 8, 0, 0, 1, encoded(true)),
+        ("JPEG", 8, 8, 0, 0, 1, encoded(false)),
+    ];
+    for (name, w, h, stride, format, kind, data) in cases {
+        let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, w, h, stride, format as i32, kind]);
+        image.extend(data);
+        // Records are a multiple of 4 bytes long.
+        image.resize(image.len().next_multiple_of(4), 0);
+        let mut draw = le32(&[-1, 2]);
+        draw.extend([0.0f32, 0.0, w as f32, h as f32, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+        let emf = emf_plus_file(&[plus_rec(0x4008, 0x0500, &image), plus_rec(0x401A, 0, &draw)]);
+
+        let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+        let at = |fx: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * 0.5) as u32);
+        let (right, left) = (at(0.75), at(0.25));
+        assert!(is_red(right), "{name}: the red bitmap is drawn on the right half: {right:?}");
+        assert!(is_paper(left), "{name}: left half should be paper: {left:?}");
+    }
+}
+
+/// An EMF+ record for [`emf_plus_file`]: type, flags and data.
+fn plus_rec(typ: u16, flags: u16, data: &[u8]) -> Vec<u8> {
+    let mut v = typ.to_le_bytes().to_vec();
+    v.extend(flags.to_le_bytes());
+    v.extend(((12 + data.len()) as u32).to_le_bytes());
+    v.extend((data.len() as u32).to_le_bytes());
+    v.extend(data);
+    v
+}
+
+/// An EMF+ only file with the frame of [`red_right_half_emf`]: an EmfPlusHeader (96 dpi), then
+/// `records`, then EmfPlusEndOfFile, in one comment record.
+fn emf_plus_file(records: &[Vec<u8>]) -> Vec<u8> {
+    let mut comment = 0x2B46_4D45u32.to_le_bytes().to_vec();
+    comment.extend(plus_rec(0x4001, 0, &le32(&[0xDBC0_1002_u32 as i32, 1, 96, 96])));
+    comment.extend(records.concat());
+    comment.extend(plus_rec(0x4002, 0, &[]));
+    let mut payload = (comment.len() as u32).to_le_bytes().to_vec();
+    payload.extend(comment);
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    emf.extend([emf_rec(70, &payload), emf_rec(14, &[0; 12])].concat());
+    emf
+}
+
+/// Renders a document holding one 70 pt metafile picture with `crop` at `scale`: the page and the
+/// picture's frame (points).
+fn emf_on_page(emf: Vec<u8>, crop: [f32; 4], scale: f32) -> (Rendered, wordcraft_geom::Rect) {
+    emf_on_page_sized(emf, (70.0, 70.0), crop, scale)
+}
+
+/// [`emf_on_page`] with the picture `size` (points).
+fn emf_on_page_sized(emf: Vec<u8>, size: (f32, f32), crop: [f32; 4], scale: f32) -> (Rendered, wordcraft_geom::Rect) {
+    let mut d = Document::new();
+    let media = d.add_media(emf, "emf");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: size.0,
+        h: size.1,
+        alt: String::new(),
+        float: Default::default(),
+        crop,
+        fx: Default::default(),
+        ole: None,
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(&d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    (render_page(&d, &l.pages[0], scale, &opts), rect)
+}
+
+/// Whether a pixel is close to pure red.
+fn is_red(p: [u8; 4]) -> bool {
+    p[0] > 200 && p[1] < 60 && p[2] < 60
+}
+
+/// Whether a pixel is paper.
+fn is_paper(p: [u8; 4]) -> bool {
+    p[..3].iter().all(|c| *c > 200)
+}
+
+/// A clip region (INTERSECTCLIPRECT to the left half) keeps a red rectangle over the whole
+/// picture to that half; once RESTOREDC drops it, a second rectangle across the bottom shows on
+/// both halves.
+#[test]
+fn metafile_clip_region_clips_and_ends() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let brush = emf_rec(39, &le32(&[1, 0, 0x0000_00FF, 0]));
+    let recs = [
+        brush,
+        emf_rec(37, &le32(&[1])),
+        emf_rec(33, &[]),
+        emf_rec(30, &le32(&[0, 0, 50, 100])),
+        emf_rec(43, &le32(&[0, 0, 100, 60])),
+        emf_rec(34, &le32(&[-1])),
+        emf_rec(43, &le32(&[0, 80, 100, 100])),
+        emf_rec(14, &[0; 12]),
+    ];
+    emf.extend(recs.concat());
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let at = |fx: f32, fy: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * fy) as u32);
+    assert!(is_red(at(0.25, 0.3)), "inside the clip: {:?}", at(0.25, 0.3));
+    assert!(is_paper(at(0.75, 0.3)), "outside the clip: {:?}", at(0.75, 0.3));
+    assert!(is_red(at(0.75, 0.9)), "after the clip is restored away: {:?}", at(0.75, 0.9));
+}
+
+/// The vector cache counts each item's copy of the clip region: 100 rectangles drawn inside a
+/// clip region hold 100 copies of its rectangle more than without it.
+#[test]
+fn metafile_cache_counts_clip_regions() {
+    let bytes = |clip: bool| {
+        let mut emf = red_right_half_emf()[..88].to_vec();
+        if clip {
+            emf.extend(emf_rec(30, &le32(&[0, 0, 50, 100])));
+        }
+        for i in 0..100 {
+            emf.extend(emf_rec(43, &le32(&[i % 50, 0, i % 50 + 10, 10])));
+        }
+        emf.extend(emf_rec(14, &[0; 12]));
+        media::build_vector(&emf).map(|v| v.bytes())
+    };
+    let (with, without) = (bytes(true).expect("a picture"), bytes(false).expect("a picture"));
+    assert!(with >= without + 100 * 16, "{with} and {without}");
+}
+
+/// A hatch tile squeezed to well under a pixel tall but several pixels wide (the picture is 70 pt
+/// wide and 2 pt tall) keeps its vertical lines: the row crosses red lines and the background
+/// between them, not one blended color.
+#[test]
+fn metafile_narrow_hatch_tile_keeps_its_lines() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let brush = emf_rec(39, &le32(&[1, 2, 0x0000_00FF, 1]));
+    // The stock NULL_PEN leaves the rectangle without an outline.
+    let no_pen = emf_rec(37, &le32(&[0x8000_0008_u32 as i32]));
+    emf.extend([brush, emf_rec(37, &le32(&[1])), no_pen, emf_rec(43, &le32(&[0, 0, 100, 100])), emf_rec(14, &[0; 12])].concat());
+    let (img, rect) = emf_on_page_sized(emf, (70.0, 2.0), [0.0; 4], 1.0);
+    let y = (rect.y + rect.h / 2.0) as u32;
+    let row: Vec<u8> = ((rect.x + 2.0) as u32..(rect.x + rect.w - 2.0) as u32).map(|x| img.pixel(x, y)[1]).collect();
+    assert!(row.iter().any(|g| *g < 160) && row.iter().any(|g| *g > 240), "red lines and background: {row:?}");
+}
+
+/// A clip path (a rectangle path over the left half, SELECTCLIPPATH with RGN_COPY) keeps a red
+/// rectangle over the whole picture to that half.
+#[test]
+fn metafile_clip_path_clips() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let brush = emf_rec(39, &le32(&[1, 0, 0x0000_00FF, 0]));
+    let recs = [
+        brush,
+        emf_rec(37, &le32(&[1])),
+        emf_rec(59, &[]),
+        emf_rec(43, &le32(&[0, 0, 50, 100])),
+        emf_rec(60, &[]),
+        emf_rec(67, &le32(&[5])),
+        emf_rec(43, &le32(&[0, 0, 100, 100])),
+        emf_rec(14, &[0; 12]),
+    ];
+    emf.extend(recs.concat());
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let at = |fx: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * 0.5) as u32);
+    assert!(is_red(at(0.25)), "inside the clip path: {:?}", at(0.25));
+    assert!(is_paper(at(0.75)), "outside the clip path: {:?}", at(0.75));
+}
+
+/// A bitmap under a world transform that turns it a quarter turn clockwise about the picture's
+/// center (EmfPlusSetWorldTransform): its left pixel (red) is drawn at the top and its right pixel
+/// (blue) at the bottom.
+#[test]
+fn emf_plus_turned_bitmap_is_drawn_turned() {
+    let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, 2, 1, 8, 0x000E_200B, 0]);
+    // BGRA: red, then blue.
+    image.extend([0u8, 0, 255, 255, 255, 0, 0, 255]);
+    let turn = plus_rec(0x402A, 0, &[0.0f32, 1.0, -1.0, 0.0, 100.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+    let mut draw = le32(&[-1, 2]);
+    draw.extend([0.0f32, 0.0, 2.0, 1.0, 25.0, 25.0, 50.0, 50.0].iter().flat_map(|v| v.to_le_bytes()));
+    let emf = emf_plus_file(&[plus_rec(0x4008, 0x0500, &image), turn, plus_rec(0x401A, 0, &draw)]);
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let at = |fx: f32, fy: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * fy) as u32);
+    let (top_right, bottom_left) = (at(0.65, 0.37), at(0.35, 0.62));
+    assert!(is_red(top_right), "red at the top: {top_right:?}");
+    assert!(bottom_left[2] > 200 && bottom_left[0] < 60, "blue at the bottom: {bottom_left:?}");
+}
+
+/// A geometric PS_USERSTYLE pen whose dashes and gaps are far below a pixel draws its line solid
+/// instead of splitting it into dashes too small to see.
+#[test]
+fn metafile_sub_pixel_dashes_draw_solid() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    // 10,000 device pixels over 250 mm: a device unit is 0.025 mm. The picture is 1000 units wide.
+    emf[8..24].copy_from_slice(&le32(&[0, 0, 1000, 1000]));
+    emf[72..80].copy_from_slice(&le32(&[10_000, 10_000]));
+    // EXTCREATEPEN 1: PS_GEOMETRIC | PS_ENDCAP_FLAT | PS_USERSTYLE, 80 units wide, black, two
+    // entries of 1 unit.
+    let pen = emf_rec(95, &le32(&[1, 0, 0, 0, 0, 0x0001_0207, 80, 0, 0, 0, 2, 1, 1]));
+    let recs = [pen, emf_rec(37, &le32(&[1])), emf_rec(27, &le32(&[0, 500])), emf_rec(54, &le32(&[1000, 500])), emf_rec(14, &[0; 12])];
+    emf.extend(recs.concat());
+    let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+    let y = (rect.y + rect.h * 0.5) as u32;
+    let (x0, x1) = ((rect.x + 5.0) as u32, (rect.x + rect.w - 5.0) as u32);
+    let dark = (x0..x1).filter(|&x| img.pixel(x, y)[..3].iter().all(|c| *c < 60)).count();
+    assert_eq!(dark, (x1 - x0) as usize, "the line is solid black");
+}
+
+/// A hatched brush (CREATEBRUSHINDIRECT, BS_HATCHED, HS_VERTICAL) fills with its red lines over
+/// the background, not with a solid red.
+#[test]
+fn metafile_hatch_brush_draws_its_lines() {
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let brush = emf_rec(39, &le32(&[1, 2, 0x0000_00FF, 1]));
+    emf.extend([brush, emf_rec(37, &le32(&[1])), emf_rec(43, &le32(&[0, 0, 100, 100])), emf_rec(14, &[0; 12])].concat());
+    let scale = 4.0;
+    let (img, rect) = emf_on_page(emf, [0.0; 4], scale);
+    let y = ((rect.y + rect.h / 2.0) * scale) as u32;
+    let (x0, x1) = (((rect.x + 2.0) * scale) as u32, ((rect.x + rect.w - 2.0) * scale) as u32);
+    let red = (x0..x1).filter(|&x| img.pixel(x, y)[1] < 128).count();
+    let n = (x1 - x0) as usize;
+    assert!(red > 0 && red < n * 3 / 4, "the row crosses red lines and the background between them: {red} of {n} red");
+}
+
 /// #1899: a crop that keeps a sliver of the picture (3% here; a header's bar can be 2.7% of a
 /// page-sized metafile) stretches that sliver over the frame, as the file says, for vector and
 /// bitmap pictures alike. Both pictures are paper on the left half and red on the right.
 #[test]
 fn a_crop_keeping_a_sliver_fills_the_frame_with_it() {
-    let mut png = Vec::new();
-    image::RgbaImage::from_fn(100, 100, |x, _| image::Rgba(if x >= 50 { [255, 0, 0, 255] } else { [255; 4] }))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    let img = image::RgbaImage::from_fn(100, 100, |x, _| image::Rgba(if x >= 50 { [255, 0, 0, 255] } else { [255; 4] }));
+    let png = wordcraft_geom::picture::encode_png(&image::DynamicImage::from(img)).unwrap();
     for (bytes, ext) in [(red_right_half_emf(), "emf"), (png, "png")] {
         // (crop, where in the frame, red?): 47–50% of the source is all paper; 50–53% all red.
         for (crop, at, red) in [([0.47, 0.47, 0.5, 0.5], 0.7, false), ([0.5, 0.47, 0.47, 0.5], 0.3, true)] {
@@ -1079,6 +1469,43 @@ fn a_crop_keeping_a_sliver_fills_the_frame_with_it() {
             let is_paper = px[..3].iter().all(|c| *c > 200);
             assert!(if red { is_red } else { is_paper }, "{ext} crop {crop:?} at {at}: {px:?}");
         }
+    }
+}
+
+/// A negative crop side draws as no crop on that side, for vector and bitmap pictures alike: a
+/// left side of -0.5 does not pad the source, so the frame at 55% shows the source at 55% (red).
+#[test]
+fn a_negative_crop_side_draws_uncropped() {
+    let img = image::RgbaImage::from_fn(100, 100, |x, _| image::Rgba(if x >= 50 { [255, 0, 0, 255] } else { [255; 4] }));
+    let png = wordcraft_geom::picture::encode_png(&image::DynamicImage::from(img)).unwrap();
+    for (bytes, ext) in [(red_right_half_emf(), "emf"), (png, "png")] {
+        let mut d = Document::new();
+        let media = d.add_media(bytes, ext);
+        let mut p = wordcraft_doc::Paragraph::new();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [-0.5, 0.0, 0.0, 0.0],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(0, obj, &Default::default()).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let opts = RenderOptions::default();
+        let rect = page_display(&d, &l.pages[0], &opts.display)
+            .iter()
+            .find_map(|i| match i {
+                Draw::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a picture on the page");
+        let img = render_page(&d, &l.pages[0], 1.0, &opts);
+        let px = img.pixel((rect.x + rect.w * 0.55) as u32, (rect.y + rect.h * 0.5) as u32);
+        assert!(is_red(px), "{ext}: {px:?}");
     }
 }
 
@@ -1164,6 +1591,29 @@ fn metafile_text_records_are_painted() {
     let (x1, y1) = (((rect.x + rect.w) * scale) as u32, ((rect.y + rect.h) * scale) as u32);
     let dark = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| img.pixel(x, y)[0] < 100).count();
     assert!(dark > 50, "the text is painted inside the picture: {dark} dark pixels");
+}
+
+/// With the opaque background mode (the default) and a red background color (SETBKCOLOR), a text
+/// run's character cells are filled red behind the black text.
+#[test]
+fn metafile_text_fills_its_opaque_background() {
+    let mut font = emf_rec(82, &le32(&[1, -20, 0, 0, 0, 400, 0, 0]));
+    let mut name: Vec<u8> = "Arial".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    name.resize(64, 0);
+    font.extend(name);
+    font[4..8].copy_from_slice(&104u32.to_le_bytes());
+    let mut text = emf_rec(84, &le32(&[0, 0, 100, 100, 1, 0, 0, 5, 40, 4, 76, 0, 0, 0, 0, 0, 0]));
+    text.extend("WWWW".encode_utf16().flat_map(|u| u.to_le_bytes()));
+    text[4..8].copy_from_slice(&84u32.to_le_bytes());
+    let mut emf = red_right_half_emf()[..88].to_vec();
+    let bk = emf_rec(25, &le32(&[0x0000_00FF]));
+    emf.extend([bk, font, emf_rec(37, &le32(&[1])), emf_rec(24, &le32(&[0])), text, emf_rec(14, &[0; 12])].concat());
+    let scale = 2.0;
+    let (img, rect) = emf_on_page(emf, [0.0; 4], scale);
+    let (x0, y0) = ((rect.x * scale) as u32, (rect.y * scale) as u32);
+    let (x1, y1) = (((rect.x + rect.w) * scale) as u32, ((rect.y + rect.h) * scale) as u32);
+    let red = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| is_red(img.pixel(x, y))).count();
+    assert!(red > 50, "the character cells are filled red: {red} red pixels");
 }
 
 /// An EMF text run whose anchor sits inside the picture but whose font is billions of units
@@ -1488,14 +1938,40 @@ fn paths_far_past_every_canvas_are_not_flattened() {
     assert!(!path_extent_ok(Affine::IDENTITY, &line(f64::NAN)));
 }
 
+#[test]
+fn rules_of_one_width_cover_the_same_whole_pixels_at_every_zoom() {
+    for zoom in [0.5, 0.6, 0.75] {
+        for ppp in [1.0, 1.25] {
+            let k = zoom * ppp * 96.0 / 72.0;
+            let view = Affine::new([k, 0.0, 0.0, k, 37.3, 12.9]);
+            let mut widths = Vec::new();
+            for i in 0..20 {
+                let pos = 10.0 + f64::from(i) * 17.37;
+                let (w_h, (_, oy)) = snap_rule(view, (5.0, pos, 400.0, pos), 0.5).unwrap();
+                let (w_v, (ox, _)) = snap_rule(view, (pos, 5.0, pos, 400.0), 0.5).unwrap();
+                widths.push(w_h);
+                widths.push(w_v);
+                for (w, centre) in [(w_h, (pos + oy) * k + 12.9), (w_v, (pos + ox) * k + 37.3)] {
+                    let edge = centre - w / 2.0;
+                    assert!((edge - edge.round()).abs() < 1e-9, "zoom {zoom} ppp {ppp}: edge {edge} is off the pixel grid");
+                }
+            }
+            assert!(widths.iter().all(|w| *w == widths[0] && *w >= 1.0 && w.fract() == 0.0), "zoom {zoom} ppp {ppp}: {widths:?}");
+        }
+    }
+    assert!(snap_rule(Affine::rotate(0.3), (0.0, 0.0, 9.0, 0.0), 0.5).is_none());
+    assert!(snap_rule(Affine::scale(2.0), (0.0, 0.0, 9.0, 4.0), 0.5).is_none());
+}
+
 /// The same three pictures that don't draw as in the PDF test: each stays a grey box, and the page's
 /// pixels are what they were before strict export existed (#6005).
 #[test]
 fn undecodable_pictures_keep_their_grey_box_pixels() {
-    let mut whole = Vec::new();
-    image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut whole), image::ImageFormat::Png)
-        .unwrap();
+    let mut whole = wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     let cut = whole.len() - 24;
     whole.truncate(cut);
     let mut d = Document::new();
@@ -1524,4 +2000,182 @@ fn undecodable_pictures_keep_their_grey_box_pixels() {
     // FNV-1a of the pixels, recorded before the shared decode check existed.
     let h = img.pixels.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
     assert_eq!(h, 0x79f9f1d3602a9925, "{h:#x}");
+}
+
+/// The cache charge for a metafile's geometry covers what its items keep after their pixels move
+/// out: a pattern's path and tile, and the clip rectangles and clip paths of every kind of item.
+/// A tile or clip path shared by several items is charged once.
+#[test]
+fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
+    use craft_metafile::{ClipPath, Tile};
+    let segs = |n: usize| vec![Seg::Line(0.0, 0.0); n];
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
+    let base = crate::media::geometry_bytes(&pic(vec![]));
+    let tile = Arc::new(Tile { width: 1000, height: 1000, rgba: vec![0; 4_000_000], cell: [1.0, 1.0], origin: [0.0, 0.0] });
+    let pattern = |tile: &Arc<Tile>| Item::Pattern { segs: segs(1000), even_odd: false, tile: tile.clone(), region: None, clips: vec![] };
+    let one = crate::media::geometry_bytes(&pic(vec![pattern(&tile)]));
+    assert!(one - base >= 4_000_000 + 1000 * std::mem::size_of::<Seg>(), "{} bytes", one - base);
+    // Two fills of the same brush keep one tile.
+    let two = crate::media::geometry_bytes(&pic(vec![pattern(&tile), pattern(&tile)]));
+    assert!(two - one < 1_000_000, "the shared tile is charged once: {} bytes more", two - one);
+    // A clip path shared by two bitmaps is charged once; a clip region is charged per item.
+    let clip = Arc::new(ClipPath { segs: segs(100_000), even_odd: false });
+    let bitmap = |clips: Vec<Arc<ClipPath>>, region: Option<Vec<[f32; 4]>>| Item::Bitmap {
+        rect: [0.0; 4],
+        transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        width: 0,
+        height: 0,
+        rgba: vec![],
+        region,
+        clips,
+    };
+    let plain = crate::media::geometry_bytes(&pic(vec![bitmap(vec![], None)]));
+    let clipped = crate::media::geometry_bytes(&pic(vec![bitmap(vec![clip.clone()], None), bitmap(vec![clip.clone()], None)]));
+    let clip_bytes = 100_000 * std::mem::size_of::<Seg>();
+    assert!(clipped - 2 * plain >= clip_bytes && clipped - 2 * plain < 2 * clip_bytes, "{} bytes", clipped - 2 * plain);
+    let region = crate::media::geometry_bytes(&pic(vec![bitmap(vec![], Some(vec![[0.0; 4]; 1000]))]));
+    assert!(region - plain >= 1000 * 16, "{} bytes", region - plain);
+}
+
+/// The parser collects segments and dashes without shrinking them, so the charge follows the
+/// capacity a vector keeps, not only its length.
+#[test]
+fn geometry_bytes_charges_the_capacity_of_segment_and_dash_vectors() {
+    use craft_metafile::LineStyle;
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
+    let path = |segs: Vec<Seg>, dash: Vec<f32>| Item::Path {
+        segs,
+        fill: None,
+        stroke: Some(([0, 0, 0, 255], 1.0)),
+        line: LineStyle { dash, ..LineStyle::default() },
+        even_odd: false,
+        region: None,
+        clips: vec![],
+    };
+    let tight = crate::media::geometry_bytes(&pic(vec![path(vec![Seg::Line(0.0, 0.0); 2], vec![1.0; 2])]));
+    let mut segs = Vec::with_capacity(10_000);
+    segs.extend([Seg::Line(0.0, 0.0); 2]);
+    let mut dash = Vec::with_capacity(1_000);
+    dash.extend([1.0f32; 2]);
+    let slack = crate::media::geometry_bytes(&pic(vec![path(segs, dash)]));
+    assert!(slack - tight >= 9_000 * std::mem::size_of::<Seg>(), "{} bytes more", slack - tight);
+}
+
+/// A stroked path keeps its dash array on the heap, and a text item keeps its boxed record and font
+/// name; the cache charge counts both, so many dashed paths or text records are not under-counted.
+#[test]
+fn geometry_bytes_counts_dash_arrays_and_text_records() {
+    use craft_metafile::{Font, HAlign, LineStyle, Text, VAlign};
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
+    let path = |dash: usize| Item::Path {
+        segs: vec![Seg::Line(0.0, 0.0); 2],
+        fill: None,
+        stroke: Some(([0, 0, 0, 255], 1.0)),
+        line: LineStyle { dash: vec![1.0; dash], ..LineStyle::default() },
+        even_odd: false,
+        region: None,
+        clips: vec![],
+    };
+    let solid = crate::media::geometry_bytes(&pic(vec![path(0)]));
+    let dashed = crate::media::geometry_bytes(&pic(vec![path(16)]));
+    assert_eq!(dashed - solid, 16 * std::mem::size_of::<f32>());
+    let text = |family: &str| {
+        Item::Text(Box::new(Text {
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            text: "ab".into(),
+            dx: vec![1.0; 2],
+            font: Font { family: family.into(), ..Font::default() },
+            color: [0, 0, 0, 255],
+            background: None,
+            h_align: HAlign::default(),
+            v_align: VAlign::default(),
+            clip: None,
+            region: None,
+            clips: vec![],
+        }))
+    };
+    let bare = crate::media::geometry_bytes(&pic(vec![text("")]));
+    let named = crate::media::geometry_bytes(&pic(vec![text("Some Long Face Name")]));
+    assert_eq!(named - bare, "Some Long Face Name".len());
+    let empty = crate::media::geometry_bytes(&pic(vec![]));
+    assert!(bare - empty >= std::mem::size_of::<Text>(), "the boxed Text struct is charged: {} bytes", bare - empty);
+}
+
+/// The placeholder for a picture `bytes` shown 200 × 150 pt, one row per pixel row: `Some(true)`
+/// for dark (text) pixels, `Some(false)` for the grey fill, `None` for anything else.
+fn placeholder_pixels(bytes: Vec<u8>) -> Vec<Vec<Option<bool>>> {
+    let mut d = Document::new();
+    let media = d.add_media(bytes, "png");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: 200.0,
+        h: 150.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(&d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    ((rect.y.ceil() as u32)..((rect.y + rect.h).floor() as u32))
+        .map(|y| {
+            ((rect.x.ceil() as u32)..((rect.x + rect.w).floor() as u32))
+                .map(|x| {
+                    let px = img.pixel(x, y);
+                    if px[..3] == [0xD0; 3] {
+                        Some(false)
+                    } else if px[..3].iter().all(|c| *c < 0x90) {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// #5637: a picture too large to decode is not just a grey box: the box says why, in three
+/// upright lines centred in it.
+#[test]
+fn a_picture_too_large_to_decode_says_so_in_its_box() {
+    let huge = ihdr_only_png(8333, 8333);
+    assert!(decode_pixmap(&huge).is_none(), "the decode budget refuses it");
+    let grid = placeholder_pixels(huge);
+    let (h, w) = (grid.len() as f64, grid[0].len() as f64);
+    assert!(grid.iter().flatten().any(|p| *p == Some(false)), "the grey placeholder is drawn");
+    let inked: Vec<bool> = grid.iter().map(|row| row.contains(&Some(true))).collect();
+    let rows: Vec<usize> = (0..inked.len()).filter(|y| inked[*y]).collect();
+    assert!(!rows.is_empty(), "the placeholder carries a message, not a plain grey box");
+    // Three lines of text: three bands of inked rows with blank rows between them.
+    let bands = (0..inked.len()).filter(|y| inked[*y] && (*y == 0 || !inked[*y - 1])).count();
+    assert_eq!(bands, 3, "three lines of text, inked rows {rows:?}");
+    // Centred both ways; glyphs flipped about their baselines would sit several pixels low.
+    let (top, bottom) = (rows[0] as f64, *rows.last().unwrap() as f64);
+    assert!(((top + bottom) / 2.0 - h / 2.0).abs() < 3.0, "centred vertically: rows {top}..{bottom} of {h}");
+    let cols: Vec<usize> = (0..grid[0].len()).filter(|x| grid.iter().any(|row| row[*x] == Some(true))).collect();
+    let (left, right) = (cols[0] as f64, *cols.last().unwrap() as f64);
+    assert!(((left + right) / 2.0 - w / 2.0).abs() < 3.0, "centred horizontally: columns {left}..{right} of {w}");
+    // The first line starts with the stem of an upright "P": its leftmost inked column runs at
+    // least 5 px down from the line's top.
+    let first = rows[0]..rows.iter().zip(&rows[1..]).find(|(a, b)| **b != **a + 1).map_or(rows.len(), |(a, _)| *a + 1);
+    let lead = (0..grid[0].len()).find(|x| grid[first.clone()].iter().any(|row| row[*x] == Some(true))).unwrap();
+    let stem = grid[first.clone()].iter().filter(|row| row[lead] == Some(true) || row.get(lead + 1) == Some(&Some(true))).count();
+    assert!(stem >= 5, "the first line starts with an upright P stem ({stem} px)");
+    // A damaged picture still gets its plain grey placeholder.
+    let grid = placeholder_pixels(b"\x89PNG\r\n\x1a\njunk".to_vec());
+    assert!(grid.iter().flatten().any(|p| *p == Some(false)), "a damaged picture keeps its grey placeholder");
+    assert!(!grid.iter().flatten().any(|p| *p == Some(true)), "with no size message");
 }

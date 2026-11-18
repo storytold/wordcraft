@@ -799,6 +799,7 @@ fn deleting_a_comment_in_a_parent_cycle_ends() {
 /// A very long reply chain (as a hostile file could hold) is deleted in one pass over the
 /// comments, not one pass per reply: 50,000 replies would otherwise freeze the app.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn deleting_a_long_reply_chain_stays_fast() {
     let mut s = Session::new(Document::new());
     s.view.proofing = false;
