@@ -15637,6 +15637,20 @@ fn a_tall_label_after_an_opening_page_break_sets_its_lines_height() {
     };
     let (plain, after_break) = (line_with_label(false), line_with_label(true));
     assert!((plain - after_break).abs() < 0.01, "label line {after_break} after a break, {plain} without");
+    // The break's own line, which draws no label, isn't made taller by it.
+    let mut d = Document::from_text("Before\n\u{000C}x");
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    Arc::make_mut(&mut d.numbering).abstracts[0].levels[0].chr.size = Some(40.0);
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+    let l = lay(&d);
+    let para = l
+        .pages
+        .iter()
+        .flat_map(|pg| pg.items.iter())
+        .filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None })
+        .find(|para| para.label.is_some())
+        .unwrap();
+    assert!(para.lines[0].height < plain - 10.0, "the break's line {} takes the label's height {plain}", para.lines[0].height);
 }
 
 /// A numbered paragraph opening with a page break has its label on the line after the break:

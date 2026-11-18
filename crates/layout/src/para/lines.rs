@@ -505,12 +505,14 @@ impl<'e> Breaker<'e> {
         // below them (Word for Mac 16.114.4, Georgia 11 pt at least 12 pt: an 80 pt picture alone
         // takes 80 pt). A list label is text on the line: its descent stays. The label is on the
         // first line, or the second when the paragraph opens with a page break (`label_line`).
-        let label_here = self.first
-            || (self.lines.len() == 1
-                && self.lines.first().is_some_and(|l| {
-                    l.end == LineEnd::PageBreak
-                        && pl.clusters.get(l.c0..l.c1).is_some_and(|cs| cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker)))
-                }));
+        let break_only = |c0: usize, c1: usize| {
+            pl.clusters.get(c0..c1).is_some_and(|cs| {
+                cs.iter().any(|c| c.kind == ClKind::PageBreak) && cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker))
+            })
+        };
+        // A first line holding only a page break hands the label on to the line after it.
+        let label_here = (self.first && !break_only(range.0, range.1))
+            || (self.lines.len() == 1 && self.lines.first().is_some_and(|l| l.end == LineEnd::PageBreak && break_only(l.c0, l.c1)));
         let labelled = label_here && pl.label.is_some();
         let at_least = matches!(rp.line_spacing, LineSpacing::AtLeast(_)) && self.grid.is_none() && !labelled;
         let pictures_alone = !text && obj_asc + obj_desc > 0.0 && (spacing.is_some() || at_least);
