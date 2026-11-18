@@ -120,7 +120,8 @@ fn read_setup(app: &WordApp) -> PageSetup {
 /// Page Setup on the dialog stack: the framework dialog over the setup, with OK held until the
 /// commands ran, so a refusal shows in the dialog.
 pub(crate) struct PageSetupHost {
-    setup: PageSetup,
+    /// What the dialog shows, in points.
+    pub(super) setup: PageSetup,
     /// The setup as opened: only what differs from it is applied.
     was: PageSetup,
     unit: UnitKind,

@@ -15,7 +15,8 @@ use crate::dialogs::font::FontForm;
 
 /// The Font dialog on the host, as `open_form` opens it.
 type FontHost = FormHost<FontForm>;
-use crate::dialogs::page_setup::{PageSetupForm, PageSetupHost}; // PLAN: assumed (dialogs-w18 note 5): `PageSetupHost = FormHost<PageSetupForm>`; the form holds `paper`, `landscape`, margins and `valign` in points
+use crate::dialogs::page_setup::PageSetupHost;
+use craft::pages::{Orientation, PageSetup, PageVerticalAlign};
 
 // ---------------------------------------------------------------- helpers
 
@@ -87,19 +88,27 @@ fn confirm(h: &mut egui_kittest::Harness<'_, WordApp>, id: DialogId) {
     h.run_steps(3);
 }
 
-/// Opens the Paragraph dialog, edits what it shows and answers OK.
+/// Opens the Paragraph dialog, edits what it shows through its fields, as automation does, and answers OK.
 fn apply_paragraph(h: &mut egui_kittest::Harness<'_, WordApp>, edit: impl FnOnce(&mut ParagraphFormat)) {
     let id = open_named(h, "paragraph", json!({}));
-    if let Some(host) = h.state_mut().dialog_host.get_mut_by_id::<ParagraphHost>(id) {
-        edit(&mut host.form_mut().format);
+    let shown = h.state().dialog_host.get_by_id::<ParagraphHost>(id).map(|d| d.inner().format().clone()).unwrap_or_default();
+    let mut format = shown.clone();
+    edit(&mut format);
+    let (Json::Object(before), Json::Object(after)) = (serde_json::to_value(&shown).unwrap(), serde_json::to_value(&format).unwrap()) else {
+        panic!("a paragraph format is a JSON object");
+    };
+    let ctx = h.ctx.clone();
+    for (field, value) in after.into_iter().filter(|(field, value)| before.get(field) != Some(value)) {
+        h.state_mut().dialog_host.set_json_field(&ctx, id, &field, value).unwrap_or_else(|e| panic!("paragraph.{field}: {e}"));
     }
+    h.run_steps(2);
     confirm(h, id);
 }
 
 /// What the Paragraph dialog shows for the selection.
 fn shown_paragraph(h: &mut egui_kittest::Harness<'_, WordApp>) -> ParagraphFormat {
     let id = open_named(h, "paragraph", json!({}));
-    let shown = h.state().dialog_host.get_by_id::<ParagraphHost>(id).map(|d| d.form().format.clone()).unwrap_or_default();
+    let shown = h.state().dialog_host.get_by_id::<ParagraphHost>(id).map(|d| d.inner().format().clone()).unwrap_or_default();
     let ctx = h.ctx.clone();
     h.state_mut().dialog_host.cancel_by_id(&ctx, id);
     h.run_steps(2);
@@ -142,11 +151,12 @@ fn char_props_at_start(app: &WordApp) -> wordcraft_doc::props::CharProps {
 #[test]
 fn paste_special_dialog_keeps_the_clipboard_ownership_result() {
     let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
-    // PLAN: assumed `PasteSpecialForm::read(&WordApp, &Value) -> PasteSpecialForm { formats: Vec<String>, payload: Value, .. }` (dialogs-w18 note 3)
     let form = super::paste_special::PasteSpecialForm::read(&a, &json!({"text": "Bold", "privateClipboard": false}));
-    assert_eq!(form.formats, ["text"], "another program's copy isn't our fragment");
-    assert_eq!(form.payload.get("privateClipboard"), Some(&json!(false)));
-    assert_eq!(form.payload.get("text").and_then(Value::as_str), Some("Bold"));
+    // The form's fields as automation reads them.
+    let form = serde_json::to_value(&form).unwrap();
+    assert_eq!(form["formats"], json!(["text"]), "another program's copy isn't our fragment");
+    assert_eq!(form["payload"].get("privateClipboard"), Some(&json!(false)));
+    assert_eq!(form["payload"].get("text").and_then(Value::as_str), Some("Bold"));
 }
 
 /// #3931: hovering Insert › Table's grid asks the page for a preview of that table (rows by
@@ -744,21 +754,41 @@ fn replace_all_with_regex_groups_from_the_dialog() {
 
 // ---------------------------------------------------------------- Page Setup
 
-/// Opens Page Setup in `h`, edits its form (points) and answers OK.
-fn page_setup(h: &mut egui_kittest::Harness<'_, WordApp>, edit: impl FnOnce(&mut PageSetupForm)) {
+/// Opens Page Setup in `h`, edits the setup it shows (points) and answers OK.
+fn page_setup(h: &mut egui_kittest::Harness<'_, WordApp>, edit: impl FnOnce(&mut PageSetup)) {
     let id = open_named(h, "pageSetup", json!({}));
     if let Some(host) = h.state_mut().dialog_host.get_mut_by_id::<PageSetupHost>(id) {
-        edit(host.form_mut());
+        edit(&mut host.setup);
     }
     h.run_steps(2);
     confirm(h, id);
 }
 
+/// The paper's width and height, in points.
+fn paper_of(s: &PageSetup) -> (f32, f32) {
+    (s.width as f32, s.height as f32)
+}
+
+/// Sets the paper to `w` by `h` points.
+fn set_paper(s: &mut PageSetup, (w, h): (f32, f32)) {
+    (s.width, s.height) = (f64::from(w), f64::from(h));
+}
+
+/// Sets the orientation.
+fn set_landscape(s: &mut PageSetup, landscape: bool) {
+    s.orientation = if landscape { Orientation::Landscape } else { Orientation::Portrait };
+}
+
+/// Sets the top, bottom, left and right margins, in points.
+fn set_margins(s: &mut PageSetup, (t, b, l, r): (f32, f32, f32, f32)) {
+    let m = &mut s.margins;
+    (m.top, m.bottom, m.left, m.right) = (f64::from(t), f64::from(b), f64::from(l), f64::from(r));
+}
 
 /// The Page Setup paper size as opened, in points.
 fn opened_paper(h: &mut egui_kittest::Harness<'_, WordApp>) -> (f32, f32) {
     let id = open_named(h, "pageSetup", json!({}));
-    let paper = h.state().dialog_host.get_by_id::<PageSetupHost>(id).map(|d| d.form().paper).unwrap_or_default();
+    let paper = h.state().dialog_host.get_by_id::<PageSetupHost>(id).map(|d| paper_of(&d.setup)).unwrap_or_default();
     let ctx = h.ctx.clone();
     h.state_mut().dialog_host.cancel_by_id(&ctx, id);
     h.run_steps(2);
@@ -805,8 +835,8 @@ fn page_setup_applies_a_custom_paper_size() {
 
     for ((w, ht), want) in [((400.0, 600.0), (400.0, 600.0, false)), ((800.0, 400.0), (800.0, 400.0, true))] {
         page_setup(&mut h, |f| {
-            f.paper = (w, ht);
-            f.landscape = w > ht;
+            set_paper(f, (w, ht));
+            set_landscape(f, w > ht);
         });
         assert_eq!(sect(h.state()), want, "{w}×{ht}");
     }
@@ -814,8 +844,9 @@ fn page_setup_applies_a_custom_paper_size() {
 
     // Portrait again with the same paper: the dialog swaps width and height, which is no new size.
     page_setup(&mut h, |f| {
-        f.paper = (f.paper.1, f.paper.0);
-        f.landscape = false;
+        let (w, ht) = paper_of(f);
+        set_paper(f, (ht, w));
+        set_landscape(f, false);
     });
     assert_eq!(sect(h.state()), (400.0, 800.0, false));
     assert_eq!(size_steps(h.state()), 2, "turning the page isn't a new size");
@@ -832,7 +863,7 @@ fn page_setup_refuses_margins_that_dont_fit_and_applies_smaller_ones_first() {
     let undo = h.state().session.undo_depth();
     let id = open_named(&mut h, "pageSetup", json!({}));
     if let Some(d) = h.state_mut().dialog_host.get_mut_by_id::<PageSetupHost>(id) {
-        d.form_mut().paper = (100.0, 500.0);
+        set_paper(&mut d.setup, (100.0, 500.0));
     }
     h.run_steps(2);
     confirm(&mut h, id);
@@ -842,8 +873,7 @@ fn page_setup_refuses_margins_that_dont_fit_and_applies_smaller_ones_first() {
     assert_eq!((wordcraft_engine::cmd::page::sect(&h.state().session), h.state().session.undo_depth()), (before, undo), "nothing applied");
 
     if let Some(d) = h.state_mut().dialog_host.get_mut_by_id::<PageSetupHost>(id) {
-        let f = d.form_mut();
-        (f.top, f.bottom, f.left, f.right) = (18.0, 18.0, 18.0, 18.0);
+        set_margins(&mut d.setup, (18.0, 18.0, 18.0, 18.0));
     }
     h.run_steps(2);
     confirm(&mut h, id);
@@ -859,9 +889,9 @@ fn page_setup_ok_is_one_undo_step() {
     let sect = |h: &egui_kittest::Harness<'_, WordApp>| wordcraft_engine::cmd::page::sect(&h.state().session);
     let apply = |h: &mut egui_kittest::Harness<'_, WordApp>, (w, ht): (f32, f32), (t, b, l, r): (f32, f32, f32, f32)| {
         page_setup(h, |f| {
-            f.paper = (w, ht);
-            f.landscape = w > ht;
-            (f.top, f.bottom, f.left, f.right) = (t, b, l, r);
+            set_paper(f, (w, ht));
+            set_landscape(f, w > ht);
+            set_margins(f, (t, b, l, r));
         });
     };
     // Size first, then orientation and margins.
@@ -906,9 +936,8 @@ fn page_setup_shows_a_refused_command_and_applies_nothing() {
     h.run_steps(2);
     let id = open_named(&mut h, "pageSetup", json!({}));
     if let Some(d) = h.state_mut().dialog_host.get_mut_by_id::<PageSetupHost>(id) {
-        let f = d.form_mut();
-        f.paper = (300.0, 500.0);
-        (f.top, f.bottom, f.left, f.right) = (72.0, 72.0, 72.0, 72.0);
+        set_paper(&mut d.setup, (300.0, 500.0));
+        set_margins(&mut d.setup, (72.0, 72.0, 72.0, 72.0));
     }
     h.run_steps(2);
     confirm(&mut h, id);
@@ -933,10 +962,10 @@ fn page_setup_different_first_page_leaves_the_title_page_unnumbered() {
     let mut h = app_harness(app);
     h.run_steps(2);
     let id = open_named(&mut h, "pageSetup", json!({}));
-    let shown = h.state().dialog_host.get_by_id::<PageSetupHost>(id).map(|d| (d.form().first_page, d.form().odd_even));
+    let shown = h.state().dialog_host.get_by_id::<PageSetupHost>(id).map(|d| (d.setup.different_first, d.setup.different_odd_even));
     assert_eq!(shown, Some((false, false)), "shows the section's values");
     if let Some(d) = h.state_mut().dialog_host.get_mut_by_id::<PageSetupHost>(id) {
-        d.form_mut().first_page = true;
+        d.setup.different_first = true;
     }
     h.run_steps(2);
     confirm(&mut h, id);
@@ -962,9 +991,9 @@ fn page_setup_each_layout_value_sends_only_its_own_command() {
         let before = sect(&h);
         let depth = h.state().session.undo_depth();
         page_setup(&mut h, |f| match case {
-            0 => f.valign = PageVAlign::Justify,
-            1 => f.first_page = true,
-            _ => f.odd_even = true,
+            0 => f.vertical_align = PageVerticalAlign::Justify,
+            1 => f.different_first = true,
+            _ => f.different_odd_even = true,
         });
         let after = sect(&h);
         let even_odd = h.state().session.doc.settings.even_odd_headers;
