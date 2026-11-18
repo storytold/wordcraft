@@ -60,6 +60,9 @@ fn script() -> Vec<Step> {
         ("list_commands", json!({"query": "bold"})),
         ("list_documents", json!({})),
         ("get_text", json!({})),
+        // Extra top-level keys the schema does not declare: ignored, as before (#6972).
+        ("get_text", json!({"extra": true})),
+        ("type_text", json!({"text": "!", "bogus": 1})),
         ("inspect_document", json!({})),
         ("render_page", json!({"page": 1, "scale": 0.2})),
         ("render_page", json!({"page": 99})),
@@ -331,22 +334,27 @@ fn batches_are_capped_at_a_thousand() {
     assert_eq!(b["error"]["code"], -32600);
 }
 
-/// Difference 5 (accepted, stricter): arguments the tool's schema does not list, or of another
-/// type, are a tool error before the tool runs. The old server passed them on and ignored them.
+/// Difference 5 (withdrawn, #6972): an argument the tool's schema does not list is ignored, as
+/// the old server did, so a client that sends one keeps working; WordCraft's schemas leave the
+/// argument object open, and its server drops the keys they do not declare before the shared
+/// check. That check still refuses an argument the schema declares of another type before the
+/// tool runs. The shared default itself is unchanged and still refuses unknown keys.
 #[test]
-fn unknown_and_mistyped_arguments_are_tool_errors() {
+fn mistyped_arguments_are_tool_errors() {
     let mut new = Server::new(Box::new(Headless::default()));
-    for (name, args, needle) in [
-        ("type_text", json!({"text": "x", "bogus": 1}), "unknown argument `bogus`"),
-        ("get_text", json!({"x": 1}), "unknown argument `x`"),
-        ("type_text", json!({"text": 5}), "must be of type"),
-        ("select_text", json!({"text": "x", "occurrence": "1"}), "must be of type"),
-    ] {
+    for (name, args, needle) in
+        [("type_text", json!({"text": 5}), "must be of type"), ("select_text", json!({"text": "x", "occurrence": "1"}), "must be of type")]
+    {
         let r = new.handle(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}})).unwrap();
         assert_eq!(r["result"]["isError"], true, "{r}");
         assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains(needle), "{r}");
         assert!(r.get("error").is_none(), "a tool failure is a result, not a JSON-RPC error: {r}");
     }
+    // An unknown key is ignored and the tool runs, where the shared default alone refuses it.
+    let r = new.handle(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "get_text", "arguments": {"x": 1}}})).unwrap();
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let defs = crate::tools::tool_definitions();
+    assert!(craft_mcp_server::check_arguments(defs.as_array().unwrap(), "get_text", &json!({"x": 1})).is_err());
 }
 
 /// Difference 6 (accepted, stricter): a required argument that is missing is refused before the

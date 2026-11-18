@@ -62,6 +62,24 @@ fn agent_writes_a_formatted_document() {
     assert!(p["percent"].as_f64().unwrap() > 50.0);
 }
 
+/// A top-level argument the tool's schema does not declare is ignored, as it was before the
+/// server moved to the shared core (#6972): the advertised schemas leave the object open, so a
+/// client that follows them may send one, and the call it made before must still run.
+/// Arguments the schema does declare are still checked: one of the wrong type is refused before
+/// the tool runs.
+#[test]
+fn unknown_top_level_arguments_are_ignored() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    tool(&mut s, "type_text", json!({"text": "Hello", "bogus": 1}));
+    let text = tool(&mut s, "get_text", json!({"extra": true}));
+    assert_eq!(text["text"], json!("Hello"));
+    // A declared argument of the wrong type is still an error before the tool runs.
+    let r = call(&mut s, 9, "tools/call", json!({"name": "get_text", "arguments": {"doc": "1"}}));
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("must be of type"), "{r}");
+}
+
 /// The document's paragraphs as (text, in a list) from `inspect_document`.
 fn paragraphs(s: &mut Server) -> Vec<(String, bool)> {
     let doc = tool(s, "inspect_document", json!({}));
