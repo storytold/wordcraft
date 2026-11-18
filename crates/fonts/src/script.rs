@@ -149,6 +149,50 @@ pub fn is_japanese_family(family: &str) -> bool {
     JAPANESE_FALLBACKS.iter().any(|n| family.eq_ignore_ascii_case(n)) || crate::japanese_fonts().any(|f| family.eq_ignore_ascii_case(f.family))
 }
 
+/// The East Asian language a run's fallback font is chosen for. Chinese and Japanese share most
+/// ideographs but draw some of them differently, and a font made for one draws them in that
+/// one's forms: Japanese text takes a font made for Japanese, Chinese and Korean text one that
+/// isn't, and text of no known East Asian language the fallback order as it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum EastAsianLang {
+    Japanese,
+    /// Chinese or Korean.
+    Other,
+    #[default]
+    Unknown,
+}
+
+impl EastAsianLang {
+    /// The language a `w:lang` tag names (`ja-JP`, `zh-TW`, `ko`), by its primary subtag.
+    pub fn of_tag(tag: &str) -> Self {
+        let primary = tag.split(['-', '_']).next().unwrap_or(tag);
+        if primary.eq_ignore_ascii_case("ja") {
+            Self::Japanese
+        } else if primary.eq_ignore_ascii_case("zh") || primary.eq_ignore_ascii_case("ko") {
+            Self::Other
+        } else {
+            Self::Unknown
+        }
+    }
+
+    /// `self`, or Japanese when no language is known and `chars` hold kana: only Japanese is
+    /// written with them. A language that is known decides, so kana in Chinese text (の in a
+    /// name) don't make it Japanese.
+    pub fn or_kana(self, mut chars: impl Iterator<Item = char>) -> Self {
+        if self == Self::Unknown && chars.any(is_kana) { Self::Japanese } else { self }
+    }
+
+    /// Whether a font of `family` suits text in this language: for Japanese one made for
+    /// Japanese, for Chinese or Korean one that isn't, for no known language any.
+    pub(crate) fn suits(self, family: &str) -> bool {
+        match self {
+            Self::Japanese => is_japanese_family(family),
+            Self::Other => !is_japanese_family(family),
+            Self::Unknown => true,
+        }
+    }
+}
+
 /// The platforms' colour emoji fonts. Emoji prefer them over the monochrome symbol fonts that
 /// also cover many emoji (Windows' Segoe UI Symbol has ✅, so it drew in black and white).
 const COLOR_EMOJI: &[&str] = &["Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji"];

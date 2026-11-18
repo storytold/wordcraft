@@ -2,6 +2,7 @@
 #[allow(unused_imports)]
 use std::path::{Path, PathBuf};
 
+use crate::EastAsianLang;
 use crate::fontdb::face::FlipPen;
 use crate::fontdb::*;
 
@@ -429,15 +430,24 @@ fn a_family_partly_loaded_by_a_character_fallback_is_loaded_whole_for_a_run() {
 /// A bundled Source Sans 3 file named `family` that maps 、。, kana, 取 and 鳥 (a format 12 cmap, to
 /// glyphs the font has), as a Chinese font and a Japanese one both do.
 fn cjk_font(family: &str) -> Vec<u8> {
+    cjk_font_with(family, &[])
+}
+
+/// [`cjk_font`], mapping the `extra` characters too.
+fn cjk_font_with(family: &str, extra: &[char]) -> Vec<u8> {
     let named = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, family)]);
     let font = skrifa::FontRef::new(&named).unwrap();
+    let mut groups = vec![[0x3001u32, 0x3002, 300], [0x3040, 0x30FF, 1], [0x53D6, 0x53D6, 200], [0x9CE5, 0x9CE5, 201]];
+    groups.extend(extra.iter().map(|c| [u32::from(*c), u32::from(*c), 202]));
+    groups.sort_unstable();
     let mut cmap = Vec::new();
     for v in [0u16, 1, 3, 10] {
         cmap.extend_from_slice(&v.to_be_bytes());
     }
     cmap.extend_from_slice(&12u32.to_be_bytes());
     cmap.extend_from_slice(&[0, 12, 0, 0]);
-    for v in [64u32, 0, 4, 0x3001, 0x3002, 300, 0x3040, 0x30FF, 1, 0x53D6, 0x53D6, 200, 0x9CE5, 0x9CE5, 201] {
+    let n = groups.len() as u32;
+    for v in [16 + 12 * n, 0, n].into_iter().chain(groups.into_iter().flatten()) {
         cmap.extend_from_slice(&v.to_be_bytes());
     }
     let mut tables: Vec<([u8; 4], Vec<u8>)> = font
@@ -479,7 +489,10 @@ fn japanese_text_takes_a_japanese_font_over_a_chinese_one_loaded_first() {
     assert_eq!(family(db.fallback_for('と', latin.id())).as_deref(), Some("Hiragino Kaku Gothic ProN"));
     // Kanji alone are Japanese only when the run says so (`w:lang w:eastAsia`).
     assert_eq!(family(db.fallback_for_run(&['鳥', '取'], latin.id(), false, false)).as_deref(), Some("PingFang SC"));
-    assert_eq!(family(db.fallback_for_run_in(&['鳥', '取'], latin.id(), false, false, true)).as_deref(), Some("Hiragino Kaku Gothic ProN"));
+    assert_eq!(
+        family(db.fallback_for_run_in(&['鳥', '取'], latin.id(), false, false, EastAsianLang::Japanese)).as_deref(),
+        Some("Hiragino Kaku Gothic ProN")
+    );
 }
 
 #[test]
@@ -500,7 +513,83 @@ fn japanese_text_takes_a_chinese_font_when_no_japanese_one_is_installed() {
         assert_eq!(family(db.fallback_for_run(run, latin.id(), false, false)).as_deref(), Some("PingFang SC"), "{run:?}");
     }
     assert_eq!(family(db.fallback_for('と', latin.id())).as_deref(), Some("PingFang SC"));
-    assert_eq!(family(db.fallback_for_run_in(&['鳥', '取'], latin.id(), false, false, true)).as_deref(), Some("PingFang SC"));
+    assert_eq!(family(db.fallback_for_run_in(&['鳥', '取'], latin.id(), false, false, EastAsianLang::Japanese)).as_deref(), Some("PingFang SC"));
+}
+
+#[test]
+fn chinese_text_with_kana_keeps_a_chinese_font() {
+    // A kana made the whole run Japanese, also in text tagged Chinese (`w:lang w:eastAsia`
+    // zh-TW): の in a name drew the run's hanzi in Hiragino, in their Japanese forms. The tag
+    // decides; kana decide only for text no tag names a language for.
+    let dir = font_dir("chinese-kana");
+    std::fs::write(dir.join("PingFang.ttf"), cjk_font("PingFang SC")).unwrap();
+    std::fs::write(dir.join("Hiragino.ttf"), cjk_font("Hiragino Kaku Gothic ProN")).unwrap();
+    let family = |f: Option<Arc<FontFace>>| f.map(|f| f.family.clone());
+    let loaded = |db: &FontDb, name: &str| db.read_faces().iter().any(|f| f.family == name);
+    let run = ['鳥', '取', 'の'];
+    // Nothing loaded yet: the hanzi load the Chinese font, which maps the kana too, before the
+    // kana can load the Japanese one.
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    if db.read_faces().iter().any(|f| f.covers('と') || f.covers('鳥')) {
+        eprintln!("skipped: a bundled face (craft-fonts) draws Japanese");
+        return;
+    }
+    assert_eq!(family(db.fallback_for_run_in(&run, latin.id(), false, false, EastAsianLang::Other)).as_deref(), Some("PingFang SC"));
+    assert!(!loaded(&db, "Hiragino Kaku Gothic ProN"), "the Japanese font is not read for Chinese text");
+    // The same run with no language is Japanese, by its kana.
+    assert_eq!(family(db.fallback_for_run(&run, latin.id(), false, false)).as_deref(), Some("Hiragino Kaku Gothic ProN"));
+    // The Japanese font loaded first (for Japanese text earlier in the document), and no Chinese
+    // one yet: one is loaded for the Chinese text.
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    assert_eq!(family(db.fallback_for('と', latin.id())).as_deref(), Some("Hiragino Kaku Gothic ProN"));
+    assert!(!loaded(&db, "PingFang SC"));
+    assert_eq!(family(db.fallback_for_run_in(&run, latin.id(), false, false, EastAsianLang::Other)).as_deref(), Some("PingFang SC"));
+    assert_eq!(family(db.fallback_for_run_in(&run, latin.id(), false, false, EastAsianLang::Japanese)).as_deref(), Some("Hiragino Kaku Gothic ProN"));
+}
+
+#[test]
+fn a_japanese_font_that_lacks_a_character_of_the_run_is_not_read() {
+    // Japanese text with a character no font made for Japanese maps (這, here only in the Chinese
+    // font) read every such font on the list, for nothing: the run took the Chinese font anyway.
+    let dir = font_dir("japanese-lacking");
+    std::fs::write(dir.join("PingFang.ttf"), cjk_font_with("PingFang SC", &['這'])).unwrap();
+    std::fs::write(dir.join("Hiragino.ttf"), cjk_font("Hiragino Kaku Gothic ProN")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    if db.read_faces().iter().any(|f| f.covers('と') || f.covers('鳥')) {
+        eprintln!("skipped: a bundled face (craft-fonts) draws Japanese");
+        return;
+    }
+    let family = |f: Option<Arc<FontFace>>| f.map(|f| f.family.clone());
+    assert_eq!(family(db.fallback_for_run_in(&['取', '這'], latin.id(), false, false, EastAsianLang::Japanese)).as_deref(), Some("PingFang SC"));
+    assert!(!db.read_faces().iter().any(|f| f.family == "Hiragino Kaku Gothic ProN"), "the Japanese font lacks 這: not read");
+    // It is read for a run it maps.
+    assert_eq!(
+        family(db.fallback_for_run_in(&['取', '鳥'], latin.id(), false, false, EastAsianLang::Japanese)).as_deref(),
+        Some("Hiragino Kaku Gothic ProN")
+    );
+}
+
+#[test]
+fn a_runs_east_asian_language_comes_from_its_tag() {
+    for (tag, lang) in [
+        ("ja-JP", EastAsianLang::Japanese),
+        ("JA", EastAsianLang::Japanese),
+        ("zh-TW", EastAsianLang::Other),
+        ("zh_Hant_TW", EastAsianLang::Other),
+        ("ko-KR", EastAsianLang::Other),
+        ("en-US", EastAsianLang::Unknown),
+        ("", EastAsianLang::Unknown),
+        ("jav", EastAsianLang::Unknown),
+    ] {
+        assert_eq!(EastAsianLang::of_tag(tag), lang, "{tag}");
+    }
+    let text = "這家店の招牌菜";
+    assert_eq!(EastAsianLang::of_tag("zh-TW").or_kana(text.chars()), EastAsianLang::Other);
+    assert_eq!(EastAsianLang::of_tag("en-US").or_kana(text.chars()), EastAsianLang::Japanese);
+    assert_eq!(EastAsianLang::Unknown.or_kana("這家店".chars()), EastAsianLang::Unknown);
 }
 
 #[test]

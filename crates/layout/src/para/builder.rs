@@ -294,9 +294,8 @@ impl<'a> Builder<'a> {
         // instead of mixing faces per character (e.g. a bundled Japanese Mincho for JIS-covered
         // ideographs beside a Simplified-Chinese sans for the rest). Whitespace and characters the
         // primary covers don't constrain the choice. `None` keeps the per-character fallback.
-        // Japanese text (`w:lang w:eastAsia` ja, or kana anywhere in the run, also ones the
-        // primary draws) takes a font made for Japanese, so the ideographs it shares with Chinese
-        // aren't drawn in their Chinese forms.
+        // The face suits the run's East Asian language ([`east_asian_lang`]), so the ideographs
+        // Japanese shares with Chinese aren't drawn in the other language's forms.
         let ea_face: Option<FaceRef> = {
             let ea: Vec<char> = text
                 .chars()
@@ -305,8 +304,8 @@ impl<'a> Builder<'a> {
             if ea.is_empty() {
                 None
             } else {
-                let japanese = rc.lang_ea.as_deref().is_some_and(is_japanese_lang) || text.chars().any(wordcraft_fonts::is_kana);
-                wordcraft_fonts::FontDb::global().fallback_for_run_in(&ea, primary.id(), rc.bold, rc.italic, japanese).map(|f| FaceRef::of(&f))
+                let lang = east_asian_lang(rc.lang_ea.as_deref(), text);
+                wordcraft_fonts::FontDb::global().fallback_for_run_in(&ea, primary.id(), rc.bold, rc.italic, lang).map(|f| FaceRef::of(&f))
             }
         };
         let segs = self.segment_keys(SegmentInput {
@@ -766,8 +765,10 @@ pub(crate) fn left_out(doc: &Document, rc: &ResolvedChar, show_hidden: bool, hid
     (rc.hidden && !show_hidden) || hide_deleted.hides(doc, rc.del)
 }
 
-/// Whether a `w:lang` tag (`ja-JP`, `ja`) is Japanese.
-fn is_japanese_lang(tag: &str) -> bool {
-    let primary = tag.split(['-', '_']).next().unwrap_or(tag);
-    primary.eq_ignore_ascii_case("ja")
+/// The East Asian language a run's fallback face is chosen for: the one its `w:lang w:eastAsia`
+/// names (Japanese, Chinese or Korean), else Japanese when the run has kana, also ones the primary
+/// font draws, else none. A tag that names a language wins over kana: の in a name in Chinese text
+/// doesn't make the text Japanese.
+pub(crate) fn east_asian_lang(tag: Option<&str>, text: &str) -> wordcraft_fonts::EastAsianLang {
+    tag.map_or(wordcraft_fonts::EastAsianLang::Unknown, wordcraft_fonts::EastAsianLang::of_tag).or_kana(text.chars())
 }

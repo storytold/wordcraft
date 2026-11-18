@@ -10766,29 +10766,30 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
 }
 
 #[test]
-fn japanese_text_takes_a_font_made_for_japanese() {
-    // On macOS, Japanese text in a Latin font fell back to PingFang HK, a Chinese font, though
-    // Hiragino was installed: some kanji took their Chinese forms. Text with kana, and kanji
-    // alone in a run in Japanese (`w:lang w:eastAsia`), now take a Japanese font when one is
-    // installed.
-    let installed = wordcraft_fonts::FontDb::global().families();
-    if !installed.iter().any(|f| wordcraft_fonts::is_japanese_family(f)) {
-        eprintln!("skipped: no Japanese font installed");
-        return;
-    }
-    let mut d = Document::from_text("鳥取\nとっとり");
-    d.format_range(&Pos::body(0, 0), &Pos::body(0, "鳥取".len()), &|c| c.lang_ea = Some("ja-JP".into())).unwrap();
+fn a_runs_east_asian_language_decides_its_fallback_font() {
+    // Japanese text takes a font made for Japanese: a run in Japanese (`w:lang w:eastAsia`), or
+    // one with kana. A kana made a run Japanese even when its language said Chinese: の in a name
+    // in Traditional Chinese text (zh-TW) drew the hanzi in a Japanese font, in their Japanese
+    // forms. The language decides; kana decide only for text in no East Asian language. The
+    // fonts each language then takes are pinned with test fonts in `wordcraft-fonts`
+    // (`fontdb::tests::sysfonts`): the fonts layout tests use have no CJK.
+    use crate::para::east_asian_lang;
+    use wordcraft_fonts::EastAsianLang;
+    let text = "這家店の招牌菜";
+    assert_eq!(east_asian_lang(Some("zh-TW"), text), EastAsianLang::Other);
+    assert_eq!(east_asian_lang(Some("ko-KR"), text), EastAsianLang::Other);
+    assert_eq!(east_asian_lang(Some("ja-JP"), "鳥取"), EastAsianLang::Japanese);
+    assert_eq!(east_asian_lang(None, "とっとり"), EastAsianLang::Japanese);
+    assert_eq!(east_asian_lang(None, text), EastAsianLang::Japanese);
+    assert_eq!(east_asian_lang(Some("en-US"), text), EastAsianLang::Japanese, "a tag that names no East Asian language");
+    assert_eq!(east_asian_lang(None, "鳥取"), EastAsianLang::Unknown);
+    // The run's language reaches the builder.
+    let mut d = Document::from_text(text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.lang_ea = Some("zh-TW".into())).unwrap();
     let l = lay(&d);
-    let paras: Vec<_> =
-        l.pages.iter().flat_map(|p| p.items.iter()).filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).collect();
-    assert_eq!(paras.len(), 2);
-    for (para, text) in paras.into_iter().zip(["鳥取", "とっとり"]) {
-        for c in &para.clusters {
-            let ch = text.get(c.start..c.end).unwrap_or_default();
-            let family = &para.styles[c.style as usize].face.get().family;
-            assert!(wordcraft_fonts::is_japanese_family(family), "{ch:?} in {family}");
-        }
-    }
+    let para =
+        l.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    assert!(para.styles.iter().all(|s| s.rc.lang_ea.as_deref() == Some("zh-TW")));
 }
 
 /// Text typed after a raised or lowered character sits where that character does: an input
