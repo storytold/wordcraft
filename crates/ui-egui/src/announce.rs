@@ -98,6 +98,19 @@ mod tests {
 
     use crate::WordApp;
 
+    /// An announcement belongs to the window whose shortcut made it, as its status message does:
+    /// another window drawn within its three seconds doesn't put it in its own tree.
+    #[test]
+    fn an_announcement_stays_with_its_window() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.announcement = Some(super::Announcement { text: "Bold On".into(), serial: 0, at: crate::now_ms() });
+        let mut other = crate::window_ui::WindowUi::new(app.session.document_id());
+        app.swap_window(&mut other);
+        assert!(app.announcement.is_none(), "the other window has nothing to say");
+        app.swap_window(&mut other);
+        assert_eq!(app.announcement.as_ref().map(|a| a.text.as_str()), Some("Bold On"), "it is back with its window");
+    }
+
     fn harness(text: &str) -> egui_kittest::Harness<'static, WordApp> {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(text)), crate::Services::default());
         app.canvas.want_focus = true;

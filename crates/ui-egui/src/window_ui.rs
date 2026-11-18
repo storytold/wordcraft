@@ -24,6 +24,9 @@ pub(crate) struct WindowUi {
     pub(crate) restrict: dialogs_review::RestrictPane,
     pub(crate) spelling_review: Option<crate::proofing_pane::SpellingForm>,
     pub(crate) status_msg: Option<(String, f64)>,
+    /// What this window's last formatting shortcut did, for screen readers: only this window's tree
+    /// shows it.
+    pub(crate) announcement: Option<crate::announce::Announcement>,
     pub(crate) previews: previews::Previews,
     pub(crate) change_picture_target: Option<String>,
     pub(crate) recipient_list_pending: bool,
@@ -100,6 +103,7 @@ impl WindowUi {
             restrict: Default::default(),
             spelling_review: None,
             status_msg: None,
+            announcement: None,
             previews: Default::default(),
             change_picture_target: None,
             recipient_list_pending: false,
@@ -175,8 +179,6 @@ impl WordApp {
             mac_titlebar: _,
             control_rx: _,
             updates_rt: _,
-            // An announcement lasts three seconds, from whichever window's shortcut made it.
-            announcement: _,
             font_notice_seen: _,
             font_notices: _,
             packs_rt: _,
@@ -238,6 +240,7 @@ impl WordApp {
             restrict,
             spelling_review,
             status_msg,
+            announcement,
             previews,
             change_picture_target,
             recipient_list_pending,
@@ -347,6 +350,7 @@ impl WordApp {
             restrict,
             spelling_review,
             status_msg,
+            announcement,
             previews,
             change_picture_target,
             recipient_list_pending,
