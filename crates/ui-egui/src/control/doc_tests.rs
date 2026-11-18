@@ -175,6 +175,22 @@ fn control_requests_cannot_change_saved_preferences() {
     let dark = if a.ui.theme == crate::theme::Appearance::Dark { "light" } else { "dark" };
     let r = send(&mut a, "ui.theme", json!({"value": dark}));
     assert!(refused(&r), "{r}");
+    // The status bar's count, the scroll speeds and the display server are saved with them
+    // (review: CodeRabbit, FredApps): each is refused and keeps its value.
+    let kept = (a.ui.status_count, a.ui.scroll_speed, a.ui.touchpad_scroll_speed, a.ui.display_server);
+    let count = if a.ui.status_count == crate::StatusCount::Characters { "words" } else { "characters" };
+    let server = if a.ui.display_server.code() == "x11" { "wayland" } else { "x11" };
+    for (id, value) in [
+        ("ui.statusCount", json!(count)),
+        ("ui.scrollSpeed", json!(if a.ui.scroll_speed == crate::ScrollSpeed::Fast { "slow" } else { "fast" })),
+        ("ui.touchpadScrollSpeed", json!(if a.ui.touchpad_scroll_speed == crate::ScrollSpeed::Fast { "slow" } else { "fast" })),
+        ("ui.displayServer", json!(server)),
+    ] {
+        let r = exec(&mut a, id, json!({"value": value}));
+        assert!(refused(&r), "{id}: {r}");
+        assert_eq!(exec(&mut a, id, json!({}))["ok"], true, "{id}: reading it still answers");
+    }
+    assert_eq!((a.ui.status_count, a.ui.scroll_speed, a.ui.touchpad_scroll_speed, a.ui.display_server), kept);
     let r = exec(&mut a, "ui.startScreen", json!({}));
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(saved(&a), before);

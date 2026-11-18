@@ -21,8 +21,8 @@ impl WordApp {
         ui.dark_page = self.session.view.dark_mode;
         ui.nav_pane = self.session.view.nav_pane;
         ui.styles_pane_dock = self.session.view.styles_pane_dock;
-        // The user's last choice, not the active document's view: each open document has its own,
-        // and switching to one must not change what is saved (#3622).
+        // The saved, app-wide choice (#5740), not the active view's copy of it, so what is saved
+        // is what the user chose, whichever document is active (#3622).
         ui.check_spelling = self.session.prefs.check_spelling;
         ui.keyboard = self.session.keymap.clone();
         ui.ribbon = self.session.ribbon.clone();

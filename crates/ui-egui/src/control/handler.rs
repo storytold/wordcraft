@@ -255,7 +255,8 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
 
 /// The File › Options settings the window keeps in `ui.json` itself, not in the session: the
 /// interface theme, size, language and animations, the Quick Access Toolbar, KeyTips, the mini
-/// toolbar, alignment guides, the Start screen, the recent-document count and the print options.
+/// toolbar, alignment guides, the Start screen, the recent-document count, the print options, the
+/// status bar's count, the mouse wheel and touchpad scroll speeds and (Linux) the display server.
 #[derive(PartialEq)]
 struct WindowOptions {
     theme: crate::theme::Appearance,
@@ -271,6 +272,10 @@ struct WindowOptions {
     recent_count: usize,
     print_backgrounds: bool,
     update_fields_before_print: bool,
+    status_count: crate::StatusCount,
+    scroll_speed: crate::ScrollSpeed,
+    touchpad_scroll_speed: crate::ScrollSpeed,
+    display_server: crate::DisplayServer,
 }
 
 impl WindowOptions {
@@ -289,6 +294,10 @@ impl WindowOptions {
             recent_count: ui.recent_count,
             print_backgrounds: ui.print_backgrounds,
             update_fields_before_print: ui.update_fields_before_print,
+            status_count: ui.status_count,
+            scroll_speed: ui.scroll_speed,
+            touchpad_scroll_speed: ui.touchpad_scroll_speed,
+            display_server: ui.display_server,
         }
     }
 
@@ -306,6 +315,10 @@ impl WindowOptions {
         ui.recent_count = self.recent_count;
         ui.print_backgrounds = self.print_backgrounds;
         ui.update_fields_before_print = self.update_fields_before_print;
+        ui.status_count = self.status_count;
+        ui.scroll_speed = self.scroll_speed;
+        ui.touchpad_scroll_speed = self.touchpad_scroll_speed;
+        ui.display_server = self.display_server;
     }
 }
 

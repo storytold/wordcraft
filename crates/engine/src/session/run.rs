@@ -33,9 +33,10 @@ struct KeptPrefs {
     prefs: crate::Prefs,
     keymap: crate::KeyMap,
     ribbon: crate::RibbonLayout,
-    /// Check Spelling as You Type as the window shows it is the active document's view: it is
-    /// compared and put back only while the command's own document is still the active one, as
-    /// another document (one it opened or switched to) has a view of its own.
+    /// Check Spelling as You Type as the window shows it: the active view's copy of the one
+    /// app-wide setting (#5740). It is compared and put back only while the command's own
+    /// document is still the active one: a document it opened or switched to takes the saved
+    /// setting into its view on activation, so a difference there isn't a preference change.
     document: u64,
     proofing: bool,
 }
