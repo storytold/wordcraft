@@ -290,9 +290,9 @@ pub struct UiState {
     /// File › Print settings (#641); not saved.
     #[serde(skip)]
     pub print: print_page::PrintSettings,
-    /// This window's ribbon is hidden (per window, [`window_ui::WindowUi`]). Saved as the window
-    /// in use at the time had it, as Word does, so the next launch's first window opens the way
-    /// the last window was used; a new window opens with the ribbon shown.
+    /// This window's ribbon is hidden (per window, [`window_ui::WindowUi`]). Like the tab, it is
+    /// written to `ui.json` but not restored: every document window, new, opened or at launch,
+    /// shows its ribbon on Home ([`WordApp::apply_prefs`]).
     pub ribbon_collapsed: bool,
     /// The Quick Access Toolbar shows in the title bar (#1945). Its menu's Hide Quick Access
     /// Toolbar takes it away; Show Quick Access Toolbar (the ribbon's right-click menu, Customize
