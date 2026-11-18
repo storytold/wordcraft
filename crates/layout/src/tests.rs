@@ -15573,9 +15573,9 @@ fn a_line_of_only_pictures_takes_no_descent() {
     assert!(para.lines.len() == 2 && (para.lines[0].height - 30.0).abs() < 0.01, "picture, then a line break: {}", para.lines[0].height);
 }
 
-/// At-least spacing: a line of only pictures is as tall as the largest of their extent, the
-/// font's height and the spacing, the paragraph mark's descent not added below them; beside text
-/// the text's descent is. Word for
+/// At-least spacing off the document grid: a line of only pictures without a list label is as
+/// tall as the largest of their extent, the font's height and the spacing, the paragraph mark's
+/// descent not added below them; beside text (or a label) the text's descent is. Word for
 /// Mac 16.114.4, Georgia 11 pt at least 12 pt: an 80 pt picture alone in its paragraph moves the
 /// next line down 80 pt, not 80 pt plus the font's 2.4 pt descent (`cargo xtask word-compare`,
 /// probe `picture-atleast-12`).
