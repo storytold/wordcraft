@@ -411,7 +411,7 @@ impl<'a> Shaped<'a> {
 
     /// A field: a legacy form field, its code in braces, or its result.
     fn field(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, rc: &Arc<ResolvedChar>) {
-        let InlineObject::Field { instr, result, code, .. } = o else { return };
+        let InlineObject::Field { instr, result, code, locked, .. } = o else { return };
         let env = cx.env;
         let form = if env.field_codes != *code { None } else { o.legacy_form() };
         if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { size, .. }) = form {
@@ -426,6 +426,9 @@ impl<'a> Shaped<'a> {
                 shaded.shading = Some(FIELD_SHADING);
             }
             self.b.shape_atomic(&field_code_text(instr), slot.start, slot.end, &Arc::new(shaded));
+        } else if *locked && crate::fields::field_name(instr) == "PAGEREF" {
+            // A locked page reference keeps its result, as Word prints and exports it.
+            self.b.shape_atomic(result, slot.start, slot.end, &linked(rc, instr));
         } else {
             self.field_result(cx, (instr, result), slot, rc);
         }
@@ -820,6 +823,11 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
     }
 }
 
+/// A character that continues a word or a path segment after a slash: a letter, a digit or `_`.
+fn word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 /// The places a line of `text` may break after. `cs_slash(i)`: whether the slash at offset `i` is in
 /// a complex-script run (`w:cs`).
 fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara, cs_slash: &dyn Fn(usize) -> bool) -> Vec<usize> {
@@ -836,9 +844,16 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara, cs_sla
             && next_char(i).is_some_and(char::is_alphanumeric)
     };
     for (i, o) in unicode_linebreak::linebreaks(text) {
-        // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
-        // too long for the line still breaks anywhere).
-        let after_slash = text.get(..i).is_some_and(|t| t.ends_with('/')) && next_char(i).is_some_and(char::is_alphanumeric) && !break_after_slash(i);
+        // Word keeps "and/or" and web addresses whole: no break right after a slash before a letter,
+        // digit or underscore ("/_back"), unless Thai is next to it (above), nor after the question
+        // mark of a query ("/?type="), which takes an ASCII one (a question mark in CJK text keeps
+        // its break). A word too long for the line still breaks anywhere.
+        let next = next_char(i);
+        let after_slash = match text.get(..i).and_then(|t| t.chars().next_back()) {
+            Some('/') => next.is_some_and(word_char) && !break_after_slash(i),
+            Some('?') => next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'),
+            _ => false,
+        };
         if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len()) && !after_slash {
             found.push(i);
         }
@@ -856,7 +871,7 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara, cs_sla
         .match_indices('/')
         .filter(|&(i, _)| {
             text.get(..i).and_then(|t| t.chars().next_back()).is_some_and(|c| c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}'))
-                && text.get(i + 1..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric)
+                && text.get(i + 1..).and_then(|t| t.chars().next()).is_some_and(word_char)
         })
         .map(|(i, _)| i)
         .collect();
