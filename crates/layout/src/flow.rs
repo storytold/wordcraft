@@ -577,13 +577,9 @@ impl<'a> Flow<'a> {
         );
         self.late.drew();
         items.extend(front);
-        // A paragraph mark kept with a closing page break is drawn on the break's line in Word:
-        // its own line takes no number.
-        let n = self.pl.lines.len();
-        let break_mark = (n >= 2
-            && self.pl.lines.get(n - 2).is_some_and(|l| l.end == LineEnd::PageBreak)
-            && self.pl.lines.get(n - 1).is_some_and(|m| only_markers(self.p, m.start..m.stop)))
-        .then_some(n - 1);
+        // A paragraph mark kept with a closing page break (`ends_page` took it along) is drawn
+        // on the break's line in Word: its own line takes no number.
+        let break_mark = (fit.mark_with_break && l1 == n).then(|| l1.saturating_sub(1));
         items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y, break_mark));
         add_items(pb, behind, items);
         if let (Some(f), Some(l)) = (self.pl.lines.get(l0), self.pl.lines.get(l1 - 1)) {
