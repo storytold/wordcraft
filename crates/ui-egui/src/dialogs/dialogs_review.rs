@@ -182,8 +182,7 @@ impl WordForm for CompareForm {
             Field::new(Label::from(tl!("Label changes with:").to_string())).show(ui, |ui, _| {
                 TextField::new(Label::from(tl!("Label changes with:").to_string()), Bind::bound(&mut self.author)).show(ui);
             });
-            // PLAN: `rtl::arrows` mirrors the arrows of More >> / << Less; its return type is assumed to print as the label.
-            let more = crate::rtl::arrows(if self.more { tl!("<< Less") } else { tl!("More >>") }).to_string();
+            let more = (if self.more { tl!("<< Less") } else { tl!("More >>") }).to_string();
             if clicked(&Button::new(Label::from(more)).show(ui)) {
                 self.more = !self.more;
             }

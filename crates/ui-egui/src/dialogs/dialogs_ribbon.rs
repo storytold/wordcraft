@@ -492,8 +492,7 @@ pub(crate) fn commands(app: &WordApp, category: &str) -> Vec<(&'static str, Stri
 /// translated label, case-insensitive (the id lets "file.save" or "save" find Save). Sorted as
 /// [`commands`].
 pub(crate) fn matching_commands(app: &WordApp, category: &str, query: &str) -> Vec<(String, String)> {
-    // PLAN: assumed `crate::i18n::Folder::new(code)` with `contains(haystack, needle) -> bool` and `crate::i18n::current().code()` (shell-w12)
-    let fold = crate::i18n::Folder::new(crate::i18n::current().code());
+    let fold = craft::i18n::Folder::new(crate::i18n::current().code());
     let q = query.trim();
     if q.is_empty() {
         return commands(app, category).into_iter().map(|(id, l)| (id.to_string(), l)).collect();
