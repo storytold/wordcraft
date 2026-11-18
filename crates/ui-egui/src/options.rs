@@ -250,6 +250,7 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.darkMode", json!({"value": dark_page}));
     }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
+    ui.checkbox(&mut app.ui.font_download_notice, tl!("Tell me when a document's missing fonts can be downloaded"));
     default_app_button(app, ui);
     ui.add_space(8.0);
     section(ui, "Start-up");
