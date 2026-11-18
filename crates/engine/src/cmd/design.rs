@@ -63,7 +63,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let t = THEMES.iter().find(|t| t.0.eq_ignore_ascii_case(name)).ok_or_else(|| CmdError::Params(format!("unknown colours `{name}`")))?;
             set_accent(s, t.3[0]);
             sel_result(s)
-        }),
+        })
+        .params(r#"{"name": string (see design.themes)}"#),
         CommandSpec::new("design.styleSet", "Style Set", "Design › Document Formatting", style_set)
             .params(r#"{"name": "default|basic|lines|shaded|casual|centered|minimalist|title"}"#),
         CommandSpec::new("design.paragraphSpacing", "Paragraph Spacing", "Design › Document Formatting", para_spacing)
