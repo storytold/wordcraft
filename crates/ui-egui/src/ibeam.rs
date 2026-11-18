@@ -18,7 +18,7 @@ pub(crate) fn replace(ctx: &egui::Context, p: Pos2, bg: Rgb) -> bool {
     }
     ctx.set_cursor_icon(CursorIcon::None);
     // Above the page and whatever floats over it, as the system pointer would be.
-    let painter = ctx.layer_painter(LayerId::new(Order::Tooltip, Id::new("wordcraft_ibeam")));
+    let painter = ctx.layer_painter(LayerId::new(Order::Tooltip, Id::unique("wordcraft_ibeam")));
     paint(&painter, p, crate::canvas::caret_contrast(bg));
     true
 }

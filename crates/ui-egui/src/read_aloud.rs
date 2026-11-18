@@ -23,13 +23,11 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     if ra.state() == State::Playing {
         ctx.request_repaint_after(std::time::Duration::from_millis(120));
     }
-    if let Some(e) = app.session.read_aloud.error()
-        && app.read_aloud_error.as_deref() != Some(e.as_str())
-    {
-        app.read_aloud_error = Some(e.clone());
+    if let Some(e) = error_notice(&mut app.read_aloud_error, app.session.read_aloud.error()) {
         app.status(e);
     }
-    let current = app.session.read_aloud.current().map(|u| u.start);
+    // The caret follows the reading only in the document being read.
+    let current = if reads_shown_document(app) { app.session.read_aloud.current().map(|u| u.start) } else { None };
     if current != app.read_aloud_at {
         if let Some(start) = &current {
             app.session.sel = wordcraft_engine::Selection::caret(app.session.doc.clamp(start));
@@ -40,18 +38,48 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
+/// The notice for the player's error `now`, given the one last `shown`: each message is shown
+/// once, and when the error clears (Play after a halt) the last one is forgotten, so the same
+/// message coming back is shown again.
+fn error_notice(shown: &mut Option<String>, now: Option<String>) -> Option<String> {
+    match now {
+        None => {
+            *shown = None;
+            None
+        }
+        Some(e) if shown.as_deref() == Some(e.as_str()) => None,
+        Some(e) => {
+            *shown = Some(e.clone());
+            Some(e)
+        }
+    }
+}
+
 /// The page rectangles (in page units) of the sentence being read, to highlight.
 pub fn highlight(app: &mut WordApp) -> Option<(wordcraft_engine::doc::Pos, wordcraft_engine::doc::Pos)> {
-    if !app.session.read_aloud.open {
+    if !app.session.read_aloud.open || !reads_shown_document(app) {
         return None;
     }
     let u = app.session.read_aloud.current()?;
     Some((app.session.doc.clamp(&u.start), app.session.doc.clamp(&u.end)))
 }
 
+/// Whether the reading is of the document the window shows: its sentence positions are in it.
+fn reads_shown_document(app: &WordApp) -> bool {
+    app.session.read_aloud.document == Some(app.session.document_id())
+}
+
 /// The player window.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     if !app.session.read_aloud.open {
+        return;
+    }
+    // With a window per document, the player is in the window of the document being read.
+    if app.windows.native()
+        && let Some(d) = app.session.read_aloud.document
+        && d != app.session.document_id()
+        && app.session.is_open(d)
+    {
         return;
     }
     let t = Tokens::get(ctx);
@@ -60,7 +88,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let mut run: Option<(&str, serde_json::Value)> = None;
     let right_top = app.canvas.canvas_rect.map_or(ctx.content_rect().right_top() + vec2(-24.0, 160.0), |r| r.right_top() + vec2(-24.0, 16.0));
     let window = egui::Window::new(tl!("Read Aloud"))
-        .id(egui::Id::new("read-aloud-player"))
+        .id(egui::Id::unique("read-aloud-player"))
         .collapsible(false)
         .resizable(false)
         .pivot(egui::Align2::RIGHT_TOP)
@@ -94,10 +122,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ui.add_space(6.0);
         // Speed: applied when the slider is let go, so dragging doesn't restart the sentence
         // on every frame.
-        let id = egui::Id::new("read-aloud-rate");
+        let id = egui::Id::unique("read-aloud-rate");
         let mut rate = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or_else(|| app.session.read_aloud.rate());
         ui.horizontal(|ui| {
-            ui.label(tl!("Speed"));
+            let label = ui.label(tl!("Speed"));
             ui.spacing_mut().slider_width = 110.0;
             let r = ui.add(
                 egui::Slider::new(&mut rate, MIN_RATE..=MAX_RATE)
@@ -106,6 +134,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
                     .custom_formatter(|v, _| format!("{v:.2}×"))
                     .custom_parser(|s| s.trim().trim_end_matches(['×', 'x']).trim().parse().ok()),
             );
+            let r = r.labelled_by(label.id);
             if r.dragged() {
                 ui.data_mut(|d| d.insert_temp(id, rate));
             } else {
@@ -154,4 +183,20 @@ fn button(ui: &mut Ui, t: &Tokens, icon: &str, tip: &str, enabled: bool) -> bool
     let r = Rect::from_center_size(rect.center(), vec2(20.0, 20.0));
     crate::icons::paint(ui.painter(), r, icon, c, if enabled { t.accent } else { Color32::TRANSPARENT });
     enabled && resp.clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_notice;
+
+    #[test]
+    fn the_same_error_after_play_is_shown_again() {
+        let mut shown = None;
+        let halt = || Some("stopped for another program".to_string());
+        assert_eq!(error_notice(&mut shown, halt()), halt(), "shown once");
+        assert_eq!(error_notice(&mut shown, halt()), None, "not on every frame");
+        // Play clears the error; the same halt later is a new notice.
+        assert_eq!(error_notice(&mut shown, None), None);
+        assert_eq!(error_notice(&mut shown, halt()), halt());
+    }
 }

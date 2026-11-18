@@ -16,12 +16,14 @@ use wordcraft_layout::display::paint_for;
 use crate::WordApp;
 use crate::theme::Tokens;
 
+/// Stable storage id for a fill drag's undo mark.
 fn mark_id() -> Id {
-    Id::new("format_shape.drag_mark")
+    Id::unique("format_shape.drag_mark")
 }
 
+/// Stable storage id for the gradient stop being edited.
 fn stop_id() -> Id {
-    Id::new("format_shape.stop")
+    Id::unique("format_shape.stop")
 }
 
 /// Forgets a drag's undo mark: called while the pane is closed, so a drag cut short by closing
@@ -35,8 +37,9 @@ pub fn forget_drag(ctx: &egui::Context) {
 #[derive(Clone)]
 struct Variation(wordcraft_doc::Pos, Fill, Rgb);
 
+/// Stable storage id for the gradient variation remembered for the last object.
 fn variation_id() -> Id {
-    Id::new("format_shape.variation")
+    Id::unique("format_shape.variation")
 }
 
 /// The colour Shape Fill › Gradient builds from for the object at `pos` filled with `fill`:
@@ -77,10 +80,6 @@ fn apply(app: &mut WordApp, ui: &Ui, fill: Option<&Fill>, resp: Option<&Response
 
 /// The pane, while open.
 pub fn pane(app: &mut WordApp, ui: &mut Ui) {
-    if crate::panes::header(ui, "Format Shape") {
-        let _ = app.run("view.formatShapePane", serde_json::json!({"value": false}));
-        return;
-    }
     // A drag that applied as it went ends as one undo step.
     if !ui.input(|i| i.pointer.any_down())
         && let Some(mark) = ui.data_mut(|d| {
@@ -126,9 +125,11 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Draws a solid fill's colour field and transparency slider, applying each changed fill as a
+/// whole.
 fn solid(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], color: Rgb, transparency: f32) {
     let mut c = color;
-    if color_field(ui, theme, Id::new("format_shape.solid_color"), &mut c) {
+    if color_field(ui, theme, Id::unique("format_shape.solid_color"), &mut c) {
         apply(app, ui, Some(&Fill::Solid { color: c, transparency }), None);
     }
     let mut t = transparency;
@@ -140,8 +141,8 @@ fn solid(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], color: Rgb, transparency
 /// A labelled 0–100% slider with its value box; the response when it changed.
 fn percent(ui: &mut Ui, label: &str, v: &mut f32) -> Option<Response> {
     ui.horizontal(|ui| {
-        ui.label(label);
-        let s = ui.add(egui::Slider::new(v, 0.0..=100.0).suffix("%").fixed_decimals(0));
+        let label = ui.label(label);
+        let s = ui.add(egui::Slider::new(v, 0.0..=100.0).suffix("%").fixed_decimals(0)).labelled_by(label.id);
         (s.changed()).then_some(s)
     })
     .inner
@@ -211,8 +212,11 @@ fn kind_of(t: usize, focus: [f32; 4], angle: f32, scaled: bool) -> GradientKind 
     }
 }
 
+/// Draws the gradient preset gallery and type, direction and angle controls, the stop bar with
+/// add and remove, and the selected stop's colour, position, transparency and rotate-with-shape
+/// controls.
 fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
-    egui::Grid::new("format_shape.gradient").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("format_shape.gradient").num_columns(2).spacing(vec2(8.0, 6.0)), |ui| {
         ui.label(tl!("Preset gradients"));
         ui.menu_button("▾", |ui| {
             if let Some(f) = presets_gallery(ui, theme) {
@@ -222,14 +226,15 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
         });
         ui.end_row();
 
-        ui.label(tl!("Type"));
+        let type_label = ui.label(tl!("Type"));
         let t = type_of(&g.kind);
         let mut pick = t;
-        egui::ComboBox::from_id_salt("format_shape.type").selected_text(tl!(TYPES[t].0)).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("format_shape.type").selected_text(tl!(TYPES[t].0)).show_ui(ui, |ui| {
             for (i, (label, _)) in TYPES.iter().enumerate() {
                 ui.selectable_value(&mut pick, i, tl!(label));
             }
         });
+        combo.response.labelled_by(type_label.id);
         if pick != t {
             let (angle, focus) = match g.kind {
                 GradientKind::Linear { angle, .. } => (angle, [50.0; 4]),
@@ -254,8 +259,10 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
 
         if let GradientKind::Linear { angle, scaled } = g.kind {
             ui.label(tl!("Angle"));
+            // Not `clamp_existing_to_range`: egui would clamp a document's 359.95° to 359.9° and
+            // report it as a change, rewriting the fill unasked.
             let mut a = angle;
-            let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.9).suffix("°").speed(1.0));
+            let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.9).clamp_existing_to_range(false).suffix("°").speed(1.0));
             if r.changed() {
                 apply(app, ui, Some(&with(g, |g| g.kind = GradientKind::Linear { angle: a, scaled })), Some(&r));
             }
@@ -289,7 +296,7 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
     let Some(stop) = g.stops.get(sel).copied() else { return };
     let set = |s: GradStop| with(g, |g| g.stops[sel] = s);
     let mut c = stop.color;
-    if color_field(ui, theme, Id::new("format_shape.stop_color"), &mut c) {
+    if color_field(ui, theme, Id::unique("format_shape.stop_color"), &mut c) {
         apply(app, ui, Some(&set(GradStop { color: c, ..stop })), None);
     }
     ui.horizontal(|ui| {
@@ -360,7 +367,7 @@ fn stops_bar(app: &mut WordApp, ui: &mut Ui, g: &Gradient, sel: usize) {
     };
     let Some(p) = resp.interact_pointer_pos() else { return };
     // Whether the drag in progress began on a handle: only then does it move a stop.
-    let grab_id = Id::new("format_shape.grabbed");
+    let grab_id = Id::unique("format_shape.grabbed");
     if resp.drag_started() || resp.clicked() {
         resp.request_focus();
         let hit = near(p);
@@ -390,7 +397,7 @@ fn stops_bar(app: &mut WordApp, ui: &mut Ui, g: &Gradient, sel: usize) {
 fn presets_gallery(ui: &mut Ui, theme: &[Rgb]) -> Option<Fill> {
     let presets = shape_fill::presets(theme);
     let mut out = None;
-    egui::Grid::new("format_shape.presets").spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("format_shape.presets").spacing(vec2(4.0, 4.0)), |ui| {
         for (i, f) in presets.iter().enumerate() {
             let style = shape_fill::PRESET_STYLES.get(i / 6).copied().unwrap_or("");
             let name = format!("{}, {} {}", tl!(style), tl!("Accent"), i % 6 + 1);
@@ -414,7 +421,7 @@ fn directions(ui: &mut Ui, g: &Gradient, t: usize) -> Option<GradientKind> {
         PATH_DIRECTIONS.iter().map(|&f| (kind_of(t, f, 90.0, true), shape_fill::path_direction_name(f))).collect()
     };
     let mut out = None;
-    egui::Grid::new("format_shape.directions").spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("format_shape.directions").spacing(vec2(4.0, 4.0)), |ui| {
         for (i, (k, name)) in kinds.into_iter().enumerate() {
             let f = with(g, |g| set_kind(g, k));
             if swatch(ui, &f, &name) {
@@ -436,7 +443,7 @@ pub fn swatch(ui: &mut Ui, fill: &Fill, tip: &str) -> bool {
     let ring = if resp.hovered() { Stroke::new(2.0, t.accent) } else { Stroke::new(1.0, t.border) };
     ui.painter().rect_stroke(r.shrink(2.0), 0.0, ring, egui::StrokeKind::Outside);
     let name = tl!(tip);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
     resp.on_hover_text(name).clicked()
 }
 
@@ -523,6 +530,32 @@ mod tests {
         h.run_steps(3);
         assert_eq!(fill(h.state()), None);
         assert_eq!(h.state().session.undo_depth(), depth + 2);
+    }
+
+    /// Showing the pane leaves a linear angle the Angle field can't type (359.95°) alone: no
+    /// edit, no undo step.
+    #[test]
+    fn format_shape_pane_leaves_an_angle_outside_the_field_alone() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        let stops = json!([{"pos": 0, "color": "FFFFFF"}, {"pos": 100, "color": "156082"}]);
+        a.run("shape.fill", json!({"gradient": {"stops": stops, "angle": 359.95}})).unwrap();
+        let (doc, depth) = (a.session.doc.clone(), a.session.undo_depth());
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(6);
+        assert!(h.query_by_label("Angle").is_some(), "the pane shows the gradient's fields");
+        let Some(Fill::Gradient(g)) = fill(h.state()) else { panic!("{:?}", fill(h.state())) };
+        assert_eq!(g.kind, wordcraft_doc::fill::GradientKind::Linear { angle: 359.95, scaled: false });
+        assert!(h.state().session.doc == doc);
+        assert_eq!(h.state().session.undo_depth(), depth);
     }
 }
 
