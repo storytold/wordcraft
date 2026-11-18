@@ -861,8 +861,11 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         Some(resp)
                     };
                     let st = |ui: &mut Ui, s: &str| st_icon(ui, None, s);
+                    // Go To's key as this platform writes it ("Go To (Ctrl+Alt+G)", "Go To (⌘⌥G)" on macOS).
+                    let goto_key = crate::widgets::shortcut_text(app, "edit.goto");
+                    let goto_hint = if goto_key.is_empty() { tl!("Go To").to_string() } else { format!("{} ({goto_key})", tl!("Go To")) };
                     if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
-                        .is_some_and(|r| r.on_hover_text(tl!("Go To (⌘⌥G)")).clicked())
+                        .is_some_and(|r| r.on_hover_text(goto_hint).clicked())
                     {
                         let _ = app.run("ui.dialog", json!({"name": "goto"}));
                     }
