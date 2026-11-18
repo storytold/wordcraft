@@ -216,13 +216,19 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
             let mut print_options = Vec::new();
             let orientation = params.get("orientation").and_then(|v| v.as_str()).unwrap_or(&app.ui.print.orientation);
             let mode = wordcraft_engine::print::imposition(params).map_err(|e| e.to_string())?;
-            let is_landscape = if mode != wordcraft_engine::print::Imposition::Single {
-                let markup = wordcraft_engine::cmd::file::export_options(&app.session, &pdf_params).markup;
-                let lay = app.session.export_layout_with(markup);
+            let markup = wordcraft_engine::cmd::file::export_options(&app.session, &pdf_params).markup;
+            let lay = app.session.export_layout_with(markup);
+            // The job's first physical sheet, in points: the paper the printer must load.
+            let sheet = if mode != wordcraft_engine::print::Imposition::Single {
                 wordcraft_engine::print::sheets(params, &lay, app.session.current_pages(&lay))
                     .map_err(|e| e.to_string())?
                     .first()
-                    .is_some_and(|s| s.width > s.height)
+                    .map(|s| (s.width, s.height))
+            } else {
+                plan.pages.first().and_then(|&page| lay.pages.get(page)).map(|p| (p.w, p.h))
+            };
+            let is_landscape = if mode != wordcraft_engine::print::Imposition::Single {
+                sheet.is_some_and(|(w, h)| w > h)
             } else if orientation == "landscape" {
                 true
             } else if orientation == "portrait" {
@@ -231,8 +237,14 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
                 let lay = app.session.export_layout();
                 lay.pages.first().is_some_and(|p| p.w > p.h)
             };
-            // Scale to paper size: ask the printer for that paper too, so it takes it from the right tray.
-            if let Some(media) = wordcraft_engine::print::paper(params).ok().flatten().and_then(|(name, _, _)| pwg_media(name)) {
+            // Ask the printer for the job's paper so it takes it from the right tray: the Scale to
+            // paper size choice, else the printed pages' own size. Without it the spooler falls
+            // back to its default paper and an A5 document prints on A4 (#6837).
+            let named = match wordcraft_engine::print::paper(params).ok().flatten() {
+                Some((name, _, _)) => Some(name),
+                None => sheet.and_then(|(w, h)| wordcraft_geom::paper_name(w, h)),
+            };
+            if let Some(media) = named.and_then(pwg_media) {
                 print_options.push(("media".into(), media.into()));
             }
             if is_landscape {
