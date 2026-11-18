@@ -1027,6 +1027,34 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
             });
         });
     }
+    // Alt with a tab letter goes straight to that tab, as Word's Alt+I does (#1012). No Alt+letter
+    // command claims these letters, so the tab wins, and it changes the view that is open instead
+    // of reaching into another one.
+    let mut alt_letter: Vec<egui::Key> = Vec::new();
+    for e in &events {
+        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e
+            && modifiers.alt
+            && !(modifiers.ctrl || modifiers.shift || modifiers.command || modifiers.mac_cmd)
+            && let Some(tab) =
+                keys::key_name(*key).map(|n| n.to_ascii_uppercase()).and_then(|n| ring_tabs(app).into_iter().find(|t| tab_letter(t) == n))
+        {
+            let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
+            app.ui.keytips = Phase::Tabs;
+            app.ui.keytip_focus = Some(tab.to_string());
+            app.ui.keytip_prefix.clear();
+            alt_letter.push(*key);
+        }
+    }
+    if !alt_letter.is_empty() {
+        // The letter reached the tab: it must not also run a command or land in the page.
+        ctx.input_mut(|i| {
+            i.events.retain(|e| match e {
+                egui::Event::Key { key, pressed: true, .. } => !alt_letter.contains(key),
+                egui::Event::Text(_) => false,
+                _ => true,
+            });
+        });
+    }
     if ALT_ARMS && alt_released && !other_key {
         // A second Alt leaves the ribbon and gives the page its keyboard back (#1012).
         if app.ui.keytips == Phase::Tabs {

@@ -140,6 +140,9 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     }
     let resp = tooltip(app, resp, &label.replace('\n', " "), id);
     command_menu(&resp, app, id);
+    // A large button had no name of its own, so a screen reader read an unnamed button (#1012);
+    // it now has its label, and a toggle says whether it is on.
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, checked, label.replace('\n', " ")));
     ring_focus(ui, app, &resp, id);
     if resp.clicked() && on && !menu {
         run_from_ribbon(app, id, params);
@@ -184,7 +187,9 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    // The name and, for a toggle, whether it is on (#1012): a reader says "Bold, pressed" rather
+    // than just "Bold".
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, checked, tip));
     ring_focus(ui, app, &resp, id);
     resp
 }
@@ -275,7 +280,7 @@ fn split_button(
     }
     let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]), "", "", None);
     show_hint(&aresp, &arrow_title, &[]);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, checked, tip));
     // The arrow opens the choices beside the button: it says whose, so it is not just "button"
     // (#3172).
     aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &arrow_title));
