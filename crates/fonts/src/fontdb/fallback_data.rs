@@ -49,6 +49,14 @@ pub(super) struct IndexedFile {
     pub(super) family_checked: bool,
     /// Loaded for a character it covers: its faces are searched as loaded fonts from then on.
     pub(super) used: bool,
+    /// File size and modification time when cataloged so an in-place replacement invalidates cached ranges.
+    pub(super) stamp: Option<(u64, Option<std::time::SystemTime>)>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn file_stamp(path: &std::path::Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()))
 }
 
 /// Does `ranges` (sorted, disjoint, inclusive) hold `cp`?

@@ -1,7 +1,7 @@
 use super::face::{FALLBACK_FAMILY, FontFace};
 #[cfg(not(target_arch = "wasm32"))]
 use super::fallback_data::{
-    CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, ranges_hold, read_fallback_file, read_family_coverage,
+    CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, file_stamp, ranges_hold, read_fallback_file, read_family_coverage,
 };
 use super::fallback_data::{FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order};
 use super::{Arc, FontDb};
@@ -250,12 +250,11 @@ impl FontDb {
             index.files = paths
                 .into_iter()
                 .map(|path| {
-                    known.remove(&path).unwrap_or_else(|| IndexedFile {
-                        used: index.loaded.contains(&path),
-                        path,
-                        ranges: None,
-                        family_checked: false,
-                    })
+                    let stamp = file_stamp(&path);
+                    match known.remove(&path) {
+                        Some(prev) if prev.stamp == stamp => prev,
+                        _ => IndexedFile { used: index.loaded.contains(&path), path, ranges: None, family_checked: false, stamp },
+                    }
                 })
                 .collect();
             index.generation = Some(generation);
