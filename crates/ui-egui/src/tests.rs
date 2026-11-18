@@ -4453,10 +4453,11 @@ fn status_bar_zoom_is_in_percent_and_its_controls_in_reading_order() {
     names(group, &mut order);
     assert_eq!(order, ["Focus", "Read Mode", "Print Layout", "Web Layout", "Zoom Out", "Zoom", "Zoom In"]);
     // Dragging the slider with the mouse from its middle to a point along it: the value after the
-    // press (the slider jumps to the pointer) and the value where the drag ends.
+    // press (the slider jumps to the pointer) and the value the move gives, read while the button
+    // is still down; letting go keeps it.
     fn drag_along(h: &mut egui_kittest::Harness<'static, WordApp>, label: &str, fraction: f32) -> (f64, f64) {
         let value = |h: &egui_kittest::Harness<'static, WordApp>| {
-            h.get_by_role_and_label(Role::Slider, label).accesskit_node().numeric_value().map_or(0.0, f64::round)
+            h.get_by_role_and_label(Role::Slider, label).accesskit_node().numeric_value().map(f64::round).expect("the slider has a value")
         };
         let rect = h.get_by_role_and_label(Role::Slider, label).rect();
         let (from, to) = (rect.center(), egui::pos2(rect.min.x + rect.width() * fraction, rect.center().y));
@@ -4467,9 +4468,11 @@ fn status_bar_zoom_is_in_percent_and_its_controls_in_reading_order() {
         let pressed = value(h);
         h.event(egui::Event::PointerMoved(to));
         h.run_steps(2);
+        let moved = value(h);
         h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
         h.run_steps(3);
-        (pressed, value(h))
+        assert_eq!(value(h), moved, "{label}: letting go keeps the value the drag gave");
+        (pressed, moved)
     }
     // Set as a screen reader sets it.
     for percent in [250.0, 100.0] {
