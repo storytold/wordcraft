@@ -327,6 +327,39 @@ fn accept_and_reject_buttons_move_to_the_next_change() {
     }
 }
 
+/// The halves of a large split button light up on hover only while its command is enabled: in
+/// a read-only document, Accept and Reject paint no hover background.
+#[test]
+fn disabled_accept_and_reject_halves_do_not_light_up_on_hover() {
+    use egui_kittest::kittest::Queryable;
+    for (verb, enabled) in [("Accept", true), ("Accept", false), ("Reject", true), ("Reject", false)] {
+        let mut app = two_tracked_insertions();
+        if !enabled {
+            app.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+        }
+        app.run("ui.tab", json!({"tab": "Review"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        for half in [format!("{verb} and Move to Next"), format!("{verb} options")] {
+            let rect = {
+                let node = h.get_by_label(&half);
+                node.hover();
+                node.rect()
+            };
+            h.run_steps(30);
+            let lit = h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect == rect && r.fill.a() > 0));
+            assert_eq!(lit, enabled, "{half} lights up only while enabled ({enabled})");
+        }
+    }
+}
+
 /// Home › Paste is a split button: the icon half pastes, and the label half opens the paste
 /// options without pasting.
 #[test]

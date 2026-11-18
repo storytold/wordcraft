@@ -371,8 +371,8 @@ pub fn big_split(
     let aresp = ui.interact(bottom, ui.scope_id().with(("big_split_menu", id)), Sense::click());
     keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
-    bg(ui, top, &resp, checked, &t);
-    bg(ui, bottom, &aresp, false, &t);
+    bg_if(ui, top, &resp, checked, &t, on);
+    bg_if(ui, bottom, &aresp, false, &t, on);
     let (c, a, text) = if on { (t.icon, t.accent, t.text) } else { (t.text_disabled, t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a);
     let lines: Vec<&str> = label.split('\n').collect();
