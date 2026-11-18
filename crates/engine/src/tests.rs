@@ -6041,6 +6041,45 @@ fn paste_content_uses_session_clipboard_when_html_and_rtf_match_without_text() {
     assert!(paste_special_res.is_ok(), "pasteSpecial as formatted succeeds with empty text and matching rich formats");
 }
 
+/// On macOS, arboard wraps HTML in `<html><head>…</head><body>…</body></html>`, so the
+/// round-tripped HTML never equals what WordCraft stored. The session clipboard must still be
+/// recognised when RTF matches or HTML matches after unwrapping (#5859).
+#[test]
+fn paste_content_uses_session_clipboard_when_macos_wraps_html() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_rtf = s.clipboard_rtf.clone();
+    assert!(!my_rtf.is_empty());
+    assert!(s.clipboard.as_ref().is_some_and(|f| !f.parts.is_empty()));
+
+    // Simulate macOS wrapping: HTML is wrapped by arboard, RTF is raw.
+    let wrapped_html =
+        format!("<html><head><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\"></head><body>{}</body></html>", s.clipboard_html);
+    assert_ne!(wrapped_html, s.clipboard_html, "wrapped HTML differs from stored");
+
+    // With empty text (front-end path for shapes/text-boxes without text), session clipboard matched.
+    let pasted = crate::cmd::paste::paste_content(&mut s, &json!({"text": "", "html": wrapped_html, "rtf": my_rtf}));
+    assert!(matches!(pasted, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved despite wrapped HTML");
+        assert_eq!(frag.plain_text(), "Internal text box");
+    }
+
+    // With non-empty text that matches, session clipboard matched via main's text rule.
+    let my_text = s.clipboard_text.clone();
+    let pasted_text = crate::cmd::paste::paste_content(&mut s, &json!({"text": my_text, "html": wrapped_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_text, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_text {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved with text match");
+    }
+
+    // Paste Special as formatted is available despite wrapped HTML.
+    let avail = crate::cmd::paste::available(&s, &json!({"text": my_text, "html": wrapped_html, "rtf": my_rtf}));
+    assert!(avail.contains(&"formatted"), "formatted format is available for pasteSpecial when HTML is wrapped on macOS");
+}
+
 /// Pasting external RTF when HTML matches WordCraft's session clipboard does not return the old
 /// session fragment with its custom parts (#5785, #5859).
 #[test]
@@ -6058,20 +6097,20 @@ fn paste_content_does_not_use_session_clipboard_when_html_matches_but_rtf_differ
     }
 }
 
-/// Pasting external RTF when plain text matches WordCraft's session clipboard does not return the
-/// old session fragment with its custom parts (#5785, #5859).
+/// When another app copies different RTF (`privateClipboard: false`), plain text matching
+/// WordCraft's session clipboard does not return the old session fragment (#5785, #5859).
 #[test]
-fn paste_content_does_not_use_session_clipboard_when_text_matches_but_rtf_differs() {
+fn paste_content_does_not_use_session_clipboard_when_another_app_copied_rtf() {
     let mut s = s();
     run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
     run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
     run(&mut s, "edit.copy", json!({}));
     let my_text = s.clipboard_text.clone();
     let external_rtf = "{\\rtf1\\ansi External rich text}";
-    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"text": my_text, "rtf": external_rtf}));
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"privateClipboard": false, "text": my_text, "rtf": external_rtf}));
     assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
     if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
-        assert!(frag.parts.is_empty(), "session text box parts not reused when RTF differs");
+        assert!(frag.parts.is_empty(), "session text box parts not reused when another app copied");
     }
 }
 
