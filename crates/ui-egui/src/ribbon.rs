@@ -145,7 +145,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             .map(|(i, (n, _))| (n.as_str(), i))
             .filter(|(n, _)| wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(n) && !user_names.contains(n))
             .collect();
-        note_contextual_tabs(ui.ctx(), &contextual, now, animate)
+        note_contextual_tabs(ui.ctx(), app.windows.shown(), &contextual, now, animate)
     };
     // A tab that just left stays in its former slot while it slides and fades away.
     let ghosts: Vec<(String, usize, f64)> = leaving.iter().filter(|(n, ..)| !tabs.iter().any(|(t, _)| t == n)).cloned().collect();
@@ -297,7 +297,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                         ui.ctx().request_repaint();
                                         1.0 - ease_out_cubic(((now - left) / TAB_ENTRY_SECS) as f32)
                                     }
-                                    None if contextual => tab_entry(ui.ctx(), tab, now, animate),
+                                    None if contextual => tab_entry(ui.ctx(), app.windows.shown(), tab, now, animate),
                                     None => 1.0,
                                 };
                                 let shift = vec2(-(1.0 - entry) * TAB_ENTRY_SLIDE, 0.0);
@@ -327,7 +327,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 let resp = if cut && ghost.is_none() { resp.on_hover_text(shown) } else { resp };
                                 if active {
                                     let u = Rect::from_center_size(pos2(r.center().x + shift.x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                    slide_underline(ui, tab, u, t.accent.gamma_multiply(entry), now, animate);
+                                    slide_underline(ui, app.windows.shown(), tab, u, t.accent.gamma_multiply(entry), now, animate);
                                 }
                                 if resp.clicked() {
                                     let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -394,7 +394,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .show(ui, |ui| {
             // Bring newly selected ribbon content in from the side of its tab.
             let index = tabs.iter().position(|(name, _)| name == &app.ui.tab).unwrap_or(0);
-            let (settled, direction) = tab_content_entry(ui.ctx(), &app.ui.tab, index, now, animate);
+            let (settled, direction) = tab_content_entry(ui.ctx(), app.windows.shown(), &app.ui.tab, index, now, animate);
             let shift = vec2(direction * (1.0 - settled) * CONTENT_SWITCH_SLIDE, 0.0);
             let mut shifted = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect().translate(shift)).layout(*ui.layout()));
             shifted.set_opacity(0.2 + 0.8 * settled);

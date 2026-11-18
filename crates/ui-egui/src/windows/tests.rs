@@ -134,6 +134,7 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     assert!(a.dialog.is_none() && a.ui.tab == crate::DEFAULT_TAB && !a.ui.ribbon_collapsed, "the new window starts afresh");
     frames(&ctx, &mut a, 3);
     let child = a.active_viewport();
+    let child_window = a.windows.shown();
     assert_ne!(child, ViewportId::ROOT, "the new window has a viewport of its own");
     assert_eq!(DRAWN.with(|d| d.borrow().clone()), [child, ViewportId::ROOT], "both windows draw each frame");
     frames(&ctx, &mut a, 3);
@@ -161,9 +162,10 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     a.run("ui.collapseRibbon", json!({})).unwrap();
     frames(&ctx, &mut a, 4);
     assert!(!a.ui.ribbon_collapsed, "the first window's ribbon is back");
+    let first_window = a.windows.shown();
     let underline = |id| crate::ribbon::underline_tab(&ctx, id);
-    assert_eq!(underline(ViewportId::ROOT).as_deref(), Some("Insert"));
-    assert_eq!(underline(child).as_deref(), Some(crate::DEFAULT_TAB));
+    assert_eq!(underline(first_window).as_deref(), Some("Insert"));
+    assert_eq!(underline(child_window).as_deref(), Some(crate::DEFAULT_TAB));
 }
 
 fn docx_on_disk(name: &str, body: &str) -> std::path::PathBuf {
