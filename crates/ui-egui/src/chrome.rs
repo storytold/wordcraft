@@ -719,10 +719,11 @@ pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
-/// Gives the bottom panel around `ui` the status bar's role, as Word's: screen readers read a
-/// status bar's controls on request (NVDA+End), finding it by its role or at the bottom of the
-/// window. The panel's bounds come along: egui gives a panel none, and a node without them isn't
-/// found at a point.
+/// Gives the bottom panel around `ui` the status bar's role, as Word's, and its bounds: egui gives a
+/// panel none, and a node without them isn't found at a point. That is what a screen reader needs to
+/// find the status bar by its role or at the bottom of the window. It doesn't make every status bar
+/// command find it: NVDA+End looks at the window's bottom-left corner, which in a maximized window
+/// on Windows is the invisible resize border (nvaccess/nvda#21114).
 fn name_status_bar(ui: &Ui) {
     let Some(panel) = ui.stack().parent.as_ref().filter(|p| p.kind() == Some(egui::UiKind::BottomPanel)) else {
         return;

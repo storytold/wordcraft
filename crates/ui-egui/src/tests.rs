@@ -4450,6 +4450,12 @@ fn screen_readers_find_the_status_bar_and_its_controls() {
     assert_eq!(bar.accesskit_node().label().as_deref(), Some("Status Bar"));
     let corner = window.get().left_bottom() + egui::vec2(0.5, -0.5);
     assert!(bar.rect().contains(corner), "the window's bottom-left corner {corner:?} is on the status bar: {:?}", bar.rect());
+    // The bar is the window's bottom strip, not the whole window.
+    let (r, w) = (bar.rect(), window.get());
+    assert!(
+        (r.bottom() - w.bottom()).abs() <= 1.0 && r.width() >= w.width() - 1.0 && r.height() < 48.0,
+        "the status bar is the bottom strip of the window {w:?}: {r:?}"
+    );
     let lang = crate::ribbon::caret_language(h.state());
     for label in ["Page 1 of 1", "4 words", lang.as_str()] {
         let item = bar.get_by_role_and_label(Role::Button, label);
