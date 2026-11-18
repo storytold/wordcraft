@@ -154,7 +154,7 @@ pub fn show_results(s: &mut Session) -> Result<(), CmdError> {
 fn set_code(s: &mut Session, v: &Value) -> CmdResult {
     let code = p::req_str(v, "code")?.trim().to_string();
     if code.is_empty() || code.len() > MAX_CODE || code.contains(OBJ) {
-        return Err(CmdError::Params("bad field code".into()));
+        return Err(CmdError::Params("`code` must be non-empty, at most 4096 UTF-8 bytes, and contain no U+FFFC object markers".into()));
     }
     let Some(f) = selected(s).into_iter().next() else { return Err(none_selected()) };
     with_field(s, &f.at, |o| match o {
@@ -441,7 +441,10 @@ mod tests {
         s.run("fields.setCode", &json!({"code": "TITLE"})).unwrap();
         let objs = |s: &Session| s.doc.body.first().and_then(|b| b.as_para()).map(|p| p.objects.clone()).unwrap_or_default();
         assert!(matches!(objs(&s).first(), Some(InlineObject::Field { instr, result, .. }) if instr == "TITLE" && result == "Report"));
-        assert!(s.run("fields.setCode", &json!({"code": ""})).is_err());
+        assert!(matches!(
+            s.run("fields.setCode", &json!({"code": ""})),
+            Err(crate::CmdError::Params(message)) if message == "`code` must be non-empty, at most 4096 UTF-8 bytes, and contain no U+FFFC object markers"
+        ));
 
         // A locked field keeps its result.
         s.run("fields.lock", &json!({})).unwrap();
