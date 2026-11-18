@@ -6,9 +6,15 @@ use wordcraft_doc::Pos;
 use wordcraft_doc::props::Align;
 use wordcraft_engine::Session;
 
+use super::bookmarks::bookmark_names;
+use super::find::goto_page;
 use super::host::{FormHost, close_all};
-use crate::dialogs::paragraph::{ParagraphFormat, ParagraphHost}; // PLAN: assumed (dialogs-w15): `ParagraphHost = FormHost<ParagraphForm>`, `ParagraphForm { pub format: ParagraphFormat }`
-use crate::dialogs::font::{FontForm, FontHost}; // PLAN: assumed (dialogs-w14): `FontHost = FormHost<FontForm>`; FontForm keeps the old Dialog::Font field names
+use craft::text::ui::character::ParagraphFormat;
+use crate::dialogs::paragraph::ParagraphHost; // PLAN: assumed (dialogs-w15): `ParagraphHost = FormHost<ParagraphForm>`, `ParagraphForm { pub format: ParagraphFormat }`
+use crate::dialogs::font::FontForm;
+
+/// The Font dialog on the host, as `open_form` opens it.
+type FontHost = FormHost<FontForm>;
 use crate::dialogs::page_setup::{PageSetupForm, PageSetupHost}; // PLAN: assumed (dialogs-w18 note 5): `PageSetupHost = FormHost<PageSetupForm>`; the form holds `paper`, `landscape`, margins and `valign` in points
 
 // ---------------------------------------------------------------- helpers
