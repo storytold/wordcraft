@@ -427,8 +427,8 @@ fn envelope_dialog_adds_an_envelope_section() {
     let document = a.session.document_id();
     a.run("mailings.envelopes", f.params(true)).unwrap();
     assert_eq!(a.session.document_id(), document, "no save prompt: nothing is replaced");
-    // PLAN: assumed the save prompt's dialog key is `saveChanges` and `OpenDialog::key` is a string (shell-w8, dialogs-w13).
-    assert!(a.dialog_host.open_dialogs().iter().all(|d| d.key != "saveChanges"), "no save prompt is open");
+    // PLAN: assumed the save prompt's dialog key is `saveChanges` (shell-w8, dialogs-w13).
+    assert!(a.dialog_host.open_dialogs().iter().all(|d| d.key.as_deref() != Some("saveChanges")), "no save prompt is open");
     let secs = a.session.doc.sections();
     assert_eq!(secs.len(), 2);
     assert!((secs[0].1.page_w - 623.6).abs() < 0.1);
@@ -552,11 +552,10 @@ fn envelope_sizes_follow_the_interface_language_and_region() {
     assert_eq!(size("Envelope DL", &a.session.region()), "DL   110 × 220 mm");
     a.run("file.options", json!({"region": "it-IT"})).unwrap();
     assert_eq!(size("Envelope #10", &a.session.region()), "#10   4,13 × 9,5 in");
-    // PLAN: assumed `crate::i18n::{apply_language(lang), Lang}` with `Lang::PSEUDO` (shell-w12, sh.A15, S-L322).
     crate::i18n::apply_language(crate::i18n::Lang::PSEUDO);
     assert_eq!(size("Envelope #10", &a.session.region()), "⟦#10   4,13 × 9,5 in⟧");
     assert_eq!(size("Envelope DL", &a.session.region()), "⟦DL   110 × 220 mm⟧");
-    crate::i18n::apply_language(crate::i18n::Lang::default());
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
 }
 
 /// #407: Labels builds a new document of the chosen sheet, or a single label.
@@ -573,7 +572,7 @@ fn labels_dialog_builds_a_sheet() {
     f.single = true;
     (f.row, f.col) = (3, 2);
     assert_eq!(a.session.run("mailings.labels", &f.params()).unwrap()["filled"], 1);
-    assert!(product_label(f.product).contains("63.5 × 33.9 mm (A4)"));
+    assert!(product_label(f.product, &a.session.region()).contains("63.5 × 33.9 mm (A4)"));
 }
 
 /// A `w`×`h` pixel PNG, base64 for `insert.picture`.
@@ -642,8 +641,7 @@ fn size_dialog_follows_the_crop_and_shapes_have_no_original() {
     assert_eq!((f.width, f.height), (15.0, 15.0));
 
     let mut a = app();
-    // PLAN: assumed `WordApp::command_input()` with `enabled(id)` for the command state (sh.A5, shell-w5/w6).
-    assert!(!a.command_input().enabled("picture.size"), "nothing to size");
+    assert!(!crate::app::command_board::command_enabled(&a, "picture.size"), "nothing to size");
     let _ = a.run("ui.dialog", json!({"name": "pictureSize"}));
     assert!(a.dialog_host.open_dialogs().is_empty());
     a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();

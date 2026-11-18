@@ -632,8 +632,8 @@ fn font_dialog_ok_keeps_what_the_user_left_alone() {
     h.run_steps(2);
     apply_font(&mut h, |f| {
         assert!(f.small_caps, "the dialog shows small caps");
-        assert_eq!(f.spacing, 2.0);
-        f.size = "14".into();
+        assert_eq!(f.spacing, Some(2.0));
+        f.size = Some(14.0);
     });
     let c = char_props_at_start(h.state());
     assert_eq!(c.size, Some(14.0));
@@ -657,16 +657,16 @@ fn font_dialog_sets_kerning_for_fonts() {
     let mut h = app_harness(app);
     h.run_steps(2);
     apply_font(&mut h, |f| {
-        assert_eq!((f.kern, f.kern_at), (Some(false), 12.0), "off, offering 12 pt");
+        assert_eq!((f.kern, f.kern_at), (Some(false), Some(12.0)), "off, offering 12 pt");
         f.kern = Some(true);
-        f.kern_at = 16.0;
+        f.kern_at = Some(16.0);
     });
     assert_eq!((kern(h.state(), 0), kern(h.state(), 7)), (Some(16.0), Some(16.0)));
     let _ = h.state_mut().run("edit.undo", json!({}));
     assert_eq!(kern(h.state(), 0), Some(0.0), "one undo step");
     let _ = h.state_mut().run("edit.redo", json!({}));
     apply_font(&mut h, |f| {
-        assert_eq!((f.kern, f.kern_at), (Some(true), 16.0));
+        assert_eq!((f.kern, f.kern_at), (Some(true), Some(16.0)));
         f.kern = Some(false);
     });
     assert_eq!((kern(h.state(), 0), kern(h.state(), 7)), (Some(0.0), Some(0.0)));
@@ -675,7 +675,7 @@ fn font_dialog_sets_kerning_for_fonts() {
     let _ = h.state_mut().run("select.all", json!({}));
     apply_font(&mut h, |f| {
         assert_eq!(f.kern, None, "mixed kerning shows neither on nor off");
-        f.size = "13".into();
+        f.size = Some(13.0);
     });
     assert_eq!((kern(h.state(), 0), kern(h.state(), 7)), (Some(14.0), Some(0.0)), "each run keeps its kerning");
 }
@@ -702,7 +702,7 @@ fn font_dialog_formats_a_bullet_and_hands_it_back() {
         if edit {
             let id = id_of(h.state(), "font");
             if let Some(f) = h.state_mut().dialog_host.get_mut_by_id::<FontHost>(id) {
-                f.form_mut().size = "16".into();
+                f.form_mut().size = Some(16.0);
                 f.form_mut().bold = true;
             }
             h.run_steps(2);

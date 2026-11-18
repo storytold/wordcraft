@@ -407,9 +407,8 @@ fn the_source_manager_imports_a_word_sources_file() {
     )
     .unwrap();
 
-    let mut a = app("Studios matter ");
     let files = std::sync::Arc::new(ScriptedFiles::answering([Picked::Paths(vec![path.clone()])]));
-    a.services.files = files.clone(); // PLAN: assumed Services::files: Arc<dyn Files> (sh.A14)
+    let mut a = app("Studios matter ").with_host(std::sync::Arc::new(craft::host::Host::default().with_files(files.clone())));
     assert_eq!(a.run("references.sources", json!({})).unwrap(), json!({"pending": "sourceManager"}));
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
@@ -429,7 +428,7 @@ fn the_source_manager_imports_a_word_sources_file() {
     let asked: Vec<String> = files.requests().into_iter().map(|r| r.purpose).collect();
     assert_eq!(asked, ["sources"], "the host can offer Word sources files");
     assert_eq!(h.state().session.doc.sources.len(), 2);
-    let status = h.state().status().text(); // PLAN: assumed `Status::text` (chrome-w9)
+    let status = h.state().status_message().map(|m| m.text.as_str().to_string()).unwrap_or_default();
     assert!(status.contains("Imported 2 sources"), "{status:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
