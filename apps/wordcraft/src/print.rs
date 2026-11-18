@@ -89,9 +89,11 @@ pub fn submit() -> Submit {
                     Duplex::Off => craft_print::Duplex::Off,
                 }),
                 grayscale: settings.grayscale,
+                grey_pages: false,
                 scaling: craft_print::Scaling::ShrinkToFit,
                 title: "WordCraft document".into(),
                 options,
+                driver_settings: None,
             };
             #[cfg(not(windows))]
             let sent = craft_print::submit_cancellable(&bytes, &job, &mut |_, _| {}, &token).map_err(|error| error.to_string());

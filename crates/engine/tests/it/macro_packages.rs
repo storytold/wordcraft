@@ -2,7 +2,6 @@
 //! macro-enabled document keeps its VBA project (as opaque bytes) when it is saved again.
 
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read, Write};
 
 use wordcraft_doc::Document;
 use wordcraft_engine::io::{open_bytes, save_bytes};
@@ -18,26 +17,24 @@ const REL_VBA_DATA: &str = "http://schemas.microsoft.com/office/2006/relationshi
 const VBA_DATA: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><wne:vbaSuppData xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml"><wne:mcds><wne:mcd wne:macroName="PROJECT.NEWMACROS.HELLO" wne:name="Project.NewMacros.Hello" wne:bEncrypt="00" wne:cmg="56"/></wne:mcds></wne:vbaSuppData>"#;
 
 fn unzip(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
-    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).expect("zip");
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
     let mut out = BTreeMap::new();
-    for i in 0..z.len() {
-        let mut f = z.by_index(i).expect("entry");
-        let mut b = Vec::new();
-        f.read_to_end(&mut b).expect("read entry");
-        out.insert(f.name().to_string(), b);
+    for name in names {
+        let b = z.read(&name, 16 << 20).expect("read entry").expect("entry");
+        out.insert(name, b);
     }
     out
 }
 
 fn zip(entries: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     // Content types first, as Word writes them.
     let order = entries.iter().filter(|(n, _)| *n == "[Content_Types].xml").chain(entries.iter().filter(|(n, _)| *n != "[Content_Types].xml"));
     for (name, bytes) in order {
-        zw.start_file(name.as_str(), zip::write::SimpleFileOptions::default()).expect("start");
-        zw.write_all(bytes).expect("write");
+        zw.add(name.as_str(), bytes, craft_zip::Compression::Deflated).expect("write");
     }
-    zw.finish().expect("finish").into_inner()
+    zw.finish().expect("finish")
 }
 
 fn text(files: &BTreeMap<String, Vec<u8>>, name: &str) -> String {

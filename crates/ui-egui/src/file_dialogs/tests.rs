@@ -54,7 +54,7 @@ fn imported_word_save_asks_for_docx_and_preserves_the_original() {
         let revision = a.session.rev();
         let result = a.run("file.save", json!({})).unwrap();
         assert_eq!(result["pending"], "saveAs");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
         answer(&shown, None);
         assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], false);
         assert_eq!(a.session.doc, draft);
@@ -204,7 +204,7 @@ fn imported_word_save_controls_ask_for_docx() {
     h.get_by_label("Save").click();
     h.run_steps(3);
     assert!(h.state().file_dialog_open(), "the Save button asks for a supported target");
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
     answer(&shown, None);
     h.run_steps(3);
 
@@ -215,7 +215,7 @@ fn imported_word_save_controls_ask_for_docx() {
     h.event(egui::Event::Key { key: egui::Key::S, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
     h.run_steps(3);
     assert!(h.state().file_dialog_open(), "the focused editor's Mod+S asks too");
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
     answer(&shown, None);
     h.run_steps(3);
     assert!(h.state().session.dirty);
@@ -283,7 +283,7 @@ fn body_text(a: &WordApp) -> String {
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("wordcraft-ui-dialogs-{name}-{}", std::process::id()));
+    let dir = std::path::absolute(std::env::temp_dir().join(format!("wordcraft-ui-dialogs-{name}-{}", std::process::id()))).expect("temp dir");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -325,6 +325,43 @@ fn save_as_template_starts_in_the_templates_folder() {
     assert!(matches!(&shown.borrow()[0].0, FileDialogRequest::Save { name, dir: Some(d) } if name == "Memo.dotx" && *d == chosen.to_string_lossy()));
     answer(&shown, None);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #4143: Save As starts in the folder of the open file, not in the home folder; a document
+/// that was never saved has no folder to offer.
+#[test]
+fn save_as_starts_in_the_folder_of_the_open_file() {
+    let dir = scratch("save-as-folder");
+    let opened = dir.join("one.docx");
+    wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("original"))
+        .run("file.save", &json!({"path": opened.to_string_lossy()}))
+        .unwrap();
+    let (mut a, shown) = async_app();
+    a.services.templates_dir = Some(dir.join("Templates"));
+    a.run("file.open", json!({"path": opened.to_string_lossy()})).unwrap();
+    a.save_as_dialog();
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "one.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
+    answer(&shown, None);
+
+    let (mut fresh, shown) = async_app();
+    typed(&mut fresh);
+    fresh.save_as_dialog();
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: format!("{UNSAVED}.docx"), dir: None });
+    answer(&shown, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file opened by a relative path (`wordcraft one.docx`) has an empty parent: Save As starts
+/// in the working folder, not with an empty folder the dialog would drop.
+#[test]
+fn save_as_starts_in_the_working_folder_for_a_relative_path() {
+    let (mut a, shown) = async_app();
+    typed(&mut a);
+    a.session.path = Some(std::path::PathBuf::from("one.docx"));
+    a.save_as_dialog();
+    let cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "one.docx".into(), dir: Some(cwd) });
+    answer(&shown, None);
 }
 
 /// Save As returns at once (the UI keeps running); the frame loop saves once the answer arrives.
@@ -375,7 +412,7 @@ fn save_as_with_a_new_filename_saves_under_it() {
     let r = a.run("file.saveAs", json!({})).unwrap();
     assert_eq!(r, json!({"saved": false}));
     assert!(a.file_dialog_open(), "F12's saveAs request opens the dialog");
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "two.docx".into(), dir: None });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "two.docx".into(), dir: Some(dir.join("sub").to_string_lossy().into_owned()) });
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -463,6 +500,103 @@ fn export_pdf_without_a_path_asks_where_to_save() {
     let bytes = std::fs::read(&picked).unwrap();
     assert!(bytes.starts_with(b"%PDF"), "a PDF is written to the picked path");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A synchronous web save failure must not stamp a save that never reached its destination.
+#[test]
+fn failed_web_saves_restore_the_save_stamps() {
+    for id in ["file.save", "file.saveAs"] {
+        for (name, hosted, dirty, expected_calls) in [
+            ("draft.unsupported", false, true, vec![]),
+            ("draft.docx", false, true, vec!["download"]),
+            ("draft.docx", true, true, vec!["host"]),
+            ("draft.docx", false, false, vec!["download"]),
+        ] {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            let downloaded = calls.clone();
+            let host_calls = calls.clone();
+            let services = Services {
+                download: Some(Box::new(move |_, _| {
+                    downloaded.borrow_mut().push("download");
+                    Err("download refused".into())
+                })),
+                host_save: hosted.then(|| {
+                    Box::new(move |_: &str, _: &[u8], _: bool| {
+                        host_calls.borrow_mut().push("host");
+                        Err("host refused".into())
+                    }) as crate::HostSaveFn
+                }),
+                ..Default::default()
+            };
+            let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text(UNSAVED)), services);
+            a.session.dirty = dirty;
+            a.session.path = Some("original.docx".into());
+            a.session.view.zoom = 1.37;
+            a.session.doc.core.created.clear();
+            a.session.doc.core.modified = "2020-01-02T03:04:05Z".into();
+            a.session.doc.core.last_modified_by = "Previous author".into();
+            a.session.doc.core.revision = 7;
+            let path_before = a.session.path.clone();
+            let core_before = a.session.doc.core.clone();
+            let zoom_before = a.session.doc.settings.zoom;
+            let undo_before = a.session.undo_depth();
+            assert!(a.run(id, json!({"path": name})).is_err(), "{id}: {name}");
+            assert_eq!(*calls.borrow(), expected_calls, "{id}: {name}");
+            assert_eq!(a.session.doc.core, core_before, "{id}: {name}");
+            assert_eq!(a.session.doc.settings.zoom, zoom_before, "{id}: {name}");
+            assert_eq!(a.session.undo_depth(), undo_before, "{id}: {name}");
+            assert_eq!(a.session.dirty, dirty, "{id}: {name}");
+            assert_eq!(a.session.path, path_before, "{id}: {name}");
+        }
+        let services = Services {
+            download: Some(Box::new(|_, bytes| {
+                assert!(bytes.starts_with(b"PK"));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text(UNSAVED)), services);
+        a.session.dirty = true;
+        let revision_before = a.session.doc.core.revision;
+        assert_eq!(a.run(id, json!({"path": "draft.docx"})).unwrap()["downloaded"], "draft.docx");
+        assert_eq!(a.session.doc.core.revision, revision_before.saturating_add(1));
+        assert_eq!(a.session.doc.core.last_modified_by, a.session.author);
+        assert!(!a.session.doc.core.created.is_empty() && !a.session.doc.core.modified.is_empty());
+        assert!(!a.session.dirty);
+    }
+}
+
+/// An explicit web PDF export keeps an existing PDF suffix regardless of ASCII case.
+#[test]
+fn web_pdf_export_keeps_an_existing_suffix_in_any_case() {
+    let downloaded = Rc::new(RefCell::new(Vec::new()));
+    let captured = downloaded.clone();
+    let services = Services {
+        download: Some(Box::new(move |name, bytes| {
+            captured.borrow_mut().push((name.to_string(), bytes.starts_with(b"%PDF")));
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    for (name, expected) in [
+        ("Report.pdf", "Report.pdf"),
+        ("Report.PDF", "Report.PDF"),
+        ("Résumé.PdF", "Résumé.PdF"),
+        ("😀.PDF", "😀.PDF"),
+        (".hidden.PDF", ".hidden.PDF"),
+        ("Report..PDF", "Report..PDF"),
+        ("é", "é.pdf"),
+        ("😀", "😀.pdf"),
+        ("Report.pdf.exe", "Report.pdf.exe.pdf"),
+        ("Report.ＰＤＦ", "Report.ＰＤＦ.pdf"),
+        ("Report.pdf.", "Report.pdf..pdf"),
+        ("Report", "Report.pdf"),
+    ] {
+        let result = a.execute("file.exportPdf", json!({"path": name})).unwrap();
+        assert_eq!(result["downloaded"], expected, "{name}");
+        assert_eq!(downloaded.borrow().last().cloned(), Some((expected.to_string(), true)), "{name}");
+    }
 }
 
 /// Open, Save As and Export PNG from the command search (no path) ask for a file the same way.
@@ -582,7 +716,6 @@ fn an_imported_sources_file_adds_its_sources() {
 /// A workbook with several sheets (#334) shows Select Table; its answer loads that sheet.
 #[test]
 fn a_workbook_with_several_sheets_asks_which_one() {
-    use std::io::Write;
     let dir = scratch("workbook");
     let book = dir.join("people.ods");
     let table = |name: &str, cells: &[&str]| {
@@ -595,16 +728,14 @@ fn a_workbook_with_several_sheets_asks_which_one() {
         format!(r#"<table:table table:name="{name}">{cells}</table:table>"#)
     };
     let content = format!(
-        r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet>{}{}</office:spreadsheet></office:body></office:document-content>"#,
+        r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet>{}{}</office:spreadsheet></office:body></office:document-content>"#,
         table("Notes", &["n"]),
         table("Guests", &["Name", "Ada", "Alan"])
     );
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (name, body) in [("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content.as_str())] {
-        z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        z.write_all(body.as_bytes()).unwrap();
-    }
-    std::fs::write(&book, z.finish().unwrap().into_inner()).unwrap();
+    let mut z = craft_zip::Writer::new();
+    z.add("mimetype", b"application/vnd.oasis.opendocument.spreadsheet", craft_zip::Compression::Stored).unwrap();
+    z.add("content.xml", content.as_bytes(), craft_zip::Compression::Deflated).unwrap();
+    std::fs::write(&book, z.finish().unwrap()).unwrap();
     let (mut a, shown) = async_app();
     a.run("ui.openRecipientList", json!({})).unwrap();
     answer(&shown, Some(&book.to_string_lossy()));
