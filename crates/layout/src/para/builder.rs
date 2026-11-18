@@ -136,8 +136,10 @@ impl<'a> Builder<'a> {
         }
         let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
         // A symbol font that isn't installed, or is installed one em tall (Apple's Symbol), takes
-        // the height Word gives it; so does a font drawn in a twin with a shorter line (Selawik).
-        let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r).or_else(|| wordcraft_fonts::word::twin_line(&rc.font, &r)) {
+        // the height Word gives it; so does text drawn in a twin with another line (Selawik), but
+        // not a segment drawn in another face (East Asian letters in their own font).
+        let twin = || (face.id() == r.face.id()).then(|| wordcraft_fonts::word::twin_line(&rc.font, &r)).flatten();
+        let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r).or_else(twin) {
             Some((a, d)) => (a * face.upem, d * face.upem),
             None => wordcraft_fonts::word::line_metrics(&face),
         };
