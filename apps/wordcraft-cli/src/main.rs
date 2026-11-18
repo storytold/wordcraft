@@ -286,7 +286,10 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
             let Some(spec) = specs.iter().find(|spec| spec.name == arg) else {
                 return Err(format!("{command}: unknown option --{name}"));
             };
-            if spec.takes_value && args.get(i + 1).is_some_and(|value| !value.starts_with("--")) {
+            if spec.takes_value {
+                if args.get(i + 1).is_none_or(|value| value.starts_with("--")) {
+                    return Err(format!("{command}: {arg} requires a value"));
+                }
                 i += 2;
             } else {
                 i += 1;
