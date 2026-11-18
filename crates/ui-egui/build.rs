@@ -77,7 +77,7 @@ fn craft_i18n() -> (String, Vec<std::path::PathBuf>) {
         }
     };
     let mut o = String::from("/// (locale, shared catalog, WordCraft's catalog), one entry per locale; `\"\"` for a missing file.\n");
-    o.push_str("pub static CRAFT_I18N: &craft_i18n::Embedded = &[\n");
+    o.push_str("pub static CRAFT_I18N: &craft::i18n::Embedded = &[\n");
     let mut catalogs = Vec::new();
     for (code, shared, app) in entries {
         catalogs.extend(shared.iter().cloned());

@@ -7,8 +7,7 @@ use craft::automation::control::{ControlChannel, ControlRequest, Reply};
 /// A context with the framework runtime installed, as the app's host installs it.
 fn installed() -> egui::Context {
     let ctx = egui::Context::default();
-    // PLAN: assumed `crate::ui_fonts` and `crate::i18n::Lang::EN` are reachable here (sh.A10)
-    craft_ui::embed::install(&ctx, craft_ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN));
+    craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN));
     ctx
 }
 
@@ -22,7 +21,7 @@ fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
         },
         app,
     );
-    craft_ui::embed::install(&h.ctx, craft_ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN));
+    craft::ui::shell::embed::install(&h.ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN));
     frames(&mut h, 6);
     h
 }
@@ -31,7 +30,7 @@ fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
 fn frames(h: &mut egui_kittest::Harness<'_, WordApp>, n: usize) {
     for _ in 0..n {
         let ctx = h.ctx.clone();
-        craft_ui::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
+        craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
         h.step();
     }
 }
@@ -250,11 +249,10 @@ fn ui_closewindow_asks_the_close_guard_like_the_os_button() {
 #[test]
 fn ui_clipboard_sets_each_flavour_it_is_given() {
     use craft::platform::clipboard::{Clipboard, MemoryClipboard};
-    use craft_ui::runtime::commands::ClipboardHandle;
+    use craft::ui::runtime::commands::ClipboardHandle;
     let ctx = egui::Context::default();
-    // PLAN(platform-w3): assumed `Clipboard::new(MemoryClipboard::default())` and the mime names below
-    let spec = craft_ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
-    craft_ui::embed::install(&ctx, spec, &crate::ui_fonts(crate::i18n::Lang::EN));
+    let spec = craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
+    craft::ui::shell::embed::install(&ctx, spec, &crate::ui_fonts(crate::i18n::Lang::EN));
     let mut a = app();
     let r = call(&mut a, &ctx, "ui.clipboard", json!({"text": "plain", "html": "<b>rich</b>"}));
     assert_eq!(r["ok"], true, "{r}");
