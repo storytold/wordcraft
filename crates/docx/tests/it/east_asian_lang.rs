@@ -1,8 +1,6 @@
 //! East Asian language attribute of a run (`w:lang/@w:eastAsia`, ISO/IEC 29500-1 §17.3.2.20).
 //! Verifies that saving DOCX documents preserves the East Asian language of `w:lang`.
 
-use std::io::{Read, Write};
-
 fn docx(body: &str, styles: Option<&str>) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let doc_rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
@@ -17,19 +15,17 @@ fn docx(body: &str, styles: Option<&str>) -> Vec<u8> {
             format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{s}</w:styles>"#),
         ));
     }
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, xml) in &parts {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(xml.as_bytes()).unwrap();
+        zw.add(name, xml.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn part(bytes: &[u8], name: &str) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read(name, 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 fn run(text: &str, rpr: &str) -> String {
