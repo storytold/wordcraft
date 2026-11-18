@@ -20,6 +20,8 @@ mod default_apps;
 mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
+#[cfg(any(target_os = "linux", test))]
+mod linux_gpu;
 mod logging;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod portal_save;
@@ -685,6 +687,13 @@ fn main() -> eframe::Result {
             }));
         }
     }
+    // egui-wgpu draws on the discrete GPU by default; on a laptop whose integrated GPU drives the
+    // panel, that wakes the discrete GPU whenever the window redraws. Draw on the GPU that drives
+    // the screen; `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` still decide (see linux_gpu.rs).
+    #[cfg(target_os = "linux")]
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+        setup.native_adapter_selector = Some(std::sync::Arc::new(linux_gpu::pick_adapter));
+    }
     // Registered before the event loop starts, so it catches the Finder event that launched us as
     // well as later ones. Lives until the event loop returns; the app creator only borrows it.
     #[cfg(target_os = "macos")]
@@ -719,6 +728,7 @@ fn main() -> eframe::Result {
                 app.replace_startup_document(doc);
             }
             app.watch_desktop_theme(&cc.egui_ctx);
+            app.tell_about_font_downloads();
             if prefs_enabled()
                 && let Some(dir) = wordcraft_control_key::settings_dir()
             {

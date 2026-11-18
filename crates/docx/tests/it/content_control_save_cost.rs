@@ -74,6 +74,7 @@ fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (
 /// looked for each paragraph's markers in the whole set of markers, once per paragraph, so a
 /// document with 32,000 controls took four seconds to save where it takes a tenth of one now.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_document_with_many_inline_content_controls_saves_in_linear_time() {
     let scale = 4;
     let small = inline_controls(8_000);
@@ -94,6 +95,7 @@ fn a_document_with_many_inline_content_controls_saves_in_linear_time() {
 /// The same for the controls written around whole paragraphs: the writer compared every control
 /// with every other one to find the ones that clash, so the save was quadratic in their number.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_document_with_many_block_content_controls_saves_in_linear_time() {
     let scale = 4;
     let small = block_controls(8_000);
@@ -217,6 +219,8 @@ const PINNED_PARTS: &[&str] = &[
     "word/styles.xml",
     "word/settings.xml",
     "word/theme/theme1.xml",
+    // The fonts the document uses, with their families: it brings no font table of its own.
+    "word/fontTable.xml",
     "docProps/core.xml",
     "docProps/app.xml",
 ];

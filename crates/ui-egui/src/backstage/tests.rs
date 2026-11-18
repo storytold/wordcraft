@@ -1511,6 +1511,125 @@ fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
     assert!((bar.right() - 1432.0).abs() < 1.0, "expected the scrollbar at the window edge: {bar:?}");
 }
 
+/// The File page in a window `height` points tall, left to right or, with `rtl`, in a right-to-left
+/// interface (a fixture catalog, so the test does not need the translations). With `mac`, the
+/// File page covers the integrated macOS title bar.
+fn file_page_harness(rtl: bool, mac: bool, height: f32) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.integrated_titlebar = mac;
+    a.mac_titlebar = crate::chrome::MacTitleBar { height: 28.0, content_left: 70.0 };
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let ar = crate::i18n::fixture_lang("ar", "\tHome\tHome\n");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, height)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // Draw the File page in a fixture language even without embedded catalogs.
+            crate::i18n::set_current(if rtl { ar } else { crate::i18n::Lang::EN });
+            crate::rtl::sync(&ctx);
+            assert_eq!(crate::rtl::on(), rtl);
+            super::show(app, ui);
+            crate::i18n::set_current(crate::i18n::Lang::EN);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// The rectangle of the side menu's button named `label`, a 200 point wide row (the page itself
+/// may have a control with the same name).
+fn side_menu_button(h: &egui_kittest::Harness<'static, WordApp>, label: &str) -> egui::Rect {
+    let label = crate::i18n::t(label).to_string();
+    h.query_all_by_label(&label)
+        .map(|n| n.rect())
+        .find(|r| (r.width() - 200.0).abs() < 0.5)
+        .unwrap_or_else(|| panic!("the side menu's {label} button"))
+}
+
+/// #6639: in a window too short for the File page's side menu, the wheel over the menu scrolls
+/// it, so Options and About can be reached. Checked left to right and right to left, where the
+/// menu is on the right.
+#[test]
+fn the_side_menu_scrolls_with_the_wheel_in_a_short_window() {
+    // Both directions run before the test fails, so each one's result is reported.
+    let mut misses = Vec::new();
+    for (rtl, x) in [(false, 100.0), (true, 1340.0)] {
+        let language = if rtl { "right to left" } else { "left to right" };
+        let height = 360.0;
+        // The harness keeps an 8 point margin, so the window's bottom edge is at y=352.
+        let bottom = height - 8.0;
+        let mut h = file_page_harness(rtl, false, height);
+        let menu = side_menu_button(&h, "Home");
+        assert!(menu.min.x <= x && x <= menu.max.x, "{language}: the menu is under the pointer: {menu:?}");
+        for label in ["Options", "About"] {
+            let r = side_menu_button(&h, label);
+            assert!(r.max.y > bottom, "{language}: {label} starts below the window's bottom edge: {r:?}");
+        }
+        h.event(egui::Event::PointerMoved(egui::pos2(x, 200.0)));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -2000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(4);
+        for label in ["Options", "About"] {
+            let r = side_menu_button(&h, label);
+            if r.max.y > bottom + 0.5 {
+                misses.push(format!("{language}: the wheel did not bring {label} into the window: {r:?}"));
+            }
+        }
+        assert!(h.state().ui.backstage, "{language}: File stays open");
+    }
+    assert!(misses.is_empty(), "{misses:#?}");
+}
+
+/// #6639: in a window too short for the side menu, Tab to About scrolls the menu so that About
+/// is in the window, left to right and right to left.
+#[test]
+fn tab_to_about_scrolls_it_into_a_short_window() {
+    let mut misses = Vec::new();
+    for rtl in [false, true] {
+        let language = if rtl { "right to left" } else { "left to right" };
+        let bottom = 360.0 - 8.0;
+        let mut h = file_page_harness(rtl, false, 360.0);
+        let about_focused = |h: &egui_kittest::Harness<'static, WordApp>| {
+            h.query_all_by_label("About").find(|n| (n.rect().width() - 200.0).abs() < 0.5 && n.is_focused()).map(|n| n.rect())
+        };
+        let mut about = None;
+        for _ in 0..40 {
+            h.key_press(egui::Key::Tab);
+            h.run_steps(4);
+            about = about_focused(&h);
+            if about.is_some() {
+                break;
+            }
+        }
+        let Some(r) = about else {
+            panic!("{language}: Tab reaches the side menu's About button");
+        };
+        if r.max.y > bottom + 0.5 {
+            misses.push(format!("{language}: About has the focus below the window's bottom edge: {r:?}"));
+        }
+    }
+    assert!(misses.is_empty(), "{misses:#?}");
+}
+
+/// #6639: when the whole side menu fits, About stays at the menu's bottom, above its 12 point
+/// margin, as it was before the menu could scroll, with and without the macOS title bar.
+#[test]
+fn about_stays_at_the_bottom_of_a_side_menu_that_fits() {
+    for (rtl, mac) in [(false, false), (true, false), (false, true), (true, true)] {
+        let language = if rtl { "right to left" } else { "left to right" };
+        let h = file_page_harness(rtl, mac, 900.0);
+        let about = side_menu_button(&h, "About");
+        let bottom = 900.0 - 8.0 - 12.0;
+        assert!((about.max.y - bottom).abs() < 0.5, "{language}, mac {mac}: About sits at the bottom of the menu: {about:?}");
+    }
+}
+
 /// Recursively collects bounding rectangles and text entries from egui shapes.
 fn collect_shapes(shape: &egui::Shape, rects: &mut Vec<egui::Rect>, texts: &mut Vec<(String, egui::Pos2, f32)>) {
     match shape {
