@@ -988,3 +988,38 @@ fn insert_fragment_remaps_conflicting_media_keys() {
     let remapped = para.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
     assert_eq!(remapped, other_key);
 }
+
+/// #6788: splitting a paragraph after its first letters leaves the drop cap on the first
+/// paragraph only; the new one (also when it is empty) is plain. A split at offset 0 is unchanged.
+#[test]
+fn split_paragraph_keeps_the_drop_cap_on_the_first_paragraph_only() {
+    let drop_cap = |d: &Document, i: usize| {
+        let p = d.body.get(i).and_then(|b| b.as_para()).map(|p| p.props.clone()).unwrap_or_default();
+        (p.drop_cap, p.drop_cap_margin, p.drop_cap_distance, p.drop_cap_font)
+    };
+    let capped = |text: &str| {
+        let mut d = doc(&[text]);
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(0)) {
+            p.props.drop_cap = Some(3);
+            p.props.drop_cap_margin = Some(true);
+            p.props.drop_cap_distance = Some(4.0);
+            p.props.drop_cap_font = Some("Serif".into());
+        }
+        d
+    };
+    let cap = (Some(3), Some(true), Some(4.0), Some("Serif".to_string()));
+    let plain = (None, None, None, None);
+
+    let mut d = capped("Sugar and knowledge");
+    d.split_paragraph(&Pos::body(0, 10)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), plain.clone()));
+
+    let mut d = capped("Sugar");
+    d.split_paragraph(&Pos::body(0, 5)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), plain.clone()));
+
+    // At offset 0 nothing changes: both paragraphs keep the properties, as before.
+    let mut d = capped("Sugar");
+    d.split_paragraph(&Pos::body(0, 0)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), cap));
+}
