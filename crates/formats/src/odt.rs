@@ -1,87 +1,96 @@
-//! OpenDocument Text (`.odt`, ODF 1.3).
-//!
-//! Both ways, through the flow model ([`crate::model`]) with what ODT keeps besides
-//! ([`model::FlowOpts`]): paragraphs and headings with their spacing, indents, line spacing,
-//! contextual spacing, alignment, borders, background and tab stops; character formatting (the
-//! extras in [`model::Fmt::extra`] included); custom paragraph and character styles by name, and
-//! the look of the heading, title, quotation and preformatted styles; lists with their identity,
-//! number formats, labels and positions, and heading numbering (`text:outline-style`); tables with
-//! column widths, spans, header rows, cell borders, padding, shading and vertical alignment;
-//! pictures (in line or floating), equations as formula objects, text boxes; links, bookmarks,
-//! text fields, footnotes and endnotes, comments with ranges and replies; sections with their own
-//! master pages, page setup, columns and headers and footers; document defaults, metadata and
-//! LibreOffice's layout settings (`settings.xml`, kept from the file or Word-compatible).
-//!
-//! Export writes `mimetype` (stored, first), `META-INF/manifest.xml`, `content.xml`,
-//! `styles.xml`, `meta.xml`, `settings.xml`, pictures under `Pictures/` and formula
-//! sub-documents. Import reads `content.xml`, `styles.xml` (style inheritance resolved, automatic
-//! and common styles), `meta.xml`, `settings.xml` and the parts frames point at; drawing shapes
-//! are still skipped.
-//!
-//! Tracked changes (ODF 1.3 Part 3 §5.5) go both ways: `text:tracked-changes` holds one
-//! `text:changed-region` per change; an insertion is the body text between
-//! `text:change-start`/`text:change-end`, a deletion keeps the deleted paragraphs in its region
-//! and leaves a `text:change` point in the body. They map to `Document::revisions` and the
-//! `ins`/`del` marks of runs and paragraph marks; a deleted paragraph mark is a region of
-//! several paragraphs. Format changes are read as no change.
+//! OpenDocument Text (`.odt`, `.ott`, `.fodt`) import and export via `craft-odf`.
 
-use std::collections::HashMap;
-use std::io::{Cursor, Read, Write};
 use std::sync::Arc;
 
-use quick_xml::XmlVersion;
-use quick_xml::events::{BytesStart, Event};
-use wordcraft_doc::props::{Borders, VAlign};
-use wordcraft_doc::section::{Columns, SectionStart};
-use wordcraft_doc::{Align, Document, RevisionKind, Rgb, SectionProps};
+use wordcraft_doc::{Block, Document, SectionProps};
 
-use crate::model::{self, Cell, FBlock, FComment, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img, mime_of};
+pub use craft_odf::text::{CryptError, TEMPLATE_MIME, TEXT_MIME, decrypt, encrypt, is_encrypted};
 
-mod body;
-mod cell_formula;
-mod chart;
-mod crypt;
-mod datastyle;
-mod fields;
-mod flat;
-mod forms;
-mod formula_size;
-mod frames;
-mod geometry;
-mod import;
-mod kept;
-mod limits;
-mod objects;
-mod package;
-mod parts;
-mod path;
-mod shapes;
-mod strokes;
-mod styles;
-mod writer;
-mod xml;
+/// Text room, points, that header and footer bands leave on a page (as Page Setup's margins must).
+const MIN_TEXT_ROOM: f32 = 36.0;
 
-use body::Body;
-pub use crypt::{CryptError, decrypt, encrypt, is_encrypted};
-pub use flat::{export_flat, import_flat, import_flat_on};
-use import::Pages;
-#[cfg(test)]
-use import::{Pictures, apply_page_layout, read_entry, read_meta};
-pub use import::{import, import_on, parse};
-#[cfg(test)]
-use limits::{MAX_EXTRA_SPACES, MAX_XML_DEPTH};
-pub use package::{TEMPLATE_MIME, TEXT_MIME, export, export_template};
-use styles::Styles;
-#[cfg(test)]
-use writer::x;
-#[cfg(test)]
-use xml::length;
-use xml::{Ev, events, get};
+fn shared_section(page: &SectionProps) -> craft_wordmodel::SectionProps {
+    let mut d = Document::new();
+    d.last_section = page.clone();
+    wordcraft_docx::to_shared_model(&d).map(|s| s.last_section).unwrap_or_default()
+}
 
-mod page_parts;
+/// A shared document opened as a WordCraft one, its pages keeping the text room the header and
+/// footer bands leave ([`keep_text_room`]).
+fn from_shared(shared: craft_wordmodel::Document) -> Result<Document, String> {
+    let mut doc = wordcraft_docx::from_shared_model(shared).map_err(|e| e.to_string())?;
+    keep_text_room(&mut doc);
+    Ok(doc)
+}
 
-#[cfg(test)]
-mod tests;
+/// A page's header and footer bands grow its margins, and a band as tall as the page (to fit a
+/// full-page picture, #5806) takes all the text's room: every page then draws one line below the
+/// paper and the rest of the body is missing from the render and PDF. The bands grow the margins
+/// only while the text keeps half an inch (Page Setup's rule for margins): the larger margin, the
+/// larger band with it, gives up the excess first, so the smaller band is kept whole. The band's
+/// own height is untouched: the header still draws as tall as its content.
+///
+/// `craft-odf` caps a band at the page's longer side rather than at the room left for text; this
+/// is the guard that keeps the text on the page until the shared reader makes the same one.
+fn keep_text_room(doc: &mut Document) {
+    for b in &mut doc.body {
+        if let Block::Para(p) = &mut *Arc::make_mut(b)
+            && let Some(sec) = p.section.as_mut()
+        {
+            keep_section_room(sec);
+        }
+    }
+    keep_section_room(&mut doc.last_section);
+}
 
-#[cfg(test)]
-mod tests_more;
+fn keep_section_room(sec: &mut SectionProps) {
+    if !(sec.page_h.is_finite() && sec.margin_top.is_finite() && sec.margin_bottom.is_finite()) {
+        return;
+    }
+    let mut excess = sec.margin_top + sec.margin_bottom - (sec.page_h - MIN_TEXT_ROOM);
+    if excess <= 0.0 {
+        return;
+    }
+    let (first, second) = if sec.margin_top >= sec.margin_bottom {
+        (&mut sec.margin_top, &mut sec.margin_bottom)
+    } else {
+        (&mut sec.margin_bottom, &mut sec.margin_top)
+    };
+    let cut = excess.min(first.max(0.0));
+    *first -= cut;
+    excess -= cut;
+    if excess > 0.0 {
+        *second = (*second - excess).max(0.0);
+    }
+}
+
+pub fn import(bytes: &[u8]) -> Result<Document, String> {
+    from_shared(craft_odf::text::import(bytes)?)
+}
+
+pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> {
+    from_shared(craft_odf::text::import_on(bytes, &shared_section(page))?)
+}
+
+pub fn import_flat(bytes: &[u8]) -> Result<Document, String> {
+    from_shared(craft_odf::text::import_flat(bytes)?)
+}
+
+pub fn import_flat_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> {
+    from_shared(craft_odf::text::import_flat_on(bytes, &shared_section(page))?)
+}
+
+pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
+    let shared = wordcraft_docx::to_shared_model(doc).map_err(|e| e.to_string())?;
+    craft_odf::text::export(&shared)
+}
+
+pub fn export_template(doc: &Document) -> Result<Vec<u8>, String> {
+    let shared = wordcraft_docx::to_shared_model(doc).map_err(|e| e.to_string())?;
+    craft_odf::text::export_template(&shared)
+}
+
+pub fn export_flat(doc: &Document) -> Result<Vec<u8>, String> {
+    let shared = wordcraft_docx::to_shared_model(doc).map_err(|e| e.to_string())?;
+    craft_odf::text::export_flat(&shared)
+}
