@@ -357,6 +357,40 @@ fn non_latin_file_name_is_drawn_in_the_caption() {
     assert!(cjk.canvas.ime_faces.is_empty(), "CJK collections are not copied into the fallback list");
 }
 
+/// The CJK UI font a Japanese file name asks for is loaded and draws the name, also in a build
+/// without craft-i18n's CJK catalogs and craft-fonts' CJK faces. There it was never loaded, and
+/// the caption, like an input method's composition, showed boxes.
+#[test]
+fn a_japanese_file_name_is_drawn_in_the_caption() {
+    // A font to draw it with: an installed CJK font in a build without embedded CJK faces, or
+    // embedded faces that have the name's characters (embedded faces without them load no
+    // installed font for it).
+    let embedded = wordcraft_fonts::ui_cjk_fonts_for(false, false);
+    let drawable = if embedded.is_empty() {
+        wordcraft_fonts::system_cjk_ui_font_for(false, false, &[]).is_some()
+    } else {
+        wordcraft_fonts::ui_uncovered_cjk(&["日本語"], &embedded).is_empty()
+    };
+    // macOS and Windows always have one (Hiragino, Yu Gothic), and CI runs these tests on both (the
+    // Print job), so there a missing font fails instead of hiding a regression.
+    assert!(drawable || cfg!(not(any(target_os = "macos", windows))), "macOS and Windows have a CJK font, but none draws 日本語");
+    if !drawable {
+        eprintln!("skipped: no CJK font draws 日本語");
+        return;
+    }
+    let ctx = egui::Context::default();
+    let frame = |app: &mut WordApp| {
+        ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+    };
+    let mut a = app();
+    a.session.path = Some("日本語.docx".into());
+    // The fonts the name asks for load from the next frame.
+    frame(&mut a);
+    frame(&mut a);
+    assert!(a.want_system_cjk);
+    assert!(ctx.fonts_mut(|f| f.has_glyphs(&crate::theme::semibold(13.0), "日本語")), "the caption draws the name");
+}
+
 /// File › Recover draws the recovered documents' names with the interface faces: a Chinese
 /// name there was a row of boxes because nothing asked for the CJK UI font. (The Recent list
 /// has its own, `ensure_recent_fonts`.)
@@ -3767,6 +3801,148 @@ fn the_print_button_shows_only_with_a_print_hook() {
     }
 }
 
+/// A Print page with printers found (so it draws the job message), in English.
+fn print_page_harness(message: Option<crate::printing::Feedback>) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = app();
+    a.ui.language = "en".into();
+    a.services.printers = Some(Box::new(|| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(vec![printing::Printer { name: "Test queue".into(), label: String::new(), default: true }]);
+        receiver
+    }));
+    a.services.print_native = Some(Box::new(|_, _, _, _| std::sync::mpsc::channel().1));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    // The page's first drawing starts discovery, which replaces the message: draw it once, leave,
+    // and let the printers arrive.
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
+    h.run_steps(3);
+    set_print_message(&mut h, message);
+    h.state_mut().print_memo = Default::default();
+    h
+}
+
+/// A job message that arrives without the app's own `print_feedback` acting on it (a submitted job
+/// would close the Print page); what the window has said is set by the test.
+fn set_print_message(h: &mut egui_kittest::Harness<'_, WordApp>, message: Option<crate::printing::Feedback>) {
+    h.state_mut().printing.message = message.clone();
+    h.state_mut().print_feedback_seen = message;
+    h.state_mut().print_gen += 1;
+}
+
+fn leave_and_reopen_print(h: &mut egui_kittest::Harness<'_, WordApp>) {
+    let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
+    h.run_steps(2);
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(3);
+}
+
+/// Opened again, the Print page doesn't repeat how the last job went when the window already said
+/// it (in its status bar), but a failure that comes in while it is open stays, and what the
+/// printers are doing (none found) shows each time. The shared message is never cleared, so
+/// `ui.printSettings` still reports it.
+#[test]
+fn the_print_page_opens_without_the_last_jobs_message() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(Some(Feedback::Submitted("job 7".into())));
+    // A job went away earlier: its message was said in this window's status bar, and the page closed.
+    h.state_mut().print_memo.said = Some(h.state().print_gen);
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("job 7").is_none(), "the last job's message isn't repeated");
+    assert_eq!(h.state().printing.message, Some(Feedback::Submitted("job 7".into())), "but the shared message stays");
+    // A failure arrives while the page is open, said (by the status bar) in the very frame, so
+    // only the page being open keeps it showing: wrong reopen detection would hide it.
+    let failure = Some(Feedback::Failed("no paper".into()));
+    set_print_message(&mut h, failure.clone());
+    h.state_mut().print_memo.said = Some(h.state().print_gen);
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("no paper").is_some(), "a failure on the open page stays");
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("no paper").is_none(), "reopened, the failure isn't repeated");
+    assert_eq!(h.state().printing.message, failure, "but it is still the shared message");
+    set_print_message(&mut h, Some(Feedback::NoPrinters));
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("No printers found").is_some(), "no printers still shows");
+}
+
+/// A retry that fails again with the very same text is a new result: it shows, though the window
+/// said the same words for the job before.
+#[test]
+fn a_retry_that_fails_the_same_way_shows_again() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(None);
+    // Every job is refused at once, with the same words.
+    h.state_mut().services.print_native = Some(Box::new(|_, _, _, _| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(Err("no paper".to_owned()));
+        receiver
+    }));
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(3);
+    h.state_mut().run("ui.print", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())));
+    assert!(h.query_by_label_contains("no paper").is_some(), "the first failure shows");
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("no paper").is_none(), "reopened, it isn't repeated");
+    h.state_mut().run("ui.print", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())));
+    assert!(h.query_by_label_contains("no paper").is_some(), "the same failure of a new job shows");
+}
+
+/// A result nobody has said yet isn't dropped: a failure that arrived while File showed another
+/// page (so no status bar was drawn) shows when Print opens.
+#[test]
+fn the_print_page_shows_a_result_that_was_never_said() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(None);
+    h.state_mut().ui.backstage = true;
+    h.state_mut().ui.backstage_page = "home".into();
+    h.run_steps(2);
+    // Through the app's own `print_feedback` (run each frame), which says it in a status bar that isn't drawn.
+    h.state_mut().printing.message = Some(Feedback::Failed("no paper".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().print_memo.said, None, "File's home page doesn't say it");
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("no paper").is_some());
+}
+
+/// Per window: what one window has said of the last job isn't another window's, and the shared
+/// message is the same in both. (The harness draws one viewport, which re-enters a window of its
+/// own, so the per-window state is checked where windows swap; `the_print_page_opens_without_the_last_jobs_message`
+/// and `the_print_page_shows_a_result_that_was_never_said` show what each state does on the page.)
+#[test]
+fn the_print_pages_of_two_windows_decide_separately() {
+    use crate::printing::Feedback;
+    let failure = Some(Feedback::Failed("no paper".into()));
+    let mut a = app();
+    a.printing.message = failure.clone();
+    let first = a.windows.shown();
+    a.print_gen = 1;
+    a.print_memo.said = Some(a.print_gen);
+    a.new_window();
+    assert_ne!(first, a.windows.shown());
+    assert_eq!(a.print_memo.said, None, "the second window never said it, so its page shows it");
+    assert_eq!(a.printing.message, failure, "the message is shared, and still there");
+    assert!(a.enter_window(first));
+    assert_eq!(a.print_memo.said, Some(1), "the first window said it, so its page doesn't repeat it");
+    assert_eq!(a.printing.message, failure);
+}
+
 /// Return on the Print page prints, as in Word, where ⌘P opens on Print as the default
 /// button; the document isn't typed into.
 #[test]
@@ -4430,7 +4606,8 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         h.event(key(egui::Key::C, modifiers));
         h.step();
-        assert!(h.state().session.painter.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.painter.is_none(), "{modifiers:?}: Copy Formatting doesn't arm the Format Painter brush");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Copy Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: the existing clipboard text was preserved");
         assert!(copied(&h).is_empty(), "{modifiers:?}: no text reached the system clipboard: {:?}", copied(&h));
@@ -4441,12 +4618,47 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         h.event(key(egui::Key::V, modifiers));
         h.step();
         assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: Paste Formatting made the target bold");
-        assert!(h.state().session.painter.is_none(), "{modifiers:?}: the non-sticky painter is used up");
-        assert_eq!(body_text(h.state()), "Bold plain", "{modifiers:?}: pasting formatting left the document text alone");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: copied formatting stays for the next Paste Formatting");
+        // Pasted again, as in Word: formatting again, never the clipboard's text (#5616).
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        h.state_mut().run("text.insert", json!({"text": " more"})).unwrap();
+        h.state_mut().run("select.text", json!({"text": "more"})).unwrap();
+        // It types on in the pasted bold: make it plain first.
+        h.state_mut().run("format.bold", json!({})).unwrap();
+        assert_eq!(bold(&mut h), Some(false));
+        h.event(key(egui::Key::V, modifiers));
+        h.step();
+        assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: a second Paste Formatting made the next target bold");
+        assert_eq!(body_text(h.state()), "Bold plain more", "{modifiers:?}: the second paste left the text alone");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Paste Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: Paste Formatting preserved the clipboard text");
         assert!(copied(&h).is_empty(), "{modifiers:?}: pasting formatting put no text on the system clipboard: {:?}", copied(&h));
     }
+}
+
+/// #1537/#4943: with no formatting picked up, Ctrl/Cmd+Shift+V pastes the clipboard as text
+/// only (Word for Windows): the text arrives in the destination's formatting, not the source's.
+#[test]
+fn ctrl_shift_v_without_copied_formatting_pastes_text_only() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Bold plain"})).unwrap();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copy", json!({})).unwrap();
+    a.run("select.text", json!({"text": "plain"})).unwrap();
+    // The destination has formatting of its own, so a paste that dropped it would show.
+    a.run("format.italic", json!({})).unwrap();
+    assert!(a.session.painter.is_none());
+    let mut h = harness(a);
+    h.run_steps(6);
+    let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.step();
+    assert_eq!(body_text(h.state()), "Bold Bold", "the clipboard text replaced the selection");
+    let bold = h.state_mut().run("format.state", json!({})).unwrap().get("bold").and_then(Value::as_bool);
+    assert_ne!(bold, Some(true), "the pasted text took the destination's formatting, not the copied bold");
+    let italic = h.state_mut().run("format.state", json!({})).unwrap().get("italic").and_then(Value::as_bool);
+    assert_eq!(italic, Some(true), "the pasted text kept the destination's italic");
 }
 
 /// #1669: with Shift held, Backspace still erases (#707) and Delete cuts the selection, doing
@@ -6218,6 +6430,189 @@ fn interface_size_survives_an_unusable_display_scale() {
         assert_eq!((InterfaceSize::AUTO.zoom_factor(native), InterfaceSize::AUTO.drawn_percent(native)), (1.0, 100), "{native}");
     }
     assert_eq!(InterfaceSize::AUTO.drawn_percent(f32::MAX), u16::MAX);
+}
+
+/// #4030: a system that reports a huge scale (an 11-inch 1366x768 panel on X11) must not make Auto
+/// draw an interface larger than the screen holds; the controls stay on screen.
+#[test]
+fn auto_interface_size_is_capped_to_what_fits_the_screen() {
+    use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit};
+    let limit = auto_scale_limit(Some((1366.0, 768.0)));
+    assert!((1.0..1.6).contains(&limit), "{limit}");
+    // Scales that fit are left as the system reports them.
+    for (screen, natives) in [((1920.0, 1080.0), [1.0, 1.25, 1.5]), ((1366.0, 768.0), [1.0, 1.25, 1.5])] {
+        let limit = auto_scale_limit(Some(screen));
+        for native in natives {
+            assert_eq!(f32::from(InterfaceSize::AUTO.drawn_percent_within(native, limit)), native * 100.0, "{screen:?} {native}");
+        }
+    }
+    assert!((auto_scale_limit(Some((1920.0, 1080.0))) - 2.13).abs() < 0.01);
+    for native in [2.0, 3.17] {
+        let drawn = f32::from(InterfaceSize::AUTO.drawn_percent_within(native, limit)) / 100.0;
+        assert!(1366.0 / drawn >= AUTO_MIN_POINTS.0 - 3.0 && 768.0 / drawn >= AUTO_MIN_POINTS.1 - 3.0, "{native}: {drawn}");
+    }
+    // A scale that already fits, an unknown screen and junk are left alone.
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(1.25, limit), 125);
+    assert_eq!(auto_scale_limit(None), f32::INFINITY);
+    assert_eq!(auto_scale_limit(Some((f32::NAN, 768.0))), f32::INFINITY);
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(3.0, auto_scale_limit(None)), 300);
+    // A screen below the minimum is never scaled under 100 %; a 4K screen at 2x is untouched.
+    assert_eq!(auto_scale_limit(Some((640.0, 480.0))), 1.0);
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(2.0, auto_scale_limit(Some((3840.0, 2160.0)))), 200);
+    // A chosen size is the user's and is not capped.
+    assert_eq!(InterfaceSize::from_percent(300.0).unwrap().drawn_percent_within(3.0, limit), 300);
+}
+
+/// #4030: the zoom is shared, so the smallest screen of all the open windows caps Auto, and a
+/// monitor size made with the zoom before a change still gives the same physical screen.
+#[test]
+fn auto_cap_follows_the_smallest_window_screen_and_the_zoom_of_its_points() {
+    use theme::auto_scale_limit_over;
+    let small = auto_scale_limit_over([((1366.0, 768.0), 1.0)], 1.0, 1.0);
+    let large = auto_scale_limit_over([((3840.0, 2160.0), 1.0)], 1.0, 1.0);
+    assert!(small < large);
+    assert_eq!(auto_scale_limit_over([((3840.0, 2160.0), 1.0), ((1366.0, 768.0), 1.0)], 1.0, 1.0), small);
+    // A 1366x768 panel at native scale 3: the points are 455x256 at zoom 1, 304x171 at zoom 1.5.
+    // The pixels, and so the cap, don't depend on which zoom made the points.
+    let a = auto_scale_limit_over([((1366.0 / 3.0, 768.0 / 3.0), 3.0)], 1.0, 3.0);
+    let b = auto_scale_limit_over([((1366.0 / 4.5, 768.0 / 4.5), 3.0)], 1.5, 3.0);
+    assert!((a - b).abs() < 1e-4 && (a - small).abs() < 1e-4, "{a} {b} {small}");
+    assert_eq!(auto_scale_limit_over([], 1.0, 1.0), f32::INFINITY);
+}
+
+/// #4030: with a 1x window on a large screen and a 3x window on a 1366x768 panel, the shared zoom
+/// is the one the 3x window needs, so both windows draw within their own screen.
+#[test]
+fn auto_cap_keeps_every_window_within_its_own_screen_when_scales_differ() {
+    use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit, usable_scale};
+    let windows = [((3840.0, 2160.0), 1.0_f32), ((1366.0 / 3.0, 768.0 / 3.0), 3.0)];
+    for root in [1.0_f32, 3.0] {
+        let limit = theme::auto_scale_limit_over(windows, 1.0, root);
+        let zoom = InterfaceSize::AUTO.zoom_factor_within(root, limit);
+        for ((w, h), own) in windows {
+            let pixels_per_point = usable_scale(own) * zoom;
+            let (px_w, px_h) = (w * own, h * own);
+            assert!(pixels_per_point <= auto_scale_limit(Some((px_w, px_h))) + 1e-4, "root {root}, window {own}: {pixels_per_point}");
+            assert!(
+                px_w / pixels_per_point >= AUTO_MIN_POINTS.0 - 1.0 && px_h / pixels_per_point >= AUTO_MIN_POINTS.1 - 1.0,
+                "root {root}, window {own}"
+            );
+        }
+    }
+}
+
+/// #4030: the cap shows in `ui.interfaceSize` and is never saved; Ctrl+Shift+0 returns to Auto
+/// while Ctrl+Alt+0 (AltGr+0, which types `}` on a German layout) neither resets nor swallows it.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn reset_interface_size_shortcut_and_capped_report() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    {
+        let a = h.state_mut();
+        a.native_scale = 3.0;
+        a.auto_scale_limit = 1.5;
+        assert_eq!(a.run("ui.interfaceSize", json!({})).unwrap(), json!({"auto": true, "percent": 150}));
+        assert!(!serde_json::to_string(&a.ui).unwrap().contains("150"), "the cap is not saved");
+        a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    }
+    let altgr = egui::Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: true, repeat: false, modifiers: altgr });
+    h.event(egui::Event::ModifiersChanged(altgr));
+    h.event(egui::Event::Text("}".into()));
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+0 doesn't reset");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "}", "AltGr+0 types the character");
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto");
+    // AltGr+Shift+0, where the layout leaves the key a zero, doesn't reset either.
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    let altgr_shift = egui::Modifiers { alt: true, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: altgr_shift });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+Shift+0 doesn't reset");
+    // With File › Options open, the place a too-large size pushes off screen, the chord resets.
+    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+    h.state_mut().ui.backstage_page = "options".into();
+    h.step();
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto from File › Options");
+    // A modal dialog keeps the keys: Customize Keyboard records the chord instead.
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "customizeKeyboard"})).unwrap();
+    h.step();
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "no reset while a modal dialog is open");
+}
+
+/// #4030 review: where Shift+0 types `=` (German, Swiss and Nordic layouts) egui-winit reports `=`
+/// as the key and the zero only as the physical key. That press is Ctrl+Shift+=, Superscript, as
+/// on main; it doesn't reset the interface size.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
+    let mut a = app();
+    a.run("document.setText", json!({"text": "x"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "Ctrl+Shift+= doesn't reset");
+    let pos = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+    let props = h.state().session.doc.para_at(&pos).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
+    assert_eq!(props.vert_align, Some(wordcraft_doc::props::VertAlign::Superscript), "Ctrl+Shift+= runs Superscript");
+}
+
+/// #4030 review: a Ctrl+Shift+0 the user binds in Customize Keyboard runs their command instead
+/// of resetting the interface size.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_bound_ctrl_shift_0_beats_the_interface_size_reset() {
+    let mut a = app();
+    a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Shift+0": "view.focus"}}));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "the size stays");
+    assert!(h.state().session.view.focus_mode, "the user's binding runs");
 }
 
 /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.

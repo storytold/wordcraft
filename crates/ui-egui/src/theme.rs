@@ -125,9 +125,49 @@ impl InterfaceSize {
 
     /// The size the interface is drawn at on that display, in percent (screen pixels per point × 100).
     pub fn drawn_percent(self, native: f32) -> u16 {
-        let drawn = usable_scale(native) * self.zoom_factor(native) * 100.0;
+        self.drawn_percent_within(native, f32::INFINITY)
+    }
+
+    /// [`InterfaceSize::zoom_factor`] on a screen that [`auto_scale_limit`] caps at `limit` pixels
+    /// per point: Auto never draws larger than that.
+    pub fn zoom_factor_within(self, native: f32, limit: f32) -> f32 {
+        match self.0 {
+            None => (limit / usable_scale(native)).min(1.0),
+            Some(_) => self.zoom_factor(native),
+        }
+    }
+
+    /// [`InterfaceSize::drawn_percent`] within [`auto_scale_limit`]'s cap.
+    pub fn drawn_percent_within(self, native: f32, limit: f32) -> u16 {
+        let drawn = usable_scale(native) * self.zoom_factor_within(native, limit) * 100.0;
         drawn.round().clamp(0.0, f32::from(u16::MAX)) as u16
     }
+}
+
+/// The smallest window, in points, the interface is laid out for under Auto.
+pub const AUTO_MIN_POINTS: (f32, f32) = (900.0, 460.0);
+
+/// The largest pixels-per-point Auto may draw at on a screen of `screen_px` pixels (#4030): the
+/// one that still leaves [`AUTO_MIN_POINTS`], so the ribbon and the window's controls stay on
+/// screen. Never below 1.0, and unlimited when the screen size is unknown.
+pub fn auto_scale_limit(screen_px: Option<(f32, f32)>) -> f32 {
+    screen_px
+        .filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0)
+        .map_or(f32::INFINITY, |(w, h)| (w / AUTO_MIN_POINTS.0).min(h / AUTO_MIN_POINTS.1).max(1.0))
+}
+
+/// [`auto_scale_limit`] for the several windows that share one zoom, expressed as pixels per point
+/// at the scale `native` (the one [`InterfaceSize::zoom_factor_within`] divides by). Each window
+/// is a monitor size in points and its own native scale; `zoom` is the zoom factor those points
+/// were made with, so the size in pixels is the three multiplied. Every window must stay within
+/// its own screen, so the allowed zoom is worked out per window and the smallest one is shared.
+/// Unlimited when no screen is known.
+pub fn auto_scale_limit_over(monitors: impl IntoIterator<Item = ((f32, f32), f32)>, zoom: f32, native: f32) -> f32 {
+    let shared_zoom = monitors
+        .into_iter()
+        .map(|((w, h), own)| auto_scale_limit(Some((w * zoom * own, h * zoom * own))) / usable_scale(own))
+        .fold(f32::INFINITY, f32::min);
+    shared_zoom * usable_scale(native)
 }
 
 /// The display's scale, or 1.0 when egui doesn't know it (or reports nonsense).
@@ -655,7 +695,8 @@ fn system_arabic_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
 /// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once:
 /// `None` when the embedded faces already cover the interface text
 /// ([`cjk_font_text`](crate::i18n::Lang::cjk_font_text)). The font is picked for the catalogs'
-/// missing characters, or for the language names when only those are missing.
+/// missing characters, or for the language names when only those are missing; see
+/// [`system_cjk_needed`].
 #[cfg(not(target_arch = "wasm32"))]
 fn system_cjk_font(hans: bool, korean: bool) -> Option<&'static wordcraft_fonts::SystemUiFont> {
     static ZH: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
@@ -671,17 +712,39 @@ fn system_cjk_font(hans: bool, korean: bool) -> Option<&'static wordcraft_fonts:
     .get_or_init(|| {
         let embedded = wordcraft_fonts::ui_cjk_fonts_for(hans, korean);
         let (catalogs, names) = crate::i18n::Lang::cjk_font_text_for(hans, korean);
-        let mut needed = wordcraft_fonts::ui_uncovered_cjk(&catalogs, &embedded);
-        if needed.is_empty() {
-            needed = wordcraft_fonts::ui_uncovered_cjk(&[&names], &embedded);
-            if needed.is_empty() {
-                return None;
-            }
-        }
+        let needed = system_cjk_needed(&catalogs, &names, &embedded)?;
         log::debug!("interface: {} CJK characters lack an embedded glyph", needed.len());
-        wordcraft_fonts::system_cjk_ui_font_for(hans, korean, &needed)
+        let found = wordcraft_fonts::system_cjk_ui_font_for(hans, korean, &needed);
+        if found.is_none() && needed.is_empty() && !hans && !korean {
+            // No Japanese or Chinese font installed: a Korean one (NanumGothic alone on Linux)
+            // still draws Korean document text.
+            return wordcraft_fonts::system_cjk_ui_font_for(false, true, &needed);
+        }
+        found
     })
     .as_ref()
+}
+
+/// The CJK characters an installed interface font is picked for: those of the catalogs, or of
+/// the language names, that the embedded faces lack. `None` when the embedded faces draw them all.
+///
+/// The interface asks for this font only when CJK is on screen: the interface language, or CJK
+/// document text drawn as interface text (an input method's composition, a file name in the
+/// caption). A build with neither craft-i18n's CJK catalogs nor craft-fonts' CJK faces has no CJK
+/// text of its own to measure, and that text drew as boxes. It gets the font picked for the
+/// language's own characters (an empty list: [`wordcraft_fonts::system_cjk_ui_font_for`] probes
+/// one, `の` for a Japanese or other interface), or failing that a Korean font.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn system_cjk_needed(catalogs: &[&str], names: &str, embedded: &[&wordcraft_fonts::CraftFont]) -> Option<Vec<char>> {
+    let needed = wordcraft_fonts::ui_uncovered_cjk(catalogs, embedded);
+    if !needed.is_empty() {
+        return Some(needed);
+    }
+    let needed = wordcraft_fonts::ui_uncovered_cjk(&[names], embedded);
+    if !needed.is_empty() {
+        return Some(needed);
+    }
+    embedded.is_empty().then(Vec::new)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1118,6 +1181,29 @@ mod tests {
         super::add_fallback_faces(&mut defs, &got);
         let semi = &defs.families[&egui::FontFamily::Name("semibold".into())];
         assert!(semi.iter().any(|n| n.starts_with("fallback ")), "the caption is painted with semibold");
+    }
+
+    /// A build without craft-i18n's CJK catalogs and craft-fonts' CJK faces has no CJK interface
+    /// text of its own, so the CJK UI font that CJK document text asks for (a composition, a file
+    /// name, a comment) was never loaded, and that text drew as boxes. It is now picked for the
+    /// language's own characters.
+    #[test]
+    fn cjk_text_gets_an_installed_cjk_font_in_a_build_without_one() {
+        assert_eq!(super::system_cjk_needed(&[], "English", &[]), Some(Vec::new()), "picked for the language's own characters");
+        assert_eq!(super::system_cjk_needed(&["ファイル"], "English", &[]), Some(vec!['ァ', 'イ', 'フ', 'ル']));
+        assert_eq!(super::system_cjk_needed(&[], "English 日本語", &[]), Some(vec!['日', '本', '語']));
+        let embedded = wordcraft_fonts::ui_cjk_fonts_for(false, false);
+        if !embedded.is_empty() {
+            assert_eq!(super::system_cjk_needed(&[], "English", &embedded), None, "the embedded faces draw CJK");
+        } else {
+            // macOS and Windows always have one, and CI runs these tests on both (the Print job).
+            let installed = wordcraft_fonts::system_cjk_ui_font_for(false, false, &[]).is_some();
+            assert!(installed || cfg!(not(any(target_os = "macos", windows))), "macOS and Windows have a CJK font");
+            if installed {
+                let defs = super::font_definitions_language(false, false, false, true);
+                assert!(defs.font_data.keys().any(|n| n.starts_with("system ")), "the installed CJK font follows the interface fonts");
+            }
+        }
     }
 
     /// #656: dialog primary buttons, the Discord pill, the table eraser and the Navigation search

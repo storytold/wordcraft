@@ -703,10 +703,41 @@ fn draw_line(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
             stroke_segment(ctx, (x0, y0, x1, y1), (-nx, -ny));
         }
         _ => {
+            let (st, off) = match snap_rule(fr.view, (x0, y0, x1, y1), w) {
+                Some((w_px, off)) => (kurbo::Stroke { width: w_px / fr.view.as_coeffs()[0], ..st }, off),
+                None => (st, (0.0, 0.0)),
+            };
             ctx.set_stroke(st);
-            stroke_segment(ctx, (x0, y0, x1, y1), (0.0, 0.0));
+            stroke_segment(ctx, (x0, y0, x1, y1), off);
         }
     }
+}
+
+/// Snap a horizontal or vertical rule to the device pixel grid so every border of one nominal
+/// width covers the same number of pixels at any zoom (#5967). Returns the stroke width in device
+/// pixels and the offset, in points, that moves the line onto the snapped spot; `None` for slanted
+/// lines or a view that rotates or skews.
+fn snap_rule(view: Affine, (x0, y0, x1, y1): (f64, f64, f64, f64), width: f64) -> Option<(f64, (f64, f64))> {
+    if !is_upright(view) {
+        return None;
+    }
+    let [k, _, _, _, tx, ty] = view.as_coeffs();
+    if y0 == y1 && x0 != x1 {
+        let (w_px, c) = snap_hairline(y0 * k + ty, width * k);
+        Some((w_px, (0.0, (c - ty) / k - y0)))
+    } else if x0 == x1 && y0 != y1 {
+        let (w_px, c) = snap_hairline(x0 * k + tx, width * k);
+        Some((w_px, ((c - tx) / k - x0, 0.0)))
+    } else {
+        None
+    }
+}
+
+/// A line `width_px` wide centred at device coordinate `centre`, moved so both edges fall on whole
+/// pixels. Returns the width, made a whole number of pixels (at least one), and the new centre.
+fn snap_hairline(centre: f64, width_px: f64) -> (f64, f64) {
+    let w = width_px.round().max(1.0);
+    (w, (centre - w / 2.0).round() + w / 2.0)
 }
 
 /// Stroke the line from (`x0`, `y0`) to (`x1`, `y1`), moved by (`ox`, `oy`).
@@ -856,7 +887,7 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         return;
     };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
-    let [cl, ct, vis_w, vis_h] = craft_metafile::crop_window(*crop);
+    let [cl, ct, vis_w, vis_h] = wordcraft_layout::crop_window(*crop);
     let sx = r.width() / (pw * vis_w);
     let sy = r.height() / (ph * vis_h);
     ctx.set_transform(view);
