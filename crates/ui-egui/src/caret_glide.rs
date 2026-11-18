@@ -47,7 +47,7 @@ const OFFSCREEN_SLACK: f32 = 48.0;
 pub type Bar = [Pos2; 2];
 
 /// What the page knows about the caret in one pass.
-pub struct LookRequest<'a> {
+pub struct LookRequest {
     /// The scrolled content's top-left on screen.
     pub content_origin: Pos2,
     /// Where the caret belongs on screen.
@@ -370,7 +370,7 @@ fn cause_key(app: &WordApp) -> u64 {
 
 /// Steps `glide` for this pass: where and how strongly to draw the caret. With the caret
 /// animation off, or any motion mode but the full one, the caret jumps and blinks on and off.
-pub fn look(glide: &mut CaretGlide, app: &WordApp, request: LookRequest<'_>) -> Look {
+pub fn look(glide: &mut CaretGlide, app: &WordApp, request: LookRequest) -> Look {
     let LookRequest { content_origin, target, shown, since_ms, on, now, frame_nr, viewport, keys, pointer, motion, view_changed } = request;
     if !app.ui.caret_animation || !matches!(motion, MotionMode::Full) {
         glide.reset();
