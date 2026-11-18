@@ -83,7 +83,6 @@ impl WordApp {
 
     /// Keeps the app's preferences in `settings` and applies what it holds. Changes are saved
     /// through the store by [`WordApp::save_prefs_step`].
-    // PLAN(app-hub): app.H1 fields `settings: Option<SharedSettings<Prefs>>` and `settings_notices`.
     #[must_use]
     pub fn with_settings(mut self, settings: SharedSettings<Prefs>) -> Self {
         let loaded = settings.lock().get().clone();
@@ -97,10 +96,10 @@ impl WordApp {
     pub fn settings_loaded(&mut self, ctx: &egui::Context, report: &LoadReport) {
         let mut load = SettingsLoad::new().reset(report.section_errors.iter().map(|e| e.section.clone()).collect::<Vec<_>>());
         if let Some(path) = &report.broken_moved_to {
-            load = load.moved_aside(Some(path.display().to_string()));
+            load = load.moved_aside(path.display().to_string());
         }
         if let Some(why) = &report.read_only {
-            load = load.read_only(Some(why.to_string()));
+            load = load.read_only(why.to_string());
         }
         self.settings_notices.loaded(ctx, &load);
     }
@@ -147,9 +146,8 @@ impl WordApp {
 
     /// The screen mode the document window is in: the one mapping of the view's Full Screen,
     /// Focus and Full Screen View flags to the shell's [`ScreenMode`].
-    // PLAN(chrome-w4): `chrome::Screen::of` returns the shell's `ScreenMode` (Focus, Immersive, FullScreenWithMenuBar, Standard).
     pub(crate) fn screen_mode(&self) -> ScreenMode {
-        crate::chrome::Screen::of(&self.session.view)
+        crate::chrome::Screen::mode(&self.session.view)
     }
 
     /// Follows the window into `mode` (the shell sends the window actions itself): sets only the

@@ -117,6 +117,11 @@ impl Windows {
         self.shown.get()
     }
 
+    /// The key of the window that has focus (the one focused last), if any.
+    pub(crate) fn active(&self) -> Option<u64> {
+        self.list.active().map(WindowId::get)
+    }
+
     /// The key of the window drawn now: `main` for the root entry, else one of its own, so two
     /// windows never share a placement or shell key.
     pub(crate) fn window_key(&self) -> WindowKey {

@@ -78,7 +78,7 @@ impl WordApp {
             self.status(e);
         }
         if let (Ok(_), Some(name)) = (&r, applied) {
-            push_recent_font(&mut self.ui.recent_fonts, &name);
+            push_recent_font(&mut self.ui.font_picker.recent, &name);
         }
         if matches!(id, "insert.picture" | "insert.icon") {
             self.select_inserted_picture(&r);
@@ -670,8 +670,7 @@ impl WordApp {
                         None => return Some(Err(format!("unknown animations setting {v:?}; use system, on or off"))),
                     }
                 }
-                // PLAN(shell-w13): `animations_on()` and `system_animations` read the runtime's motion.
-                json!({"animations": self.ui.animations.code(), "enabled": self.animations_on(), "system": self.system_animations})
+                json!({"animations": self.ui.animations.code(), "enabled": self.animations_on(), "system": self.system_animations()})
             }
             "ui.statusCount" => {
                 // `words` (the default), `characters` or `charactersNoSpaces`: what the status
@@ -710,8 +709,8 @@ impl WordApp {
                 // `auto` (follow the system) or a language code; anything else is an error.
                 if let Some(v) = s("value") {
                     match i18n::normalize_pref(v) {
-                        // PLAN(shell-w13): assumed `apply_language(&mut self, code: &str)`.
-                        Some(code) => self.apply_language(code),
+                        // `frame_input` applies the preference at the next frame.
+                        Some(code) => self.ui.language = code.to_string(),
                         None => {
                             let codes: Vec<&str> = i18n::Lang::all().map(i18n::Lang::code).collect();
                             return Some(Err(format!("unknown language `{v}`; use auto or one of {}", codes.join(", "))));
@@ -790,9 +789,8 @@ impl WordApp {
             }
             // Native printing submits the selected queue on a worker; the browser owns its dialog.
             "ui.printSettings" => {
-                // PLAN: assumed `services.print` is the `Spool` (sh.A14).
-                let discover = self.services.print.discoverer();
-                return Some(printing::settings(&mut self.printing, p, Some(&discover)));
+                let discover = self.services.print.as_ref().map(craft::print::spool::Spool::discoverer);
+                return Some(printing::settings(&mut self.printing, p, discover.as_ref()));
             }
             "ui.printPage" => return Some(printing::print_page(self, p)),
             "ui.print" | "ui.printSubmit" => return Some(self.print_to_system(p)),
@@ -852,8 +850,7 @@ impl WordApp {
                 if self.ui.recent.len() == before {
                     return Some(Err(format!("`{path}` is not on the recent list")));
                 }
-                // PLAN(shell-w13): the reply comes from the store's immediate save (sh.A13).
-                let saved = self.save_prefs_now();
+                let saved = self.flush_prefs();
                 if !matches!(saved, Some(Err(_))) {
                     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
                     self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
@@ -866,8 +863,7 @@ impl WordApp {
                 // Clear the whole list, as Word's registry clear does for recent documents (#2716).
                 let removed = self.ui.recent.len();
                 self.ui.recent.clear();
-                // PLAN(shell-w13): the reply comes from the store's immediate save (sh.A13).
-                let saved = self.save_prefs_now();
+                let saved = self.flush_prefs();
                 if !matches!(saved, Some(Err(_))) {
                     self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
                 }
@@ -978,8 +974,8 @@ impl WordApp {
             _ => (PickRequest::open("document"), file_dialogs::AfterPick::OpenDocument { document }),
         };
         let request = request.fallback(true);
-        // PLAN: assumed `in_automation_folder(&self, &Path) -> bool` (H-12).
-        let request = match folder.map(std::path::PathBuf::from).filter(|dir| self.in_automation_folder(dir)) {
+        let inside_roots = |dir: &std::path::PathBuf| wordcraft_engine::file_access::check_read(&dir.to_string_lossy()).is_ok();
+        let request = match folder.map(std::path::PathBuf::from).filter(inside_roots) {
             Some(dir) => request.directory(dir),
             None => request,
         };

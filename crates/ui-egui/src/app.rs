@@ -7,7 +7,7 @@ use super::{
 };
 use craft::platform::clock::monotonic_ms;
 use craft::ui::runtime::commands::CommandInput;
-use craft::ui::runtime::env::{AltCodePages, RootEnv, WheelSpeed};
+use craft::ui::runtime::env::{AltCodePages, ResolvedRoot, RootEnv, WheelSpeed};
 use craft::ui::runtime::frame::{FrameInput, FrameOutput};
 use craft::ui::runtime::windows::WindowHost;
 
@@ -84,7 +84,10 @@ impl WordApp {
             services,
             host: std::sync::Arc::new(craft::host::Host::builder(super::APP).build()),
             settings: None,
-            settings_notices: Vec::new(),
+            settings_notices: Default::default(),
+            command_catalog: None,
+            key_overrides: Default::default(),
+            fonts_frames: 0,
             clipboard_published: false,
             printing: Default::default(),
             print_feedback_seen: None,
@@ -192,6 +195,31 @@ impl WordApp {
         env
     }
 
+    /// What this frame's mode and motion choices resolve to: the system's answer replaces `System`.
+    /// Before the first frame there is no context to ask, and the system reports nothing.
+    pub(crate) fn resolved_root(&self) -> ResolvedRoot {
+        let root = self.root_env();
+        match &self.ctx {
+            Some(ctx) => root.resolved(ctx),
+            None => root.resolved_for(craft::theme::SystemAppearance::default()),
+        }
+    }
+
+    /// Whether the interface draws in dark mode, `System` resolved.
+    pub(crate) fn ui_is_dark(&self) -> bool {
+        self.resolved_root().mode == craft::theme::Mode::Dark
+    }
+
+    /// Whether interface animations run now: the choice and the system's reduced-motion setting resolved.
+    pub(crate) fn animations_on(&self) -> bool {
+        self.resolved_root().motion != craft::behavior::MotionMode::Off
+    }
+
+    /// Whether the system allows animations (it does not ask for reduced motion, or reports nothing).
+    pub(crate) fn system_animations(&self) -> bool {
+        self.ctx.as_ref().is_none_or(|ctx| !craft::ui::runtime::env::system_appearance(ctx).appearance.reduced_motion.unwrap_or(false))
+    }
+
     /// Before each frame's passes, from `embed::before_input`: runs the commands the runtime
     /// collected, binds the interface language, and returns the frame's input (root values,
     /// command states, host). It runs before `logic`, so what needs the frame's own flags
@@ -212,6 +240,7 @@ impl WordApp {
                 self.native_scale,
             );
         }
+        self.fonts_frames = self.fonts_frames.saturating_add(1).min(2);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::apply_language(lang);
         if self.host.lang() != lang.lang {

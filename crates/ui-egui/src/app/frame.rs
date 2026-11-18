@@ -100,16 +100,17 @@ impl WordApp {
             })
             .top(Slot::new("languagePack").visible(language_packs::bar_offer(self)), language_packs::pack_bar)
             .status(true, chrome::status_bar::show)
-            .body(|ui, cx, app: &mut WordApp| {
+            .body(|ui, _cx, app: &mut WordApp| {
                 if !app.has_document() || stale(app) {
                     return;
                 }
-                panes::show(ui, cx, app);
-                if app.session.md_source.is_some() {
-                    crate::md_source::show(app, ui);
-                } else {
-                    canvas::show(app, ui);
-                }
+                panes::show(app, ui, |ui, _cx, app| {
+                    if app.session.md_source.is_some() {
+                        crate::md_source::show(app, ui);
+                    } else {
+                        canvas::show(app, ui);
+                    }
+                });
                 if app.session.read_aloud.open && !stale(app) {
                     read_aloud::show(app, ui);
                 }

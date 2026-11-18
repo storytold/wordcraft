@@ -34,7 +34,7 @@ impl WordApp {
             while let Some(req) = channel.next_request() {
                 let reply = control::handle(self, ctx, &req);
                 let document = self.capture_document();
-                channel.settle(req, reply, document, f64::from(ctx.style().animation_time) * 1000.0);
+                channel.settle(req, reply, document, f64::from(ctx.global_style().animation_time) * 1000.0);
             }
         }
         // The library does not wake the window for a queued capture or an access-tree wait; both

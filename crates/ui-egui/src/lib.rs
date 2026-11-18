@@ -376,8 +376,17 @@ pub struct WordApp {
     pub(crate) host: std::sync::Arc<craft::host::Host>,
     /// The saved preferences' store, shared with the host.
     pub(crate) settings: Option<craft::settings::SharedSettings<prefs::Prefs>>,
-    /// The values of `config.toml` that did not fit, reported once.
-    pub(crate) settings_notices: Vec<craft::settings::SectionError>,
+    /// What the settings store reported at load and at each save, for the status line and the notices.
+    pub(crate) settings_notices: craft::ui::notices::SettingsNoticeState,
+    /// The app's commands as the keymap knows them, and the registry they were built from
+    /// ([`WordApp::catalog`]).
+    pub(crate) command_catalog: Option<(std::sync::Arc<wordcraft_engine::Registry>, craft::ui::runtime::commands::AppCatalog)>,
+    /// The session's key overrides, kept as one `Arc` while they do not change: the runtime
+    /// rebuilds its keymap when the `Arc` it is handed changes ([`WordApp::overrides`]).
+    pub(crate) key_overrides: std::sync::Arc<craft::keymap::Overrides>,
+    /// Frames drawn so far, counted to 2: the control channel's queued requests wait until the
+    /// fonts are warm.
+    pub(crate) fonts_frames: u8,
     /// Only a successfully published copy may reuse this window's private fragment.
     pub clipboard_published: bool,
     pub printing: printing::State,

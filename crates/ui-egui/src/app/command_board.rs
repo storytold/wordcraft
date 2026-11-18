@@ -59,11 +59,13 @@ impl WordApp {
     /// chords, then the interface commands. The interface commands come last because a tie in the
     /// application scope goes to the first command in catalog order, so a chord the user bound to
     /// an engine command beats Ctrl+F1 (#1678).
-    pub(crate) fn catalog(&mut self) -> AppCatalog {
-        // PLAN: assumed `Registry::generation(&self) -> u64` and the field `command_catalog: AppCatalog` (app-hub).
-        let generation = self.session.registry.generation();
-        if self.command_catalog.generation() != generation {
-            let registry = self.session.registry.clone();
+    ///
+    /// The catalog is rebuilt when the session holds another registry than the one it was built
+    /// from. `None` only when the registry's rows cannot form a catalog (logged).
+    pub(crate) fn catalog(&mut self) -> Option<AppCatalog> {
+        let registry = self.session.registry.clone();
+        if !self.command_catalog.as_ref().is_some_and(|(built_from, _)| Arc::ptr_eq(built_from, &registry)) {
+            let generation = self.command_catalog.as_ref().map_or(0, |(_, catalog)| catalog.generation().wrapping_add(1));
             let mut seen = HashSet::new();
             let mut defs = Vec::with_capacity(registry.all().len() + 3);
             for spec in registry.all().iter().filter(|spec| seen.insert(spec.id)) {
@@ -91,16 +93,23 @@ impl WordApp {
                 defs.push(CommandDef::new(CommandRef::new(*id), *label, Scope::app()));
             }
             match AppCatalog::new(defs, generation) {
-                Ok(catalog) => self.command_catalog = catalog,
-                Err(error) => log::warn!("command catalog: {error:?}"),
+                Ok(catalog) => self.command_catalog = Some((registry, catalog)),
+                Err(error) => {
+                    log::warn!("command catalog: {error:?}");
+                    self.command_catalog = None;
+                }
             }
         }
-        self.command_catalog.clone()
+        self.command_catalog.as_ref().map(|(_, catalog)| catalog.clone())
     }
 
-    /// The user's binding changes, as the keymap applies them.
-    pub(crate) fn overrides(&self) -> Arc<Overrides> {
-        // PLAN: assumed the field `key_overrides: Arc<Overrides>` (app-hub), filled from the store.
+    /// The user's binding changes, as the keymap applies them: the session's own. The runtime
+    /// rebuilds its keymap when this `Arc` changes, so the same one is handed out until the
+    /// session's overrides differ from it.
+    pub(crate) fn overrides(&mut self) -> Arc<Overrides> {
+        if *self.key_overrides != *self.session.keymap() {
+            self.key_overrides = Arc::new(self.session.keymap().clone());
+        }
         self.key_overrides.clone()
     }
 
@@ -108,16 +117,15 @@ impl WordApp {
     /// is enabled, whether it is checked and the reason a surface shows.
     pub(crate) fn command_input(&mut self) -> CommandInput {
         let registry = self.session.registry.clone();
-        let mut input = CommandInput::new().catalog(self.catalog()).overrides(self.overrides());
+        let mut input = CommandInput::new().overrides(self.overrides());
+        if let Some(catalog) = self.catalog() {
+            input = input.catalog(catalog);
+        }
         for spec in registry.all() {
             let (enabled, reason) = gate(self, spec.id);
+            // A toggle's checked state is bound at its ribbon button, not here.
             let mut state = CommandState::new().enabled(enabled);
-            // PLAN: assumed `Session::command_checked(&self, id) -> Option<bool>`: the toggle's state from the view.
-            if let Some(on) = self.session.command_checked(spec.id) {
-                state = state.checked(on);
-            }
-            // PLAN: assumed `widgets::hint::command_hint(group, description, reason) -> Option<String>`.
-            if let Some(hint) = crate::widgets::hint::command_hint(spec.location, spec.label, reason) {
+            if let Some(hint) = crate::widgets::command_hint(spec.location, spec.label, reason) {
                 state = state.hint(hint);
             }
             input = input.state(CommandRef::new(spec.id), state);
@@ -136,16 +144,14 @@ impl WordApp {
     /// except the interface commands, which have their own target.
     pub(crate) fn run_fired(&mut self, ctx: &egui::Context, output: &FrameOutput) {
         for fired in &output.fired {
-            // PLAN: assumed `windows.list.active()` and `enter_window(key)` select the window the key was pressed in.
-            if let Some(window) = self.windows.list.active() {
+            if let Some(window) = self.windows.active() {
                 self.enter_window(window);
             }
             let id = fired.command.id.as_str();
             let params = if fired.command.params.is_null() { json!({}) } else { fired.command.params.clone() };
             let from_key = fired.source == FireSource::Key;
 
-            let (id, params) = if id == "edit.pasteFormat" && from_key { self.paste_format_params(ctx, params) } else { (id, params) };
-            let Some(params) = params_or_skip(id, params) else { continue };
+            let (id, params) = if id == "edit.pasteFormat" && from_key { self.paste_format_command(ctx, params) } else { (id, params) };
             let result = if fired.source == FireSource::Automation { self.execute(id, params) } else { self.run(id, params) };
             if let Err(error) = result {
                 log::debug!("command {id}: {error}");
@@ -159,29 +165,10 @@ impl WordApp {
     /// Paste Formatting from its key. Mod+Shift+V pastes the formatting Mod+Shift+C (or the Format
     /// Painter) picked up; with none picked up it pastes the clipboard as text only, as Word for
     /// Windows does (#1537, #4943). Another key bound to Paste Formatting only pastes formatting.
-    /// The result is the command to run, or a null `params` when the key press only waits for the
-    /// browser's paste event.
-    fn paste_format_params(&mut self, ctx: &egui::Context, params: Value) -> (&'static str, Value) {
+    /// The framework fires one command per chord, so nothing waits for a browser paste event.
+    fn paste_format_command(&self, ctx: &egui::Context, params: Value) -> (&'static str, Value) {
         let formatting = self.session.painter.is_some() || self.session.copied_format.is_some();
         let chord = ctx.input(|i| i.modifiers.command && i.modifiers.shift && !i.modifiers.alt);
-        // A browser sends a paste event after that chord (the desktop doesn't): after pasting
-        // formatting it is ignored; with none, it pastes the text there, once.
-        let paste_follows = chord && self.canvas.paste_event_follows_chord;
-        self.canvas.ignore_next_paste = formatting && paste_follows;
-        // The canvas's V release (Shift may go up first, so it reads as plain Mod+V) must not paste
-        // again through the picture hook.
-        if chord && self.canvas.focused(ctx) {
-            self.canvas.pasted = true;
-        }
-        self.canvas.paste_wait_since = None;
-        if !formatting && paste_follows {
-            return ("edit.pasteFormat", Value::Null);
-        }
         if !formatting && chord { ("edit.pasteText", json!({})) } else { ("edit.pasteFormat", params) }
     }
-}
-
-/// The parameters to run with, or `None` for the paste-format key that only waits for the paste event.
-fn params_or_skip(id: &str, params: Value) -> Option<Value> {
-    (!(id == "edit.pasteFormat" && params.is_null())).then_some(params)
 }
