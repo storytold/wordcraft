@@ -212,7 +212,6 @@ mod tests {
 
     use super::*;
     use crate::{Services, WordApp};
-    // PLAN: `craft-ui-test-kit` dev-dependency comes from app-hub (H-1).
     use craft_ui_test_kit::windows::Windows as Kit;
 
     #[test]
