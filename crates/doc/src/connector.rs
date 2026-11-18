@@ -213,6 +213,45 @@ pub struct ShapeExtra {
     /// main colour (the shape's `stroke`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_fill: Option<crate::fill::Fill>,
+    /// An ODF custom shape's geometry as read (its `draw:enhanced-geometry`, equations and
+    /// handles), whose path the shape's freeform was worked out from: saved back as it was, so
+    /// LibreOffice draws its own shape (or a preset WordCraft draws as a rectangle: kept with
+    /// it). Dropped when the shape is made another kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub odf_geometry: Option<std::sync::Arc<String>>,
+    /// A horizontal rule (VML `o:hr`: a web page's `<hr>` pasted into Word): it takes its whole
+    /// line, and is drawn across [`HorizontalRule::pct`] of it or at the shape's own width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hr: Option<HorizontalRule>,
+}
+
+/// How a horizontal rule sits on its line (VML `o:hrpct`, `o:hralign`), as Word draws one:
+/// across `pct` percent of the line's width (the paragraph's, inside its indents), or at the
+/// shape's own width when `pct` is 0; `align` places it when it is narrower than the line.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HorizontalRule {
+    pub pct: f32,
+    pub align: crate::props::Align,
+    /// Word's standard look (`o:hrstd`), kept for saving.
+    pub standard: bool,
+}
+
+impl HorizontalRule {
+    /// The rule's width on a line `line` wide, for a shape `own` wide.
+    pub fn width(&self, line: f32, own: f32) -> f32 {
+        let line = line.max(0.0);
+        if self.pct.is_finite() && self.pct > 0.0 { line * (self.pct.min(100.0) / 100.0) } else { own.clamp(0.0, line) }
+    }
+
+    /// Where a rule `w` wide starts on a line from `x`, `line` wide.
+    pub fn left(&self, x: f32, line: f32, w: f32) -> f32 {
+        match self.align {
+            crate::props::Align::Center => x + (line - w) / 2.0,
+            crate::props::Align::Right => x + line - w,
+            _ => x,
+        }
+    }
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -231,8 +270,11 @@ impl ShapeExtra {
 /// The largest rounded-rectangle corner: half the shorter side, which makes its ends round.
 pub const MAX_CORNER: u32 = 50_000;
 
-/// A rounded rectangle's corner radius without its own: 16% of the shorter side.
-pub const DEFAULT_CORNER: f32 = 0.16;
+/// A rounded rectangle's corner radius without its own: a sixth of the shorter side, the preset's
+/// default `adj` of 16667 (ECMA-376 §20.1.10.56). Measured in Word for Windows: a 300 × 100 pt
+/// rounded rectangle without `adj` is drawn with corners of 16.67 pt, a 300 × 40 pt one of 6.67
+/// pt and a 60 × 150 pt one of 10 pt.
+pub const DEFAULT_CORNER: f32 = 16_667.0 / 100_000.0;
 
 /// The corner radius, in points, of a `w` × `h` rounded rectangle with `corner` (see
 /// [`ShapeExtra::corner`]).
@@ -351,7 +393,6 @@ pub fn end_direction(kind: ShapeKind, w: f32, h: f32, at_end: bool) -> (f32, f32
                 (0.0, 1.0)
             }
         }
-        ShapeKind::Line => (w, -h),
         _ => (w, h),
     };
     let len = (dx * dx + dy * dy).sqrt();
@@ -483,7 +524,10 @@ mod tests {
     #[test]
     fn corner_radius_follows_the_shorter_side() {
         let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
-        assert!(near(corner_radius(None, 200.0, 100.0), 16.0));
+        assert!(near(corner_radius(None, 200.0, 100.0), 16.667));
+        assert!(near(corner_radius(None, 300.0, 40.0), 6.6668));
+        assert!(near(corner_radius(None, 60.0, 150.0), 10.0002));
+        assert!(near(corner_radius(None, 200.0, 100.0), corner_radius(Some(16_667), 200.0, 100.0)), "the preset's default");
         assert!(near(corner_radius(Some(0), 200.0, 100.0), 0.0));
         assert!(near(corner_radius(Some(3_565), 100.0, 200.0), 3.565));
         assert!(near(corner_radius(Some(MAX_CORNER), 200.0, 100.0), 50.0));

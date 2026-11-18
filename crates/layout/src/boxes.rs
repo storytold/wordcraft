@@ -7,13 +7,20 @@ use super::placed::Placed;
 use super::table_flow::below;
 use super::{
     Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, StoryRef, TableFloat, TextDirection,
-    Wrap, WrapText, para, table,
+    Wrap, WrapText, display, para, table,
 };
 
 /// Cell identity is independent of optional table-style formatting.
 pub(crate) enum BoxContext<'a> {
     Other,
-    Cell(Option<&'a para::CellText>),
+    /// Outer cell edges relative to its text origin (not including wrap distances).
+    Cell {
+        text: Option<&'a para::CellText>,
+        left: f32,
+        right: f32,
+        /// False for a turned text frame: its x axis becomes page y after rotation.
+        clamp: bool,
+    },
 }
 
 pub(crate) struct BoxInput<'a> {
@@ -32,7 +39,7 @@ impl<'a> BoxInput<'a> {
     }
 
     pub(crate) fn cell(story: StoryRef, blocks: &'a Blocks, prefix: &'a [u32], width: f32, cell: Option<&'a para::CellText>, depth: usize) -> Self {
-        Self { story, blocks, prefix, width, context: BoxContext::Cell(cell), depth, frame: None }
+        Self { story, blocks, prefix, width, context: BoxContext::Cell { text: cell, left: 0.0, right: width, clamp: false }, depth, frame: None }
     }
 }
 
@@ -152,7 +159,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     let layout = table::layout_table(ctx, story, t, path, width, depth + 1);
     let (tx, ty) = match t.props.float {
         Some(float) => {
-            let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
+            let legacy = (ctx.doc.settings.compat_mode < 15).then(|| table::first_cell_left_margin(ctx, t));
             let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
             exclusions.push((area, false, None, WrapText::BothSides, true));
             float_tables.push(area);
@@ -191,9 +198,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
     let empty_cell = para::CellText::default();
-    let (table, in_cell) = match context {
-        BoxContext::Other => (None, false),
-        BoxContext::Cell(table) => (Some(table.unwrap_or(&empty_cell)), true),
+    let (in_cell, table, cell_edges) = match context {
+        BoxContext::Other => (false, None, None),
+        BoxContext::Cell { text, left, right, clamp } => (true, Some(text.unwrap_or(&empty_cell)), clamp.then_some((left, right))),
     };
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =
@@ -280,6 +287,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     if left_out(oi) {
                         continue;
                     }
+                    let h = ctx.float_height(o, w, h);
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
                         let page =
                             PageFrame { sect: &pin.sect, margin_top: pin.margin_top, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
@@ -289,7 +297,16 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     // Only paragraph-relative placement excludes space-before. Line anchors
                     // and frameless page/margin fallbacks retain the text-top origin.
                     let float_y = if float.v_rel == Anchor::Paragraph { para_top } else { y };
-                    let r = float_rect(frame, (0.0, width), float_y, w, h, float);
+                    let mut r = float_rect(frame, (0.0, width), float_y, w, h, float);
+                    // Only move an offset-positioned float when its box crosses the outer
+                    // cell edge. Cell text margins and wrap distances do not move the object.
+                    if let Some((left, right)) = cell_edges
+                        && !float.outside_cell
+                        && float.h_align.is_none()
+                        && float.wrap != Wrap::InFrontOfText
+                    {
+                        r.x = keep_in_cell(r.x, r.w, left, right);
+                    }
                     let outline = ctx.wrap_outline(o);
                     excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
                     floats.insert(oi, r);
@@ -308,6 +325,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 if below {
                     edges.bottom = 0.0;
                 }
+                edges.joined = [above, below];
                 let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0)) + edges.top;
                 if above {
                     edges.up = (y + lead - prev_end).max(0.0);
@@ -315,7 +333,14 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
-                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: para_top, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
+                    let at = ObjFrame {
+                        page: frame,
+                        col: (0.0, width),
+                        para_y: para_top,
+                        table_chr: table.map(|t| &t.chr),
+                        pinned: Some(&pinned),
+                        late: None,
+                    };
                     let (back, front) = place_objects(
                         ctx,
                         &ObjectPlacement {
@@ -342,8 +367,12 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     items.splice(at..at, back);
                     items.extend(front);
                 }
-                // Automatic space after: none after the last paragraph of a cell or box.
-                let after = if pl.rp.after_auto && i + 1 == blocks.len() { 0.0 } else { pl.rp.space_after };
+                // Automatic space after: none after the last paragraph of a cell or box. Nor
+                // contextual spacing after a cell's last paragraph in the default style (or an
+                // undefined one, formatted as Normal): the end-of-cell mark is a Normal paragraph.
+                let last = i + 1 == blocks.len();
+                let normal = || pl.rp.style == "Normal" || ctx.doc.styles.get(&pl.rp.style).is_none();
+                let after = if last && (pl.rp.after_auto || (in_cell && ctxl && normal())) { 0.0 } else { pl.rp.space_after };
                 y += edges.top + pl.height + edges.bottom + after;
                 prev_after = after;
                 prev_after_auto = pl.rp.after_auto;
@@ -440,14 +469,15 @@ pub(crate) struct BoxLayout {
 
 /// Where floating table `tl` goes in a box `width` wide whose next paragraph starts at `y`, and
 /// the area text keeps clear of. Positions relative to the page or its margins need the box's
-/// `frame`; without one (a table cell) they're relative to the box.
+/// `frame`; without one (a table cell) they're relative to the box. `legacy` is the first cell's
+/// left margin before Word 2013 layout, `None` in it.
 fn box_float_table_rect(
     frame: Option<PageFrame>,
     width: f32,
     y: f32,
     tl: &table::TableLayout,
     f: &TableFloat,
-    legacy: f32,
+    legacy: Option<f32>,
     float_tables: &[Rect],
 ) -> (Rect, Rect) {
     let h = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
@@ -483,18 +513,19 @@ fn box_float_table_rect(
     };
     // Nor is there an area to align in: the table starts where the text is.
     let v_align = if frame.is_none() && matches!(f.v_rel, Anchor::Page | Anchor::Margin) { None } else { f.v_align };
-    let x = align_in(h_area, f.x, w, PageFrame::h_align(frame.as_ref(), f.h_align)) - if f.h_align.is_none() { legacy } else { 0.0 };
-    let r = clear_of_float_tables(Rect::new(x, align_in(v_area, y_off, h, v_align), w, h), f, legacy, h_area.0, float_tables);
+    let x = align_in(h_area, f.x, w, PageFrame::h_align(frame.as_ref(), f.h_align)) - if f.h_align.is_none() { legacy.unwrap_or(0.0) } else { 0.0 };
+    let r = clear_of_float_tables(Rect::new(x, align_in(v_area, y_off, h, v_align), w, h), f, legacy.is_none(), h_area.0, float_tables);
     let [dl, dt, dr, db] = f.dist_from_text();
     (r, r.inset(-dl, -dt, -dr, -db))
 }
 
 /// Floating table `f` at `r`, moved below the floating tables in its way when it may not
-/// overlap them. In Word 2013+ layout one placed by an offset keeps its distance from the text's
-/// left edge (`text_left`).
-pub(crate) fn clear_of_float_tables(mut r: Rect, f: &TableFloat, legacy: f32, text_left: f32, others: &[Rect]) -> Rect {
+/// overlap them. In Word 2013+ layout (`modern`) one placed by an offset keeps its distance from
+/// the text's left edge (`text_left`); before it, it keeps its own left edge, also when its first
+/// cell has no left margin.
+pub(crate) fn clear_of_float_tables(mut r: Rect, f: &TableFloat, modern: bool, text_left: f32, others: &[Rect]) -> Rect {
     let [dl, dt, dr, db] = f.dist_from_text();
-    let keeps_text_distance = legacy == 0.0 && f.h_align.is_none() && f.x >= 0.0 && matches!(f.h_rel, Anchor::Margin | Anchor::Column);
+    let keeps_text_distance = modern && f.h_align.is_none() && f.x >= 0.0 && matches!(f.h_rel, Anchor::Margin | Anchor::Column);
     for _ in 0..64 {
         let area = r.inset(-dl, -dt, -dr, -db);
         let Some(below) = others.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.bottom()).reduce(f32::max) else { break };
@@ -504,6 +535,19 @@ pub(crate) fn clear_of_float_tables(mut r: Rect, f: &TableFloat, legacy: f32, te
         }
     }
     r
+}
+
+/// Keep a float's box within the outer cell edges, relative to the cell's text origin.
+/// Offsets that fit are unchanged, including those inside the text margins. Wrap distances
+/// affect surrounding text only. An oversized object starts at the outer left edge.
+pub(crate) fn keep_in_cell(x: f32, w: f32, left: f32, right: f32) -> f32 {
+    let left = if left.is_finite() { left } else { 0.0 };
+    let end = right - w;
+    if !end.is_finite() || end <= left {
+        return left;
+    }
+    // max/min also place a non-finite offset at a finite edge without panicking.
+    x.max(left).min(end)
 }
 
 /// A text box's default internal margins (Word's: 0.1" left/right, 0.05" top/bottom); a box's
@@ -586,25 +630,35 @@ pub(crate) fn joined(doc: &Document, blocks: &Blocks, i: usize, j: Option<usize>
 /// The room a paragraph's top or bottom border takes in the text flow: its distance from the
 /// text plus its width (Word).
 fn border_room(b: Option<Border>) -> f32 {
-    b.filter(Border::is_visible).map_or(0.0, |b| b.space + b.width)
+    b.filter(Border::is_visible).map_or(0.0, |b| {
+        let extent = b.space + b.width;
+        if extent.is_finite() { extent.max(0.0) } else { 0.0 }
+    })
 }
 
 /// How a piece of a paragraph meets the paragraphs around it: the room taken by its top and
 /// bottom borders (0: none drawn there — the paragraph goes on from or into one of its border
 /// group, or it is split there) and how far its shading and side borders reach up to join the
-/// paragraph above in its group.
+/// paragraph above in its group, and whether it goes on from the paragraph above and into the one
+/// below in that group (its side lines don't run on past those ends).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Edges {
     pub(crate) top: f32,
     pub(crate) bottom: f32,
     pub(crate) up: f32,
+    pub(crate) joined: [bool; 2],
 }
 
 impl Edges {
     /// A paragraph on its own: its top and bottom borders at its ends.
     pub(crate) fn own(pl: &ParaLayout, l0: usize, l1: usize) -> Edges {
         let b = pl.rp.borders.unwrap_or_default();
-        Edges { top: if l0 == 0 { border_room(b.top) } else { 0.0 }, bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 }, up: 0.0 }
+        Edges {
+            top: if l0 == 0 { border_room(b.top) } else { 0.0 },
+            bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 },
+            up: 0.0,
+            joined: [false; 2],
+        }
     }
 }
 
@@ -639,23 +693,38 @@ pub(crate) fn push_para(
     }
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
-        // All four lines lie beyond their distance from the text; top and bottom reach the corners.
-        if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
-            let ty = y - t.space - t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
-        }
-        if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
-            let by = y + h + t.space + t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
-        }
-        if let Some(t) = b.left.filter(Border::is_visible) {
-            let bx = lx + t.width / 2.0;
-            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
-        }
-        if let Some(t) = b.right.filter(Border::is_visible) {
-            let bx = rx - t.width / 2.0;
-            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
-        }
+        // All four lines lie beyond their distance from the text (`lx`, `rx`: the side lines'
+        // outer edges); `box_rules` runs the top and bottom over the side lines to those edges.
+        let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |t| t.width / 2.0);
+        let (cl, cr) = (lx + half(b.left), rx - half(b.right));
+        let tb = b.top.filter(|t| e.top > 0.0 && t.is_visible());
+        let bb = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible());
+        let ty = tb.map_or(top, |t| y - t.space - t.width / 2.0);
+        let by = bb.map_or(bottom, |t| y + h + t.space + t.width / 2.0);
+        box_rules(items, (cl, ty, cr, by), [tb, bb, b.left, b.right], e.joined);
     }
     y + h
+}
+
+/// The visible lines of a border box with corners `(x0, y0)` and `(x1, y1)` (`[top, bottom, left,
+/// right]`), ending square as Word draws them: a top or bottom line runs on over half the side
+/// line it meets, or half its own width where there is none, so single-line boxes close at the
+/// corners; a side line runs on to the outer edge of the top or bottom line it meets, or by half
+/// its own width where there is none, unless the box goes on there (`joined`: at the top, at the
+/// bottom).
+pub(crate) fn box_rules(items: &mut Vec<Placed>, (x0, y0, x1, y1): (f32, f32, f32, f32), sides: [Option<Border>; 4], joined: [bool; 2]) {
+    let [top, bottom, left, right] = sides.map(|b| b.filter(Border::is_visible));
+    let half = |t: &Border| display::rule_width(t) / 2.0;
+    for (t, y) in [(top, y0), (bottom, y1)] {
+        if let Some(t) = t {
+            let over = |side: Option<Border>| half(&side.unwrap_or(t));
+            items.push(Placed::Rule { x0: x0 - over(left), y0: y, x1: x1 + over(right), y1: y, border: t });
+        }
+    }
+    for (t, x) in [(left, x0), (right, x1)] {
+        if let Some(t) = t {
+            let end = |o: Option<Border>, joined: bool| if joined { 0.0 } else { half(&o.unwrap_or(t)) };
+            items.push(Placed::Rule { x0: x, y0: y0 - end(top, joined[0]), x1: x, y1: y1 + end(bottom, joined[1]), border: t });
+        }
+    }
 }

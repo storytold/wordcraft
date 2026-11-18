@@ -8,6 +8,7 @@ use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
+use crate::boxes::BoxContext;
 use crate::para::{CellText, ClKind, ParaLayout};
 use crate::{BoxInput, BoxLayout, Ctx, Placed, layout_box};
 
@@ -145,7 +146,7 @@ pub fn cell_margins(doc: &wordcraft_doc::Document, t: &Table, row: usize, cell: 
 /// rows only, so AutoFit stays quick.
 const MEASURE_BUDGET: usize = 4000;
 /// The line length paragraphs are measured at: wide enough that nothing real wraps.
-const MEASURE_WIDE: f32 = 15_840.0;
+pub(crate) const MEASURE_WIDE: f32 = 15_840.0;
 /// What an empty cell's text needs (about a paragraph mark), points.
 const EMPTY_TEXT: f32 = 12.0;
 
@@ -343,38 +344,9 @@ fn region_look(st: &TableStyleProps, region: Region) -> RegionLook {
     out
 }
 
-/// A cell's borders from the table style's parts it is in, later parts winning. Row parts give
-/// their left/right edges at the table's sides and `inside_v` between cells; column parts their
-/// top/bottom edges at the table's top and bottom and `between` between rows; corner cells their
-/// four edges.
-fn region_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize), (first_g, last_g): (bool, bool)) -> Borders {
-    let mut out = Borders::default();
-    for (part, b) in parts {
-        let b = *b;
-        let mapped = if part.is_row() {
-            Borders {
-                top: b.top,
-                bottom: b.bottom,
-                left: if first_g { b.left } else { b.inside_v },
-                right: if last_g { b.right } else { b.inside_v },
-                between: None,
-                inside_v: None,
-            }
-        } else if part.is_column() {
-            Borders {
-                top: if ri == 0 { b.top } else { b.between },
-                bottom: if ri + 1 >= nrows { b.bottom } else { b.between },
-                left: b.left,
-                right: b.right,
-                between: None,
-                inside_v: None,
-            }
-        } else {
-            Borders { between: None, inside_v: None, ..b }
-        };
-        out.overlay(&mapped);
-    }
-    out
+/// A cell's borders from the table style's parts it is in ([`wordcraft_doc::styles::part_borders`]).
+fn region_borders(parts: &[(TablePart, Borders)], rows: (usize, usize), edges: (bool, bool)) -> Borders {
+    wordcraft_doc::styles::part_borders(parts, rows, edges)
 }
 
 struct CellBox {
@@ -406,7 +378,9 @@ struct TableFrame {
     x: f32,
 }
 
-// Nested measurement needs the same preferred weights as layout before sharing span minima.
+/// The table's column widths before autofit: its grid, or equal shares of `avail` without one,
+/// then the cells' absolute and percentage widths. Nested measurement needs the same preferred
+/// weights as layout before sharing span minima.
 fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
     let ncols = grid_cols(t).max(1);
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
@@ -423,6 +397,7 @@ fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
         vec![avail / ncols as f32; ncols]
     };
     apply_cell_widths(t, &mut grid);
+    apply_pct_widths(t, &mut grid, avail);
     grid
 }
 
@@ -650,8 +625,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
                 (items, len)
             } else {
-                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } =
-                    layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth));
+                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } = layout_box(
+                    ctx,
+                    BoxInput {
+                        context: BoxContext::Cell { text, left: -margins[1], right: x1 - x0 - margins[1], clamp: true },
+                        ..BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth)
+                    },
+                );
                 // A hidden end-of-cell mark: an empty last paragraph takes no room (Word for
                 // Windows: a row of empty such cells is only its borders).
                 if cell.props.hide_mark && cell.blocks.last().and_then(|b| b.as_para()).is_some_and(|p| p.text.is_empty()) {
@@ -746,6 +726,9 @@ struct TableRows<'a> {
     total: f32,
 }
 
+/// Place the laid-out cells of every row: vertical alignment, turned text, borders and the cell
+/// rectangles, clipped where the row's exact height or a fixed table's column is too small for
+/// the cell's text.
 fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
     let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total } = input;
     // Grid columns holding a vertical-merge continuation, per row.
@@ -787,6 +770,15 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 && let Some(f) = c.fill
             {
                 items.push(Placed::Fill { rect, color: f });
+            }
+            // Its background picture, over the shading and under the text, cut off at its edges.
+            if c.vmerge != VMerge::Continue
+                && let Some(pic) = t.rows.get(ri).and_then(|r| r.cells.get(ci)).and_then(|cell| cell.props.picture.as_deref())
+            {
+                let images = cell_picture(pic, rect, story, path);
+                if !images.is_empty() {
+                    items.push(Placed::Clip { rect, spin: wordcraft_geom::Spin::default(), items: images });
+                }
             }
             // Behind-text frames count towards vertical alignment even without inline content.
             // They do not increase the row's flow height.
@@ -849,7 +841,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             let (x0, x1, y0, y1) = (c.x, c.x + c.w, 0.0, rh);
             // Horizontal edges run on over half of each visible vertical edge, so the corners
             // close the way Word draws them instead of leaving a notch at thick borders.
-            let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |e| e.width / 2.0);
+            let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |e| crate::display::rule_width(&e) / 2.0);
             let (hx0, hx1) = (x0 - half(b.left), x1 + half(b.right));
             let top_vis = c.vmerge != VMerge::Continue;
             if top_vis && let Some(e) = b.top.filter(Border::is_visible) {
@@ -872,7 +864,9 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 row: ri,
                 cell: ci,
                 story,
-                clip: exact && c.h > span_h + 0.01,
+                // A fixed table's cell too narrow for any text (its lines are laid out 4 pt wide)
+                // clips them, as Word does, rather than letting them run past its edges.
+                clip: (exact && c.h > span_h + 0.01) || (t.props.fixed && c.w - c.margins[1] - c.margins[3] < 4.0),
             });
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             parts.push(CellPart { top, items: first..items.len(), end, align });
@@ -921,6 +915,11 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     }
     let limit = cut - row.bottom.clamp(0.0, cut);
     let fits = |bottom: f32| bottom <= limit + 0.01;
+    // A cell's background picture (a clip as big as the cell's area): split with the area like
+    // shading, not moved on like a picture in the text.
+    let areas: Vec<Rect> =
+        row.items.iter().filter_map(|it| if let Placed::Cell { rect, covered: false, .. } = it { Some(*rect) } else { None }).collect();
+    let background = |it: &Placed| matches!(it, Placed::Clip { rect, .. } if areas.contains(rect));
     // Each cell's items: every item of a row is in one of its cells.
     let (mut cells, mut ends, realign) = cells_from_top(row, limit);
     // A nested table's cell is deeper than the row's own.
@@ -970,6 +969,9 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let mut cut_through = vec![false; cells.len()];
     for ((((items, splits), m), kept), through) in cells.iter().zip(&splits).zip(&mut moved).zip(&mut kept_cells).zip(&mut cut_through) {
         for (it, &split) in items.iter().zip(splits) {
+            if background(it) {
+                continue;
+            }
             let mut runs_over = |top: f32, bottom: f32| *through |= top < limit - 0.01 && bottom > limit + 0.01;
             let top = if let Some(r) = it.turned_bounds() {
                 // Turned text moves as a whole, like a picture.
@@ -1044,6 +1046,22 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     for ((((c, items), splits), &shift), end) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts).zip(&ends) {
         let start = b.len();
         for (it, &split) in items.iter().zip(splits) {
+            // A background picture: the part above the cut stays, and the continuation's area
+            // shows the rest of it, from the cut down.
+            if let Placed::Clip { rect, spin, items: pictures } = it
+                && background(it)
+            {
+                let (above, below) = split_rect(*rect, cut, geo_shift(rect.bottom(), shift));
+                a.extend(above.map(|rect| Placed::Clip { rect, spin: *spin, items: pictures.clone() }));
+                b.extend(below.map(|r| {
+                    let mut pictures = pictures.clone();
+                    for p in &mut pictures {
+                        p.translate(0.0, r.y - rect.y.max(cut));
+                    }
+                    Placed::Clip { rect: r, spin: *spin, items: pictures }
+                }));
+                continue;
+            }
             if let Some(r) = it.turned_bounds() {
                 let mut it = it.clone();
                 if fits(r.bottom()) {
@@ -1191,14 +1209,16 @@ fn align_in_part(
     }
     let limit = cut - row.bottom.clamp(0.0, cut);
     let mut kept = f32::MIN;
-    for ((items, splits), _) in cells.iter().zip(splits).zip(realign).filter(|(_, al)| al.is_none()) {
+    for (((items, splits), _), end) in cells.iter().zip(splits).zip(realign).zip(ends.iter()).filter(|((_, al), _)| al.is_none()) {
+        // No further than the cell's content: its last paragraph may have dropped its space after.
+        let end = end.unwrap_or(f32::MAX);
         for (it, &split) in items.iter().zip(splits) {
             let bottom = match (it.turned_bounds(), it) {
                 (Some(r), _) => Some(r.bottom()),
                 // A paragraph kept whole ends with its space after.
                 (None, Placed::Lines { para, l0, y, .. }) if split > *l0 => crate::item_bottom(*y, para, *l0, split)
                     .filter(|&b| b <= limit + 0.01)
-                    .map(|b| if split == para.lines.len() { (b + para.rp.space_after).min(limit) } else { b }),
+                    .map(|b| if split == para.lines.len() { (b + para.rp.space_after).min(end.max(b)).min(limit) } else { b }),
                 (None, Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Graphic { rect, .. } | Placed::Clip { rect, .. }) => {
                     Some(rect.bottom())
                 }
@@ -1266,6 +1286,51 @@ fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, e
         }
     }
     k
+}
+
+/// Most copies of a tiled cell picture drawn.
+const MAX_TILES: usize = 400;
+
+/// A cell's background picture in `rect` (the cell's area): once at its own size where its
+/// alignment puts it, tiled from the cell's top left, or stretched over the cell.
+fn cell_picture(pic: &wordcraft_doc::props::CellPicture, rect: Rect, story: StoryRef, path: &[u32]) -> Vec<Placed> {
+    use wordcraft_doc::props::PictureRepeat;
+    let [w, h] = pic.size;
+    let image = |r: Rect| Placed::Image {
+        rect: r,
+        media: pic.media.clone(),
+        crop: [0.0; 4],
+        story,
+        path: wordcraft_doc::Path(path.to_vec()),
+        off: usize::MAX,
+        spin: wordcraft_geom::Spin::default(),
+        fx: Default::default(),
+    };
+    let sized = w.is_finite() && h.is_finite() && w > 0.1 && h > 0.1;
+    match pic.repeat {
+        PictureRepeat::Stretch => vec![image(rect)],
+        PictureRepeat::Tile if sized => {
+            let (cols, rows) = ((rect.w / w).ceil().max(1.0), (rect.h / h).ceil().max(1.0));
+            // Too many tiles to draw (or a cell of no finite size): one picture stretched over
+            // the cell, as a page's picture is, so the cell is always covered.
+            let tiles = cols * rows;
+            if !tiles.is_finite() || tiles > MAX_TILES as f32 {
+                return vec![image(rect)];
+            }
+            let (cols, rows) = (cols as usize, rows as usize);
+            (0..rows)
+                .flat_map(|r| (0..cols).map(move |c| (r, c)))
+                .map(|(r, c)| image(Rect::new(rect.x + c as f32 * w, rect.y + r as f32 * h, w, h)))
+                .collect()
+        }
+        _ if sized => {
+            let at = |a: f32| if a.is_finite() { a.clamp(0.0, 1.0) } else { 0.0 };
+            let x = rect.x + (rect.w - w) * at(pic.align[0]);
+            let y = rect.y + (rect.h - h) * at(pic.align[1]);
+            vec![image(Rect::new(x, y, w, h))]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// The parts of `r` above `cut` and below it, the latter moved up by `shift` (onto the
@@ -1478,6 +1543,121 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
     grid.copy_from_slice(&widths);
 }
 
+/// Word sizes each column by the percentage its cells ask for, whichever rows ask: cells without a
+/// preferred width take no part, so a header row of percentages sizes the automatic rows below it.
+/// The percentages are shares of the table's width, scaled up when they come short of 100%; past
+/// 100% the columns take their shares left to right until the width runs out
+/// (`overfull_shares`). A table without a
+/// width of its own takes `avail` when autofit and its grid's width when fixed. Where rows ask
+/// different percentages of a column it takes the largest. A merged cell's percentage is shared
+/// by the columns under it that ask none of their own, in their grid proportions (Word shares it
+/// by their content), and makes no column narrower than it asks. Measured in Word. Columns no cell
+/// sizes and absolute widths keep the grid.
+fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
+    let mut pcts: Vec<Option<f32>> = vec![None; grid.len()];
+    let mut merged: Vec<(usize, usize, f32)> = Vec::new();
+    for row in &t.rows {
+        let mut g = row.first_grid();
+        for cell in &row.cells {
+            if cell.props.width.is_some() {
+                return;
+            }
+            if let Some(p) = cell.props.width_pct {
+                if !p.is_finite() || p <= 0.0 {
+                    return;
+                }
+                if cell.span() == 1 {
+                    let Some(slot) = pcts.get_mut(g) else { return };
+                    *slot = Some(slot.map_or(p, |q| q.max(p)));
+                } else {
+                    merged.push((g, cell.span(), p));
+                }
+            }
+            g = g.saturating_add(cell.span());
+        }
+    }
+    for (g, span, p) in merged {
+        let Some(cols) = pcts.get_mut(g..g.saturating_add(span)) else { return };
+        let Some(weights) = grid.get(g..g.saturating_add(span)) else { return };
+        let own: f32 = cols.iter().flatten().sum();
+        let free: f32 = cols.iter().zip(weights).filter(|(c, _)| c.is_none()).map(|(_, w)| *w).sum();
+        let rest = (p - own).max(0.0);
+        if free > 0.0 {
+            for (c, w) in cols.iter_mut().zip(weights) {
+                if c.is_none() {
+                    *c = Some(rest * w / free);
+                }
+            }
+        } else if own > 0.0 && rest > 0.0 {
+            // Every column asks its own, short of the merged cell's: they grow to it together.
+            cols.iter_mut().flatten().for_each(|c| *c *= p / own);
+        }
+    }
+    let Some(pcts) = pcts.into_iter().collect::<Option<Vec<f32>>>() else { return };
+    if pcts.iter().any(|p| *p <= 0.0) {
+        return;
+    }
+    let sum: f32 = pcts.iter().sum();
+    let own_width = t.props.width_pct.is_some_and(|p| p > 0.0) || t.props.width.is_some_and(|w| w > 0.0);
+    // A table with its own width is scaled to it afterwards; any positive total will do. A fixed
+    // table without one keeps its grid's width.
+    let total = if own_width || t.props.fixed { grid.iter().sum() } else { avail };
+    if !sum.is_finite() || sum <= 0.0 || !total.is_finite() || total <= 0.0 {
+        return;
+    }
+    if sum <= 100.0 {
+        let shares: Vec<f32> = pcts.iter().map(|p| total * (p / sum)).collect();
+        // A grid Word wrote from these same percentages is within its rounding of them (whole
+        // twips, and percentages in fiftieths): it is kept exactly. Rebuilt, a column could come
+        // out a few hundredths of a point narrower and wrap its text differently (#6575).
+        let rounding = 0.05 + total * 0.0002;
+        if grid.iter().zip(&shares).all(|(g, s)| (g - s).abs() <= rounding) {
+            return;
+        }
+        grid.copy_from_slice(&shares);
+        return;
+    }
+    // A grid too narrow for the floor in every column shares its width out instead, so the table
+    // keeps it.
+    let floor = if t.props.fixed { FIXED_PCT_MIN_COLUMN.min(total / pcts.len() as f32) } else { 0.0 };
+    grid.copy_from_slice(&overfull_shares(&pcts, total, floor));
+}
+
+/// Over 100%, as Word lays it out: the columns take their shares left to right until the table's
+/// width runs out; the column it runs out in takes what is left, and those after it nothing. In an
+/// autofit table autofit then widens them to their longest words at the others' expense. In a
+/// fixed table they keep `floor` each, their text clipped, and the shares are of what is left
+/// once those are set aside.
+fn overfull_shares(pcts: &[f32], total: f32, floor: f32) -> Vec<f32> {
+    let mut starved = 0;
+    loop {
+        let room = (total - floor * starved as f32).max(0.0);
+        let mut used = 0.0;
+        let mut short = 0;
+        let widths: Vec<f32> = pcts
+            .iter()
+            .map(|p| {
+                let w = (room * p / 100.0).min(room - used);
+                if w < floor || w <= 0.0 {
+                    short += 1;
+                    return floor;
+                }
+                used += w;
+                w
+            })
+            .collect();
+        // More columns starved than were set aside for: set aside for them and share again.
+        if short <= starved || starved >= pcts.len() {
+            return widths;
+        }
+        starved = short;
+    }
+}
+
+/// The narrowest a fixed table's columns get when the percentages before them fill the table
+/// (measured in Word: 2 pt, with or without a table width).
+const FIXED_PCT_MIN_COLUMN: f32 = 2.0;
+
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
 /// - With no preferred width anywhere (the table's and every cell's automatic) the columns come
 ///   from their content alone: each its widest line if they all fit in `avail`, else shared out
@@ -1529,6 +1709,7 @@ mod width_tests {
 
     #[test]
     fn autofit_shares_donor_loss() {
+        crate::test_fonts();
         let table = Table::new(1, 4, 260.0);
         let mut grid = [30.0, 120.0, 20.0, 90.0];
         let content = [(28.0, 28.0), (40.0, 120.0), (40.0, 40.0), (30.0, 90.0)];
@@ -1536,8 +1717,27 @@ mod width_tests {
         assert_eq!(grid, [28.0, 111.0, 40.0, 81.0]);
     }
 
+    /// #5074 review (and #6575): a grid Word wrote from the cells' percentages is kept exactly,
+    /// while one that is off by more than Word's rounding is rebuilt from them.
+    #[test]
+    fn a_grid_matching_its_percentages_is_kept() {
+        let mut t = Table::new(1, 3, 300.0);
+        t.props.width = Some(300.0);
+        for (cell, p) in t.rows[0].cells.iter_mut().zip([33.32, 33.34, 33.34]) {
+            cell.props.width = None;
+            cell.props.width_pct = Some(p);
+        }
+        let mut grid = [99.95, 100.05, 100.0];
+        apply_pct_widths(&t, &mut grid, 468.0);
+        assert_eq!(grid, [99.95, 100.05, 100.0], "kept");
+        let mut stale = [90.0, 110.0, 100.0];
+        apply_pct_widths(&t, &mut stale, 468.0);
+        assert!(stale.iter().zip([99.96, 100.02, 100.02]).all(|(g, w)| (g - w).abs() < 0.01), "rebuilt: {stale:?}");
+    }
+
     #[test]
     fn autofit_exhausts_donors() {
+        crate::test_fonts();
         let table = Table::new(1, 2, 50.0);
         let mut grid = [30.0, 20.0];
         autofit(&mut grid, &[(25.0, 25.0), (40.0, 40.0)], &table, 50.0);
@@ -1546,6 +1746,7 @@ mod width_tests {
 
     #[test]
     fn autofit_keeps_fitting_widths() {
+        crate::test_fonts();
         let table = Table::new(1, 3, 120.0);
         let mut grid = [30.0, 40.0, 50.0];
         autofit(&mut grid, &[(10.0, 10.0), (20.0, 20.0), (30.0, 30.0)], &table, 120.0);
