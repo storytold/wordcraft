@@ -357,12 +357,13 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     // The open document's `file.proofingExceptions`: saved with it, and only the marks are hidden.
     section(ui, "Exceptions for this document");
     let settings = &app.session.doc.settings;
+    let open = app.has_document();
     let rows = [
-        ("Hide spelling errors in this document only", "hideSpellingErrors", settings.hide_spelling_errors),
-        ("Hide grammar errors in this document only", "hideGrammarErrors", settings.hide_grammar_errors),
+        ("Hide spelling errors in this document only", "hideSpellingErrors", open && settings.hide_spelling_errors),
+        ("Hide grammar errors in this document only", "hideGrammarErrors", open && settings.hide_grammar_errors),
     ];
-    // Off on the Start screen, where no document takes the setting.
-    ui.add_enabled_ui(app.has_document(), |ui| {
+    // Off and unchecked on the Start screen, where no document takes the setting.
+    ui.add_enabled_ui(open, |ui| {
         for (label, key, value) in rows {
             let mut v = value;
             if ui.checkbox(&mut v, tl!(label)).changed()
@@ -531,12 +532,13 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
     // The open document's `file.privacyOptions` (#1062): saved with it, honoured when it is saved.
     section(ui, "Privacy for this document");
     let settings = &app.session.doc.settings;
+    let open = app.has_document();
     let rows = [
-        ("Remove my name from comments, changes and file properties when saving", "removePersonalInfo", settings.remove_personal_info),
-        ("Leave out the date and time of comments and tracked changes when saving", "removeDateTime", settings.remove_date_time),
+        ("Remove my name from comments, changes and file properties when saving", "removePersonalInfo", open && settings.remove_personal_info),
+        ("Leave out the date and time of comments and tracked changes when saving", "removeDateTime", open && settings.remove_date_time),
     ];
-    // Off on the Start screen, where no document takes the setting.
-    ui.add_enabled_ui(app.has_document(), |ui| {
+    // Off and unchecked on the Start screen, where no document takes the setting.
+    ui.add_enabled_ui(open, |ui| {
         for (label, key, value) in rows {
             let mut v = value;
             if ui.checkbox(&mut v, tl!(label)).changed()
