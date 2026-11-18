@@ -464,7 +464,7 @@ pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Resu
 }
 
 /// [`save_bytes`], encrypted with `password` when there is one and the format is a Word package
-/// (other formats are copies and are written as they are).
+/// or OpenDocument text file (.odt, .ott); other formats are copies and are written as they are.
 pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<Vec<u8>, String> {
     let bytes = save_bytes_opts(name, doc, opts)?;
     match password {
