@@ -823,10 +823,12 @@ impl Scan {
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
         let mut stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at, bk.tab_origin));
-        // A right, centre or decimal stop past the right indent aligns its text there instead of
-        // past it: a template's 8.5-inch stop on a narrower page kept text on the page (#6447).
-        if ptab.is_none() && matches!(stop.align, TabAlign::Right | TabAlign::Center | TabAlign::Decimal) {
-            stop.pos = stop.pos.min(bk.base_right);
+        // A right or decimal stop past the right margin ends its text at the margin instead of
+        // past it: a template's 8.5-inch stop on a narrower page ran off the page (#6447). Not the
+        // right indent: Word ends a TOC number at a stop between the indent and the margin (#4613).
+        // Not a centre stop: centred on the margin, half its text would still be past it.
+        if ptab.is_none() && matches!(stop.align, TabAlign::Right | TabAlign::Decimal) {
+            stop.pos = stop.pos.min(bk.width);
         }
         // A positional tab whose place the text has passed goes there on the next line
         // (ECMA-376 §17.3.3.23); a line with nothing but markers on it is empty.

@@ -1961,24 +1961,33 @@ fn left_tab_past_the_right_indent_does_not_add_a_line() {
     assert!((page.x - 72.0).abs() < 0.5, "the text after the tab starts at the indent: {}", page.x);
 }
 
-/// A right tab stop past the right indent (a template's 8.5-inch stop on a narrower text
-/// column) ends the text after it on the right indent instead of past the page edge (#6447).
+/// A right or decimal tab stop past the right margin (a template's 8.5-inch stop on a narrower
+/// text column) ends the text after it on the margin instead of past the page edge (#6447). A
+/// stop between the right indent and the margin keeps its place: a TOC entry with a right indent
+/// ends its page number at the stop, as in Word (#4613). Letter page, 1 in margins: the margin
+/// is at 540 pt.
 #[test]
-fn right_tab_past_the_right_indent_ends_text_on_the_indent() {
+fn right_tab_past_the_right_margin_ends_text_on_the_margin() {
     use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
-    let text = "Degree\tMay 20XX";
-    for (indent_right, edge) in [(0.0, 540.0), (36.0, 504.0)] {
+    let cases = [
+        ("Degree\tMay 20XX", 0.0, 612.0, TabAlign::Right, TabLeader::None),
+        ("Degree\tMay 20XX", 36.0, 612.0, TabAlign::Right, TabLeader::None),
+        ("Degree\tMay 20XX", 0.0, 612.0, TabAlign::Decimal, TabLeader::None),
+        ("Chapter\t104", 28.35, 468.0, TabAlign::Right, TabLeader::Dot),
+    ];
+    for (text, indent_right, pos, align, leader) in cases {
         let mut d = Document::from_text(text);
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
             p.indent_right = Some(indent_right);
-            p.tabs = Some(vec![TabStop { pos: 612.0, align: TabAlign::Right, leader: TabLeader::None }])
+            p.tabs = Some(vec![TabStop { pos, align, leader }])
         })
         .unwrap();
         let l = lay(&d);
         let start = l.caret(&Pos::body(0, 0)).unwrap();
         let end = l.caret(&Pos::body(0, text.len())).unwrap();
-        assert!((end.x - edge).abs() < 0.5, "right indent {indent_right}: the text ends at {}, not {edge}", end.x);
-        assert!((end.top - start.top).abs() < 0.01, "right indent {indent_right}: one line");
+        let case = format!("{align:?} stop at {pos}, right indent {indent_right}");
+        assert!((end.x - 540.0).abs() < 0.5, "{case}: the text ends at {}, not 540", end.x);
+        assert!((end.top - start.top).abs() < 0.01, "{case}: one line");
     }
 }
 
