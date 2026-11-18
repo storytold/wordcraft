@@ -19,39 +19,18 @@ pub(crate) const KIND: &str = "wordcraft-fit-v1";
 /// Serialize `fit` as the custom XML store.
 pub(crate) fn write(fit: &FitState) -> Result<Vec<u8>, DocxError> {
     let json = serde_json::to_string(fit).map_err(|e| DocxError::Xml(e.to_string()))?;
-    let esc_json = quick_xml::escape::escape(&json);
+    let esc_json = craft_xml::esc(&json);
     Ok(format!(r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}"><fitState>{}</fitState></{ROOT}>"#, esc_json).into_bytes())
 }
 
 /// Read the state from a custom XML part's bytes, if it is ours.
 pub(crate) fn read_from_bytes(bytes: &[u8]) -> Option<FitState> {
-    let mut reader = quick_xml::Reader::from_reader(bytes);
-    let mut buf = Vec::new();
-    let mut is_our_kind = false;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e)) => {
-                let name = e.local_name();
-                if name.as_ref() == ROOT.as_bytes() {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.local_name().as_ref() == b"kind" && attr.value.as_ref() == KIND.as_bytes() {
-                            is_our_kind = true;
-                        }
-                    }
-                } else if name.as_ref() == b"fitState" && is_our_kind {
-                    let text = reader.read_text(e.to_end().name()).ok()?;
-                    let s = std::str::from_utf8(text.as_ref()).ok()?;
-                    let unescaped = quick_xml::escape::unescape(s).ok()?;
-                    return serde_json::from_str(&unescaped).ok();
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) | Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
+    let root = craft_xml::parse(bytes).ok()?;
+    if root.local() != ROOT || root.attr("kind") != Some(KIND) {
+        return None;
     }
-    None
+    let text = root.child_text("fitState")?;
+    serde_json::from_str(text.as_ref()).ok()
 }
 
 #[cfg(test)]
