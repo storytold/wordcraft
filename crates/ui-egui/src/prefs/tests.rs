@@ -50,7 +50,7 @@ fn a_legacy_ui_json_is_imported_with_its_junk_reset_to_defaults() {
 
     // The unit saved before #838 under `editing.units` carries over unless it is inches.
     let unit = |text: &str| legacy_ui_json(format!(r#"{{"editing": {text}}}"#).as_bytes()).unwrap().0.editing.units;
-    assert_eq!(unit(r#"{"units": "centimeters"}"#), Some(wordcraft_doc::Unit::Centimeters));
+    assert_eq!(unit(r#"{"units": "centimeters"}"#), Some(wordcraft_geom::Unit::Centimeters));
     assert_eq!(unit(r#"{"units": "inches"}"#), None);
     assert_eq!(unit(r#"{"units": "centimeters", "measurementUnits": null}"#), None);
 
