@@ -317,6 +317,42 @@ fn alt_shows_the_column_widths_while_dragging() {
     assert!(widths(&mut h).is_empty(), "gone with the drag");
 }
 
+/// The widths Alt shows on the ruler are in the File › Options unit, written the region's way:
+/// centimetres with a decimal comma in Brazil, not inches (#5231).
+#[test]
+fn alt_column_widths_are_in_the_regions_unit() {
+    let mut h = table_window();
+    h.state_mut().session.system_region = wordcraft_engine::Region::from_tag("pt-BR");
+    let a = cell(&mut h, 0, 0);
+    let y = a.y + a.h / 2.0;
+    let (start, end) = (screen(&mut h, a.right(), y), screen(&mut h, a.right() + 18.0, y));
+    h.event(egui::Event::PointerMoved(start));
+    h.step();
+    button(&h, start, true);
+    h.step();
+    h.event(egui::Event::PointerMoved(end));
+    h.step();
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+    steps(&mut h, 2);
+    let layout = h.state_mut().session.layout();
+    let w = crate::table_ruler::widths(h.state(), &h.ctx, &layout, 0);
+    let want = h.state().session.format_length(w[0].1);
+    assert!(want.ends_with(" cm") && want.contains(','), "{want}");
+    fn texts(s: &egui::Shape, out: &mut Vec<String>) {
+        match s {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+            _ => {}
+        }
+    }
+    let mut shown = Vec::new();
+    h.output().shapes.iter().for_each(|s| texts(&s.shape, &mut shown));
+    assert!(shown.contains(&want), "{want} not among {shown:?}");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    button(&h, end, false);
+    steps(&mut h, 3);
+}
+
 /// A cell selected with a click along its left edge: dragging its right border with the
 /// mouse moves it in that cell's row only (#962).
 #[test]
