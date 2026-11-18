@@ -180,7 +180,8 @@ pub struct Report {
     pub verdict: Verdict,
     /// Deterministic order: by part, then rule id, then message.
     pub findings: Vec<Finding>,
-    /// Things skipped within a completed run.
+    /// Informational notes about skipped checks and observations from completed checks,
+    /// such as unattached custom XML schemas.
     pub coverage_notes: Vec<String>,
     /// Every rule id that executed, in the documented order.
     pub checks_run: Vec<&'static str>,
@@ -5663,6 +5664,39 @@ mod round5_completeness_tests {
         let complete = validate_bytes(&bytes);
         assert!(!complete.findings.iter().any(|f| f.rule == "CUSTOMXML-SCHEMA"), "{complete:?}");
         assert!(!complete.coverage_notes.iter().any(|n| n.ends_with("which is not attached in settings.xml")), "{complete:?}");
+    }
+
+    #[test]
+    fn custom_xml_schema_note_suppressed_for_unknown_entry_identity() {
+        let bytes = package(
+            vec![
+                (
+                    "word/settings.xml",
+                    package::SETTINGS_CONTENT_TYPE,
+                    format!(r#"<w:settings xmlns:w="{NS_W}"><w:attachedSchema w:val="urn:A"/></w:settings>"#),
+                ),
+                (
+                    "word/props.xml",
+                    package::CUSTOM_XML_PROPS_CONTENT_TYPE,
+                    format!(
+                        r#"<ds:datastoreItem xmlns:ds="{NS_DS}"><ds:schemaRefs><ds:schemaRef ds:uri="urn:B"/></ds:schemaRefs></ds:datastoreItem>"#
+                    ),
+                ),
+            ],
+            &(rel("settings", "settings.xml") + &rel("customXmlProps", "props.xml")),
+        );
+        let mut setup = Acc::default();
+        let pkg = package::load(&bytes, &mut setup).unwrap();
+        let xml = check_xml(&pkg, &mut setup);
+
+        let mut control = Acc::default();
+        check_custom_xml(&pkg, &xml, &mut control);
+        assert_eq!(control.coverage, ["custom XML part word/props.xml declares schema urn:B, which is not attached in settings.xml"]);
+
+        let mut suppressed = Acc::default();
+        suppressed.set_unknown_unreadable();
+        check_custom_xml(&pkg, &xml, &mut suppressed);
+        assert!(suppressed.coverage.is_empty(), "{:?}", suppressed.coverage);
     }
 
     /// Threading joins use each direction's definition completeness, including missing parse results.
