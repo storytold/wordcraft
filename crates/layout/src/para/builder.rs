@@ -109,7 +109,8 @@ impl<'a> Builder<'a> {
 
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
     pub(super) fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool) -> u32 {
-        let r = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let family = lookup_family(self.env.doc, &rc.font);
+        let r = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
         let face = face_override.unwrap_or(r.face);
         // The display list reads every run's format (link target, strike kind, underline colour,
         // baseline shift…) from its StyleRun, so runs share one only when their formats are equal.
@@ -138,7 +139,7 @@ impl<'a> Builder<'a> {
         // A symbol font that isn't installed, or is installed one em tall (Apple's Symbol), takes
         // the height Word gives it; so does text drawn in a twin with another line (Selawik), but
         // not a segment drawn in another face (East Asian letters in their own font).
-        let twin = || (face.id() == r.face.id()).then(|| wordcraft_fonts::word::twin_line(&rc.font, &r)).flatten();
+        let twin = || (face.id() == r.face.id()).then(|| wordcraft_fonts::word::twin_line(family, &r)).flatten();
         let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r).or_else(twin) {
             Some((a, d)) => (a * face.upem, d * face.upem),
             None => wordcraft_fonts::word::line_metrics(&face),
