@@ -16,7 +16,7 @@ use wordcraft_zotero::{Bridge, Call, Command, Host};
 use craft::ui::dialog::{DialogId, PromptChoice, StandardPrompt, dialog_id};
 
 use crate::WordApp;
-use crate::dialogs::host::{DialogHooks, Keyed, open_with};
+use crate::dialogs::host::{DialogHooks, Keyed, Settle, open_with};
 
 /// A call from Zotero waiting for its answer.
 struct Pending {
@@ -268,14 +268,14 @@ pub(crate) fn show_question(app: &mut WordApp) {
 /// The key of Zotero's question on the dialog host.
 const QUESTION_KEY: &str = "zotero";
 
-fn settle_question(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
+fn settle_question(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     let Some(result) = app.dialog_host.take_by_id::<Keyed<StandardPrompt>>(id) else {
-        return false;
+        return Settle::Keep;
     };
     let buttons = app.zotero.alert.as_ref().map_or(0, |a| a.buttons);
     let value = result.ok().map_or(0, |a| answer_value(buttons, a.choice));
     let _ = answer(app, value);
-    true
+    Settle::Done
 }
 
 #[cfg(test)]

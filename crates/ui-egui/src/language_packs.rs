@@ -32,7 +32,7 @@ use serde_json::json;
 use wordcraft_engine::packs::{self, LanguageRow, Pack, Proofing};
 
 use crate::WordApp;
-use crate::dialogs::host::{DialogHooks, open_with};
+use crate::dialogs::host::{DialogHooks, Settle, open_with};
 
 /// How long the bar keeps what it worked out while the document is being typed in.
 const MISSING_REFRESH_SECS: f64 = 1.0;
@@ -921,10 +921,10 @@ fn prepare_picker(app: &mut WordApp, id: DialogId) {
 
 /// Applies what the Add a language dialog recorded in the pass that just ran. Never opens the dialog: a click on
 /// Add a language… does ([`open_picker`]).
-fn settle_picker(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
+fn settle_picker(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     // The dialog answers `()`: taking it keeps the host's results from piling up.
     let _ = app.dialog_host.take_by_id::<AddLanguage>(id);
-    let Some(dialog) = app.dialog_host.get_mut_by_id::<AddLanguage>(id) else { return false };
+    let Some(dialog) = app.dialog_host.get_mut_by_id::<AddLanguage>(id) else { return Settle::Done };
     let asks = std::mem::take(&mut dialog.asks);
     // Pack names include Arabic and other scripts; ask for a system Arabic face when none is embedded.
     app.want_system_arabic = true;
@@ -935,8 +935,7 @@ fn settle_picker(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool 
             Want::Refresh(injected) => start_fetch(app, injected),
         }
     }
-    // PLAN: assumed the bool is "close the dialog now" (dg.A1 `DialogHooks::settle`); the picker closes by its own result
-    false
+    Settle::Keep
 }
 
 /// The licence texts About shows, read again only when the dictionaries change (they can run to

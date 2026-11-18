@@ -24,7 +24,7 @@ use egui::Ui;
 use serde::Serialize;
 
 use crate::WordApp;
-use crate::dialogs::host::{DialogHooks, open_with};
+use crate::dialogs::host::{DialogHooks, Settle, open_with};
 
 /// Most documents the box has been considered for that are remembered: beyond that the oldest
 /// are forgotten (a document shown again after hundreds of others may be told about twice).
@@ -145,8 +145,10 @@ pub(crate) enum FontBoxResult {
 }
 
 /// Applies what the box asked since the last pass and runs Add Font… when the box ended with it.
-fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
-    let added = matches!(app.dialog_host.take_by_id::<FontBox>(id), Some(DialogResult::Ok(FontBoxResult::AddFont)));
+fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
+    let taken = app.dialog_host.take_by_id::<FontBox>(id);
+    let finished = taken.is_some();
+    let added = matches!(taken, Some(DialogResult::Ok(FontBoxResult::AddFont)));
     let asks = app.dialog_host.get_mut_by_id::<FontBox>(id).map(|b| std::mem::take(&mut b.asks)).unwrap_or_default();
     for ask in asks {
         match ask {
@@ -157,8 +159,7 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
     if added {
         let _ = app.run("font.add", serde_json::json!({}));
     }
-    // PLAN: assumed the bool is "close the dialog now" (dg.A1 `DialogHooks::settle`); the box closes by its own result
-    false
+    if finished { Settle::Done } else { Settle::Keep }
 }
 
 /// How to install a downloaded font on this system, after the files are unpacked.
