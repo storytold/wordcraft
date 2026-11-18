@@ -167,7 +167,7 @@ fn layout_of(app: &WordApp, cache: &mut Option<(LayoutKey, Arc<DocLayout>)>) -> 
 
 /// One choice list over `(id, label)` pairs, named `label`; true when the choice changed.
 fn choice(ui: &mut Ui, label: &str, salt: &str, current: &mut String, items: &[(&str, &str)]) -> bool {
-    let entries: Vec<Entry<String>> = items.iter().map(|(id, name)| Entry::new((*id).to_owned(), tl!(name))).collect();
+    let entries: Vec<Entry<String>> = items.iter().map(|(id, name)| Entry::new((*id).to_owned(), tl!(name).to_owned())).collect();
     let mut changed = false;
     Field::new(label.to_owned()).id_salt(salt).show(ui, |ui, _| {
         let picked = Select::new(label.to_owned(), Bind::given(current.clone()), &entries).id_salt(salt).show(ui);
@@ -183,11 +183,11 @@ fn choice(ui: &mut Ui, label: &str, salt: &str, current: &mut String, items: &[(
 
 /// The Print page: settings on the left, the preview on the right.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
-    let mut cache = app.ui.print.layout.take();
+    let mut cache = app.print.layout.take();
     let lay = layout_of(app, &mut cache);
-    app.ui.print.layout = cache;
+    app.print.layout = cache;
     let total = lay.pages.len();
-    app.ui.print.settings.preview = app.ui.print.settings.preview.min(total.saturating_sub(1));
+    app.print.settings.preview = app.print.settings.preview.min(total.saturating_sub(1));
     let chooses = app.services.print.as_ref().is_some_and(|spool| spool.chooses_printer());
     let can_print = app.services.print.is_some();
     Stack::new().fill().show(ui, |ui, cx| {
@@ -202,16 +202,16 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let message = app.printing.message.clone();
         let generation = app.print_gen;
         if opened {
-            app.ui.print.hidden = (result(&message) && app.ui.print.said == Some(generation)).then_some(generation);
+            app.print.hidden = (result(&message) && app.print.said == Some(generation)).then_some(generation);
         }
         // A later message (a job started again, then failed the same way) is shown afresh.
-        if app.ui.print.hidden != Some(generation) {
-            app.ui.print.hidden = None;
+        if app.print.hidden != Some(generation) {
+            app.print.hidden = None;
         }
-        let hide_message = app.ui.print.hidden.is_some();
+        let hide_message = app.print.hidden.is_some();
         if !hide_message {
             // Shown here, so the next opening needn't repeat it.
-            app.ui.print.said = result(&message).then_some(generation);
+            app.print.said = result(&message).then_some(generation);
         }
         let ready = !chooses || app.printing.ready();
         Row::new().show(ui, |ui, _| {
@@ -227,7 +227,7 @@ pub(crate) fn print_requested(app: &mut WordApp, _ctx: &egui::Context) {
     let chooses = app.services.print.as_ref().is_some_and(|spool| spool.chooses_printer());
     let can_print = app.services.print.is_some();
     if can_print && (!chooses || app.printing.ready()) {
-        let params = app.ui.print.settings.params();
+        let params = app.print.settings.params();
         let _ = app.run("ui.print", params);
     }
 }
@@ -238,7 +238,7 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
     let current = app.session.current_pages(lay);
     // #2958: as in Word, the page's action leads the settings, in the accent of a dialog's primary button.
     if can_print && clicked(&Button::new(tl!("Print")).variant(Variant::PRIMARY).enabled(ready).id_salt("print").show(ui)) {
-        let params = app.ui.print.settings.params();
+        let params = app.print.settings.params();
         let _ = app.run("ui.print", params);
     }
     if chooses {
@@ -252,7 +252,7 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
         if app.printing.busy() && clicked(&Button::new(tl!("Cancel printing")).id_salt("cancel").show(ui)) {
             let _ = app.run("ui.printCancel", json!({}));
         }
-        app.ui.print.settings.copies = app.printing.settings.copies;
+        app.print.settings.copies = app.printing.settings.copies;
     } else if can_print {
         Text::new(tl!("Send the document straight to the system print dialog, or save a copy in another format below.")).show(ui);
     } else {
@@ -262,7 +262,7 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
         app.print_pdf_dialog();
     }
 
-    let print = &mut app.ui.print;
+    let print = &mut app.print;
     if chooses {
         if print.settings.copies > 1 {
             collate(ui, &mut print.settings.collate, !app.printing.busy());
@@ -315,7 +315,7 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
         std::iter::once((NO_SCALING, "No Scaling")).chain(wordcraft_geom::PAPER_SIZES.iter().map(|(n, _, _)| (*n, *n))).collect();
     choice(ui, tl!("Scale to paper size"), "print_paper", &mut sheet.paper, &papers);
 
-    match wordcraft_engine::print::plan(&app.ui.print.settings.params(), total, current) {
+    match wordcraft_engine::print::plan(&app.print.settings.params(), total, current) {
         Ok(plan) => {
             let msg = crate::i18n::fmt(tl!("{count} of {total} pages will print"), &[("count", &plan.chosen.to_string()), ("total", &total.to_string())]);
             Text::new(msg).show(ui);

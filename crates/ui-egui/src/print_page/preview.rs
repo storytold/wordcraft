@@ -28,7 +28,7 @@ pub(super) fn thumbnails(ctx: &egui::Context) -> Thumbnails<usize> {
 
 /// What every sheet is drawn from: the output layout's inputs and the print settings that impose it.
 pub(super) fn inputs(app: &WordApp) -> Revision {
-    Revision::of(&(layout_key(app), app.ui.print.settings.params().to_string()))
+    Revision::of(&(layout_key(app), app.print.settings.params().to_string()))
 }
 
 /// Draws the imposed sheets of the document on the UI thread, as production's preview did.
@@ -94,7 +94,7 @@ impl ThumbSource<usize> for SheetSource<'_> {
 /// The preview (#1156): the sheet fills the pane, a bar below pages through the sheets and zooms; zoomed in,
 /// the sheet pans.
 pub(super) fn show(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>) {
-    let params = app.ui.print.settings.params();
+    let params = app.print.settings.params();
     let sheets = match wordcraft_engine::print::sheets(&params, lay, app.session.current_pages(lay)) {
         Ok(sheets) => sheets,
         Err(error) => {
@@ -103,8 +103,8 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>) {
         }
     };
     let total = sheets.len();
-    let page = app.ui.print.settings.preview.min(total.saturating_sub(1));
-    app.ui.print.settings.preview = page;
+    let page = app.print.settings.preview.min(total.saturating_sub(1));
+    app.print.settings.preview = page;
     if sheets.get(page).is_none() {
         return;
     }
@@ -114,7 +114,7 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>) {
     let request = ThumbRequest::for_cell(room.max_elem(), ctx.pixels_per_point());
     let state = thumbnails(&ctx).state(&ctx, &SheetSource::new(app, lay, &sheets), &page, &request, Priority::VISIBLE);
     let label = crate::i18n::fmt(tl!("Sheet {page} of {pages}"), &[("page", &(page + 1).to_string()), ("pages", &total.to_string())]);
-    let mut view = app.ui.print.view.clone();
+    let mut view = app.print.view.clone();
     let mut step = None;
     Stack::new().show(ui, |ui, _| {
         let shown = match state.shown() {
@@ -142,8 +142,8 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>) {
             }
         });
     });
-    app.ui.print.view = view;
+    app.print.view = view;
     if let Some(next) = step {
-        app.ui.print.settings.preview = next;
+        app.print.settings.preview = next;
     }
 }
