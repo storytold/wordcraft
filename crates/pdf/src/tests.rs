@@ -390,6 +390,7 @@ fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn long_fragmented_hidden_headings_export_in_linear_time() {
     // Headings of n chars in one-char runs: all hidden with bold alternating, and hidden and visible
     // alternating. Layout and the bookmark/tag titles once scanned every left-out range for every
@@ -1917,6 +1918,7 @@ fn comments_print_in_balloons_beside_scaled_pages() {
 /// references) exports in time proportional to its length: each link looked its bookmark up by
 /// walking the whole document, so NIH's 67-page protocol template took 10.6 s (0.9 s now).
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn internal_links_export_in_linear_time() {
     let doc = |n: usize| {
         let mut d = Document::new();
@@ -3121,6 +3123,7 @@ fn only_safe_link_targets_become_annotations() {
 /// without one), found in one pass: a long run of glyphs sharing a cluster used to rescan the rest
 /// of the run for every glyph.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn cluster_ends_match_the_next_larger_cluster_in_linear_time() {
     let brute = |cl: &[usize], len: usize| -> Vec<usize> {
         (0..cl.len()).map(|i| cl.iter().skip(i + 1).copied().find(|n| *n > cl[i]).unwrap_or(len)).collect::<Vec<_>>()
