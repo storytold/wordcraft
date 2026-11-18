@@ -99,7 +99,7 @@ impl WordForm for TemplatesForm {
         let reason = browse_reason(ui);
         let picked = Field::new(label(tl!("Document template:")))
             .show(ui, |ui, _| {
-                template_row(label(tl!("Document template:")), Bind::bound(&mut self.path), reason).show(ui).picked
+                template_row(label(tl!("Document template:")), Bind::bound(&mut self.path), reason.clone()).show(ui).picked
             })
             .inner
             .flatten();
@@ -290,7 +290,7 @@ impl OrganizerDialog {
                         self.right = key.clone();
                     }
                 }
-                let picked = template_row(label(tl!("Template")), Bind::bound(&mut self.file), reason).show(ui).picked;
+                let picked = template_row(label(tl!("Template")), Bind::bound(&mut self.file), reason.clone()).show(ui).picked;
                 if let Some(path) = picked {
                     self.requests.push(Request::Load(path));
                 }
@@ -424,8 +424,8 @@ mod tests {
             org.requests.push(Request::Copy);
         }
         assert!(a.session.doc.styles.get("Memo").is_none());
-        let gone = organizer_settle(&mut a, &egui::Context::default(), id);
-        assert!(!gone);
+        let settled = organizer_settle(&mut a, &egui::Context::default(), id);
+        assert_eq!(settled, Settle::Keep, "the organizer stays open after a copy");
         assert!(a.session.doc.styles.get("Memo").is_some(), "the settler runs styles.copyFrom");
         let _ = std::fs::remove_dir_all(&dir);
     }

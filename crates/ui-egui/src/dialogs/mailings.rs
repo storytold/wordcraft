@@ -519,7 +519,7 @@ fn filter_section(ui: &mut egui::Ui, fields: &[String], filter: &mut RecipientFi
         filter.sort = Default::default();
     }
     let mut keys = vec![Entry::new(String::new(), tl!("(none)"))];
-    keys.extend(names.iter().map(|n| Entry::new(n.clone(), n.as_str())));
+    keys.extend(names.iter().map(|n| Entry::new(n.clone(), n.clone())));
     let directions = [Entry::new(false, tl!("Ascending")), Entry::new(true, tl!("Descending"))];
     for (i, (field, desc)) in filter.sort.iter_mut().enumerate() {
         let label = tl!(if i == 0 { "Sort by" } else { "Then by" });

@@ -72,8 +72,8 @@ impl BookmarkDialog {
 }
 
 impl StackDialog for BookmarkDialog {
-    /// The choice that closed the dialog (Add), `None` for Cancel.
-    type Result = Option<ListManagerChoice>;
+    /// The name Add closed the dialog with, `None` for Cancel.
+    type Result = Option<String>;
 
     fn id(&self) -> DialogId {
         dialog_id("bookmark")
@@ -88,7 +88,7 @@ impl StackDialog for BookmarkDialog {
         if !wordcraft_engine::cmd::insert::bookmark_name_ok(name) {
             return None;
         }
-        Some(Some(ListManagerChoice { action: "add".into(), entry: None, name: name.to_string() }))
+        Some(Some(name.to_string()))
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Self::Result>> {
@@ -118,7 +118,7 @@ impl StackDialog for BookmarkDialog {
         }
         let out = list.show(ui);
         if out.closed.is_some() {
-            return Some(DialogResult::Ok(out.choice));
+            return Some(DialogResult::Ok(out.choice.map(|choice| choice.name)));
         }
         if let Some(choice) = out.choice {
             self.pending = Some(choice);
@@ -131,8 +131,8 @@ impl StackDialog for BookmarkDialog {
 /// closes with it; Delete and Go To are read from the open dialog.
 fn settle_bookmark(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     let Some(dialog) = app.dialog_host.get_mut_by_id::<BookmarkDialog>(id) else {
-        if let Some(DialogResult::Ok(Some(choice))) = app.dialog_host.take_by_id::<BookmarkDialog>(id) {
-            let _ = app.run("insert.bookmark", json!({"name": choice.name}));
+        if let Some(DialogResult::Ok(Some(name))) = app.dialog_host.take_by_id::<BookmarkDialog>(id) {
+            let _ = app.run("insert.bookmark", json!({"name": name}));
         }
         return Settle::Done;
     };

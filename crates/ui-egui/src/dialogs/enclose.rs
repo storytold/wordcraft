@@ -83,11 +83,11 @@ impl EncloseForm {
 }
 
 /// A radio group over `value` whose options are `(id, label)`.
-fn radios(ui: &mut Ui, name: &str, value: &mut String, options: &[(&str, &str)], enabled: bool, horizontal: bool) {
+fn radios(ui: &mut Ui, name: &'static str, value: &mut String, options: &[(&'static str, &'static str)], enabled: bool, horizontal: bool) {
     let group = RadioGroup::new(Label::from(name), Bind::given(value.clone())).enabled(enabled).show(ui, |ui, _| {
         let items = |ui: &mut Ui| {
             for (id, label) in options {
-                Radio::new((*id).to_string()).label(Label::from(tl!(label))).enabled(enabled).show(ui);
+                Radio::new((*id).to_string()).label(Label::from(tl!(*label))).enabled(enabled).show(ui);
             }
         };
         if horizontal {
