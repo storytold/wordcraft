@@ -3,7 +3,8 @@
 
 use std::sync::Arc;
 
-use craft::font_manager::{Catalog, FontPickerSettings};
+use craft::font_manager::Catalog;
+use craft::font_manager::picker::FontPickerSettings;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};

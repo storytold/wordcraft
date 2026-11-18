@@ -4,7 +4,7 @@
 //! runs `table.newStyle` / `table.modifyStyle` with only what changed.
 
 use craft::behavior::Anchor9;
-use craft::color_ui::ColorPickerTab; // PLAN: ui-egui needs the `craft` dependency with the `color-ui` and `font-manager` features (app-hub)
+use craft::color_ui::ui::ColorPickerTab;
 use craft::font_manager::picker::FontPickerSettings;
 use craft::ui::buttons::{Button, ToggleButton};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
@@ -355,7 +355,7 @@ fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyl
     // The page is white whatever the interface theme; the style's colours are data, so they go through
     // `data_shapes` and dim with a disabled picture.
     cx.data_shapes([Shape::rect_filled(rect, 2.0, Color32::WHITE)]);
-    cx.painter.rect_stroke(rect, 2.0, Stroke::new(cx.stroke_width(craft::ui::style::StrokeWidth::Thin), cx.ink()), egui::StrokeKind::Inside);
+    cx.painter.rect_stroke(rect, 2.0, Stroke::new(cx.stroke_width(craft::ui::primitives::StrokeWidth::Thin), cx.ink()), egui::StrokeKind::Inside);
     let Some(st) = style else { return };
     let mut shapes: Vec<Shape> = Vec::new();
     let formats: Vec<PartFormat> = TablePart::ALL.iter().map(|p| st.part(*p)).collect();
