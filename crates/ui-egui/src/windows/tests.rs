@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use craft::control::ControlRequest;
+use craft::automation::control::{ControlRequest, Reply};
 use craft::host::{Picked, ScriptedFiles};
-// PLAN: `craft-ui-test-kit` is not in the `craft` facade; app-hub (H-1) adds it as a dev-dependency of `crates/ui-egui/Cargo.toml`.
 use craft_ui_test_kit::windows::Windows as Kit;
 use egui::{ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use serde_json::json;
@@ -435,10 +434,9 @@ fn a_programmatic_close_of_one_of_two_windows_on_a_document_is_accepted() {
     assert!(refused.is_none(), "closing a window alone loses nothing: {refused:?}");
 
     // And the command itself runs, closing the window and leaving the document and its work.
-    // PLAN: assumed `control::handle(&mut WordApp, &Context, &ControlRequest) -> control::Reply` (shell-w10).
     let (req, _reply) = ControlRequest::new("engine.execute", json!({"command": "file.close"}));
     let r = match crate::control::handle(&mut a, &rig.ctx(), &req) {
-        crate::control::Reply::Done(v) => v,
+        Reply::Done(v) => v,
         _ => json!({"ok": false, "error": "not a reply"}),
     };
     assert_eq!(r["ok"], true, "{r}");

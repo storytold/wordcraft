@@ -49,6 +49,7 @@ wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 craft-codepage = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0", default-features = false }
+craft-ui-test-kit = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 

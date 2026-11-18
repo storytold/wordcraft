@@ -162,7 +162,7 @@ fn user_assignments_become_overrides() {
         ];
         for (assign, ask, want) in rows {
             let mut h = alt_frame_app();
-            craft::ui::testing::set_os(&h.ctx, os);
+            craft::ui::testing::windows::set_os(&h.ctx, os);
             h.step();
             if let Some((chord, id)) = assign {
                 h.state_mut().session.keymap_mut().insert(CommandRef::new(id).key(), vec![chord.to_string()]);
@@ -172,7 +172,7 @@ fn user_assignments_become_overrides() {
         }
         // A bound chord leaves its default holder for the command it is bound to.
         let mut h = alt_frame_app();
-        craft::ui::testing::set_os(&h.ctx, os);
+        craft::ui::testing::windows::set_os(&h.ctx, os);
         h.step();
         let default = holder_of(&h, "Mod+Shift+Backspace");
         assert!(default.is_some() && default != command("select.all"), "{os:?}: the chord starts with its own command");

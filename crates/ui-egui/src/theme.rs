@@ -127,7 +127,7 @@ impl InterfaceSize {
     /// The runtime's interface scale for this size: [`InterfaceSize::zoom_factor_within`] on a
     /// display of scale `native`, capped at `limit` under Auto.
     pub fn scale(self, native: f32, limit: f32) -> Scale {
-        Scale(self.zoom_factor_within(native, limit))
+        Scale::new(self.zoom_factor_within(native, limit))
     }
 
     /// [`InterfaceSize::drawn_percent`] within [`auto_scale_limit`]'s cap.

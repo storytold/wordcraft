@@ -7,7 +7,7 @@ use craft::review::{CommentAnchor, CommentMessage, CommentThread, Revision, Revi
 use craft::ui::contract::{Props, Show as _};
 
 use super::geometry::{FLOAT_WIDTH, floating_comments, markup_width, shown_comment};
-use super::{Color32, CommentDisplay, DocLayout, Pos, Pos2, StoryRef, Tokens, Ui, WordApp, json};
+use super::{Color32, CommentDisplay, DocLayout, Env, Pos, Pos2, StoryRef, Ui, WordApp, json};
 
 
 /// The most revision cards of each kind shown.
@@ -46,7 +46,8 @@ pub(crate) fn balloons(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui::P
     }
     let only_shown = app.session.prefs.markup.comment_display == CommentDisplay::Selected;
     let shown = shown_comment(app);
-    let palette = Tokens::get(ui.ctx()).author_colors;
+    // Each author takes the next of the theme's categorical data colours.
+    let palette: Vec<Color32> = Env::of(ui).tokens.color.data.series.iter().map(|c| Color32::from_rgb(c.0[0], c.0[1], c.0[2])).collect();
     let BalloonItems { cards } = collect_items(app, layout, only_shown, shown, &palette);
     let items: Vec<BalloonItem<'_>> = cards
         .iter()

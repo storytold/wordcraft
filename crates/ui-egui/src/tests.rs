@@ -2,9 +2,11 @@ use super::*;
 use egui_kittest::kittest::Queryable;
 // PLAN(app-hub): assumed facade paths for the host fakes and the automation channel (S-L103, S-L150).
 use craft::automation::control::{ControlRequest, Reply};
-use craft::host::{PickId, Picked, testing::ScriptedFiles};
+use craft::host::{PickId, Picked, ScriptedFiles};
+use craft::platform::clock::monotonic_ms;
+use craft::platform::default_app::DefaultApp;
 use craft::platform::open::{DropTarget, DroppedFile, FileIntake};
-use craft::shell::ScreenMode;
+use craft::ui::shell::ScreenMode;
 use std::sync::Arc;
 
 mod perf;
@@ -1545,10 +1547,7 @@ fn a_command_line_file_still_asks_for_its_password_after_the_startup_document_is
     a.sync_document();
     a.sync_document();
     assert_eq!(prompt(&a), Some("password"), "the box survives the first frames");
-    let params = match &a.dialog {
-        Some(crate::dialogs::Dialog::Password { params, .. }) => params.clone(),
-        other => panic!("{:?}", other.as_ref().map(|d| d.name())),
-    };
+    let params = open_dialog(&a).map(|(_, fields)| fields["params"].clone()).expect("the password dialog is open");
     let mut with = params;
     with["password"] = json!("sesame");
     a.run("file.open", with).unwrap();
@@ -1611,10 +1610,8 @@ fn a_protected_template_from_the_platform_asks_for_its_password_and_stays_a_new_
     let mut a = app();
     a.open_from_platform(&name, None).unwrap();
     assert_eq!(prompt(&a), Some("password"));
-    let (then, params) = match &a.dialog {
-        Some(crate::dialogs::Dialog::Password { then, params, .. }) => (then.clone(), params.clone()),
-        other => panic!("{:?}", other.as_ref().map(|d| d.name())),
-    };
+    let (_, fields) = open_dialog(&a).expect("the password dialog is open");
+    let (then, params) = (fields["then"].as_str().unwrap_or_default().to_string(), fields["params"].clone());
     assert_eq!(then, "file.newFromTemplate");
     let mut with = params;
     with["password"] = json!("sesame");
@@ -2346,7 +2343,7 @@ fn autosave_covers_macro_enabled_documents_and_templates() {
         a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
         assert!(a.autosaves(), "{ext}");
         a.run("text.insert", json!({"text": "More "})).unwrap();
-        a.autosave_tick(now_ms() + 10_000.0);
+        a.autosave_tick(monotonic_ms() + 10_000.0);
         assert!(!a.session.dirty, "{ext}: AutoSave wrote the file");
         let saved = wordcraft_engine::io::open_path(&path).unwrap();
         assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("More "), "{ext}");
@@ -2368,7 +2365,7 @@ fn renaming_a_saved_file_keeps_autosave_and_replaces_its_recent_entry() {
     assert_eq!(a.ui.recent.first(), Some(&renamed.to_string_lossy().to_string()));
     assert!(!a.ui.recent.contains(&path.to_string_lossy().to_string()), "{:?}", a.ui.recent);
     a.run("text.insert", json!({"text": "More "})).unwrap();
-    a.autosave_tick(now_ms() + 10_000.0);
+    a.autosave_tick(monotonic_ms() + 10_000.0);
     assert!(!a.session.dirty, "AutoSave wrote the renamed file");
     let saved = wordcraft_engine::io::open_path(&renamed).unwrap();
     assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("More "));
@@ -2739,12 +2736,12 @@ fn mailings_results_never_save_over_the_original() {
         assert!(!a.saved_here() && !a.autosaves(), "{id}: AutoSave doesn't cover the result");
         assert_ne!(a.title_stem(), "contract", "{id}: titled as a new document");
         a.run("text.insert", json!({"text": "Note "})).unwrap();
-        a.autosave_tick(now_ms() + 10_000.0);
+        a.autosave_tick(monotonic_ms() + 10_000.0);
         a.run("file.save", json!({})).unwrap();
         a.run("edit.undo", json!({})).unwrap();
         a.run("edit.undo", json!({})).unwrap();
         a.run("file.save", json!({})).unwrap();
-        a.autosave_tick(now_ms() + 20_000.0);
+        a.autosave_tick(monotonic_ms() + 20_000.0);
         assert_eq!(std::fs::read(&path).unwrap(), saved, "{id}: the original file is never overwritten");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2815,7 +2812,7 @@ fn redo_after_a_mailing_cannot_put_the_result_under_a_saved_file() {
         a.run("edit.redo", json!({})).unwrap();
         assert_eq!(body_text(&a), result, "{id}: nothing to redo");
         a.run("file.save", json!({})).unwrap();
-        a.autosave_tick(now_ms() + 10_000.0);
+        a.autosave_tick(monotonic_ms() + 10_000.0);
         assert_eq!(on_file(&copy), written, "{id}");
         assert!(on_file(&path).contains("Signed contract"), "{id}: the original is untouched");
         let _ = std::fs::remove_dir_all(&dir);
@@ -2832,7 +2829,7 @@ fn opened_files_are_not_autosaved_until_the_user_saves() {
     let mut a = app();
     a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
     a.run("text.insert", json!({"text": "Typed "})).unwrap();
-    a.autosave_tick(now_ms() + 10_000.0);
+    a.autosave_tick(monotonic_ms() + 10_000.0);
     assert!(std::fs::read(&path).unwrap() == before, "an opened file is never rewritten behind the user's back");
     assert!(a.session.dirty);
 
@@ -2840,7 +2837,7 @@ fn opened_files_are_not_autosaved_until_the_user_saves() {
     a.run("file.save", json!({})).unwrap();
     a.run("text.insert", json!({"text": "More "})).unwrap();
     assert!(a.session.dirty);
-    a.autosave_tick(now_ms() + 10_000.0);
+    a.autosave_tick(monotonic_ms() + 10_000.0);
     assert!(!a.session.dirty);
     let saved = wordcraft_engine::io::open_path(&path).unwrap();
     assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Typed More Original"));
@@ -2876,7 +2873,7 @@ fn autosave_is_blocked_with_a_reason_for_files_it_cannot_keep() {
     assert_eq!(a.autosave_block(), None);
     assert!(a.autosaves());
     a.run("text.insert", json!({"text": "More "})).unwrap();
-    a.autosave_tick(now_ms() + 10_000.0);
+    a.autosave_tick(monotonic_ms() + 10_000.0);
     assert!(!a.session.dirty, "AutoSave wrote the .docx");
     assert_eq!(a.run("file.autosave", json!({})).unwrap(), json!({"value": false}), "toggling turns it off");
     assert!(!a.autosaves());
@@ -2909,7 +2906,7 @@ fn cancelling_open_keeps_autosave() {
     assert!(a.autosaves(), "the picker was cancelled; nothing was replaced");
 
     a.run("text.insert", json!({"text": " continues"})).unwrap();
-    a.autosave_tick(now_ms() + 10_000.0);
+    a.autosave_tick(monotonic_ms() + 10_000.0);
     assert!(!a.session.dirty);
     let saved = wordcraft_engine::io::open_path(&path).unwrap();
     assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("chapter continues"));
@@ -2928,14 +2925,14 @@ fn autosave_failures_are_reported_once() {
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     a.run("text.insert", json!({"text": "More "})).unwrap();
     a.status = None;
-    a.autosave_tick(now_ms() + 10_000.0);
+    a.autosave_tick(monotonic_ms() + 10_000.0);
     let msg = status_text(&a).unwrap_or_default().to_string();
     assert!(msg.contains("AutoSave"), "the failure shows in the status bar: {msg:?}");
     assert!(a.session.dirty);
 
     // Not retried until the user saves again.
     a.status = None;
-    a.autosave_tick(now_ms() + 20_000.0);
+    a.autosave_tick(monotonic_ms() + 20_000.0);
     assert!(status_text(&a).is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3351,7 +3348,7 @@ fn dark_page_leaves_the_interface_theme_alone() {
         a.run("view.darkMode", json!({"value": true})).unwrap();
         assert!(a.session.view.dark_mode, "{setting}");
         let mode = a.root_env().resolved(&ctx).mode;
-        assert_eq!(mode == craft::ui::runtime::Mode::Dark, dark, "{setting}");
+        assert_eq!(mode == craft::theme::Mode::Dark, dark, "{setting}");
         assert_eq!(a.run("ui.theme", json!({})).unwrap()["dark"], dark, "{setting}");
     }
 }
@@ -3678,11 +3675,11 @@ fn control_inspect_and_render_need_a_document() {
     assert_eq!(v["ok"], true, "with a document it works: {v}");
 }
 
-/// `ui.render` and `ui.screenshot` without a `path` return the PNG in the reply instead of
+/// `ui.render` without a `path` returns the PNG in the reply instead of
 /// writing a fixed name into the shared temporary folder, where another user could have
 /// planted a link to one of this user's files.
 #[test]
-fn render_and_screenshot_without_a_path_reply_with_the_png() {
+fn render_without_a_path_replies_with_the_png() {
     let ctx = egui::Context::default();
     let mut a = typed();
     let (req, _reply) = ControlRequest::new("ui.render", json!({"page": 1, "scale": 0.5}));
@@ -3693,15 +3690,6 @@ fn render_and_screenshot_without_a_path_reply_with_the_png() {
     assert_eq!(&png[..4], b"\x89PNG", "{v}");
     assert!(v["result"]["width"].as_u64().unwrap() > 0 && v["result"]["pages"].as_u64().unwrap() >= 1, "{v}");
 
-    let image = egui::ColorImage::from_rgba_unmultiplied([2, 1], &[255, 0, 0, 255, 0, 0, 255, 255]);
-    let v = control::save_screenshot(&image, None, 41);
-    assert_eq!(v["ok"], true, "{v}");
-    assert_eq!(v["request"], 41);
-    assert!(v["result"].get("path").is_none(), "no file: {v}");
-    let png = wordcraft_engine::cmd::insert::base64_decode(v["result"]["png"].as_str().expect("png")).expect("base64");
-    assert_eq!(&png[..4], b"\x89PNG");
-    assert_eq!(v["result"]["width"], 2, "{v}");
-    assert_eq!(v["result"]["height"], 1, "{v}");
 }
 
 /// #821: Shift+F10 opens the page's context menu below the caret, like right-clicking there

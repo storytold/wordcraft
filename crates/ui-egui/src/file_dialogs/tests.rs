@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use craft::host::files::{PickKind, PickRequest, Picked, ScriptedFiles};
+use craft::host::{PickKind, PickRequest, Picked, ScriptedFiles};
 
 use super::*;
 use crate::Services;

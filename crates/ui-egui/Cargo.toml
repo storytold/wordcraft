@@ -60,6 +60,8 @@ wordcraft-engine = { workspace = true, features = ["test-support"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 craft-zip = { workspace = true }
+# The window tests' frame driver for child viewports; it is not part of the `craft` facade.
+craft-ui-test-kit = { workspace = true }
 
 [build-dependencies]
 craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", features = ["subset"] }

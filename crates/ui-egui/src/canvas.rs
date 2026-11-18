@@ -27,7 +27,6 @@ use wordcraft_layout::display::CommentDisplay;
 use wordcraft_layout::{DocLayout, Page, Placed};
 
 use crate::WordApp;
-use crate::theme::{Tokens, regular, semibold};
 
 mod balloons;
 mod caret;
@@ -48,8 +47,6 @@ pub(crate) mod rulers;
 mod source;
 mod story;
 
-#[cfg(test)]
-use balloons::balloon_text;
 pub use balloons::{deselect_balloon, select_balloon};
 use context_menu::ContextAsk;
 pub(crate) use cursor::{caret_color_on, caret_contrast};
