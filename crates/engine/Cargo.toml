@@ -35,6 +35,8 @@ regex = { workspace = true }
 regex-automata = { workspace = true }
 image = { workspace = true }
 zeroize = { workspace = true }
+# Command plug-ins (RFC-0046): `plugin` and the `plugin.*` commands.
+craft-plugin = { workspace = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 # The browser clock for `now_iso` (`SystemTime::now()` panics on wasm32-unknown-unknown).
@@ -63,3 +65,5 @@ wordcraft-formats = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
 craft-zip = { workspace = true }
 cfb = { workspace = true }
+# Plug-in modules for the tests, written in WebAssembly text.
+wat = "1.261"

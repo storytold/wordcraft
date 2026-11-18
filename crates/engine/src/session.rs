@@ -255,6 +255,8 @@ pub struct Session {
     order: Vec<u64>,
     /// Untitled documents made so far, for the next one's name (`Document3`).
     untitled_count: u32,
+    /// Plug-ins (RFC-0046): the installed ones, their settings and catalogs (`plugin.*`).
+    pub plugins: crate::plugin::Runtime,
 }
 
 impl Session {

@@ -37,6 +37,11 @@ wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "453b0da782ccef39be9a6dac8d27c80b553ef1cc", version = "=0.1.0" }
+# Command plug-ins (WebAssembly, RFC-0046): craft-libs' shared runtime, pinned to the fork commit
+# that has it until the upstream pull request lands and re-pins it. Built without its `http`
+# feature (that implements `Fetch` for another revision's craft-update): the UI wraps WordCraft's
+# own craft-update client instead.
+craft-plugin = { git = "https://github.com/Dasemu/craft-libs", rev = "93428fbe5d11b735365fa87068a9e1fc85fb3550", version = "=0.1.0" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

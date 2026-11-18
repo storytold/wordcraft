@@ -17,6 +17,7 @@ pub mod keymap;
 pub(crate) mod locale;
 pub mod math_gallery;
 pub mod packs;
+pub mod plugin;
 pub(crate) mod prefs;
 pub mod print;
 pub mod recovery;

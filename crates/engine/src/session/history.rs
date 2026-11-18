@@ -1,5 +1,24 @@
-use super::doc_state::{MAX_UNDO, Selection, UNDO_LIST_MAX, Undo, next_math_session};
-use super::{Arc, Document, Session};
+use super::doc_state::{ColumnBlock, MAX_UNDO, Selection, UNDO_LIST_MAX, Undo, next_math_session};
+use super::{Arc, CharProps, Document, Session, Value};
+
+/// What a plug-in's call ([`crate::plugin`]) puts back when it is refused after it ran: the
+/// document, the selection, the undo history's length and the window's requests before it.
+pub(crate) struct CallMark {
+    doc: Document,
+    sel: Selection,
+    pending: Option<CharProps>,
+    column: Option<ColumnBlock>,
+    typing_open: bool,
+    undo: u64,
+    ui_requests: Vec<Value>,
+}
+
+impl CallMark {
+    /// The window's requests before the call.
+    pub(crate) fn ui_requests(&self) -> &[Value] {
+        &self.ui_requests
+    }
+}
 
 impl Session {
     /// Snapshot for undo before a change. Returns whether it took a step: typing that is
@@ -259,5 +278,54 @@ impl Session {
     /// would let a restore put the previous document's content into this one (#1327 follow-up).
     pub fn clear_versions(&mut self) {
         self.versions.clear();
+    }
+
+    /// Where a plug-in's call starts ([`Session::put_back`] returns to it).
+    pub(crate) fn call_mark(&self) -> CallMark {
+        CallMark {
+            doc: self.doc.clone(),
+            sel: self.sel.clone(),
+            pending: self.pending.clone(),
+            column: self.column.clone(),
+            typing_open: self.typing_open,
+            undo: self.undo_mark(),
+            ui_requests: self.ui_requests.clone(),
+        }
+    }
+
+    /// Whether the document changed since `mark`, or an undo step was recorded.
+    pub(crate) fn changed_since(&self, mark: &CallMark) -> bool {
+        self.undo_mark() != mark.undo || !self.doc.same_content(&mark.doc)
+    }
+
+    /// Put the document, selection, undo steps and window requests back as they were at `mark`
+    /// (a refused call leaves nothing to undo or redo). Steps the call pushed out at the undo
+    /// limit stay gone.
+    pub(crate) fn put_back(&mut self, mark: CallMark) {
+        let keep = mark.undo.saturating_sub(self.undo_evicted);
+        self.history.truncate(usize::try_from(keep).unwrap_or(usize::MAX));
+        self.doc = mark.doc;
+        self.sel = mark.sel;
+        self.pending = mark.pending;
+        self.column = mark.column;
+        self.typing_open = mark.typing_open;
+        self.ui_requests = mark.ui_requests;
+        self.note_body_replaced();
+        self.refresh_math_session();
+        self.touch();
+    }
+
+    /// End a plug-in run that started at `mark`: the steps its calls recorded since are dropped,
+    /// so the step the run opened (labelled `opened`, which holds the document before it) undoes
+    /// the whole run, and that step is renamed `label`. Typing after the run is a step of its own.
+    pub(crate) fn fold_undo_since(&mut self, mark: u64, opened: &str, label: &str) {
+        let keep = mark.saturating_sub(self.undo_evicted);
+        self.history.truncate(usize::try_from(keep).unwrap_or(usize::MAX));
+        self.typing_open = false;
+        if let Some(last) = self.history.last_mut()
+            && last.label == opened
+        {
+            Arc::make_mut(last).label = label.to_string();
+        }
     }
 }

@@ -293,6 +293,8 @@ impl Session {
             others: _,
             order: _,
             untitled_count: _,
+            // The installed plug-ins and their settings belong to the person, not a document.
+            plugins: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
         } = self;
