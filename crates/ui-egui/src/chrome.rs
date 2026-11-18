@@ -853,6 +853,10 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                                 ui.label(crate::i18n::tn((count - SHOWN) as u64, "…and {n} more", "…and {n} more"));
                             }
                             ui.separator();
+                            if missing.iter().any(|f| f.download.is_some()) && ui.button(tl!("Get the Missing Fonts…")).clicked() {
+                                let _ = app.run("ui.dialog", json!({"name": "fontDownload"}));
+                                ui.close();
+                            }
                             if ui.button(tl!("Add Font…")).clicked() {
                                 let _ = app.run("font.add", json!({}));
                                 ui.close();
