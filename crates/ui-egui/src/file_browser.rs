@@ -528,7 +528,19 @@ mod tests {
     #[test]
     fn listing_filters_sorts_and_caps() {
         let dir = scratch("list");
-        for f in ["b.docx", "A.DOCX", "notes.txt", ".hidden.docx", "c.docx", "notes.markdown", "paper.latex", "appendix.LTX", "other.bin"] {
+        for f in [
+            "b.docx",
+            "A.DOCX",
+            "notes.txt",
+            ".hidden.docx",
+            "c.docx",
+            "notes.markdown",
+            "paper.latex",
+            "appendix.LTX",
+            "notes.text",
+            "page.XHTML",
+            "other.bin",
+        ] {
             std::fs::write(dir.join(f), b"x").unwrap();
         }
         std::fs::create_dir(dir.join("zeta")).unwrap();
@@ -540,8 +552,11 @@ mod tests {
         let req = FileDialogRequest::Open { purpose: "document".into() };
         let browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
         let names: Vec<&str> = browser.listing.as_ref().unwrap().entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["zeta", "A.DOCX", "appendix.LTX", "b.docx", "c.docx", "notes.markdown", "notes.txt", "paper.latex"]);
-        assert_eq!(list_dir(&dir, &exts(&["*"]), 100).unwrap().entries.len(), 9);
+        assert_eq!(
+            names,
+            ["zeta", "A.DOCX", "appendix.LTX", "b.docx", "c.docx", "notes.markdown", "notes.text", "notes.txt", "page.XHTML", "paper.latex"]
+        );
+        assert_eq!(list_dir(&dir, &exts(&["*"]), 100).unwrap().entries.len(), 11);
         let capped = list_dir(&dir, &exts(&["docx"]), 2).unwrap();
         assert_eq!(capped.entries.len(), 2);
         assert!(capped.truncated);
