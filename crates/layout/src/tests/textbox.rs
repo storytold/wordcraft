@@ -620,3 +620,106 @@ fn a_clipped_line_in_a_turned_box_is_drawn_once_turned_and_clipped() {
         .sum();
     assert_eq!((upright_clips, turned_clips), (0, 1));
 }
+
+/// #2191 review: in a fixed-size `no_wrap` box whose widest line overflows, centred and
+/// right-aligned paragraphs (both short and overflowing) still align to the box's own measure
+/// rather than the widest line, and table-bearing boxes keep `typing_word` revision matching.
+#[test]
+fn no_wrap_aligned_paragraphs_align_to_the_box_not_the_widest_line() {
+    use wordcraft_doc::props::Align;
+    let mut d = Document::from_text("x");
+    let long = "(Figure 1.1) A time line of the important vaccines, on one line";
+    let mut p0 = Paragraph::with_text(long, Default::default());
+    p0.props.align = Some(Align::Left);
+    let mut p1 = Paragraph::with_text("Short", Default::default());
+    p1.props.align = Some(Align::Right);
+    let mut p2 = Paragraph::with_text("Short", Default::default());
+    p2.props.align = Some(Align::Center);
+    let mut p3 = Paragraph::with_text(long, Default::default());
+    p3.props.align = Some(Align::Right);
+    let mut p4 = Paragraph::with_text(long, Default::default());
+    p4.props.align = Some(Align::Center);
+
+    let float = wordcraft_doc::para::Float { x: 200.0, y: 100.0, ..Default::default() };
+    let id = text_box_with(&mut d, 0, "", 144.0, 144.0, TextBody { no_wrap: true, ..Default::default() }, float);
+    d.parts.get_mut(&id).unwrap().blocks = vec![para_block(p0), para_block(p1), para_block(p2), para_block(p3), para_block(p4)];
+    let l = lay(&d);
+    let frame = frame_of(&l, id);
+    let [inset_l, _, inset_r, _] = TextBody::default().insets_pt();
+    let box_left = frame.x + inset_l;
+    let box_right = frame.right() - inset_r;
+    let box_mid = (box_left + box_right) / 2.0;
+
+    let span = |idx: u32| -> (f32, f32, usize) {
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(s), path, x, para, l0, .. } if *s == id && path.0 == [idx] => {
+                    let line = &para.lines[*l0];
+                    Some((x + para.x_of(*l0, line.start)?, x + para.x_of(*l0, line.stop)?, para.lines.len()))
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+
+    let (l0_a, l0_b, n0) = span(0);
+    assert_eq!(n0, 1);
+    assert!((l0_a - box_left).abs() < 0.5 && l0_b > box_right + 50.0, "left long line overflows right: {l0_a}..{l0_b} vs {box_left}..{box_right}");
+
+    let (r_short_a, r_short_b, _) = span(1);
+    assert!(
+        r_short_a > box_left && (r_short_b - box_right).abs() < 0.5,
+        "short right-aligned line ends at the box's right inset: {r_short_a}..{r_short_b} vs {box_right}"
+    );
+
+    let (c_short_a, c_short_b, _) = span(2);
+    let c_short_mid = (c_short_a + c_short_b) / 2.0;
+    assert!((c_short_mid - box_mid).abs() < 0.5, "short centred line centres in the box: {c_short_mid} vs {box_mid}");
+
+    let (r_long_a, r_long_b, n3) = span(3);
+    assert_eq!(n3, 1);
+    assert!(
+        r_long_a < box_left - 50.0 && (r_long_b - box_right).abs() < 0.5,
+        "long right-aligned line overflows left: {r_long_a}..{r_long_b} vs {box_left}..{box_right}"
+    );
+
+    let (c_long_a, c_long_b, n4) = span(4);
+    assert_eq!(n4, 1);
+    let c_long_mid = (c_long_a + c_long_b) / 2.0;
+    assert!(
+        c_long_a < box_left - 20.0 && c_long_b > box_right + 20.0 && (c_long_mid - box_mid).abs() < 0.5,
+        "long centred line overflows both sides evenly: {c_long_a}..{c_long_b} around {box_mid}"
+    );
+}
+
+/// In a mixed `no_wrap` box (with a table), paragraphs keep their revision across layout so
+/// `typing_word` still suppresses proofing squiggles without mutating the document model.
+#[test]
+fn mixed_no_wrap_box_keeps_typing_word_suppression() {
+    let mut d = Document::from_text("x");
+    let mut p = Paragraph::with_text("helo wrld", Default::default());
+    p.rev = 42;
+    let rev = p.rev;
+    let float = wordcraft_doc::para::Float { x: 200.0, y: 100.0, ..Default::default() };
+    let id = text_box_with(&mut d, 0, "", 144.0, 144.0, TextBody { no_wrap: true, ..Default::default() }, float);
+    d.parts.get_mut(&id).unwrap().blocks = vec![para_block(p), std::sync::Arc::new(Block::Table(wordcraft_doc::Table::new(1, 2, 100.0)))];
+    let marks = |l: &DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(s), path, para, .. } if *s == id && path.0 == [0] => {
+                    Some(para.issues.iter().filter(|i| !i.2).map(|i| "helo wrld"[i.0..i.1].to_string()).collect())
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let mut cache = LayoutCache::new();
+    let opts = LayoutOptions { proofing: true, ..Default::default() };
+    assert_eq!(marks(&layout(&d, &mut cache, &opts)), ["helo", "wrld"]);
+    let typing = layout(&d, &mut cache, &LayoutOptions { typing_word: Some(TypingWord { rev, start: 5, end: 9 }), ..opts });
+    assert_eq!(marks(&typing), ["helo"], "typing_word must match revision and suppress wrld squiggle");
+}

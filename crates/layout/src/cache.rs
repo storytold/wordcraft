@@ -27,6 +27,8 @@ pub(crate) struct Key {
     pub(crate) sref: u64,
     /// The word being typed in this paragraph, left without a spelling squiggle.
     pub(crate) typing: Option<(usize, usize)>,
+    /// Laid out inside a text box with "Wrap text in shape" off (`TextBody::no_wrap`).
+    pub(crate) no_wrap: bool,
 }
 
 /// Memoised paragraph layouts.

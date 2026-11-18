@@ -398,4 +398,7 @@ pub struct ParaEnv<'a> {
     /// Heights of the paragraph's inline text boxes that resize to fit their text, by object
     /// index: they take these instead of their saved heights.
     pub fitted: &'a [(usize, f32)],
+    /// Text box with "Wrap text in shape" off: lines run on past the box's sides without
+    /// wrapping, while still aligning within the box's own measure.
+    pub no_wrap: bool,
 }

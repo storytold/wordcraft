@@ -40,6 +40,9 @@ struct Breaker<'e> {
     /// the list label and alignment are measured from the right. Lines are mirrored back (and
     /// bidirectional text reordered) once broken; floating objects are mirrored in.
     rtl_para: bool,
+    /// Text box with "Wrap text in shape" off: lines do not wrap at the right edge and long
+    /// lines still shift by `slack` when centred or right-aligned.
+    no_wrap: bool,
     /// The document grid's line pitch, for paragraphs that snap to it.
     grid: Option<Grid>,
     bidi: bool,
@@ -195,6 +198,7 @@ impl<'e> Breaker<'e> {
             hyph_limit: settings.consecutive_hyphen_limit as usize,
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
+            no_wrap: env.no_wrap,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
             est_h,
@@ -353,6 +357,13 @@ impl<'e> Breaker<'e> {
             self.first_x0 = sc.xs.first().copied();
         }
         let end = sc.end;
+        let (left, right) = if self.no_wrap {
+            let x0 = sc.xs.first().copied().unwrap_or(sc.left);
+            let x1 = sc.xs.last().copied().unwrap_or(sc.right_edge);
+            (sc.left.min(x0), sc.right_edge.max(x1))
+        } else {
+            (sc.left, sc.right_edge)
+        };
         let mut line = Line {
             top: self.top,
             height: v.height,
@@ -366,8 +377,8 @@ impl<'e> Breaker<'e> {
             end,
             start,
             stop,
-            left: sc.left,
-            right: sc.right_edge,
+            left,
+            right,
             hyphen,
             beside: sc.beside,
             vis: Vec::new(),
@@ -558,7 +569,7 @@ impl<'e> Breaker<'e> {
             (None, Align::Right) => slack,
             _ => 0.0,
         };
-        if shift > 0.0 && slack > 0.0 {
+        if (shift > 0.0 && slack > 0.0) || (self.no_wrap && shift != 0.0) {
             // Ordinary tabs move with paragraph alignment; positional tabs keep their anchors.
             let whole_line = display.is_none() && pl.label.is_none() && !self.rtl_para && !pl.ptabs.iter().any(|(ci, ..)| *ci >= c0 && *ci < c1);
             let shift_from = if whole_line { c0 } else { align_from };
@@ -576,7 +587,7 @@ impl<'e> Breaker<'e> {
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
         let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
-        let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
+        let shrink = !self.no_wrap && display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
@@ -817,7 +828,7 @@ impl Scan {
             return true;
         }
         self.xs.push(self.x);
-        if ptab.is_none() && stop.pos > self.right_edge + 0.01 && stop.align == TabAlign::Left {
+        if !bk.no_wrap && ptab.is_none() && stop.pos > self.right_edge + 0.01 && stop.align == TabAlign::Left {
             // Not when only markers (a bookmark, say) are before it: the line is empty.
             if has_content(pl, self.c0, j) {
                 // Tab past the right indent wraps: like Word, it starts the next line
@@ -893,7 +904,8 @@ impl Scan {
         } else {
             0.0
         };
-        let fits = absorbs
+        let fits = bk.no_wrap
+            || absorbs
             || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;

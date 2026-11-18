@@ -67,6 +67,11 @@ pub(crate) struct Ctx<'a> {
     /// Heights of text boxes that resize to fit their text, by story, width and page fields,
     /// worked out once per matching layout context ([`textbox::fitted_height`]).
     pub(crate) fitted: HashMap<(u32, u32, (u32, u32, u32, u32, u64, wordcraft_doc::section::NumFormat)), Option<f32>>,
+    /// Width and depth of unwrapped text boxes that resize to fit their text, by story and
+    /// page fields, worked out once per matching layout context ([`textbox::unwrapped_extent`]).
+    pub(crate) fitted_extents: HashMap<(u32, (u32, u32, u32, u32, u64, wordcraft_doc::section::NumFormat)), Option<(f32, f32)>>,
+    /// Text box layout with "Wrap text in shape" off: passed to paragraph line breaking.
+    pub(crate) no_wrap: bool,
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     pub(crate) floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
@@ -227,6 +232,7 @@ impl Ctx<'_> {
             grid: para::Grid::default(),
             fit_objects: false,
             fitted: &[],
+            no_wrap: false,
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
@@ -285,7 +291,7 @@ impl Ctx<'_> {
             .objects
             .iter()
             .any(|o| matches!(o, InlineObject::Shape { story: Some(_), float, .. } if float.wrap == Wrap::Inline && float.rot == 0.0));
-        if self.opts.proofing || self.boxes.inside() || resized || self.hide_deleted != self.opts.hides_deleted(StoryRef::Body) {
+        if self.opts.proofing || self.boxes.inside() || self.no_wrap || resized || self.hide_deleted != self.opts.hides_deleted(StoryRef::Body) {
             return None;
         }
         let kept = (self.eq_count, self.uses_totals);
@@ -415,6 +421,7 @@ impl Ctx<'_> {
             hide_deleted: self.hide_deleted,
             sref: if self.fields.styleref.is_some() && styleref::has_styleref(p) { self.fields.styleref_key(p) } else { 0 },
             typing: self.opts.typing_word.filter(|t| t.rev == p.rev).map(|t| (t.start, t.end)),
+            no_wrap: self.no_wrap,
         };
         (key, eq_number)
     }
@@ -454,6 +461,7 @@ impl Ctx<'_> {
             grid: self.grid,
             fit_objects: self.boxes.inside(),
             fitted,
+            no_wrap: self.no_wrap,
         }
     }
 }
@@ -532,6 +540,8 @@ mod tests {
             footer_wraps: Default::default(),
             header_tables: Default::default(),
             fitted: Default::default(),
+            fitted_extents: Default::default(),
+            no_wrap: false,
             floats_above: Default::default(),
             hf: Arc::new(HfLinks::new(doc.sections())),
             alphas: Default::default(),
@@ -545,5 +555,49 @@ mod tests {
         assert_eq!(ctx.fitted.len(), 2, "the same box with a different PAGE format needs its own height");
         ctx.fitted_boxes(&p);
         assert_eq!(ctx.fitted.len(), 2, "matching field context reuses the fitted height");
+        drop(ctx);
+
+        if let Some(part) = doc.parts.get_mut(&id) {
+            part.body.no_wrap = true;
+        }
+        let mut ctx = Ctx {
+            doc: &doc,
+            cache: &mut cache,
+            opts: &opts,
+            counters: Default::default(),
+            fields: FieldCtx::default(),
+            notes_hash: 0,
+            numbers: Default::default(),
+            eq_count: 0,
+            boxes: Default::default(),
+            chains: Default::default(),
+            grid: Default::default(),
+            hide_deleted: opts.hides_deleted(StoryRef::Body),
+            uses_totals: false,
+            track_totals: false,
+            pct_base: None,
+            quiet_marks: Vec::new(),
+            stacked_marks: Vec::new(),
+            mirror: false,
+            table_keys: Vec::new(),
+            pin: None,
+            footer_wraps: Default::default(),
+            header_tables: Default::default(),
+            fitted: Default::default(),
+            fitted_extents: Default::default(),
+            no_wrap: false,
+            floats_above: Default::default(),
+            hf: Arc::new(HfLinks::new(doc.sections())),
+            alphas: Default::default(),
+            header_repeats: 0,
+        };
+        let shape = &p.objects[0];
+        assert!(crate::textbox::fitted_size(&mut ctx, shape, 0).is_some());
+        assert_eq!(ctx.fitted_extents.len(), 1);
+        assert!(crate::textbox::fitted_size(&mut ctx, shape, 0).is_some());
+        assert_eq!(ctx.fitted_extents.len(), 1, "matching field context reuses the fitted extent");
+        ctx.fields.page_format = wordcraft_doc::section::NumFormat::CardinalText;
+        assert!(crate::textbox::fitted_size(&mut ctx, shape, 0).is_some());
+        assert_eq!(ctx.fitted_extents.len(), 2, "a different PAGE format measures its own fitted extent");
     }
 }

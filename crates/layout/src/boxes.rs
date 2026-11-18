@@ -31,15 +31,25 @@ pub(crate) struct BoxInput<'a> {
     pub(crate) context: BoxContext<'a>,
     pub(crate) depth: usize,
     pub(crate) frame: Option<PageFrame<'a>>,
+    pub(crate) no_wrap: bool,
 }
 
 impl<'a> BoxInput<'a> {
     pub(crate) fn other(story: StoryRef, blocks: &'a Blocks, width: f32, depth: usize, frame: Option<PageFrame<'a>>) -> Self {
-        Self { story, blocks, prefix: &[], width, context: BoxContext::Other, depth, frame }
+        Self { story, blocks, prefix: &[], width, context: BoxContext::Other, depth, frame, no_wrap: false }
     }
 
     pub(crate) fn cell(story: StoryRef, blocks: &'a Blocks, prefix: &'a [u32], width: f32, cell: Option<&'a para::CellText>, depth: usize) -> Self {
-        Self { story, blocks, prefix, width, context: BoxContext::Cell { text: cell, left: 0.0, right: width, clamp: false }, depth, frame: None }
+        Self {
+            story,
+            blocks,
+            prefix,
+            width,
+            context: BoxContext::Cell { text: cell, left: 0.0, right: width, clamp: false },
+            depth,
+            frame: None,
+            no_wrap: false,
+        }
     }
 }
 
@@ -193,10 +203,11 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
 /// says where the box sits on its page, for floating objects positioned relative to the page or
 /// its margins; without it (cells, notes, text boxes) they're positioned in the box.
 pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
-    let BoxInput { story, blocks, prefix, width, context, depth, frame } = input;
+    let BoxInput { story, blocks, prefix, width, context, depth, frame, no_wrap } = input;
     // Deletions in balloons leave the body's text only: a header, note or text box keeps its own
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
+    let outer_no_wrap = std::mem::replace(&mut ctx.no_wrap, no_wrap);
     let empty_cell = para::CellText::default();
     let (in_cell, table, cell_edges) = match context {
         BoxContext::Other => (false, None, None),
@@ -403,6 +414,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
+    ctx.no_wrap = outer_no_wrap;
     BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 

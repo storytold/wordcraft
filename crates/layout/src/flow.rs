@@ -1028,6 +1028,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                         grid: ctx.grid,
                         fit_objects: false,
                         fitted: &[],
+                        no_wrap: false,
                     };
                     Arc::new(para::layout_para(p, &env))
                 }

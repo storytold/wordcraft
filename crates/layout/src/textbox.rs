@@ -71,7 +71,7 @@ fn frame(body: &TextBody, w: f32, h: f32) -> (f32, f32) {
 const STACK_WIDTH: f32 = 12.0;
 
 /// Lay `blocks` of story `id` out in lines `len` long; stacked text one letter to a line.
-fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth: usize) -> Vec<Placed> {
+fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, no_wrap: bool, depth: usize) -> Vec<Placed> {
     let story = StoryRef::Part(id);
     if vert == TextVert::Stacked {
         // One letter to a line: words may break anywhere, and each letter takes the narrowest
@@ -93,13 +93,11 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
             .collect();
         return layout_box(ctx, BoxInput::other(story, &stacked, STACK_WIDTH, depth + 1, None)).items;
     }
-    layout_box(ctx, BoxInput::other(story, blocks, len, depth + 1, None)).items
+    layout_box(ctx, BoxInput { no_wrap, ..BoxInput::other(story, blocks, len, depth + 1, None) }).items
 }
 
 /// How long a line of text that doesn't wrap may run (the largest page side).
 const NO_WRAP_LEN: f32 = 1584.0;
-/// Room text that doesn't wrap is laid out with past its widest line, so the line still fits.
-const FIT_SLACK: f32 = 0.5;
 /// The widest outline a fitted box counts (the reader's cap on `a:ln` widths).
 const MAX_OUTLINE: f32 = 100.0;
 
@@ -107,78 +105,39 @@ const MAX_OUTLINE: f32 = 100.0;
 /// shape off). None when it can't be told here, so the box keeps its own size: text running up,
 /// down or stacked, a linked box, or text holding tables or text boxes.
 fn unwrapped_extent(ctx: &mut Ctx, id: u32, depth: usize) -> Option<(f32, f32)> {
-    let part = ctx.doc.parts.get(&id)?;
-    if !part.body.no_wrap || part.body.vert != TextVert::Horz || part.body.next.is_some() {
-        return None;
+    let key = (id, ctx.fields.page_key());
+    if let Some(&ext) = ctx.fitted_extents.get(&key) {
+        return ext;
     }
-    let nested = |b: &Arc<Block>| match &**b {
-        Block::Para(p) => p.objects.iter().any(|o| !o.text_boxes().is_empty()),
-        Block::Table(_) => true,
-    };
-    if part.blocks.iter().any(nested) || shown_story(ctx, id) != id {
-        return None;
-    }
-    let blocks = part.blocks.clone();
-    // Measured apart from where the text is shown: list numbers, equation numbers and the nested
-    // boxes' budget count once.
-    let snap = (ctx.counters.clone(), ctx.eq_count, ctx.boxes.clone());
-    let items = layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, NO_WRAP_LEN, depth + 1, None)).items;
-    (ctx.counters, ctx.eq_count, ctx.boxes) = snap;
-    let widest = items
-        .iter()
-        .filter_map(|it| match it {
-            Placed::Lines { para, .. } => Some(natural_width(para)),
-            _ => None,
-        })
-        .fold(0.0f32, f32::max);
-    Some((widest, extent(&items)))
-}
-
-/// The widest line of text box `id`'s paragraphs laid out on their own, when the box doesn't
-/// wrap its text but [`unwrapped_extent`] leaves it alone because it also holds tables or text
-/// boxes. None when the box wraps its text, runs it up, down or stacked, or is linked.
-fn mixed_unwrapped_width(ctx: &mut Ctx, id: u32, blocks: &Blocks, depth: usize) -> Option<f32> {
-    let body = ctx.doc.parts.get(&id)?.body;
-    if !body.no_wrap || body.vert != TextVert::Horz || body.next.is_some() || shown_story(ctx, id) != id {
-        return None;
-    }
-    Some(paras_widest(ctx, id, blocks, depth))
-}
-
-/// The widest line of story `id`'s paragraphs among `blocks`, laid out on their own and unwrapped.
-fn paras_widest(ctx: &mut Ctx, id: u32, blocks: &Blocks, depth: usize) -> f32 {
-    let paras: Blocks = blocks.iter().filter(|b| matches!(&***b, Block::Para(_))).cloned().collect();
-    // Measured apart from where the text is shown: list numbers, equation numbers and the nested
-    // boxes' budget count once.
-    let snap = (ctx.counters.clone(), ctx.eq_count, ctx.boxes.clone());
-    let items = layout_box(ctx, BoxInput::other(StoryRef::Part(id), &paras, NO_WRAP_LEN, depth + 1, None)).items;
-    (ctx.counters, ctx.eq_count, ctx.boxes) = snap;
-    items
-        .iter()
-        .filter_map(|it| match it {
-            Placed::Lines { para, .. } => Some(natural_width(para)),
-            _ => None,
-        })
-        .fold(0.0f32, f32::max)
-}
-
-/// `blocks` with each paragraph's lines `room` points longer (its right indent that much less),
-/// so text that doesn't wrap runs on past the box's side while its tables keep the box's width.
-fn widen_paras(ctx: &Ctx, blocks: &Blocks, room: f32) -> Blocks {
-    blocks
-        .iter()
-        .map(|b| match &**b {
-            Block::Para(p) => {
-                let mut p = p.clone();
-                let right = ctx.doc.styles.resolve_para(&p.props).indent_right;
-                p.props.indent_right = Some(right - room);
-                p.props.indent_right_chars = None;
-                p.touch();
-                Arc::new(Block::Para(p))
-            }
-            _ => b.clone(),
-        })
-        .collect()
+    let ext = (|| {
+        let part = ctx.doc.parts.get(&id)?;
+        if !part.body.no_wrap || part.body.vert != TextVert::Horz || part.body.next.is_some() {
+            return None;
+        }
+        let nested = |b: &Arc<Block>| match &**b {
+            Block::Para(p) => p.objects.iter().any(|o| !o.text_boxes().is_empty()),
+            Block::Table(_) => true,
+        };
+        if part.blocks.iter().any(nested) || shown_story(ctx, id) != id {
+            return None;
+        }
+        let blocks = part.blocks.clone();
+        // Measured apart from where the text is shown: list numbers, equation numbers and the nested
+        // boxes' budget count once.
+        let snap = (ctx.counters.clone(), ctx.eq_count, ctx.boxes.clone());
+        let items = layout_box(ctx, BoxInput { no_wrap: true, ..BoxInput::other(StoryRef::Part(id), &blocks, NO_WRAP_LEN, depth + 1, None) }).items;
+        (ctx.counters, ctx.eq_count, ctx.boxes) = snap;
+        let widest = items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { para, .. } => Some(natural_width(para)),
+                _ => None,
+            })
+            .fold(0.0f32, f32::max);
+        Some((widest, extent(&items)))
+    })();
+    ctx.fitted_extents.insert(key, ext);
+    ext
 }
 
 /// The size Word gives a text box that resizes to fit its text and doesn't wrap it: its widest
@@ -198,28 +157,16 @@ pub(crate) fn fitted_size(ctx: &mut Ctx, o: &InlineObject, depth: usize) -> Opti
 /// share of a linked chain's, cut to what fits, aligned and turned as the box says.
 pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec<Placed> {
     let body = ctx.doc.parts.get(&id).map(|p| p.body).unwrap_or_default();
-    let (mut len, across) = frame(&body, rect.w, rect.h);
+    let (len, across) = frame(&body, rect.w, rect.h);
     let items = match chain_share(ctx, id, depth) {
         Some(items) => items,
         None => {
-            // Text that doesn't wrap runs on to its widest line, past the box's side if need be.
-            let unwrapped = unwrapped_extent(ctx, id, depth);
-            if let Some((widest, _)) = unwrapped {
-                len = len.max(widest + FIT_SLACK);
-            }
             if !ctx.boxes.enter(id) {
                 return Vec::new();
             }
-            let mut blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
-            // Beside tables or text boxes the box keeps its size and its tables the box's width;
-            // only its paragraphs run on to their widest line.
-            if unwrapped.is_none()
-                && let Some(widest) = mixed_unwrapped_width(ctx, id, &blocks, depth)
-                && widest + FIT_SLACK > len
-            {
-                blocks = widen_paras(ctx, &blocks, widest + FIT_SLACK - len);
-            }
-            let inner = lay(ctx, id, &blocks, len, body.vert, depth);
+            let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
+            let unwrap = body.no_wrap && body.vert == TextVert::Horz;
+            let inner = lay(ctx, id, &blocks, len, body.vert, unwrap, depth);
             ctx.boxes.leave();
             // Text that doesn't fit inside the margins is hidden, as in Word; a box that resizes
             // to fit its text shows it all (#743).
@@ -241,18 +188,12 @@ pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32) -> Option<f32> {
     if ctx.chains.member.contains_key(&id) || !ctx.boxes.enter(id) {
         return None;
     }
-    let mut blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
+    let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
     let (len, _) = frame(&body, w, 0.0);
-    // Text that doesn't wrap (Wrap text in shape off) is measured on its unwrapped lines, as
-    // `box_items` shows it (#2191).
-    if let Some(widest) = mixed_unwrapped_width(ctx, id, &blocks, 0)
-        && widest + FIT_SLACK > len
-    {
-        blocks = widen_paras(ctx, &blocks, widest + FIT_SLACK - len);
-    }
+    let unwrap = body.no_wrap && body.vert == TextVert::Horz;
     // Measuring doesn't count the box's list numbers and equations: `box_items` lays it out again.
     let snap = (ctx.counters.clone(), ctx.eq_count);
-    let items = lay(ctx, id, &blocks, len, body.vert, 0);
+    let items = lay(ctx, id, &blocks, len, body.vert, unwrap, 0);
     (ctx.counters, ctx.eq_count) = snap;
     ctx.boxes.leave();
     let [_, t, _, b] = body.insets_pt();
@@ -438,17 +379,7 @@ fn flow(ctx: &mut Ctx, chain: &[u32], depth: usize) -> Vec<Vec<Placed>> {
             Some((_, items)) => items.clone(),
             None => {
                 (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
-                // Tables keep the box's width (#2191).
-                let mut shown = blocks.clone();
-                if unwrap {
-                    let widest = paras_widest(ctx, head, &blocks, depth);
-                    // Measuring lays the story's paragraphs out once more.
-                    work = work.saturating_add(floor);
-                    if widest + FIT_SLACK > len {
-                        shown = widen_paras(ctx, &blocks, widest + FIT_SLACK - len);
-                    }
-                }
-                let items = lay(ctx, head, &shown, len, body.vert, depth);
+                let items = lay(ctx, head, &blocks, len, body.vert, unwrap, depth);
                 after.get_or_insert_with(|| (ctx.counters.clone(), ctx.eq_count));
                 #[cfg(test)]
                 FLOW_LAYOUTS.with(|c| c.set(c.get().saturating_add(1)));
