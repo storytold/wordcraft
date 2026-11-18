@@ -35,7 +35,7 @@ Floating tables count exact contact with a line's bottom edge (#3977); shapes ke
 
 An otherwise empty section at page start retains its line before continuous content. Shared-section page totals and wrapping earlier text around later floating tables remain open.
 
-Consistent cell widths override stale table grid proportions when their totals agree. Conflicting widths, spans and percentages still need the shared-grid algorithm.
+Consistent cell widths override stale table grid proportions when their totals agree. Percentage cell widths size their columns whichever rows give them, as in Word: rows that disagree give each column its largest, and a merged cell's percentage is shared by the columns under it (in grid proportions, where Word shares it by their content). Mixed absolute and percentage widths still need the shared-grid algorithm.
 
 Protected typing boundary discovery (#3614) counts earlier objects once and uses an editable-ID set when moving through consecutive permission markers. Permission matching, protection enforcement and saved formats are unchanged. This narrows gap #3; broader stability and mutation costs remain.
 
@@ -240,6 +240,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
 | 2026-11-01 | trivial | #19 narrowed: ODT read and written nearly whole on this branch (styles, tables, notes, comments, tracked changes including formatting, fields, indexes and marks, drawings, charts, embedded objects, forms, ruby, password protection, flat ODT), checked against LibreOffice; what's left listed; estimate 18–27 h → 10–16 h |
 | 2026-11-01 | trivial | #10 narrowed: text in a turned text box is drawn turned with it on screen and in PNG and PDF (upside down when flipped across, never mirrored); editing it still goes by its upright text; estimate unchanged |
+| 2026-10-31 | trivial | PDFs, prints and page images show body PAGEREF fields' pages, so a table of contents prints its headings' pages, as Word does; not a ranked gap; readiness estimates unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery no longer repeats paragraph-prefix scans (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
 | 2026-11-04 | trivial | Table Sort rejects malformed or nonexistent explicit columns before mutation; valid columns, the omitted-column default and history are retained (#5531). Readiness estimates unchanged. |
@@ -270,6 +271,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-31 | trivial | Preserve recipient columns after an unquoted whitespace-only prefix in a headered CSV (#4249); keep quoted headers, headerless whitespace records and shared CSV parsing. |
 | 2026-10-31 | trivial | Integrate complete-record recipient CSV delimiter detection (#4249) with current main; preserve leading blank-line detection (#5042), original regressions and readiness estimates. |
 | 2026-11-01 | trivial | #2437: Preserve finite paragraph-border flow extents and terminal-break keep preflight with current-main changes. Recursive terminal-successor lookahead remains outside scope. Source checks only; primary qualification pending. |
+| 2026-10-31 | trivial | Percentage cell widths size their columns whichever rows give them, as measured in Word, rows that disagree giving each column its largest and merged cells sharing theirs; mixed absolute and percentage widths still need the shared-grid algorithm; no ranked gap changed; readiness estimates unchanged |
 | 2026-10-30 | trivial | Only the PDF sent to the printer omits link annotations; File › Print › Save these pages as PDF (`file.printPdf`) keeps them, like Export (#4734); no ranked gap changed; readiness estimates unchanged |
 | 2026-10-29 | trivial | The print job's PDF omits link annotations, which the spooler refused to fit to the paper, so documents with links reach the printer (#4734); physical printer output remains to be validated; no ranked gap changed; readiness estimates unchanged |
 | 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |

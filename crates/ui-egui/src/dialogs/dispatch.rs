@@ -5,7 +5,7 @@ use super::font::{apply_font, font_box, font_sample_box, font_sample_props, samp
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
 use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
-use super::paragraph::{ParaNumber, apply_paragraph, para_check, para_number};
+use super::paragraph::{ParaNumber, apply_paragraph, para_check, para_number, para_special};
 use super::styles::manage_styles;
 use super::{Dialog, MeasureExt, Tokens, Ui, Value, WordApp, json, semibold, vec2};
 
@@ -324,10 +324,7 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                         let right_label = r.cell(|ui| ui.label(tl!(r_label)));
                         r.cell(|ui| para_number(ui, right, ParaNumber::Length, "right", mixed, &right_label));
                     });
-                    t.row(|r| {
-                        let first_label = r.cell(|ui| ui.label(tl!("First line:")));
-                        r.cell(|ui| para_number(ui, first, ParaNumber::Length, "indentFirst", mixed, &first_label));
-                    });
+                    t.row(|r| para_special(r, first, mixed));
                 });
                 para_check(ui, &mut opts[0], tl!("Mirror indents"), "mirrorIndents", mixed);
             });
