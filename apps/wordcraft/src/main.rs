@@ -15,8 +15,6 @@ mod appimage_env;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod clipboard;
-mod cloud;
-mod collab;
 mod control_server;
 mod default_apps;
 mod file_dialogs;
@@ -52,9 +50,6 @@ struct App {
     /// The host's answer for this frame. `InputState` still describes the last painted frame on
     /// a hidden logic tick.
     raw_window: RawWindowState,
-    /// Shared editing, when a credential was configured. `None` leaves the app behaving exactly
-    /// as it did before.
-    collab: Option<collab::Link>,
     /// macOS: the documents opened from Finder.
     #[cfg(target_os = "macos")]
     events: fmv_macos_events::Inbox,
@@ -67,15 +62,6 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         apple_events::poll(&self.events, &mut self.doc, ctx);
-        if let Some(link) = &mut self.collab {
-            link.pump(&mut self.doc.session);
-            for notice in std::mem::take(&mut link.notices) {
-                self.doc.status(notice);
-            }
-            // egui only draws when something happens locally, and another person typing is not a
-            // local event. Without this a remote edit sits in the socket until the mouse moves.
-            ctx.request_repaint_after(std::time::Duration::from_millis(120));
-        }
         self.doc.logic(ctx);
         self.dialogs.show(frame);
         let mut window = self.raw_window;
@@ -744,9 +730,9 @@ fn main() -> eframe::Result {
                 let doc = app.session.blank_document();
                 app.replace_startup_document(doc);
             }
-            // Open, Save and Share against cloud storage: no backend ships right now (see
-            // `wordcraft_ui_egui::cloud`), so the application is local-only and offers nothing
-            // cloud-shaped until storytold/craft-libs#160 lands.
+            // Open, Save and Share against cloud storage reach the real craft_ui::cloud contract
+            // (see `wordcraft_ui_egui::cloud_app`), but no backend is connected: nothing here
+            // calls `app.cloud.connect`, so every cloud page and menu item stays hidden.
             app.watch_desktop_theme(&cc.egui_ctx);
             app.tell_about_font_downloads();
             if prefs_enabled()
@@ -787,17 +773,6 @@ fn main() -> eframe::Result {
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }
-            // Attached after the document exists, so the first remote edit has somewhere to
-            // land. A missing credential or an unreachable relay logs and yields None, and the app
-            // runs as an ordinary single-writer word processor.
-            //
-            // A document named by the launcher, reached through CollabCraft, which signs in
-            // through the browser. Otherwise the plain token in the environment, which is what a
-            // test harness supplies.
-            let link = match cloud::CloudToken::from_env() {
-                Some(source) => collab::Link::attach(&mut app.session, &source),
-                None => collab::Link::attach(&mut app.session, &collab::EnvToken),
-            };
             Ok(Box::new(App {
                 doc: app,
                 // With nothing restored, the window the system placed is checked all the same.
@@ -805,7 +780,6 @@ fn main() -> eframe::Result {
                 key_file,
                 dialogs,
                 raw_window: RawWindowState::default(),
-                collab: link,
                 #[cfg(target_os = "macos")]
                 events: apple_events.connect(&cc.egui_ctx),
             }))
