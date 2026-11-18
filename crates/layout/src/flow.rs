@@ -577,7 +577,14 @@ impl<'a> Flow<'a> {
         );
         self.late.drew();
         items.extend(front);
-        items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y));
+        // A paragraph mark kept with a closing page break is drawn on the break's line in Word:
+        // its own line takes no number.
+        let n = self.pl.lines.len();
+        let break_mark = (n >= 2
+            && self.pl.lines.get(n - 2).is_some_and(|l| l.end == LineEnd::PageBreak)
+            && self.pl.lines.get(n - 1).is_some_and(|m| only_markers(self.p, m.start..m.stop)))
+        .then_some(n - 1);
+        items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y, break_mark));
         add_items(pb, behind, items);
         if let (Some(f), Some(l)) = (self.pl.lines.get(l0), self.pl.lines.get(l1 - 1)) {
             pb.y = y + (l.top + l.height - f.top);
@@ -784,14 +791,14 @@ fn add_notes(pb: &mut PageBuilder, mut new_notes: Vec<NoteBox>, notes: &[(usize,
 }
 
 /// Line numbers for lines `l0..l1` of `pl` laid out from `y`, left of the column they are in:
-/// each column of a multi-column section gets its own (#6018), as in Word.
-fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): (usize, usize), y: f32) -> Vec<Placed> {
+/// each column of a multi-column section gets its own (#6018), as in Word. Line `skip` takes none.
+fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): (usize, usize), y: f32, skip: Option<usize>) -> Vec<Placed> {
     let mut items = Vec::new();
     if let Some(ln) = pb.sect.line_numbers.clone().filter(|_| !pb.web && pl.rp.style != "Header" && !pl.rp.suppress_line_numbers)
         && let Some(first) = pl.lines.get(l0)
     {
         for li in l0..l1 {
-            let Some(line) = pl.lines.get(li).filter(|l| !l.beside) else { continue };
+            let Some(line) = pl.lines.get(li).filter(|l| !l.beside && skip != Some(li)) else { continue };
             pb.line_no = pb.line_no.saturating_add(1);
             let n = pb.line_no.saturating_add(ln.start.saturating_sub(1));
             if ln.count_by > 1 && !n.is_multiple_of(ln.count_by) {
