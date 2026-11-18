@@ -901,6 +901,8 @@ Quoted field escapes are interpreted like Word, and body `PAGE` fields use their
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
+- 2026-11-18: Command plug-ins (RFC-0046, gap #22): WebAssembly modules installed from a file, a GitHub release or a catalog after a confirmation (permissions, source, SHA-256), run from Insert › Add-ins as one undo step under an allowlist of document commands (`plugin.*`, `addins.get`; [docs/plugins.md](docs/plugins.md)). Catalog 511/522; readiness unchanged.
+
 ## Revision history
 
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
@@ -926,6 +928,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | trivial | Progress log: command plug-ins (RFC-0046), Insert › Add-ins (#22) |
 | 2026-10-30 | trivial | Progress log: under Track Changes a list item deleted whole shows its number as deleted text, in the deletion's colour and mark (#4828); readiness unchanged |
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |

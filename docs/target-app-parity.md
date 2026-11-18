@@ -200,7 +200,7 @@ Word. Their weighted sum is the **full ready for real work** number.
 | Localization | 4% | 27% | 75–120 + native review | [localization-parity.md](localization-parity.md) | 13 UI languages (Word 30); 4 of the 12 key languages partly done; English and Polish proofing |
 | Platforms | 3% | 95% | 5–10 | [ROADMAP.md](../ROADMAP.md) | macOS (universal, signed), Windows x64/x86/arm64, Linux (AppImage/deb/rpm/Flatpak), FreeBSD, web. Beyond Word on Linux, BSD and the web; Word's iPad/iPhone/Android apps are out of scope |
 | Hardware | 1% | 40% | 20–40 | [hardware-parity.md](hardware-parity.md) | No native printing on desktop, no pen/ink, no dictation; GPU drawing and HiDPI fine. Ink hours are in the Features row (Draw tab) |
-| Ecosystem and plugins | 2% | 15% | 40–80 | [gaps.md](gaps.md) | Zotero built in, macros record/play commands, `.docm` macros preserved (#172). No VBA execution, no Office add-ins, no EndNote/Mendeley plugins, no cloud storage or co-authoring |
+| Ecosystem and plugins | 2% | 15% | 40–80 | [gaps.md](gaps.md) | Zotero built in, macros record/play commands, `.docm` macros preserved (#172), command plug-ins in WebAssembly (RFC-0046, [plugins.md](plugins.md); no panels yet). No VBA execution, no Office add-ins (Office.js), no EndNote/Mendeley plugins, no cloud storage or co-authoring |
 | AI features | 0% | 40% | 15–30 | [gaps.md](gaps.md) | Beyond Word for external agents (MCP, CLI). No in-app writing assistant like Copilot yet (chat PR #178 open). Weight 0: Copilot is a paid add-on and not what decides a switch |
 
 **Ready for real work ≈ 0.30·68 + 0.20·60 + 0.15·55 + 0.10·65 + 0.10·50 + 0.05·75 + 0.04·25 +
@@ -324,3 +324,4 @@ can be used without committing Word output.
 | 2026-10-10 | major | Created from ROADMAP.md's "Parity by area" and "Estimate to 100%" sections; full re-measure against Word for Mac 16.113.4 (bundle listing, catalog diff from source, issue tracker); split into feature depth (67%) and ready for real work (60%); added proofing, East Asian, accessibility areas and the dimension table; hours re-calibrated from PR history |
 | 2026-10-06 | major | First estimate in ROADMAP.md: ~62% real feature parity, 120–150 h to 100% |
 | 2026-10-29 | trivial | Tables row: Table Properties' row, column and cell settings apply to the selection, as in Word (#4857); no percentage change |
+| 2026-11-18 | trivial | Ecosystem row: command plug-ins (RFC-0046), Insert › Add-ins › Get Add-ins live (`addins.get`): Insert catalog 47/53 → 48/53; percentages unchanged |
