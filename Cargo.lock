@@ -1283,6 +1283,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mcp-server"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=93dac78c93a7f1fd66e2022edeb089233b1dc45a#93dac78c93a7f1fd66e2022edeb089233b1dc45a"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-metadata"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=93dac78c93a7f1fd66e2022edeb089233b1dc45a#93dac78c93a7f1fd66e2022edeb089233b1dc45a"
@@ -1430,6 +1438,11 @@ dependencies = [
 
 [[package]]
 name = "craft-sheet"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=93dac78c93a7f1fd66e2022edeb089233b1dc45a#93dac78c93a7f1fd66e2022edeb089233b1dc45a"
+
+[[package]]
+name = "craft-ssip"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=93dac78c93a7f1fd66e2022edeb089233b1dc45a#93dac78c93a7f1fd66e2022edeb089233b1dc45a"
 
@@ -7385,6 +7398,7 @@ name = "wordcraft-doc"
 version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
+ "craft-codepage",
  "craft-zip",
  "log",
  "proptest",
@@ -7436,6 +7450,7 @@ dependencies = [
  "craft-font-store",
  "craft-mime",
  "craft-proof",
+ "craft-ssip",
  "craft-zip",
  "encoding_rs",
  "getrandom 0.3.4",
@@ -7540,6 +7555,7 @@ dependencies = [
 name = "wordcraft-mcp"
 version = "0.18.1"
 dependencies = [
+ "craft-mcp-server",
  "log",
  "serde_json",
  "wordcraft-control-key",

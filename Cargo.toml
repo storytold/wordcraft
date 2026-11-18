@@ -31,11 +31,13 @@ wordcraft-pdf = { path = "crates/pdf" }
 wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
+craft-ssip = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
+craft-codepage = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 
 # foundation
@@ -74,6 +76,7 @@ craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", features = ["egui"] }
 craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 craft-docx = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
+craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 craft-rtf = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0", features = ["doc"] }
 craft-doc-binary = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 craft-flow = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
@@ -93,9 +96,10 @@ craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93
 miniz_oxide = "0.9"
 cfb = "0.15"
 # Legacy text encodings (GBK/GB18030, Big5, Shift_JIS, EUC-KR, single-byte code pages) for plain
-# text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause) and its
-# detector chardetng (Apache-2.0 OR MIT), both pure Rust (Firefox's).
+# text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause), pure
+# Rust (Firefox's). Detection is craft-mime's `detect` feature.
 encoding_rs = "0.8"
+# chardetng (Apache-2.0 OR MIT): only the formats test oracle for the old detector uses it directly.
 chardetng = "1"
 # Password-protected (agile-encrypted) Word documents: pure-Rust RustCrypto primitives.
 aes = "0.9"
