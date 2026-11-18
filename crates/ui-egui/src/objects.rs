@@ -73,15 +73,21 @@ pub struct ObjectDrag {
 /// How near (screen points) a press must be to a connector's end to grab it.
 const END_GRAB: f32 = 7.0;
 
-/// The selected connector's start and end on its page (points), and its layout.
+/// The selected floating connector's start and end on its page (points), and its layout; or a
+/// floating line's, whose ends move the same way (they just don't glue); both in the body text,
+/// where `shape.connect` moves them. Such a line shows
+/// and takes handles at its ends only, as Word's do: the frame's handles would sit on a level
+/// line, so pressing it there would resize it into a slant rather than move it.
 fn connector_ends(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, (f32, f32), (f32, f32))> {
     let (pos, InlineObject::Shape { kind, float, .. }) = selected(app)? else { return None };
-    if !kind.is_connector() {
+    // Where `shape.connect` can't move its ends (In Line with Text, a header or footer), a line or
+    // connector keeps its frame's handles instead.
+    if !kind.is_open() || pos.story != StoryRef::Body || float.wrap == Wrap::Inline {
         return None;
     }
     let (flip_h, flip_v) = (float.flip_h, float.flip_v);
     let o = layout.object(&pos, app.session.page_hint)?;
-    let (a, b) = wordcraft_doc::connector::ends(o.rect.x, o.rect.y, o.rect.w, o.rect.h, flip_h, flip_v);
+    let (a, b) = wordcraft_engine::cmd::connectors::page_ends(o.rect, flip_h, flip_v, o.spin.deg);
     Some((o, a, b))
 }
 
@@ -407,7 +413,15 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let _ = app.run("select.addObject", json!({"pos": object.pos()}));
         return true;
     }
-    if pressed && grab == Grab::Move && object.behind() && behind_draggable(app, &object) {
+    // While editing a header/footer, a click on its Behind Text picture where no header/footer
+    // text covers it (the plain hit test picked it: down over the body, or clear of the text in
+    // the band) selects it, as in Word; only over text does the click defer to that text.
+    // ponytail: headers/footers only; body Behind Text pictures clear of text could do the same.
+    let clear_of_text = matches!(object.story, StoryRef::Part(_))
+        && crate::canvas::page_at(pages, layout, scale, at)
+            .and_then(|(page, x, y)| layout.object_at_in(page, x, y, EDGE / scale.max(0.01), object.story))
+            .is_some_and(|o| o.pos() == object.pos());
+    if pressed && grab == Grab::Move && object.behind() && !clear_of_text && behind_draggable(app, &object) {
         let (min, picture) = match app.session.doc.para_at(&object.pos()).and_then(|p| p.object_at(object.pos().off)) {
             Some(o) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return false,
@@ -431,6 +445,8 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let pos = object.pos();
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
         let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+        // A header/footer picture repeats on every page: select the copy clicked, as `select_at` does.
+        app.session.page_hint = object.page;
         let (min, picture) = match selected(app) {
             Some((_, o)) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return true,
@@ -601,9 +617,8 @@ fn link_click(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
 /// Right-click at `at`: the picture, shape or text box under it becomes the selection (as a click
 /// would, without a drag), so the context menu acts on it. Returns whether there was one.
 pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> bool {
-    if crate::canvas::editing_header_footer(app, layout) {
-        return false;
-    }
+    // While editing a header/footer, `grab_at` looks at its own objects, so its picture is picked
+    // too and the menu's Reset Picture or Wrap Text acts on it.
     let Some((object, _)) = grab_at(app, layout, pages, scale, at) else { return false };
     let pos = object.pos();
     // Already selected (alone or among several picked for Group): keep the selection.
@@ -611,6 +626,9 @@ pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
         let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
     }
+    // A header/footer picture repeats on every page: its frame belongs on the page clicked, not
+    // the one last edited.
+    app.session.page_hint = object.page;
     true
 }
 
@@ -644,7 +662,9 @@ fn object_link(app: &WordApp, object: &ObjectHit) -> Option<String> {
 /// being edited (body, or the header/footer).
 fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<(ObjectHit, Grab)> {
     let story = active_story(app, layout);
-    let handle = active(app, layout).filter(|(o, _)| o.story == story && !fixed(app, o)).and_then(|(o, _)| {
+    // A connector or line is resized by its ends (`connector_end_at`), not by a frame.
+    let framed = connector_ends(app, layout).is_none();
+    let handle = active(app, layout).filter(|(o, _)| framed && o.story == story && !fixed(app, o)).and_then(|(o, _)| {
         let f = screen(pages, scale, o.page, o.rect)?;
         if !size_only(app, &o) && frame::rotate_handle_at(f, o.spin.deg, at) {
             return Some((o, Grab::Rotate));
@@ -799,8 +819,10 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
         paint_end_drag(app, d, painter, t, layout, pages, scale);
         return;
     }
-    if let Some((o, a, b)) = connector_ends(app, layout) {
-        // A connector: a handle at each end (filled when glued).
+    // A connector or line: a handle at each end (filled when glued). While it is dragged by its
+    // body, the drag preview below shows instead (the page leaves it out meanwhile).
+    let body_drag = app.canvas.obj_drag.as_ref().is_some_and(|d| d.drag.moved);
+    if !body_drag && let Some((o, a, b)) = connector_ends(app, layout) {
         let glued = match selected(app) {
             Some((_, InlineObject::Shape { extra, .. })) => (extra.start.is_some(), extra.end.is_some()),
             _ => (false, false),
@@ -881,14 +903,16 @@ fn paint_drop_caret(d: &ObjectDrag, painter: &Painter, layout: &DocLayout, pages
 }
 
 /// A connector's end being dragged: a line from its other end to the pointer, and the connection
-/// sites of the shapes near the pointer (the one it would glue to, filled).
+/// sites of the shapes near the pointer (the one it would glue to, filled). A line's end doesn't
+/// glue, so it shows no sites.
 fn paint_end_drag(app: &WordApp, d: &ObjectDrag, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
     let Some((which, at)) = d.end.filter(|_| d.drag.moved) else { return };
     let Some((_, a, b)) = connector_ends(app, layout) else { return };
     let fixed = if which { a } else { b };
     let snap = wordcraft_engine::cmd::connectors::SNAP;
+    let glues = matches!(selected(app), Some((_, InlineObject::Shape { kind, .. })) if kind.is_connector());
     let mut best: Option<((f32, f32), f32)> = None;
-    if let Some(pg) = layout.pages.get(d.object.page) {
+    if glues && let Some(pg) = layout.pages.get(d.object.page) {
         for it in &pg.items {
             let wordcraft_layout::Placed::Object { rect, spin, story: StoryRef::Body, path, off, .. } = it else { continue };
             let pos = Pos { story: StoryRef::Body, path: path.clone(), off: *off };

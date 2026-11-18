@@ -316,10 +316,9 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .params(r#"{"value": n}"#),
-        CommandSpec::new("para.defineBullet", "Define New Bullet", "Home › Paragraph › Bullets", |s, v| {
-            s.run("para.bullets", &json!({"kind": p::str(v, "char").unwrap_or("★")}))
-        })
-        .params(r#"{"char": string}"#),
+        CommandSpec::new("para.defineBullet", "Define New Bullet", "Home › Paragraph › Bullets", crate::cmd::lists::define_bullet).params(
+            r#"{"char"?: one character (default ★), "font"?: family (the bullet's own font; "" = the text's), "size"?: pt, "bold"?: bool, "italic"?: bool, "color"?: "RRGGBB" | "auto", "align"?: "left|center|right"} (the selected paragraphs get a list of their own; each keeps its level)"#,
+        ),
         CommandSpec::new("para.defineNumber", "Define New Number Format", "Home › Paragraph › Numbering", |s, v| {
             let fmt = wordcraft_doc::section::NumFormat::from_ooxml(p::str(v, "format").unwrap_or("decimal"));
             let text = p::str(v, "text").unwrap_or("%1.").to_string();
@@ -340,7 +339,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
         CommandSpec::new("review.language", "Language", "Review › Language", language).params(
-            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents)}"#,
+            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents), "scope"?: "selection" (default) | "document" (every run and paragraph mark of every story: body, headers, footers, notes, comments, text boxes, tables, glossary (skipped while Track Changes and Track Formatting are on); one undo step, selection unchanged; returns the caret, "scope":"document" and "glossarySkipped":true when the glossary was skipped)}"#,
         ),
         CommandSpec::new("review.language.preferred", "Set as Default Language", "File › Options › Language", preferred_language)
             .params(r#"{"lang": "en-US|en-GB|pl-PL|nl-NL|…" (BCP 47)} — only the saved default proofing language, what future blank documents are written in, as Options › Language › Set as default does; the open document, the selection and the undo history don't change. Returns {"preferred": tag}."#)

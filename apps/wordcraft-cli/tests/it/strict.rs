@@ -1,6 +1,5 @@
 //! `convert --strict` (#6005): exit 3 and a report when a PDF or PNG would silently lack a
 //! character or a picture, nothing written; exit 0 otherwise.
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -64,11 +63,11 @@ fn uncovered() -> char {
 }
 
 fn png() -> Vec<u8> {
-    let mut out = Vec::new();
-    image::RgbaImage::from_pixel(4, 4, image::Rgba([20, 90, 200, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-        .unwrap();
-    out
+    wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(4, 4, image::Rgba([20, 90, 200, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap()
 }
 
 fn pic(rid: &str) -> String {
@@ -106,7 +105,7 @@ fn package(document: &str, document_rels: &str, extra: &[(&str, &[u8])]) -> Vec<
         r#"<Relationships xmlns="{RELS_NS}"><Relationship Id="rId1" Type="{REL}/officeDocument" Target="word/document.xml"/></Relationships>"#
     );
     let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="bin" ContentType="application/octet-stream"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     let mut parts: Vec<(&str, &[u8])> = vec![
         ("[Content_Types].xml", types.as_bytes()),
         ("_rels/.rels", rels.as_bytes()),
@@ -115,10 +114,9 @@ fn package(document: &str, document_rels: &str, extra: &[(&str, &[u8])]) -> Vec<
     ];
     parts.extend_from_slice(extra);
     for (name, bytes) in parts {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(bytes).unwrap();
+        zip.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 #[test]
