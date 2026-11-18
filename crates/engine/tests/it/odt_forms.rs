@@ -2,21 +2,17 @@
 //! stay what they are when the document is saved as DOCX (`w:sdt`) and as ODT again. The ODT is
 //! original and synthetic, shaped like LibreOffice's.
 
-use std::io::{Read, Write};
-
 use wordcraft_doc::control::ControlKind;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_engine::io;
 
 fn odt() -> Vec<u8> {
     let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"><office:body><office:text><office:forms><form:form form:name="Form"><form:listbox form:name="Colour" form:id="c1" form:dropdown="true"><form:option form:label="Red"/><form:option form:label="Green" form:current-selected="true"/></form:listbox><form:checkbox form:name="Agree" form:id="c2" form:current-state="unchecked"/></form:form></office:forms><text:p>Colour: <draw:control draw:control="c1"/> Agree: <draw:control draw:control="c2"/></text:p></office:text></office:body></office:document-content>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content)] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 fn kinds(doc: &wordcraft_doc::Document) -> Vec<&'static str> {
@@ -36,8 +32,14 @@ fn odt_form_controls_become_content_controls_everywhere() {
     assert_eq!(text, "Colour: Green Agree: \u{2610}");
     // DOCX: Word content controls.
     let docx = io::save_bytes("form.docx", &doc).unwrap();
-    let mut body = String::new();
-    zip::ZipArchive::new(std::io::Cursor::new(&docx)).unwrap().by_name("word/document.xml").unwrap().read_to_string(&mut body).unwrap();
+    let body = String::from_utf8(
+        craft_zip::Archive::open(&docx, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 })
+            .unwrap()
+            .read("word/document.xml", 16 << 20)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     assert!(body.contains("<w:dropDownList") && body.contains("w14:checkbox"), "{body}");
     let again = io::open_bytes("form.docx", &docx).unwrap();
     assert_eq!(kinds(&again), ["dropDown", "checkBox"]);
