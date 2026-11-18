@@ -87,13 +87,32 @@ fn xlsx_limits() -> craft_xlsx::Limits {
 }
 
 /// The package and text limits for an `.ods`, keeping the cells of `only_sheet` alone
-/// (`Some(usize::MAX)`: none, for the sheet names).
+/// (`Some(usize::MAX)`: none, for the sheet names). Cells past [`MAX_TEXT_BYTES`] of text are
+/// left out instead of refusing the file.
 fn ods_options(only_sheet: Option<usize>) -> craft_ods::Options {
     craft_ods::Options {
         package: craft_odf::Limits { max_entries: crate::MAX_ZIP_ENTRIES, max_entry: MAX_ENTRY, max_total: MAX_TOTAL },
         max_text: MAX_TEXT_BYTES as u64,
+        truncate_text: true,
         only_sheet,
         ..craft_ods::Options::default()
+    }
+}
+
+/// Leaves out the last row of `sheet`, read from `bytes` with [`ods_options`] and cut short at
+/// [`MAX_TEXT_BYTES`], when the text ran out inside it, so that no recipient is left with only
+/// some of its fields. A second read with room for one more cell (its text and its value
+/// attribute, each within `max_cell_text`) tells: it keeps more of that row only if the first
+/// read cut the row short.
+fn drop_cut_ods_row(bytes: &[u8], i: usize, sheet: &mut craft_ods::Sheet) {
+    let Some(last) = sheet.cells.keys().map(|r| r.row).max() else { return };
+    let in_last = |s: &craft_ods::Sheet| s.cells.keys().filter(|r| r.row == last).count();
+    let mut options = ods_options(Some(i));
+    options.max_text = options.max_text.saturating_add(2 * options.max_cell_text as u64 + 1);
+    let further = craft_ods::read(bytes, &options).ok();
+    let cut = further.as_ref().and_then(|b| b.sheets.get(i)).is_none_or(|s| in_last(s) > in_last(sheet));
+    if cut {
+        sheet.cells.retain(|r, _| r.row != last);
     }
 }
 
@@ -124,8 +143,13 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
     if let Ok(listed) = craft_ods::read(bytes, &ods_options(Some(usize::MAX))) {
         let names: Vec<String> = listed.sheets.into_iter().map(|s| s.name).collect();
         let i = resolve(&names, pick)?;
-        let book = craft_ods::read(bytes, &ods_options(Some(i))).map_err(|e| e.to_string())?;
-        let sheet = book.sheets.get(i).ok_or("no such sheet")?;
+        let mut book = craft_ods::read(bytes, &ods_options(Some(i))).map_err(|e| e.to_string())?;
+        let truncated = book.text_truncated;
+        let sheet = book.sheets.get_mut(i).ok_or("no such sheet")?;
+        if truncated {
+            drop_cut_ods_row(bytes, i, sheet);
+            log::warn!("sheet: cells past {MAX_TEXT_BYTES} bytes of text are left out of the recipient list");
+        }
         let rows = cells_to_rows(&sheet.cells, |c| {
             if !c.text.is_empty() {
                 c.text.chars().take(MAX_CELL_CHARS).collect()
@@ -301,7 +325,7 @@ mod tests {
     fn a_shared_string_in_many_cells_stays_under_the_text_budget() {
         let long = "x".repeat(MAX_CELL_CHARS);
         let rows: String = (1..=3_000).map(|r| format!(r#"<row r="{r}"><c r="A{r}" t="s"><v>0</v></c></row>"#)).collect();
-        let book = craft_xlsx::testing::workbook(&[("S", &rows)], &[&long]);
+        let book = craft_xlsx::testing::workbook(&[("S", &rows)], &[&long]).unwrap();
         assert_eq!(detect(&book), Some(Kind::Xlsx));
         let (_, rows) = read_rows(&book, Pick::Index(0)).unwrap();
         let total: usize = rows.iter().flatten().map(String::len).sum();
@@ -314,7 +338,7 @@ mod tests {
     fn values_far_right_stay_under_the_cell_budget() {
         // Column ALL is the 1,000th column.
         let rows: String = (1..=2_100).map(|r| format!(r#"<row r="{r}"><c r="ALL{r}"><v>1</v></c></row>"#)).collect();
-        let book = craft_xlsx::testing::workbook(&[("S", &rows)], &[]);
+        let book = craft_xlsx::testing::workbook(&[("S", &rows)], &[]).unwrap();
         let (_, rows) = read_rows(&book, Pick::Index(0)).unwrap();
         assert!(rows.iter().all(|r| r.len() == MAX_COLS && r[MAX_COLS - 1] == "1"));
         let cells: usize = rows.iter().map(Vec::len).sum();
@@ -370,7 +394,7 @@ mod tests {
         assert!(made <= MAX_TEXT_MADE + MAX_CELL_CHARS, "{made} bytes made");
         // The same through a sheet that repeats one row holding one long shared string.
         let rows: String = (0..5_000).map(|_| r#"<row r="1"><c r="A1" t="s"><v>0</v></c></row>"#).collect();
-        let book = craft_xlsx::testing::workbook(&[("S", &rows)], &[&long]);
+        let book = craft_xlsx::testing::workbook(&[("S", &rows)], &[&long]).unwrap();
         let (_, rows) = read_rows(&book, Pick::Index(0)).unwrap();
         assert!(rows.is_empty(), "{} rows", rows.len());
     }
@@ -391,7 +415,8 @@ mod tests {
     fn ods_names_and_one_sheet_read() {
         let book = craft_ods::testing::spreadsheet(
             r#"<table:table table:name="First"><table:table-row><table:table-cell office:value-type="string"><text:p>a</text:p></table:table-cell></table:table-row></table:table><table:table table:name="Guests"><table:table-row><table:table-cell office:value-type="string"><text:p>Name</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell office:value-type="string"><text:p>Ada</text:p></table:table-cell></table:table-row></table:table>"#,
-        );
+        )
+        .unwrap();
         assert_eq!(detect(&book), Some(Kind::Ods));
         assert_eq!(sheet_names(&book).unwrap(), ["First", "Guests"]);
         assert_eq!(
@@ -408,8 +433,39 @@ mod tests {
         let long = "é".repeat(MAX_CELL_CHARS + 5);
         let book = craft_ods::testing::spreadsheet(&format!(
             r#"<table:table table:name="S"><table:table-row><table:table-cell office:value-type="string"><text:p>{long}</text:p></table:table-cell></table:table-row></table:table>"#
-        ));
+        ))
+        .unwrap();
         let rows = read_rows(&book, Pick::Index(0)).unwrap().1;
         assert_eq!(rows, [["é".repeat(MAX_CELL_CHARS)]]);
+    }
+
+    /// An OpenDocument sheet that passes [`MAX_TEXT_BYTES`] of text keeps the complete rows
+    /// before that point and leaves out the rest, the row cut short included.
+    #[test]
+    fn an_ods_sheet_past_the_text_budget_keeps_its_complete_rows() {
+        let cell = |t: &str| format!(r#"<table:table-cell office:value-type="string"><text:p>{t}</text:p></table:table-cell>"#);
+        let sheet = |rows: String| {
+            craft_ods::testing::spreadsheet(&format!(
+                r#"<table:table table:name="S"><table:table-row>{}{}</table:table-row>{rows}</table:table>"#,
+                cell("Name"),
+                cell("Note")
+            ))
+            .unwrap()
+        };
+        // 2,000 bytes a row: 33,554 copies fit after the header, with 856 bytes to spare.
+        for (a, b, why) in [(100, 1_900, "the text runs out inside a row"), (1_000, 1_000, "the text runs out between rows")] {
+            let (a, b) = ("a".repeat(a), "b".repeat(b));
+            let book = sheet(format!(r#"<table:table-row table:number-rows-repeated="40000">{}{}</table:table-row>"#, cell(&a), cell(&b)));
+            let rows = read_rows(&book, Pick::Index(0)).unwrap().1;
+            assert_eq!(rows[0], ["Name", "Note"], "{why}");
+            assert_eq!(rows.len(), 1 + 33_554, "{why}");
+            assert!(rows[1..].iter().all(|r| r[..] == [a.as_str(), b.as_str()]), "{why}: a row has only some of its fields");
+        }
+        // One row whose repeated cells pass the budget on their own.
+        let long = "x".repeat(1_000_000);
+        let book = sheet(format!(
+            r#"<table:table-row><table:table-cell table:number-columns-repeated="100" office:value-type="string"><text:p>{long}</text:p></table:table-cell></table:table-row>"#
+        ));
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["Name", "Note"]]);
     }
 }
