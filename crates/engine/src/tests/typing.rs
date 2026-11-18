@@ -4058,3 +4058,25 @@ fn word_moves_and_deletes_take_a_typographic_apostrophe() {
     run(&mut b, "text.deleteWordForward", json!({}));
     assert_eq!(text(&b), "più", "Ctrl+Delete deletes `l’anno ` whole");
 }
+
+/// #6788: Enter in a paragraph with a drop cap makes a normal paragraph; only the first keeps
+/// the cap (Word behaviour), for a dropped cap and one in the margin.
+#[test]
+fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
+    for position in ["dropped", "margin"] {
+        let mut s = typed("Sugar and knowledge");
+        run(&mut s, "insert.dropCap", json!({"position": position, "lines": 3, "distance": 4.0, "font": "Liberation Mono"}));
+        let first_has_cap = s.doc.body.first().and_then(|b| b.as_para()).is_some_and(|p| p.props.drop_cap == Some(3));
+        assert!(first_has_cap, "{position}: the cap is set");
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 10}, "focus": {"block": 0, "off": 10}}));
+        run(&mut s, "text.newParagraph", json!({}));
+        let paras: Vec<_> = s.doc.body.iter().filter_map(|b| b.as_para()).collect();
+        assert_eq!(paras.len(), 2, "{position}");
+        let (first, second) = (&paras[0].props, &paras[1].props);
+        assert_eq!(first.drop_cap, Some(3), "{position}: the first paragraph keeps its cap");
+        assert_eq!(second.drop_cap, None, "{position}");
+        assert_eq!(second.drop_cap_margin, None, "{position}");
+        assert_eq!(second.drop_cap_distance, None, "{position}");
+        assert_eq!(second.drop_cap_font, None, "{position}");
+    }
+}

@@ -80,6 +80,8 @@ pub struct Settings {
     pub default_tab: f32,
     pub even_odd_headers: bool,
     pub mirror_margins: bool,
+    /// The gutter is added to the top margin instead of the left one (`w:gutterAtTop`).
+    pub gutter_at_top: bool,
     pub auto_hyphenation: bool,
     /// Hyphenation zone (`w:hyphenationZone`), points: a line is hyphenated only when breaking
     /// it at a word boundary would leave more than this empty at its end.
@@ -137,6 +139,12 @@ pub struct Settings {
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
+    /// `w:doNotSuppressIndentation` (a `.doc`'s `Copts.fWW11IndentRules`): Word 2003's indent
+    /// rules beside floating objects. An unnumbered paragraph's line starts right after a floating
+    /// object before it on the line, its own indent ignored (ECMA-376 Part 4 §14.8.3.12). Word 2013's
+    /// layout (compatibility mode 15) does not use it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub do_not_suppress_indentation: bool,
     /// Drawing grid spacing in points, across and down (View › Gridlines); ECMA-376's default is 1/8 inch.
     pub grid_h: f32,
     pub grid_v: f32,
@@ -296,6 +304,7 @@ impl Default for Settings {
             default_tab: 36.0,
             even_odd_headers: false,
             mirror_margins: false,
+            gutter_at_top: false,
             auto_hyphenation: false,
             hyphenation_zone: DEFAULT_HYPHENATION_ZONE,
             hyphenate_caps: true,
@@ -319,6 +328,7 @@ impl Default for Settings {
             sum_paragraph_spacing: false,
             do_not_expand_shift_return: false,
             allow_space_of_same_style_in_table: false,
+            do_not_suppress_indentation: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
             math: None,
