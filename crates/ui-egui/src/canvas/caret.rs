@@ -142,26 +142,6 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     let mut bars: Vec<(Bar, Color32)> = Vec::new();
     let mut composition = None;
     if focused && !pl.in_equation && !app.canvas.ime_preedit.is_empty() {
-        // The composition is interface text, but it may be in a script the interface fonts lack
-        // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
-        let new = crate::theme::faces_for_preedit(
-            &app.canvas.ime_preedit,
-            &app.canvas.ime_faces,
-            |c| (c as u32) < 0x250,
-            |c| wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX),
-        );
-        if !new.is_empty() {
-            app.canvas.ime_faces.extend(new);
-            crate::theme::install_fonts_language_extra(
-                &ctx,
-                app.fonts_hans,
-                app.fonts_korean,
-                app.fonts_hant,
-                app.fonts_system_cjk,
-                &app.canvas.ime_faces,
-            );
-            ctx.request_repaint();
-        }
         // The caret is steady inside the composition, so the glide stands down while it shows.
         app.canvas.glide.reset();
         let text = app.canvas.ime_preedit.clone();

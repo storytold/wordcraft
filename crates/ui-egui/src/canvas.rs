@@ -155,9 +155,6 @@ pub struct CanvasState {
     /// The chars of `ime_preedit` the input method marks as its cursor or selection, as it reports
     /// them (unchecked).
     pub(crate) ime_preedit_range: Option<std::ops::Range<usize>>,
-    /// Document faces added to the interface fonts so the input method's composition (#565) and a
-    /// file name in the window caption can be drawn.
-    pub(crate) ime_faces: Vec<Arc<wordcraft_fonts::FontFace>>,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
@@ -239,7 +236,6 @@ impl CanvasState {
             last_highlight: old.last_highlight,
             last_font_color: old.last_font_color,
             last_shading: old.last_shading,
-            ime_faces: old.ime_faces,
             tab_kind: old.tab_kind,
             scroll_to_caret: !seen,
             ime_reset,
@@ -336,7 +332,6 @@ impl Default for CanvasState {
             viewed_page: None,
             ime_preedit: String::new(),
             ime_preedit_range: None,
-            ime_faces: Vec::new(),
             context_issue: None,
             context_synonyms: None,
             context_menu_open: false,
