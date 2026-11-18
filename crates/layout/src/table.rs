@@ -1516,6 +1516,10 @@ fn is_automatic(t: &Table) -> bool {
 /// Consistent cell widths replace a stale grid without changing the table's total width.
 /// Conflicting widths, spans and percentages need the full shared-grid algorithm.
 fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
+    if let Some(widths) = stale_grid_widths(t, grid) {
+        grid.copy_from_slice(&widths);
+        return;
+    }
     let Some(first) = t.rows.first() else { return };
     if first.cells.len() != grid.len() {
         return;
@@ -1533,6 +1537,41 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
         return;
     }
     grid.copy_from_slice(&widths);
+}
+
+// An autofit table whose width matches its complete point-width rows but not its grid takes the rows.
+fn stale_grid_widths(t: &Table, grid: &[f32]) -> Option<Vec<f32>> {
+    const WIDTH_EPSILON: f32 = 0.5;
+    const EDGE_EPSILON: f32 = 0.01;
+    let width = t.props.width.filter(|w| w.is_finite() && (w - grid.iter().sum::<f32>()).abs() > WIDTH_EPSILON)?;
+    if t.props.fixed || t.props.width_pct.is_some() || t.rows.is_empty() {
+        return None;
+    }
+    let mut edges = vec![None; grid.len() + 1];
+    edges[0] = Some(0.0);
+    for row in &t.rows {
+        if row.first_grid() != 0 || row.grid_after() != 0 {
+            return None;
+        }
+        let (mut g, mut x) = (0usize, 0.0f32);
+        for cell in &row.cells {
+            x += cell.props.width.filter(|w| w.is_finite() && *w > 0.0 && cell.props.width_pct.is_none())?;
+            g = g.saturating_add(cell.span());
+            let edge = edges.get_mut(g)?;
+            if edge.is_some_and(|previous: f32| (previous - x).abs() > EDGE_EPSILON) {
+                return None;
+            }
+            edge.get_or_insert(x);
+        }
+        if g != grid.len() {
+            return None;
+        }
+    }
+    if (edges[grid.len()]? - width).abs() > WIDTH_EPSILON {
+        return None;
+    }
+    let widths: Option<Vec<f32>> = edges.windows(2).map(|pair| Some(pair[1]? - pair[0]?)).collect();
+    widths.filter(|widths| widths.iter().all(|w| *w > 0.0))
 }
 
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
@@ -1601,6 +1640,30 @@ mod width_tests {
         let mut grid = [30.0, 20.0];
         autofit(&mut grid, &[(25.0, 25.0), (40.0, 40.0)], &table, 50.0);
         assert_eq!(grid, [25.0, 40.0]);
+    }
+
+    #[test]
+    fn rows_outrank_grid_total() {
+        let mut table = Table::new(3, 4, 400.0);
+        let rows = [vec![(4, 400.0)], vec![(2, 150.0), (1, 200.0), (1, 50.0)], vec![(1, 60.0), (1, 90.0), (2, 250.0)]];
+        for (row, widths) in table.rows.iter_mut().zip(rows) {
+            row.cells.truncate(widths.len());
+            for (cell, (span, width)) in row.cells.iter_mut().zip(widths) {
+                cell.props.span = span;
+                cell.props.width = Some(width);
+            }
+        }
+        table.grid = vec![100.0, 200.0, 250.0, 100.0];
+        table.props.width = Some(400.0);
+        let mut grid = table.grid.clone();
+
+        apply_cell_widths(&table, &mut grid);
+        assert_eq!(grid, [60.0, 90.0, 200.0, 50.0]);
+
+        table.props.fixed = true;
+        grid.copy_from_slice(&table.grid);
+        apply_cell_widths(&table, &mut grid);
+        assert_eq!(grid, [100.0, 200.0, 250.0, 100.0], "a fixed table keeps its grid");
     }
 
     #[test]
