@@ -135,8 +135,7 @@ fn page_numbers_dialog_accepts_typed_zero() {
     let mut a = app();
     a.run("ui.language", json!({"value": "en"})).unwrap();
     a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
-    // The dialog's existing numeric input and format picker lack accessible names.
-    let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
@@ -144,7 +143,8 @@ fn page_numbers_dialog_accepts_typed_zero() {
         a,
     );
     h.run_steps(4);
-    h.get_by_label("Start at:").click();
+    // The box is named by its option button: click the option.
+    h.get_by_role_and_label(Role::RadioButton, "Start at:").click();
     h.run_steps(2);
     h.get_by_role(Role::SpinButton).click();
     h.run_steps(2);

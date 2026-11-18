@@ -526,14 +526,19 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
     }
     if takes_text_format(&f.name) {
         ui.add_space(4.0);
-        ui.label(tl!("Format:"));
+        let label = ui.label(tl!("Format:"));
         let shown = TEXT_FORMATS.iter().find(|(v, _)| *v == f.text_format).map(|(_, l)| *l).unwrap_or("(none)");
-        craft_ui::ComboBox::from_id_salt("field_text").selected_text(tl!(shown)).width(200.0).show_ui(ui, |ui| {
-            for (v, l) in TEXT_FORMATS {
-                if ui.selectable_label(f.text_format == *v, tl!(l)).clicked() {
-                    f.choose_text_format(v);
+        craft_ui::ComboBox::from_id_salt("field_text")
+            .selected_text(tl!(shown))
+            .width(200.0)
+            .show_ui(ui, |ui| {
+                for (v, l) in TEXT_FORMATS {
+                    if ui.selectable_label(f.text_format == *v, tl!(l)).clicked() {
+                        f.choose_text_format(v);
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(label.id);
     }
 }
