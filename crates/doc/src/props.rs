@@ -67,6 +67,16 @@ mod tests {
         assert_eq!((same.font_ea_theme, same.font_cs_theme, same.font_ascii_theme), (None, None, None));
     }
 
+    /// A named East Asian font replaces the theme slot: in Word the slot wins over the font, so
+    /// keeping it would hide the font just chosen.
+    #[test]
+    fn a_named_east_asian_font_replaces_the_theme_slot() {
+        let mut base = CharProps { font_ea_theme: Some(ThemeFont::MinorEastAsia), ..Default::default() };
+        base.overlay(&CharProps { font_ea: Some("SimSun".into()), ..Default::default() });
+        assert_eq!(base.font_ea.as_deref(), Some("SimSun"));
+        assert_eq!(base.font_ea_theme, None);
+    }
+
     #[test]
     fn rgb_hex() {
         assert_eq!(Rgb(255, 0, 16).hex(), "FF0010");

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
-use wordcraft_engine::Session;
+use wordcraft_engine::{CmdError, Session};
 
 const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
@@ -19,7 +19,8 @@ wordcraft-cli — WordCraft from the command line
 USAGE:
   wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
-                                              xml); --update-fields refreshes unlocked fields before saving;
+                                              xml); --update-fields refreshes unlocked fields before saving
+                                              (if protection blocks updates, they are skipped with a warning);
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
@@ -34,10 +35,11 @@ USAGE:
                                               --strict writes nothing and exits 3 if a character on the
                                               page can't be drawn or a picture is missing or undecodable
                                               (report on stderr, as for convert --strict)
-  wordcraft-cli run [--file F | --template T] [--script FILE|-] --cmd 'id={json}' [--cmd …]
-                    [--save OUT] [--print] [--author NAME]
+  wordcraft-cli run [--file F | --template T] [--script FILE|-] [--cmd 'id={json}' …]
+                    [--save OUT] [--page N] [--scale S] [--print] [--author NAME]
                                               run commands headlessly, then save (--author names
                                               who tracked changes and comments are by).
+                                              PNG saves use --page (1-based, default 1) and --scale (default 2).
                                               --script runs a JSON file (- is stdin) first:
                                               {\"file\"?, \"template\"?, \"commands\": [{\"command\": id,
                                               \"params\"?: {…}} | id, …], \"save\"?: [OUT, …]}; save
@@ -264,7 +266,7 @@ fn parse_scale_arg(command: &str, args: &[String]) -> Result<Option<f64>, String
         OptionArg::Value(val) => {
             let scale = val.parse::<f64>().map_err(|_| format!("{command}: invalid --scale `{val}`: not a number"))?;
             if !scale.is_finite() || scale <= 0.0 {
-                return Err(format!("{command}: invalid --scale `{val}`: scale must be a positive number"));
+                return Err(format!("{command}: invalid --scale `{val}`: scale must be a finite positive number"));
             }
             Ok(Some(scale))
         }
@@ -451,6 +453,30 @@ fn report_lines(json: &Value) -> Vec<String> {
     wordcraft_engine::strict::lines_from_json(json)
 }
 
+/// Explicitly update unlocked fields in a session before saving the document.
+///
+/// If field updates are disabled by document protection (`CmdError::Disabled`), logs a warning to
+/// stderr and continues conversion rather than aborting. Other command failures are converted to
+/// [`Failure`] via [`engine_error`].
+///
+/// # Arguments
+///
+/// * `s` - The active document [`Session`] whose unlocked fields should be refreshed.
+///
+/// # Errors
+///
+/// Returns `Err(Failure)` if the command fails with an error other than `CmdError::Disabled`.
+fn update_fields(s: &mut Session) -> Result<(), Failure> {
+    if let Err(e) = s.run("references.updateFields", &json!({})) {
+        if matches!(e, CmdError::Disabled(_)) {
+            eprintln!("wordcraft-cli: warning: {e}");
+        } else {
+            return Err(engine_error(e));
+        }
+    }
+    Ok(())
+}
+
 /// `convert <in> <out>`: `rest` is the command line after `convert`, `open` opens the input.
 fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Session, Failure>) -> Result<(), Failure> {
     validate_options("convert", rest, CONVERT_OPTIONS)?;
@@ -473,7 +499,7 @@ fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Sess
     let password = password_from(rest)?;
     let mut s = open(&i, password.as_deref())?;
     if rest.iter().any(|a| a == "--update-fields") {
-        s.run("references.updateFields", &json!({})).map_err(engine_error)?;
+        update_fields(&mut s)?;
     }
     let r = if to_png {
         s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup, "strict": strict}))
@@ -577,6 +603,11 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             write_stdout(|o| writeln!(o, "{r}"))
         }
         "run" => {
+            for (i, arg) in rest.iter().enumerate() {
+                if arg == "--cmd" && rest.get(i + 1).is_none_or(|value| value.starts_with("--")) {
+                    return Err("--cmd needs a value".into());
+                }
+            }
             validate_options("run", &rest, RUN_OPTIONS)?;
             let page = parse_page_arg("run", &rest)?;
             let scale = parse_scale_arg("run", &rest)?;
@@ -610,7 +641,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let mut i = 0;
             while i < rest.len() {
                 if rest.get(i).map(String::as_str) == Some("--cmd") {
-                    let spec = rest.get(i + 1).ok_or("--cmd needs a value")?;
+                    let spec = rest.get(i + 1).filter(|value| !value.starts_with("--")).ok_or("--cmd needs a value")?;
                     let (id, params) = match spec.split_once('=') {
                         Some((id, p)) => {
                             (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| engine_error(format!("{id}: bad JSON params: {e}")))?)

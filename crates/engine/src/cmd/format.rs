@@ -336,7 +336,7 @@ fn font(s: &mut Session, v: &Value) -> CmdResult {
         let Some(n) = v.get(k) else { return Ok(None) };
         let n = n.as_str().map(str::trim).unwrap_or("");
         if n.is_empty() || n.len() > 128 {
-            return Err(CmdError::Params(format!("bad font name `{k}`")));
+            return Err(CmdError::Params(format!("`{k}` must be a non-empty font name of at most 128 bytes")));
         }
         Ok(Some(n.to_string()))
     };
