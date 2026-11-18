@@ -1,8 +1,7 @@
 use super::geometry::{FLOAT_WIDTH, floating_comments, markup_width, shown_comment};
 use super::pages::page_screen_scale;
 use super::{
-    Color32, CommentDisplay, DocLayout, HashMap, PX_PER_PT, Pos, Pos2, Rect, Sense, StoryRef, Stroke, Tokens, Ui, WordApp, json, pos2, regular,
-    semibold, vec2,
+    Color32, CommentDisplay, DocLayout, HashMap, PX_PER_PT, Pos, Pos2, Rect, Sense, Stroke, Tokens, Ui, WordApp, json, pos2, regular, semibold, vec2,
 };
 
 /// Comment balloons in the markup area right of each page, joined to their anchors, with each
@@ -103,8 +102,8 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
             let top = (anchor.y + if over_page { 4.0 } else { -12.0 }).max(next_y);
             let active = app.canvas.balloon == Some(*id);
             // Lay out a read-only balloon's text: the comment, then each reply under a rule,
-            // each with who wrote it and when. (galley, gap above, a rule above, height shown)
-            let mut lines: Vec<(craft_ui::text::AlignedGalley, f32, bool, f32)> = Vec::new();
+            // each with who wrote it and when.
+            let mut lines: Vec<BalloonLine> = Vec::new();
             let card = if active {
                 Rect::from_min_size(pos2(x0, top), vec2(w, app.canvas.balloon_h.max(24.0)))
             } else {
@@ -115,19 +114,19 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
                     let gap = if i == 0 { 0.0 } else { 9.0 };
                     let g = balloon_text(painter, author_name(&r.author), semibold(fs), t.text, w - 16.0);
                     let h = g.height();
-                    lines.push((g, gap, i > 0, h));
+                    lines.push(BalloonLine { galley: g, gap, rule: i > 0, height: h, links: None });
                     let when = crate::local_time::comment_time(r);
                     if !when.is_empty() {
                         let g = balloon_text(painter, when, small.clone(), t.text_dim, w - 16.0);
                         let h = g.height();
-                        lines.push((g, 1.0, false, h));
+                        lines.push(BalloonLine { galley: g, gap: 1.0, rule: false, height: h, links: None });
                     }
-                    let text = app.session.doc.plain_text(StoryRef::Part(r.part));
-                    let g = balloon_text(painter, text.trim().to_string(), regular(fs), dim(resolved), w - 16.0);
+                    let text = crate::comment_links::CommentText::new(&app.session.doc, r.part).trimmed();
+                    let g = balloon_job(painter, text.job(regular(fs), dim(resolved), t.blue, w - 16.0), w - 16.0);
                     let h = shown_height(&g);
-                    lines.push((g, 4.0, false, h));
+                    lines.push(BalloonLine { galley: g, gap: 4.0, rule: false, height: h, links: Some(text) });
                 }
-                let h = lines.iter().map(|(_, gap, _, h)| h + gap).sum::<f32>() + 12.0;
+                let h = lines.iter().map(|line| line.height + line.gap).sum::<f32>() + 12.0;
                 Rect::from_min_size(pos2(x0, top), vec2(w, h))
             };
             if !card.intersects(clip) {
@@ -150,27 +149,12 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
             } else {
                 card_shapes(painter, &t, card, color, selected, None);
                 let text_painter = painter.with_clip_rect(card.intersect(clip));
-                let mut y = card.min.y + 6.0;
-                for (g, gap, rule, h) in lines {
-                    y += gap;
-                    if rule {
-                        // A reply starts: a hairline between it and what it answers.
-                        painter.hline(card.min.x + 10.0..=card.max.x - 8.0, y - gap / 2.0, Stroke::new(1.0, t.border));
-                    }
-                    // A body cut off at its shown rows paints none of the rows below them.
-                    let shown = if h < g.height() {
-                        text_painter.with_clip_rect(text_painter.clip_rect().intersect(Rect::from_x_y_ranges(card.x_range(), y..=y + h)))
-                    } else {
-                        text_painter.clone()
-                    };
-                    g.paint(&shown, pos2(card.min.x + 10.0, y), t.text);
-                    y += h;
-                }
                 let r = ui.interact(card, ui.scope_id().with(("balloon", *id)), Sense::click());
+                let followed = paint_balloon_lines(app, ui, &text_painter, card, lines, &r);
                 if r.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-                if r.clicked() {
+                if r.clicked() && !followed {
                     clicked = Some((*id, pos.clone()));
                 }
                 card
@@ -183,6 +167,46 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
         select_balloon(app, id);
         app.session.sel = wordcraft_engine::Selection::caret(p);
     }
+}
+
+struct BalloonLine {
+    galley: craft_ui::text::AlignedGalley,
+    gap: f32,
+    rule: bool,
+    height: f32,
+    links: Option<crate::comment_links::CommentText>,
+}
+
+/// Paint the visible comment rows and follow a link without selecting its whole card.
+fn paint_balloon_lines(app: &mut WordApp, ui: &Ui, painter: &egui::Painter, card: Rect, lines: Vec<BalloonLine>, response: &egui::Response) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let mut followed = false;
+    let mut y = card.min.y + 6.0;
+    for BalloonLine { galley: g, gap, rule, height: h, links: text } in lines {
+        y += gap;
+        if rule {
+            // A reply starts: a hairline between it and what it answers.
+            painter.hline(card.min.x + 10.0..=card.max.x - 8.0, y - gap / 2.0, Stroke::new(1.0, t.border));
+        }
+        // A body cut off at its shown rows paints none of the rows below them.
+        let shown = if h < g.height() {
+            painter.with_clip_rect(painter.clip_rect().intersect(Rect::from_x_y_ranges(card.x_range(), y..=y + h)))
+        } else {
+            painter.clone()
+        };
+        let origin = pos2(card.min.x + 10.0, y);
+        if let Some(text) = text {
+            let shape = g.text_shape(origin, t.text);
+            let target = ui.input(|i| i.pointer.hover_pos()).and_then(|p| text.at(&shape.galley, shape.pos, shown.clip_rect(), p));
+            if let Some(target) = crate::comment_links::interact(ui, response, target) {
+                super::links::follow_link(app, target);
+                followed = true;
+            }
+        }
+        g.paint(&shown, origin, t.text);
+        y += h;
+    }
+    followed
 }
 
 /// What a balloon in the markup area shows.
@@ -288,7 +312,10 @@ fn shown_height(g: &craft_ui::text::AlignedGalley) -> f32 {
 /// character. Place each already-shaped row against the card's start edge, including neutral
 /// paragraphs inheriting their predecessor's direction. Logical text and glyph order stay intact.
 pub(super) fn balloon_text(painter: &egui::Painter, text: String, font: egui::FontId, color: Color32, width: f32) -> craft_ui::text::AlignedGalley {
-    let mut job = egui::text::LayoutJob::simple(text, font, color, width);
+    balloon_job(painter, egui::text::LayoutJob::simple(text, font, color, width), width)
+}
+
+fn balloon_job(painter: &egui::Painter, mut job: egui::text::LayoutJob, width: f32) -> craft_ui::text::AlignedGalley {
     job.direction = egui::epaint::text::TextDirection::Auto;
     job.halign = egui::Align::Min;
     // Row placement below supplies the reading edge, including empty RTL rows.

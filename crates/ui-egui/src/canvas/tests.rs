@@ -2,6 +2,8 @@ use super::pages::gridline_cells;
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+mod comment_links;
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.

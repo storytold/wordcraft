@@ -1523,7 +1523,9 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     app.canvas.context_menu_open = shown;
     if let Some(c) = crate::ink::cursor(app).filter(|_| resp.hovered() || app.canvas.ink.is_some()) {
         ui.ctx().set_cursor_icon(c);
-    } else if resp.hovered() || app.canvas.obj_drag.is_some() {
+    } else if (resp.hovered() && !ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| over_balloon(app, p))) || app.canvas.obj_drag.is_some() {
+        // Balloons choose their own cursor before this canvas pass. Keep the link's hand
+        // (or the comment editor's text cursor) instead of overwriting it from underneath.
         let latest = ui.input(|i| i.pointer.latest_pos());
         let over_object = latest.and_then(|p| crate::objects::cursor(app, layout, &rects, geo.scale, p));
         // The selection bar: Word shows a right-pointing arrow there; egui has none, so the

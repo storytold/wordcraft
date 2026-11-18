@@ -31,6 +31,7 @@ pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;
 pub mod colors;
+mod comment_links;
 pub mod content_controls;
 pub mod control;
 pub mod credits;
