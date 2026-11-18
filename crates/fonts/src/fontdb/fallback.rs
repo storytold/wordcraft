@@ -1,6 +1,6 @@
 use super::face::{FALLBACK_FAMILY, FontFace};
 #[cfg(not(target_arch = "wasm32"))]
-use super::fallback_data::{CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, ranges_hold, read_fallback_file};
+use super::fallback_data::{CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, file_stamp, ranges_hold, read_fallback_file};
 use super::fallback_data::{FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order};
 use super::{Arc, FontDb};
 #[cfg(not(target_arch = "wasm32"))]
@@ -235,7 +235,7 @@ impl FontDb {
     }
 
     /// Load a system font covering `c` (preferred fallback families first, then any cataloged
-    /// file under 40 MB, found through the coverage index). Returns true if one was loaded.
+    /// file under 40 MB, both found through the coverage index). Returns true if one was loaded.
     /// Misses are remembered.
     #[cfg(not(target_arch = "wasm32"))]
     fn system_fallback(&self, c: char) -> bool {
@@ -257,6 +257,11 @@ impl FontDb {
             if self.is_loaded(fam) || !cataloged.iter().any(|f| f.eq_ignore_ascii_case(fam)) {
                 continue;
             }
+            // A family none of whose files maps `c` is not loaded for it: it would stay loaded
+            // and help nothing (an emoji loaded every CJK family a Mac has first, 500 MB).
+            if !self.family_maps(fam, c) {
+                continue;
+            }
             if !self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tried.insert(fam) {
                 continue;
             }
@@ -276,8 +281,47 @@ impl FontDb {
         false
     }
 
-    /// Load the first cataloged font file (in path order) that maps `c`, reading each file not
-    /// yet indexed as the search reaches it. Returns whether a loaded face now covers `c`.
+    /// Does a file of the installed `family` map `c`? Answered by the coverage index, which reads
+    /// a file's character maps the first time it is asked about it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn family_maps(&self, family: &str, c: char) -> bool {
+        let paths = self.family_paths(family);
+        let mut index = self.coverage_index();
+        paths.iter().any(|p| index.file_holds(p, u32::from(c)))
+    }
+
+    /// The coverage index, its file list brought up to date with the catalog.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn coverage_index(&self) -> std::sync::MutexGuard<'_, CoverageIndex> {
+        let mut index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let generation = self.catalog_gen.load(Ordering::Acquire);
+        if index.generation != Some(generation) {
+            // A new scan (or the first search): keep what is known of files still installed,
+            // unless a file was replaced since its character maps were read.
+            let mut known: HashMap<std::path::PathBuf, IndexedFile> =
+                std::mem::take(&mut index.files).into_iter().map(|f| (f.path.clone(), f)).collect();
+            let mut paths: Vec<std::path::PathBuf> =
+                self.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner).iter().map(|e| e.path.clone()).collect();
+            paths.sort();
+            paths.dedup();
+            let files = paths.into_iter().map(|path| match known.remove(&path) {
+                Some(mut file) => {
+                    if file.ranges.is_some() && file.stamp != file_stamp(&file.path) {
+                        file.ranges = None;
+                    }
+                    file
+                }
+                None => IndexedFile { used: index.loaded.contains(&path), path, ranges: None, stamp: None },
+            });
+            index.files = files.collect();
+            index.generation = Some(generation);
+        }
+        index
+    }
+
+    /// Load the first cataloged font file (in path order) that maps `c`, reading the character
+    /// maps of each file not yet indexed as the search reaches it. Returns whether a loaded face
+    /// now covers `c`.
     #[cfg(not(target_arch = "wasm32"))]
     fn indexed_fallback(&self, c: char) -> bool {
         self.load_indexed(&[c], false)
@@ -294,49 +338,22 @@ impl FontDb {
         self.load_indexed(chars, true);
     }
 
-    /// Load the cataloged font files (in path order) that map every char of `chars`, reading each
-    /// file not yet indexed as the search reaches it, until a loaded face covers them all; with
-    /// `whole_family`, each such file's family is loaded with it (whatever of it isn't loaded
-    /// yet). A collection's faces only together may map them: the search then goes on. Returns
-    /// whether a loaded face now covers them all.
+    /// Load the cataloged font files (in path order) that map every char of `chars`, reading the
+    /// character maps of each file not yet indexed as the search reaches it, until a loaded face
+    /// covers them all; with `whole_family`, each such file's family is loaded with it (whatever
+    /// of it isn't loaded yet). A collection's faces only together may map them: the search then
+    /// goes on. Returns whether a loaded face now covers them all.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_indexed(&self, chars: &[char], whole_family: bool) -> bool {
         let covered = |db: &FontDb| db.read_faces().iter().any(|f| chars.iter().all(|c| f.covers(*c)));
         let cps: Vec<u32> = chars.iter().map(|c| u32::from(*c)).collect();
         let maps_all = |ranges: &[(u32, u32)]| cps.iter().all(|cp| ranges_hold(ranges, *cp));
-        let mut index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let generation = self.catalog_gen.load(Ordering::Acquire);
-        if index.generation != Some(generation) {
-            // A new scan (or the first search): keep what is known of files still installed.
-            let mut known: HashMap<std::path::PathBuf, IndexedFile> =
-                std::mem::take(&mut index.files).into_iter().map(|f| (f.path.clone(), f)).collect();
-            let mut paths: Vec<std::path::PathBuf> =
-                self.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner).iter().map(|e| e.path.clone()).collect();
-            paths.sort();
-            paths.dedup();
-            let files = paths
-                .into_iter()
-                .map(|path| known.remove(&path).unwrap_or_else(|| IndexedFile { used: index.loaded.contains(&path), path, ranges: None }));
-            index.files = files.collect();
-            index.generation = Some(generation);
-        }
+        let mut index = self.coverage_index();
         let CoverageIndex { files, reads, .. } = &mut *index;
         for i in 0..files.len() {
             let Some(file) = files.get_mut(i).filter(|f| !f.used) else { continue };
-            let mut data = None;
-            match &file.ranges {
-                Some(r) if !maps_all(r) => continue,
-                Some(_) => {}
-                None => {
-                    *reads += 1;
-                    data = read_fallback_file(&file.path);
-                    let ranges = data.as_deref().map(coverage_ranges).unwrap_or_default();
-                    let hit = maps_all(&ranges);
-                    file.ranges = Some(ranges);
-                    if !hit {
-                        continue;
-                    }
-                }
+            if !maps_all(file.ranges(reads)) {
+                continue;
             }
             // The file maps them: load it (once; its faces are loaded fonts from now on).
             file.used = true;
@@ -351,17 +368,12 @@ impl FontDb {
                     load.push(f.path.clone());
                 }
                 let fonts: Vec<(Vec<u8>, Option<String>)> = load.iter().filter_map(|p| read_fallback_file(p)).map(|b| (b, None)).collect();
-                *reads += fonts.len();
                 if self.add_fonts(fonts) > 0 && covered(self) {
                     return true;
                 }
                 continue;
             }
-            if data.is_none() {
-                *reads += 1;
-                data = read_fallback_file(&file.path);
-            }
-            if let Some(data) = data
+            if let Some(data) = read_fallback_file(&file.path)
                 && self.add_font(data) > 0
                 && covered(self)
             {

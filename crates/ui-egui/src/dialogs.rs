@@ -34,10 +34,15 @@ use bookmarks::bookmark_at_caret;
 #[cfg(test)]
 use bookmarks::bookmark_names;
 pub use chrome::show;
-pub(crate) use chrome::{block_behind, buttons, cancel_key_pressed, color_menu, forget_nudge, ok_cancel_responses, release_keyboard};
+pub(crate) use chrome::{
+    block_behind, buttons, cancel_key_pressed, color_menu, drag_by_title_bar, forget_nudge, ok_cancel_responses, release_keyboard,
+};
+pub(crate) use dispatch::search_results;
+pub(crate) use find::swallow_shortcut_text;
 pub use find::{FindExtra, FindTab, GoToWhat};
 #[cfg(test)]
-use find::{command_matches, goto_page, swallow_shortcut_text};
+use find::{command_matches, goto_page};
+pub use font::font_for_bullet;
 #[cfg(test)]
 use font::{apply_font, preview_size};
 use font::{east_asian_char, font_props};
@@ -93,6 +98,11 @@ pub enum Dialog {
         /// alone stays as it is.
         #[serde(skip)]
         start: serde_json::Map<String, Value>,
+        /// Formatting a bullet for Define New Bullet (#2786): OK hands the font, size, bold,
+        /// italic and colour back to that dialog instead of formatting the text, and Cancel goes
+        /// back to it unchanged.
+        #[serde(skip)]
+        bullet: Option<Box<crate::dialogs_bullet::DefineBulletForm>>,
     },
     Paragraph {
         /// Right-to-left reading order (Direction in Word's Paragraph dialog).
@@ -311,6 +321,12 @@ pub enum Dialog {
         #[serde(skip)]
         note: String,
     },
+    /// The document's missing fonts that can be downloaded, and how ([`crate::font_download`]).
+    FontDownload {
+        fonts: Vec<crate::font_download::Row>,
+        /// "Don't show this again".
+        dont_show: bool,
+    },
     /// Tabs: 0 About, 1 Contributors, 2 Models.
     About {
         tab: u8,
@@ -414,10 +430,12 @@ pub enum Dialog {
         #[serde(skip)]
         basis: Box<CellMarginsForm>,
     },
-    /// Opening a password-protected document (#55): the password, then `file.open` with
-    /// `params` again. The password is never serialised or printed.
+    /// Opening a password-protected document (#55): the password, then the command that asked
+    /// for it (`then`: `file.open`, or `file.newFromTemplate` for a protected template, #3433)
+    /// with `params` again. The password is never serialised or printed.
     Password {
         name: String,
+        then: String,
         #[serde(skip)]
         params: Value,
         #[serde(skip)]
@@ -482,14 +500,27 @@ pub enum Dialog {
 }
 
 impl Dialog {
+    /// The Define New Bullet form a Font or Symbol dialog opened from it carries (#2786).
+    fn bullet_form(&mut self) -> Option<crate::dialogs_bullet::DefineBulletForm> {
+        match self {
+            Dialog::Font { bullet, .. } => bullet.take().map(|b| *b),
+            Dialog::Insert(i) => match i.as_mut() {
+                crate::dialogs_insert::InsertDialog::Symbol(f) => f.bullet.take().map(|b| *b),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Whether the dialog blocks the rest of the window while it is open. As in Word for Mac
-    /// (16.114.1, #3859), all are but those you keep working beside.
+    /// (16.114.1, #3859), all are but those you keep working beside. Symbol opened from Define
+    /// New Bullet picks the bullet for it, so it blocks the window as that dialog does (#2786).
     pub fn is_modal(&self) -> bool {
         use crate::dialogs_insert::InsertDialog;
         use crate::dialogs_refs::RefsDialog;
         match self {
             Dialog::Find { .. } | Dialog::InsertMergeField { .. } => false,
-            Dialog::Insert(d) => !matches!(**d, InsertDialog::Symbol(_)),
+            Dialog::Insert(d) => !matches!(&**d, InsertDialog::Symbol(f) if f.bullet.is_none()),
             Dialog::Refs(d) => !matches!(**d, RefsDialog::MarkEntry(_) | RefsDialog::CrossRef(_)),
             _ => true,
         }
@@ -525,6 +556,7 @@ impl Dialog {
             Dialog::Icons { .. } => "icons",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
+            Dialog::FontDownload { .. } => "fontDownload",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::RecipientList { .. } => "recipientList",
@@ -575,6 +607,10 @@ impl Dialog {
     }
 
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
+        // Search opens in the title bar's box when the window shows it (#5398).
+        if name == "commands" && crate::chrome::open_title_search(app) {
+            return None;
+        }
         if let Some(d) = crate::dialogs_insert::open(name, app) {
             return Some(Dialog::Insert(Box::new(d)));
         }
@@ -624,6 +660,7 @@ impl Dialog {
                     kern: kern.map(|k| k > 0.0),
                     kern_at: kern.filter(|k| *k > 0.0).unwrap_or(12.0) as f32,
                     start: serde_json::Map::new(),
+                    bullet: None,
                 };
                 let props = font_props(&d);
                 if let Dialog::Font { start, .. } = &mut d {
@@ -773,6 +810,7 @@ impl Dialog {
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "renameDocument" => Dialog::RenameDocument { name: app.title_stem(), message: String::new(), focus: true },
             "about" => Dialog::About { tab: 0 },
+            "fontDownload" => crate::font_download::open(app),
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
             "languageData" => Dialog::About { tab: 3 },
@@ -859,6 +897,9 @@ impl Dialog {
                 kept[k] = json!(t);
             }
         }
+        if let Some(own) = payload.get("privateClipboard").and_then(Value::as_bool) {
+            kept["privateClipboard"] = json!(own);
+        }
         let note = if formats.is_empty() { crate::system_clipboard::nothing_to_paste(app) } else { String::new() };
         Dialog::PasteSpecial { formats, choice: 0, payload: kept, note }
     }
@@ -892,6 +933,7 @@ impl Dialog {
     }
 }
 
+pub mod dialogs_bullet;
 pub mod dialogs_chart;
 pub mod dialogs_controls;
 pub mod dialogs_insert;

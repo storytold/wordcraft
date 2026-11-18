@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 pub struct Prefs {
     /// Word Count includes text boxes, footnotes and endnotes (Word's default).
     pub count_notes: bool,
+    /// On-screen paper for pages without a document background; excluded from saved documents.
+    #[serde(deserialize_with = "lenient_paper_color")]
+    pub paper_color: crate::cmd::view::PaperColor,
     /// Track Changes Options: what markup shows and how revisions are drawn (per user, as in
     /// Word).
     pub markup: wordcraft_layout::display::MarkupOptions,
@@ -36,7 +39,7 @@ pub struct Prefs {
     pub region: Option<String>,
     /// A folder searched for Hunspell dictionaries before the system locations (File › Options ›
     /// Language, #1063): an app started from Finder or the Dock doesn't see
-    /// `WORDCRAFT_DICTIONARIES`. `None` searches the system locations only.
+    /// `WORDCRAFT_DICTIONARIES`. `None` means no configured folder.
     pub dictionaries_folder: Option<String>,
     /// The user templates folder File › New lists personal templates from and Save as Word
     /// Template starts in (File › Options › Advanced › File locations, #2852). `None`: the app's
@@ -64,6 +67,7 @@ pub struct Prefs {
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {
+            paper_color: Default::default(),
             count_notes: true,
             markup: Default::default(),
             print_markup: false,
@@ -103,6 +107,11 @@ impl Prefs {
 fn lenient_default_language<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     let value = serde_json::Value::deserialize(d)?;
     Ok(value.as_str().and_then(wordcraft_proof::lang::normalize_tag))
+}
+
+fn lenient_paper_color<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::cmd::view::PaperColor, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 /// Ignore an invalid saved Page Color without discarding other preferences.
