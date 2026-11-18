@@ -109,9 +109,10 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
     Err("not an Excel or OpenDocument spreadsheet".into())
 }
 
+#[cfg(feature = "test-support")]
 #[doc(hidden)]
-pub fn xls_fixture(sheets: &[(&str, Vec<Vec<String>>)]) -> Vec<u8> {
-    craft_xls::testing::workbook(sheets)
+pub fn xls_fixture(sheets: &[(&str, Vec<Vec<String>>)]) -> Result<Vec<u8>, String> {
+    craft_xls::testing::workbook(sheets).map_err(|e| e.to_string())
 }
 
 pub fn field_names(row: &[String]) -> Vec<String> {
