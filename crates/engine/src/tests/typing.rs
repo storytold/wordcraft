@@ -200,7 +200,6 @@ fn enter_on_an_empty_nested_item_moves_it_up_a_level_first() {
 /// up a level and then ends the list, as with direct numbering.
 #[test]
 fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
-    use std::io::Write;
     let w = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
     let style = |id: &str, name: &str, ilvl: u8| {
         format!(
@@ -227,8 +226,7 @@ fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
     let doc_rels =
         format!("<Relationships {rels_ns}>{}{}</Relationships>", rel("rId1", "styles", "styles.xml"), rel("rId2", "numbering", "numbering.xml"));
     let ct = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default();
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [
         ("[Content_Types].xml", ct),
         ("_rels/.rels", main.as_str()),
@@ -237,10 +235,9 @@ fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
         ("word/styles.xml", styles.as_str()),
         ("word/numbering.xml", numbering.as_str()),
     ] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let doc = crate::io::open_bytes("t.docx", &z.finish().unwrap().into_inner()).unwrap();
+    let doc = crate::io::open_bytes("t.docx", &z.finish().unwrap()).unwrap();
     let mut s = Session::new(doc);
     // The list level each paragraph shows, wherever its numbering comes from.
     let levels = |s: &Session| -> Vec<Option<u8>> {
@@ -2433,12 +2430,11 @@ fn two_section_docx(kind: &str) -> Vec<u8> {
             ),
         ),
     ];
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, data) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, data.as_bytes()).unwrap();
+        zip.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// #2127: Backspace just after a section break, or Delete just before it, removes the break, as
@@ -2504,12 +2500,11 @@ fn break_on_the_last_paragraph_docx(then: Option<&str>) -> Vec<u8> {
             ),
         ),
     ];
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, data) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, data.as_bytes()).unwrap();
+        zip.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// #2127: Delete at the end of the last paragraph removes a section break on its mark too,
@@ -3876,6 +3871,88 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert_eq!(s.doc, before);
 }
 
+// #3693 is an additional editing shortcut, not a claim of Word's default key behaviour.
+#[test]
+fn delete_previous_sentence_respects_caret_boundaries_and_unicode() {
+    for (text, before, expected) in [
+        ("First sentence. Second sentence.", "First sentence. Second sentence.", "First sentence. "),
+        ("First sentence. Second sentence.", "First sentence. Sec", "First sentence. ond sentence."),
+        ("First sentence. Second sentence.", "First sentence. ", "Second sentence."),
+        ("Grüße! Überall café.", "Grüße! Überall café.", "Grüße! "),
+        ("No punctuation here", "No punctuation", " here"),
+        ("One. Two.", "", "One. Two."),
+        ("", "", ""),
+    ] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": text, "raw": true}));
+        let mut pos = s.sel.focus.clone();
+        pos.off = before.len();
+        s.sel = crate::Selection::caret(pos);
+        run(&mut s, "text.deleteSentenceBack", json!({}));
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, expected, "{text:?} at {before:?}");
+        if expected != text {
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, text);
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, expected);
+        }
+    }
+}
+
+#[test]
+fn delete_previous_sentence_keeps_paragraph_boundaries_and_deletes_selections() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "First.\nSecond sentence.", "raw": true, "paragraphs": true}));
+    let end = s.sel.focus.clone();
+    s.sel = crate::Selection::caret(Pos { off: 0, ..end.clone() });
+    let count = s.doc.body.len();
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.body.len(), count);
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Second sentence.");
+    s.sel = crate::Selection { anchor: Pos { off: 0, ..end.clone() }, focus: Pos { off: 6, ..end } };
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, " sentence.");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Second sentence.");
+}
+
+#[test]
+fn delete_previous_sentence_tracks_changes_and_respects_read_only() {
+    for accept in [true, false] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "One. Two.", "raw": true}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "text.deleteSentenceBack", json!({}));
+        let changes = s.run("review.changes", &json!({})).unwrap();
+        assert!(changes.as_array().unwrap().iter().any(|c| c["kind"] == "delete"));
+        run(&mut s, if accept { "review.acceptAll" } else { "review.rejectAll" }, json!({}));
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, if accept { "One. " } else { "One. Two." });
+    }
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Keep this.", "raw": true}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    assert!(s.run("text.deleteSentenceBack", &json!({})).is_err());
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Keep this.");
+}
+
+#[test]
+fn delete_previous_sentence_does_not_cross_a_table_cell_boundary() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "First cell.", "raw": true}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second cell.", "raw": true}));
+    let end = s.sel.focus.clone();
+    s.sel = crate::Selection::caret(Pos { off: 0, ..end.clone() });
+    let before = s.doc.plain_text(StoryRef::Body);
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), before);
+    s.sel = crate::Selection::caret(end);
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("First cell."));
+}
+
 // English spelling from SCOWL 2026 (CP2): each English reads its own SCOWL dictionary, with
 // `en-variants.txt` deciding the other dialect's spellings. Typed text, as a person types it.
 
@@ -3953,4 +4030,26 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let issues = s.run("review.issues", &json!({})).unwrap();
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
+}
+
+/// #6788: Enter in a paragraph with a drop cap makes a normal paragraph; only the first keeps
+/// the cap (Word behaviour), for a dropped cap and one in the margin.
+#[test]
+fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
+    for position in ["dropped", "margin"] {
+        let mut s = typed("Sugar and knowledge");
+        run(&mut s, "insert.dropCap", json!({"position": position, "lines": 3, "distance": 4.0, "font": "Liberation Mono"}));
+        let first_has_cap = s.doc.body.first().and_then(|b| b.as_para()).is_some_and(|p| p.props.drop_cap == Some(3));
+        assert!(first_has_cap, "{position}: the cap is set");
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 10}, "focus": {"block": 0, "off": 10}}));
+        run(&mut s, "text.newParagraph", json!({}));
+        let paras: Vec<_> = s.doc.body.iter().filter_map(|b| b.as_para()).collect();
+        assert_eq!(paras.len(), 2, "{position}");
+        let (first, second) = (&paras[0].props, &paras[1].props);
+        assert_eq!(first.drop_cap, Some(3), "{position}: the first paragraph keeps its cap");
+        assert_eq!(second.drop_cap, None, "{position}");
+        assert_eq!(second.drop_cap_margin, None, "{position}");
+        assert_eq!(second.drop_cap_distance, None, "{position}");
+        assert_eq!(second.drop_cap_font, None, "{position}");
+    }
 }

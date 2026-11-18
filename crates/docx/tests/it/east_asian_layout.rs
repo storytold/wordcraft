@@ -2,8 +2,6 @@
 //! two lines in one and horizontal in vertical are read and saved again. Fixtures are
 //! hand-written from the spec.
 
-use std::io::{Read, Write};
-
 use wordcraft_doc::props::{CombineBrackets, EastAsianLayout};
 
 fn docx(body: &str, styles: Option<&str>) -> Vec<u8> {
@@ -20,19 +18,17 @@ fn docx(body: &str, styles: Option<&str>) -> Vec<u8> {
             format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{s}</w:styles>"#),
         ));
     }
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, xml) in &parts {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(xml.as_bytes()).unwrap();
+        zw.add(name, xml.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn part(bytes: &[u8], name: &str) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read(name, 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 fn run(text: &str, rpr: &str) -> String {

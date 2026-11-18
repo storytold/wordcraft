@@ -67,6 +67,16 @@ fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
     }
 }
 
+/// Behind a modal window, whose `backdrop` has the pointer, the app still moves by its title bar,
+/// as in Word for Mac (#5124); not from just inside the window's edge, where it reaches over the
+/// title bar.
+pub(crate) fn drag_by_title_bar(ctx: &egui::Context, backdrop: &egui::Response, window: egui::Rect) {
+    let origin = ctx.input(|i| i.pointer.press_origin()).filter(|p| !window.contains(*p));
+    if backdrop.drag_started() && origin.is_some_and(|p| crate::chrome::title_drag_rect(ctx).is_some_and(|r| r.contains(p))) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
 /// Makes `window` modal (#3859): the document gives up the keyboard now, and from the next frame
 /// nothing beneath the window takes the pointer or Tab. A press beside it nudges it ([`nudge`]).
 pub(crate) fn block_behind(app: &WordApp, ctx: &egui::Context, window: &egui::Response) {
@@ -81,6 +91,7 @@ pub(crate) fn block_behind(app: &WordApp, ctx: &egui::Context, window: &egui::Re
         .inner;
     // The backdrop also has the pointer just inside the window's edge (egui's hit radius).
     let beside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !window.rect.contains(p)));
+    drag_by_title_bar(ctx, &backdrop, window.rect);
     ctx.move_to_top(layer);
     ctx.memory_mut(|m| m.set_modal_layer(layer));
     ctx.accesskit_node_builder(window.id, |node| node.set_modal());
@@ -177,6 +188,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Icons { .. } => "Icons",
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
+        Dialog::FontDownload { .. } => "Get the Missing Fonts",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
         Dialog::RecipientList { .. } => "Recipient List",
@@ -214,7 +226,21 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let held = (app.file_browser_open() || app.colors.is_some()).then(|| ctx.input_mut(|i| std::mem::take(&mut i.events)));
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
-        close = crate::rtl::root(ui, |ui| body(app, ui, &mut d));
+        // Scrolls only when the last frame's body was taller than the screen.
+        let room = (ui.ctx().content_rect().height() - 110.0).max(160.0);
+        let key = id.with("body_height");
+        let tall = ui.ctx().data(|data| data.get_temp::<f32>(key)).is_some_and(|h| h > room);
+        let mut content = |ui: &mut egui::Ui| {
+            let top = ui.cursor().min.y;
+            close = crate::rtl::root(ui, |ui| body(app, ui, &mut d));
+            let height = ui.min_rect().max.y - top;
+            ui.ctx().data_mut(|data| data.insert_temp(key, height));
+        };
+        if tall {
+            egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, content);
+        } else {
+            content(ui);
+        }
     });
     if let Some(events) = held {
         ctx.input_mut(|i| i.events = events);
@@ -236,7 +262,14 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
             });
         }
         count_dialog_frame(ctx, id);
-        close |= crate::window_close::show(ctx, &shown.response, &Tokens::get(ctx));
+        if crate::window_close::show(ctx, &shown.response, &Tokens::get(ctx)) && !close {
+            close = true;
+            // The title bar's close box is Cancel: a dialog opened from Define New Bullet goes
+            // back to it, as its Cancel button does (#2786).
+            if back_to_bullet(app, &mut d) {
+                return;
+            }
+        }
         // A file browser it opened (Attach…, Browse…) stays above it.
         if d.is_modal() && !close && !app.file_browser_open() {
             block_behind(app, ctx, &shown.response);
@@ -251,6 +284,13 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     } else {
         app.dialog = Some(d);
     }
+}
+
+/// Back to Define New Bullet from a Font or Symbol dialog it opened, when `d` is one (#2786).
+fn back_to_bullet(app: &mut WordApp, d: &mut Dialog) -> bool {
+    let Some(form) = d.bullet_form() else { return false };
+    app.dialog = Some(Dialog::Insert(Box::new(crate::dialogs_insert::InsertDialog::DefineBullet(form))));
+    true
 }
 
 /// Cancel key for dialogs: Escape everywhere, plus ⌘. (Command+Period) on macOS.
