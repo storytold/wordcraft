@@ -408,7 +408,7 @@ fn the_source_manager_imports_a_word_sources_file() {
     .unwrap();
 
     let files = std::sync::Arc::new(ScriptedFiles::answering([Picked::Paths(vec![path.clone()])]));
-    let mut a = app("Studios matter ").with_host(std::sync::Arc::new(craft::host::Host::default().with_files(files.clone())));
+    let mut a = app("Studios matter ").with_host(std::sync::Arc::new(craft::host::Host::builder(crate::APP).files(files.clone()).build()));
     assert_eq!(a.run("references.sources", json!({})).unwrap(), json!({"pending": "sourceManager"}));
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {

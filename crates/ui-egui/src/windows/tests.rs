@@ -93,9 +93,13 @@ fn text(a: &WordApp) -> String {
     a.session.doc.plain_text(StoryRef::Body).trim().to_string()
 }
 
-fn prompt(a: &WordApp) -> Option<&'static str> {
-    // PLAN: assumed `fn open_dialogs(&self) -> Vec<&'static str>` from dialogs-w13.
-    a.open_dialogs().into_iter().next()
+/// What the window asks: `saveChanges` while a close waits on the Save prompt, else the key of the
+/// first open dialog.
+fn prompt(a: &WordApp) -> Option<String> {
+    if a.closing.as_ref().is_some_and(|c| c.prompt.is_some()) {
+        return Some("saveChanges".to_owned());
+    }
+    a.dialog_host.open_dialogs().into_iter().find_map(|d| d.key)
 }
 
 /// New opens the document in a second native window, focused, with a fresh interface; the
@@ -109,7 +113,7 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     rig.frames(&mut a, 3);
     a.ui.tab = "Insert".into();
     a.run("ui.dialog", json!({"name": "paragraph"})).unwrap();
-    assert_eq!(prompt(&a), Some("paragraph"));
+    assert_eq!(prompt(&a).as_deref(), Some("paragraph"));
 
     a.run("file.new", json!({})).unwrap();
     let second = a.session.document_id();
@@ -128,10 +132,10 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     rig.frames(&mut a, 2);
     assert_eq!(a.active_viewport(), ViewportId::ROOT);
     assert_eq!(a.session.document_id(), first);
-    assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a)), ("First".into(), "Insert", Some("paragraph")));
+    assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a).as_deref()), ("First".into(), "Insert", Some("paragraph")));
     rig.focus(child);
     rig.frames(&mut a, 2);
-    assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a)), ("Second".into(), crate::DEFAULT_TAB, None));
+    assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a).as_deref()), ("Second".into(), crate::DEFAULT_TAB, None));
 }
 
 /// Each window has its own key, and the root window's stays `main` when it adopts another entry.
@@ -206,7 +210,7 @@ fn closing_a_window_asks_first_and_the_root_adopts_another() {
 
     rig.close(child);
     rig.frame(&mut a);
-    assert_eq!(prompt(&a), Some("saveChanges"), "the dirty window asks");
+    assert_eq!(prompt(&a).as_deref(), Some("saveChanges"), "the dirty window asks");
     assert_eq!((a.window_count(), a.active_viewport()), (2, child));
     a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
     assert_eq!((a.window_count(), a.session.document_id(), text(&a).as_str()), (1, kept, "Kept"));
@@ -278,7 +282,7 @@ fn quitting_from_the_empty_window_asks_about_the_other_windows() {
     assert!(!a.has_document());
 
     assert!(!a.quit());
-    assert_eq!((a.session.document_id(), prompt(&a), text(&a).as_str()), (other, Some("saveChanges"), "Agent"));
+    assert_eq!((a.session.document_id(), prompt(&a).as_deref(), text(&a).as_str()), (other, Some("saveChanges"), "Agent"));
     assert_ne!(a.windows.shown(), empty, "the document's own window asks");
     a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
     assert!(a.quit_requested);
@@ -318,14 +322,14 @@ fn quitting_asks_about_each_document_in_its_window() {
     rig.frames(&mut a, 2);
 
     assert!(!a.quit());
-    assert_eq!((a.session.document_id(), prompt(&a)), (two, Some("saveChanges")), "the active window asks first");
+    assert_eq!((a.session.document_id(), prompt(&a).as_deref()), (two, Some("saveChanges")), "the active window asks first");
     a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
     assert!(!a.quit_requested);
     assert_eq!((a.window_count(), a.session.documents().len()), (2, 2), "Cancel keeps both");
 
     assert!(!a.quit());
     a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-    assert_eq!((a.session.document_id(), prompt(&a)), (one, Some("saveChanges")), "then the other window asks");
+    assert_eq!((a.session.document_id(), prompt(&a).as_deref()), (one, Some("saveChanges")), "then the other window asks");
     assert_eq!(a.window_count(), 1);
     rig.frame(&mut a);
     assert!(rig.sent(ViewportId::ROOT, &ViewportCommand::Focus), "its window comes to the front");
@@ -396,20 +400,20 @@ fn closing_one_of_two_windows_on_a_document_asks_nothing() {
     let child = a.active_viewport();
     rig.close(child);
     rig.frame(&mut a);
-    assert_eq!(prompt(&a), None, "no prompt while another window shows the document");
+    assert_eq!(prompt(&a).as_deref(), None, "no prompt while another window shows the document");
     assert_eq!((a.window_count(), a.session.document_id(), text(&a).as_str()), (1, doc, "Kept"));
     assert!(a.session.dirty);
     rig.frames(&mut a, 2);
     assert_eq!(a.window_title(), super::title("Document1", true));
     a.run("file.close", json!({})).unwrap();
-    assert_eq!(prompt(&a), Some("saveChanges"), "the last window asks");
+    assert_eq!(prompt(&a).as_deref(), Some("saveChanges"), "the last window asks");
     a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
 
     a.run("view.newWindow", json!({})).unwrap();
     rig.frames(&mut a, 2);
     assert_eq!(a.window_count(), 2);
     assert!(!a.quit());
-    assert_eq!(prompt(&a), Some("saveChanges"));
+    assert_eq!(prompt(&a).as_deref(), Some("saveChanges"));
     a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
     assert!(a.quit_requested, "one prompt for the document");
 }
@@ -458,9 +462,7 @@ type Shown = Arc<ScriptedFiles>;
 fn blank_beside_a_document() -> (Rig, WordApp, Shown, u64) {
     let files: Shown = Arc::new(ScriptedFiles::held());
     let mut rig = Rig::new();
-    // PLAN: assumed `Host::testing().files(Arc<dyn Files>) -> Host` (framework testing backends) and
-    // `WordApp::with_host(self, Arc<Host>) -> WordApp` (app-hub, app.H1).
-    let host = Arc::new(craft::host::Host::testing().files(files.clone()));
+    let host = Arc::new(craft::host::Host::builder(crate::APP).files(files.clone()).build());
     let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default()).with_host(host);
     rig.frames(&mut a, 2);
     a.run("file.open", json!({"path": docx_on_disk("first", "First").to_string_lossy()})).unwrap();
