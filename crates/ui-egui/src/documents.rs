@@ -10,6 +10,9 @@
 use serde_json::{Value, json};
 use wordcraft_engine::DocInfo;
 
+use craft::ui::contract::Show as _;
+use craft::ui::menu::MenuItem;
+
 use crate::{WordApp, panes};
 
 /// What the window keeps for an open document while another one is shown.
@@ -171,7 +174,6 @@ impl WordApp {
         if id == self.session.document_id() {
             return panes::has_comment_drafts(self);
         }
-        // PLAN(chrome-w13): `panes::state_has_drafts(&CommentsPanelState) -> bool`
         self.parked.get(&id).is_some_and(|p| panes::state_has_drafts(&p.comments))
     }
 
@@ -262,7 +264,7 @@ pub(crate) fn switch_windows_menu(ui: &mut egui::Ui, app: &mut WordApp) {
         app.session.documents().into_iter().map(|d| (d.id, format!("{}{}", display_title(&d), if d.dirty { " •" } else { "" }), d.active)).collect()
     };
     for (key, label, current) in entries {
-        if craft::ui::widgets::MenuItem::new(label).radio_mark(Some(current)).show(ui).ran {
+        if MenuItem::new(label).radio_mark(Some(current)).show(ui).ran {
             if native {
                 app.show_window(key);
             } else {
