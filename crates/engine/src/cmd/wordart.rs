@@ -15,28 +15,28 @@ use wordcraft_doc::{Paragraph, PartKind, Pos, StoryRef, para_block};
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
-const EFFECT_PARAMS: &str = r#"{"style"?: "solid"|"outlined"|"hollow"|"gradient"|"shadowed"|"glowing"|"reflected"|"sunset", "clear"?: bool, "fill"?: "RRGGBB"|"none" (hollow)|{"color": "RRGGBB", "transparency"?: %}|{"gradient": ["RRGGBB", …], "angle"?: deg}|null (the run's colour), "outline"?: "RRGGBB"|"none"|{"color"?: "RRGGBB"|null, "width"?: pt, "transparency"?: %}|null, "shadow"?: preset|{"color"?, "transparency"?, "blur"?, "distance"?, "angle"?}|null, "glow"?: pt|{"color"?, "size"?, "transparency"?}|null, "reflection"?: bool|{"transparency"?: %, "size"?: %, "distance"?: pt}|null}  (an omitted key is left as it is; with a shape selected or the caret in a text box, the box's whole text)"#;
+const EFFECT_PARAMS: &str = r#"{"style"?: "solid"|"outlined"|"hollow"|"gradient"|"shadowed"|"glowing"|"reflected"|"sunset", "clear"?: bool, "fill"?: "RRGGBB"|"none" (hollow)|{"color": "RRGGBB", "transparency"?: %}|{"gradient": ["RRGGBB", …], "angle"?: deg}|null (the run's colour), "outline"?: "RRGGBB"|"none"|{"color"?: "RRGGBB"|null, "width"?: pt, "transparency"?: %}|null, "shadow"?: preset|{"color"?, "transparency"?, "blur"?, "distance"?, "angle"?}|null, "glow"?: pt|{"color"?, "size"?, "transparency"?}|null, "reflection"?: bool|"none"|{"transparency"?: %, "size"?: %, "distance"?: pt}|null}  (an omitted key is left as it is; with a shape selected or the caret in a text box, the box's whole text)"#;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("insert.wordArt", "WordArt", "Insert › Text", insert).params(
-            r#"{"text"?: string, "style"?: WordArt style id (see format.textEffects), "transform"?: "textArchUp"|"textArchDown"|"textCircle"|"textWave1"|… (a DrawingML preset text warp)}"#,
+        CommandSpec::new("insert.wordArt", "Decorative Text", "Insert › Text", insert).params(
+            r#"{"text"?: string, "style"?: Decorative Text style id (see format.textEffects), "transform"?: "textArchUp"|"textArchDown"|"textCircle"|"textWave1"|… (a DrawingML preset text warp)}"#,
         ),
         CommandSpec::new("format.textEffects", "Text Effects", "Home › Font", text_effects).params(EFFECT_PARAMS),
-        CommandSpec::new("wordArt.style", "WordArt Styles", "Shape Format › WordArt Styles", |s, v| {
+        CommandSpec::new("wordArt.style", "Decorative Text Styles", "Shape Format › Decorative Text Styles", |s, v| {
             let id = p::req_str(v, "style")?;
             text_effects(s, &json!({"style": id}))
         })
         .params(r#"{"style": "solid"|"outlined"|"hollow"|"gradient"|"shadowed"|"glowing"|"reflected"|"sunset"}"#),
-        CommandSpec::new("wordArt.textFill", "Text Fill", "Shape Format › WordArt Styles", |s, v| {
+        CommandSpec::new("wordArt.textFill", "Text Fill", "Shape Format › Decorative Text Styles", |s, v| {
             text_effects(s, &json!({"fill": v.get("fill").or_else(|| v.get("color")).cloned().unwrap_or(Value::Null)}))
         })
         .params(r#"{"fill": "RRGGBB"|"none"|{"gradient": ["RRGGBB", …], "angle"?: deg}|null}"#),
-        CommandSpec::new("wordArt.textOutline", "Text Outline", "Shape Format › WordArt Styles", |s, v| {
+        CommandSpec::new("wordArt.textOutline", "Text Outline", "Shape Format › Decorative Text Styles", |s, v| {
             text_effects(s, &json!({"outline": v.get("outline").cloned().unwrap_or_else(|| v.clone())}))
         })
         .params(r#"{"color"?: "RRGGBB"|null, "width"?: pt} or {"outline": "none"|null}"#),
-        CommandSpec::new("wordArt.transform", "Transform", "Shape Format › WordArt Styles", transform)
+        CommandSpec::new("wordArt.transform", "Transform", "Shape Format › Decorative Text Styles", transform)
             .params(r#"{"preset": "textArchUp"|"textArchDown"|"textCircle"|"textWave1"|"textSlantUp"|"textSlantDown"|"textInflate"|"textDeflate"|"textChevron"|"textChevronInverted"|"textTriangle"|"textTriangleInverted"|… (any DrawingML preset text warp)|"none", "adj"?: n (the preset's adjust value)}"#),
     ]
 }
@@ -47,8 +47,8 @@ fn theme(s: &Session) -> Vec<Rgb> {
 }
 
 /// The text box story the selection formats as a whole: the selected shape's, or the one the
-/// caret is in.
-fn box_story(s: &Session) -> Option<u32> {
+/// caret is in. The ribbon reads the current effects from the same place.
+pub fn box_story(s: &Session) -> Option<u32> {
     if let Some((_, InlineObject::Shape { story: Some(id), .. })) = super::objects::object_selection(s) {
         return Some(*id);
     }
@@ -100,13 +100,14 @@ fn parse_outline(v: Option<&Value>) -> Result<Change<TextOutline>, CmdError> {
     Ok(match v {
         None => None,
         Some(Value::Null) => Some(None),
-        Some(Value::String(x)) if x == "none" => Some(Some(TextOutline { color: None, ..d })),
+        Some(Value::String(x)) if x.eq_ignore_ascii_case("none") => Some(Some(TextOutline { color: None, ..d })),
         Some(Value::String(x)) => {
             Some(Some(TextOutline { color: Some(Rgb::parse(x).ok_or_else(|| CmdError::Params("`outline`: a colour".into()))?), ..d }))
         }
         Some(o @ Value::Object(_)) => Some(Some(TextOutline {
             color: match o.get("color") {
                 Some(Value::Null) => None,
+                Some(Value::String(s)) if s.eq_ignore_ascii_case("none") => None,
                 Some(_) => color(o, "color").or(d.color),
                 None => d.color,
             },
@@ -123,7 +124,7 @@ fn parse_shadow(v: Option<&Value>) -> Result<Change<Shadow>, CmdError> {
         None => None,
         Some(Value::Null) => Some(None),
         Some(Value::Bool(b)) => Some(b.then(Shadow::default)),
-        Some(Value::String(id)) if id == "none" => Some(None),
+        Some(Value::String(id)) if id.eq_ignore_ascii_case("none") => Some(None),
         Some(Value::String(id)) => Some(Some(preset(id)?)),
         Some(o @ Value::Object(_)) => {
             let mut sh = match p::str(o, "preset") {
@@ -146,7 +147,7 @@ fn parse_glow(v: Option<&Value>, accent: Rgb) -> Result<Change<Glow>, CmdError> 
     Ok(match v {
         None => None,
         Some(Value::Null) => Some(None),
-        Some(Value::String(x)) if x == "none" => Some(None),
+        Some(Value::String(x)) if x.eq_ignore_ascii_case("none") => Some(None),
         Some(n @ Value::Number(_)) => Some(Some(Glow { size: n.as_f64().unwrap_or(0.0) as f32, ..d }.sanitized()).filter(|g| g.size > 0.0)),
         Some(o @ Value::Object(_)) => Some(
             Some(
@@ -169,13 +170,14 @@ fn parse_reflection(v: Option<&Value>) -> Result<Change<Reflection>, CmdError> {
         None => None,
         Some(Value::Null) => Some(None),
         Some(Value::Bool(b)) => Some(b.then_some(d)),
+        Some(Value::String(x)) if x.eq_ignore_ascii_case("none") => Some(None),
         Some(o @ Value::Object(_)) => Some(Some(Reflection {
             transparency: p::f32(o, "transparency").unwrap_or(d.transparency),
             size: p::f32(o, "size").unwrap_or(d.size),
             distance: p::f32(o, "distance").unwrap_or(d.distance),
             blur: p::f32(o, "blur").unwrap_or(d.blur),
         })),
-        Some(_) => return Err(CmdError::Params("`reflection`: true, an object or null".into())),
+        Some(_) => return Err(CmdError::Params("`reflection`: true, \"none\", an object or null".into())),
     })
 }
 
@@ -184,7 +186,7 @@ fn text_effects(s: &mut Session, v: &Value) -> CmdResult {
     let theme = theme(s);
     let accent = theme.get(4).copied().unwrap_or(Rgb(0x15, 0x60, 0x82));
     let style = match p::str(v, "style") {
-        Some(id) => Some(art_style(id, &theme).ok_or_else(|| CmdError::Params(format!("unknown WordArt style `{id}`")))?),
+        Some(id) => Some(art_style(id, &theme).ok_or_else(|| CmdError::Params(format!("unknown decorative text style `{id}`")))?),
         None => None,
     };
     let clear = p::bool(v, "clear").unwrap_or(false);
@@ -242,11 +244,11 @@ fn transform(s: &mut Session, v: &Value) -> CmdResult {
             Some(w)
         }
     };
-    let pos = warp_target(s).ok_or_else(|| CmdError::Disabled("select a shape or WordArt first".into()))?;
+    let pos = warp_target(s).ok_or_else(|| CmdError::Disabled("select a shape or decorative text first".into()))?;
     let para = s.doc.para_mut(pos.story, &pos.path)?;
     match para.object_at_mut(pos.off) {
         Some(InlineObject::Shape { extra, .. }) => extra.warp = warp.clone(),
-        _ => return Err(CmdError::Disabled("select a shape or WordArt first".into())),
+        _ => return Err(CmdError::Disabled("select a shape or decorative text first".into())),
     }
     para.touch();
     Ok(json!({"transform": warp.map(|w| w.preset)}))
@@ -267,7 +269,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let text: String = p::str(v, "text").unwrap_or("Your text here").chars().filter(|c| !c.is_control()).take(1000).collect();
     let text = if text.trim().is_empty() { "Your text here".to_string() } else { text };
     let style = p::str(v, "style").unwrap_or("solid");
-    let fx = art_style(style, &theme(s)).ok_or_else(|| CmdError::Params(format!("unknown WordArt style `{style}`")))?;
+    let fx = art_style(style, &theme(s)).ok_or_else(|| CmdError::Params(format!("unknown decorative text style `{style}`")))?;
     let warp = match p::str(v, "transform") {
         None | Some("none") => None,
         Some(id) => Some(TextWarp::new(id).ok_or_else(|| CmdError::Params(format!("unknown text warp `{id}`")))?),

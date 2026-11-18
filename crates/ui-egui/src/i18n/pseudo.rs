@@ -1,20 +1,18 @@
-//! A test-only pseudo-language: every string that goes through the catalog lookup comes back
-//! wrapped in `⟦…⟧`, so text drawn without the marks never went through translation.
+//! A test-only pseudo-language: while it is on (per thread), every string that goes through a
+//! lookup comes back as the craft-i18n crate's pseudo locale marks it, wrapped in `⟦…⟧`, so text
+//! drawn without the marks never went through translation.
 
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeSet, HashMap};
+use std::cell::Cell;
+use std::collections::BTreeSet;
 
 thread_local! {
     static ON: Cell<bool> = const { Cell::new(false) };
-    // Marked strings live for the test process; lookups hand out `&'static str`.
-    static CACHE: RefCell<HashMap<String, &'static str>> = RefCell::new(HashMap::new());
-    // Every English string looked up while on, to check against a real catalog.
-    static LOOKED_UP: RefCell<BTreeSet<String>> = const { RefCell::new(BTreeSet::new()) };
 }
 
-/// Every English string looked up while the pseudo-language was on.
+/// Every English string looked up in the pseudo-language so far, in this process (the crate
+/// keeps one list for every thread).
 pub fn looked_up() -> BTreeSet<String> {
-    LOOKED_UP.with_borrow(Clone::clone)
+    super::I18N.looked_up()
 }
 
 pub fn on() -> bool {
@@ -23,11 +21,6 @@ pub fn on() -> bool {
 
 pub fn set(on: bool) {
     ON.set(on);
-}
-
-pub fn mark(s: &str) -> &'static str {
-    LOOKED_UP.with_borrow_mut(|l| l.insert(s.to_string()));
-    CACHE.with_borrow_mut(|c| *c.entry(s.to_string()).or_insert_with(|| Box::leak(format!("⟦{}⟧", s.replace('\n', "⟧\n⟦")).into_boxed_str())))
 }
 
 /// `text` without its marked segments. Lines are marked one by one, since multi-line labels are

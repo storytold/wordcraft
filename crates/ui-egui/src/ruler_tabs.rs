@@ -118,7 +118,7 @@ pub(crate) fn selector(app: &mut WordApp, ui: &Ui, corner: Rect) {
         return;
     }
     let t = Tokens::get(ui.ctx());
-    let r = ui.interact(corner, ui.id().with("ruler_tab_kind"), Sense::click());
+    let r = ui.interact(corner, ui.scope_id().with("ruler_tab_kind"), Sense::click());
     if r.clicked() {
         app.canvas.tab_kind = next_kind(app.canvas.tab_kind, false);
     } else if r.secondary_clicked() {
@@ -136,6 +136,21 @@ pub(crate) fn selector(app: &mut WordApp, ui: &Ui, corner: Rect) {
     };
     draw_tab_glyph(&p, b.center().x + nudge, b.max.y - 4.0, kind, false, Stroke::new(1.5, t.text));
     r.on_hover_text(format!("{}: {}", tl!("Tabs"), tl!(kind_label(kind))));
+}
+
+/// Where the stops' glyphs sit on the ruler `bar`, for its numbers to keep clear of (#1878):
+/// each of `tabs`, and a stop being dragged where it would land instead.
+pub(crate) fn marker_rects(app: &WordApp, bar: Rect, x_of: &dyn Fn(f32) -> f32, tabs: &[TabStop]) -> Vec<Rect> {
+    let base = bar.max.y - 1.0;
+    let glyph = |x: f32| Rect::from_min_max(pos2(x - 4.5, base - 7.5), pos2(x + 4.5, base + 0.5));
+    let drag = app.canvas.tab_drag.as_ref();
+    let moving = drag.and_then(|d| d.from);
+    let mut rects: Vec<Rect> =
+        tabs.iter().filter(|t| moving.is_none_or(|from| (from - t.pos).abs() > TAB_POS_EPS)).map(|t| glyph(x_of(t.pos))).collect();
+    if let Some(d) = drag.filter(|d| !d.off) {
+        rects.push(glyph(x_of(d.at)));
+    }
+    rects
 }
 
 /// The ruler geometry the stops are drawn on.
@@ -171,7 +186,7 @@ pub(crate) fn stops(app: &mut WordApp, ui: &Ui, hp: &Painter, g: &Ruler<'_>, tab
     // A click on an empty stretch over the text sets a stop of the selector's kind there; pressing
     // and dragging places it where the button is released. The edges stay with the margin handles
     // and indent markers, and only the primary button places stops.
-    let add = ui.interact(g.text.shrink2(vec2(4.0, 0.0)), ui.id().with("ruler_tab_add"), Sense::click_and_drag());
+    let add = ui.interact(g.text.shrink2(vec2(4.0, 0.0)), ui.scope_id().with("ruler_tab_add"), Sense::click_and_drag());
     let kind = app.canvas.tab_kind;
     let placing = |x: f32| TabDrag { from: None, para: para.clone(), align: kind, leader: TabLeader::None, at: snap(x), off: false };
     if add.clicked()
@@ -189,8 +204,11 @@ pub(crate) fn stops(app: &mut WordApp, ui: &Ui, hp: &Painter, g: &Ruler<'_>, tab
     let mut open_dialog = false;
     for (i, tab) in tabs.iter().enumerate() {
         let x = (g.x_of)(tab.pos);
-        let r =
-            ui.interact(Rect::from_center_size(pos2(x, g.bar.max.y - 4.0), vec2(9.0, 10.0)), ui.id().with(("ruler_tab", i)), Sense::click_and_drag());
+        let r = ui.interact(
+            Rect::from_center_size(pos2(x, g.bar.max.y - 4.0), vec2(9.0, 10.0)),
+            ui.scope_id().with(("ruler_tab", i)),
+            Sense::click_and_drag(),
+        );
         let starts = r.drag_started_by(egui::PointerButton::Primary);
         if starts {
             app.canvas.tab_drag =
@@ -225,13 +243,15 @@ pub(crate) fn stops(app: &mut WordApp, ui: &Ui, hp: &Painter, g: &Ruler<'_>, tab
                 draw_tab_glyph(hp, x, base, d.align, g.rtl, stroke);
                 // A guide down the page shows where text will line up.
                 if let Some(area) = app.canvas.canvas_rect {
-                    let guide =
-                        ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.id().with("ruler_tab_guide"))).with_clip_rect(area);
+                    let guide = ui
+                        .ctx()
+                        .layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.scope_id().with("ruler_tab_guide")))
+                        .with_clip_rect(area);
                     guide.extend(Shape::dashed_line(&[pos2(x, area.min.y), pos2(x, area.max.y)], Stroke::new(1.0, t.text_dim), 3.0, 3.0));
                 }
                 format!("{} {}", tl!(kind_label(d.align)), units.format_with(d.at, decimal))
             };
-            egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), ui.id().with("ruler_tab_tip"), egui::PopupAnchor::Pointer).show(|ui| {
+            egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), ui.scope_id().with("ruler_tab_tip"), egui::PopupAnchor::Pointer).show(|ui| {
                 ui.label(label);
             });
         } else {
@@ -297,5 +317,28 @@ mod tests {
             Some(json!({"clear": [72.0], "set": [{"pos": 144.0, "align": "center", "leader": "dot"}]})),
             "moving keeps the stop's kind and leader"
         );
+    }
+
+    /// #1878: the ruler's numbers keep clear of each stop's glyph, and of a dragged stop where it
+    /// lands rather than where it was; a stop dragged off the ruler frees its number.
+    #[test]
+    fn marker_rects_cover_each_stop_and_a_dragged_one_where_it_lands() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let bar = Rect::from_min_max(pos2(0.0, 100.0), pos2(800.0, 115.0));
+        let x_of = |pos: f32| 100.0 + pos;
+        let stop = |pos: f32| TabStop { pos, align: TabAlign::Left, leader: TabLeader::None };
+        let tabs = [stop(72.0), stop(144.0)];
+        let centres = |rects: &[Rect]| rects.iter().map(|r| r.center().x).collect::<Vec<f32>>();
+        let rects = marker_rects(&a, bar, &x_of, &tabs);
+        assert_eq!(centres(&rects), [172.0, 244.0]);
+        assert!(rects.iter().all(|r| r.width() == 9.0 && r.min.y == bar.max.y - 8.5 && r.max.y == bar.max.y - 0.5), "{rects:?}");
+        let para = a.session.sel.focus.clone();
+        let drag = |from, at, off| Some(TabDrag { from, para: para.clone(), align: TabAlign::Left, leader: TabLeader::None, at, off });
+        a.canvas.tab_drag = drag(Some(72.0), 216.0, false);
+        assert_eq!(centres(&marker_rects(&a, bar, &x_of, &tabs)), [244.0, 316.0], "a dragged stop counts where it lands");
+        a.canvas.tab_drag = drag(Some(72.0), 216.0, true);
+        assert_eq!(centres(&marker_rects(&a, bar, &x_of, &tabs)), [244.0], "off the ruler it counts nowhere");
+        a.canvas.tab_drag = drag(None, 216.0, false);
+        assert_eq!(centres(&marker_rects(&a, bar, &x_of, &tabs)), [172.0, 244.0, 316.0], "a stop being placed counts too");
     }
 }

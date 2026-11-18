@@ -154,7 +154,7 @@ pub fn show_results(s: &mut Session) -> Result<(), CmdError> {
 fn set_code(s: &mut Session, v: &Value) -> CmdResult {
     let code = p::req_str(v, "code")?.trim().to_string();
     if code.is_empty() || code.len() > MAX_CODE || code.contains(OBJ) {
-        return Err(CmdError::Params("bad field code".into()));
+        return Err(CmdError::Params("`code` must be non-empty, at most 4096 UTF-8 bytes, and contain no U+FFFC object markers".into()));
     }
     let Some(f) = selected(s).into_iter().next() else { return Err(none_selected()) };
     with_field(s, &f.at, |o| match o {
@@ -188,14 +188,22 @@ fn shown_text(s: &mut Session, f: &FieldAt) -> String {
     };
     let l = s.layout();
     let page = l.caret(&f.at).and_then(|c| l.pages.get(c.page));
+    let section = page.map(|p| (p.section + 1) as u32).unwrap_or(1);
+    let section_pages = page
+        .map(|p| l.pages.iter().filter(|pg| pg.section == p.section).count() as u32)
+        .unwrap_or_else(|| u32::try_from(l.pages.len()).unwrap_or(u32::MAX));
+    let page_format = page.and_then(|p| s.doc.sections().get(p.section).map(|(_, sec)| sec.page_num_format)).unwrap_or_default();
+    let (fn_name, fn_path) = s.resolved_filenames();
     let ctx = wordcraft_layout::fields::FieldCtx {
         page: page.map(|p| p.number).unwrap_or(1),
+        page_format,
         pages: u32::try_from(l.pages.len()).unwrap_or(u32::MAX),
-        section_pages: u32::try_from(l.pages.len()).unwrap_or(u32::MAX),
-        section: 1,
+        section_pages,
+        section,
         title: s.doc.core.title.as_str().into(),
         author: s.doc.core.creator.as_str().into(),
-        filename: s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default().into(),
+        filename: fn_name.into(),
+        filepath: fn_path.into(),
         ..Default::default()
     };
     wordcraft_layout::fields::field_text(&instr, &result, &ctx).0
@@ -277,6 +285,52 @@ mod tests {
         s
     }
 
+    /// #1798: Update Field evaluates `DOCPROPERTY` against custom and built-in document
+    /// properties (with a `\* MERGEFORMAT` switch), instead of leaving the cached result.
+    #[test]
+    fn update_fields_evaluates_docproperty() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("file.properties", &json!({"custom": {"ProjectName": "Atlas"}})).unwrap();
+        s.run("insert.field", &json!({"instr": "DOCPROPERTY \"ProjectName\" \\* MERGEFORMAT", "result": "stale"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+        s.doc.core.title = "Report".into();
+        s.run("insert.field", &json!({"instr": "DOCPROPERTY Title", "result": ""})).unwrap();
+        s.run("references.updateFields", &json!({})).unwrap();
+        let results: Vec<String> = s
+            .doc
+            .body
+            .first()
+            .and_then(|b| b.as_para())
+            .map(|p| {
+                p.objects
+                    .iter()
+                    .filter_map(|o| match o {
+                        InlineObject::Field { result, .. } => Some(result.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(results, ["Atlas", "Report"]);
+    }
+
+    /// `DOCPROPERTY LastSavedBy`, Word's name for the last author, reads the last-modified-by
+    /// property.
+    #[test]
+    fn update_fields_evaluates_docproperty_last_saved_by() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.doc.core.last_modified_by = "Ada".into();
+        s.run("insert.field", &json!({"instr": "DOCPROPERTY LastSavedBy", "result": "stale"})).unwrap();
+        s.run("references.updateFields", &json!({})).unwrap();
+        let result = s.doc.body.first().and_then(|b| b.as_para()).and_then(|p| {
+            p.objects.iter().find_map(|o| match o {
+                InlineObject::Field { result, .. } => Some(result.clone()),
+                _ => None,
+            })
+        });
+        assert_eq!(result.as_deref(), Some("Ada"));
+    }
+
     fn page_text(s: &mut Session) -> String {
         let l = s.layout();
         let mut out = String::new();
@@ -291,6 +345,30 @@ mod tests {
             }
         }
         out
+    }
+
+    /// #1765: ASK and SET fields draw nothing on the page; their stored results are kept (and
+    /// saved), and code view still shows them.
+    #[test]
+    fn ask_and_set_fields_draw_nothing() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.field", &json!({"instr": "ASK Nominativo \"Inserire nome\" \\d \"N\"", "result": "«NOME» «COGNOME»"})).unwrap();
+        s.run("insert.field", &json!({"instr": "SET Codice \"COD\"", "result": "COD"})).unwrap();
+        s.run("text.insert", &json!({"text": "Title"})).unwrap();
+        let shown = page_text(&mut s);
+        assert!(!shown.contains("NOME") && !shown.contains("COD"), "{shown}");
+        let para = s.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        let results: Vec<&str> = para
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Field { result, .. } => Some(result.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results, ["«NOME» «COGNOME»", "COD"]);
+        s.run("view.fieldCodes", &json!({})).unwrap();
+        assert!(page_text(&mut s).contains("{ SET Codice \"COD\" }"));
     }
 
     /// Alt+F9 shows every field's code in braces; Shift+F9 flips just the selected one; F9 shows
@@ -363,7 +441,10 @@ mod tests {
         s.run("fields.setCode", &json!({"code": "TITLE"})).unwrap();
         let objs = |s: &Session| s.doc.body.first().and_then(|b| b.as_para()).map(|p| p.objects.clone()).unwrap_or_default();
         assert!(matches!(objs(&s).first(), Some(InlineObject::Field { instr, result, .. }) if instr == "TITLE" && result == "Report"));
-        assert!(s.run("fields.setCode", &json!({"code": ""})).is_err());
+        assert!(matches!(
+            s.run("fields.setCode", &json!({"code": ""})),
+            Err(crate::CmdError::Params(message)) if message == "`code` must be non-empty, at most 4096 UTF-8 bytes, and contain no U+FFFC object markers"
+        ));
 
         // A locked field keeps its result.
         s.run("fields.lock", &json!({})).unwrap();
@@ -383,5 +464,21 @@ mod tests {
         // Nothing selected: an error, not a no-op undo step.
         s.run("caret.docStart", &json!({})).unwrap();
         assert!(s.run("fields.lock", &json!({})).is_err());
+    }
+
+    #[test]
+    fn unlink_uses_section_context() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        // Insert section break so there are 2 sections
+        s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+        // In section 2: insert SECTION and SECTIONPAGES fields
+        s.run("insert.field", &json!({"instr": "SECTION"})).unwrap();
+        s.run("text.insert", &json!({"text": " of "})).unwrap();
+        s.run("insert.field", &json!({"instr": "SECTIONPAGES"})).unwrap();
+        // Select both and unlink
+        s.run("select.all", &json!({})).unwrap();
+        s.run("fields.unlink", &json!({})).unwrap();
+        let text = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(text.contains("2 of 1"), "unlinked text should reflect section 2: {text}");
     }
 }

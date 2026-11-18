@@ -6,7 +6,7 @@
 //! spacing and every named symbol in [`crate::math_symbols`]. Unknown commands stay as text.
 
 use crate::math::{
-    Arg, FracKind, MAX_DEPTH, MNode, MRun, MScr, MSty, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
+    Arg, ColJc, FracKind, MAX_DEPTH, MNode, MRun, MScr, MSty, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
 };
 use crate::math_linear::{FUNCTION_NAMES, map_args};
 use crate::math_symbols::{name_of, symbol};
@@ -47,7 +47,7 @@ fn tokenize(s: &str) -> Vec<Tok> {
         match c {
             '\\' => {
                 let start = i;
-                while cs.get(i).is_some_and(|c| c.is_ascii_alphabetic()) {
+                while cs.get(i).is_some_and(char::is_ascii_alphabetic) {
                     i += 1;
                 }
                 if i == start {
@@ -324,6 +324,21 @@ impl Lp {
                 let den = self.arg();
                 one(MNode::Frac { kind: FracKind::Bar, num, den })
             }
+            "genfrac" => {
+                let beg = delim_arg(&self.arg());
+                let end = delim_arg(&self.arg());
+                let thickness = self.arg();
+                let _style = self.arg();
+                let num = self.arg();
+                let den = self.arg();
+                let kind = if is_zero_length(&thickness) { FracKind::NoBar } else { FracKind::Bar };
+                let frac = MNode::Frac { kind, num, den };
+                if beg.is_none() && end.is_none() {
+                    one(frac)
+                } else {
+                    one(MNode::Delim { beg, end, sep: None, grow: true, shp_match: false, elems: vec![vec![frac]] })
+                }
+            }
             "binom" | "dbinom" | "tbinom" => {
                 let n = self.arg();
                 let k = self.arg();
@@ -380,9 +395,30 @@ impl Lp {
                 one(MNode::Run(MRun { text: t, nor: true, sty: Some(MSty::Italic), ..Default::default() }))
             }
             "operatorname" => {
+                let starred = self.peek() == Some(&Tok::Ch('*'));
+                if starred {
+                    self.i += 1;
+                }
                 let t = self.raw_arg();
                 let name = vec![MNode::Run(MRun::plain(t))];
-                self.apply(name)
+                if starred && self.peek() == Some(&Tok::Sub) {
+                    self.i += 1;
+                    let lim = self.arg();
+                    vec![MNode::Lim { upper: false, e: name, lim }]
+                } else {
+                    self.apply(name)
+                }
+            }
+            "tag" => {
+                let starred = self.peek() == Some(&Tok::Ch('*'));
+                if starred {
+                    self.i += 1;
+                }
+                let t = self.raw_arg();
+                let num_str = if starred { format!("#{t}") } else { format!("# ({t})") };
+                let mut r = MRun::new(num_str);
+                r.lit = false;
+                vec![MNode::Run(r)]
             }
             "mathrm" | "rm" => {
                 let a = self.arg();
@@ -424,13 +460,15 @@ impl Lp {
             "underline" => one(MNode::Bar { top: false, e: self.arg() }),
             "boxed" | "fbox" => one(MNode::BorderBox { hide: [false; 4], strike: [false; 4], e: self.arg() }),
             "phantom" => one(MNode::Phant { show: false, zero_wid: false, zero_asc: false, zero_desc: false, e: self.arg() }),
-            "overbrace" | "underbrace" | "overparen" | "underparen" => {
+            "overbrace" | "underbrace" | "overparen" | "underparen" | "overbracket" | "underbracket" => {
                 let top = c.starts_with("over");
                 let chr = match c {
                     "overbrace" => '⏞',
                     "underbrace" => '⏟',
                     "overparen" => '⏜',
-                    _ => '⏝',
+                    "underparen" => '⏝',
+                    "overbracket" => '⎴',
+                    _ => '⎵',
                 };
                 let e = self.arg();
                 let g = MNode::GroupChr { chr, top, e };
@@ -540,6 +578,22 @@ impl Lp {
     }
 
     fn environment(&mut self, env: &str) -> Arg {
+        let base = env.trim_end_matches('*');
+        let mut col_jc = Vec::new();
+        if base == "array" || base == "tabular" {
+            let _ = self.opt();
+            let spec = self.raw_arg();
+            for ch in spec.chars() {
+                match ch {
+                    'l' | 'L' => col_jc.push(ColJc::Left),
+                    'r' | 'R' => col_jc.push(ColJc::Right),
+                    'c' | 'C' => col_jc.push(ColJc::Center),
+                    _ => {}
+                }
+            }
+        } else if base == "aligned" {
+            let _ = self.opt();
+        }
         // Rows of `&`-separated cells up to `\end{…}`.
         let mut rows: Vec<Vec<Arg>> = vec![vec![]];
         loop {
@@ -567,7 +621,6 @@ impl Lp {
         if rows.len() > 1 && rows.last().is_some_and(|r| r.iter().all(|c| c.is_empty())) {
             rows.pop();
         }
-        let base = env.trim_end_matches('*');
         let delims = match base {
             "pmatrix" => Some((Some('('), Some(')'))),
             "bmatrix" => Some((Some('['), Some(']'))),
@@ -585,8 +638,8 @@ impl Lp {
             elems: vec![vec![inner]],
         };
         match base {
-            "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix" | "smallmatrix" | "array" => {
-                let m = MNode::Matrix { rows, col_jc: Vec::new() };
+            "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix" | "smallmatrix" | "array" | "tabular" => {
+                let m = MNode::Matrix { rows, col_jc };
                 match delims {
                     Some((b, e)) => vec![wrap(m, b, e)],
                     None => vec![m],
@@ -763,6 +816,31 @@ fn text_chars(text: &str, s: &mut String) {
     }
 }
 
+/// The delimiter of a `\genfrac` argument: one character, or none for `{}` and anything else.
+fn delim_arg(a: &[MNode]) -> Option<char> {
+    let [MNode::Run(r)] = a else { return None };
+    let mut cs = r.text.chars();
+    match (cs.next(), cs.next()) {
+        (Some(c), None) if c != '.' => Some(c),
+        _ => None,
+    }
+}
+
+/// Whether a `\genfrac` thickness is a zero length such as `0pt`, `0.0pt` or `0 em`. An empty
+/// thickness means the default rule and anything that is not a plain number and unit is not zero.
+fn is_zero_length(a: &[MNode]) -> bool {
+    let mut text = String::new();
+    for n in a {
+        let MNode::Run(r) = n else { return false };
+        text.extend(r.text.chars().filter(|c| !c.is_whitespace() && !matches!(c, '\u{2009}' | '\u{205F}' | '\u{2005}')));
+    }
+    let number = text.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let unit = &text[number.len()..];
+    !number.is_empty()
+        && matches!(unit, "pt" | "em" | "ex" | "mm" | "cm" | "in" | "bp" | "pc" | "sp" | "mu")
+        && number.parse::<f64>().is_ok_and(|v| v == 0.0)
+}
+
 fn delim_tex(c: Option<char>) -> String {
     match c {
         None => ".".into(),
@@ -774,228 +852,261 @@ fn delim_tex(c: Option<char>) -> String {
     }
 }
 
-fn node(n: &MNode, s: &mut String, depth: usize) {
-    match n {
-        MNode::Run(r) => {
-            let (open, close) = if r.nor {
-                ("\\text{", "}")
-            } else {
-                match (r.sty, r.scr) {
-                    (_, MScr::DoubleStruck) => ("\\mathbb{", "}"),
-                    (_, MScr::Script) => ("\\mathcal{", "}"),
-                    (_, MScr::Fraktur) => ("\\mathfrak{", "}"),
-                    (_, MScr::SansSerif) => ("\\mathsf{", "}"),
-                    (_, MScr::Monospace) => ("\\mathtt{", "}"),
-                    (Some(MSty::Bold), _) => ("\\mathbf{", "}"),
-                    (Some(MSty::BoldItalic), _) => ("\\boldsymbol{", "}"),
-                    (Some(MSty::Plain), _) if r.text.chars().any(|c| c.is_alphabetic()) => {
-                        if FUNCTION_NAMES.contains(&r.text.as_str()) {
-                            s.push('\\');
-                            s.push_str(&r.text);
-                            s.push(' ');
-                            return;
-                        }
-                        ("\\mathrm{", "}")
-                    }
-                    _ => ("", ""),
-                }
-            };
-            s.push_str(open);
-            if r.nor {
-                text_chars(&r.text, s);
-            } else {
-                chars(&r.text, s);
-            }
-            s.push_str(close);
-        }
-        MNode::Frac { kind, num, den } => match kind {
-            FracKind::NoBar => {
-                s.push_str("\\genfrac{}{}{0pt}{}");
-                braced(num, s, depth);
-                braced(den, s, depth);
-            }
-            FracKind::Linear | FracKind::Skewed => {
-                braced(num, s, depth);
-                s.push('/');
-                braced(den, s, depth);
-            }
-            FracKind::Bar => {
-                s.push_str("\\frac");
-                braced(num, s, depth);
-                braced(den, s, depth);
-            }
-        },
-        MNode::Script { kind, base, sub, sup } => {
-            if *kind == ScriptKind::Pre {
-                s.push_str("{}_");
-                braced(sub, s, depth);
-                s.push('^');
-                braced(sup, s, depth);
-                braced(base, s, depth);
-                return;
-            }
-            braced(base, s, depth);
-            if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup) {
-                s.push('_');
-                braced(sub, s, depth);
-            }
-            if matches!(kind, ScriptKind::Sup | ScriptKind::SubSup) {
-                s.push('^');
-                braced(sup, s, depth);
-            }
-        }
-        MNode::Rad { deg, deg_hide, e } => {
-            s.push_str("\\sqrt");
-            if !deg_hide && !deg.is_empty() {
-                s.push('[');
-                arg(deg, s, depth);
-                s.push(']');
-            }
-            braced(e, s, depth);
-        }
-        MNode::Nary { chr, lim_loc, sub_hide, sup_hide, sub, sup, e, .. } => {
-            match name_of(*chr) {
-                Some(n) => {
-                    s.push('\\');
-                    s.push_str(n);
-                }
-                None => s.push(*chr),
-            }
-            match lim_loc {
-                Some(crate::math::LimLoc::UndOvr) => s.push_str("\\limits"),
-                Some(crate::math::LimLoc::SubSup) if !crate::math::is_integral(*chr) => s.push_str("\\nolimits"),
-                _ => {}
-            }
-            if !sub_hide && !sub.is_empty() {
-                s.push('_');
-                braced(sub, s, depth);
-            }
-            if !sup_hide && !sup.is_empty() {
-                s.push('^');
-                braced(sup, s, depth);
-            }
-            s.push(' ');
-            braced(e, s, depth);
-        }
-        MNode::Delim { beg, end, elems, .. } => {
-            s.push_str("\\left");
-            s.push_str(&delim_tex(*beg));
-            for (i, e) in elems.iter().enumerate() {
-                if i > 0 {
-                    s.push_str("\\middle|");
-                }
-                arg(e, s, depth);
-            }
-            s.push_str("\\right");
-            s.push_str(&delim_tex(*end));
-        }
+fn group_chr_tex(chr: char, top: bool) -> &'static str {
+    match chr {
+        '⏜' => "\\overparen",
+        '⏝' => "\\underparen",
+        '⎴' => "\\overbracket",
+        '⎵' => "\\underbracket",
+        _ if top => "\\overbrace",
+        _ => "\\underbrace",
+    }
+}
+
+fn node(node: &MNode, output: &mut String, depth: usize) {
+    match node {
+        MNode::Run(run) => run_node(run, output),
+        MNode::Frac { kind, num, den } => fraction_node(*kind, num, den, output, depth),
+        MNode::Script { kind, base, sub, sup } => script_node(*kind, base, sub, sup, output, depth),
+        MNode::Rad { deg, deg_hide, e } => radical_node(deg, *deg_hide, e, output, depth),
+        MNode::Nary { .. } => nary_node(node, output, depth),
+        MNode::Delim { beg, end, sep, elems, .. } => delimiter_node(*beg, *end, *sep, elems, output, depth),
         MNode::Func { name, e } => {
-            arg(name, s, depth);
-            braced(e, s, depth);
+            arg(name, output, depth);
+            braced(e, output, depth);
         }
-        MNode::Lim { upper, e, lim } => {
-            // `\lim_{…}` keeps its name; other bases stack.
-            let simple = matches!(e.as_slice(), [MNode::Run(r)] if r.sty == Some(MSty::Plain) && FUNCTION_NAMES.contains(&r.text.as_str()));
-            if simple && !upper {
-                arg(e, s, depth);
-                s.push('_');
-                braced(lim, s, depth);
-            } else if let [MNode::GroupChr { chr, top, e: inner }] = e.as_slice() {
-                s.push_str(if *top { "\\overbrace" } else { "\\underbrace" });
-                braced(inner, s, depth);
-                s.push(if *upper { '^' } else { '_' });
-                braced(lim, s, depth);
-                let _ = chr;
-            } else {
-                s.push_str(if *upper { "\\overset" } else { "\\underset" });
-                braced(lim, s, depth);
-                braced(e, s, depth);
-            }
-        }
-        MNode::Acc { chr, e } => {
-            let cmd = match chr {
-                '\u{302}' => "hat",
-                '\u{303}' => "tilde",
-                '\u{307}' => "dot",
-                '\u{308}' => "ddot",
-                '\u{20DB}' => "dddot",
-                '\u{30C}' => "check",
-                '\u{306}' => "breve",
-                '\u{301}' => "acute",
-                '\u{300}' => "grave",
-                '\u{305}' | '\u{AF}' => "bar",
-                '\u{20D6}' => "overleftarrow",
-                '\u{20E1}' => "overleftrightarrow",
-                _ => "vec",
-            };
-            s.push('\\');
-            s.push_str(cmd);
-            braced(e, s, depth);
-        }
+        MNode::Lim { upper, e, lim } => limit_node(*upper, e, lim, output, depth),
+        MNode::Acc { chr, e } => accent_node(*chr, e, output, depth),
         MNode::Bar { top, e } => {
-            s.push_str(if *top { "\\overline" } else { "\\underline" });
-            braced(e, s, depth);
+            output.push_str(if *top { "\\overline" } else { "\\underline" });
+            braced(e, output, depth);
         }
         MNode::BorderBox { e, .. } => {
-            s.push_str("\\boxed");
-            braced(e, s, depth);
+            output.push_str("\\boxed");
+            braced(e, output, depth);
         }
-        MNode::Boxed { e } => braced(e, s, depth),
-        MNode::GroupChr { top, e, .. } => {
-            s.push_str(if *top { "\\overbrace" } else { "\\underbrace" });
-            braced(e, s, depth);
+        MNode::Boxed { e } => braced(e, output, depth),
+        MNode::GroupChr { chr, top, e } => {
+            output.push_str(group_chr_tex(*chr, *top));
+            braced(e, output, depth);
         }
-        MNode::EqArr { rows } => {
-            if rows.len() == 1
-                && let Some(r) = rows.first()
-                && crate::math::has_number_mark(r)
-            {
-                arg(r, s, depth);
-                return;
-            }
-            s.push_str("\\begin{aligned}");
-            for (i, r) in rows.iter().enumerate() {
-                if i > 0 {
-                    s.push_str("\\\\");
-                }
-                for n in r {
-                    match n {
-                        MNode::Run(run) if !run.lit && run.text.contains('&') => {
-                            for (k, part) in run.text.split('&').enumerate() {
-                                if k > 0 {
-                                    s.push('&');
-                                }
-                                let mut p = run.clone();
-                                p.text = part.to_string();
-                                node(&MNode::Run(p), s, depth + 1);
-                            }
-                        }
-                        other => node(other, s, depth + 1),
-                    }
-                }
-            }
-            s.push_str("\\end{aligned}");
-        }
-        MNode::Matrix { rows, .. } => {
-            s.push_str("\\begin{matrix}");
-            for (i, r) in rows.iter().enumerate() {
-                if i > 0 {
-                    s.push_str("\\\\");
-                }
-                for (j, c) in r.iter().enumerate() {
-                    if j > 0 {
-                        s.push('&');
-                    }
-                    arg(c, s, depth);
-                }
-            }
-            s.push_str("\\end{matrix}");
-        }
+        MNode::EqArr { rows } => equation_array_node(rows, output, depth),
+        MNode::Matrix { rows, .. } => matrix_node(rows, output, depth),
         MNode::Phant { e, .. } => {
-            s.push_str("\\phantom");
-            braced(e, s, depth);
+            output.push_str("\\phantom");
+            braced(e, output, depth);
         }
     }
+}
+
+fn run_node(run: &MRun, output: &mut String) {
+    let (open, close) = if run.nor {
+        ("\\text{", "}")
+    } else {
+        match (run.sty, run.scr) {
+            (_, MScr::DoubleStruck) => ("\\mathbb{", "}"),
+            (_, MScr::Script) => ("\\mathcal{", "}"),
+            (_, MScr::Fraktur) => ("\\mathfrak{", "}"),
+            (_, MScr::SansSerif) => ("\\mathsf{", "}"),
+            (_, MScr::Monospace) => ("\\mathtt{", "}"),
+            (Some(MSty::Bold), _) => ("\\mathbf{", "}"),
+            (Some(MSty::BoldItalic), _) => ("\\boldsymbol{", "}"),
+            (Some(MSty::Plain), _) if run.text.chars().any(char::is_alphabetic) => {
+                if FUNCTION_NAMES.contains(&run.text.as_str()) {
+                    output.push('\\');
+                    output.push_str(&run.text);
+                    output.push(' ');
+                    return;
+                }
+                ("\\mathrm{", "}")
+            }
+            _ => ("", ""),
+        }
+    };
+    output.push_str(open);
+    if run.nor {
+        text_chars(&run.text, output)
+    } else {
+        chars(&run.text, output)
+    }
+    output.push_str(close);
+}
+
+fn fraction_node(kind: FracKind, numerator: &[MNode], denominator: &[MNode], output: &mut String, depth: usize) {
+    match kind {
+        FracKind::NoBar => {
+            output.push_str("\\genfrac{}{}{0pt}{}");
+            braced(numerator, output, depth);
+            braced(denominator, output, depth);
+        }
+        FracKind::Linear | FracKind::Skewed => {
+            braced(numerator, output, depth);
+            output.push('/');
+            braced(denominator, output, depth);
+        }
+        FracKind::Bar => {
+            output.push_str("\\frac");
+            braced(numerator, output, depth);
+            braced(denominator, output, depth);
+        }
+    }
+}
+
+fn script_node(kind: ScriptKind, base: &[MNode], sub: &[MNode], sup: &[MNode], output: &mut String, depth: usize) {
+    if kind == ScriptKind::Pre {
+        output.push_str("{}_");
+        braced(sub, output, depth);
+        output.push('^');
+        braced(sup, output, depth);
+        braced(base, output, depth);
+        return;
+    }
+    braced(base, output, depth);
+    if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup) {
+        output.push('_');
+        braced(sub, output, depth);
+    }
+    if matches!(kind, ScriptKind::Sup | ScriptKind::SubSup) {
+        output.push('^');
+        braced(sup, output, depth);
+    }
+}
+
+fn radical_node(degree: &[MNode], degree_hidden: bool, expression: &[MNode], output: &mut String, depth: usize) {
+    output.push_str("\\sqrt");
+    if !degree_hidden && !degree.is_empty() {
+        output.push('[');
+        arg(degree, output, depth);
+        output.push(']');
+    }
+    braced(expression, output, depth);
+}
+
+fn nary_node(node: &MNode, output: &mut String, depth: usize) {
+    let MNode::Nary { chr, lim_loc, sub_hide, sup_hide, sub, sup, e, .. } = node else { return };
+    match name_of(*chr) {
+        Some(name) => {
+            output.push('\\');
+            output.push_str(name);
+        }
+        None => output.push(*chr),
+    }
+    match lim_loc {
+        Some(crate::math::LimLoc::UndOvr) => output.push_str("\\limits"),
+        Some(crate::math::LimLoc::SubSup) if !crate::math::is_integral(*chr) => output.push_str("\\nolimits"),
+        _ => {}
+    }
+    if !sub_hide && !sub.is_empty() {
+        output.push('_');
+        braced(sub, output, depth);
+    }
+    if !sup_hide && !sup.is_empty() {
+        output.push('^');
+        braced(sup, output, depth);
+    }
+    output.push(' ');
+    braced(e, output, depth);
+}
+
+fn delimiter_node(begin: Option<char>, end: Option<char>, separator: Option<char>, elements: &[Arg], output: &mut String, depth: usize) {
+    output.push_str("\\left");
+    output.push_str(&delim_tex(begin));
+    let middle = separator.map(|c| format!("\\middle{}", delim_tex(Some(c)))).unwrap_or_else(|| "\\middle|".to_string());
+    for (index, element) in elements.iter().enumerate() {
+        if index > 0 {
+            output.push_str(&middle);
+        }
+        arg(element, output, depth);
+    }
+    output.push_str("\\right");
+    output.push_str(&delim_tex(end));
+}
+
+fn limit_node(upper: bool, expression: &[MNode], limit: &[MNode], output: &mut String, depth: usize) {
+    let simple = matches!(expression, [MNode::Run(run)] if run.sty == Some(MSty::Plain) && FUNCTION_NAMES.contains(&run.text.as_str()));
+    if simple && !upper {
+        arg(expression, output, depth);
+        output.push('_');
+        braced(limit, output, depth);
+    } else if let [MNode::GroupChr { chr, top, e: inner }] = expression {
+        output.push_str(group_chr_tex(*chr, *top));
+        braced(inner, output, depth);
+        output.push(if upper { '^' } else { '_' });
+        braced(limit, output, depth);
+    } else {
+        output.push_str(if upper { "\\overset" } else { "\\underset" });
+        braced(limit, output, depth);
+        braced(expression, output, depth);
+    }
+}
+
+fn accent_node(character: char, expression: &[MNode], output: &mut String, depth: usize) {
+    let command = match character {
+        '\u{302}' => "hat",
+        '\u{303}' => "tilde",
+        '\u{307}' => "dot",
+        '\u{308}' => "ddot",
+        '\u{20DB}' => "dddot",
+        '\u{30C}' => "check",
+        '\u{306}' => "breve",
+        '\u{301}' => "acute",
+        '\u{300}' => "grave",
+        '\u{305}' | '\u{AF}' => "bar",
+        '\u{20D6}' => "overleftarrow",
+        '\u{20E1}' => "overleftrightarrow",
+        _ => "vec",
+    };
+    output.push('\\');
+    output.push_str(command);
+    braced(expression, output, depth);
+}
+
+fn equation_array_node(rows: &[Arg], output: &mut String, depth: usize) {
+    if rows.len() == 1
+        && let Some(row) = rows.first()
+        && crate::math::has_number_mark(row)
+    {
+        arg(row, output, depth);
+        return;
+    }
+    output.push_str("\\begin{aligned}");
+    for (index, row) in rows.iter().enumerate() {
+        if index > 0 {
+            output.push_str("\\\\");
+        }
+        for child_node in row {
+            match child_node {
+                MNode::Run(run) if !run.lit && run.text.contains('&') => {
+                    for (index, part) in run.text.split('&').enumerate() {
+                        if index > 0 {
+                            output.push('&');
+                        }
+                        let mut piece = run.clone();
+                        piece.text = part.to_string();
+                        run_node(&piece, output);
+                    }
+                }
+                other => node(other, output, depth + 1),
+            }
+        }
+    }
+    output.push_str("\\end{aligned}");
+}
+
+fn matrix_node(rows: &[Vec<Arg>], output: &mut String, depth: usize) {
+    output.push_str("\\begin{matrix}");
+    for (row_index, row) in rows.iter().enumerate() {
+        if row_index > 0 {
+            output.push_str("\\\\");
+        }
+        for (column, cell) in row.iter().enumerate() {
+            if column > 0 {
+                output.push('&');
+            }
+            arg(cell, output, depth);
+        }
+    }
+    output.push_str("\\end{matrix}");
 }
 
 #[cfg(test)]
@@ -1025,12 +1136,49 @@ mod tests {
     }
 
     #[test]
+    fn latex_binom_round_trip() {
+        let a = parse_latex(r"\binom{n}{k}");
+        let l = to_latex(&a);
+        assert_eq!(parse_latex(&l), a, "exported as {l}");
+        let nobar = |n: &str, k: &str| MNode::Frac { kind: FracKind::NoBar, num: parse_latex(n), den: parse_latex(k) };
+        let b = parse_latex(r"\genfrac{}{}{0pt}{}{n}{k}");
+        assert_eq!(b, vec![nobar("n", "k")]);
+        assert_eq!(parse_latex(&to_latex(&b)), b);
+        // Other spellings of a zero thickness.
+        for z in ["0 pt", "0.0pt", r"0\,pt", "0em"] {
+            let c = parse_latex(&format!(r"\genfrac{{}}{{}}{{{z}}}{{}}{{n}}{{k}}"));
+            assert_eq!(c, vec![nobar("n", "k")], "thickness {z}");
+        }
+        // A non-zero or default thickness keeps the bar.
+        for t in ["1pt", "0.4pt", ""] {
+            let c = parse_latex(&format!(r"\genfrac{{}}{{}}{{{t}}}{{}}{{n}}{{k}}"));
+            let bar = MNode::Frac { kind: FracKind::Bar, num: parse_latex("n"), den: parse_latex("k") };
+            assert_eq!(c, vec![bar], "thickness {t:?}");
+        }
+        // Delimiters are kept.
+        let d = parse_latex(r"\genfrac(){0pt}{}{n}{k}");
+        assert_eq!(d, a);
+        let e = parse_latex(r"\genfrac[]{0pt}{}{n}{k}");
+        assert!(matches!(&e[..], [MNode::Delim { beg: Some('['), end: Some(']'), .. }]), "{e:#?}");
+        assert_eq!(parse_latex(&to_latex(&e)), e);
+    }
+
+    #[test]
     fn latex_round_trip() {
         for lin in ["x=(-b±√(b^2-4ac))/2a", "∑_(i=1)^n▒i^2", "√(3&x)", "a⃗+x̂", "■(a&b@c&d)", "sin⁡x+cos⁡y", "e^(-x^2)"] {
             let n = crate::math::parse_linear(lin);
             let tex = to_latex(&n);
             let back = parse_latex(&tex);
             assert_eq!(crate::math::to_linear(&back), crate::math::to_linear(&n), "{lin} → {tex}");
+        }
+    }
+
+    #[test]
+    fn group_character_latex_roundtrip() {
+        for cmd in ["\\overparen{a+b}", "\\underparen{a+b}", "\\overbracket{x}", "\\underbracket{x}"] {
+            let n = parse_latex(cmd);
+            let tex = to_latex(&n);
+            assert_eq!(tex, cmd);
         }
     }
 
@@ -1048,5 +1196,47 @@ mod tests {
         let _ = parse_latex(&deep);
         let deep = "\\hat".repeat(5000) + "x";
         let _ = parse_latex(&deep);
+    }
+
+    #[test]
+    fn array_column_specs_and_aligned_optional_args() {
+        let n = parse_latex(r"\begin{array}{lcr} a & b & c \\ d & e & f \end{array}");
+        let MNode::Matrix { rows, col_jc } = &n[0] else { panic!("{n:#?}") };
+        assert_eq!(col_jc, &[ColJc::Left, ColJc::Center, ColJc::Right]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(crate::math::to_linear(&rows[0][0]), "a");
+        assert_eq!(crate::math::to_linear(&rows[0][1]), "b");
+        assert_eq!(crate::math::to_linear(&rows[0][2]), "c");
+
+        let n = parse_latex(r"\begin{aligned}[t] x &= 1 \\ y &= 2 \end{aligned}");
+        assert!(matches!(&n[0], MNode::EqArr { rows } if rows.len() == 2));
+    }
+
+    #[test]
+    fn operatorname_starred_and_tag() {
+        let n = parse_latex(r"\operatorname*{argmin}_{x} f(x)");
+        assert!(matches!(&n[0], MNode::Lim { upper: false, .. }));
+
+        let n = parse_latex(r"E=mc^2 \tag{1}");
+        let MNode::EqArr { rows } = &n[0] else { panic!("{n:#?}") };
+        assert!(crate::math::has_number_mark(&rows[0]));
+
+        let n = parse_latex(r"E=mc^2 \tag*{(A)}");
+        let MNode::EqArr { rows } = &n[0] else { panic!("{n:#?}") };
+        assert!(crate::math::has_number_mark(&rows[0]));
+    }
+
+    #[test]
+    fn delim_preserves_custom_separator() {
+        let delim = MNode::Delim {
+            beg: Some('{'),
+            end: Some('}'),
+            sep: Some('‖'),
+            grow: true,
+            shp_match: false,
+            elems: vec![vec![MNode::Run(MRun::new("x"))], vec![MNode::Run(MRun::new("y"))]],
+        };
+        let tex = to_latex(&[delim]);
+        assert!(tex.contains(r"\middle\|"), "Expected \\middle\\|, got: {tex}");
     }
 }

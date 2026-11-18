@@ -12,6 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::props::Rgb;
+
 /// Most items in a SmartArt graphic.
 pub const MAX_ITEMS: usize = 100;
 /// Longest item text, characters.
@@ -68,13 +70,14 @@ impl SmartArtLayout {
         }
     }
 
-    /// The layout an id names (any ASCII case; `list` is the basic list).
+    /// The layout an id names (any ASCII case, ignoring hyphens, underscores and spaces;
+    /// `list` is the basic list; `basic process` or `process` is process, etc.).
     pub fn from_id(id: &str) -> Option<SmartArtLayout> {
-        let id = id.trim();
-        if id.eq_ignore_ascii_case("list") {
+        let norm = id.chars().filter(|c| !c.is_whitespace() && *c != '-' && *c != '_').collect::<String>();
+        if norm.eq_ignore_ascii_case("list") {
             return Some(SmartArtLayout::BasicList);
         }
-        SmartArtLayout::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(id))
+        SmartArtLayout::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(&norm) || l.label().replace(' ', "").eq_ignore_ascii_case(&norm))
     }
 
     /// The name shown for it.
@@ -159,7 +162,8 @@ impl SmartArtColors {
     }
 
     pub fn from_id(id: &str) -> Option<SmartArtColors> {
-        SmartArtColors::ALL.into_iter().find(|c| c.id().eq_ignore_ascii_case(id.trim()))
+        let norm = id.chars().filter(|c| !c.is_whitespace() && *c != '-' && *c != '_').collect::<String>();
+        SmartArtColors::ALL.into_iter().find(|c| c.id().eq_ignore_ascii_case(&norm) || c.label().replace(' ', "").eq_ignore_ascii_case(&norm))
     }
 
     /// The name shown for it.
@@ -196,11 +200,14 @@ pub struct SmartArtItem {
     pub text: String,
     #[serde(default)]
     pub level: u8,
+    /// Fill of the item's shape in place of the style's colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Rgb>,
 }
 
 impl SmartArtItem {
     pub fn new(text: impl Into<String>, level: u8) -> SmartArtItem {
-        SmartArtItem { text: text.into(), level }
+        SmartArtItem { text: text.into(), level, color: None }
     }
 }
 
@@ -255,6 +262,35 @@ impl SmartArtSpec {
         }
     }
 
+    /// Whether any item has its own colour.
+    pub fn has_custom_colors(&self) -> bool {
+        self.items.iter().any(|it| it.color.is_some())
+    }
+
+    /// Give every item the style's colour again.
+    pub fn clear_custom_colors(&mut self) {
+        for it in &mut self.items {
+            it.color = None;
+        }
+    }
+
+    /// The theme accent (1–6) the style gives item `i`; `None` when the item has no shape of
+    /// its own (it is text inside another item's shape).
+    pub fn style_accent(&self, i: usize) -> Option<usize> {
+        let it = self.items.get(i)?;
+        let tops = || self.items.iter().take(i).filter(|o| o.level == 0).count();
+        match self.layout {
+            SmartArtLayout::Hierarchy => Some(self.colors.accent(i)),
+            SmartArtLayout::Radial if i == 0 => Some(self.colors.accent(0)),
+            SmartArtLayout::Radial => {
+                let parents = self.parents();
+                let spoke = |j: usize| j > 0 && matches!(parents.get(j), Some(Some(0)) | Some(None));
+                spoke(i).then(|| self.colors.accent((1..i).filter(|j| spoke(*j)).count() + 1))
+            }
+            _ => (it.level == 0).then(|| self.colors.accent(tops())),
+        }
+    }
+
     /// The graphic after `sanitize`.
     pub fn sanitized(mut self) -> SmartArtSpec {
         self.sanitize();
@@ -287,8 +323,9 @@ impl SmartArtSpec {
 
 /// `s` as item text: control characters as spaces, ends trimmed, at most [`MAX_TEXT`] characters.
 pub fn clean_text(s: &str) -> String {
-    let s: String = s.chars().take(MAX_TEXT * 4).map(|c| if c.is_control() { ' ' } else { c }).collect();
-    s.trim().chars().take(MAX_TEXT).collect::<String>().trim_end().to_string()
+    let trimmed = s.trim_start_matches(|c: char| c.is_whitespace() || c.is_control());
+    let s: String = trimmed.chars().take(MAX_TEXT).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    s.trim_end().to_string()
 }
 
 #[cfg(test)]
@@ -319,6 +356,13 @@ mod tests {
         assert_eq!(s.descendants(5), 6..6);
         assert_eq!(s.descendants(99), 0..0);
         assert_eq!(SmartArtLayout::from_id("VENN"), Some(SmartArtLayout::Venn));
+        assert_eq!(SmartArtLayout::from_id("basic-list"), Some(SmartArtLayout::BasicList));
+        assert_eq!(SmartArtLayout::from_id("Basic Process"), Some(SmartArtLayout::Process));
+        assert_eq!(SmartArtLayout::from_id("basic_cycle"), Some(SmartArtLayout::Cycle));
+        assert_eq!(SmartArtLayout::from_id("list"), Some(SmartArtLayout::BasicList));
         assert_eq!(SmartArtColors::from_id("colorful"), Some(SmartArtColors::Colorful));
+        assert_eq!(SmartArtColors::from_id("Accent 2"), Some(SmartArtColors::Accent2));
+        assert_eq!(SmartArtColors::from_id("accent-4"), Some(SmartArtColors::Accent4));
+        assert_eq!(clean_text(&format!("{}Valid Text", " ".repeat(1500))), "Valid Text");
     }
 }

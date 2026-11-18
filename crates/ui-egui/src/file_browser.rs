@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
 
 use crate::file_dialogs::{AfterPick, FileDialogRequest, open_filters};
-use crate::theme::{APP_COLOR, Tokens, regular};
+use crate::print_page::{EXPORT_FORMATS, export_file_ext, export_name, is_document_ext};
+use crate::theme::{Tokens, regular};
 use crate::{WordApp, icons};
 
 /// At most this many entries are listed; a bigger folder shows the first ones and says so.
@@ -47,7 +48,8 @@ pub(crate) struct Listing {
 
 /// Whether `path` has one of `exts` (case-insensitive); `*` takes any file.
 pub(crate) fn matches(path: &Path, exts: &[String]) -> bool {
-    exts.iter().any(|e| e == "*") || path.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    exts.iter().any(|e| e == "*")
+        || path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// The subfolders and the files with one of `exts` in `dir`, at most `cap` of them, folders first
@@ -137,9 +139,13 @@ pub(crate) struct FileBrowser {
     /// The file types, as (label, extensions).
     filters: Vec<(String, Vec<String>)>,
     filter: usize,
+    /// Exporting: the format behind each type, which `after` follows; empty otherwise.
+    exports: Vec<String>,
     listing: Result<Listing, String>,
     /// The highlighted entry.
     selected: Option<PathBuf>,
+    /// The highlighted entry was a folder when it was selected.
+    selected_is_dir: bool,
     note: Note,
     focus_name: bool,
 }
@@ -147,15 +153,24 @@ pub(crate) struct FileBrowser {
 impl FileBrowser {
     pub(crate) fn new(req: FileDialogRequest, after: AfterPick, start: PathBuf, unavailable: bool) -> Self {
         let (name, filters) = match &req {
-            FileDialogRequest::Open { purpose } => {
+            FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
-            FileDialogRequest::Save { name } => {
-                let ext = Path::new(name).extension().and_then(|e| e.to_str()).filter(|e| !e.is_empty());
+            FileDialogRequest::Save { name, .. } => {
+                let ext = Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty());
                 let mut f: Vec<(String, Vec<String>)> = ext.map(|e| (format!("*.{e}"), vec![e.to_string()])).into_iter().collect();
                 f.push(("All files".into(), vec!["*".into()]));
                 (name.clone(), f)
             }
+        };
+        // Exporting (#3535): File › Export's formats are the types, starting on the one asked for.
+        let (filters, filter, exports) = match &after {
+            AfterPick::Export { ext } => (
+                EXPORT_FORMATS.iter().map(|&(l, f)| (l.to_string(), vec![export_file_ext(f).to_string()])).collect(),
+                EXPORT_FORMATS.iter().position(|&(_, f)| f == ext.as_str()).unwrap_or(0),
+                EXPORT_FORMATS.iter().map(|&(_, f)| f.to_string()).collect(),
+            ),
+            _ => (filters, 0, Vec::new()),
         };
         let mut b = FileBrowser {
             req,
@@ -165,9 +180,11 @@ impl FileBrowser {
             location: String::new(),
             name,
             filters,
-            filter: 0,
+            filter,
+            exports,
             listing: Ok(Listing::default()),
             selected: None,
+            selected_is_dir: false,
             note: Note::None,
             focus_name: true,
         };
@@ -185,7 +202,18 @@ impl FileBrowser {
         self.location = dir.to_string_lossy().into_owned();
         self.dir = dir;
         self.selected = None;
+        self.selected_is_dir = false;
         self.note = Note::None;
+    }
+
+    /// A type was chosen: when exporting it is the format, and the name's export extension follows it.
+    fn type_changed(&mut self) {
+        let Some(format) = self.exports.get(self.filter).cloned() else { return };
+        // Only a known document extension is replaced; `notes.v2` keeps its `.v2`.
+        if Path::new(&self.name).extension().and_then(|e| e.to_str()).is_some_and(is_document_ext) {
+            self.name = export_name(&self.name, &format);
+        }
+        self.after = AfterPick::Export { ext: format };
     }
 
     fn up(&mut self) {
@@ -195,21 +223,23 @@ impl FileBrowser {
     }
 
     /// OK: a highlighted folder, or a typed folder, is opened; otherwise the typed name is the
-    /// pick. Save adds the chosen type's extension to a name without one and asks once more
-    /// before replacing a file; Open wants a file that exists.
+    /// pick. Save adds the chosen type's extension to a name without one (an export replaces a
+    /// known document extension with the type's) and asks once more before replacing a file; Open wants a file that exists.
     pub(crate) fn accept(&mut self) -> Step {
-        if let Some(dir) = self.selected.take().filter(|p| p.is_dir()) {
+        if let Some(dir) = self.selected.clone().filter(|p| p.is_dir()) {
             self.navigate(dir);
             return Step::Stay;
         }
-        let Some(mut path) = resolve(&self.dir, &self.name) else { return Step::Stay };
+        // A removed folder remains a folder selection, not a proposed file name.
+        let selected_file = self.selected.clone().filter(|_| !self.selected_is_dir);
+        let Some(mut path) = selected_file.or_else(|| resolve(&self.dir, &self.name)) else { return Step::Stay };
         if path.is_dir() {
             self.name.clear();
             self.navigate(path);
             return Step::Stay;
         }
         match self.req {
-            FileDialogRequest::Open { .. } => {
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => {
                 if path.is_file() {
                     return Step::Pick(path);
                 }
@@ -217,7 +247,11 @@ impl FileBrowser {
                 Step::Stay
             }
             FileDialogRequest::Save { .. } => {
-                if path.extension().is_none()
+                if let AfterPick::Export { ext } = &self.after {
+                    // The chosen type is the format: its extension replaces a known document
+                    // extension on the name, and is added to any other.
+                    path = PathBuf::from(export_name(&path.to_string_lossy(), ext));
+                } else if path.extension().is_none()
                     && let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*")
                 {
                     path.set_extension(ext);
@@ -234,6 +268,7 @@ impl FileBrowser {
     /// A click on an entry: highlight it, and a file's name goes into the file name field.
     fn select(&mut self, e: &Entry) {
         self.selected = Some(e.path.clone());
+        self.selected_is_dir = e.dir;
         if !e.dir {
             self.name = e.name.clone();
         }
@@ -242,14 +277,14 @@ impl FileBrowser {
 
     fn title(&self) -> &'static str {
         match self.req {
-            FileDialogRequest::Open { .. } => "Open",
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
             FileDialogRequest::Save { .. } => "Save As",
         }
     }
 
     fn ok_label(&self) -> &'static str {
         match self.req {
-            FileDialogRequest::Open { .. } => "Open",
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
             FileDialogRequest::Save { .. } => "Save",
         }
     }
@@ -258,11 +293,13 @@ impl FileBrowser {
 impl WordApp {
     /// Ask for a file in the built-in browser and do `after` with the answer when it closes.
     pub(crate) fn show_file_browser(&mut self, req: FileDialogRequest, after: AfterPick, unavailable: bool) {
-        let start = self
-            .file_browser
-            .last_dir
-            .clone()
-            .filter(|d| d.is_dir())
+        // A folder the request names (the user templates folder, #2852) comes first.
+        let asked = match &req {
+            FileDialogRequest::Save { dir: Some(d), .. } => Some(PathBuf::from(d)).filter(|d| d.is_dir()),
+            _ => None,
+        };
+        let start = asked
+            .or_else(|| self.file_browser.last_dir.clone().filter(|d| d.is_dir()))
             .or_else(|| self.session.path.as_ref().and_then(|p| p.parent()).map(Path::to_path_buf).filter(|d| d.is_dir()))
             .or_else(home)
             .or_else(|| std::env::current_dir().ok())
@@ -270,18 +307,27 @@ impl WordApp {
         self.file_browser.open = Some(Box::new(FileBrowser::new(req, after, start, unavailable)));
     }
 
-    /// `ui.fileBrowser`: the built-in browser for `purpose` (document, picture, recipients, save),
-    /// even when a system dialog was asked for and never showed up (it is given up as cancelled).
+    /// `ui.fileBrowser`: the built-in browser for `purpose` (document, picture, recipients, save,
+    /// export), even when a system dialog was asked for and never showed up (it is given up as cancelled).
     pub(crate) fn browse_builtin(&mut self, purpose: &str) {
-        self.give_up_file_dialog();
+        // An export that was waiting on the system dialog keeps its format.
+        let pending = self.give_up_file_dialog();
         if self.file_browser.open.is_some() {
             return;
         }
         let (req, after) = match purpose {
             "picture" => (FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture),
             "recipients" => (FileDialogRequest::Open { purpose: "recipients".into() }, AfterPick::Recipients),
-            "save" => (FileDialogRequest::Save { name: self.default_save_name() }, AfterPick::SaveAs(crate::file_dialogs::AfterSave::Nothing)),
-            _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument),
+            "save" => (
+                FileDialogRequest::Save { name: self.default_save_name(), dir: None },
+                AfterPick::SaveAs { after: crate::file_dialogs::AfterSave::Nothing, document: self.session.document_id() },
+            ),
+            "export" => {
+                let ext = pending.unwrap_or_else(|| "pdf".into());
+                let name = format!("{}.{}", self.title_stem(), export_file_ext(&ext));
+                (FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext })
+            }
+            _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() }),
         };
         self.show_file_browser(req, after, false);
     }
@@ -294,7 +340,10 @@ impl WordApp {
         if let Err(e) = self.finish_pick(b.after, picked) {
             log::warn!("file browser: {e}");
         }
-        self.canvas.want_focus = true;
+        // A modal dialog (the one that asked for the file, or one the pick opened) keeps the keyboard.
+        if !self.modal_open() {
+            self.canvas.want_focus = true;
+        }
     }
 }
 
@@ -302,23 +351,24 @@ impl WordApp {
 pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut b) = app.file_browser.open.take() else { return };
     let t = Tokens::get(ctx);
-    let mut open = true;
     let mut done: Option<Option<PathBuf>> = None;
-    egui::Window::new(tl!(b.title()))
-        .id(egui::Id::new("builtin_file_browser"))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0))
-        .open(&mut open)
-        .show(ctx, |ui| {
-            ui.set_width(620.0);
-            done = body(ui, &mut b, &t);
-        });
-    if !open {
-        done = Some(None);
+    let id = egui::Id::unique("builtin_file_browser");
+    let window = egui::Window::new(tl!(b.title())).id(id).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));
+    let shown = crate::window_close::window(ctx, window).show(ctx, |ui| {
+        ui.set_width(620.0);
+        done = crate::rtl::root(ui, |ui| body(ui, &mut b, &t));
+    });
+    if let Some(s) = &shown {
+        if crate::window_close::show(ctx, &s.response, &t) {
+            done = Some(None);
+        }
+        if done.is_none() {
+            crate::dialogs::block_behind(app, ctx, &s.response);
+        }
     }
     app.file_browser.open = Some(b);
     if let Some(picked) = done {
+        crate::dialogs::forget_nudge(ctx, id);
         app.close_file_browser(picked);
     }
 }
@@ -344,7 +394,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         {
             b.navigate(h);
         }
-        let r = ui.add(egui::TextEdit::singleline(&mut b.location).desired_width(f32::INFINITY));
+        let r = ui.add(egui::TextEdit::singleline(&mut b.location).desired_width(f32::INFINITY)).accessible_name(tl!("Folder path"));
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             location_done = true;
             let typed = b.location.clone();
@@ -359,21 +409,46 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
     let mut clicked: Option<Entry> = None;
     egui::Frame::NONE.fill(t.input).stroke(egui::Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
         let entries: &[Entry] = b.listing.as_ref().map(|l| l.entries.as_slice()).unwrap_or(&[]);
+        // An unreadable folder has its own message below; the hint is for a listing that came back empty.
+        let listed = b.listing.is_ok();
         egui::ScrollArea::vertical().max_height(300.0).min_scrolled_height(300.0).auto_shrink([false, false]).show_rows(
             ui,
             ROW,
             entries.len(),
             |ui, range| {
+                if listed && entries.is_empty() {
+                    // #3037: an empty folder (or a type filter that matches nothing) says so
+                    // instead of showing a blank box.
+                    ui.add_space(140.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(egui::RichText::new(tl!("No items to show.")).small().color(t.text_dim));
+                    });
+                }
                 for e in entries.get(range).unwrap_or(&[]) {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), b.selected.as_ref() == Some(&e.path), &e.name)
+                    });
                     if b.selected.as_ref() == Some(&e.path) {
                         ui.painter().rect_filled(r, 2.0, t.checked);
                     } else if resp.hovered() {
                         ui.painter().rect_filled(r, 2.0, t.hover);
                     }
-                    let icon = Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(18.0, 18.0));
+                    let rtl = crate::rtl::on();
+                    let icon = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 14.0), r.center().y), vec2(18.0, 18.0));
                     icons::paint(ui.painter(), icon, if e.dir { "folder" } else { "file" }, t.icon, t.accent);
-                    ui.painter().with_clip_rect(r).text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, &e.name, regular(13.0), t.text);
+                    // A long name keeps its beginning and ends in an ellipsis inside the row, from the
+                    // side reading starts from; the whole name is the row's tooltip then.
+                    let mut job = egui::text::LayoutJob::simple_singleline(crate::i18n::isolate(&e.name), regular(13.0), t.text);
+                    job.wrap.max_width = (r.width() - 36.0).max(0.0);
+                    job.wrap.max_rows = 1;
+                    job.wrap.break_anywhere = true;
+                    let galley = ui.painter().layout_job(job);
+                    let text_x = crate::rtl::lead_x(rtl, r, 30.0);
+                    let at = pos2(if rtl { text_x - galley.size().x } else { text_x }, r.center().y - galley.size().y / 2.0);
+                    let elided = galley.elided;
+                    ui.painter().galley(at, galley, t.text);
+                    let resp = if elided { resp.on_hover_text(&e.name) } else { resp };
                     if resp.double_clicked() {
                         if e.dir {
                             go = Some(e.path.clone());
@@ -422,27 +497,35 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         }
         if r.changed() {
             b.selected = None;
+            b.selected_is_dir = false;
             b.note = Note::None;
         }
         let before = b.filter;
         let current = b.filters.get(b.filter).map(|(l, _)| tl!(l.as_str()).to_string()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("builtin_file_browser_type").selected_text(current).width(150.0).show_ui(ui, |ui| {
-            for (i, (l, _)) in b.filters.iter().enumerate() {
-                ui.selectable_value(&mut b.filter, i, tl!(l.as_str()));
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("builtin_file_browser_type")
+            .selected_text(current)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for (i, (l, _)) in b.filters.iter().enumerate() {
+                    ui.selectable_value(&mut b.filter, i, tl!(l.as_str()));
+                }
+            })
+            .response
+            .accessible_name(tl!("File type"));
         refilter = b.filter != before;
     });
     if refilter {
+        b.type_changed();
         b.navigate(b.dir.clone());
     }
     ui.add_space(8.0);
     let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
     let enter = !location_done && ui.input(|i| i.key_pressed(egui::Key::Enter));
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            cancel |= ui.button(tl!("Cancel")).clicked();
-            let ok = ui.add(egui::Button::new(egui::RichText::new(tl!(b.ok_label())).color(egui::Color32::WHITE)).fill(APP_COLOR));
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+            let (ok, cancelb) =
+                crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!(b.ok_label()))), tl!("Cancel"));
+            cancel |= cancelb.clicked();
             pick |= ok.clicked() || enter;
         });
     });
@@ -514,8 +597,8 @@ mod tests {
         let dir = scratch("save");
         std::fs::create_dir(dir.join("drafts")).unwrap();
         std::fs::write(dir.join("drafts").join("old.docx"), b"x").unwrap();
-        let req = FileDialogRequest::Save { name: "Document1.docx".into() };
-        let mut b = FileBrowser::new(req, AfterPick::OpenDocument, dir.clone(), false);
+        let req = FileDialogRequest::Save { name: "Document1.docx".into(), dir: None };
+        let mut b = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
         b.name = "drafts".into();
         assert_eq!(b.accept(), Step::Stay);
         assert_eq!(b.dir, dir.join("drafts"));
@@ -524,6 +607,74 @@ mod tests {
         b.name = "old".into();
         assert_eq!(b.accept(), Step::Stay, "asks before replacing");
         assert_eq!(b.accept(), Step::Pick(dir.join("drafts").join("old.docx")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A selected file keeps its exact name for Open and both steps of Save's replacement check.
+    #[test]
+    fn selecting_a_file_preserves_leading_spaces() {
+        let dir = scratch("selected-path");
+        let selected = dir.join(" report.docx");
+        let sibling = dir.join("report.docx");
+        std::fs::write(&selected, b"selected original").unwrap();
+        std::fs::write(&sibling, b"sibling original").unwrap();
+        for save in [false, true] {
+            let req = if save {
+                FileDialogRequest::Save { name: "Draft.docx".into(), dir: None }
+            } else {
+                FileDialogRequest::Open { purpose: "document".into() }
+            };
+            let mut browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+            let entry = browser.listing.as_ref().unwrap().entries.iter().find(|entry| entry.path == selected).unwrap().clone();
+            browser.select(&entry);
+            if save {
+                assert_eq!(browser.accept(), Step::Stay, "Save still asks before replacing the selected file");
+                assert_eq!(browser.note, Note::Replace(selected.clone()));
+            }
+            assert_eq!(browser.accept(), Step::Pick(selected.clone()));
+            assert_eq!(std::fs::read(&selected).unwrap(), b"selected original");
+            assert_eq!(std::fs::read(&sibling).unwrap(), b"sibling original");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder selection keeps its kind even if the folder disappears before Save.
+    #[test]
+    fn a_selected_folder_never_replaces_the_typed_save_name() {
+        for removed in [false, true] {
+            let dir = scratch(if removed { "selected-folder-removed" } else { "selected-folder-live" });
+            let folder = dir.join("Drafts");
+            std::fs::create_dir(&folder).unwrap();
+            let req = FileDialogRequest::Save { name: "chapter.docx".into(), dir: None };
+            let mut browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+            let entry = browser.listing.as_ref().unwrap().entries.iter().find(|entry| entry.path == folder).unwrap().clone();
+            browser.select(&entry);
+            assert_eq!(browser.name, "chapter.docx");
+            if removed {
+                std::fs::remove_dir(&folder).unwrap();
+                assert_eq!(browser.accept(), Step::Pick(dir.join("chapter.docx")));
+                assert!(!dir.join("Drafts.docx").exists());
+            } else {
+                assert_eq!(browser.accept(), Step::Stay);
+                assert_eq!(browser.dir, folder);
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A selected file still names the exact Save target after external deletion.
+    #[test]
+    fn a_removed_selected_file_keeps_its_exact_save_path() {
+        let dir = scratch("removed-selected-file");
+        let selected = dir.join(" report.docx");
+        std::fs::write(&selected, b"original").unwrap();
+        let req = FileDialogRequest::Save { name: "Draft.docx".into(), dir: None };
+        let mut browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        let entry = browser.listing.as_ref().unwrap().entries.iter().find(|entry| entry.path == selected).unwrap().clone();
+        browser.select(&entry);
+        std::fs::remove_file(&selected).unwrap();
+        assert_eq!(browser.accept(), Step::Pick(selected));
+        assert_eq!(browser.note, Note::None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -554,6 +705,387 @@ mod tests {
         assert!(!a.session.dirty);
         let saved = wordcraft_engine::io::open_path(&dir.join("novel.docx")).unwrap();
         assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved without a portal"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3859: the browser a modal dialog opens (Templates and Add-ins › Attach…) is modal over
+    /// it, frame after frame: the dialog doesn't rise above the browser's backdrop, where it
+    /// would take clicks beside the browser.
+    #[test]
+    fn the_browser_stays_above_the_dialog_that_opened_it() {
+        let dir = scratch("over_dialog");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.dialog = crate::dialogs::Dialog::open("templates", &mut a);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let req = FileDialogRequest::Open { purpose: "template".into() };
+        h.state_mut().file_browser.open = Some(Box::new(FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false)));
+        let browser = egui::LayerId::new(egui::Order::Middle, egui::Id::unique("builtin_file_browser"));
+        let backdrop = egui::LayerId::new(egui::Order::Middle, browser.id.with("modal_backdrop"));
+        let dialog = egui::LayerId::new(egui::Order::Middle, egui::Id::unique(("dialog", "Templates and Add-ins")));
+        for frame in 0..6 {
+            h.step();
+            if frame > 0 {
+                assert_eq!(h.ctx.memory(|m| m.top_modal_layer()), Some(browser), "frame {frame}");
+                let order: Vec<_> = h.ctx.memory(|m| m.layer_ids().collect());
+                let at = |l| order.iter().position(|o| *o == l).unwrap_or_else(|| panic!("frame {frame}: no {l:?} in {order:?}"));
+                assert!(at(dialog) < at(backdrop) && at(backdrop) < at(browser), "frame {frame}: {order:?}");
+            }
+        }
+        assert!(h.state().dialog.is_some(), "the dialog waits under it");
+        h.state_mut().canvas.want_focus = false;
+        h.state_mut().close_file_browser(None);
+        assert!(!h.state().canvas.want_focus, "the document doesn't ask for the keyboard back");
+        h.step();
+        h.event(egui::Event::Text("x".into()));
+        h.run_steps(2);
+        assert!(h.state().dialog.is_some(), "the dialog is back on top");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "it keeps the keyboard");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3859: Escape in the browser over a dialog (Templates and Add-ins › Attach…) cancels the
+    /// browser only; the dialog under it, drawn first, doesn't take the key too.
+    #[test]
+    fn escape_in_the_browser_leaves_the_dialog_under_it_open() {
+        let dir = scratch("escape_over_dialog");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.dialog = crate::dialogs::Dialog::open("templates", &mut a);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let req = FileDialogRequest::Open { purpose: "template".into() };
+        h.state_mut().file_browser.open = Some(Box::new(FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false)));
+        h.run_steps(3);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(!h.state().file_browser_open(), "Escape closes the browser");
+        assert!(h.state().dialog.is_some(), "and leaves the dialog open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3859: a modal dialog that closes as it opens the browser (Save in "Save changes?" as a new
+    /// document closes, with no system dialog) leaves the keyboard in the browser's name box: the
+    /// document doesn't take it back on the next frame.
+    #[test]
+    fn a_dialog_closing_into_the_browser_leaves_it_the_keyboard() {
+        use egui_kittest::kittest::Queryable;
+        let services = Services {
+            file_dialog: Some(Box::new(|_req| {
+                let (tx, rx) = channel();
+                tx.send(Err("no portal".to_string())).unwrap();
+                rx
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        a.run("text.insert", json!({"text": "Unsaved"})).unwrap();
+        let _ = a.run("file.close", json!({}));
+        assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h.get_by_label("Save").click();
+        h.run_steps(4);
+        assert!(h.state().dialog.is_none() && h.state().file_browser_open(), "Save As goes on in the browser");
+        let before = h.state().file_browser.open.as_ref().map(|b| b.name.clone());
+        h.event(egui::Event::Text("x".into()));
+        h.run_steps(2);
+        let after = h.state().file_browser.open.as_ref().map(|b| b.name.clone());
+        assert_ne!(after, before, "typing goes into the name box");
+    }
+
+    /// #3859: beside a modeless dialog (Find) the document takes the keyboard back.
+    #[test]
+    fn the_document_takes_the_keyboard_back_beside_a_modeless_dialog() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.dialog = crate::dialogs::Dialog::open("find", &mut a);
+        assert!(a.dialog.as_ref().is_some_and(|d| !d.is_modal()));
+        a.show_file_browser(
+            FileDialogRequest::Open { purpose: "document".into() },
+            AfterPick::OpenDocument { document: a.session.document_id() },
+            false,
+        );
+        a.canvas.want_focus = false;
+        a.close_file_browser(None);
+        assert!(a.canvas.want_focus);
+    }
+
+    /// #3859: the browser is modal on its own too: no keytips run behind it.
+    #[test]
+    fn no_keytips_behind_the_browser() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let ctx = egui::Context::default();
+        assert!(!crate::keytips::suppressed(&a, &ctx));
+        a.show_file_browser(
+            FileDialogRequest::Open { purpose: "document".into() },
+            AfterPick::OpenDocument { document: a.session.document_id() },
+            false,
+        );
+        assert!(crate::keytips::suppressed(&a, &ctx));
+    }
+
+    /// Drawn entries have names and selection state, and choosing one still picks its path.
+    #[test]
+    fn entries_expose_names_selection_and_picking() {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let dir = scratch("entry_accessibility");
+        let folder = dir.join("Drafts");
+        let file = dir.join("chapter.docx");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(&file, b"x").unwrap();
+        let browser =
+            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        // Font changes take effect next frame; the buttons need the named semibold family.
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(760.0, 520.0)).build_ui_state(
+            move |ui, state: &mut (FileBrowser, Option<Option<PathBuf>>)| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                if let Some(picked) = body(ui, &mut state.0, &t) {
+                    state.1 = Some(picked);
+                }
+            },
+            (browser, None),
+        );
+        h.run_steps(4);
+        for name in ["Drafts", "chapter.docx"] {
+            assert_eq!(h.get_by_role_and_label(Role::Button, name).accesskit_node().toggled(), Some(Toggled::False));
+        }
+        h.get_by_role_and_label(Role::Button, "Drafts").click();
+        h.run_steps(2);
+        assert_eq!(h.state().0.selected.as_ref(), Some(&folder));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Drafts").accesskit_node().toggled(), Some(Toggled::True));
+        h.get_by_role_and_label(Role::Button, "chapter.docx").click();
+        h.run_steps(2);
+        assert_eq!(h.state().0.selected.as_ref(), Some(&file));
+        assert_eq!(h.state().0.name, "chapter.docx");
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Drafts").accesskit_node().toggled(), Some(Toggled::False));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "chapter.docx").accesskit_node().toggled(), Some(Toggled::True));
+        h.get_by_role_and_label(Role::Button, "Open").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1, Some(Some(file)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3535: exporting offers File › Export's formats as the types; the chosen one is the format,
+    /// the name's extension follows it, and the export writes that format.
+    #[test]
+    fn export_types_choose_the_format_and_the_extension() {
+        let dir = scratch("export");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("text.insert", json!({"text": "Exported in WordCraft"})).unwrap();
+        a.run("ui.fileBrowser", json!({"purpose": "export"})).unwrap();
+        let b = a.file_browser.open.as_mut().expect("the built-in browser is open");
+        assert_eq!(b.filters.len(), EXPORT_FORMATS.len());
+        assert_eq!(b.filters[b.filter].0, "PDF document (*.pdf)");
+        assert!(b.name.ends_with(".pdf"), "{}", b.name);
+        b.filter = b.filters.iter().position(|(l, _)| l == "Plain text (*.txt)").unwrap();
+        b.type_changed();
+        assert!(b.name.ends_with(".txt"), "{}", b.name);
+        assert!(matches!(&b.after, AfterPick::Export { ext } if ext == "txt"));
+        b.navigate(dir.clone());
+        // A name typed afterwards with another document extension gets the chosen format's instead,
+        // and a name with an unknown one keeps it.
+        b.name = "notes.v2".into();
+        let Step::Pick(v2) = b.accept() else { panic!("picked") };
+        assert_eq!(v2.file_name().unwrap(), "notes.v2.txt");
+        b.name = "notes.docx".into();
+        let Step::Pick(path) = b.accept() else { panic!("picked") };
+        assert_eq!(path.file_name().unwrap(), "notes.txt");
+        for (typed, want) in [
+            ("a.PDF", "a.txt"),
+            ("a.htm", "a.txt"),
+            ("a", "a.txt"),
+            ("a.TXT", "a.TXT"),
+            ("sub/a.rtf", "sub/a.txt"),
+            (".txt", ".txt.txt"),
+            (".docx", ".docx.txt"),
+            ("sub/.docx", "sub/.docx.txt"),
+            ("a.", "a.txt"),
+            ("a..", "a.txt"),
+        ] {
+            assert_eq!(crate::print_page::export_name(typed, "txt"), want);
+        }
+        a.close_file_browser(Some(path.clone()));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("Exported in WordCraft"));
+        // Word 2003 XML starts on its own type, though Word XML writes .xml too.
+        let req = FileDialogRequest::Save { name: "x.xml".into(), dir: None };
+        let b = FileBrowser::new(req, AfterPick::Export { ext: crate::print_page::EXPORT_WORD_2003.into() }, dir.clone(), false);
+        assert_eq!(b.filters[b.filter].0, "Word 2003 XML Document (*.xml)");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The OpenDocument template and flat-XML exports are types of their own: the name gets
+    /// their extension, and the export saves by it.
+    #[test]
+    fn export_types_include_the_opendocument_template_and_flat_xml() {
+        let dir = scratch("export_ott");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("text.insert", json!({"text": "Template text"})).unwrap();
+        for (label, ext) in [("OpenDocument Text Template (*.ott)", "ott"), ("Flat OpenDocument Text (*.fodt)", "fodt")] {
+            let req = FileDialogRequest::Save { name: "x.pdf".into(), dir: None };
+            let mut b = FileBrowser::new(req, AfterPick::Export { ext: "pdf".into() }, dir.clone(), false);
+            b.filter = b.filters.iter().position(|(l, _)| l == label).unwrap();
+            b.type_changed();
+            assert_eq!(b.name, format!("x.{ext}"));
+            b.navigate(dir.clone());
+            let Step::Pick(path) = b.accept() else { panic!("picked") };
+            assert_eq!(path, dir.join(format!("x.{ext}")));
+            a.finish_pick(AfterPick::Export { ext: ext.into() }, Some(path.to_string_lossy().into_owned())).unwrap();
+            assert!(path.is_file(), "{ext} written");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An export waiting on a system dialog that never showed up keeps its format when Browse
+    /// in WordCraft… takes over, instead of starting over on PDF.
+    #[test]
+    fn browse_in_wordcraft_keeps_a_pending_exports_format() {
+        let services = Services {
+            file_dialog: Some(Box::new(|_req| {
+                let (tx, rx) = channel();
+                // The system dialog never answers.
+                std::mem::forget(tx);
+                rx
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        a.export_dialog("rtf");
+        assert!(a.file_dialog.is_some(), "waiting on the system dialog");
+        a.run("ui.fileBrowser", json!({"purpose": "export"})).unwrap();
+        assert!(a.file_dialog.is_none(), "the system dialog is given up");
+        let b = a.file_browser.open.as_ref().expect("the built-in browser is open");
+        assert!(matches!(&b.after, AfterPick::Export { ext } if ext == "rtf"));
+        assert_eq!(b.filters[b.filter].0, "Rich Text Format (*.rtf)");
+        assert!(b.name.ends_with(".rtf"), "{}", b.name);
+    }
+
+    /// Word XML chosen as the export type wins over a Word 2003 XML file already at that path,
+    /// whose format a save by path alone would keep.
+    #[test]
+    fn exporting_word_xml_over_a_word_2003_file_writes_word_xml() {
+        let dir = scratch("export_xml");
+        let path = dir.join("letter.xml").to_string_lossy().into_owned();
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+        a.finish_pick(AfterPick::Export { ext: crate::print_page::EXPORT_WORD_2003.into() }, Some(path.clone())).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("w:wordDocument"));
+        a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(path.clone())).unwrap();
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(xml.contains("pkg:package") && !xml.contains("w:wordDocument"), "Word XML, not Word 2003 XML");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A system Save dialog lets the user type a name without `.xml`; Word XML export still
+    /// writes `<name>.xml` (as the built-in browser does) and won't silently replace an existing one.
+    #[test]
+    fn exporting_word_xml_to_a_name_without_xml_appends_the_extension() {
+        let dir = scratch("export_xml_ext");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+        let bare = dir.join("letter").to_string_lossy().into_owned();
+        a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap();
+        let xml = std::fs::read_to_string(dir.join("letter.xml")).unwrap();
+        assert!(xml.contains("pkg:package"), "Word XML written at letter.xml");
+        // A known document extension gives way to .xml; an unknown one stays.
+        let docx = dir.join("notes.docx").to_string_lossy().into_owned();
+        a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(docx)).unwrap();
+        assert!(dir.join("notes.xml").is_file());
+        let v2 = dir.join("notes.v2").to_string_lossy().into_owned();
+        a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(v2)).unwrap();
+        assert!(dir.join("notes.v2.xml").is_file());
+        // The resulting name already exists: the system dialog never confirmed it, so refuse.
+        let bare = dir.join("letter").to_string_lossy().into_owned();
+        assert!(a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A name that is only a known extension (`.docx`) is a stem for `Path::extension`, which the
+    /// engine's explicit-format guard reads too: exporting Word XML to it must name a real
+    /// `.xml` file and write it (a bare `.xml` would be refused, writing nothing).
+    #[test]
+    fn exporting_word_xml_to_a_dotfile_name_writes_the_file() {
+        let dir = scratch("export_xml_dotfile");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+        for format in ["xml", crate::print_page::EXPORT_WORD_2003] {
+            let typed = dir.join(".docx").to_string_lossy().into_owned();
+            a.finish_pick(AfterPick::Export { ext: format.into() }, Some(typed)).unwrap();
+            let written = dir.join(".docx.xml");
+            assert!(std::fs::read_to_string(&written).unwrap().contains(if format == "xml" { "pkg:package" } else { "w:wordDocument" }));
+            let _ = std::fs::remove_file(&written);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3037: an empty folder (or a type filter that matches nothing) says so instead of a blank
+    /// box; a matching file replaces the hint.
+    #[test]
+    fn an_empty_folder_says_there_are_no_items() {
+        let dir = scratch("empty_state");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let mut b =
+            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        b.navigate(dir.clone());
+        assert!(matches!(&b.listing, Ok(l) if l.entries.is_empty()), "the folder starts empty");
+        a.file_browser.open = Some(Box::new(b));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        let texts = |h: &egui_kittest::Harness<'static, WordApp>| -> Vec<String> {
+            h.output()
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect()
+        };
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(texts(&h).iter().any(|t| t.contains("No items to show.")), "empty-state hint shown");
+        std::fs::write(dir.join("chapter.docx"), b"x").unwrap();
+        if let Some(b) = &mut h.state_mut().file_browser.open {
+            b.navigate(dir.clone());
+        }
+        for _ in 0..2 {
+            h.step();
+        }
+        assert!(texts(&h).iter().any(|t| t.contains("chapter.docx")), "the file is listed");
+        assert!(!texts(&h).iter().any(|t| t.contains("No items to show.")), "the hint is gone");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
