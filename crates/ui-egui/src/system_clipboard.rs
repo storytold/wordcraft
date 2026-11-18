@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use craft::platform::clipboard::{HTML, RTF, Written};
 // PLAN(app-hub): craft facade path of the framework's clipboard handle, and the craft-platform dependency
-use craft::ui::runtime::commands::clipboard::{ClipItem, ClipboardHandle};
+use craft::ui::runtime::commands::{ClipItem, ClipboardHandle};
 use serde_json::Value;
 use wordcraft_engine::cmd::paste::{MAX_PASTE_BYTES, MAX_PICTURE_BYTES};
 

@@ -69,7 +69,7 @@ fn pane_bodies_fit_the_narrowest_pane() {
         move |ui, app: &mut crate::WordApp| {
             // Fonts take effect the frame after they are installed.
             if !fonts {
-                crate::theme::install_fonts(ui.ctx());
+                crate::app::fonts::install_ui_fonts(ui.ctx(), crate::i18n::Lang::EN);
                 fonts = true;
                 return;
             }
@@ -209,7 +209,7 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 1200.0)).build_ui_state(
             |ui, app: &mut crate::WordApp| {
                 if !fonts {
-                    crate::theme::install_fonts(ui.ctx());
+                    crate::app::fonts::install_ui_fonts(ui.ctx(), crate::i18n::Lang::EN);
                     fonts = true;
                     return;
                 }

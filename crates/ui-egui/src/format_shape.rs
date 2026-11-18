@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use craft::behavior::EditEvents;
+use craft::behavior::{EditEvents, Value};
 use craft::color_ui::gradient::{ColorStop, GradientStops, StopRows, StopRules};
 use craft::color_ui::ui::gradient::{GradientEditor, StopRef};
 // PLAN: assumed craft::draw::ui exports these (ch.C15)
@@ -14,7 +14,7 @@ use craft::theme::Srgba;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _, Trigger, Value};
+use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _, Trigger};
 use craft::ui::form::{Field, SliderField};
 use craft::ui::layout_components::Stack;
 use craft::ui::menu::Menu;
