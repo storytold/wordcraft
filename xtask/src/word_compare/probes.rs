@@ -438,6 +438,28 @@ fn notes_lists_headers(v: &mut Vec<Probe>) {
     s.footnotes = notes;
     v.push(probe("footnotes", "footnotes at page bottoms, a long one continuing on the next page (Georgia 11, notes 9)", s));
 
+    // A long footnote whose reference line moves down the page one line at a time: how many of
+    // its lines Word keeps on the reference's page, with widow control on and off in the note.
+    for (wc, ppr_wc) in [("on", r#"<w:widowControl/>"#), ("off", r#"<w:widowControl w:val="0"/>"#)] {
+        for n in 40..=54usize {
+            let mut w = Words::new(20);
+            let mut body: String = (0..n).map(|k| p(ppr_wc, &r("", &format!("Line {k} {}", w.text(4))))).collect();
+            body.push_str(&format!(
+                r#"<w:p><w:pPr>{ppr_wc}</w:pPr>{}<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="1"/></w:r></w:p>"#,
+                r("", "Reference line")
+            ));
+            body.push_str(&(0..20).map(|k| p(ppr_wc, &r("", &format!("After {k} {}", w.text(4))))).collect::<String>());
+            let note: String = (0..20).map(|k| format!("Note line {k} {}. ", w.text(5))).collect();
+            let notes = format!(
+                r#"<w:footnote w:id="1"><w:p><w:pPr>{ppr_wc}<w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteRef/></w:r>{}</w:p></w:footnote>"#,
+                r(r#"<w:sz w:val="18"/><w:szCs w:val="18"/>"#, &format!(" {note}"))
+            );
+            let mut s = base("Georgia", 22, SINGLE, body);
+            s.footnotes = notes;
+            v.push(probe(format!("footnote-split-{wc}-{n}"), "a long footnote split across pages: lines kept with its reference", s));
+        }
+    }
+
     let mut w = Words::new(17);
     let numbering = r#"<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="multilevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl><w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2)"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/></w:rPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>"#;
     let mut body = String::new();
