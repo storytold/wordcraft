@@ -10,8 +10,8 @@ use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
 const DOC_EXTS: &[&str] = &[
-    "docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "markdown", "html", "htm", "mht", "mhtml", "tex",
-    "latex", "ltx", "json", "xml",
+    "docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht",
+    "mhtml", "tex", "latex", "ltx", "json", "xml",
 ];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
