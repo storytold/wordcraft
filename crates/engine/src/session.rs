@@ -34,7 +34,7 @@ pub use doc_state::{CellRange, ColumnBlock, FindState, MathEdit, Selection, UNDO
 use doc_state::{TypedWord, Undo, doc_bib_style};
 use ime_state::ImeCaretState;
 pub use locale::set_system_locale;
-pub(crate) use locale::system_locale;
+pub use locale::system_locale;
 pub use prefs::Prefs;
 pub use query::blank_document;
 pub use snapshot_types::EditSnapshot;
