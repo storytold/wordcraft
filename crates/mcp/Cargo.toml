@@ -14,5 +14,7 @@ wordcraft-engine = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-control-key = { workspace = true }
 craft-mcp-server = { workspace = true }
+# The control channel's authenticate-once client (`ControlClient`) and token lookup.
+craft = { workspace = true, features = ["automation"] }
 serde_json = { workspace = true }
 log = { workspace = true }

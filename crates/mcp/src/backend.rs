@@ -1,16 +1,12 @@
 //! Where MCP tool calls end up: a control-channel method call.
 
-use std::io::{BufReader, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::Path;
-use std::time::Duration;
 
-use serde_json::{Value, json};
-
-use crate::server::{BoundedLine, read_bounded_line};
-
-/// Longest reply line accepted from the app (screenshots and `document.inspect` are large).
-const MAX_REPLY_LINE: usize = 256 << 20;
+use craft::automation::args::{EnvNames, FlagNames};
+use craft::automation::client::{ConnectError, ControlClient};
+use craft::automation::security::client_token;
+use serde_json::Value;
 
 /// Something that answers control-channel methods (`engine.execute`, `document.inspect`,
 /// `ui.pointer`, `ui.render`, …). See `wordcraft_ui_egui::control` for the full list.
@@ -23,43 +19,60 @@ pub trait Backend {
     fn describe(&self) -> String;
 }
 
-/// Looks up the control key for an address (`HOST:PORT`).
-type KeyFinder = Box<dyn Fn(&str) -> Result<String, String> + Send>;
-
-/// A running WordCraft app, reached through its loopback control port.
-pub struct Remote {
-    addr: String,
-    conn: Option<(BufReader<TcpStream>, TcpStream)>,
-    next_id: u64,
-    /// Whether a connection ever succeeded (`lazy` starts without one; the app may open later).
-    connected: bool,
-    /// The connection leads to the app's 127.0.0.1: requests carry the control key.
-    send_key: bool,
-    /// The control key, looked up once per connection (the app picks a new one at every start).
-    key: Option<String>,
-    find_key: KeyFinder,
+/// A control token and where it came from: a token read from the app's file may be stale after
+/// an app restart, one given by the user is not re-read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Token {
+    value: String,
+    from_file: bool,
 }
 
-/// The control key: `env` (`WORDCRAFT_CONTROL_KEY`) when set, else the app's key file for
-/// `port` in `settings`. The error says where it looked.
-fn lookup_key(env: Option<String>, settings: Option<&Path>, port: Option<u16>) -> Result<String, String> {
-    if let Some(k) = env.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
-        return Ok(k);
-    }
-    let (Some(settings), Some(port)) = (settings, port) else {
-        return Err("no control key: set WORDCRAFT_CONTROL_KEY (no settings folder or port to find the key file)".to_string());
+/// Looks up the control token for an address (`HOST:PORT`).
+type TokenFinder = Box<dyn Fn(&str) -> Result<Token, Connect> + Send>;
+
+/// The environment variable names of the control channel (`WORDCRAFT_CONTROL_TOKEN`, …).
+fn env_names() -> EnvNames {
+    EnvNames::for_app("WORDCRAFT")
+}
+
+/// The control token: `env` (`WORDCRAFT_CONTROL_TOKEN`) when set and not empty, else the app's
+/// token file for `port` in `settings`. The error says where it looked. A missing token file means
+/// the app has not started (it writes the file before it serves, and removes it on exit), so it
+/// reads as unreachable and a lazy bridge keeps retrying (#4078).
+fn lookup_token(env: Option<String>, settings: Option<&Path>, port: Option<u16>) -> Result<Token, Connect> {
+    let names = env_names();
+    let supplied = env.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    let file = match (&supplied, settings.zip(port)) {
+        (Some(_), _) => None,
+        (None, Some((dir, port))) => {
+            let path = wordcraft_control_key::key_path(dir, port);
+            if !path.is_file() {
+                return Err(Connect::Unreachable(format!(
+                    "no control token yet: set {}, or start the app with --control {port} (it writes {})",
+                    names.token,
+                    path.display()
+                )));
+            }
+            Some(path)
+        }
+        (None, None) => {
+            return Err(Connect::Token(format!("no control token: set {} (no settings folder or port to find the token file)", names.token)));
+        }
     };
-    let path = wordcraft_control_key::key_path(settings, port);
-    match std::fs::read_to_string(&path).map(|k| k.trim().to_string()) {
-        Ok(k) if !k.is_empty() => Ok(k),
-        _ => Err(format!("no control key: set WORDCRAFT_CONTROL_KEY, or start the app with --control {port} (it writes {})", path.display())),
-    }
+    let from_file = file.is_some();
+    client_token(supplied.as_deref(), file.as_deref(), &FlagNames::default(), &names)
+        .map(|value| Token { value, from_file })
+        .map_err(|e| Connect::Token(e.to_string()))
 }
 
-/// The key for the app at `addr`, from the environment or the app's key file.
-fn find_key(addr: &str) -> Result<String, String> {
-    let port = addr.rsplit_once(':').and_then(|(_, p)| p.parse().ok());
-    lookup_key(std::env::var("WORDCRAFT_CONTROL_KEY").ok(), wordcraft_control_key::settings_dir().as_deref(), port)
+/// The port of `addr` (`HOST:PORT`).
+fn port_of(addr: &str) -> Option<u16> {
+    addr.rsplit_once(':').and_then(|(_, p)| p.parse().ok())
+}
+
+/// The token for the app at `addr`, from the environment or the app's token file.
+fn find_token(addr: &str) -> Result<Token, Connect> {
+    lookup_token(std::env::var(env_names().token).ok(), wordcraft_control_key::settings_dir().as_deref(), port_of(addr))
 }
 
 /// The only address the app's control server binds (`apps/wordcraft/src/control_server.rs`).
@@ -86,11 +99,11 @@ fn is_app_addr(addr: &str) -> bool {
     host.parse::<IpAddr>().map_or_else(|_| host.eq_ignore_ascii_case("localhost"), app)
 }
 
-/// The key goes only to the app's `--connect` address, and only when the connection really
+/// The token goes only to the app's `--connect` address, and only when the connection really
 /// leads to 127.0.0.1 (`peer`): a listener on another loopback address (::1, 127.0.0.2), which
 /// any local user can open, never sees it.
-fn may_send_key(addr: &str, peer: Option<SocketAddr>) -> bool {
-    is_app_addr(addr) && peer.is_some_and(|p| p.ip().to_canonical() == APP_IP)
+fn may_send_key(addr: &str, peer: SocketAddr) -> bool {
+    is_app_addr(addr) && peer.ip().to_canonical() == APP_IP
 }
 
 /// Where to connect for `addr`: `localhost` means the app's 127.0.0.1 (not whatever the resolver
@@ -104,15 +117,44 @@ fn targets(addr: &str) -> std::io::Result<Vec<SocketAddr>> {
     Ok(addr.to_socket_addrs()?.collect())
 }
 
+/// Why `addr` gets no token.
+fn not_app_address(addr: &str) -> String {
+    format!(
+        "{addr} is not the app's address, so the control token is not sent (it only goes to 127.0.0.1 and localhost, where the app listens) and the app refuses requests; reach the app through 127.0.0.1, for example with an SSH tunnel"
+    )
+}
+
+/// Why a connection could not be made.
+#[derive(Debug)]
+enum Connect {
+    /// The app was not reached.
+    Unreachable(String),
+    /// The app refused the token.
+    Refused(String),
+    /// No token could be found.
+    Token(String),
+}
+
+/// A running WordCraft app, reached through its loopback control port.
+pub struct Remote {
+    addr: String,
+    client: Option<ControlClient>,
+    /// Whether a connection ever succeeded (`lazy` starts without one; the app may open later).
+    connected: bool,
+    /// The connection leads to the app's 127.0.0.1: the control token may be sent.
+    send_key: bool,
+    find_token: TokenFinder,
+}
+
 impl Remote {
     /// Connect to `addr` (`127.0.0.1:7981`), failing fast when nothing is listening.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        Self::connect_with(addr, Box::new(find_key))
+        Self::connect_with(addr, Box::new(find_token))
     }
 
-    fn connect_with(addr: &str, find_key: KeyFinder) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key };
-        r.reconnect()?;
+    fn connect_with(addr: &str, find_token: TokenFinder) -> std::io::Result<Self> {
+        let mut r = Self { addr: addr.to_string(), client: None, connected: false, send_key: false, find_token };
+        r.reconnect().map_err(|c| std::io::Error::other(r.connect_error(c, false)))?;
         if let Some(w) = r.key_warning() {
             log::warn!("{w}");
         }
@@ -122,7 +164,7 @@ impl Remote {
     /// A remote that connects on first use: the app may start after the MCP server, and a
     /// server that exits at once reads as failed for the client's whole session (#4078).
     pub fn lazy(addr: &str) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key: Box::new(find_key) }
+        Self { addr: addr.to_string(), client: None, connected: false, send_key: false, find_token: Box::new(find_token) }
     }
 
     /// The address the app is reached at, as given.
@@ -130,152 +172,107 @@ impl Remote {
         &self.addr
     }
 
-    /// Why requests go without the control key (the address is not the app's 127.0.0.1), if they
-    /// do.
+    /// Why requests go without the control token (the address is not the app's 127.0.0.1), if
+    /// they do.
     pub fn key_warning(&self) -> Option<String> {
         // Nothing is known about the address until a connection succeeds.
         if !self.connected {
             return None;
         }
-        (!self.send_key).then(|| {
-            format!(
-                "{} is not the app's address, so the control key is not sent (it only goes to 127.0.0.1 and localhost, where the app listens) and the app refuses requests; reach the app through 127.0.0.1, for example with an SSH tunnel",
-                self.addr
-            )
-        })
+        (!self.send_key).then(|| not_app_address(&self.addr))
     }
 
     /// Drop the connection and connect again to the first of the address's targets that answers,
-    /// deciding afresh whether the control key may go to it.
-    fn reconnect(&mut self) -> std::io::Result<()> {
-        self.conn = None;
-        self.key = None;
-        let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, format!("cannot resolve {}", self.addr));
-        for sa in targets(&self.addr)? {
-            match TcpStream::connect_timeout(&sa, Duration::from_millis(800)) {
-                Ok(s) => {
-                    s.set_nodelay(true).ok();
-                    // The app answers within 60 s (its own timeout); leave headroom.
-                    s.set_read_timeout(Some(Duration::from_secs(90))).ok();
-                    self.send_key = may_send_key(&self.addr, s.peer_addr().ok());
-                    let read = s.try_clone()?;
-                    self.conn = Some((BufReader::new(read), s));
+    /// deciding afresh whether the token may go to it. An address that is not the app's gets no
+    /// connection: nothing could authenticate on it.
+    fn reconnect(&mut self) -> Result<(), Connect> {
+        self.client = None;
+        let mut last = Connect::Unreachable(format!("cannot resolve {}", self.addr));
+        for sa in targets(&self.addr).map_err(|e| Connect::Unreachable(e.to_string()))? {
+            self.send_key = may_send_key(&self.addr, sa);
+            if !self.send_key {
+                self.connected = true;
+                return Ok(());
+            }
+            match self.authenticate(sa) {
+                Ok(client) => {
+                    self.client = Some(client);
                     self.connected = true;
                     return Ok(());
                 }
-                Err(e) => last = e,
+                Err(e @ Connect::Unreachable(_)) => last = e,
+                Err(e) => return Err(e),
             }
         }
         Err(last)
     }
 
-    /// The request line; it carries the key when this connection may (looked up once per
-    /// connection).
-    fn request_line(&mut self, id: u64, method: &str, params: &Value) -> Result<String, String> {
-        let mut req = json!({"id": id, "method": method, "params": params});
-        if self.send_key {
-            let key = match &self.key {
-                Some(k) => k.clone(),
-                None => (self.find_key)(&self.addr)?,
-            };
-            req["key"] = json!(key);
-            self.key = Some(key);
+    /// Connect to `sa` and authenticate. A token read from the app's file that is refused may be
+    /// stale (the app restarted with a new one), so it is read again once.
+    fn authenticate(&self, sa: SocketAddr) -> Result<ControlClient, Connect> {
+        let mut refused_before = false;
+        loop {
+            let token = (self.find_token)(&self.addr)?;
+            match ControlClient::connect(sa, &token.value) {
+                Ok(client) => return Ok(client),
+                Err(ConnectError::Refused(_)) if token.from_file && !refused_before => refused_before = true,
+                Err(ConnectError::Refused(e)) => return Err(Connect::Refused(e)),
+                Err(ConnectError::Transport(e)) => return Err(Connect::Unreachable(e)),
+                // `ConnectError` is non-exhaustive: a failure it adds later did not reach the app either.
+                Err(other) => return Err(Connect::Unreachable(other.to_string())),
+            }
         }
-        Ok(req.to_string())
     }
 
-    /// Send one line and read its reply. Once a write is attempted, any failure leaves the
-    /// outcome unknown: even a failed write may have delivered a complete request at EOF.
-    fn roundtrip(&mut self, line: &str) -> Result<String, Failure> {
-        let Some((reader, writer)) = self.conn.as_mut() else {
-            return Err(Failure::NotSent(std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")));
-        };
-        roundtrip_io(reader, writer, line)
+    /// The error a failed connection reports; `will_retry` says the next call connects again.
+    fn connect_error(&self, why: Connect, will_retry: bool) -> String {
+        match why {
+            Connect::Unreachable(e) => {
+                let retry = if will_retry { "; will retry on each call" } else { "" };
+                format!("WordCraft app at {} is not reachable: {e}{retry}", self.addr)
+            }
+            Connect::Refused(e) => format!(
+                "unauthorized: the WordCraft app at {} refused the control token ({e}); it came from {} or the app's token file",
+                self.addr,
+                env_names().token
+            ),
+            Connect::Token(e) => e,
+        }
     }
 
     /// One request and its reply. A request that was not sent, or one that only reads, is tried
     /// once more on a new connection (the app may have restarted; a new connection also reads
-    /// the key again). A mutation whose outcome is unknown is never sent again: it may have run.
-    fn exchange(&mut self, id: u64, method: &str, params: &Value) -> Result<Value, String> {
-        self.exchange_with(id, method, params, Self::roundtrip)
-    }
-
-    fn exchange_with(
-        &mut self,
-        id: u64,
-        method: &str,
-        params: &Value,
-        mut roundtrip: impl FnMut(&mut Self, &str) -> Result<String, Failure>,
-    ) -> Result<Value, String> {
-        let unreachable = |addr: &str, e: std::io::Error, connected: bool| {
-            let retry = if connected { String::new() } else { "; will retry on each call".to_string() };
-            format!("WordCraft app at {addr} is not reachable: {e}{retry}")
-        };
-        let mut first = true;
-        let reply = loop {
-            let tried = if self.conn.is_some() { Ok(()) } else { self.reconnect().map_err(Failure::NotSent) };
-            let result = match tried {
-                Ok(()) => {
-                    let line = self.request_line(id, method, params)?;
-                    roundtrip(self, &line)
-                }
-                Err(e) => Err(e),
+    /// the token again). A mutation whose outcome is unknown is never sent again: it may have run.
+    fn exchange(&mut self, method: &str, params: &Value) -> Result<Value, String> {
+        let mut replayed = false;
+        loop {
+            if self.client.is_none() {
+                self.reconnect().map_err(|c| self.connect_error(c, !self.connected))?;
+            }
+            if !self.send_key {
+                return Err(not_app_address(&self.addr));
+            }
+            let Some(client) = self.client.as_mut() else {
+                return Err(format!("WordCraft app at {} is not connected", self.addr));
             };
-            match result {
-                Ok(r) => break r,
-                Err(f) => {
-                    self.conn = None;
-                    // A reply that arrived but can't be read (too long, not UTF-8): the app has
-                    // run the request, so sending it again could run a state-changing one twice.
-                    if let Failure::Unknown(e) = &f
-                        && e.kind() == std::io::ErrorKind::InvalidData
-                    {
-                        return Err(format!("bad reply from app: {e}"));
-                    }
-                    if let Failure::Unknown(e) = &f
-                        && !is_read_only(method, params)
-                    {
+            match client.call(method, params.clone()) {
+                Ok(v) => return Ok(v),
+                // An error reply: the connection is intact and the app answered.
+                Err(e) if !client.is_broken() => return Err(e),
+                Err(e) => {
+                    self.client = None;
+                    if !is_read_only(method, params) {
                         return Err(format!(
                             "outcome unknown: the connection to the WordCraft app at {} failed while sending `{method}` or waiting for its reply ({e}); it may have been executed, so it is not sent again. Inspect the document to check",
                             self.addr
                         ));
                     }
-                    if !first {
-                        return Err(unreachable(&self.addr, f.into_error(), self.connected));
+                    if replayed {
+                        return Err(format!("WordCraft app at {} is not reachable: {e}", self.addr));
                     }
-                    first = false;
+                    replayed = true;
                 }
             }
-        };
-        serde_json::from_str(reply.trim()).map_err(|e| format!("bad reply from app: {e}"))
-    }
-}
-
-/// Shared socket exchange, also used with a writer that fails after partial delivery in tests.
-fn roundtrip_io(reader: &mut impl std::io::BufRead, writer: &mut impl Write, line: &str) -> Result<String, Failure> {
-    let mut out = Vec::with_capacity(line.len() + 1);
-    out.extend_from_slice(line.as_bytes());
-    out.push(b'\n');
-    writer.write_all(&out).and_then(|()| writer.flush()).map_err(Failure::Unknown)?;
-    match read_bounded_line(reader, MAX_REPLY_LINE).map_err(Failure::Unknown)? {
-        BoundedLine::Line(reply) => Ok(reply),
-        BoundedLine::Eof => Err(Failure::Unknown(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"))),
-        BoundedLine::TooLong => Err(Failure::Unknown(std::io::Error::new(std::io::ErrorKind::InvalidData, "reply from app too long"))),
-    }
-}
-
-/// Why a round trip failed.
-enum Failure {
-    /// No write was attempted: the app did not run it.
-    NotSent(std::io::Error),
-    /// After the request was sent: the app may have run it.
-    Unknown(std::io::Error),
-}
-
-impl Failure {
-    fn into_error(self) -> std::io::Error {
-        match self {
-            Self::NotSent(e) | Self::Unknown(e) => e,
         }
     }
 }
@@ -291,32 +288,7 @@ fn is_read_only(method: &str, params: &Value) -> bool {
 
 impl Backend for Remote {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = self.next_id;
-        self.next_id += 1;
-        let unauthorized = |v: &Value| v.get("error").and_then(Value::as_str) == Some("unauthorized");
-        let mut v = self.exchange(id, method, &params)?;
-        if unauthorized(&v) && self.send_key {
-            // A stale key (the app restarted on this port): the app closed the connection; a new
-            // one reads the key again. Once.
-            self.conn = None;
-            v = self.exchange(id, method, &params)?;
-        }
-        if v.get("ok").and_then(Value::as_bool) == Some(true) {
-            Ok(v.get("result").cloned().unwrap_or(Value::Null))
-        } else if unauthorized(&v) {
-            self.conn = None;
-            Err(self.key_warning().map_or_else(
-                || {
-                    format!(
-                        "unauthorized: the WordCraft app at {} refused the control key (from WORDCRAFT_CONTROL_KEY or the app's key file)",
-                        self.addr
-                    )
-                },
-                |w| format!("unauthorized: {w}"),
-            ))
-        } else {
-            Err(v.get("error").and_then(Value::as_str).unwrap_or("unknown error").to_string())
-        }
+        self.exchange(method, &params)
     }
 
     fn has_ui(&self) -> bool {
@@ -335,39 +307,56 @@ impl Backend for Remote {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::BufRead;
-    use std::net::{SocketAddr, TcpListener};
+    use serde_json::json;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{Receiver, channel};
+    use std::time::Duration;
+
+    const WAIT: Duration = Duration::from_secs(5);
+
+    /// A valid control token (64 hex digits) made of one digit.
+    fn tok(c: char) -> String {
+        c.to_string().repeat(64)
+    }
+
+    fn fixed_token(t: String) -> TokenFinder {
+        Box::new(move |_| Ok(Token { value: t.clone(), from_file: false }))
+    }
 
     #[test]
-    fn key_from_env_then_key_file() {
-        let dir = std::env::temp_dir().join(format!("wordcraft-mcp-key-{}", std::process::id()));
+    fn token_from_env_then_token_file() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-mcp-token-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = wordcraft_control_key::key_path(&dir, 7981);
-        // Neither: the error names the variable and the file it looked for.
-        let e = lookup_key(None, Some(&dir), Some(7981)).unwrap_err();
-        assert!(e.contains("WORDCRAFT_CONTROL_KEY") && e.contains(&path.display().to_string()), "{e}");
-        // The key file, trimmed; an empty variable does not count.
-        std::fs::write(&path, "  file-key\n").unwrap();
-        assert_eq!(lookup_key(None, Some(&dir), Some(7981)).unwrap(), "file-key");
-        assert_eq!(lookup_key(Some(" ".into()), Some(&dir), Some(7981)).unwrap(), "file-key");
+        // Neither: the app has not started; the error names the variable and the file it looked for.
+        let Connect::Unreachable(e) = lookup_token(None, Some(&dir), Some(7981)).unwrap_err() else {
+            panic!("a missing token file must read as unreachable");
+        };
+        assert!(e.contains("WORDCRAFT_CONTROL_TOKEN") && e.contains(&path.display().to_string()), "{e}");
+        // The token file, trimmed; an empty variable does not count.
+        std::fs::write(&path, format!("  {}\n", tok('a'))).unwrap();
+        let file = Token { value: tok('a'), from_file: true };
+        assert_eq!(lookup_token(None, Some(&dir), Some(7981)).unwrap(), file);
+        assert_eq!(lookup_token(Some(" ".into()), Some(&dir), Some(7981)).unwrap(), file);
         // The variable wins.
-        assert_eq!(lookup_key(Some(" env-key ".into()), Some(&dir), Some(7981)).unwrap(), "env-key");
-        assert_eq!(lookup_key(Some("env-key".into()), None, None).unwrap(), "env-key");
-        // Read again every time: the app writes a new key at every start.
-        std::fs::write(&path, "new-key").unwrap();
-        assert_eq!(lookup_key(None, Some(&dir), Some(7981)).unwrap(), "new-key");
+        let env = Token { value: tok('b'), from_file: false };
+        assert_eq!(lookup_token(Some(format!(" {} ", tok('b'))), Some(&dir), Some(7981)).unwrap(), env);
+        assert_eq!(lookup_token(Some(tok('b')), None, None).unwrap(), env);
+        // Read again every time: the app writes a new token at every start.
+        std::fs::write(&path, tok('c')).unwrap();
+        assert_eq!(lookup_token(None, Some(&dir), Some(7981)).unwrap().value, tok('c'));
         // Another port, another file.
-        assert!(lookup_key(None, Some(&dir), Some(7982)).is_err());
+        assert!(lookup_token(None, Some(&dir), Some(7982)).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn key_only_for_the_apps_address() {
-        let peer = |s: &str| s.parse::<SocketAddr>().ok();
+        let peer = |s: &str| s.parse::<SocketAddr>().unwrap();
         for (addr, at) in [
             ("127.0.0.1:7981", "127.0.0.1:7981"),
             ("[::ffff:127.0.0.1]:7981", "[::ffff:127.0.0.1]:7981"),
@@ -395,8 +384,6 @@ mod tests {
         ] {
             assert!(!may_send_key(addr, peer(at)), "{addr} at {at}");
         }
-        // No peer address: no key.
-        assert!(!may_send_key("127.0.0.1:7981", None));
     }
 
     #[test]
@@ -409,23 +396,48 @@ mod tests {
         assert_eq!(targets("[::1]:7981").unwrap(), vec!["[::1]:7981".parse::<SocketAddr>().unwrap()]);
     }
 
-    /// A stand-in for the app on 127.0.0.1: every request line goes to the returned channel and
-    /// gets `answer(request)`: a reply and whether to close the connection after it, or `None`
-    /// to close it without a reply (the app quit).
-    fn fake_app(answer: impl Fn(&Value) -> Option<(Value, bool)> + Send + Sync + 'static) -> (u16, Receiver<Value>) {
+    /// A stand-in for the app on 127.0.0.1.
+    struct Fake {
+        port: u16,
+        /// Every request line except `auth`.
+        seen: Receiver<Value>,
+        /// The token of every `auth` frame.
+        tokens: Receiver<String>,
+    }
+
+    /// An `auth` frame is accepted when `accept(token)`; refused, the connection closes. Every
+    /// other request line gets `answer(request)`: a reply and whether to close the connection
+    /// after it, or `None` to close it without a reply (the app quit).
+    fn fake_app(
+        accept: impl Fn(&str) -> bool + Send + Sync + 'static,
+        answer: impl Fn(&Value) -> Option<(Value, bool)> + Send + Sync + 'static,
+    ) -> Fake {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        let (tx, rx) = channel();
-        let answer = Arc::new(answer);
+        let (seen_tx, seen) = channel();
+        let (token_tx, tokens) = channel();
+        let (accept, answer) = (Arc::new(accept), Arc::new(answer));
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let (tx, answer) = (tx.clone(), answer.clone());
+                let (seen_tx, token_tx, accept, answer) = (seen_tx.clone(), token_tx.clone(), accept.clone(), answer.clone());
                 std::thread::spawn(move || {
                     let mut out = stream.try_clone().unwrap();
                     for line in BufReader::new(stream).lines() {
                         let Ok(req) = serde_json::from_str::<Value>(&line.unwrap_or_default()) else { return };
-                        let _ = tx.send(req.clone());
-                        let Some((mut reply, close)) = answer(&req) else { return };
+                        let (mut reply, close) = if req["method"] == "auth" {
+                            let token = req["params"]["token"].as_str().unwrap_or("").to_string();
+                            let ok = accept(&token);
+                            let _ = token_tx.send(token);
+                            if ok {
+                                (json!({"ok": true, "result": {"authenticated": true}}), false)
+                            } else {
+                                (json!({"ok": false, "error": "authentication required"}), true)
+                            }
+                        } else {
+                            let _ = seen_tx.send(req.clone());
+                            let Some(r) = answer(&req) else { return };
+                            r
+                        };
                         reply["id"] = req["id"].clone();
                         if writeln!(out, "{reply}").is_err() || close {
                             return;
@@ -434,187 +446,108 @@ mod tests {
                 });
             }
         });
-        (port, rx)
+        Fake { port, seen, tokens }
+    }
+
+    fn ok(result: i64) -> Option<(Value, bool)> {
+        Some((json!({"ok": true, "result": result}), false))
     }
 
     #[test]
-    fn an_unreadable_reply_is_not_retried() {
-        // The app answered something that can't be read (here not UTF-8; an over-long reply
-        // takes the same path): the request ran, so it must not be sent again.
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let seen = Arc::new(AtomicUsize::new(0));
-        let n = seen.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let n = n.clone();
-                std::thread::spawn(move || {
-                    let mut out = stream.try_clone().unwrap();
-                    for line in BufReader::new(stream).lines() {
-                        if line.is_err() {
-                            return;
-                        }
-                        n.fetch_add(1, Ordering::SeqCst);
-                        if out.write_all(b"\xff\xfe\n").is_err() {
-                            return;
-                        }
-                    }
-                });
-            }
-        });
-        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k1")).unwrap();
-        let e = r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "x"}})).unwrap_err();
-        assert!(e.contains("bad reply"), "{e}");
-        assert_eq!(seen.load(Ordering::SeqCst), 1, "the request was sent once");
-    }
-
-    fn fixed_key(key: &'static str) -> KeyFinder {
-        Box::new(move |_| Ok(key.to_string()))
-    }
-
-    const WAIT: Duration = Duration::from_secs(5);
-
-    #[test]
-    fn sends_the_key_to_loopback() {
-        let (port, seen) = fake_app(|_| Some((json!({"ok": true, "result": 7}), false)));
+    fn sends_the_token_to_loopback() {
+        let app = fake_app(|_| true, |_| ok(7));
         for host in ["127.0.0.1", "localhost"] {
-            let mut r = Remote::connect_with(&format!("{host}:{port}"), fixed_key("k1")).unwrap();
+            let mut r = Remote::connect_with(&format!("{host}:{}", app.port), fixed_token(tok('1'))).unwrap();
             assert!(r.key_warning().is_none(), "{host}");
             assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(7));
-            assert_eq!(seen.recv_timeout(WAIT).unwrap()["key"], "k1", "{host}");
+            assert_eq!(app.tokens.recv_timeout(WAIT).unwrap(), tok('1'), "{host}");
         }
     }
 
     #[test]
     fn a_lazy_remote_serves_once_the_app_opens() {
-        // Nothing is listening: the call fails, but the server stays up and says it will retry.
+        // The app is not running, so it has written no token file: the call fails, but the server
+        // stays up and says it will retry.
+        let dir = std::env::temp_dir().join(format!("wordcraft-mcp-lazy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
         let mut r = Remote::lazy("127.0.0.1:1");
-        r.find_key = fixed_key("k1");
+        let settings = dir.clone();
+        r.find_token = Box::new(move |addr| lookup_token(None, Some(&settings), port_of(addr)));
         let e = r.call("document.inspect", json!({})).unwrap_err();
         assert!(e.contains("not reachable") && e.contains("will retry"), "{e}");
         assert!(r.describe().contains("will connect to"));
-        // The app opens later: the next call connects and answers.
-        let (port, seen) = fake_app(|_| Some((json!({"ok": true, "result": 7}), false)));
-        r.addr = format!("127.0.0.1:{port}");
+        // The app opens later and writes its token file: the next call connects and answers.
+        let app = fake_app(|_| true, |_| ok(7));
+        std::fs::write(wordcraft_control_key::key_path(&dir, app.port), tok('1')).unwrap();
+        r.addr = format!("127.0.0.1:{}", app.port);
         assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(7));
         assert!(r.key_warning().is_none());
-        assert_eq!(seen.recv_timeout(WAIT).unwrap()["key"], "k1");
+        assert_eq!(app.tokens.recv_timeout(WAIT).unwrap(), tok('1'));
         assert!(r.describe().contains("connected to"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn reads_the_key_again_on_a_new_connection() {
-        // The app restarted with a new key: the old key is refused (and the connection closed).
-        let (port, seen) = fake_app(|req| {
-            Some(if req["key"] == "new" { (json!({"ok": true, "result": 1}), false) } else { (json!({"ok": false, "error": "unauthorized"}), true) })
-        });
+    fn reads_the_token_again_on_a_new_connection() {
+        // The app restarted with a new token: the old one is refused, the file is read again.
+        let app = fake_app(|t| t == tok('b'), |_| ok(1));
         let reads = Arc::new(AtomicUsize::new(0));
         let n = reads.clone();
-        let finder: KeyFinder = Box::new(move |_| Ok(if n.fetch_add(1, Ordering::SeqCst) == 0 { "old" } else { "new" }.to_string()));
-        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), finder).unwrap();
+        let finder: TokenFinder =
+            Box::new(move |_| Ok(Token { value: if n.fetch_add(1, Ordering::SeqCst) == 0 { tok('a') } else { tok('b') }, from_file: true }));
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{}", app.port), finder).unwrap();
+        assert_eq!(app.tokens.recv_timeout(WAIT).unwrap(), tok('a'));
+        assert_eq!(app.tokens.recv_timeout(WAIT).unwrap(), tok('b'));
         assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(1));
-        assert_eq!(seen.recv_timeout(WAIT).unwrap()["key"], "old");
-        assert_eq!(seen.recv_timeout(WAIT).unwrap()["key"], "new");
-        assert_eq!(reads.load(Ordering::SeqCst), 2);
-        // The new key is kept for the next requests on the same connection.
+        // The new token is kept for the next requests on the same connection.
         assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(1));
         assert_eq!(reads.load(Ordering::SeqCst), 2);
 
-        // The app quits mid-session (connection closed): the retry reads the key again.
-        let (port, seen) = fake_app(|req| if req["id"] == 2 { None } else { Some((json!({"ok": true, "result": 1}), false)) });
+        // The app quits mid-session (connection closed): the retry authenticates with the token
+        // read again.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let app = fake_app(|_| true, move |_| if c.fetch_add(1, Ordering::SeqCst) == 1 { None } else { ok(1) });
         let reads = Arc::new(AtomicUsize::new(0));
         let n = reads.clone();
-        let finder: KeyFinder = Box::new(move |_| Ok(format!("key-{}", n.fetch_add(1, Ordering::SeqCst))));
-        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), finder).unwrap();
+        let finder: TokenFinder = Box::new(move |_| Ok(Token { value: tok(['a', 'b', 'c'][n.fetch_add(1, Ordering::SeqCst) % 3]), from_file: true }));
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{}", app.port), finder).unwrap();
         r.call("document.inspect", json!({})).unwrap();
-        r.call("document.inspect", json!({})).unwrap_err();
-        let keys: Vec<Value> = seen.try_iter().map(|v| v["key"].clone()).collect();
-        assert_eq!(keys.first(), Some(&json!("key-0")), "{keys:?}");
-        assert_eq!(keys.last(), Some(&json!("key-1")), "{keys:?}");
+        assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(1));
+        let tokens: Vec<String> = app.tokens.try_iter().collect();
+        assert_eq!(tokens, vec![tok('a'), tok('b')]);
     }
 
     #[test]
-    fn no_key_for_other_hosts_and_a_clear_error() {
-        // There is no LAN address to test with here: same stand-in, with the decision a LAN
-        // address gets.
-        let (port, seen) = fake_app(|req| {
-            Some(if req.get("key").is_some() {
-                (json!({"ok": true, "result": 1}), false)
-            } else {
-                (json!({"ok": false, "error": "unauthorized"}), true)
-            })
-        });
-        let finder: KeyFinder = Box::new(|_| Err("the key must not be read for another host".to_string()));
-        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), finder).unwrap();
-        r.send_key = false;
+    fn no_token_for_other_hosts_and_a_clear_error() {
+        // A LAN address: the token must not be read, and nothing is sent.
+        let finder: TokenFinder = Box::new(|_| Err(Connect::Token("the token must not be read for another host".to_string())));
+        let mut r = Remote::connect_with("192.0.2.20:7981", finder).unwrap();
         assert!(r.key_warning().is_some_and(|w| w.contains("not the app's address")));
         let e = r.call("document.inspect", json!({})).unwrap_err();
         assert!(e.contains("not the app's address") && e.contains("not sent"), "{e}");
-        assert!(seen.recv_timeout(WAIT).unwrap().get("key").is_none());
     }
 
     #[test]
     fn a_mutation_with_a_lost_reply_is_not_sent_again() {
         // The app runs the request, then the connection drops without a reply.
-        let (port, seen) = fake_app(|_| None);
-        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+        let app = fake_app(|_| true, |_| None);
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{}", app.port), fixed_token(tok('1'))).unwrap();
         let e = r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "x"}})).unwrap_err();
         assert!(e.contains("outcome unknown"), "{e}");
-        assert_eq!(seen.recv_timeout(WAIT).unwrap()["method"], "engine.execute");
+        assert_eq!(app.seen.recv_timeout(WAIT).unwrap()["method"], "engine.execute");
         std::thread::sleep(Duration::from_millis(200));
-        assert!(seen.try_recv().is_err(), "the mutation was sent a second time");
+        assert!(app.seen.try_recv().is_err(), "the mutation was sent a second time");
     }
 
     #[test]
     fn a_read_with_a_lost_reply_is_sent_again() {
         let n = Arc::new(AtomicUsize::new(0));
-        let (port, seen) =
-            fake_app(move |_| if n.fetch_add(1, Ordering::SeqCst) == 0 { None } else { Some((json!({"ok": true, "result": 3}), false)) });
-        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+        let app = fake_app(|_| true, move |_| if n.fetch_add(1, Ordering::SeqCst) == 0 { None } else { ok(3) });
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{}", app.port), fixed_token(tok('1'))).unwrap();
         assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(3));
-        assert_eq!(seen.try_iter().count(), 2);
-    }
-
-    #[test]
-    fn a_failed_write_after_delivering_json_never_replays_a_mutation() {
-        // Deliver a complete request, then fail either its newline write or its flush. The
-        // stand-in, like the production server, accepts a complete JSON body at EOF.
-        struct FailingWriter<'a> {
-            socket: &'a mut TcpStream,
-            fail_flush: bool,
-            wrote: bool,
-        }
-        impl Write for FailingWriter<'_> {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                if self.wrote {
-                    return Err(std::io::ErrorKind::BrokenPipe.into());
-                }
-                self.wrote = true;
-                let len = buf.len() - usize::from(!self.fail_flush);
-                self.socket.write_all(&buf[..len])?;
-                self.socket.shutdown(std::net::Shutdown::Write)?;
-                Ok(len)
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Err(std::io::ErrorKind::BrokenPipe.into())
-            }
-        }
-        for fail_flush in [false, true] {
-            let (port, seen) = fake_app(|_| None);
-            let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
-            let mut attempts = 0;
-            let e = r
-                .exchange_with(1, "engine.execute", &json!({"command": "text.insert", "params": {"text": "once"}}), |r, line| {
-                    attempts += 1;
-                    let (reader, socket) = r.conn.as_mut().unwrap();
-                    roundtrip_io(reader, &mut FailingWriter { socket, fail_flush, wrote: false }, line)
-                })
-                .unwrap_err();
-            assert!(e.contains("outcome unknown"), "{e}");
-            assert_eq!(attempts, 1, "a failed write must not trigger another exchange");
-            assert_eq!(seen.recv_timeout(WAIT).unwrap()["params"]["params"]["text"], "once");
-            assert!(seen.try_recv().is_err());
-        }
+        assert_eq!(app.seen.try_iter().count(), 2);
     }
 
     #[test]
@@ -623,9 +556,8 @@ mod tests {
             for path in [json!("out.png"), json!(""), Value::Null] {
                 let count = Arc::new(AtomicUsize::new(0));
                 let n = count.clone();
-                let (port, seen) =
-                    fake_app(move |_| if n.fetch_add(1, Ordering::SeqCst) == 0 { None } else { Some((json!({"ok": true, "result": 3}), false)) });
-                let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+                let app = fake_app(|_| true, move |_| if n.fetch_add(1, Ordering::SeqCst) == 0 { None } else { ok(3) });
+                let mut r = Remote::connect_with(&format!("127.0.0.1:{}", app.port), fixed_token(tok('1'))).unwrap();
                 let result = r.call(method, json!({"path": path}));
                 if path.is_string() {
                     assert!(result.unwrap_err().contains("outcome unknown"));
@@ -634,7 +566,7 @@ mod tests {
                     assert_eq!(result.unwrap(), json!(3));
                     assert_eq!(count.load(Ordering::SeqCst), 2);
                 }
-                assert_eq!(seen.try_iter().count(), if path.is_string() { 1 } else { 2 });
+                assert_eq!(app.seen.try_iter().count(), if path.is_string() { 1 } else { 2 });
             }
             assert!(is_read_only(method, &json!({})), "no path means PNG in the reply");
         }
@@ -642,10 +574,10 @@ mod tests {
 
     #[test]
     fn a_mutation_not_sent_goes_out_on_a_new_connection() {
-        let (port, seen) = fake_app(|_| Some((json!({"ok": true, "result": 1}), false)));
-        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
-        r.conn = None;
+        let app = fake_app(|_| true, |_| ok(1));
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{}", app.port), fixed_token(tok('1'))).unwrap();
+        r.client = None;
         assert_eq!(r.call("engine.execute", json!({"command": "file.new"})).unwrap(), json!(1));
-        assert_eq!(seen.try_iter().count(), 1);
+        assert_eq!(app.seen.try_iter().count(), 1);
     }
 }
