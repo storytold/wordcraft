@@ -122,8 +122,12 @@ pub(crate) fn comment_draft(app: &WordApp, id: u32) -> Option<String> {
 /// Whether the open document has a comment or reply draft not yet written to it (typed, or
 /// kept after the document refused it): closing the page would lose it.
 pub(crate) fn has_comment_drafts(app: &WordApp) -> bool {
-    let d = &app.canvas.comments;
-    d.editing.is_some() || !d.reply.is_empty()
+    state_has_drafts(&app.canvas.comments)
+}
+
+/// Whether `state` holds a comment or reply draft: the open document's, or a parked document's.
+pub(crate) fn state_has_drafts(state: &CommentsPanelState) -> bool {
+    state.editing.is_some() || !state.reply.is_empty()
 }
 
 /// Lines of a comment's text that its card or balloon shows; longer text scrolls in its field and
