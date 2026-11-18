@@ -23,10 +23,7 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     if ra.state() == State::Playing {
         ctx.request_repaint_after(std::time::Duration::from_millis(120));
     }
-    if let Some(e) = app.session.read_aloud.error()
-        && app.read_aloud_error.as_deref() != Some(e.as_str())
-    {
-        app.read_aloud_error = Some(e.clone());
+    if let Some(e) = error_notice(&mut app.read_aloud_error, app.session.read_aloud.error()) {
         app.status(e);
     }
     // The caret follows the reading only in the document being read.
@@ -38,6 +35,23 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
             app.canvas.scroll_to_caret = true;
         }
         app.read_aloud_at = current;
+    }
+}
+
+/// The notice for the player's error `now`, given the one last `shown`: each message is shown
+/// once, and when the error clears (Play after a halt) the last one is forgotten, so the same
+/// message coming back is shown again.
+fn error_notice(shown: &mut Option<String>, now: Option<String>) -> Option<String> {
+    match now {
+        None => {
+            *shown = None;
+            None
+        }
+        Some(e) if shown.as_deref() == Some(e.as_str()) => None,
+        Some(e) => {
+            *shown = Some(e.clone());
+            Some(e)
+        }
     }
 }
 
@@ -169,4 +183,20 @@ fn button(ui: &mut Ui, t: &Tokens, icon: &str, tip: &str, enabled: bool) -> bool
     let r = Rect::from_center_size(rect.center(), vec2(20.0, 20.0));
     crate::icons::paint(ui.painter(), r, icon, c, if enabled { t.accent } else { Color32::TRANSPARENT });
     enabled && resp.clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_notice;
+
+    #[test]
+    fn the_same_error_after_play_is_shown_again() {
+        let mut shown = None;
+        let halt = || Some("stopped for another program".to_string());
+        assert_eq!(error_notice(&mut shown, halt()), halt(), "shown once");
+        assert_eq!(error_notice(&mut shown, halt()), None, "not on every frame");
+        // Play clears the error; the same halt later is a new notice.
+        assert_eq!(error_notice(&mut shown, None), None);
+        assert_eq!(error_notice(&mut shown, halt()), halt());
+    }
 }

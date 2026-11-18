@@ -29,11 +29,15 @@ fn alt_code_digit(key: Key) -> Option<char> {
     char::from_digit(n, 10)
 }
 
+/// Alt is the only modifier held: the one an Alt code's digits are typed with.
+fn alt_only(m: &Modifiers) -> bool {
+    m.alt && !m.ctrl && !m.shift && !m.command && !m.mac_cmd
+}
+
 /// Alt+numpad entry (#961): digits typed with Alt alone held collect; releasing Alt types the
 /// character their code names (`text.typeCode`: 0233 → é, 233 → Θ in code page 437). Returns
 /// whether the event was part of it (and isn't handled otherwise).
 pub(super) fn alt_code_event(app: &mut WordApp, e: &egui::Event) -> bool {
-    let alt_only = |m: &Modifiers| m.alt && !m.ctrl && !m.shift && !m.command && !m.mac_cmd;
     match e {
         egui::Event::Key { key, pressed: true, repeat, modifiers, .. } if alt_only(modifiers) => match alt_code_digit(*key) {
             // A held digit's auto-repeat adds nothing (as on Windows).
@@ -130,4 +134,116 @@ pub(super) fn alt_code_echoed(app: &mut WordApp, echo: &AltCodeEcho, text: &str)
         }
     }
     true
+}
+
+/// Alt+numpad entry in the focused text box (Find what, a dialog's fields, the ribbon's boxes);
+/// the page has its own ([`alt_code_event`]), #4403.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FieldAltCode {
+    /// The digits typed while Alt is held.
+    code: String,
+    /// The last digit's own text (Linux sends it with Alt held) isn't typed.
+    swallow_text: bool,
+    /// What the last code typed, for the platform's own composed character that may follow.
+    echo: Option<AltCodeEcho>,
+}
+
+/// The character an Alt code names in the code pages the page uses for it: the system locale's
+/// on Windows, else `text.typeCode`'s defaults (Windows-1252 and the locale's OEM page).
+fn field_code_char(code: &str) -> Option<char> {
+    use wordcraft_engine::cmd::text::{alt_code_char, system_code_pages, system_oem_code_page};
+    let (ansi, oem) = if cfg!(target_os = "windows") { system_code_pages() } else { (1252, system_oem_code_page()) };
+    alt_code_char(code, ansi, oem)
+}
+
+/// Whether `e` lets go of Alt: its key's release, or modifiers without it.
+fn alt_released(e: &egui::Event) -> bool {
+    match e {
+        egui::Event::Key { key: Key::AltLeft | Key::AltRight, pressed: false, .. } => true,
+        egui::Event::ModifiersChanged(m) => !m.alt,
+        _ => false,
+    }
+}
+
+/// Alt codes in the focused text box, as on the page (#4403). Rewrites this frame's input before
+/// the box reads it: the digits typed with Alt held type nothing (Linux sends their text), and
+/// letting go of Alt types the code's character. A platform that composes the code itself
+/// (Windows) sends its character after that: the same character isn't typed twice, and for a
+/// code up to 255 the system's character replaces ours, as on the page ([`alt_code_echoed`]).
+pub(crate) fn field_alt_codes(app: &mut WordApp, ctx: &egui::Context) {
+    if !alt_codes_supported(ctx) || app.canvas.focused || !ctx.text_edit_focused() {
+        app.canvas.field_alt_code = FieldAltCode::default();
+        return;
+    }
+    let st = &mut app.canvas.field_alt_code;
+    let events = ctx.input(|i| i.events.clone());
+    let mut out = Vec::with_capacity(events.len() + 1);
+    let mut changed = false;
+    for e in events {
+        match &e {
+            egui::Event::Key { key, pressed: true, repeat, modifiers, .. } => {
+                st.swallow_text = false;
+                st.echo = None;
+                match alt_code_digit(*key).filter(|_| alt_only(modifiers)) {
+                    Some(d) => {
+                        // A held digit's auto-repeat adds nothing; past seven digits a code
+                        // names nothing, so stop collecting rather than grow.
+                        if !*repeat && st.code.len() < 8 {
+                            st.code.push(d);
+                        }
+                        st.swallow_text = true;
+                    }
+                    // Another key (Alt itself, a letter, a digit with Ctrl) ends the entry.
+                    None => st.code.clear(),
+                }
+            }
+            egui::Event::Text(_) if std::mem::take(&mut st.swallow_text) => {
+                changed = true;
+                continue;
+            }
+            egui::Event::Text(t) => {
+                if let Some(echo) = st.echo.take()
+                    && (echo.typed == *t || echo.system_composes)
+                {
+                    changed = true;
+                    if echo.typed != *t && echo.byte_code && t.chars().count() == 1 {
+                        // Ours was typed just before, with no key or click since: take it back.
+                        out.push(egui::Event::Key {
+                            key: Key::Backspace,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        });
+                        out.push(e);
+                    }
+                    continue;
+                }
+            }
+            egui::Event::PointerButton { pressed: true, .. } => st.echo = None,
+            // Focus elsewhere (another window) ends an Alt code unfinished.
+            egui::Event::WindowFocused(false) => st.code.clear(),
+            _ => {}
+        }
+        let released = alt_released(&e);
+        out.push(e);
+        if released && !st.code.is_empty() {
+            let code = std::mem::take(&mut st.code);
+            let system_composes = cfg!(target_os = "windows");
+            // A digit's own text comes with its key, before Alt is let go: text after this is
+            // the system's composed character (Windows), also for a code we name no character
+            // for (a double-byte lead byte, say), or what is typed next. A digit that sent no
+            // text must not cost it.
+            st.swallow_text = false;
+            if let Some(c) = field_code_char(&code) {
+                let byte_code = code.trim_start_matches('0').parse::<u32>().is_ok_and(|v| v <= 255);
+                st.echo = Some(AltCodeEcho { typed: c.to_string(), system_composes, byte_code });
+                out.push(egui::Event::Text(c.to_string()));
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        ctx.input_mut(|i| i.events = out);
+    }
 }
