@@ -693,6 +693,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     if env.doc.settings.word_thai_breaks {
         keep_plain_thai_whole(&mut sh.b.clusters, &sh.b.styles, &p.text);
+        keep_plain_stops_with_latin(&mut sh.b.clusters, &sh.b.styles, &p.text);
     }
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
@@ -840,6 +841,22 @@ fn keep_plain_thai_whole(clusters: &mut [Cluster], styles: &[super::model::Style
     for k in 1..clusters.len() {
         if clusters[k - 1].break_after && plain(&clusters[k - 1]) && plain(&clusters[k]) {
             clusters[k - 1].break_after = false;
+        }
+    }
+}
+
+/// A full stop in a run that isn't complex script keeps a Latin letter or digit after it: measured
+/// in Word for Windows, "พ.ศ" + "." + "2564" (the stop and the year in plain runs) doesn't break
+/// after the stop, while a `w:cs` stop does ("พ.ศ." | "2564"), and a plain stop before Thai does
+/// ("แล้ว." | "ต่อไป"). Only for documents read from Word files.
+fn keep_plain_stops_with_latin(clusters: &mut [Cluster], styles: &[super::model::StyleRun], text: &str) {
+    for c in clusters.iter_mut() {
+        if c.break_after
+            && text.get(c.start..c.end) == Some(".")
+            && styles.get(c.style as usize).is_some_and(|s| !s.rc.cs && !s.rc.rtl)
+            && text.get(c.end..).and_then(|t| t.chars().next()).is_some_and(|n| n.is_alphanumeric() && !matches!(n, '\u{0E00}'..='\u{0E7F}'))
+        {
+            c.break_after = false;
         }
     }
 }

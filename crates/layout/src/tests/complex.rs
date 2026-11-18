@@ -491,3 +491,28 @@ fn a_long_plain_thai_run_in_a_word_file_still_wraps() {
     let shown: String = pl.lines.iter().map(|l| &text[l.start..l.stop]).collect();
     assert_eq!(shown, text, "no text is lost");
 }
+
+/// Measured in Word for Windows (runs as in a real file, the year in a plain run): a `w:cs` stop
+/// breaks before the year ("พ.ศ." | "2564"), a plain one doesn't, and a plain stop before Thai
+/// still does ("แล้ว." | "ต่อไป").
+#[test]
+fn a_plain_full_stop_keeps_a_year_after_it_in_word_files() {
+    let break_after_stop = |runs: &[(&str, bool)]| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.text = runs.iter().map(|(t, _)| *t).collect();
+        p.runs = runs
+            .iter()
+            .map(|&(t, cs)| wordcraft_doc::Run { len: t.len(), props: wordcraft_doc::CharProps { cs: Some(cs), ..Default::default() } })
+            .collect();
+        let text = p.text.clone();
+        let mut d = Document::from_text("");
+        d.settings.word_thai_breaks = true;
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let pl = para_layout(&l, 0);
+        pl.clusters.iter().any(|c| c.break_after && text.get(c.start..c.end) == Some("."))
+    };
+    assert!(break_after_stop(&[("ประกาศพ.ศ.", true), ("2564", false), ("เรื่องงานบริหาร", true)]), "a w:cs stop");
+    assert!(!break_after_stop(&[("ประกาศพ.ศ", true), (".", false), ("2564", false), ("เรื่องงานบริหาร", true)]), "a plain stop");
+    assert!(break_after_stop(&[("งานจบแล้ว", true), (".", false), ("ต่อไปอีกนาน", true)]), "a plain stop before Thai");
+}
