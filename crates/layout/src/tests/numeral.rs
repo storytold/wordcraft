@@ -117,6 +117,7 @@ fn resolve_uses_the_given_system_locale() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn context_mode_on_a_very_long_digit_run_stays_linear() {
     crate::test_fonts();
     // Every digit used to scan back over all the digits and spaces before it (O(n²)).
