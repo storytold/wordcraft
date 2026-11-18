@@ -18,11 +18,13 @@ fn peer_text_stays_on_one_visible_line() {
 fn validators_accept_only_the_documented_options() {
     assert!(validate_options("info", &args(&["file.docx"]), PASSWORD_OPTIONS).is_ok());
     assert!(validate_options("render", &args(&["in.docx", "out.png", "--page", "2", "--scale", "1.5"]), RENDER_OPTIONS).is_ok());
+    assert!(validate_options("render", &args(&["in.docx", "out.png", "--scale", "-2"]), RENDER_OPTIONS).is_ok());
     assert!(validate_options("run", &args(&["--cmd", "text.insert={}", "--cmd", "edit.undo", "--print"]), RUN_OPTIONS).is_ok());
+    assert!(validate_options("run", &args(&["--script", "-"]), RUN_OPTIONS).is_ok());
+    assert!(validate_options("info", &args(&["file.docx", "--password", ""]), PASSWORD_OPTIONS).is_ok());
     assert!(validate_options("commands", &args(&["--json"]), COMMANDS_OPTIONS).is_ok());
     assert!(validate_options("parity", &args(&["--markdown"]), PARITY_OPTIONS).is_ok());
     assert!(validate_options("mcp", &args(&["--connect", "127.0.0.1:9000"]), MCP_OPTIONS).is_ok());
-    assert!(validate_options("render", &args(&["in.docx", "out.png", "--page"]), RENDER_OPTIONS).is_ok());
     assert!(
         validate_options(
             "zotero",
@@ -31,6 +33,24 @@ fn validators_accept_only_the_documented_options() {
         )
         .is_ok()
     );
+}
+
+#[test]
+fn missing_option_values_do_not_select_defaults_or_consume_another_option() {
+    for options in [vec!["--connect"], vec!["--connect", "--author", "Reviewer"]] {
+        assert_eq!(validate_options("mcp", &args(&options), MCP_OPTIONS), Err("mcp: --connect requires a value".into()), "{options:?}");
+    }
+    for options in [vec!["--save"], vec!["--save", "--print"]] {
+        assert_eq!(validate_options("run", &args(&options), RUN_OPTIONS), Err("run: --save requires a value".into()), "{options:?}");
+    }
+    assert_eq!(validate_options("render", &args(&["in.docx", "out.png", "--page"]), RENDER_OPTIONS), Err("render: --page requires a value".into()));
+}
+
+#[test]
+fn run_requires_a_save_path_before_executing_commands() {
+    for argv in [vec!["run", "--save"], vec!["run", "--save", "--print"], vec!["run", "--cmd", "no.such.command", "--save"]] {
+        assert_eq!(run(&args(&argv)), Err("run: --save requires a value".into()), "{argv:?}");
+    }
 }
 
 #[test]
