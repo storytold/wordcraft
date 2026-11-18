@@ -2887,43 +2887,54 @@ fn duplicate_move_start_id_fires() {
     assert_finding(&report, "STRUCT-MOVE-UNPAIRED", Some("word/document.xml"));
 }
 
-#[test]
-fn custom_xml_schema_unattached() {
+fn custom_xml_schema_doc(attached: bool) -> Doc {
     let mut d = Doc::minimal();
     d.add_with_override(
         "customXml/itemProps1.xml",
         CT_CUSTOMXML_PROPS,
         format!(
-            r#"<?xml version="1.0"?><ds:datastoreItem xmlns:ds="{DS_NS}" ds:itemID="{{X}}"><ds:schemaRefs><ds:schemaRef ds:uri="http://example.com/ns"/></ds:schemaRefs></ds:datastoreItem>"#
+            r#"<ds:datastoreItem xmlns:ds="{DS_NS}" ds:itemID="{{00000000-0000-0000-0000-000000000001}}"><ds:schemaRefs><ds:schemaRef ds:uri="urn:example:custom"/></ds:schemaRefs></ds:datastoreItem>"#
         ),
     );
-    d.add_with_override("word/settings.xml", CT_SETTINGS, format!(r#"<?xml version="1.0"?><w:settings xmlns:w="{W_NS}"/>"#));
-    let report = validate(&d);
-    assert_eq!(report.verdict, Verdict::Fail);
-    let f = assert_finding(&report, "CUSTOMXML-SCHEMA", Some("customXml/itemProps1.xml"));
-    assert_eq!(f.evidence, wordcraft_validate::Evidence::MsDocumented);
+    d.set("customXml/item1.xml", r#"<item xmlns="urn:example:custom"/>"#);
+    d.set(
+        "customXml/_rels/item1.xml.rels",
+        rels_xml(
+            r#"<Relationship Id="rProps" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps" Target="itemProps1.xml"/>"#,
+        ),
+    );
+    let schema = if attached { r#"<w:attachedSchema w:val="urn:example:custom"/>"# } else { "" };
+    d.add_with_override("word/settings.xml", CT_SETTINGS, format!(r#"<w:settings xmlns:w="{W_NS}">{schema}</w:settings>"#));
+    d.set_doc_rels(concat!(
+        r#"<Relationship Id="rSet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>"#,
+        r#"<Relationship Id="rXml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../customXml/item1.xml"/>"#,
+    ));
+    d
+}
+
+fn unattached_schema_notes(report: &Report) -> impl Iterator<Item = &str> {
+    report.coverage_notes.iter().map(String::as_str).filter(|note| note.ends_with("which is not attached in settings.xml"))
+}
+
+#[test]
+fn custom_xml_schema_unattached() {
+    let report = validate(&custom_xml_schema_doc(false));
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    assert_clean(&report);
+    assert!(!has(&report, "CUSTOMXML-SCHEMA"), "{report:?}");
+    assert!(report.checks_run.contains(&"CUSTOMXML-SCHEMA"), "{report:?}");
+    assert_eq!(
+        unattached_schema_notes(&report).collect::<Vec<_>>(),
+        ["custom XML part customXml/itemProps1.xml declares schema urn:example:custom, which is not attached in settings.xml"]
+    );
 }
 
 #[test]
 fn custom_xml_schema_attached_does_not_fire() {
-    let mut d = Doc::minimal();
-    d.add_with_override(
-        "customXml/itemProps1.xml",
-        CT_CUSTOMXML_PROPS,
-        format!(
-            r#"<?xml version="1.0"?><ds:datastoreItem xmlns:ds="{DS_NS}" ds:itemID="{{X}}"><ds:schemaRefs><ds:schemaRef ds:uri="http://example.com/ns"/></ds:schemaRefs></ds:datastoreItem>"#
-        ),
-    );
-    d.add_with_override(
-        "word/settings.xml",
-        CT_SETTINGS,
-        format!(r#"<?xml version="1.0"?><w:settings xmlns:w="{W_NS}"><w:attachedSchema w:val="http://example.com/ns"/></w:settings>"#),
-    );
-    d.set_doc_rels(
-        r#"<Relationship Id="rSet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>"#,
-    );
-    let report = validate(&d);
-    assert!(!has(&report, "CUSTOMXML-SCHEMA"), "{:?}", report.findings);
+    let report = validate(&custom_xml_schema_doc(true));
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    assert!(!has(&report, "CUSTOMXML-SCHEMA"), "{report:?}");
+    assert!(unattached_schema_notes(&report).next().is_none(), "{report:?}");
 }
 
 #[test]
@@ -3129,7 +3140,7 @@ fn unreadable_content_types_does_not_fire_typed_relationships() {
 
 /// §1 canary (c): an unreadable owner `.rels` (`word/_rels/document.xml.rels`) in a package whose
 /// customXml part carries a schema reference the settings part would satisfy must not report
-/// CUSTOMXML-SCHEMA. The settings part is discovered through that `.rels`; when it cannot be read,
+/// the reference as unattached. The settings part is discovered through that `.rels`; when it cannot be read,
 /// the attached-schema set is unknown, not empty, so the schema conclusion is skipped and the run is
 /// INCOMPLETE.
 #[test]
@@ -3154,16 +3165,14 @@ fn unreadable_owner_rels_does_not_fire_custom_xml_schema() {
     let zip = claim_entry_method(&d.build(), "word/_rels/document.xml.rels", 12);
     let report = validate_bytes(&zip);
     assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
-    assert!(!has(&report, "CUSTOMXML-SCHEMA"), "an unreadable owner .rels must not make an attached schema look unattached: {:?}", report.findings);
+    assert!(!has(&report, "CUSTOMXML-SCHEMA"), "{report:?}");
+    assert!(unattached_schema_notes(&report).next().is_none(), "an unreadable owner .rels leaves attachment unknown: {report:?}");
 }
 
 /// §1 by-construction guard: with no owner scope (no main part), the discovery source for settings
 /// is the manifest; when both `_rels/.rels` and `[Content_Types].xml` are unreadable, no main part
-/// exists and the no-owner scope applies, and a customXml part carrying a schema reference must not
-/// fire CUSTOMXML-SCHEMA — the predicate pushes `None` (skip) instead of an empty schema set. Note
-/// this test cannot distinguish the guard by mutation: the second loop enumerates customXml parts by
-/// content type (lib.rs), so an unreadable manifest enumerates none and the false finding cannot
-/// arise either way. It pins the invariant the guard keeps by construction.
+/// exists and the no-owner scope applies. The predicate skips the check since the attached-schema
+/// set is unknown. An unreadable manifest also leaves no typed customXml parts to check.
 #[test]
 fn no_owner_manifest_unavailable_does_not_fire_custom_xml_schema() {
     let mut d = Doc::minimal();
@@ -3185,7 +3194,8 @@ fn no_owner_manifest_unavailable_does_not_fire_custom_xml_schema() {
     let zip = claim_entry_method(&zip, "[Content_Types].xml", 12);
     let report = validate_bytes(&zip);
     assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
-    assert!(!has(&report, "CUSTOMXML-SCHEMA"), "an unreadable manifest must not make an attached schema look unattached: {:?}", report.findings);
+    assert!(!has(&report, "CUSTOMXML-SCHEMA"), "{report:?}");
+    assert!(unattached_schema_notes(&report).next().is_none(), "an unreadable manifest leaves attachment unknown: {report:?}");
 }
 
 /// Opus N5: the "custom XML schema references were not checked" note is recorded only for an owner
@@ -3563,7 +3573,7 @@ fn glossary_dangling_comment_reference_fires_at_glossary_part() {
 }
 
 #[test]
-fn renamed_item_props_part_gets_schema_finding() {
+fn renamed_item_props_part_gets_schema_note() {
     let mut d = Doc::minimal();
     d.set("[Content_Types].xml", content_types_xml(&[], &[("/customXml/props.xml", CT_CUSTOMXML_PROPS)]));
     d.set(
@@ -3575,8 +3585,8 @@ fn renamed_item_props_part_gets_schema_finding() {
     );
     d.add_with_override("word/settings.xml", CT_SETTINGS, format!(r#"<?xml version="1.0"?><w:settings xmlns:w="{W_NS}"/>"#));
     let report = validate(&d);
-    assert_eq!(report.verdict, Verdict::Fail);
-    assert_finding(&report, "CUSTOMXML-SCHEMA", Some("customXml/props.xml"));
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    assert!(unattached_schema_notes(&report).any(|note| note.starts_with("custom XML part customXml/props.xml ")), "{report:?}");
 }
 
 #[test]
@@ -3851,8 +3861,8 @@ fn custom_xml_props_part_named_without_xml_is_decoded_by_content_type() {
     );
     d.add_with_override("word/settings.xml", CT_SETTINGS, format!(r#"<?xml version="1.0"?><w:settings xmlns:w="{W_NS}"/>"#));
     let report = validate(&d);
-    assert_eq!(report.verdict, Verdict::Fail, "findings: {:?}", report.findings);
-    assert_finding(&report, "CUSTOMXML-SCHEMA", Some("customXml/props.dat"));
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    assert!(unattached_schema_notes(&report).any(|note| note.starts_with("custom XML part customXml/props.dat ")), "{report:?}");
 }
 
 #[test]
@@ -4050,9 +4060,12 @@ fn custom_xml_schemas_are_checked_per_owner() {
             d.entries.reverse();
         }
         let report = validate(&d);
-        assert_eq!(report.verdict, Verdict::Fail, "reverse {reverse}: {:?}", report.findings);
-        assert_finding(&report, "CUSTOMXML-SCHEMA", Some("customXml/itemPropsMain.xml"));
-        assert_finding(&report, "CUSTOMXML-SCHEMA", Some("customXml/itemPropsGloss.xml"));
+        assert_eq!(report.verdict, Verdict::Fail, "reverse {reverse}: {report:?}");
+        assert_eq!(report.findings.len(), 1, "{report:?}");
+        assert_finding(&report, "CT-MISMATCH", Some("customXml/itemPropsGloss.xml"));
+        for part in ["customXml/itemPropsMain.xml", "customXml/itemPropsGloss.xml"] {
+            assert!(unattached_schema_notes(&report).any(|note| note.starts_with(&format!("custom XML part {part} "))), "{report:?}");
+        }
     }
 }
 
@@ -5423,15 +5436,19 @@ fn round4_shared_custom_xml() {
     let single = validate_bytes(&d.build());
     assert_eq!(single.verdict, Verdict::Pass, "{single:?}");
     assert!(!has(&single, "CUSTOMXML-SCHEMA"), "{single:?}");
+    assert!(unattached_schema_notes(&single).next().is_none(), "{single:?}");
     round3_add_rel(&mut d, "glossary", "rH", "header", "shared-header.xml");
     let shared = validate_bytes(&d.build());
-    assert_eq!(shared.verdict, Verdict::Fail, "{shared:?}");
-    assert_eq!(shared.findings.iter().filter(|f| f.rule == "CUSTOMXML-SCHEMA").count(), 1, "{shared:?}");
-    assert_finding(&shared, "CUSTOMXML-SCHEMA", Some("customXml/itemProps.xml"));
+    assert_eq!(shared.verdict, Verdict::Pass, "{shared:?}");
+    assert_eq!(
+        unattached_schema_notes(&shared).collect::<Vec<_>>(),
+        ["custom XML part customXml/itemProps.xml declares schema urn:shared, which is not attached in settings.xml"]
+    );
     d.set("word/gloss-settings.xml", format!(r#"<w:settings xmlns:w="{W_NS}"><w:attachedSchema w:val="urn:shared"/></w:settings>"#));
     let satisfied = validate_bytes(&d.build());
     assert_eq!(satisfied.verdict, Verdict::Pass, "{satisfied:?}");
     assert!(!has(&satisfied, "CUSTOMXML-SCHEMA"), "{satisfied:?}");
+    assert!(unattached_schema_notes(&satisfied).next().is_none(), "{satisfied:?}");
 }
 
 // Round 6: relationship classification and the unsupported Strict profile.

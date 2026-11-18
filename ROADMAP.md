@@ -1,7 +1,7 @@
 # WordCraft roadmap
 
 
-> **Validation status:** 2026-11-12 · minor · #5875 round 18: package entry and availability lookups carry explicit absence/unknown states; the observation gate resolves bounded helper/accessor aliases and pins completeness predicates and reader derives. Qualified standard macros and four inert attributes are supported; named-field bindings and trait bodies remain closed grammar. Synthetic controls only; independent endpoint review remains required and readiness estimates are unchanged.
+> **Validation status:** 2026-11-18 · trivial · DOCX validation reports unattached custom XML schemas in coverage notes. Inline custom XML inside revision or move wrappers still fails under `CUSTOMXML-SCHEMA`. Independent endpoint review remains open.
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
@@ -152,6 +152,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- 2026-11-18: DOCX validation reports unattached custom XML schemas in coverage notes because desktop Word opens packages with those references cleanly. Inline custom XML inside revision or move wrappers still fails under `CUSTOMXML-SCHEMA`.
 
 - 2026-10-30: Home › Paste is named "Paste" for screen readers: its hint adds the key as the platform writes it ("Paste (Ctrl+V)" on Windows and Linux), where the name carried macOS's "⌘V" on every platform. The status bar's page count hints Go To with the platform's key too. Readiness estimates unchanged.
 
@@ -953,6 +955,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | trivial | DOCX validation reports unattached custom XML schemas in coverage notes. Inline custom XML inside revision or move wrappers still fails under `CUSTOMXML-SCHEMA`. |
 | 2026-11-12 | minor | #5875 round 15: gate every owner root, report unresolved custom-property checks, suppress unused-comment absence on incomplete memberships, count unowned exclusions as out of scope, and harden the lexical contract gate; synthetic controls only, readiness estimates unchanged |
 | 2026-11-12 | minor | #5875 W2: roots, profile and supporting sources use explicit resolution states; content-type fallback rejects competing candidates. Remaining redesign work is outstanding; synthetic controls only. |
 | 2026-11-12 | minor | Validator representation lane: decimal/hex identity keys and lexical relationship/style types; ownership migration stopped before changing seven conflicting existing test expectations (#5875). Synthetic controls; no readiness estimate changed. |

@@ -479,8 +479,9 @@ pub(crate) const STRUCT_DELTEXT: RuleSpec = RuleSpec { id: "STRUCT-DELTEXT", sev
 /// `STRUCT-MOVE-UNPAIRED`: unpaired move range starts/ends, mismatched move names, or duplicate
 /// move range-start ids. Observed (web): move semantics silently dropped, so Warning.
 pub(crate) const STRUCT_MOVE_UNPAIRED: RuleSpec = RuleSpec { id: "STRUCT-MOVE-UNPAIRED", severity: Severity::Warning, evidence: Evidence::Observed };
-/// `CUSTOMXML-SCHEMA`: a custom-XML schema reference not attached in settings, or inline
-/// `w:customXml` inside a revision/move wrapper. MS-OI29500: Word will not open.
+/// `CUSTOMXML-SCHEMA`: inline `w:customXml` inside a revision or move wrapper. MS-OI29500
+/// documents that Word will not open it. Desktop Word opens files with unattached custom XML
+/// schema references cleanly, so those references are reported as informational coverage.
 pub(crate) const CUSTOMXML_SCHEMA: RuleSpec = RuleSpec { id: "CUSTOMXML-SCHEMA", severity: Severity::Error, evidence: Evidence::MsDocumented };
 /// `MEDIA-MAGIC`: an image whose bytes do not match its extension/type. Observed: Word web opens
 /// but the picture does not render — content lost, no format-sniffing rescue.
@@ -2675,7 +2676,7 @@ fn report_unreferenced_comments(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         collections: "access.into_complete_set*1,access.missing*1,access.prefix*2,field.comment_defs*1,field.comment_refs*2,field.contexts*3,field.entries*1,type.HashMap*1,type.HashSet*3,type.Observed*1";
         scope: "DECLARED EXCEPTION: PackageRegistryContext for established-unowned own declarations; reached declarations keep their selected registry; never grants story ownership";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap; ownership discovery loss; graph traversal/fanout budget";
-        fallback: "unknown membership or registry source suppresses dependent absence; custom-XML Errors and informational unused-comment coverage retain the shipped package-registry policy";
+        fallback: "unknown membership or registry source suppresses dependent absence; informational coverage retains the package-registry policy";
         package_loss: "independent";
     }
 
@@ -3767,14 +3768,14 @@ fn read_comments_ids(entry: &package::Entry, xml: &XmlScan, cap: usize, acc: &mu
     Some((entry.name.clone(), ids, !capped))
 }
 
-/// Verify that custom XML itemProperties parts only reference schemas declared in settings.xml.
+/// Report custom XML item-properties schema references missing from settings.xml as coverage.
 fn check_custom_xml(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     observation_contract! {
         rules: "CUSTOMXML-SCHEMA";
         collections: "access.into_complete_set*2,access.missing*1,field.content_types*3,field.contexts*2,field.entries*3,lookup.content_unavailable*1,parser.parse_attached_schemas*1,parser.parse_custom_xml_schemas*1,type.CompleteSet*1,type.HashSet*3,type.Observed*2,type.Vec*3";
         scope: "DECLARED EXCEPTION: PackageRegistryContext for established-unowned own declarations; reached declarations keep their selected registry; never grants story ownership";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
-        fallback: "unknown membership or registry source suppresses dependent absence; custom-XML Errors and informational unused-comment coverage retain the shipped package-registry policy";
+        fallback: "unknown membership or registry source suppresses dependent absence; informational coverage retains the package-registry policy";
         package_loss: "CUSTOMXML-SCHEMA";
     }
 
@@ -3914,12 +3915,9 @@ fn check_custom_xml(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
             acc.set_incomplete();
         }
         for uri in uris {
-            if schemas.iter().any(|set| set.missing(&uri)) {
-                acc.add(
-                    "CUSTOMXML-SCHEMA",
-                    Some(e.name.clone()),
-                    format!("custom XML part {} declares schema {uri}, which is not attached in settings.xml", e.name),
-                );
+            // Unknown package identity still prevents proving that a schema is unattached.
+            if schemas.iter().any(|set| set.missing(&uri)) && !acc.absence_suppressed(CUSTOMXML_SCHEMA.id, CUSTOMXML_SCHEMA.severity) {
+                acc.note(format!("custom XML part {} declares schema {uri}, which is not attached in settings.xml", e.name));
             }
         }
     }
@@ -5661,7 +5659,10 @@ mod round5_completeness_tests {
         let report = validate_bytes_limited(&bytes, Limits { facts: 1, ..Limits::default() });
         eprintln!("schema cap: {report:?}");
         assert!(!report.findings.iter().any(|f| f.rule == "CUSTOMXML-SCHEMA"), "{report:?}");
-        assert!(!validate_bytes(&bytes).findings.iter().any(|f| f.rule == "CUSTOMXML-SCHEMA"));
+        assert!(!report.coverage_notes.iter().any(|n| n.ends_with("which is not attached in settings.xml")), "{report:?}");
+        let complete = validate_bytes(&bytes);
+        assert!(!complete.findings.iter().any(|f| f.rule == "CUSTOMXML-SCHEMA"), "{complete:?}");
+        assert!(!complete.coverage_notes.iter().any(|n| n.ends_with("which is not attached in settings.xml")), "{complete:?}");
     }
 
     /// Threading joins use each direction's definition completeness, including missing parse results.
@@ -5771,6 +5772,9 @@ mod round5_completeness_tests {
             eprintln!("unclosed {kind}: {report:?}");
             if report.findings.iter().any(|f| f.rule == rule) {
                 manufactured.push(kind);
+            }
+            if kind == "settings" {
+                assert!(!report.coverage_notes.iter().any(|n| n.ends_with("which is not attached in settings.xml")), "{report:?}");
             }
             assert!(report.findings.iter().any(|f| f.rule == "XML-MALFORMED"), "{report:?}");
         }
@@ -5975,7 +5979,10 @@ mod round5_completeness_tests {
         for part in ["word/header.xml", "word/styles.xml", "word/numbering.xml"] {
             assert!(report.findings.iter().any(|f| f.rule == "NUM-DANGLING" && f.part.as_deref() == Some(part)), "{report:?}");
         }
-        assert!(report.findings.iter().any(|f| f.rule == "CUSTOMXML-SCHEMA"), "{report:?}");
+        assert!(
+            report.coverage_notes.iter().any(|n| n == "custom XML part word/props.xml declares schema urn:B, which is not attached in settings.xml"),
+            "{report:?}"
+        );
     }
 
     /// An unexamined content-type declaration cannot establish that an owner is non-XML.
@@ -6472,9 +6479,18 @@ mod round7_owner_discovery_tests {
                 ("word/ids.xml", package::COMMENTS_IDS_CONTENT_TYPE, r#"<w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid"><w16cid:commentId w16cid:paraId="00000004" w16cid:durableId="00000001"/></w16cid:commentsIds>"#.into()),
             ], rel("header", "header.xml") + &rel("styles", "styles.xml") + &rel("numbering", "numbering.xml") + &rel("comments", "comments.xml") + &rel("footnotes", "footnotes.xml") + &rel("endnotes", "endnotes.xml") + &rel("settings", "settings.xml") + &rel("customXmlProps", "props.xml") + &rel("commentsExtended", "ex.xml") + &rel("commentsIds", "ids.xml"));
             let report = validate_bytes(&bytes);
-            for (rule, count) in [("ID-COMMENT-REF", 1), ("REF-NOTE", 2), ("REF-STYLE", 1), ("NUM-DANGLING", 3), ("CUSTOMXML-SCHEMA", 1)] {
+            for (rule, count) in [("ID-COMMENT-REF", 1), ("REF-NOTE", 2), ("REF-STYLE", 1), ("NUM-DANGLING", 3)] {
                 assert_eq!(report.findings.iter().filter(|f| f.rule == rule).count(), count, "{mode}: {report:?}");
             }
+            assert_eq!(
+                report
+                    .coverage_notes
+                    .iter()
+                    .filter(|n| *n == "custom XML part word/props.xml declares schema urn:Missing, which is not attached in settings.xml")
+                    .count(),
+                1,
+                "{mode}: {report:?}"
+            );
             for message in ["paraIdParent 00000008", "commentsIds paraId 00000004 has no commentEx", "commentEx paraId 00000003 has no commentsIds"] {
                 assert!(report.findings.iter().any(|f| f.message.contains(message)), "{mode}: {report:?}");
             }
@@ -6828,9 +6844,18 @@ mod round8_fallback_contributor_tests {
                 ("word/ids.xml", package::COMMENTS_IDS_CONTENT_TYPE, r#"<w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid"><w16cid:commentId w16cid:paraId="00000004" w16cid:durableId="00000001"/></w16cid:commentsIds>"#.into()),
             ], rel("header", "header.xml") + &rel("styles", "styles.xml") + &rel("numbering", "numbering.xml") + &rel("comments", "comments.xml") + &rel("footnotes", "footnotes.xml") + &rel("endnotes", "endnotes.xml") + &rel("settings", "settings.xml") + &rel("customXmlProps", "props.xml") + &rel("commentsExtended", "ex.xml") + &rel("commentsIds", "ids.xml"));
             let report = validate_bytes(&bytes);
-            for (rule, count) in [("ID-COMMENT-REF", 1), ("REF-NOTE", 2), ("REF-STYLE", 1), ("NUM-DANGLING", 3), ("CUSTOMXML-SCHEMA", 1)] {
+            for (rule, count) in [("ID-COMMENT-REF", 1), ("REF-NOTE", 2), ("REF-STYLE", 1), ("NUM-DANGLING", 3)] {
                 assert_eq!(report.findings.iter().filter(|f| f.rule == rule).count(), count, "{mode}: {report:?}");
             }
+            assert_eq!(
+                report
+                    .coverage_notes
+                    .iter()
+                    .filter(|n| *n == "custom XML part word/props.xml declares schema urn:Missing, which is not attached in settings.xml")
+                    .count(),
+                1,
+                "{mode}: {report:?}"
+            );
             for message in ["paraIdParent 00000008", "commentsIds paraId 00000004 has no commentEx", "commentEx paraId 00000003 has no commentsIds"] {
                 assert!(report.findings.iter().any(|f| f.message.contains(message)), "{mode}: {report:?}");
             }

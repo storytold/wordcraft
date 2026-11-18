@@ -241,7 +241,20 @@ fn styles_fonts_numbering_and_schemas_do_not_use_competing_sources_in_either_ord
                 d.add_with_override("word/b.xml", ct, b);
                 d.set_doc_rels(&pair(kind, reverse, same));
                 let report = validate_bytes(&d.build());
-                if same {
+                if kind == "settings" {
+                    assert!(findings(&report, &rules).is_empty(), "{report:?}");
+                    assert_eq!(
+                        report
+                            .coverage_notes
+                            .iter()
+                            .any(|n| n == "custom XML part word/item.xml declares schema urn:missing, which is not attached in settings.xml"),
+                        same,
+                        "{report:?}"
+                    );
+                    if !same {
+                        unknown(&report, kind, &rules);
+                    }
+                } else if same {
                     assert!(!findings(&report, &rules).is_empty(), "{report:?}");
                 } else {
                     unknown(&report, kind, &rules);
