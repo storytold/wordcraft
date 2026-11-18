@@ -61,6 +61,7 @@ fn rotated_marks(draws: &[display::Draw]) -> Vec<(String, f32, f32, f32)> {
 
 #[test]
 fn top_to_bottom_section_stacks_lines_from_the_right() {
+    crate::test_fonts();
     let d = vertical_doc(TextDirection::Down);
     let l = lay(&d);
     let page = &l.pages[0];
@@ -101,6 +102,7 @@ fn top_to_bottom_section_stacks_lines_from_the_right() {
 
 #[test]
 fn bottom_to_top_section_stacks_lines_from_the_left() {
+    crate::test_fonts();
     let l = lay(&vertical_doc(TextDirection::Up));
     assert!(body_lines(&l).iter().all(|(.., t)| *t == TextDirection::Up));
     let c0 = l.caret(&Pos::body(0, 0)).unwrap();
@@ -112,6 +114,7 @@ fn bottom_to_top_section_stacks_lines_from_the_left() {
 
 #[test]
 fn east_asian_characters_stand_upright_in_top_to_bottom_text() {
+    crate::test_fonts();
     let l = lay(&vertical_doc(TextDirection::Down));
     let d = vertical_doc(TextDirection::Down);
     let draws = display::page_display(&d, &l.pages[0], &Default::default());
@@ -388,6 +391,7 @@ fn tate_chu_yoko_keeps_a_multi_glyph_cluster_in_one_slot() {
 
 #[test]
 fn headers_stay_horizontal_and_a_vertical_section_starts_a_page() {
+    crate::test_fonts();
     use wordcraft_doc::section::SectionStart;
     let mut d = Document::from_text("Horizontal\nVertical");
     // Section 1 ends after paragraph 0 (continuous), section 2 is vertical.
