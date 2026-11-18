@@ -168,9 +168,9 @@ pub(crate) const MAX_NOTE_PAGES: usize = 10_000;
 pub(crate) struct NoteBox {
     pub(crate) id: u32,
     pub(crate) items: Vec<Placed>,
-    /// Its In Front of Text objects, laid out like `items`: the page draws them over all of its
-    /// text, the notes after this one too (#1993).
-    pub(crate) on_top: Vec<Placed>,
+    /// Its non-behind floating objects, laid out like `items` with their `relativeHeight` (`z`):
+    /// the page draws them over all of its text, the notes after this one too (#1993).
+    pub(crate) on_top: Vec<(Option<u32>, Placed)>,
     pub(crate) h: f32,
     /// The rest of a note that didn't fit on an earlier page (drawn below the continuation
     /// separator).
@@ -259,12 +259,12 @@ impl NoteBox {
                 other => head.push(other),
             }
         }
-        // In Front of Text objects stay above unless they start below the cut, as other objects do.
-        let (top_head, mut top_tail): (Vec<_>, Vec<_>) = self.on_top.into_iter().partition(|it| v_span(it).0 < cut - 0.01);
+        // Non-behind floating objects stay above unless they start below the cut, as other objects do.
+        let (top_head, mut top_tail): (Vec<_>, Vec<_>) = self.on_top.into_iter().partition(|(_, it)| v_span(it).0 < cut - 0.01);
         // The rest starts at its first line (the space between paragraphs goes with the break).
         let start = tail.iter().filter(|it| matches!(it, Placed::Lines { .. })).map(|it| v_span(it).0).fold(f32::MAX, f32::min);
         let start = if start == f32::MAX { cut } else { start.max(cut) };
-        for it in &mut top_tail {
+        for (_, it) in &mut top_tail {
             it.translate(0.0, -start);
         }
         for it in &mut tail {
@@ -402,7 +402,7 @@ pub(crate) fn table_notes(ctx: &mut Ctx, pb: &mut PageBuilder, items: &[Placed])
         let Some(part) = ctx.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::Footnote) else { continue };
         let blocks = part.blocks.clone();
         let BoxLayout { items, on_top, height: h, .. } = layout_box(ctx, BoxInput::note(StoryRef::Part(id), &blocks, pb.sect.text_width()));
-        let on_top = on_top.into_iter().map(|t| t.item).collect();
+        let on_top = on_top.into_iter().map(|t| (t.z, t.item)).collect();
         pb.notes.push(NoteBox { id, items, on_top, h, cont: false });
     }
     pb.bottom -= pb.notes_h() - before;

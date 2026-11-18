@@ -63,10 +63,10 @@ pub(crate) struct PageBuilder<'a> {
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     pub(crate) behind: Vec<usize>,
-    /// Per page: what goes on top of all its text (In Front of Text, #1993), each with where its
-    /// block's items start (counted like `block_marks`). It joins the page's items when the page
-    /// is left, after vertical alignment has moved it with its block.
-    pub(crate) on_top: Vec<Vec<(usize, Placed)>>,
+    /// Per page: non-behind floating objects (#1993), each with where its block's items start
+    /// (counted like `block_marks`) and its resolved `relativeHeight` (`z`). They join the page's
+    /// items in `z` order when the page is left, after vertical alignment moves them with their block.
+    pub(crate) on_top: Vec<Vec<(usize, u32, Placed)>>,
     /// The bottom of the tallest column on the current page before the current one.
     pub(crate) max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -218,10 +218,10 @@ impl PageBuilder<'_> {
                     it.translate(x, ny);
                     pg.items.push(it);
                 }
-                // In Front of Text goes over the notes after it too (#1993).
-                on_top.extend(n.on_top.into_iter().map(|mut it| {
+                // Non-behind floating objects go over notes after them too, keeping `z` order (#1993).
+                on_top.extend(n.on_top.into_iter().map(|(z, mut it)| {
                     it.translate(x, ny);
-                    it
+                    (z, it)
                 }));
             }
             if let (Some(ny), Some((items, _))) = (notice_y, &self.seps.notice) {
@@ -271,7 +271,7 @@ impl PageBuilder<'_> {
                 it.translate(0.0, gap * k as f32);
             }
         }
-        for (at, it) in self.on_top.last_mut().into_iter().flatten() {
+        for (at, _, it) in self.on_top.last_mut().into_iter().flatten() {
             let k = cuts.partition_point(|&c| c <= *at);
             if k > 0 {
                 it.translate(0.0, gap * k as f32);
@@ -297,22 +297,28 @@ impl PageBuilder<'_> {
                 it.translate(0.0, space);
             }
         }
-        for (_, it) in self.on_top.last_mut().into_iter().flatten() {
+        for (_, _, it) in self.on_top.last_mut().into_iter().flatten() {
             it.translate(0.0, space);
         }
     }
-    /// Items for the current page's top layer (In Front of Text), going with the block whose
-    /// items start at `pg.items[at]` (behind-text items counted out, as in `block_marks`).
-    pub(crate) fn push_on_top(&mut self, at: usize, items: impl IntoIterator<Item = Placed>) {
+    /// Items for the current page's over-text layer, going with the block whose items start at
+    /// `pg.items[at]` (behind-text items counted out, as in `block_marks`). Objects without an
+    /// explicit `relativeHeight` (`None`) stack above those already pushed on the page.
+    pub(crate) fn push_on_top(&mut self, at: usize, items: impl IntoIterator<Item = (Option<u32>, Placed)>) {
         if let Some(t) = self.on_top.last_mut() {
-            t.extend(items.into_iter().map(|it| (at, it)));
+            let mut floor = t.iter().map(|(_, z, _)| *z).max().unwrap_or(0);
+            for (explicit_z, it) in items {
+                let z = crate::floats::resolve_top_z(&mut floor, explicit_z);
+                t.push((at, z, it));
+            }
         }
     }
-    /// The page's In Front of Text objects go over all of its text: after its last item.
+    /// The page's non-behind floating objects go over its text in `relativeHeight` (`z`) order.
     pub(crate) fn lift_on_top(&mut self) {
-        let top = self.on_top.last_mut().map(std::mem::take).unwrap_or_default();
+        let mut top = self.on_top.last_mut().map(std::mem::take).unwrap_or_default();
+        top.sort_by_key(|(_, z, _)| *z);
         if let Some(pg) = self.pages.last_mut() {
-            pg.items.extend(top.into_iter().map(|(_, it)| it));
+            pg.items.extend(top.into_iter().map(|(_, _, it)| it));
         }
     }
     /// Takes back the page a page break has just started while nothing is on it, so a page start

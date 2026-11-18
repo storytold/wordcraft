@@ -7212,6 +7212,40 @@ fn floats_are_drawn_in_their_stacking_order() {
     }
     let xs: Vec<f32> = shapes(&lay(&d).pages[0].items).iter().map(|r| r.x).collect();
     assert_eq!(xs, [200.0, 100.0, 300.0], "no order after ordered ones: drawn last");
+    // Mixed wrap: a wrapped object with higher relativeHeight draws and hit-tests above an
+    // overlapping In Front of Text object with lower relativeHeight.
+    let square =
+        |x: f32, z: u32| rect_shape(50.0, 50.0, wordcraft_doc::para::Float { z, wrap: wordcraft_doc::para::Wrap::Square, ..page_float(x, 100.0) });
+    let mut d = Document::from_text("Text");
+    d.insert_object(&Pos::body(0, 4), square(100.0, 20), &Default::default()).unwrap();
+    let off2 = 4 + wordcraft_doc::para::OBJ.len_utf8();
+    d.insert_object(&Pos::body(0, off2), at(120.0, 10), &Default::default()).unwrap();
+    let l = lay(&d);
+    let xs: Vec<f32> = shapes(&l.pages[0].items).iter().map(|r| r.x).collect();
+    assert_eq!(xs, [120.0, 100.0], "mixed wrap: relativeHeight beats Wrap::InFrontOfText");
+    let hit = l.object_at(0, 135.0, 125.0, 0.0).expect("overlapping float hit");
+    assert_eq!(hit.pos(), Pos::body(0, 4), "hit testing matches top-drawn Square object");
+}
+
+/// Across paragraphs, non-behind floats (Square vs In Front of Text) share the over-text stack in
+/// `relativeHeight` order while all body lines stay underneath.
+#[test]
+fn wrapped_float_with_higher_stacking_order_draws_over_in_front_of_text_across_paragraphs() {
+    let at = |x: f32, z: u32, wrap| rect_shape(50.0, 50.0, wordcraft_doc::para::Float { z, wrap, ..page_float(x, 100.0) });
+    let mut d = Document::from_text("First\nSecond");
+    d.insert_object(&Pos::body(0, 0), at(100.0, 20, wordcraft_doc::para::Wrap::Square), &Default::default()).unwrap();
+    d.insert_object(&Pos::body(1, 0), at(120.0, 10, wordcraft_doc::para::Wrap::InFrontOfText), &Default::default()).unwrap();
+    let off2 = wordcraft_doc::para::OBJ.len_utf8();
+    d.insert_object(&Pos::body(1, off2), at(140.0, 0, wordcraft_doc::para::Wrap::InFrontOfText), &Default::default()).unwrap();
+    let l = lay(&d);
+    let items = &l.pages[0].items;
+    let xs: Vec<f32> = shapes(items).iter().map(|r| r.x).collect();
+    assert_eq!(xs, [120.0, 100.0, 140.0], "cross-paragraph z ordering across wraps");
+    let last_line = items.iter().rposition(|it| matches!(it, Placed::Lines { .. })).unwrap();
+    let first_shape = items.iter().position(|it| matches!(it, Placed::Shape { .. })).unwrap();
+    assert!(last_line < first_shape, "body lines stay underneath all non-behind floats");
+    assert_eq!(l.object_at(0, 125.0, 125.0, 0.0).expect("Square over InFront").pos(), Pos::body(0, 0));
+    assert_eq!(l.object_at(0, 145.0, 125.0, 0.0).expect("unordered z=0 on top").pos(), Pos::body(1, off2));
 }
 
 #[test]

@@ -232,13 +232,13 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 pg.items.push(it);
             }
         }
-        // In Front of Text objects in its cells go over the rest of the page too (#1993).
+        // Non-behind floating objects in its cells go over the rest of the page in z order too (#1993).
         pb.push_on_top(
             at,
             row.on_top.iter().map(|t| {
                 let mut it = t.item.clone();
                 it.translate(x, y);
-                it
+                (t.z, it)
             }),
         );
         pb.y += row.height;
@@ -401,7 +401,7 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
                 for t in &row.on_top {
                     let mut it = t.item.clone();
                     it.translate(r.x, y);
-                    top.push(it);
+                    top.push((t.z, it));
                 }
                 y += row.height;
             }

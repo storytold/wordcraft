@@ -697,18 +697,50 @@ pub(crate) struct ObjectPlacement<'a> {
     pub depth: usize,
 }
 
+/// Resolves an optional `relativeHeight` (`z`) against a running page/box `floor`: objects without
+/// an explicit order stack above those already placed (`floor`).
+pub(crate) fn resolve_top_z(floor: &mut u32, explicit_z: Option<u32>) -> u32 {
+    match explicit_z {
+        Some(z) => {
+            *floor = (*floor).max(z);
+            z
+        }
+        None => *floor,
+    }
+}
+
+/// Picks the layer for an object's drawing, frame and text boxes: behind-text stays behind,
+/// inline stays with its paragraph's items, and every other floating wrap shares the over-text
+/// layer sorted by `relativeHeight` (#1993).
+fn layer_for<'a>(
+    wrap: Wrap,
+    floating: bool,
+    behind: &'a mut Vec<Placed>,
+    front: &'a mut Vec<Placed>,
+    top: &'a mut Vec<Placed>,
+) -> &'a mut Vec<Placed> {
+    if !floating {
+        front
+    } else if wrap == Wrap::BehindText {
+        behind
+    } else {
+        top
+    }
+}
+
 /// The pictures, shapes and text boxes in lines `l0..l1` of paragraph `p` (story `story`, at
 /// `path`), whose lines start at (x, y): floating ones drawn, every one's area (hit testing,
 /// selection) and text boxes' text. Floating rects come from `floats` (by object index) or are
-/// worked out from `at`. Returns what goes behind the text, what goes with it, and what goes on
-/// top of all of it (In Front of Text: the caller draws it after the rest of the page).
-pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed>, Vec<Placed>, Vec<Placed>) {
+/// worked out from `at`. Returns what goes behind the text, inline object frames and text, and
+/// non-behind floating objects (`Square`, `Tight`, `Through`, `TopAndBottom`, `InFrontOfText`) with
+/// their explicit `relativeHeight` (`z`) so the caller draws them over the page in `z` order.
+pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed>, Vec<Placed>, Vec<(Option<u32>, Placed)>) {
     let ObjectPlacement { story, path, p, pl, lines: (l0, l1), origin: (x, y), at, floats, depth } = *req;
-    // Each object's items (behind the text, in front, on top of all of it), with its stacking
+    // Each object's items (behind the text, inline/front, non-behind floating), with its stacking
     // order: drawn lowest first once all are placed, as Word stacks floating objects by
     // `relativeHeight`, not by their order in the paragraph. Inline objects and objects without
     // one keep their order.
-    let mut stack: Vec<(u32, Vec<Placed>, Vec<Placed>, Vec<Placed>)> = Vec::new();
+    let mut stack: Vec<(u32, Vec<Placed>, Vec<Placed>, Vec<(Option<u32>, Placed)>)> = Vec::new();
     // The highest order so far: an object without one (inserted here) stacks above the objects
     // before it, as the writer gives it the next order up on save.
     let mut z_top = 0u32;
@@ -767,16 +799,16 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k), modern)
             };
             let (mut behind, mut front, mut top) = (Vec::new(), Vec::new(), Vec::new());
-            // In Front of Text goes over every line of the page, not only those before it (#1993):
-            // its picture, its frame for hit testing and its text box's text.
-            let layer = match float.wrap {
-                Wrap::BehindText => &mut behind,
-                Wrap::InFrontOfText => &mut top,
-                _ => &mut front,
-            };
             // Floating ones are drawn here; inline ones with their line.
             if floating {
-                layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
+                layer_for(float.wrap, floating, &mut behind, &mut front, &mut top).extend(float_items(
+                    obj,
+                    rect,
+                    (Spin::default(), Point::default()),
+                    story,
+                    path,
+                    c.start,
+                ));
             }
             let text_box = match obj {
                 InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
@@ -809,10 +841,8 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 }
                 _ => Vec::new(),
             };
-            // The frame goes in the same layer as the drawing, so hit testing reaches an In Front
-            // of Text object over the text it covers rather than the text under it (#1993).
-            let frames = if float.wrap == Wrap::InFrontOfText { &mut top } else { &mut front };
-            frames.push(Placed::Object {
+            // The frame goes in the same layer as the drawing, so hit testing matches paint order (#1993).
+            layer_for(float.wrap, floating, &mut behind, &mut front, &mut top).push(Placed::Object {
                 rect,
                 spin: float.spin(),
                 story,
@@ -825,12 +855,7 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             });
             for (id, rect) in boxes {
                 let items = textbox::box_items(ctx, id, rect, depth);
-                let layer = match float.wrap {
-                    Wrap::BehindText => &mut behind,
-                    Wrap::InFrontOfText => &mut top,
-                    _ => &mut front,
-                };
-                layer.extend(items);
+                layer_for(float.wrap, floating, &mut behind, &mut front, &mut top).extend(items);
             }
             // Placed on the page from a header or footer cell: drawn with the header, once.
             if pinned.is_some() {
@@ -843,13 +868,15 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 }
                 continue;
             }
-            let z = if floating && float.z > 0 {
-                z_top = z_top.max(float.z);
-                float.z
-            } else {
-                z_top
+            let explicit_z = (floating && float.z > 0).then_some(float.z);
+            let z = match explicit_z {
+                Some(z) => {
+                    z_top = z_top.max(z);
+                    z
+                }
+                None => z_top,
             };
-            stack.push((z, behind, front, top));
+            stack.push((z, behind, front, top.into_iter().map(|it| (explicit_z, it)).collect()));
         }
     }
     // Stable: equal orders (none given) keep the paragraph's order.

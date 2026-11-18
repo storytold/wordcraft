@@ -626,9 +626,9 @@ struct Snap<'a> {
     pages: usize,
     items: usize,
     behind: usize,
-    /// The last page's In Front of Text objects: leaving the page moves them into its items,
-    /// which going back truncates.
-    on_top: Vec<(usize, Placed)>,
+    /// The last page's over-text layer: leaving the page moves it into `items`, which going back
+    /// truncates.
+    on_top: Vec<(usize, u32, Placed)>,
     counters: Counters,
     eq_count: u32,
     page_field: u32,

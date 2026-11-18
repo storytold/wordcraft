@@ -47,6 +47,8 @@ pub struct OnTop {
     /// In a turned cell, the bottom of its paragraph's turned lines instead: they move on as a
     /// whole when the row splits, like a picture, and the object with them.
     pub(crate) turned: Option<f32>,
+    /// Explicit `relativeHeight` (`z`) from the drawing, or `None` when unset.
+    pub(crate) z: Option<u32>,
     pub(crate) item: Placed,
 }
 

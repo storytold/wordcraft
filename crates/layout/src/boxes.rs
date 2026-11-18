@@ -372,7 +372,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                             depth,
                         },
                     );
-                    for placed in back.iter().chain(front.iter()) {
+                    for placed in back.iter().chain(front.iter()).chain(top.iter().map(|(_, it)| it)) {
                         if let Placed::Object { rect, spin, wrap, .. } = placed
                             && !matches!(wrap, Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText)
                         {
@@ -384,7 +384,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     items.splice(at..at, back);
                     items.extend(front);
                     // Each goes with its paragraph's first line when a row splits.
-                    on_top.extend(top.into_iter().map(|item| OnTop { cell: 0, anchor: y + lead, para: path.clone(), turned: None, item }));
+                    on_top.extend(top.into_iter().map(|(z, item)| OnTop { cell: 0, anchor: y + lead, para: path.clone(), turned: None, z, item }));
                 }
                 // Automatic space after: none after the last paragraph of a cell or box. Nor
                 // contextual spacing after a cell's last paragraph in the default style (or an
@@ -429,7 +429,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // the page (the rows and paragraphs after its table), so the table carries it up (#1993); a
     // footnote's over the notes after it, so the page lifts it.
     if !keeps_on_top {
-        items.extend(on_top.drain(..).map(|t| t.item));
+        let mut floor = 0u32;
+        let mut sorted: Vec<(u32, Placed)> = on_top.drain(..).map(|t| (crate::floats::resolve_top_z(&mut floor, t.z), t.item)).collect();
+        sorted.sort_by_key(|(z, _)| *z);
+        items.extend(sorted.into_iter().map(|(_, it)| it));
     }
     BoxLayout { items, on_top, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }

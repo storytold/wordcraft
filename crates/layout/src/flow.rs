@@ -723,7 +723,7 @@ fn notes_on_line(ctx: &mut Ctx, pb: &PageBuilder, l: &para::Line, notes: &[(usiz
         {
             let blocks = part.blocks.clone();
             let BoxLayout { items, on_top, height: h, .. } = layout_box(ctx, BoxInput::note(StoryRef::Part(*id), &blocks, pb.sect.text_width()));
-            let on_top = on_top.into_iter().map(|t| t.item).collect();
+            let on_top = on_top.into_iter().map(|t| (t.z, t.item)).collect();
             out.push(NoteBox { id: *id, items, on_top, h, cont: false });
         }
     }
@@ -812,7 +812,7 @@ fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): 
 }
 
 /// Add a piece's items to the last page: those `behind` the text at the front, the rest at the end.
-fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>, top: Vec<Placed>) {
+fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>, top: Vec<(Option<u32>, Placed)>) {
     let n_behind = behind.len();
     // Where this piece's items start, counted after those behind the text (as `block_marks`
     // are): justified alignment moves its on-top objects with it.
@@ -951,7 +951,7 @@ pub(crate) fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragr
         },
     );
     items.extend(front);
-    items.extend(top);
+    items.extend(top.into_iter().map(|(_, it)| it));
     let children = level < outline::BODY && outline::has_children(&o.levels, block);
     // Collapsed, or with something under it hidden by Show Level: the wavy line says so.
     let collapsed = children && o.hidden.get(block + 1).copied().unwrap_or(false);
