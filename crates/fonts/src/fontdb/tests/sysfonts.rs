@@ -2,6 +2,7 @@
 #[allow(unused_imports)]
 use std::path::{Path, PathBuf};
 
+use crate::fontdb::face::FlipPen;
 use crate::fontdb::*;
 
 const FAMILY: &str = "Sysfont Sans3";
@@ -421,6 +422,39 @@ fn a_family_partly_loaded_by_a_character_fallback_is_loaded_whole_for_a_run() {
 }
 
 #[test]
+fn screen_hinting_runs_a_tricky_fonts_instructions_with_the_monochrome_target() {
+    // FreeType's "tricky" fonts (old CJK fonts listed by name, such as DynaLab's "cpop") assemble
+    // their glyphs with their instructions; skrifa requires the interpreter with `Target::Mono`
+    // for them. A bundled font renamed into the list stands in for one.
+    let dir = font_dir("tricky");
+    std::fs::write(dir.join("Tricky.ttf"), renamed_to("SourceSans3-Regular.ttf", "Sysfont cpop1")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let face = db.face("Sysfont cpop1", "Regular");
+    assert_eq!(face.family, "Sysfont cpop1");
+    let font = face.skrifa().unwrap();
+    let outlines = font.outline_glyphs();
+    assert!(outlines.require_interpreter(), "the name makes it tricky");
+    let ppem = 11.0 * 96.0 / 72.0 * 1.45;
+    let drawn = |target: Target, gid: u32| {
+        let h = HintingInstance::new(&outlines, Size::new(ppem), face.location(), HintingOptions { engine: Engine::Interpreter, target }).unwrap();
+        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false, hinted: true };
+        outlines.get(GlyphId::new(gid)).unwrap().draw(DrawSettings::hinted(&h, false), &mut pen).unwrap();
+        pen.path
+    };
+    // The target decides whether the instructions may move points sideways (the light target's
+    // backward compatibility forbids it): this font's instructions only move points vertically,
+    // so the target itself is checked, and the outlines drawn with it.
+    assert!(matches!(face.screen_hinter(ppem).unwrap().target(), Target::Mono));
+    for c in "Every Thursday".chars().filter(|c| !c.is_whitespace()) {
+        let gid = face.glyph_for(c);
+        assert_eq!(*db.hinted_outline(&face, gid, ppem).unwrap(), drawn(Target::Mono, gid), "{c}: the monochrome target");
+    }
+    // Any other font keeps the light target.
+    let plain = db.face(FALLBACK_FAMILY, "Regular");
+    assert!(matches!(plain.screen_hinter(ppem).unwrap().target(), Target::Smooth { mode: SmoothMode::Light, preserve_linear_metrics: true, .. }));
+}
+
+#[test]
 fn coverage_ranges_hold_exactly_the_mapped_characters() {
     let data = renamed("SourceSans3-Regular.ttf");
     let ranges = coverage_ranges(&data);
@@ -543,6 +577,24 @@ fn east_asian_fonts_are_listed_for_the_asian_text_font_box() {
     // Loaded, it is still listed once.
     assert!(db.face("Songti Test", "Regular").is_east_asian());
     assert_eq!(listed(&db), 1);
+}
+
+#[test]
+fn an_east_asian_faces_average_character_width_is_its_half_width_cell() {
+    // #6583: Word's automatic space beside East Asian text is half the average character width
+    // of the face before it, and a platform's text metrics report a double-byte font's average
+    // as the width of its half-width cell, not the full-width figure its OS/2 table carries. The
+    // two faces here share one OS/2 table and differ only in their code pages.
+    let dir = font_dir("avgcharwidth");
+    let song = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, "Songti Width")]);
+    std::fs::write(dir.join("song.ttf"), with_code_pages(&song, 1 << 18)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let latin = db.face(FAMILY, "Regular");
+    let asian = db.face("Songti Width", "Regular");
+    assert!(latin.upem > 0.0 && !latin.is_east_asian() && asian.is_east_asian());
+    // The Latin face keeps the table's figure, which is not half the em.
+    assert!(latin.avg_char_width > latin.upem / 2.0, "{} of {}", latin.avg_char_width, latin.upem);
+    assert_eq!(asian.avg_char_width, asian.upem / 2.0);
 }
 
 /// #848: browsing the font list drew each family's name in its own face, loading every family

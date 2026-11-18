@@ -2,7 +2,7 @@ use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
 use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
-use super::headers::{MAX_HEADER_ITEMS, header_table_areas};
+use super::headers::{header_items_cap, header_table_areas, placed_cost};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
@@ -94,7 +94,62 @@ fn row_keeps_next(row: &table::RowLayout) -> bool {
         .unwrap_or(false)
 }
 
-fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, page_height: f32) -> bool {
+/// The cut that leaves every row of a nested table marked "can't split" whole: just below the
+/// top of the highest such row the cut at `room` runs through, moved up again while it runs
+/// through another one (Word moves such a row on with the rest of the outer row, observed in the
+/// docxide-pdf `nested-first-row-*-cant1` cases). Like the split itself, a row "runs through"
+/// the cut when it ends below the room left for text there, above the row's bottom band; the cut
+/// goes that band below the row's top, so the text and rows ending at its top stay.
+/// shortcut: the moved row's side borders and shading keep that band's height on the page, and
+/// on the next page its cell area and shading start that band less its top margin below its
+/// first line (clicks there miss the cell). Only an explicit bottom cell margin or a thick outer
+/// border shows it, never Word's defaults; upgrade with a separate drawing cut in split_row that
+/// moves a nested cell starting between the limit and the cut whole from its top.
+fn nested_keep_cut(doc: &wordcraft_doc::Document, row: &table::RowLayout, room: f32) -> f32 {
+    let own = row.items.iter().filter_map(|it| if let Placed::Cell { table, .. } = it { Some(table.0.len()) } else { None }).min();
+    // Each nested row's top and bottom when it can't split. A vertically merged cell runs past
+    // its own row, so a row ends where its shortest cell does.
+    let mut bands: std::collections::BTreeMap<(StoryRef, &[u32], usize), Option<(f32, f32)>> = std::collections::BTreeMap::new();
+    // The split runs a cell aligned to the middle or bottom from its top: so do its bands.
+    let mut shift = vec![0.0f32; row.items.len()];
+    for al in row.cells.iter().filter_map(|c| c.align.as_ref()) {
+        shift.get_mut(al.content.clone()).into_iter().flatten().for_each(|d| *d = al.dy);
+    }
+    for (it, &dy) in row.items.iter().zip(&shift) {
+        let Placed::Cell { rect, table, row: r, story, .. } = it else { continue };
+        if Some(table.0.len()) <= own {
+            continue;
+        }
+        let rect = Rect { y: rect.y - dy, ..*rect };
+        let band = bands
+            .entry((*story, table.0.as_slice(), *r))
+            .or_insert_with(|| doc.table(*story, table).and_then(|t| t.rows.get(*r)).filter(|r| r.props.cant_split).map(|_| (rect.y, rect.bottom())));
+        if let Some((top, bottom)) = band {
+            *top = top.min(rect.y);
+            *bottom = bottom.min(rect.bottom());
+        }
+    }
+    let below = row.bottom.clamp(0.0, room.max(0.0));
+    let mut bands: Vec<(f32, f32)> = bands.into_values().flatten().collect();
+    // From the lowest top up: once the cut moves up to a row, the rows starting below it are
+    // wholly under it, and a row the old cut ran through still runs through the new one.
+    bands.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut cut = room;
+    for (top, bottom) in bands {
+        let limit = cut - below;
+        if top < limit && bottom > limit + 0.01 {
+            cut = top + below;
+        }
+    }
+    cut
+}
+
+/// [`table::split_row_keeping_cells`] that doesn't split a nested "can't split" row either.
+fn split_keeping_nested(doc: &wordcraft_doc::Document, row: &table::RowLayout, room: f32) -> Option<(table::RowLayout, table::RowLayout)> {
+    table::split_row_keeping_cells(row, nested_keep_cut(doc, row, room))
+}
+
+fn row_can_start(doc: &wordcraft_doc::Document, row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, page_height: f32) -> bool {
     if laid.height <= room + 0.01 {
         return true;
     }
@@ -104,11 +159,19 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     if row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01 && h <= page_height + 0.01) {
         return false;
     }
-    table::split_row_keeping_cells(laid, room).is_some()
+    split_keeping_nested(doc, laid, room).is_some()
 }
 
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
+    // A page break before the first row's paragraph moves the whole table to a new page, as
+    // Word does (and as an ODT table starting a page opens). Before the table is laid out, so
+    // its cells' fields (PAGE) are those of the page it lands on.
+    let first = t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.blocks.first()).and_then(|b| b.as_para());
+    if t.props.float.is_none() && !pb.at_top() && !pb.web && first.is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).page_break_before) {
+        pb.new_page(block, body_top);
+        ctx.fields.page = pb.number;
+    }
     let width = pb.col_w();
     let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
@@ -124,13 +187,21 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         // own left edge.
         tl.x = float_table_x(pb, tl.width, &f, legacy, ctx.mirror) - pb.col_x();
     }
+    // Its own space above (ODT), not at the top of a page.
+    if let Some(s) = t.props.space_before.filter(|s| s.is_finite() && *s > 0.0 && !pb.at_top()) {
+        pb.y += s.min(MAX_TABLE_SPACE);
+    }
     // A table in the text flow starts below the floating objects in its way.
     below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
     let header_rows: Vec<usize> = (0..t.rows.len()).take_while(|r| t.rows.get(*r).is_some_and(|row| row.props.header)).collect();
-    // Items repeated so far, and what one more repeat of the header rows costs (see
-    // `MAX_HEADER_ITEMS`).
-    let mut header_repeats = 0usize;
-    let header_cost = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.items.len().max(1)).fold(0, usize::saturating_add);
+    // What one more repeat of the header rows costs (see `MAX_HEADER_ITEMS`; the items repeated
+    // so far are counted in the whole layout).
+    let header_cap = header_items_cap();
+    let header_cost = header_rows
+        .iter()
+        .filter_map(|i| tl.rows.get(*i))
+        .map(|r| r.items.iter().map(|it| placed_cost(it, header_cap)).fold(0, usize::saturating_add).max(1))
+        .fold(0, usize::saturating_add);
     // Resolve kept chains once; nested paragraphs cannot keep their enclosing row.
     let mut kept: Vec<(usize, f32)> = (0..tl.rows.len()).map(|i| (i, 0.0)).collect();
     for i in (0..tl.rows.len().saturating_sub(1)).rev() {
@@ -171,8 +242,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     {
         let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
-        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row_keeping_cells(row, room).is_some()))
-        {
+        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && split_keeping_nested(ctx.doc, row, room).is_some())) {
             pb.advance(block, body_top);
         }
     }
@@ -180,7 +250,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     let table_at_top = pb.at_top();
     for (ri, row) in tl.rows.iter().enumerate() {
         // Word never splits a row of an exact height: it moves on whole.
-        let splittable = !header_rows.contains(&ri)
+        let splittable = ri >= header_rows.len()
             && !t
                 .rows
                 .get(ri)
@@ -207,7 +277,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                     }
                     let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
                     let page_height = pb.bottom - body_top - repeated_height;
-                    height <= page_height + 0.01 && !row_can_start(next, laid, pb.bottom - pb.y - height, page_height)
+                    height <= page_height + 0.01 && !row_can_start(ctx.doc, next, laid, pb.bottom - pb.y - height, page_height)
                 });
             // A row another row follows needs room for the border below it too (measured in Word).
             if pb.y + cur.height + cur.edge <= pb.bottom + 0.01 && !defer_kept {
@@ -222,8 +292,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             let moves_on = first_part && short_of_min(ri, room);
             let split = match (splittable && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
-                (true, true) => table::split_row_keeping_cells(cur, room),
-                (true, false) => table::split_row(cur, room),
+                (true, true) => split_keeping_nested(ctx.doc, cur, room),
+                // On a fresh page, a nested row taller than the room splits rather than overflowing.
+                (true, false) => table::split_row(cur, nested_keep_cut(ctx.doc, cur, room)).or_else(|| table::split_row(cur, room)),
             };
             match split {
                 Some((a, b)) => {
@@ -237,9 +308,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 None => {}
             }
             pb.advance(block, body_top);
-            // Repeat header rows, up to this table's cap.
-            if !header_rows.contains(&ri) && header_repeats.saturating_add(header_cost) <= MAX_HEADER_ITEMS {
-                header_repeats += header_cost;
+            // Repeat header rows, up to the layout's cap.
+            if ri >= header_rows.len() && ctx.header_repeats.saturating_add(header_cost) <= header_cap {
+                ctx.header_repeats = ctx.header_repeats.saturating_add(header_cost);
                 for h in header_rows.iter().filter_map(|hr| tl.rows.get(*hr)) {
                     place(pb, h);
                 }
@@ -250,7 +321,15 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         place(pb, last);
         table_notes(ctx, pb, &last.items);
     }
+    // Its own space below (ODT).
+    if let Some(s) = t.props.space_after.filter(|s| s.is_finite() && *s > 0.0) {
+        pb.y += s.min(MAX_TABLE_SPACE);
+    }
 }
+
+/// The most space a table's own space above or below can add, points (22 inches, Word's
+/// largest paragraph spacing).
+const MAX_TABLE_SPACE: f32 = 1584.0;
 
 /// Place floating table `tl` (`w:tblpPr`): at its own position, which takes no room in the text
 /// flow; the text after it wraps around it.
@@ -270,7 +349,13 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
         let x = float_table_x(pb, w, f, legacy, ctx.mirror);
         let mut obstacles = if f.overlap { Vec::new() } else { header_table_areas(ctx, pb) };
         obstacles.extend_from_slice(&pb.float_tables);
-        let r = clear_of_float_tables(Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h), f, legacy, h_area.0, &obstacles);
+        let r = clear_of_float_tables(
+            Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h),
+            f,
+            ctx.doc.settings.compat_mode >= 15,
+            h_area.0,
+            &obstacles,
+        );
         // Like Word, a table that doesn't fit below the text before it moves to the next page with
         // its anchor: one placed relative to the paragraph when it would run off the page, one
         // placed on the page or margin when it would also cover the text already on the page.

@@ -170,36 +170,43 @@ impl SourceForm {
 /// Draws a source's type and fields, optionally every bibliography field, and adds it as a
 /// bibliography source or inserts a citation on OK.
 pub(super) fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> Next {
-    egui::Grid::new("src").num_columns(2).spacing(vec2(10.0, 5.0)).show(ui, |ui| {
-        let kind_label = ui.label(tl!("Source type:"));
-        let shown = SOURCE_TYPES.iter().find(|(k, ..)| *k == f.source.kind).map(|(_, l, _)| tl!(l).to_string()).unwrap_or_default();
-        let combo = craft_ui::ComboBox::from_id_salt("src_kind").selected_text(shown).width(200.0).show_ui(ui, |ui| {
-            for (k, l, _) in SOURCE_TYPES {
-                ui.selectable_value(&mut f.source.kind, k.to_string(), tl!(l));
-            }
+    crate::rtl::Table::new("src").columns(2).spacing(vec2(10.0, 5.0)).show(ui, |t| {
+        t.row(|r| {
+            let kind_label = r.cell(|ui| ui.label(tl!("Source type:")));
+            r.cell(|ui| {
+                let shown = SOURCE_TYPES.iter().find(|(k, ..)| *k == f.source.kind).map(|(_, l, _)| tl!(l).to_string()).unwrap_or_default();
+                let combo = craft_ui::ComboBox::from_id_salt("src_kind").selected_text(shown).width(200.0).show_ui(ui, |ui| {
+                    for (k, l, _) in SOURCE_TYPES {
+                        ui.selectable_value(&mut f.source.kind, k.to_string(), tl!(l));
+                    }
+                });
+                combo.response.labelled_by(kind_label.id);
+            });
         });
-        combo.response.labelled_by(kind_label.id);
-        ui.end_row();
         let edit = f.edit;
         let corporate = f.corporate;
         for (key, label) in f.fields() {
             // Corporate Author swaps the Author box for one organisation's name (#4848).
             let (key, label) = if key == "author" && corporate { ("corporate", "Corporate Author") } else { (key, label) };
-            let field_label = ui.label(format!("{}:", tl!(label)));
-            if let Some(v) = field_mut(&mut f.source, key) {
-                let hint = match key {
-                    "author" => tl!("Last, First; Last, First"),
-                    "tag" => tl!("Made from the author and year when empty"),
-                    _ => "",
-                };
-                ui.add_enabled(!(edit && key == "tag"), egui::TextEdit::singleline(v).desired_width(260.0).hint_text(hint))
-                    .labelled_by(field_label.id);
-            }
-            ui.end_row();
+            t.row(|r| {
+                let field_label = r.cell(|ui| ui.label(format!("{}:", tl!(label))));
+                r.cell(|ui| {
+                    if let Some(v) = field_mut(&mut f.source, key) {
+                        let hint = match key {
+                            "author" => tl!("Last, First; Last, First"),
+                            "tag" => tl!("Made from the author and year when empty"),
+                            _ => "",
+                        };
+                        ui.add_enabled(!(edit && key == "tag"), egui::TextEdit::singleline(v).desired_width(260.0).hint_text(hint))
+                            .labelled_by(field_label.id);
+                    }
+                });
+            });
             if matches!(key, "author" | "corporate") {
-                ui.label("");
-                ui.checkbox(&mut f.corporate, tl!("Corporate Author"));
-                ui.end_row();
+                t.row(|r| {
+                    r.cell(|ui| ui.label(""));
+                    r.cell(|ui| ui.checkbox(&mut f.corporate, tl!("Corporate Author")));
+                });
             }
         }
     });
@@ -286,7 +293,7 @@ pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<u
     });
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             if ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 next = Next::Close;
             }

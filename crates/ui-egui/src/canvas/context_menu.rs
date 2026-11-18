@@ -48,6 +48,17 @@ fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// The heading of a proofing issue's context menu, in the interface language like the rest of
+/// the menu: a spelling issue's own message is in the text's language (craft-proof's, "Faute
+/// d'orthographe possible" for French text), so it says Possible spelling mistake instead.
+/// English grammar rules' messages are catalog keys; other languages' rules explain in their own.
+pub(crate) fn issue_heading(issue: &serde_json::Value) -> String {
+    if issue.get("kind").and_then(|k| k.as_str()) == Some("spelling") {
+        return tl!("Possible spelling mistake").to_string();
+    }
+    tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).to_string()
+}
+
 pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if app.session.math.is_some() {
         return equation_menu(app, ui);
@@ -56,7 +67,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
         let sc = crate::widgets::shortcut_text(app, id);
         let on = crate::widgets::enabled(app, id);
-        if ui.add_enabled(on, egui::Button::new(tl!(label)).shortcut_text(sc)).clicked() {
+        if ui.add_enabled(on, crate::rtl::menu_item(ui, tl!(label), &sc, 0.0)).clicked() {
             let _ = app.run(id, params);
             ui.close();
         }
@@ -67,8 +78,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
-        // English rules' messages are catalog keys; Polish rules already explain in Polish.
-        ui.label(egui::RichText::new(tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or(""))).small().weak());
+        ui.label(egui::RichText::new(issue_heading(&issue)).small().weak());
         if sugg.is_empty() {
             ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
         }
@@ -95,17 +105,19 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     ui.separator();
     if let Some(syn) = app.canvas.context_synonyms.clone().and_then(|v| v.as_array().cloned()).filter(|a| !a.is_empty()) {
         ui.menu_button(tl!("Synonyms"), |ui| {
-            for w in syn.iter().filter_map(|x| x.as_str()) {
-                if ui.button(w).clicked() {
-                    let _ = app.run("select.word", json!({}));
-                    let (a, b) = app.session.sel.ordered();
-                    let trimmed = app.session.doc.para_at(&a).and_then(|p| p.text.get(a.off..b.off)).map(|t| t.trim_end().len()).unwrap_or(0);
-                    let end = wordcraft_doc::Pos { off: a.off + trimmed, ..b };
-                    app.session.sel = wordcraft_engine::Selection { anchor: a, focus: end };
-                    let _ = app.run("text.insert", json!({"text": w, "raw": true}));
-                    ui.close();
+            crate::rtl::root(ui, |ui| {
+                for w in syn.iter().filter_map(|x| x.as_str()) {
+                    if ui.button(w).clicked() {
+                        let _ = app.run("select.word", json!({}));
+                        let (a, b) = app.session.sel.ordered();
+                        let trimmed = app.session.doc.para_at(&a).and_then(|p| p.text.get(a.off..b.off)).map(|t| t.trim_end().len()).unwrap_or(0);
+                        let end = wordcraft_doc::Pos { off: a.off + trimmed, ..b };
+                        app.session.sel = wordcraft_engine::Selection { anchor: a, focus: end };
+                        let _ = app.run("text.insert", json!({"text": w, "raw": true}));
+                        ui.close();
+                    }
                 }
-            }
+            })
         });
     }
     item(ui, app, "Font…", "ui.dialog", json!({"name": "font"}));
@@ -154,10 +166,12 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         let pick = table_pick(&app.session);
         ui.separator();
         ui.menu_button(tl!("Insert"), |ui| {
-            item(ui, app, "Insert Columns to the Left", "table.insertColumnLeft", json!({}));
-            item(ui, app, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
-            item(ui, app, "Insert Rows Above", "table.insertRowAbove", json!({}));
-            item(ui, app, "Insert Rows Below", "table.insertRowBelow", json!({}));
+            crate::rtl::root(ui, |ui| {
+                item(ui, app, "Insert Columns to the Left", "table.insertColumnLeft", json!({}));
+                item(ui, app, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
+                item(ui, app, "Insert Rows Above", "table.insertRowAbove", json!({}));
+                item(ui, app, "Insert Rows Below", "table.insertRowBelow", json!({}));
+            })
         });
         // Every Delete is there whatever is selected, as on Word's Delete button: with the caret
         // in a cell, Delete Table is how the table goes (#1198).
@@ -179,9 +193,11 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         }
         if pick == TablePick::Table {
             ui.menu_button(tl!("AutoFit"), |ui| {
-                item(ui, app, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
-                item(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
-                item(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
+                crate::rtl::root(ui, |ui| {
+                    item(ui, app, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
+                    item(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
+                    item(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
+                })
             });
         }
         item(ui, app, "Text Direction", "table.textDirection", json!({}));

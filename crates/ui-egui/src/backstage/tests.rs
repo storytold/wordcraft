@@ -75,6 +75,289 @@ fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
     assert!(app.ui.backstage, "File stays open");
 }
 
+/// Opens File > Home in a window of `size` with one long Recent entry; returns its name and path.
+fn long_recent_harness(size: egui::Vec2) -> (egui_kittest::Harness<'static, WordApp>, String, String) {
+    let name = format!("{}.docx", "AVeryLongDocumentName".repeat(8));
+    let path = format!("C:/Users/Someone/{}/{name}", "LongFolderName".repeat(20));
+    (recent_harness(std::slice::from_ref(&path), size), name, path)
+}
+
+/// Opens File > Home in a window of `size` with `recent` as the Recent list.
+fn recent_harness(recent: &[String], size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = recent.to_vec();
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// Collects every text shape, including those nested in shape lists.
+fn collect_text<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+    match s {
+        egui::Shape::Text(ts) => out.push(ts),
+        egui::Shape::Vec(v) => {
+            for child in v {
+                collect_text(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns the painted bounds and clip rect of the Recent entry's name and path texts, and
+/// whether each ends with an ellipsis.
+fn recent_text_bounds(h: &egui_kittest::Harness<'_, WordApp>) -> Vec<(String, egui::Rect, egui::Rect, bool)> {
+    let mut found = Vec::new();
+    for cs in &h.output().shapes {
+        let mut texts = Vec::new();
+        collect_text(&cs.shape, &mut texts);
+        for ts in texts {
+            let text = ts.galley.text();
+            if text.contains("C:/Users/Someone") || text.contains("AVeryLongDocumentName") {
+                let ellipsis = ts.galley.rows.first().and_then(|row| row.glyphs.last()).is_some_and(|g| g.chr == '\u{2026}');
+                found.push((text.to_owned(), ts.visual_bounding_rect(), cs.clip_rect, ellipsis));
+            }
+        }
+    }
+    found
+}
+
+/// #5212: long names and paths in File > Home > Recent shorten to fit their row and show on hover.
+#[test]
+fn recent_shortens_a_long_name_and_path_to_its_row() {
+    let (mut h, name, path) = long_recent_harness(egui::vec2(1440.0, 900.0));
+    let row = h.get_by_label(&name).rect();
+    let texts = recent_text_bounds(&h);
+    assert_eq!(texts.len(), 2, "both file name and path shapes must be found");
+    for (text, bounds, _, ellipsis) in &texts {
+        assert!(*ellipsis, "text '{text}' must end with an ellipsis");
+        assert!(bounds.max.x <= row.max.x + 0.5, "text '{text}' bounds.max.x ({}) > row.max.x + 0.5 ({})", bounds.max.x, row.max.x + 0.5);
+    }
+
+    h.event(egui::Event::PointerMoved(row.center()));
+    h.run_steps(4);
+    h.get_by_label(&path);
+}
+
+/// #5212: at the smallest window width the shortened texts end inside the visible area, so the
+/// ellipsis is not cut off.
+#[test]
+fn recent_texts_end_inside_the_visible_area_at_the_smallest_window() {
+    let (h, _, _) = long_recent_harness(egui::vec2(760.0, 480.0));
+    let texts = recent_text_bounds(&h);
+    assert_eq!(texts.len(), 2, "both file name and path shapes must be found");
+    for (text, bounds, clip, ellipsis) in &texts {
+        assert!(*ellipsis, "text '{text}' must end with an ellipsis");
+        assert!(bounds.max.x <= clip.max.x + 0.5, "text '{text}' ends at {} past the visible edge {}", bounds.max.x, clip.max.x);
+    }
+}
+
+/// #5212: a Recent row focused with the keyboard shows its full path, as hovering does.
+#[test]
+fn recent_shows_the_full_path_when_a_row_has_keyboard_focus() {
+    let (mut h, name, path) = long_recent_harness(egui::vec2(1440.0, 900.0));
+    assert!(h.query_by_label(&path).is_none(), "the full path must not show before focus");
+    h.get_by_label(&name).focus();
+    h.run_steps(4);
+    h.get_by_label(&path);
+}
+
+/// #5212: the focus tooltip lets the pointer through, so the Recent row under it still gets
+/// hovered, shows its own path and opens on click.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_focus_tooltip_does_not_block_the_row_below() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-5212-{}", std::process::id()));
+    let paths = ["one.docx", "two.docx"].map(|n| dir.join(n).to_string_lossy().to_string());
+    let mut h = recent_harness(&paths, egui::vec2(1440.0, 900.0));
+    h.get_by_label("one.docx").focus();
+    h.run_steps(4);
+    let tip = h.get_by_label(&paths[0]).rect();
+    let below = tip.intersect(h.get_by_label("two.docx").rect());
+    assert!(below.is_positive(), "the focus tooltip must cover part of the next row: tip={tip:?}");
+    h.event(egui::Event::PointerMoved(below.center()));
+    h.run_steps(4);
+    h.get_by_label(&paths[1]);
+
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: below.center(), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(3);
+    let error = h.ctx.data(|d| d.get_temp::<String>(super::open_error_id())).unwrap_or_default();
+    assert!(error.contains("two.docx"), "the click must reach two.docx and try to open it, got error '{error}'");
+}
+
+/// #5212: every Recent row gives a screen reader its full path, not only the hovered or
+/// focused row that shows the path as a tooltip.
+#[test]
+fn recent_rows_describe_their_full_path_without_hover_or_focus() {
+    use egui_kittest::kittest::NodeT;
+    let dir = std::env::temp_dir().join("wordcraft-5212-describe");
+    let paths = ["one.docx", "two.docx"].map(|n| dir.join(n).to_string_lossy().to_string());
+    let mut h = recent_harness(&paths, egui::vec2(1440.0, 900.0));
+    let one = h.get_by_label("one.docx").rect();
+    h.event(egui::Event::PointerMoved(one.center()));
+    h.run_steps(4);
+    for (name, path) in ["one.docx", "two.docx"].iter().zip(&paths) {
+        let described = h.get_by_label(name).accesskit_node().description();
+        assert_eq!(described.as_deref(), Some(crate::i18n::isolate_path(path).as_str()), "{name} must describe its full path");
+    }
+}
+
+/// A right-to-left language for the Recent tests. `rtl` goes by its code, so it needs no Arabic font.
+fn recent_right_to_left() -> crate::i18n::Lang {
+    crate::i18n::fixture_lang("ar", "\tHome\tHome\n")
+}
+
+/// The Recent list alone with one `path`, in `lang`, in a window 1000 wide. `start` points on the
+/// side its rows start from and `end` points on the other side are out of view, as on a page
+/// scrolled sideways or wider than the window.
+fn recent_list_cut(path: &str, lang: crate::i18n::Lang, start: f32, end: f32) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec![path.to_string()];
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 500.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            crate::i18n::set_current(lang);
+            crate::rtl::sync(&ctx);
+            let mut clip = ui.clip_rect();
+            let (left, right) = if crate::rtl::on() { (end, start) } else { (start, end) };
+            clip.min.x += left;
+            clip.max.x -= right;
+            ui.set_clip_rect(clip);
+            super::open_list(app, ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// #5212: text runs from its row's start, so a row whose start is out of view has as much room
+/// for its text as before. Only the far end stops at the visible edge.
+#[test]
+fn recent_text_keeps_its_room_when_its_row_starts_out_of_view() {
+    let name = format!("{}.docx", "AVeryLongDocumentName".repeat(8));
+    let path = format!("C:/Users/Someone/{name}");
+    for lang in [crate::i18n::Lang::EN, recent_right_to_left()] {
+        let widths = |cut| recent_text_bounds(&recent_list_cut(&path, lang, cut, 0.0)).iter().map(|t| t.1.width().round()).collect::<Vec<_>>();
+        let whole = widths(0.0);
+        assert_eq!(whole.len(), 2, "both lines must be painted: {whole:?}");
+        assert_eq!(widths(500.0), whole, "the cut must not take room from the text");
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5212: a row running past the visible area stops its text there, in either direction, with
+/// its ellipsis in view.
+#[test]
+fn recent_text_stops_at_the_visible_edge_in_either_direction() {
+    let name = format!("{}.docx", "AVeryLongDocumentName".repeat(8));
+    let path = format!("C:/Users/Someone/{name}");
+    for lang in [crate::i18n::Lang::EN, recent_right_to_left()] {
+        let texts = recent_text_bounds(&recent_list_cut(&path, lang, 0.0, 400.0));
+        assert_eq!(texts.len(), 2, "both lines must be painted");
+        for (text, bounds, clip, ellipsis) in &texts {
+            assert!(
+                bounds.left() >= clip.left() - 0.5 && bounds.right() <= clip.right() + 0.5,
+                "{text} must end inside the visible area: {bounds:?} in {clip:?}"
+            );
+            assert!(ellipsis, "{text} must end in an ellipsis");
+        }
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5212: multibyte text is cut between its characters and stays in its row, starting at the
+/// side the row starts from, in either direction.
+#[test]
+fn recent_shortens_multibyte_text_in_either_direction() {
+    let name = format!("AVeryLongDocumentName{}.docx", "\u{fc}\u{20ac}".repeat(120));
+    let path = format!("C:/Users/Someone/{name}");
+    for lang in [crate::i18n::Lang::EN, recent_right_to_left()] {
+        let h = recent_list_cut(&path, lang, 0.0, 0.0);
+        let row = h.get_by_label(&name).rect();
+        let texts = recent_text_bounds(&h);
+        assert_eq!(texts.len(), 2, "both lines must be painted");
+        for (text, bounds, _, ellipsis) in &texts {
+            let lead = if lang.rtl() { row.right() - bounds.right() } else { bounds.left() - row.left() };
+            assert!((lead - 40.0).abs() < 1.0, "{text} must start at its row's start: {bounds:?} in {row:?}");
+            assert!(bounds.left() >= row.left() - 0.5 && bounds.right() <= row.right() + 0.5, "{text} must stay in its row: {bounds:?} in {row:?}");
+            assert!(ellipsis, "{text} must end in an ellipsis");
+        }
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5212: a right-to-left name runs from the right, so it is cut on its left, and its ellipsis
+/// belongs there, not beside the name's first letters.
+#[test]
+fn recent_puts_the_ellipsis_at_the_end_of_a_right_to_left_name() {
+    let name = format!("{}.docx", "\u{5d0}\u{5d1}\u{5d2} ".repeat(120));
+    let h = recent_list_cut(&format!("/docs/{name}"), recent_right_to_left(), 0.0, 0.0);
+    let output = h.output();
+    let mut texts = Vec::new();
+    for clipped in &output.shapes {
+        collect_text(&clipped.shape, &mut texts);
+    }
+    let shown = texts.iter().find(|t| t.galley.text().contains('\u{5d0}')).expect("the name");
+    let glyphs = &shown.galley.rows[0].glyphs;
+    let ellipsis = glyphs.iter().find(|g| g.chr == '\u{2026}').expect("an ellipsis");
+    let left = glyphs.iter().filter(|g| g.size().x > 0.0).map(|g| g.pos.x).fold(f32::MAX, f32::min);
+    assert!(ellipsis.pos.x <= left + 0.5, "the ellipsis must be the leftmost glyph: {} against {left}", ellipsis.pos.x);
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5212: two files with one name speak their path in the label, so it isn't read twice.
+#[test]
+fn recent_rows_with_one_name_speak_their_path_once() {
+    use egui_kittest::kittest::NodeT;
+    let dir = std::env::temp_dir().join("wordcraft-5212-twins");
+    let paths = ["one", "two"].map(|d| dir.join(d).join("same.docx").to_string_lossy().to_string());
+    let h = recent_harness(&paths, egui::vec2(1440.0, 900.0));
+    for path in &paths {
+        let label = format!("same.docx, {path}");
+        assert_eq!(h.get_by_label(&label).accesskit_node().description(), None, "{label} must not repeat its path");
+    }
+}
+
+/// #5212: with the pointer resting on one Recent row, Tab to the next row shows the focused
+/// row's path, and moving the pointer again brings back the hovered row's path.
+#[test]
+fn recent_tab_shows_the_focused_path_while_the_pointer_rests_on_another_row() {
+    let dir = std::env::temp_dir().join("wordcraft-5212-tab");
+    let paths = ["one.docx", "two.docx"].map(|n| dir.join(n).to_string_lossy().to_string());
+    let mut h = recent_harness(&paths, egui::vec2(1440.0, 900.0));
+    let one = h.get_by_label("one.docx").rect();
+    h.event(egui::Event::PointerMoved(one.center()));
+    h.run_steps(4);
+    h.get_by_label(&paths[0]);
+
+    h.get_by_label("one.docx").focus();
+    h.run_steps(1);
+    // The first Tab goes to the row's own Remove ×, the second to the next row.
+    for _ in 0..2 {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(4);
+    }
+    assert!(h.get_by_label("two.docx").is_focused(), "Tab must move focus to the next Recent row");
+    assert!(h.query_by_label(&paths[1]).is_some(), "the focused row's path must show while the pointer rests on another row");
+
+    h.event(egui::Event::PointerMoved(one.center() + egui::vec2(4.0, 0.0)));
+    h.run_steps(4);
+    assert!(h.query_by_label(&paths[0]).is_some(), "moving the pointer must bring back the hovered row's path");
+}
+
 /// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain
 /// control inset in full screen.
 #[test]
@@ -517,6 +800,56 @@ fn an_unusable_saved_folder_falls_back_to_the_apps_own() {
     let _ = std::fs::remove_dir_all(&own);
 }
 
+/// #2716: the × of a recent row is a cue, not a secret: dimmed when only the row is hovered,
+/// stronger on the × itself, absent when neither is.
+#[test]
+fn recent_remove_cross_shows_when_the_row_is_hovered() {
+    use super::{RemoveCue, remove_cue};
+    assert_eq!(remove_cue(false, false), RemoveCue::Hidden);
+    assert_eq!(remove_cue(true, false), RemoveCue::Dim, "row hovered shows the glyph");
+    assert_eq!(remove_cue(false, true), RemoveCue::Strong);
+    assert_eq!(remove_cue(true, true), RemoveCue::Strong);
+}
+
+/// #2716: each recent row has its own Remove (× at the right end, so it opens nothing), and
+/// Clear all takes the whole list away; the list is empty afterwards.
+#[test]
+fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
+    use egui::accesskit::Role;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let row = |h: &egui_kittest::Harness<WordApp>, name: &str| h.query_all_by_role_and_label(Role::Button, name).next().map(|n| n.rect());
+    assert!(row(&h, "alpha.docx").is_some() && row(&h, "beta.docx").is_some(), "both rows show");
+    // The × inside alpha's row, not beta's: click it and only alpha goes.
+    let remove_in = |h: &mut egui_kittest::Harness<WordApp>, name: &str| {
+        let r = row(h, name).expect(name);
+        h.query_all_by_role_and_label(Role::Button, "Remove from list")
+            .find(|n| n.rect().min.y >= r.min.y && n.rect().min.y < r.max.y)
+            .expect("row has its Remove")
+            .click();
+    };
+    remove_in(&mut h, "alpha.docx");
+    h.run_steps(4);
+    assert_eq!(h.state().ui.recent, ["/tmp/beta.docx".to_string()], "the row's own Remove takes its row");
+    assert!(h.state().ui.backstage, "the × does not open the Backstage away");
+    assert!(row(&h, "alpha.docx").is_none() && row(&h, "beta.docx").is_some());
+    h.get_by_label("Clear all").click();
+    h.run_steps(4);
+    assert!(h.state().ui.recent.is_empty(), "Clear all empties the list");
+    assert!(h.query_by_label("Documents you open will show up here.").is_some());
+    assert!(row(&h, "beta.docx").is_none(), "and Clear all goes with it");
+}
+
 /// Home and New are different pages (#141): Home has the short template row, the link to New
 /// and Recent; New has every template and no Recent list.
 #[test]
@@ -809,6 +1142,77 @@ fn save_as_page_shows_browse_and_no_open_list() {
     assert!(h.query_by_label("Recent").is_none(), "Save As has no list that opens documents");
 }
 
+/// #3467, #3535: a system dialog that never shows up doesn't leave Save As stuck: Browse in
+/// WordCraft… gives it up and saves through WordCraft's own browser.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn save_as_saves_in_wordcraft_when_the_system_dialog_never_shows() {
+    // A host that takes every request and never answers, like a portal that shows nothing.
+    let senders: std::rc::Rc<std::cell::RefCell<Vec<std::sync::mpsc::Sender<crate::FileDialogAnswer>>>> = Default::default();
+    let keep = senders.clone();
+    let services = Services {
+        file_dialog: Some(Box::new(move |_| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            keep.borrow_mut().push(tx);
+            rx
+        })),
+        ..Default::default()
+    };
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-builtin-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    a.run("text.insert", json!({"text": "Saved past a silent portal"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert!(h.state().file_dialog.is_some(), "the system dialog was asked for and never answered");
+    h.get_by_label("Browse in WordCraft…").click();
+    h.run_steps(4);
+    let a = h.state_mut();
+    assert!(a.file_dialog.is_none(), "the silent system dialog is given up");
+    let b = a.file_browser.open.as_mut().expect("WordCraft's own browser is open");
+    b.navigate(dir.clone());
+    b.name = "kept".into();
+    let crate::file_browser::Step::Pick(path) = b.accept() else { panic!("picked") };
+    a.close_file_browser(Some(path));
+    let saved = dir.join("kept.docx");
+    assert_eq!(a.session.path.as_deref(), Some(saved.as_path()));
+    let back = wordcraft_engine::io::open_path(&saved).unwrap();
+    assert!(back.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved past a silent portal"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3535: File › Export offers WordCraft's own browser as well, for its formats.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn export_page_offers_wordcrafts_own_browser() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Browse in WordCraft…").click();
+    h.run_steps(4);
+    let b = h.state().file_browser.open.as_ref().expect("WordCraft's own browser is open");
+    assert!(matches!(&b.after, crate::file_dialogs::AfterPick::Export { ext } if ext == "pdf"));
+}
+
 #[test]
 fn backstage_save_navigates_to_save_as_when_unnamed() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
@@ -1053,4 +1457,414 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.get_by_label("Save As").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
+}
+
+/// Scrolls the File page with the wheel at `x` and returns doc0.docx's top before and after,
+/// plus the rectangle of the page's vertical scrollbar.
+fn file_page_wheel_at(x: f32) -> (f32, f32, egui::Rect) {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = (0..12).map(|i| format!("/docs/doc{i}.docx")).collect();
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 500.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+
+    let bar = h
+        .query_all_by_role(egui::accesskit::Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the File page's vertical scrollbar");
+    let before = h.get_by_label("doc0.docx").rect();
+    h.event(egui::Event::PointerMoved(egui::pos2(x, 300.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+    (before.min.y, h.get_by_label("doc0.docx").rect().min.y, bar)
+}
+
+/// #5282: the File page scrolls with the wheel over its right side.
+#[test]
+fn the_file_page_scrolls_with_the_wheel_over_its_right_side() {
+    let (before, after, _) = file_page_wheel_at(1300.0);
+    assert!(after < before - 1.0, "expected doc0.docx to scroll up: before={before}, after={after}");
+}
+
+/// #5282: the scroll area reaches the window's right edge, so its bar sits there and the wheel
+/// works there too.
+#[test]
+fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
+    // The harness keeps an 8 point margin, so the window edge is at x=1432.
+    let (before, after, bar) = file_page_wheel_at(1428.0);
+    assert!(after < before - 1.0, "expected doc0.docx to scroll up at the edge: before={before}, after={after}");
+    assert!((bar.right() - 1432.0).abs() < 1.0, "expected the scrollbar at the window edge: {bar:?}");
+}
+
+/// The File page in a window `height` points tall, left to right or, with `rtl`, in a right-to-left
+/// interface (a fixture catalog, so the test does not need the translations). With `mac`, the
+/// File page covers the integrated macOS title bar.
+fn file_page_harness(rtl: bool, mac: bool, height: f32) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.integrated_titlebar = mac;
+    a.mac_titlebar = crate::chrome::MacTitleBar { height: 28.0, content_left: 70.0 };
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let ar = crate::i18n::fixture_lang("ar", "\tHome\tHome\n");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, height)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // Draw the File page in a fixture language even without embedded catalogs.
+            crate::i18n::set_current(if rtl { ar } else { crate::i18n::Lang::EN });
+            crate::rtl::sync(&ctx);
+            assert_eq!(crate::rtl::on(), rtl);
+            super::show(app, ui);
+            crate::i18n::set_current(crate::i18n::Lang::EN);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// The rectangle of the side menu's button named `label`, a 200 point wide row (the page itself
+/// may have a control with the same name).
+fn side_menu_button(h: &egui_kittest::Harness<'static, WordApp>, label: &str) -> egui::Rect {
+    let label = crate::i18n::t(label).to_string();
+    h.query_all_by_label(&label)
+        .map(|n| n.rect())
+        .find(|r| (r.width() - 200.0).abs() < 0.5)
+        .unwrap_or_else(|| panic!("the side menu's {label} button"))
+}
+
+/// #6639: in a window too short for the File page's side menu, the wheel over the menu scrolls
+/// it, so Options and About can be reached. Checked left to right and right to left, where the
+/// menu is on the right.
+#[test]
+fn the_side_menu_scrolls_with_the_wheel_in_a_short_window() {
+    // Both directions run before the test fails, so each one's result is reported.
+    let mut misses = Vec::new();
+    for (rtl, x) in [(false, 100.0), (true, 1340.0)] {
+        let language = if rtl { "right to left" } else { "left to right" };
+        let height = 360.0;
+        // The harness keeps an 8 point margin, so the window's bottom edge is at y=352.
+        let bottom = height - 8.0;
+        let mut h = file_page_harness(rtl, false, height);
+        let menu = side_menu_button(&h, "Home");
+        assert!(menu.min.x <= x && x <= menu.max.x, "{language}: the menu is under the pointer: {menu:?}");
+        for label in ["Options", "About"] {
+            let r = side_menu_button(&h, label);
+            assert!(r.max.y > bottom, "{language}: {label} starts below the window's bottom edge: {r:?}");
+        }
+        h.event(egui::Event::PointerMoved(egui::pos2(x, 200.0)));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -2000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(4);
+        for label in ["Options", "About"] {
+            let r = side_menu_button(&h, label);
+            if r.max.y > bottom + 0.5 {
+                misses.push(format!("{language}: the wheel did not bring {label} into the window: {r:?}"));
+            }
+        }
+        assert!(h.state().ui.backstage, "{language}: File stays open");
+    }
+    assert!(misses.is_empty(), "{misses:#?}");
+}
+
+/// #6639: in a window too short for the side menu, Tab to About scrolls the menu so that About
+/// is in the window, left to right and right to left.
+#[test]
+fn tab_to_about_scrolls_it_into_a_short_window() {
+    let mut misses = Vec::new();
+    for rtl in [false, true] {
+        let language = if rtl { "right to left" } else { "left to right" };
+        let bottom = 360.0 - 8.0;
+        let mut h = file_page_harness(rtl, false, 360.0);
+        let about_focused = |h: &egui_kittest::Harness<'static, WordApp>| {
+            h.query_all_by_label("About").find(|n| (n.rect().width() - 200.0).abs() < 0.5 && n.is_focused()).map(|n| n.rect())
+        };
+        let mut about = None;
+        for _ in 0..40 {
+            h.key_press(egui::Key::Tab);
+            h.run_steps(4);
+            about = about_focused(&h);
+            if about.is_some() {
+                break;
+            }
+        }
+        let Some(r) = about else {
+            panic!("{language}: Tab reaches the side menu's About button");
+        };
+        if r.max.y > bottom + 0.5 {
+            misses.push(format!("{language}: About has the focus below the window's bottom edge: {r:?}"));
+        }
+    }
+    assert!(misses.is_empty(), "{misses:#?}");
+}
+
+/// #6639: when the whole side menu fits, About stays at the menu's bottom, above its 12 point
+/// margin, as it was before the menu could scroll, with and without the macOS title bar.
+#[test]
+fn about_stays_at_the_bottom_of_a_side_menu_that_fits() {
+    for (rtl, mac) in [(false, false), (true, false), (false, true), (true, true)] {
+        let language = if rtl { "right to left" } else { "left to right" };
+        let h = file_page_harness(rtl, mac, 900.0);
+        let about = side_menu_button(&h, "About");
+        let bottom = 900.0 - 8.0 - 12.0;
+        assert!((about.max.y - bottom).abs() < 0.5, "{language}, mac {mac}: About sits at the bottom of the menu: {about:?}");
+    }
+}
+
+/// Recursively collects bounding rectangles and text entries from egui shapes.
+fn collect_shapes(shape: &egui::Shape, rects: &mut Vec<egui::Rect>, texts: &mut Vec<(String, egui::Pos2, f32)>) {
+    match shape {
+        egui::Shape::Rect(r) => rects.push(r.rect),
+        egui::Shape::Text(t) => texts.push((t.galley.text().to_string(), t.pos, t.galley.size().x)),
+        egui::Shape::Vec(v) => {
+            for s in v {
+                collect_shapes(s, rects, texts);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// #6151: in an RTL interface (Arabic), template titles on the Start/Home page
+/// and New page are right-aligned to their preview thumbnails rather than left-aligned.
+#[test]
+fn rtl_template_titles_are_right_aligned() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.language = "ar".into();
+    a.ui.backstage = true;
+    a.ui.backstage_page = "home".into();
+    let ctx = egui::Context::default();
+    let mut last_shapes = Vec::new();
+    for frame in 0..4 {
+        let input = egui::RawInput {
+            time: Some(f64::from(frame) * 0.1),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            a.logic(&ctx.clone());
+            a.ui(ui);
+        });
+        out.textures_delta.clear();
+        if frame == 3 {
+            last_shapes = out.shapes;
+        }
+    }
+
+    let mut rects = Vec::new();
+    let mut texts = Vec::new();
+    for s in &last_shapes {
+        collect_shapes(&s.shape, &mut rects, &mut texts);
+    }
+
+    let blank_caption = crate::i18n::tc("template", "Blank document");
+    let (_, pos, width) = texts.iter().find(|(t, _, _)| t == blank_caption).expect("blank template caption drawn");
+    let thumbnail = rects
+        .iter()
+        .find(|r| (r.width() - 150.0).abs() < 1.0 && (r.height() - 194.0).abs() < 1.0 && (r.max.y - pos.y).abs() < 1.0)
+        .expect("blank template thumbnail rect");
+
+    let text_right = pos.x + width;
+    assert!(
+        (thumbnail.max.x - text_right).abs() < 1.0,
+        "template caption should be right-aligned with thumbnail in RTL: thumbnail.max.x={}, text_right={}, text_left={}, caption={}",
+        thumbnail.max.x,
+        text_right,
+        pos.x,
+        blank_caption,
+    );
+
+    // Verify the New page through the normal UI path in Arabic as well (#6151).
+    a.ui.backstage_page = "new".into();
+    let mut new_out = ctx.run_ui(
+        egui::RawInput {
+            time: Some(0.4),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        },
+        |ui| {
+            a.logic(&ctx.clone());
+            a.ui(ui);
+        },
+    );
+    new_out.textures_delta.clear();
+    let mut new_rects = Vec::new();
+    let mut new_texts = Vec::new();
+    for s in &new_out.shapes {
+        collect_shapes(&s.shape, &mut new_rects, &mut new_texts);
+    }
+    for (label, _) in super::TEMPLATES {
+        let caption = crate::i18n::tc("template", label);
+        if let Some((_, new_pos, new_width)) = new_texts.iter().find(|(t, _, _)| t == caption) {
+            let right = new_pos.x + new_width;
+            let has_matching_thumbnail = new_rects.iter().any(|r| {
+                (r.width() - 150.0).abs() < 1.0
+                    && (r.height() - 194.0).abs() < 1.0
+                    && (r.max.y - new_pos.y).abs() < 1.0
+                    && (r.max.x - right).abs() < 1.0
+            });
+            assert!(
+                has_matching_thumbnail,
+                "New page: caption '{caption}' must be right-aligned with its 150pt thumbnail (right={right}, y={})",
+                new_pos.y
+            );
+        }
+    }
+
+    // Also verify that a template tile with a wide caption (>150 pt) aligns both the thumbnail
+    // and caption to the right edge in RTL.
+    let wide_label = "A very long template title that exceeds 150 points width";
+    let mut wide_out = ctx.run_ui(
+        egui::RawInput {
+            time: Some(0.5),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        },
+        |ui| {
+            crate::rtl::root(ui, |ui| {
+                super::template_tile(ui, &mut a, wide_label, "sample");
+            });
+        },
+    );
+    wide_out.textures_delta.clear();
+    let mut wide_rects = Vec::new();
+    let mut wide_texts = Vec::new();
+    for s in &wide_out.shapes {
+        collect_shapes(&s.shape, &mut wide_rects, &mut wide_texts);
+    }
+    let (_, wide_pos, wide_width) = wide_texts.iter().find(|(t, _, _)| t == wide_label).expect("wide template caption drawn");
+    assert!(*wide_width > 150.0, "wide caption should exceed 150 points: {wide_width}");
+    let wide_thumbnail = wide_rects
+        .iter()
+        .find(|r| (r.width() - 150.0).abs() < 1.0 && (r.height() - 194.0).abs() < 1.0 && (r.max.y - wide_pos.y).abs() < 1.0)
+        .expect("wide template thumbnail rect");
+    let wide_text_right = wide_pos.x + wide_width;
+    assert!(
+        (wide_thumbnail.max.x - wide_text_right).abs() < 1.0,
+        "wide template caption and thumbnail should share the same right edge in RTL: thumb.max.x={}, text_right={}",
+        wide_thumbnail.max.x,
+        wide_text_right,
+    );
+}
+
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_export_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Export page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_print_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-print-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "print"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Print page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A cancelled export dialog drops an earlier refusal: it is not news any more.
+#[test]
+fn cancelling_an_export_clears_its_page_error() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.export_error = "old refusal".into();
+    a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, None).unwrap();
+    assert!(a.export_error.is_empty());
+}
+
+/// The export error belongs to the window that refused the export: another window running a
+/// frame outside Backstage must not erase it while this one still shows the Export page.
+#[test]
+fn export_error_belongs_to_its_window() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-two-windows-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    // Window A (this one) is refused; window B is another window's state, outside Backstage.
+    let mut b = crate::window_ui::WindowUi::new(a.session.document_id());
+    let err = a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    assert_eq!(a.export_error, err);
+    // B's frame: swap its state in, run frames outside Backstage, swap back.
+    a.swap_window(&mut b);
+    assert!(!a.ui.backstage && a.export_error.is_empty(), "B has its own, empty, error");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.state_mut().swap_window(&mut b);
+    assert!(h.state().ui.backstage, "A is still on the Export page");
+    assert_eq!(h.state().export_error, err, "B's frames left A's message alone");
+    let _ = std::fs::remove_dir_all(&dir);
 }
