@@ -11,7 +11,7 @@ use craft::ui::runtime::env::{AltCodePages, RootEnv, WheelSpeed};
 use craft::ui::runtime::frame::{FrameInput, FrameOutput};
 use craft::ui::runtime::windows::WindowHost;
 
-mod command_board;
+pub(crate) mod command_board;
 mod commands;
 mod control;
 mod files;
