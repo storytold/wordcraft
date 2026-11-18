@@ -2254,7 +2254,7 @@ fn number_boxes_are_named_by_their_labels_in_each_dialog() {
     use egui_kittest::kittest::{NodeT, Queryable};
     let units = ["cm", "mm", "pt", "pi", "\"", "%", "°", "px"];
     let dialogs: [(&str, &[&str]); 8] = [
-        ("paragraph", &["Left:", "Right:", "First line:", "Before:", "After:", "Line spacing:"]),
+        ("paragraph", &["Left:", "Right:", "By:", "Before:", "After:", "Line spacing:"]),
         ("tableProperties", &["Preferred width:", "Indent from left:", "Specify height:"]),
         ("tableCellMargins", &["Top:", "Left:", "Bottom:", "Right:"]),
         ("columns", &["Width: 1", "Spacing: 1", "Width: 2"]),
