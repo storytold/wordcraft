@@ -220,11 +220,11 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Layout(d) => d.title(),
     };
     let id = egui::Id::unique(("dialog", title));
-    let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
+    let window = egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false);
     // A file browser or Colors dialog it opened is above it and takes the keys: Escape or Enter
     // there doesn't also cancel or OK this one.
     let held = (app.file_browser_open() || app.colors.is_some()).then(|| ctx.input_mut(|i| std::mem::take(&mut i.events)));
-    let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
+    let shown = crate::window_close::show_window(ctx, place_dialog(ctx, id, window), |ui| {
         ui.set_min_width(340.0);
         // Scrolls only when the last frame's body was taller than the screen.
         let room = (ui.ctx().content_rect().height() - 110.0).max(160.0);

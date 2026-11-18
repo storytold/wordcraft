@@ -354,7 +354,7 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     let mut done: Option<Option<PathBuf>> = None;
     let id = egui::Id::unique("builtin_file_browser");
     let window = egui::Window::new(tl!(b.title())).id(id).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));
-    let shown = crate::window_close::window(ctx, window).show(ctx, |ui| {
+    let shown = crate::window_close::show_window(ctx, window, |ui| {
         ui.set_width(620.0);
         done = crate::rtl::root(ui, |ui| body(ui, &mut b, &t));
     });
