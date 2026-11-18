@@ -198,18 +198,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         ui.add_enabled_ui(app.has_document(), |ui| {
                             // Who is signed in and who else is here, at the far right, where every office
                             // suite puts them. Drawn first because this layout runs right to left.
-                            crate::cloud::who(app, ui);
+                            craft_ui::cloud::who(app, ui);
                             // Share, Editing mode, Comments.
                             //
                             // Share means share when there is somewhere to share to. The dialog itself
                             // lives in craft-ui, so every Craft app offers the same one. Without a service
                             // that reports sharing this falls back to the export menu the button used to
                             // be, rather than offering a share that would fail.
-                            if crate::cloud::shares(app) {
+                            if craft_ui::cloud::shares(app) {
                                 ui.add_space(6.0);
                                 // A split button, drawn by craft-ui so every Craft app offers the same
                                 // one. Only the Save a Copy formats under it are WordCraft's own.
-                                if let Some(fmt) = crate::cloud::share_button(app, ui, &crate::cloud::copies()) {
+                                if let Some(fmt) = craft_ui::cloud::share_button(app, ui, &crate::cloud_app::copies()) {
                                     app.export_dialog(&fmt);
                                 }
                             } else {

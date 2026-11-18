@@ -19,11 +19,10 @@ wordcraft-fonts = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
 # The control key file's location (shared with the MCP bridge).
 wordcraft-control-key = { workspace = true }
-# Shared editing and cloud storage have no backend right now: the previous one (craft-collab,
-# craft-cloud-client, collabcraft-share, all from the personal repository wdunn001/collab-craft)
-# has been removed rather than pinned to an unreviewed personal fork/repo. See
-# `wordcraft_ui_egui::cloud` and `crate::collab` for the local, inert stand-ins, pending
-# storytold/craft-libs#160 and storytold/craft-libs#123.
+# Open, Save and Share against cloud storage reach the real `craft_ui::cloud` and
+# `craft_ui::share` contracts (see `wordcraft_ui_egui::cloud_app`), with no backend connected:
+# every cloud page and menu item stays hidden. Shared editing carries no transport here at all;
+# that work belongs to the RFC-0020 track.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

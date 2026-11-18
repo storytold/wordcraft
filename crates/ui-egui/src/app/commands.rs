@@ -1,7 +1,7 @@
 use super::{
-    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, chrome, cloud, colors, crop, dialogs,
-    dialogs_table_style, file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font,
-    system_clipboard, table_pen, theme, widgets, zotero,
+    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, chrome, colors, crop, dialogs, dialogs_table_style,
+    file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
+    table_pen, theme, widgets, zotero,
 };
 
 impl WordApp {
@@ -566,9 +566,15 @@ impl WordApp {
                 json!({"tab": self.ui.tab})
             }
             "ui.backstage" => {
+                let was_on_save_as = self.ui.backstage_page == "saveAs";
                 self.ui.backstage = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
                 if let Some(pg) = s("page") {
                     self.ui.backstage_page = pg.into();
+                }
+                // Closing Backstage, or switching off the Save As page, leaves any target the
+                // conflict modal's "Save as a copy" set: see `craft_ui::cloud::cancel_save_as`.
+                if was_on_save_as && (!self.ui.backstage || self.ui.backstage_page != "saveAs") {
+                    craft_ui::cloud::cancel_save_as(self);
                 }
                 if let Some(pane) = s("pane") {
                     self.ui.options_pane = pane.into();
@@ -936,54 +942,58 @@ impl WordApp {
     }
 
     /// The cloud storage arms of [`Self::ui_command`] (File › Open, File › Save As, and the
-    /// `cloud.*` ids): no backend ships right now (see [`cloud`]), so every arm here reports
-    /// unavailable or refuses rather than reaching a service.
+    /// `cloud.*` ids): no backend is connected in this build (see [`crate::cloud_app`]), so every
+    /// arm here reports unavailable or refuses rather than reaching a service.
     ///
     /// `file.save` is intercepted only for a document that came from the cloud, which is also the
     /// only kind with no file of its own, so saving a local document behaves exactly as it always
     /// did: this returns `None` and the caller's normal `file.save` handling runs instead.
     fn cloud_ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
+        use craft_ui::cloud::{self as cu, CloudApp};
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         Some(Ok(match id {
-            "file.save" if p.get("path").is_none() && cloud::has_target(self) => {
+            "file.save" if p.get("path").is_none() && cu::has_target(self) => {
                 self.cloud.save_name.clear();
-                return Some(cloud::save(self));
+                return Some(cu::save(self));
             }
-            "cloud.status" => cloud::status(self),
+            "cloud.status" => cu::report(self),
             "cloud.open" => {
-                if !cloud::available(self) {
-                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                if !cu::available(self) {
+                    return Some(Err(cu::UNAVAILABLE.to_owned()));
                 }
                 self.ui.backstage = true;
                 self.ui.backstage_page = "open".into();
-                cloud::start(self);
-                cloud::status(self)
+                cu::start(self);
+                cu::report(self)
             }
             "cloud.browse" => {
-                if !cloud::available(self) {
-                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                if !cu::available(self) {
+                    return Some(Err(cu::UNAVAILABLE.to_owned()));
                 }
                 let path = s("path").unwrap_or("");
-                cloud::browse(self, path);
+                cu::browse(self, path);
                 json!({"folder": path})
             }
             "cloud.shared" => {
-                if !cloud::available(self) {
-                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                if !cu::available(self) {
+                    return Some(Err(cu::UNAVAILABLE.to_owned()));
                 }
-                cloud::load_shared(self);
+                cu::load_shared(self);
                 Value::Null
             }
             "cloud.link" => {
-                if !cloud::available(self) {
-                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                if !cu::available(self) {
+                    return Some(Err(cu::UNAVAILABLE.to_owned()));
                 }
-                cloud::link(self);
-                cloud::status(self)
+                cu::link(self);
+                cu::report(self)
             }
             // Opens something already listed, by id or by name. The listing is what the user can
             // see, which keeps a scripted open and a clicked one on the same footing.
             "cloud.openFile" => {
+                if !cu::available(self) {
+                    return Some(Err(cu::UNAVAILABLE.to_owned()));
+                }
                 let id = s("id");
                 let name = s("name").unwrap_or("");
                 let found = self
@@ -995,9 +1005,9 @@ impl WordApp {
                     .find(|e| id.is_some_and(|id| e.id == id) || (!name.is_empty() && e.name == name))
                     .cloned();
                 match found {
-                    Some(entry) if cloud::opens(&entry) => {
-                        cloud::open_entry(self, entry, None);
-                        cloud::status(self)
+                    Some(entry) if cu::opens(&entry, self.kind()) => {
+                        cu::open_entry(self, entry, None);
+                        cu::report(self)
                     }
                     Some(entry) => return Some(Err(format!("WordCraft cannot open {}", entry.name))),
                     None => return Some(Err("no such file in the cloud listing".to_owned())),
@@ -1005,22 +1015,25 @@ impl WordApp {
             }
             "cloud.save" => {
                 self.cloud.save_name.clear();
-                return Some(cloud::save(self));
+                return Some(cu::save(self));
             }
+            // Availability is checked before `save_name` is written: a refused save must not
+            // leave the Save As name field holding a value the attempt never reached.
             "cloud.saveAs" => match (s("folder"), s("name")) {
-                (Some(folder), Some(name)) => {
+                (Some(folder), Some(name)) if cu::available(self) => {
                     self.cloud.save_name = name.to_owned();
-                    return Some(cloud::save_as(self, folder, name));
+                    return Some(cu::save_as(self, folder, name));
                 }
+                (Some(_), Some(_)) => return Some(Err(cu::UNAVAILABLE.to_owned())),
                 _ => {
-                    if !cloud::available(self) {
-                        return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                    if !cu::available(self) {
+                        return Some(Err(cu::UNAVAILABLE.to_owned()));
                     }
-                    cloud::go_to_save_as(self);
-                    cloud::status(self)
+                    self.go_to_save_as();
+                    cu::report(self)
                 }
             },
-            "cloud.reload" => return Some(cloud::reload_active(self)),
+            "cloud.reload" => return Some(cu::reload_active(self)),
             _ => return None,
         }))
     }

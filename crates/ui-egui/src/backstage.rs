@@ -4,7 +4,7 @@ use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
 use crate::theme::{Tokens, medium, regular, semibold};
-use crate::{WordApp, cloud, icons};
+use crate::{WordApp, icons};
 
 /// The side menu: page id, label and icon (#1714).
 const PAGES: [(&str, &str, &str); 11] = [
@@ -291,13 +291,20 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
     if !app.has_document() && !works_without_document(id) {
         return;
     }
+    // A target set by the conflict modal's "Save as a copy" belongs to the document that
+    // conflicted, not to whatever Save As comes next: leaving the Save As page without saving,
+    // or landing on it fresh for an unrelated save, clears it (`craft_ui::cloud::cancel_save_as`).
+    let on_save_as = app.ui.backstage_page == "saveAs";
+    if (on_save_as && id != "saveAs") || (!on_save_as && matches!(id, "save" | "saveAs")) {
+        craft_ui::cloud::cancel_save_as(app);
+    }
     match id {
         // A document without a file goes to the Save As page (as in Word) instead
         // of `file.save`, which would also open the native Save As dialog.
         // In the browser a save is a download, so it saves right away. A document
         // that came from the cloud has a destination too, and `WordApp::run` sends
-        // its Save back there (see `cloud::save`).
-        "save" if app.session.path.is_none() && app.services.download.is_none() && !cloud::has_target(app) => {
+        // its Save back there (see `craft_ui::cloud::save`).
+        "save" if app.session.path.is_none() && app.services.download.is_none() && !craft_ui::cloud::has_target(app) => {
             app.ui.backstage_page = "saveAs".into();
         }
         "save" => {
@@ -852,10 +859,10 @@ fn open_page(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("ui.fileBrowser", json!({}));
     }
     // Cloud storage sits beside the local picker and never in place of it.
-    if cloud::available(app) {
+    if craft_ui::cloud::available(app) {
         ui.add_space(22.0);
         section(ui, "Cloud");
-        cloud::open_page(app, ui);
+        craft_ui::cloud::open_page(app, ui);
     }
     ui.add_space(18.0);
     open_list(app, ui);
@@ -871,13 +878,13 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
         ui.add_space(6.0);
     }
     // Where to save, when there is more than one answer to that.
-    if cloud::available(app) {
-        let to_cloud = app.ui.save_to_cloud.unwrap_or_else(|| cloud::prefers_cloud(app));
+    if craft_ui::cloud::available(app) {
+        let to_cloud = app.ui.save_to_cloud.unwrap_or_else(|| craft_ui::cloud::prefers_cloud(app));
         section(ui, "Where");
         // Named here, before anything is picked, so the destination reads as the user's own
         // account and not as a generic place.
-        cloud::start(app);
-        let account = cloud::destination_name(app);
+        craft_ui::cloud::start(app);
+        let account = craft_ui::cloud::destination_name(app);
         if place_row(ui, "save", tl!("This PC"), tl!("A folder on this computer"), !to_cloud).clicked() {
             app.ui.save_to_cloud = Some(false);
         }
@@ -886,7 +893,7 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
         }
         ui.add_space(18.0);
         if to_cloud {
-            if cloud::save_page(app, ui) {
+            if craft_ui::cloud::save_page(app, ui) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }

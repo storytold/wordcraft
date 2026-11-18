@@ -764,6 +764,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-std"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1ec78e242cfa2cfe276807ac2ecc00315a6c97786977414bcd1c3963b6c91b8"
+dependencies = [
+ "cap-primitives",
+ "io-extras",
+ "io-lifetimes 3.0.1",
+ "rustix 1.1.6",
+]
+
+[[package]]
 name = "cc"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1069,6 +1081,25 @@ dependencies = [
 name = "craft-cfb"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=93dac78c93a7f1fd66e2022edeb089233b1dc45a#93dac78c93a7f1fd66e2022edeb089233b1dc45a"
+
+[[package]]
+name = "craft-cloud"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=93dac78c93a7f1fd66e2022edeb089233b1dc45a#93dac78c93a7f1fd66e2022edeb089233b1dc45a"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-cloud-local"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=93dac78c93a7f1fd66e2022edeb089233b1dc45a#93dac78c93a7f1fd66e2022edeb089233b1dc45a"
+dependencies = [
+ "cap-std",
+ "craft-cloud",
+ "craft-ui",
+]
 
 [[package]]
 name = "craft-codepage"
@@ -1460,6 +1491,7 @@ name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=93dac78c93a7f1fd66e2022edeb089233b1dc45a#93dac78c93a7f1fd66e2022edeb089233b1dc45a"
 dependencies = [
+ "craft-cloud",
  "craft-fonts-build",
  "craft-i18n",
  "egui",
@@ -1469,6 +1501,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "serde_json",
  "skrifa 0.44.0",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2379,7 +2412,7 @@ checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes 2.0.4",
  "rustix 1.1.6",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3259,7 +3292,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20fd6de4ccfcc187e38bc21cfa543cb5a302cb86a8b114eb7f0bf0dc9f8ac00f"
 dependencies = [
  "io-lifetimes 3.0.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7316,7 +7349,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
 dependencies = [
  "bitflags 2.13.2",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7617,6 +7650,8 @@ dependencies = [
  "accesskit_consumer",
  "cfb",
  "chrono",
+ "craft-cloud",
+ "craft-cloud-local",
  "craft-i18n",
  "craft-ui",
  "craft-update",
@@ -7631,6 +7666,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sys-locale",
+ "tempfile",
  "toml",
  "web-time",
  "wordcraft-doc",

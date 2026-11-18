@@ -432,7 +432,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     crate::i18n::isolate(&app.title_stem()),
                     if app.session.dirty {
                         tl!("Edited")
-                    } else if app.session.path.is_some() || crate::cloud::origin(app).is_some() {
+                    } else if app.session.path.is_some() || craft_ui::cloud::origin(app).is_some() {
                         // A document that came from the cloud is saved, in the cloud. It has no file
                         // on this computer, and saying "Not saved" about it would be untrue.
                         tl!("Saved")
@@ -870,7 +870,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                     // A cloud read or write in flight. The File view is usually closed by now, and a
                     // transfer nobody can see looks like a frozen window.
-                    if let Some(busy) = app.cloud.busy.as_ref().map(crate::cloud::Busy::text) {
+                    if let Some(busy) = app.cloud.busy.as_ref().map(craft_ui::cloud::Busy::text) {
                         ui.add_space(12.0);
                         ui.add(egui::Spinner::new().size(12.0));
                         ui.add_space(4.0);

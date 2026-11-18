@@ -30,7 +30,7 @@ pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;
-pub mod cloud;
+mod cloud_app;
 pub mod colors;
 pub mod content_controls;
 pub mod control;
@@ -677,11 +677,13 @@ pub struct WordApp {
     pub controls: content_controls::ControlUi,
     pub dialog: Option<dialogs::Dialog>,
     /// Open and Save against cloud storage: the account, the folder being browsed, transfers in
-    /// flight, and where the open document came from. Local and inert: see [`cloud`] (no real
-    /// backend ships until storytold/craft-libs#160 lands).
-    pub cloud: cloud::CloudFiles,
-    /// Giving other people access to this document. Local and inert: see [`cloud::ShareState`].
-    pub share: cloud::ShareState,
+    /// flight, and where the open document came from. No backend is connected in this build, so
+    /// [`craft_ui::cloud::available`] is false and the pages stay hidden; see [`cloud_app`].
+    pub cloud: craft_ui::cloud::CloudFiles,
+    /// Giving other people access to this document.
+    pub share: craft_ui::share::ShareDialog,
+    /// Who else is in the document. Empty until a real collaboration layer sets it.
+    pub presence: craft_ui::presence::PresenceBar,
     /// The Colors dialog (More Colors…), shown above any other dialog (#606).
     pub colors: Option<colors::ColorsDialog>,
     /// The Restrict Editing pane (#412).

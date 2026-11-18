@@ -1,8 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::file_browser;
 use super::{
-    WordApp, backstage, canvas, chrome, cloud, colors, content_controls, dialogs, documents, keys, now_ms, panes, read_aloud, ribbon, theme,
-    updates_ui, zotero,
+    WordApp, backstage, canvas, chrome, colors, content_controls, dialogs, documents, keys, now_ms, panes, read_aloud, ribbon, theme, updates_ui,
+    zotero,
 };
 
 use crate::i18n;
@@ -55,7 +55,7 @@ impl WordApp {
     pub fn title_stem(&self) -> String {
         let mut title = match &self.session.path {
             Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Document1").into()),
-            None => match cloud::origin(self) {
+            None => match craft_ui::cloud::origin(self) {
                 Some(origin) => match origin.entry.name.rsplit_once('.') {
                     Some((stem, _)) if !stem.is_empty() => stem.to_string(),
                     _ => origin.entry.name.clone(),
@@ -145,7 +145,7 @@ impl WordApp {
         dialogs::show(self, ctx);
         // Above the dialogs: a refused save has to be answered, and the answer decides what
         // happens to the user's edits.
-        cloud::conflict_modal(self, ctx);
+        craft_ui::cloud::conflict_modal(self, ctx);
         if moved(self) {
             return;
         }
@@ -193,9 +193,9 @@ impl WordApp {
 fn share_save(app: &mut WordApp) {
     if let Some(request) = app.share.take_save_request() {
         // The name the copy is saved under is also the format it is written in (see
-        // `cloud::target_name`), so the pages hold it while the bytes are made.
+        // `craft_ui::cloud::document_name`), so the pages hold it while the bytes are made.
         app.cloud.save_name = request.name.clone();
-        match cloud::save_as(app, "/", &request.name) {
+        match craft_ui::cloud::save_as(app, "/", &request.name) {
             Ok(_) => app.cloud.sharing_save = true,
             Err(reason) => app.share.save_failed(reason),
         }
@@ -204,7 +204,7 @@ fn share_save(app: &mut WordApp) {
     // The worker reports by clearing `busy`. A new origin means it landed.
     if app.cloud.sharing_save && app.cloud.busy.is_none() {
         app.cloud.sharing_save = false;
-        match cloud::origin(app) {
+        match craft_ui::cloud::origin(app) {
             Some(origin) => {
                 let (id, name) = (origin.entry.id.clone(), origin.entry.name.clone());
                 app.share.saved(id, name);

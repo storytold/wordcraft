@@ -172,10 +172,11 @@ impl WordApp {
             printing: _,
             print_feedback_seen: _,
             print_gen: _,
-            // Open, Save and Share against cloud storage: local and inert (see `cloud`), but
-            // app-wide like `session`, not swapped per window.
+            // Open, Save and Share against cloud storage (see `craft_ui::cloud`), and who else is
+            // in the document: app-wide like `session`, not swapped per window.
             cloud: _,
             share: _,
+            presence: _,
             font_generation: _,
             integrated_titlebar: _,
             mac_titlebar: _,

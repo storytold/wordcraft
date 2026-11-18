@@ -1,6 +1,6 @@
 use super::{
-    AutoSaveBlock, AwaitingSave, PromptSave, SaveChoice, Value, WordApp, async_saves, cloud, dialogs, file_dialogs, i18n, json, keeps_everything,
-    panes, printing,
+    AutoSaveBlock, AwaitingSave, PromptSave, SaveChoice, Value, WordApp, async_saves, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
+    printing,
 };
 
 impl WordApp {
@@ -30,7 +30,9 @@ impl WordApp {
             // runs once that has saved, on a later frame with the non-blocking dialog (#94). A
             // document that came from the cloud has a destination already, so it goes the ordinary way.
             SaveChoice::Save
-                if (self.session.path.is_none() || self.legacy_word_path()) && self.services.download.is_none() && !cloud::has_target(self) =>
+                if (self.session.path.is_none() || self.legacy_word_path())
+                    && self.services.download.is_none()
+                    && !craft_ui::cloud::has_target(self) =>
             {
                 return match self.save_as(file_dialogs::AfterSave::Continue { then, params, document }) {
                     file_dialogs::Asked::Done(r) => r,
