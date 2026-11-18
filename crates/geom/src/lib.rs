@@ -31,7 +31,7 @@ pub fn twips(v: i64) -> f32 {
 /// Points → twips (rounded).
 #[expect(clippy::cast_possible_truncation, reason = "The value is rounded first; Rust's float-to-integer cast saturates outside the i64 range.")]
 pub fn to_twips(pt: f32) -> i64 {
-    finite(pt * TWIPS_PER_PT).round() as i64
+    (finite(pt) * TWIPS_PER_PT).round() as i64
 }
 /// EMU → points.
 #[expect(clippy::cast_precision_loss, reason = "The f32 return type intentionally rounds i64 inputs to f32 precision.")]
@@ -437,6 +437,19 @@ mod tests {
         assert_eq!(half_points(24).to_bits(), 12.0f32.to_bits());
         assert_eq!(to_half_points(10.5), 21);
         assert_eq!(to_twips(f32::NAN), 0);
+    }
+
+    #[test]
+    fn twip_conversion_saturates_finite_overflow() {
+        // A finite input that overflows during scaling must reach the saturating cast.
+        assert_eq!(to_twips(f32::MAX), i64::MAX);
+        assert_eq!(to_twips(-f32::MAX), i64::MIN);
+        for pt in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(to_twips(pt), 0);
+        }
+        for (pt, expected) in [(0.024, 0), (0.026, 1), (-0.024, 0), (-0.026, -1), (1.25, 25)] {
+            assert_eq!(to_twips(pt), expected, "input: {pt}");
+        }
     }
 
     #[test]
