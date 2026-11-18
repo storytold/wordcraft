@@ -17,9 +17,12 @@ mod properties;
 mod toc;
 
 use fields::caption;
+#[cfg(test)]
+use fields::output_fields_with;
 pub use fields::{
     CHAPTER_SEPARATORS, REFERENCE_NOT_FOUND, output_fields, refresh_date_fields, seq_format, update_fields, update_fields_in, update_seq,
 };
+pub(crate) use fields::{page_at, page_formats, page_label, page_text};
 pub(super) use notes::note_options;
 use notes::{note, note_refs};
 pub use properties::{bookmark_text, date_picture};
@@ -32,7 +35,7 @@ use toc::{insert_toc, remove_toc, toc_range};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("references.toc", "Table of Contents", "References › Table of Contents", insert_toc).params(
-            r#"{"levels"?: 1-9, "title"?: string, "pageNumbers"?: bool, "rightAlign"?: bool, "tabLeader"?: "dot|hyphen|underscore|none", "hyperlinks"?: bool, "headingStyles"?: bool, "outlineLevels"?: bool, "tcFields"?: bool, "styleLevels"?: {style name: 1-9}} (replaces an existing table; {} updates it)"#,
+            r#"{"levels"?: 1-9, "title"?: string (at most 1024 characters), "pageNumbers"?: bool, "rightAlign"?: bool, "tabLeader"?: "dot|hyphen|underscore|none", "hyperlinks"?: bool, "headingStyles"?: bool, "outlineLevels"?: bool, "tcFields"?: bool, "styleLevels"?: {style name: 1-9}} (replaces an existing table; {} updates it)"#,
         ),
         CommandSpec::new("references.updateToc", "Update Table", "References › Table of Contents", |s, _| {
             update_toc(s)?;
@@ -103,8 +106,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// A field instruction split into its name, positional arguments and switches (ECMA-376
 /// §17.16.1): `TOC \o "1-3" \h` → name `TOC`, switches `o` = `1-3` and `h`. Quoted text stays
-/// whole (without the quotes; `\"` and `\\` inside it are a quote and a backslash). A switch
-/// takes the word after it as its argument unless that word is another switch.
+/// whole (without the quotes; a backslash inside it makes the next character literal, as in Word:
+/// `\"` is a quote, `\\` a backslash, `\*` an asterisk). A switch takes the word after it as its
+/// argument unless that word is another switch.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldCode {
     pub name: String,
@@ -126,7 +130,7 @@ pub fn field_words(instr: &str) -> Vec<(String, bool)> {
             while let Some(c) = chars.next() {
                 match c {
                     '"' => break,
-                    '\\' if matches!(chars.peek(), Some('"' | '\\')) => w.extend(chars.next()),
+                    '\\' if chars.peek().is_some() => w.extend(chars.next()),
                     c => w.push(c),
                 }
             }

@@ -20,6 +20,7 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
     json!({
         "ui": app.prefs(),
         "view": app.session.view,
+        "windows": app.session.windows,
         "proofing": app.spelling_review,
         "dialog": app.dialog.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
         "window": [r.width(), r.height()],
@@ -225,6 +226,17 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
 /// drag, key, wheel and text input, screenshots and renders, resize, focus and quit, and unknown
 /// ids as commands. It refuses closing unsaved work and document operations without a document.
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    let before = app.session.document_id();
+    let outcome = handle_request(app, ctx, req);
+    // A document a script opened doesn't bring up the missing-fonts box.
+    let after = app.session.document_id();
+    if after != before {
+        crate::font_download::skip(app, after);
+    }
+    outcome
+}
+
+fn handle_request(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     if DOC_METHODS.contains(&req.method.as_str()) {
         match addressed(app, p) {
