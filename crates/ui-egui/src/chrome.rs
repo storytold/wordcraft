@@ -775,8 +775,11 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         resp
                     };
                     let st = |ui: &mut Ui, s: &str| st_icon(ui, None, s);
+                    // Go To's key as this platform writes it ("Go To (Ctrl+Alt+G)", "Go To (⌘⌥G)" on macOS).
+                    let goto_key = crate::widgets::shortcut_text(app, "edit.goto");
+                    let goto_hint = if goto_key.is_empty() { tl!("Go To").to_string() } else { format!("{} ({goto_key})", tl!("Go To")) };
                     if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
-                        .on_hover_text(tl!("Go To (⌘⌥G)"))
+                        .on_hover_text(goto_hint)
                         .clicked()
                     {
                         let _ = app.run("ui.dialog", json!({"name": "goto"}));
@@ -853,6 +856,10 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                                 ui.label(crate::i18n::tn((count - SHOWN) as u64, "…and {n} more", "…and {n} more"));
                             }
                             ui.separator();
+                            if missing.iter().any(|f| f.download.is_some()) && ui.button(tl!("Get the Missing Fonts…")).clicked() {
+                                let _ = app.run("ui.dialog", json!({"name": "fontDownload"}));
+                                ui.close();
+                            }
                             if ui.button(tl!("Add Font…")).clicked() {
                                 let _ = app.run("font.add", json!({}));
                                 ui.close();

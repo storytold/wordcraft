@@ -357,6 +357,40 @@ fn non_latin_file_name_is_drawn_in_the_caption() {
     assert!(cjk.canvas.ime_faces.is_empty(), "CJK collections are not copied into the fallback list");
 }
 
+/// The CJK UI font a Japanese file name asks for is loaded and draws the name, also in a build
+/// without craft-i18n's CJK catalogs and craft-fonts' CJK faces. There it was never loaded, and
+/// the caption, like an input method's composition, showed boxes.
+#[test]
+fn a_japanese_file_name_is_drawn_in_the_caption() {
+    // A font to draw it with: an installed CJK font in a build without embedded CJK faces, or
+    // embedded faces that have the name's characters (embedded faces without them load no
+    // installed font for it).
+    let embedded = wordcraft_fonts::ui_cjk_fonts_for(false, false);
+    let drawable = if embedded.is_empty() {
+        wordcraft_fonts::system_cjk_ui_font_for(false, false, &[]).is_some()
+    } else {
+        wordcraft_fonts::ui_uncovered_cjk(&["日本語"], &embedded).is_empty()
+    };
+    // macOS and Windows always have one (Hiragino, Yu Gothic), and CI runs these tests on both (the
+    // Print job), so there a missing font fails instead of hiding a regression.
+    assert!(drawable || cfg!(not(any(target_os = "macos", windows))), "macOS and Windows have a CJK font, but none draws 日本語");
+    if !drawable {
+        eprintln!("skipped: no CJK font draws 日本語");
+        return;
+    }
+    let ctx = egui::Context::default();
+    let frame = |app: &mut WordApp| {
+        ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+    };
+    let mut a = app();
+    a.session.path = Some("日本語.docx".into());
+    // The fonts the name asks for load from the next frame.
+    frame(&mut a);
+    frame(&mut a);
+    assert!(a.want_system_cjk);
+    assert!(ctx.fonts_mut(|f| f.has_glyphs(&crate::theme::semibold(13.0), "日本語")), "the caption draws the name");
+}
+
 /// File › Recover draws the recovered documents' names with the interface faces: a Chinese
 /// name there was a row of boxes because nothing asked for the CJK UI font. (The Recent list
 /// has its own, `ensure_recent_fonts`.)
@@ -3582,6 +3616,27 @@ fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
     ] {
         assert!(h.query_by_role_and_label(role, name).is_some(), "nothing on the ribbon is called {name:?}");
     }
+}
+
+/// The Paste button is named "Paste": its hint adds the key as the platform writes it, so its
+/// name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
+#[test]
+fn the_paste_button_is_named_without_a_mac_key() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    assert!(h.query_by_role_and_label(Role::Button, "Paste").is_some(), "the Paste button is called \"Paste\"");
+    assert!(h.query_by_role_and_label(Role::Button, "Paste (⌘V)").is_none(), "no Mac key in its name");
 }
 
 /// #1015: focusing Save is not enough: its dialog must expose the question and any failed

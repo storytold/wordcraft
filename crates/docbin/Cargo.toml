@@ -10,10 +10,7 @@ workspace = true
 
 [dependencies]
 craft-doc-binary = { workspace = true }
-# craft-doc-binary is pinned ahead of the other craft-libs crates (its writer, storytold/craft-libs
-# #1970), so the shared model comes from the same commit for the bridge's types to match. Back to
-# `workspace = true` at the next craft-libs bump.
-craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "f58c97faacd1aab9dee76e31b7f90864a3440c8d", version = "=0.1.0" }
+craft-wordmodel = { workspace = true }
 wordcraft-doc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
