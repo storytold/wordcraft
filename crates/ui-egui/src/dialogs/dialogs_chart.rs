@@ -28,7 +28,6 @@ use wordcraft_doc::chart::{ChartSpec, ChartType, MAX_POINTS, MAX_SERIES};
 
 use crate::WordApp;
 use crate::dialogs::host::{Asks, WordForm, open_form};
-use crate::theme::c32;
 
 /// Insert › Chart (`change` false) or Chart Design › Change Chart Type (`change` true).
 // PLAN: assumed `ChartType: Deserialize` (wordcraft-doc)
@@ -176,7 +175,7 @@ impl ChartDataForm {
 /// The theme's first accents, for previews.
 fn accents(app: &WordApp) -> [Color32; 3] {
     let t = &app.session.doc.settings.theme_colors;
-    let at = |i: usize, d: Color32| t.get(i).map(|c| c32(*c)).unwrap_or(d);
+    let at = |i: usize, d: Color32| t.get(i).map(|c| Color32::from_rgb(c.0, c.1, c.2)).unwrap_or(d);
     [at(4, Color32::from_rgb(0x15, 0x60, 0x82)), at(5, Color32::from_rgb(0xE9, 0x71, 0x32)), at(6, Color32::from_rgb(0x19, 0x6B, 0x24))]
 }
 

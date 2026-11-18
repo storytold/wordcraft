@@ -40,7 +40,6 @@ use crate::WordApp;
 // PLAN: assumed dg.A5 `colors::{color_field, ColorFieldEmpty, AutoFace, Palette}` as the contract row gives them (ribbon-w11)
 use crate::colors::{AutoFace, ColorFieldEmpty, Palette, color_field};
 use crate::dialogs::host::{Asks, DialogHooks, WordForm, open_form, open_with};
-use crate::theme::c32;
 
 /// The picker's categories (`All` first), in the order shown.
 pub const CATEGORIES: [&str; 8] = ["All", "List", "Process", "Cycle", "Hierarchy", "Relationship", "Matrix", "Pyramid"];
@@ -118,7 +117,12 @@ fn accent_rgb(theme: &[Rgb], n: usize) -> Rgb {
 
 /// Theme accent `n` (1–6) of the document, as the colour a painter takes.
 pub fn accent(theme: &[Rgb], n: usize) -> DataColor {
-    DataColor::new(c32(accent_rgb(theme, n)))
+    DataColor::new(color32(accent_rgb(theme, n)))
+}
+
+/// A document colour as the colour a painter takes.
+fn color32(c: Rgb) -> Color32 {
+    Color32::from_rgb(c.0, c.1, c.2)
 }
 
 /// A document colour as the theme library's colour.
@@ -128,7 +132,7 @@ fn srgba(c: Rgb) -> Srgba {
 
 /// Theme accent `n` at `share` of its opacity.
 fn faded(theme: &[Rgb], n: usize, share: f32) -> DataColor {
-    DataColor::new(c32(accent_rgb(theme, n)).gamma_multiply(share))
+    DataColor::new(color32(accent_rgb(theme, n)).gamma_multiply(share))
 }
 
 /// A small picture of `layout` in `r`, in the colours `colors` takes from `theme`; connector
@@ -250,7 +254,7 @@ pub fn swatches(cx: &ContentPainterCx, r: Rect, colors: SmartArtColors, theme: &
 pub fn custom_swatches(cx: &ContentPainterCx, r: Rect, g: &SmartArtSpec, theme: &[Rgb]) {
     let shown: Vec<DataColor> = (0..g.items.len())
         .filter_map(|i| match g.items.get(i)?.color {
-            Some(c) => Some(DataColor::new(c32(c))),
+            Some(c) => Some(DataColor::new(color32(c))),
             None => Some(accent(theme, g.style_accent(i)?)),
         })
         .take(5)
