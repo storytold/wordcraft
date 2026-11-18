@@ -41,7 +41,7 @@ craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "453b0
 # that has it until the upstream pull request lands and re-pins it. Built without its `http`
 # feature (that implements `Fetch` for another revision's craft-update): the UI wraps WordCraft's
 # own craft-update client instead.
-craft-plugin = { git = "https://github.com/Dasemu/craft-libs", rev = "93428fbe5d11b735365fa87068a9e1fc85fb3550", version = "=0.1.0" }
+craft-plugin = { git = "https://github.com/Dasemu/craft-libs", rev = "b9821a27936e4f8a5ef3ad30a9559ecb897c5cc4", version = "=0.1.0" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
