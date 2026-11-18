@@ -415,6 +415,8 @@ impl WordApp {
         let mut state = Box::new(WindowUi::new(doc));
         // Faces borrowed for the interface (non-Latin file names) stay installed.
         state.canvas.ime_faces = self.canvas.ime_faces.clone();
+        // A hidden ribbon stays hidden, as in Word; the new window still opens on Home.
+        state.ribbon_collapsed = self.ui.ribbon_collapsed;
         self.ui.backstage = false;
         self.windows.open.push(Window { key, id: None, doc, ui: Some(state), requests: Vec::new(), title: String::new(), view });
         self.enter_window(key);
@@ -508,6 +510,7 @@ impl WordApp {
             self.windows.next_key = self.windows.next_key.saturating_add(1);
             let mut state = Box::new(WindowUi::new(d.id));
             state.canvas.ime_faces = self.canvas.ime_faces.clone();
+            state.ribbon_collapsed = self.ui.ribbon_collapsed;
             self.windows.open.push(Window { key, id: None, doc: d.id, ui: Some(state), requests: Vec::new(), title: String::new(), view: None });
             changed = true;
         }

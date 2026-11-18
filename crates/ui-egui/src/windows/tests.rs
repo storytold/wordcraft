@@ -113,8 +113,8 @@ fn prompt(a: &WordApp) -> Option<&'static str> {
     a.dialog.as_ref().map(|d| d.name())
 }
 
-/// New opens the document in a second native window, focused, with a fresh interface; the
-/// first keeps its document, its ribbon tab and its open dialog, and gets them back when it
+/// New opens the document in a second native window, focused, with a fresh interface on Home
+/// that keeps the ribbon hidden as the first has it; the first keeps its document, its ribbon tab and its open dialog, and gets them back when it
 /// is focused again.
 #[test]
 fn new_opens_a_second_window_and_each_keeps_its_state() {
@@ -131,7 +131,9 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     let second = a.session.document_id();
     assert_ne!(second, first);
     assert_eq!(a.window_count(), 2);
-    assert!(a.dialog.is_none() && a.ui.tab == crate::DEFAULT_TAB && !a.ui.ribbon_collapsed, "the new window starts afresh");
+    assert!(a.dialog.is_none() && a.ui.tab == crate::DEFAULT_TAB, "the new window starts afresh, on Home");
+    assert!(a.ui.ribbon_collapsed, "with the ribbon hidden, as the first window has it");
+    a.run("ui.collapseRibbon", json!({})).unwrap();
     frames(&ctx, &mut a, 3);
     let child = a.active_viewport();
     let child_window = a.windows.shown();

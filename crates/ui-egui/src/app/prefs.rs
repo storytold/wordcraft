@@ -35,8 +35,6 @@ impl WordApp {
         // Word opens on Home every launch, so the tab `ui.json` holds is not restored. Going File
         // and back to the editor within the run still returns to the tab that was showing.
         self.ui.tab = DEFAULT_TAB.into();
-        // Every document window opens the same way, launch included: ribbon shown, on Home.
-        self.ui.ribbon_collapsed = false;
         let recent_fonts = recent_fonts_from(self.ui.recent_fonts.iter().map(String::as_str));
         self.ui.recent_fonts = recent_fonts;
         // A `ui.json` from before the theme setting: its dark-mode switch picks Dark or Light.

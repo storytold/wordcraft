@@ -7022,14 +7022,12 @@ fn prefs_without_editing_keep_its_defaults() {
 fn startup_opens_on_home_not_the_saved_tab() {
     let mut a = app();
     a.ui.tab = "Review".into();
-    a.ui.ribbon_collapsed = true;
     a.ui.theme = theme::Appearance::Dark;
     let saved = serde_json::to_string(&a.prefs()).unwrap();
     assert!(saved.contains(r#""tab":"Review""#), "{saved}");
     let mut b = app();
     b.apply_prefs(serde_json::from_str(&saved).unwrap());
     assert_eq!(b.ui.tab, DEFAULT_TAB, "the saved tab is not restored");
-    assert!(!b.ui.ribbon_collapsed, "nor is a hidden ribbon");
     assert_eq!(b.ui.theme, theme::Appearance::Dark, "the other preferences are");
 }
 
