@@ -823,6 +823,107 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
     }
 }
 
+/// Where Word breaks around ASCII punctuation next to Thai, which UAX #14 mostly forbids (no
+/// break before `:` `;` `.` `!` `)`, none after one before a letter, none after `(`), so
+/// "เสียชีวิต :รหัสไปรษณีย์" had no break at all. As measured in Word for Windows (TH SarabunPSK,
+/// compatibility mode 15, Thai in `w:cs` runs):
+/// - a break after a mark followed by Thai, or after one Thai comes just before (unless a space
+///   follows it, or it's `;` or `?` before Latin), but never after an opening mark (`(`, `[`,
+///   `{`, or a quote after a space);
+/// - a comma after Thai breaks before it (unless that Thai follows a digit or letter, as in
+///   "4.1ข,") and never after it;
+/// - a break before a mark that follows a space after Thai or that Thai follows;
+/// - a break before an opening mark or a run of two or more dots right after Thai, and after
+///   the spaces that follow such an opening mark;
+/// - none inside an abbreviation ("พ.ศ.", "ม.ค.", "เม.ย."), though a stop before a word
+///   ("นพ." | "สมชาย") or another abbreviation ("รพ." | "ผศ.") is a place to break.
+///
+/// Thai digits don't count as Thai: "๓๙,๖๗๕.๖๐" stays one number.
+fn thai_punctuation_breaks(text: &str, found: &mut Vec<usize>) {
+    // Thai and Lao letters and marks, not their digits.
+    let is_thai_lao = |c: char| matches!(c, '\u{0E00}'..='\u{0EFF}') && !c.is_numeric();
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let at = |k: usize| chars.get(k).map(|&(_, c)| c);
+    let space = |c: char| c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}');
+    let mut drop = Vec::new();
+    for (k, &(i, c)) in chars.iter().enumerate() {
+        if !c.is_ascii_punctuation() {
+            continue;
+        }
+        let prev = k.checked_sub(1).and_then(at);
+        let next = at(k + 1);
+        // A quote after a space (or at the start) opens, as a bracket does.
+        let opening = |c: char| matches!(c, '(' | '[' | '{') || (matches!(c, '"' | '\'') && prev.is_none_or(space));
+        let end = i + c.len_utf8();
+        let thai_next = next.is_some_and(is_thai_lao);
+        let thai_prev = prev.is_some_and(is_thai_lao);
+        // A run of marks ("..", ":-") breaks at its ends: what's before its first mark counts.
+        let mut first = k;
+        while first > 0 && at(first - 1).is_some_and(|p| p.is_ascii_punctuation()) {
+            first -= 1;
+        }
+        let thai_before_run = first.checked_sub(1).and_then(at).is_some_and(is_thai_lao);
+        let mark_next = next.is_some_and(|n| n.is_ascii_punctuation());
+        if opening(c) {
+            if thai_next {
+                drop.push(end);
+            }
+            if thai_prev {
+                found.push(i);
+            }
+            if thai_prev && next.is_some_and(space) {
+                // "เสียชีวิต( รหัส" can also break after the spaces.
+                let mut after = k + 1;
+                while at(after).is_some_and(space) {
+                    after += 1;
+                }
+                found.push(chars.get(after).map_or(text.len(), |&(j, _)| j));
+            }
+            continue;
+        }
+        // A comma after Thai goes to the next line with what follows: a break before it, none after.
+        // Not when the Thai starts right after a digit or letter, as in "[I-4.1ข, ค]".
+        if c == ',' && thai_prev {
+            let mut start = k;
+            while start > 0 && at(start - 1).is_some_and(is_thai_lao) {
+                start -= 1;
+            }
+            if !start.checked_sub(1).and_then(at).is_some_and(char::is_alphanumeric) {
+                found.push(i);
+            }
+            drop.push(end);
+            continue;
+        }
+        // `;` and `?` (which Word never types as complex script) stay with Latin after them.
+        let keeps_latin = matches!(c, ';' | '?') && !thai_next;
+        if keeps_latin && thai_prev && next.is_some_and(char::is_alphanumeric) {
+            drop.push(end);
+        }
+        // Inside an abbreviation ("พ.ศ.", "ม.ค.", "เม.ย.") the stop is followed by one Thai letter
+        // and another stop: Word keeps the abbreviation whole.
+        let in_abbreviation = c == '.' && {
+            let mut j = k + 1;
+            while at(j).is_some_and(is_thai_lao) {
+                j += 1;
+            }
+            j - k - 1 == 1 && at(j) == Some('.')
+        };
+        if !mark_next && !keeps_latin && !in_abbreviation && (thai_next || (thai_before_run && next.is_some_and(|n| !space(n)))) {
+            found.push(end);
+        }
+        // Before the mark: after a space that follows Thai, or with Thai after it.
+        let thai_before_space = k.checked_sub(2).and_then(at).is_some_and(is_thai_lao);
+        if prev.is_some_and(space) && (thai_before_space || thai_next) {
+            found.push(i);
+        }
+        // Before a run of dots ("เลขบัตร.."), not a full stop.
+        if c == '.' && thai_prev && next == Some('.') {
+            found.push(i);
+        }
+    }
+    found.retain(|i| !drop.contains(i));
+}
+
 fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
     let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(text) {
@@ -905,6 +1006,9 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
             replaced_runs.get(run_index).is_none_or(|run| i <= run.start || i >= run.end)
         });
         found.extend(thai_breaks);
+        thai_punctuation_breaks(text, &mut found);
+        found.sort_unstable();
+        found.dedup();
     }
     // Myanmar has no spaces between words: it wraps between syllables.
     if text.chars().any(|c| matches!(u32::from(c), 0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F)) {
@@ -935,6 +1039,78 @@ mod break_tests {
         assert!(breaks.contains(&hyphen), "hyphen before slash remains a break: {breaks:?}");
         assert!(breaks.contains(&thai_word_end), "Thai dictionary word boundary remains a break: {breaks:?}");
         assert!(!breaks.contains(&(thai_start + 'ท'.len_utf8())), "no break inside the Thai word: {breaks:?}");
+    }
+}
+
+#[cfg(test)]
+mod thai_punctuation_tests {
+    /// The text with a `|` at each place `break_positions` allows a break.
+    fn marked(text: &str) -> String {
+        let rp = wordcraft_doc::Document::new().styles.resolve_para(&Default::default());
+        let breaks = super::break_positions(text, &rp);
+        let mut out = String::new();
+        for (i, c) in text.char_indices() {
+            if i > 0 && breaks.contains(&i) {
+                out.push('|');
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    /// As measured in Word for Windows: a break after a colon before Thai even after a space
+    /// ("เสียชีวิต :" | "รหัสไปรษณีย์"), before a run of dots after Thai ("เลขบัตร" | ".."), before
+    /// but not after an opening bracket, before a comma after Thai and not after it, none inside a
+    /// number in Thai digits, and `;` or `?` kept with Latin after them.
+    #[test]
+    fn thai_breaks_around_punctuation_as_word_does() {
+        let colon = marked("ข้อมูลการเสียชีวิต :รหัสไปรษณีย์");
+        assert!(colon.contains(":|ร"), "{colon}");
+        assert!(colon.contains(" |:"), "{colon}");
+        let dots = marked("สมาชิก/เลขบัตร..");
+        assert!(dots.contains("บัตร|.."), "{dots}");
+        assert!(!dots.contains(".|."), "{dots}");
+        let bracket = marked("ความเร็วสูง(ไฟเบอร์)");
+        assert!(bracket.contains("สูง|("), "{bracket}");
+        assert!(!bracket.contains("(|"), "{bracket}");
+        let number = marked("จำนวนเงิน ๓๙,๖๗๕.๖๐ บาท");
+        assert!(number.contains("๓๙,๖๗๕.๖๐"), "{number}");
+        let comma = marked("ข้อมูลส่วนตัว,ที่อยู่ปัจจุบัน");
+        assert!(comma.contains("ตัว|,ที่"), "{comma}");
+        let item = marked("[I-4.1ข, ค]");
+        assert!(item.contains("ข,"), "{item}");
+        for latin in [marked("การเสียชีวิต;planning"), marked("การเสียชีวิต?planning")] {
+            assert!(latin.contains(";planning") || latin.contains("?planning"), "{latin}");
+        }
+        let spaced = marked("การเสียชีวิต( รหัส");
+        assert!(spaced.contains("วิต|( |รหัส"), "{spaced}");
+        for (text, at) in [("หมายเหตุ:ส่งภายใน", "ตุ:|ส่ง"), ("ร้อยละ%ของงาน", "ละ%|ของ"), ("แบบฟอร์ม)ต่อไป", "ฟอร์ม)|ต่อ")]
+        {
+            let m = marked(text);
+            assert!(m.contains(at), "{m}");
+        }
+    }
+
+    /// As measured in Word for Windows (TH SarabunPSK, widths of 20 to 300 pt): an abbreviation
+    /// such as "พ.ศ.", "ม.ค." or "เม.ย." stays whole, while a stop before a word or another
+    /// abbreviation is a place to break ("แล้ว." | "ต่อไป", "ฯลฯ." | "เพิ่มเติม", "นพ." | "สมชาย",
+    /// "รพ." | "ผศ.").
+    #[test]
+    fn thai_abbreviations_stay_whole_as_in_word() {
+        for (text, whole) in [("ประกาศพ.ศ.2564เรื่องงาน", "พ.ศ."), ("ตั้งแต่ม.ค.ถึงเดือนอื่น", "ม.ค."), ("วันที่เม.ย.62", "เม.ย.")]
+        {
+            let m = marked(text);
+            assert!(m.contains(whole), "{m}");
+        }
+        for (text, at) in [
+            ("จบงานแล้ว.ต่อไปเป็นงานใหม่", "แล้ว.|ต่อ"),
+            ("ระเบียบฯลฯ.เพิ่มเติมอีก", "ฯลฯ.|เพิ่ม"),
+            ("ส่งให้นพ.สมชายด้วย", "นพ.|สม"),
+            ("บริหารงานรพ.ผศ.จำนวน", "รพ.|ผศ."),
+        ] {
+            let m = marked(text);
+            assert!(m.contains(at), "{m}");
+        }
     }
 }
 
