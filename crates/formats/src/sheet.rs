@@ -237,7 +237,7 @@ fn cells_to_rows<C>(cells: &BTreeMap<CellRef, C>, fmt: impl Fn(&C) -> String) ->
 /// Cells kept under the caps: cells past [`MAX_ROWS`] or [`MAX_COLS`] are ignored, and once a cell
 /// would take the cells kept past [`MAX_CELLS`] (blank cells before a value in its row count), their
 /// text past [`MAX_TEXT_BYTES`], or the text made past [`MAX_TEXT_MADE`], its row and every cell
-/// after it are ignored.
+/// after it are ignored, and so is a kept row that a cell after it is written to.
 #[derive(Default)]
 struct Grid {
     rows: BTreeMap<u32, BTreeMap<u32, String>>,
@@ -253,7 +253,13 @@ impl Grid {
     /// Keep the text `value` makes at `row`, `col` if it fits. `value` is not called for a cell
     /// that is ignored for its position or after the grid is full.
     fn insert(&mut self, row: u32, col: u32, value: impl FnOnce() -> String) {
-        if self.full || row as usize >= MAX_ROWS || col as usize >= MAX_COLS {
+        if row as usize >= MAX_ROWS || col as usize >= MAX_COLS {
+            return;
+        }
+        if self.full {
+            // A row kept before the grid filled up and written again now (row numbers that
+            // repeat) would keep only some of its cells.
+            self.rows.remove(&row);
             return;
         }
         let s = value();
@@ -355,6 +361,23 @@ mod tests {
         grid.insert(1, 0, || "next".to_string());
         assert!(!grid.full);
         assert_eq!(grid.into_rows(), [["short"], ["next"]]);
+    }
+
+    /// A row kept before the grid filled up, written again after it (a sheet whose row numbers
+    /// repeat), is left out, so that no recipient is left with only some of its fields. A write
+    /// ignored for its position leaves it.
+    #[test]
+    fn a_kept_row_written_after_the_grid_is_full_is_left_out() {
+        let mut grid = Grid::default();
+        grid.insert(0, 0, || "A1".to_string());
+        grid.insert(1, 0, || "A2".to_string());
+        while !grid.full {
+            grid.insert(0, 1, || "x".repeat(MAX_TEXT_BYTES - 10));
+        }
+        grid.insert(1, MAX_COLS as u32, || "z".to_string());
+        assert_eq!(grid.rows.keys().copied().collect::<Vec<_>>(), [1]);
+        grid.insert(1, 1, || "B2".to_string());
+        assert!(grid.into_rows().is_empty());
     }
 
     /// A cell written again as empty is empty, and its text no longer counts.
@@ -461,6 +484,18 @@ mod tests {
             assert_eq!(rows.len(), 1 + 33_554, "{why}");
             assert!(rows[1..].iter().all(|r| r[..] == [a.as_str(), b.as_str()]), "{why}: a row has only some of its fields");
         }
+        // A row of 856 bytes first: the last copy ends exactly at the budget and is kept.
+        let (a, b, fill) = ("a".repeat(1_000), "b".repeat(1_000), "c".repeat(856));
+        let book = sheet(format!(
+            r#"<table:table-row>{}</table:table-row><table:table-row table:number-rows-repeated="40000">{}{}</table:table-row>"#,
+            cell(&fill),
+            cell(&a),
+            cell(&b)
+        ));
+        let rows = read_rows(&book, Pick::Index(0)).unwrap().1;
+        assert_eq!(rows[..2], [vec!["Name".to_string(), "Note".to_string()], vec![fill]]);
+        assert_eq!(rows.len(), 2 + 33_554, "the row that ends at the budget is kept");
+        assert!(rows[2..].iter().all(|r| r[..] == [a.as_str(), b.as_str()]), "a row has only some of its fields");
         // One row whose repeated cells pass the budget on their own.
         let long = "x".repeat(1_000_000);
         let book = sheet(format!(
