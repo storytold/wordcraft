@@ -2,8 +2,9 @@ use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
 use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
 use super::select::{
-    all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_placeable, has_shape,
-    has_shape_or_canvas, has_sizable, obj_size, objects_list, selected_or_text_box, with_float, with_obj,
+    all_objects, alt_text, can_group, edit_obj, has_any_shape, has_floating, has_group, has_movable, has_object, has_picture, has_placeable,
+    has_shape, has_shape_or_canvas, has_sizable, obj_size, objects_list, selected_or_text_box, target_objects, with_float, with_movable_floats,
+    with_obj,
 };
 use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
@@ -187,14 +188,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 "right" => Spin::new(90.0, false, false),
                 other => return Err(CmdError::Params(format!("unknown direction `{other}`"))),
             };
-            with_float(s, |f| f.set_spin(f.spin().within(by)))
+            with_movable_floats(s, |f| f.set_spin(f.spin().within(by)))
         })
         .params(r#"{"direction": "right|left|flipVertical|flipHorizontal"}  (turns 90° or mirrors the selected picture, shape or text box; its pixels are kept)"#)
         .when(has_movable),
         CommandSpec::new("arrange.rotation", "Rotation", "Layout › Arrange", |s, v| {
             let deg = p::req_f32(v, "degrees")?;
             let (fh, fv) = (p::bool(v, "flipH"), p::bool(v, "flipV"));
-            with_float(s, |f| {
+            with_movable_floats(s, |f| {
                 let cur = f.spin();
                 f.set_spin(Spin::new(deg, fh.unwrap_or(cur.flip_h), fv.unwrap_or(cur.flip_v)));
             })
@@ -309,41 +310,74 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
             };
             let w = p::f32(v, "width").map(|w| w.clamp(0.0, 72.0));
-            let dash = p::str(v, "dash").map(wordcraft_doc::line_dash::LineDash::from_ooxml);
-            let cap = p::str(v, "cap").map(wordcraft_doc::connector::LineCap::from_ooxml);
-            with_obj(s, |o| {
-                if let InlineObject::Shape { stroke, stroke_width, extra, .. } = o {
-                    if let Some(c) = color {
-                        *stroke = c;
-                        // A colour chosen here replaces an outline gradient from a file.
-                        extra.outline_fill = None;
+            let dash = match v.get("dash") {
+                None => None,
+                Some(val) => {
+                    let d = val.as_str().ok_or_else(|| {
+                        CmdError::Params(
+                            "`dash`: \"solid|dot|dash|lgDash|dashDot|lgDashDot|lgDashDotDot|sysDash|sysDot|sysDashDot|sysDashDotDot\"".into(),
+                        )
+                    })?;
+                    let parsed = wordcraft_doc::line_dash::LineDash::from_ooxml(d);
+                    if d != "solid" && parsed.is_solid() {
+                        return Err(CmdError::Params(format!("unknown `dash` preset `{d}`")));
                     }
-                    if let Some(w) = w {
-                        *stroke_width = w;
-                    }
-                    if let Some(d) = dash.clone() {
-                        extra.dash = d;
-                    }
-                    if let Some(cp) = cap {
-                        extra.cap = cp;
-                    }
-                } else if let Some(style) = crate::cmd::canvas::style_mut(o) {
-                    if let Some(c) = color {
-                        style.stroke = c;
-                    }
-                    if let Some(w) = w {
-                        style.stroke_width = w;
-                    }
+                    Some(parsed)
                 }
-            })
+            };
+            let cap = match v.get("cap") {
+                None => None,
+                Some(val) => {
+                    let c = val.as_str().ok_or_else(|| CmdError::Params("`cap`: \"flat|rnd|sq\"".into()))?;
+                    let parsed = wordcraft_doc::connector::LineCap::from_ooxml(c);
+                    if c != "flat" && parsed.is_flat() {
+                        return Err(CmdError::Params(format!("unknown `cap` style `{c}`")));
+                    }
+                    Some(parsed)
+                }
+            };
+            let targets = target_objects(s, |o| matches!(o, InlineObject::Shape { .. }) || o.is_canvas());
+            if targets.is_empty() {
+                return Err(CmdError::Disabled("no shape selected".into()));
+            }
+            let mut last = serde_json::Value::Null;
+            for (pos, _) in &targets {
+                let o = edit_obj(s, pos, |o| {
+                    if let InlineObject::Shape { stroke, stroke_width, extra, .. } = o {
+                        if let Some(c) = color {
+                            *stroke = c;
+                            // A colour chosen here replaces an outline gradient from a file.
+                            extra.outline_fill = None;
+                        }
+                        if let Some(w) = w {
+                            *stroke_width = w;
+                        }
+                        if let Some(d) = dash.clone() {
+                            extra.dash = d;
+                        }
+                        if let Some(cp) = cap {
+                            extra.cap = cp;
+                        }
+                    } else if let Some(style) = crate::cmd::canvas::style_mut(o) {
+                        if let Some(c) = color {
+                            style.stroke = c;
+                        }
+                        if let Some(w) = w {
+                            style.stroke_width = w;
+                        }
+                    }
+                })?;
+                last = serde_json::to_value(o).unwrap_or(serde_json::Value::Null);
+            }
+            Ok(json!({"object": last, "count": targets.len()}))
         })
-        .params(r#"{"color"?: "RRGGBB" | null, "width"?: pt, "dash"?: string, "cap"?: string}  (a selected drawing canvas: its border)"#)
+        .params(r#"{"color"?: "RRGGBB" | null, "width"?: pt, "dash"?: "solid|dot|dash|lgDash|dashDot|lgDashDot|lgDashDotDot|sysDash|sysDot|sysDashDot|sysDashDotDot", "cap"?: "flat|rnd|sq"}  (a selected drawing canvas: its border)"#)
         .when(has_shape_or_canvas),
         CommandSpec::new("shape.effects", "Shape Effects", "Shape Format › Shape Styles", shape_effects)
             .params(
                 r#"{"shadow"?: preset|{"preset"?, "color"?: "RRGGBB", "transparency"?: %, "blur"?: pt, "distance"?: pt, "angle"?: deg}|null, "glow"?: pt|{"color"?: "RRGGBB", "size"?: pt, "transparency"?: %}|null, "softEdge"?: pt|null}  (shadow presets: offsetBottomRight, offsetBottom, offsetBottomLeft, offsetRight, offsetCenter, offsetLeft, offsetTopRight, offsetTop, offsetTopLeft; an omitted key is left as it is; applies to every shape in the selection)"#,
             )
-            .when(has_shape),
+            .when(has_any_shape),
         CommandSpec::new("shape.change", "Change Shape", "Shape Format › Insert Shapes", |s, v| {
             let kind: wordcraft_doc::para::ShapeKind = serde_json::from_value(v.get("kind").cloned().unwrap_or(json!("rectangle"))).map_err(|e| CmdError::Params(e.to_string()))?;
             with_obj(s, |o| {

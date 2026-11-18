@@ -1,5 +1,5 @@
-use super::select::{obj_size, selected, selected_or_text_box, with_obj};
-use super::{CmdError, CmdResult, InlineObject, Rgb, Session, Value, Wrap, p};
+use super::select::{edit_obj, obj_size, selected, target_objects, with_obj};
+use super::{CmdError, CmdResult, InlineObject, Pos, Rgb, Session, Value, Wrap, json, p};
 use wordcraft_doc::picfx::PicFx;
 
 /// `picture.crop`: the crop, and optionally the new display size, as one edit. With a size, a
@@ -70,19 +70,15 @@ pub fn cropped_original_size(s: &Session, o: &InlineObject) -> Option<(f32, f32)
     Some((orig.w * part(crop[0], crop[2]), orig.h * part(crop[1], crop[3])))
 }
 
-/// Size: `scale` is a percentage of the current size, or with `original` of what the crop leaves
-/// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
-/// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
-pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
-    let (_, o) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no object".into()))?;
+fn planned_size(s: &Session, o: &InlineObject, v: &Value) -> Result<(f32, f32), CmdError> {
     let lock = p::bool(v, "lockAspect").unwrap_or(true);
-    let (w0, h0) = obj_size(&o);
+    let (w0, h0) = obj_size(o);
     let (mut w, mut h) = (w0, h0);
     let scale = p::f32(v, "scale");
     let original = p::bool(v, "original").unwrap_or(false);
     if original {
         let (ow, oh) =
-            cropped_original_size(s, &o).ok_or_else(|| CmdError::Disabled("only a picture whose image can be read has an original size".into()))?;
+            cropped_original_size(s, o).ok_or_else(|| CmdError::Disabled("only a picture whose image can be read has an original size".into()))?;
         let k = scale.unwrap_or(100.0) / 100.0;
         (w, h) = (ow * k, oh * k);
     } else if let Some(sc) = scale {
@@ -118,21 +114,41 @@ pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
     // Sides set in proportion (from the original, or from a size whose sides both have a length)
     // fit the limits together. Otherwise each side the call sets fits on its own, and a side it
     // leaves as it was keeps its size, a straight line's 0 too.
-    let (w, h) = if keep && (original || (w0 > 0.0 && h0 > 0.0 && (w, h) != (w0, h0))) {
-        fit_size(w, h, true)
+    if keep && (original || (w0 > 0.0 && h0 > 0.0 && (w, h) != (w0, h0))) {
+        Ok(fit_size(w, h, true))
     } else {
         let (fw, fh) = fit_size(w, h, false);
         let left = |new: f32, old: f32| !original && new == old;
-        (if left(w, w0) { w } else { fw }, if left(h, h0) { h } else { fh })
-    };
+        Ok((if left(w, w0) { w } else { fw }, if left(h, h0) { h } else { fh }))
+    }
+}
+
+/// Size: `scale` is a percentage of the current size, or with `original` of what the crop leaves
+/// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
+/// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
+pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
+    let targets = target_objects(s, |o| match o {
+        InlineObject::Graphic { graphic, .. } => graphic.chart.is_some() || graphic.smart_art.is_some(),
+        _ => o.is_drawing(),
+    });
+    if targets.is_empty() {
+        return Err(CmdError::Disabled("no object".into()));
+    }
+    let planned: Vec<(Pos, f32, f32)> =
+        targets.into_iter().map(|(pos, o)| planned_size(s, &o, v).map(|(w, h)| (pos, w, h))).collect::<Result<Vec<_>, _>>()?;
     // Any drawing: a group's members scale with its frame (its child space is kept); a chart or
     // SmartArt graphic lays itself out again at the new size.
     let theme = s.doc.settings.theme_colors.clone();
-    with_obj(s, |o| {
-        o.set_size(w, h);
-        crate::cmd::chart::redraw(o, &theme);
-        crate::cmd::smart_art::redraw(o, &theme);
-    })
+    let mut last = Value::Null;
+    for (pos, w, h) in &planned {
+        let o = edit_obj(s, pos, |o| {
+            o.set_size(*w, *h);
+            crate::cmd::chart::redraw(o, &theme);
+            crate::cmd::smart_art::redraw(o, &theme);
+        })?;
+        last = serde_json::to_value(o).unwrap_or(Value::Null);
+    }
+    Ok(json!({"object": last, "count": planned.len()}))
 }
 
 /// An object size within 1–4000 pt. With `keep`, both sides scale by one factor, the one nearest
