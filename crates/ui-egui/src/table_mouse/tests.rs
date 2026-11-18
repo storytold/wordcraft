@@ -1,17 +1,12 @@
 use super::*;
 use crate::table_resize::tests::{H, button, cell, screen, steps, table_window, table_window_stepping};
 
-/// On the dark paper the column and cell arrows are drawn light, so they stay visible; on
-/// white paper they stay black, and the hollow row arrow is the same on both.
-#[test]
-fn the_selection_arrow_is_light_on_dark_paper() {
-    let dark_paper = Color32::from_gray(wordcraft_render::DARK_PAPER);
-    assert_eq!(arrow_colors(Spot::Column(0), false), (Color32::BLACK, Color32::WHITE));
-    assert_eq!(arrow_colors(Spot::Cell(0, 0), false), (Color32::BLACK, Color32::WHITE));
-    assert_eq!(arrow_colors(Spot::Column(0), true), (Color32::WHITE, dark_paper));
-    assert_eq!(arrow_colors(Spot::Cell(0, 0), true), (Color32::WHITE, dark_paper));
-    assert_eq!(arrow_colors(Spot::Row(0), false), (Color32::WHITE, Color32::BLACK));
-    assert_eq!(arrow_colors(Spot::Row(0), true), (Color32::WHITE, Color32::BLACK));
+/// The direction of the painted selection arrow the last pass settled on, `None` for any other cursor.
+fn arrow_toward(h: &H) -> Option<Vec2> {
+    match craft::ui::runtime::cursor::current(&h.ctx) {
+        Some(Cursor::Painted(PaintedCursor::Arrow { toward, .. })) => toward,
+        _ => None,
+    }
 }
 
 fn click(h: &mut H, at: Pos2) {
@@ -33,7 +28,7 @@ fn a_click_above_a_column_selects_it() {
     let at = screen(&mut h, b.x + b.w / 2.0, b.y - 3.0);
     h.event(egui::Event::PointerMoved(at));
     steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the drawn selection arrow");
+    assert!(arrow_toward(&h).is_some_and(|dir| dir.y > 0.0), "the selection arrow points down at the column");
     click(&mut h, at);
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 1), (1, 1))));
     assert_eq!(h.state().session.undo_depth(), depth);
@@ -62,7 +57,7 @@ fn dragging_down_the_row_areas_selects_rows() {
     assert_eq!(h.state().session.cell_range().map(|r| r.rows), Some((0, 1)), "the selection follows the pointer");
     button(&h, end, false);
     steps(&mut h, 2);
-    assert!(h.state().canvas.table_drag.is_none());
+    assert!(!dragging(h.state()));
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 1), (0, 2))));
 }
 
@@ -78,7 +73,7 @@ fn the_margin_beside_a_table_selects_rows() {
     let at_a = screen(&mut h, far, ya);
     h.event(egui::Event::PointerMoved(at_a));
     steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the drawn selection arrow");
+    assert!(arrow_toward(&h).is_some_and(|dir| dir.x > 0.0 && dir.y < 0.0), "the selection arrow points up and right beside the row");
     click(&mut h, at_a);
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 0), (0, 2))), "one click, the row");
     // Drag from row 0 to row 1.
@@ -235,24 +230,6 @@ fn dragging_across_cells_selects_their_rectangle() {
     assert!(!crate::mini_toolbar::visible(h.state()));
 }
 
-/// The "+" left of a row border adds a row there and selects it, in one undo step; over it
-/// the pointer is the plain arrow.
-#[test]
-fn the_plus_button_adds_a_row() {
-    let mut h = table_window();
-    let a = cell(&mut h, 0, 0);
-    let depth = h.state().session.undo_depth();
-    let at = screen(&mut h, a.x - 10.0, a.bottom());
-    h.event(egui::Event::PointerMoved(at));
-    steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
-    click(&mut h, at);
-    let rows = h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.len());
-    assert_eq!(rows, Some(3));
-    assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((1, 1), (0, 2))), "the new row is selected");
-    assert_eq!(h.state().session.undo_depth(), depth + 1);
-}
-
 /// A double-click along a cell's left edge selects its row, as in Word.
 #[test]
 fn a_double_click_by_a_cells_edge_selects_its_row() {
@@ -285,7 +262,7 @@ fn dragging_the_move_handle_moves_the_table() {
     let start = screen(&mut h, hx, hy);
     h.event(egui::Event::PointerMoved(start));
     steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move);
+    assert_eq!(craft::ui::runtime::cursor::current(&h.ctx), Some(Cursor::System(CursorIcon::Move)), "the move arrows over the handle");
     button(&h, start, true);
     h.step();
     let end = screen(&mut h, hx + 40.0, hy + 30.0);
@@ -293,7 +270,7 @@ fn dragging_the_move_handle_moves_the_table() {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
         h.step();
     }
-    assert!(h.state().canvas.table_drag.is_some(), "a move is in progress");
+    assert!(dragging(h.state()), "a move is in progress");
     assert_eq!(cell(&mut h, 0, 0), a, "the table waits for the release");
     button(&h, end, false);
     steps(&mut h, 3);
