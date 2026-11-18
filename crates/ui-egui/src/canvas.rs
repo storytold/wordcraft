@@ -125,6 +125,18 @@ pub(crate) struct ImePreview {
     pub(super) layout: std::sync::Arc<DocLayout>,
 }
 
+/// The replacement a platform can still deliver for a composition a pointer press discarded:
+/// a surrounding deletion followed by a `Commit`, or by `Text` + `Commit`. Unlike the batch-local
+/// state in `keys::canvas_events`, this survives frames, because an interrupt reaches the
+/// platform later than the press that discarded the composition (#6916).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum DismissedReplacement {
+    #[default]
+    None,
+    Awaiting,
+    TextDropped,
+}
+
 pub struct CanvasState {
     /// Page rasters: (key, what the page showed, texture). The key ([`page_key`]) includes the
     /// raster scale; what the page showed ([`page_shows`]) doesn't, so a zoom can tell whether
@@ -310,6 +322,9 @@ pub struct CanvasState {
     /// text again would put it under the pointer, because the press also moved the caret; a
     /// different pre-edit starts a new composition, an empty one ends the old one.
     pub(crate) ime_dismissed_preedit: Option<String>,
+    /// A surrounding deletion (and its paired replacement) still queued for that discarded
+    /// composition. It must not erase text at the caret the press moved to.
+    pub(crate) ime_dismissed_replacement: DismissedReplacement,
     /// The last bounded surrounding window and the `(revision, cursor, anchor)` it was built
     /// from. An idle pass reuses it instead of walking a long paragraph again.
     pub(crate) ime_window_cache: Option<(u64, wordcraft_doc::Pos, wordcraft_doc::Pos, Option<wordcraft_doc::ime_text::ImeWindow>)>,
@@ -481,6 +496,7 @@ impl Default for CanvasState {
             ime_interrupt_now: false,
             ime_interrupted_preedit: false,
             ime_dismissed_preedit: None,
+            ime_dismissed_replacement: DismissedReplacement::None,
             ime_window_cache: None,
             ime_tracker: egui::ImeContextTracker::new(),
             ime_viewport: None,
@@ -840,6 +856,7 @@ fn dismiss_ime_composition(app: &mut WordApp) {
         return;
     }
     app.canvas.ime_dismissed_preedit = Some(std::mem::take(&mut app.canvas.ime_preedit));
+    app.canvas.ime_dismissed_replacement = DismissedReplacement::None;
     app.canvas.ime_preedit_range = None;
     app.canvas.ime_preview = None;
     app.canvas.ime_interrupted_preedit = true;
@@ -1456,7 +1473,10 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         let at = wordcraft_geom::Point::new(x, y);
         let on_cells =
             wordcraft_engine::cmd::table_mouse::cell_rects(layout, &app.session.doc, range).iter().any(|(pi, r)| *pi == page && r.contains(at));
-        if !on_cells && app.canvas.ime_preview.is_none() && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
+        // A live composition can have no preview copy (a range of cells refuses one). Keep the
+        // selected cells in that case too: a late IME result must not land in the cell the
+        // pointer clicked (#6916).
+        if !on_cells && app.canvas.ime_preedit.is_empty() && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
             app.session.sel = wordcraft_engine::Selection::caret(pos);
         }
     }

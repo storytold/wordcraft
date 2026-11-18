@@ -8,6 +8,7 @@ use super::shortcuts::{
     is_shift_delete, paste_release_modifiers,
 };
 use super::{Key, Modifiers, WordApp, json};
+use crate::canvas::DismissedReplacement;
 
 /// Events for the focused canvas: text, editing keys, clipboard, IME. While keytips are showing
 /// every key belongs to them (letters pick badges, Escape cancels), so nothing here runs.
@@ -139,12 +140,10 @@ fn read_mode_events(app: &mut WordApp, ctx: &egui::Context, events: &[egui::Even
 fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool {
     let Batch { interrupted_preedit, interrupted_replacement, .. } = b;
     *interrupted_preedit |= std::mem::take(&mut app.canvas.ime_interrupted_preedit);
-    // A pointer press discarded a composition. The platform may keep reporting its old pre-edit
-    // for a frame or two after the interrupt. Drop those events *without* releasing the
-    // quarantine: the replacement belonging to that composition may be queued right behind
-    // them. A different pre-edit starts a fresh composition; an empty pre-edit or a commit ends
-    // the old one. In particular nothing here paints the discarded text again at the caret the
-    // click moved to (#6916).
+    // A pointer press discarded a composition. The interrupt reaches the platform a frame or two
+    // later, so its pre-edit, result string and replacement deletion can all arrive after the
+    // press moved the caret. Keep the quarantine until that result has been consumed; a
+    // genuinely different pre-edit or fresh ordinary input ends it (#6916).
     if let Some(dismissed) = app.canvas.ime_dismissed_preedit.clone() {
         match e {
             egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if !text.is_empty() && *text == dismissed => {
@@ -155,27 +154,47 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
                 app.canvas.ime_join_text = None;
                 return true;
             }
-            egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
-                // The replacement queued for the composition the click discarded. An interrupt
-                // cancels it, but `WM_IME_ENDCOMPOSITION` can still carry a result string; it
-                // must not enter the body at the caret the pointer just moved to. Drop one: the
-                // composition is over, so a later commit is fresh input.
-                *interrupted_preedit = false;
-                *interrupted_replacement = EquationReplacementDrop::None;
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if !text.is_empty() => {
+                // A different pre-edit starts a new composition at the caret the click placed.
                 app.canvas.ime_dismissed_preedit = None;
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::None;
+            }
+            egui::Event::Ime(egui::ImeEvent::Preedit { .. }) => {
+                // Windows can send an empty pre-edit immediately before the canceled
+                // composition's result string. It is not an acknowledgement: keep the
+                // quarantine so the following Commit is dropped too.
+                return true;
+            }
+            egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { .. } | egui::ImeEvent::DeleteSurroundingBytes { .. }) => {
+                // The old composition's replacement would delete around its original caret,
+                // which the press has already moved. Drop it and wait for its paired result.
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::Awaiting;
                 app.session.clear_ime_joins();
                 app.canvas.ime_join_text = None;
                 return true;
             }
-            egui::Event::Ime(egui::ImeEvent::Preedit { .. }) => {
+            egui::Event::Text(_) if app.canvas.ime_dismissed_replacement == DismissedReplacement::Awaiting => {
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::TextDropped;
+                app.session.clear_ime_joins();
+                app.canvas.ime_join_text = None;
+                return true;
+            }
+            egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
+                // `WM_IME_ENDCOMPOSITION` can still carry a result string. Drop it: the
+                // composition is over, so a later commit is fresh input.
+                *interrupted_preedit = false;
+                *interrupted_replacement = EquationReplacementDrop::None;
                 app.canvas.ime_dismissed_preedit = None;
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::None;
+                app.session.clear_ime_joins();
+                app.canvas.ime_join_text = None;
+                return true;
             }
             // Ordinary input after the dismissal is fresh, so end the quarantine: a later
-            // commit must reach `ime_commit` at the caret. A replacement Text/Commit sequence
-            // belonging to the canceled composition is still dropped by the interrupted-preedit
-            // state below, which owns that case.
+            // commit must reach `ime_commit` at the caret.
             egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Key { pressed: true, .. } => {
                 app.canvas.ime_dismissed_preedit = None;
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::None;
             }
             _ => {}
         }

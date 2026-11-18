@@ -427,6 +427,45 @@ fn fresh_input_after_a_dismissal_releases_the_commit_quarantine() {
     assert!(text.contains('あ'), "a fresh commit reaches the document: {text:?}");
 }
 
+/// #6916 review: Windows can emit an empty pre-edit immediately before the canceled
+/// composition's result string, in the frame *after* the press (when the batch-local interrupted
+/// flag is already gone). Treating that empty pre-edit as an acknowledgement would let the
+/// result string into the body at the caret the press moved to.
+#[test]
+fn an_empty_preedit_keeps_the_dismissal_through_a_late_commit() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    h.step();
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text, "甲乙丙丁", "the empty pre-edit does not release the quarantine: {text:?}");
+    assert!(h.state().canvas.ime_dismissed_preedit.is_none(), "the consumed result ends the quarantine");
+}
+
+/// #6916 review: a surrounding deletion queued for the discarded composition must not erase
+/// body text at the caret the press moved to; its paired replacement is dropped as well.
+#[test]
+fn a_dismissed_composition_delete_pair_does_not_erase_the_body() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    h.step();
+    h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 3, after_bytes: 0 }));
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text, "甲乙丙丁", "neither the deletion nor its replacement touches the body: {text:?}");
+}
+
 /// The dismissal is scoped to the composition the click ended: a genuinely new composition must
 /// still be laid out at the caret the click placed.
 #[test]
