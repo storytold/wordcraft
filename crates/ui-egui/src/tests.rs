@@ -357,6 +357,40 @@ fn non_latin_file_name_is_drawn_in_the_caption() {
     assert!(cjk.canvas.ime_faces.is_empty(), "CJK collections are not copied into the fallback list");
 }
 
+/// The CJK UI font a Japanese file name asks for is loaded and draws the name, also in a build
+/// without craft-i18n's CJK catalogs and craft-fonts' CJK faces. There it was never loaded, and
+/// the caption, like an input method's composition, showed boxes.
+#[test]
+fn a_japanese_file_name_is_drawn_in_the_caption() {
+    // A font to draw it with: an installed CJK font in a build without embedded CJK faces, or
+    // embedded faces that have the name's characters (embedded faces without them load no
+    // installed font for it).
+    let embedded = wordcraft_fonts::ui_cjk_fonts_for(false, false);
+    let drawable = if embedded.is_empty() {
+        wordcraft_fonts::system_cjk_ui_font_for(false, false, &[]).is_some()
+    } else {
+        wordcraft_fonts::ui_uncovered_cjk(&["日本語"], &embedded).is_empty()
+    };
+    // macOS and Windows always have one (Hiragino, Yu Gothic), and CI runs these tests on both (the
+    // Print job), so there a missing font fails instead of hiding a regression.
+    assert!(drawable || cfg!(not(any(target_os = "macos", windows))), "macOS and Windows have a CJK font, but none draws 日本語");
+    if !drawable {
+        eprintln!("skipped: no CJK font draws 日本語");
+        return;
+    }
+    let ctx = egui::Context::default();
+    let frame = |app: &mut WordApp| {
+        ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+    };
+    let mut a = app();
+    a.session.path = Some("日本語.docx".into());
+    // The fonts the name asks for load from the next frame.
+    frame(&mut a);
+    frame(&mut a);
+    assert!(a.want_system_cjk);
+    assert!(ctx.fonts_mut(|f| f.has_glyphs(&crate::theme::semibold(13.0), "日本語")), "the caption draws the name");
+}
+
 /// File › Recover draws the recovered documents' names with the interface faces: a Chinese
 /// name there was a row of boxes because nothing asked for the CJK UI font. (The Recent list
 /// has its own, `ensure_recent_fonts`.)
@@ -3584,6 +3618,27 @@ fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
     }
 }
 
+/// The Paste button is named "Paste": its hint adds the key as the platform writes it, so its
+/// name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
+#[test]
+fn the_paste_button_is_named_without_a_mac_key() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    assert!(h.query_by_role_and_label(Role::Button, "Paste").is_some(), "the Paste button is called \"Paste\"");
+    assert!(h.query_by_role_and_label(Role::Button, "Paste (⌘V)").is_none(), "no Mac key in its name");
+}
+
 /// #1015: focusing Save is not enough: its dialog must expose the question and any failed
 /// save's explanation, so assistive technology has context for the three choices.
 #[test]
@@ -3765,6 +3820,148 @@ fn the_print_button_shows_only_with_a_print_hook() {
             assert_eq!(printed.get(), 1, "the button printed");
         }
     }
+}
+
+/// A Print page with printers found (so it draws the job message), in English.
+fn print_page_harness(message: Option<crate::printing::Feedback>) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = app();
+    a.ui.language = "en".into();
+    a.services.printers = Some(Box::new(|| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(vec![printing::Printer { name: "Test queue".into(), label: String::new(), default: true }]);
+        receiver
+    }));
+    a.services.print_native = Some(Box::new(|_, _, _, _| std::sync::mpsc::channel().1));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    // The page's first drawing starts discovery, which replaces the message: draw it once, leave,
+    // and let the printers arrive.
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
+    h.run_steps(3);
+    set_print_message(&mut h, message);
+    h.state_mut().print_memo = Default::default();
+    h
+}
+
+/// A job message that arrives without the app's own `print_feedback` acting on it (a submitted job
+/// would close the Print page); what the window has said is set by the test.
+fn set_print_message(h: &mut egui_kittest::Harness<'_, WordApp>, message: Option<crate::printing::Feedback>) {
+    h.state_mut().printing.message = message.clone();
+    h.state_mut().print_feedback_seen = message;
+    h.state_mut().print_gen += 1;
+}
+
+fn leave_and_reopen_print(h: &mut egui_kittest::Harness<'_, WordApp>) {
+    let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
+    h.run_steps(2);
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(3);
+}
+
+/// Opened again, the Print page doesn't repeat how the last job went when the window already said
+/// it (in its status bar), but a failure that comes in while it is open stays, and what the
+/// printers are doing (none found) shows each time. The shared message is never cleared, so
+/// `ui.printSettings` still reports it.
+#[test]
+fn the_print_page_opens_without_the_last_jobs_message() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(Some(Feedback::Submitted("job 7".into())));
+    // A job went away earlier: its message was said in this window's status bar, and the page closed.
+    h.state_mut().print_memo.said = Some(h.state().print_gen);
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("job 7").is_none(), "the last job's message isn't repeated");
+    assert_eq!(h.state().printing.message, Some(Feedback::Submitted("job 7".into())), "but the shared message stays");
+    // A failure arrives while the page is open, said (by the status bar) in the very frame, so
+    // only the page being open keeps it showing: wrong reopen detection would hide it.
+    let failure = Some(Feedback::Failed("no paper".into()));
+    set_print_message(&mut h, failure.clone());
+    h.state_mut().print_memo.said = Some(h.state().print_gen);
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("no paper").is_some(), "a failure on the open page stays");
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("no paper").is_none(), "reopened, the failure isn't repeated");
+    assert_eq!(h.state().printing.message, failure, "but it is still the shared message");
+    set_print_message(&mut h, Some(Feedback::NoPrinters));
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("No printers found").is_some(), "no printers still shows");
+}
+
+/// A retry that fails again with the very same text is a new result: it shows, though the window
+/// said the same words for the job before.
+#[test]
+fn a_retry_that_fails_the_same_way_shows_again() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(None);
+    // Every job is refused at once, with the same words.
+    h.state_mut().services.print_native = Some(Box::new(|_, _, _, _| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(Err("no paper".to_owned()));
+        receiver
+    }));
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(3);
+    h.state_mut().run("ui.print", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())));
+    assert!(h.query_by_label_contains("no paper").is_some(), "the first failure shows");
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("no paper").is_none(), "reopened, it isn't repeated");
+    h.state_mut().run("ui.print", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())));
+    assert!(h.query_by_label_contains("no paper").is_some(), "the same failure of a new job shows");
+}
+
+/// A result nobody has said yet isn't dropped: a failure that arrived while File showed another
+/// page (so no status bar was drawn) shows when Print opens.
+#[test]
+fn the_print_page_shows_a_result_that_was_never_said() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(None);
+    h.state_mut().ui.backstage = true;
+    h.state_mut().ui.backstage_page = "home".into();
+    h.run_steps(2);
+    // Through the app's own `print_feedback` (run each frame), which says it in a status bar that isn't drawn.
+    h.state_mut().printing.message = Some(Feedback::Failed("no paper".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().print_memo.said, None, "File's home page doesn't say it");
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("no paper").is_some());
+}
+
+/// Per window: what one window has said of the last job isn't another window's, and the shared
+/// message is the same in both. (The harness draws one viewport, which re-enters a window of its
+/// own, so the per-window state is checked where windows swap; `the_print_page_opens_without_the_last_jobs_message`
+/// and `the_print_page_shows_a_result_that_was_never_said` show what each state does on the page.)
+#[test]
+fn the_print_pages_of_two_windows_decide_separately() {
+    use crate::printing::Feedback;
+    let failure = Some(Feedback::Failed("no paper".into()));
+    let mut a = app();
+    a.printing.message = failure.clone();
+    let first = a.windows.shown();
+    a.print_gen = 1;
+    a.print_memo.said = Some(a.print_gen);
+    a.new_window();
+    assert_ne!(first, a.windows.shown());
+    assert_eq!(a.print_memo.said, None, "the second window never said it, so its page shows it");
+    assert_eq!(a.printing.message, failure, "the message is shared, and still there");
+    assert!(a.enter_window(first));
+    assert_eq!(a.print_memo.said, Some(1), "the first window said it, so its page doesn't repeat it");
+    assert_eq!(a.printing.message, failure);
 }
 
 /// Return on the Print page prints, as in Word, where ⌘P opens on Print as the default
@@ -4430,7 +4627,8 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         h.event(key(egui::Key::C, modifiers));
         h.step();
-        assert!(h.state().session.painter.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.painter.is_none(), "{modifiers:?}: Copy Formatting doesn't arm the Format Painter brush");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Copy Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: the existing clipboard text was preserved");
         assert!(copied(&h).is_empty(), "{modifiers:?}: no text reached the system clipboard: {:?}", copied(&h));
@@ -4441,12 +4639,47 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         h.event(key(egui::Key::V, modifiers));
         h.step();
         assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: Paste Formatting made the target bold");
-        assert!(h.state().session.painter.is_none(), "{modifiers:?}: the non-sticky painter is used up");
-        assert_eq!(body_text(h.state()), "Bold plain", "{modifiers:?}: pasting formatting left the document text alone");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: copied formatting stays for the next Paste Formatting");
+        // Pasted again, as in Word: formatting again, never the clipboard's text (#5616).
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        h.state_mut().run("text.insert", json!({"text": " more"})).unwrap();
+        h.state_mut().run("select.text", json!({"text": "more"})).unwrap();
+        // It types on in the pasted bold: make it plain first.
+        h.state_mut().run("format.bold", json!({})).unwrap();
+        assert_eq!(bold(&mut h), Some(false));
+        h.event(key(egui::Key::V, modifiers));
+        h.step();
+        assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: a second Paste Formatting made the next target bold");
+        assert_eq!(body_text(h.state()), "Bold plain more", "{modifiers:?}: the second paste left the text alone");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Paste Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: Paste Formatting preserved the clipboard text");
         assert!(copied(&h).is_empty(), "{modifiers:?}: pasting formatting put no text on the system clipboard: {:?}", copied(&h));
     }
+}
+
+/// #1537/#4943: with no formatting picked up, Ctrl/Cmd+Shift+V pastes the clipboard as text
+/// only (Word for Windows): the text arrives in the destination's formatting, not the source's.
+#[test]
+fn ctrl_shift_v_without_copied_formatting_pastes_text_only() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Bold plain"})).unwrap();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copy", json!({})).unwrap();
+    a.run("select.text", json!({"text": "plain"})).unwrap();
+    // The destination has formatting of its own, so a paste that dropped it would show.
+    a.run("format.italic", json!({})).unwrap();
+    assert!(a.session.painter.is_none());
+    let mut h = harness(a);
+    h.run_steps(6);
+    let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.step();
+    assert_eq!(body_text(h.state()), "Bold Bold", "the clipboard text replaced the selection");
+    let bold = h.state_mut().run("format.state", json!({})).unwrap().get("bold").and_then(Value::as_bool);
+    assert_ne!(bold, Some(true), "the pasted text took the destination's formatting, not the copied bold");
+    let italic = h.state_mut().run("format.state", json!({})).unwrap().get("italic").and_then(Value::as_bool);
+    assert_eq!(italic, Some(true), "the pasted text kept the destination's italic");
 }
 
 /// #1669: with Shift held, Backspace still erases (#707) and Delete cuts the selection, doing
@@ -6220,6 +6453,189 @@ fn interface_size_survives_an_unusable_display_scale() {
     assert_eq!(InterfaceSize::AUTO.drawn_percent(f32::MAX), u16::MAX);
 }
 
+/// #4030: a system that reports a huge scale (an 11-inch 1366x768 panel on X11) must not make Auto
+/// draw an interface larger than the screen holds; the controls stay on screen.
+#[test]
+fn auto_interface_size_is_capped_to_what_fits_the_screen() {
+    use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit};
+    let limit = auto_scale_limit(Some((1366.0, 768.0)));
+    assert!((1.0..1.6).contains(&limit), "{limit}");
+    // Scales that fit are left as the system reports them.
+    for (screen, natives) in [((1920.0, 1080.0), [1.0, 1.25, 1.5]), ((1366.0, 768.0), [1.0, 1.25, 1.5])] {
+        let limit = auto_scale_limit(Some(screen));
+        for native in natives {
+            assert_eq!(f32::from(InterfaceSize::AUTO.drawn_percent_within(native, limit)), native * 100.0, "{screen:?} {native}");
+        }
+    }
+    assert!((auto_scale_limit(Some((1920.0, 1080.0))) - 2.13).abs() < 0.01);
+    for native in [2.0, 3.17] {
+        let drawn = f32::from(InterfaceSize::AUTO.drawn_percent_within(native, limit)) / 100.0;
+        assert!(1366.0 / drawn >= AUTO_MIN_POINTS.0 - 3.0 && 768.0 / drawn >= AUTO_MIN_POINTS.1 - 3.0, "{native}: {drawn}");
+    }
+    // A scale that already fits, an unknown screen and junk are left alone.
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(1.25, limit), 125);
+    assert_eq!(auto_scale_limit(None), f32::INFINITY);
+    assert_eq!(auto_scale_limit(Some((f32::NAN, 768.0))), f32::INFINITY);
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(3.0, auto_scale_limit(None)), 300);
+    // A screen below the minimum is never scaled under 100 %; a 4K screen at 2x is untouched.
+    assert_eq!(auto_scale_limit(Some((640.0, 480.0))), 1.0);
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(2.0, auto_scale_limit(Some((3840.0, 2160.0)))), 200);
+    // A chosen size is the user's and is not capped.
+    assert_eq!(InterfaceSize::from_percent(300.0).unwrap().drawn_percent_within(3.0, limit), 300);
+}
+
+/// #4030: the zoom is shared, so the smallest screen of all the open windows caps Auto, and a
+/// monitor size made with the zoom before a change still gives the same physical screen.
+#[test]
+fn auto_cap_follows_the_smallest_window_screen_and_the_zoom_of_its_points() {
+    use theme::auto_scale_limit_over;
+    let small = auto_scale_limit_over([((1366.0, 768.0), 1.0)], 1.0, 1.0);
+    let large = auto_scale_limit_over([((3840.0, 2160.0), 1.0)], 1.0, 1.0);
+    assert!(small < large);
+    assert_eq!(auto_scale_limit_over([((3840.0, 2160.0), 1.0), ((1366.0, 768.0), 1.0)], 1.0, 1.0), small);
+    // A 1366x768 panel at native scale 3: the points are 455x256 at zoom 1, 304x171 at zoom 1.5.
+    // The pixels, and so the cap, don't depend on which zoom made the points.
+    let a = auto_scale_limit_over([((1366.0 / 3.0, 768.0 / 3.0), 3.0)], 1.0, 3.0);
+    let b = auto_scale_limit_over([((1366.0 / 4.5, 768.0 / 4.5), 3.0)], 1.5, 3.0);
+    assert!((a - b).abs() < 1e-4 && (a - small).abs() < 1e-4, "{a} {b} {small}");
+    assert_eq!(auto_scale_limit_over([], 1.0, 1.0), f32::INFINITY);
+}
+
+/// #4030: with a 1x window on a large screen and a 3x window on a 1366x768 panel, the shared zoom
+/// is the one the 3x window needs, so both windows draw within their own screen.
+#[test]
+fn auto_cap_keeps_every_window_within_its_own_screen_when_scales_differ() {
+    use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit, usable_scale};
+    let windows = [((3840.0, 2160.0), 1.0_f32), ((1366.0 / 3.0, 768.0 / 3.0), 3.0)];
+    for root in [1.0_f32, 3.0] {
+        let limit = theme::auto_scale_limit_over(windows, 1.0, root);
+        let zoom = InterfaceSize::AUTO.zoom_factor_within(root, limit);
+        for ((w, h), own) in windows {
+            let pixels_per_point = usable_scale(own) * zoom;
+            let (px_w, px_h) = (w * own, h * own);
+            assert!(pixels_per_point <= auto_scale_limit(Some((px_w, px_h))) + 1e-4, "root {root}, window {own}: {pixels_per_point}");
+            assert!(
+                px_w / pixels_per_point >= AUTO_MIN_POINTS.0 - 1.0 && px_h / pixels_per_point >= AUTO_MIN_POINTS.1 - 1.0,
+                "root {root}, window {own}"
+            );
+        }
+    }
+}
+
+/// #4030: the cap shows in `ui.interfaceSize` and is never saved; Ctrl+Shift+0 returns to Auto
+/// while Ctrl+Alt+0 (AltGr+0, which types `}` on a German layout) neither resets nor swallows it.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn reset_interface_size_shortcut_and_capped_report() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    {
+        let a = h.state_mut();
+        a.native_scale = 3.0;
+        a.auto_scale_limit = 1.5;
+        assert_eq!(a.run("ui.interfaceSize", json!({})).unwrap(), json!({"auto": true, "percent": 150}));
+        assert!(!serde_json::to_string(&a.ui).unwrap().contains("150"), "the cap is not saved");
+        a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    }
+    let altgr = egui::Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: true, repeat: false, modifiers: altgr });
+    h.event(egui::Event::ModifiersChanged(altgr));
+    h.event(egui::Event::Text("}".into()));
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+0 doesn't reset");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "}", "AltGr+0 types the character");
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto");
+    // AltGr+Shift+0, where the layout leaves the key a zero, doesn't reset either.
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    let altgr_shift = egui::Modifiers { alt: true, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: altgr_shift });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+Shift+0 doesn't reset");
+    // With File › Options open, the place a too-large size pushes off screen, the chord resets.
+    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+    h.state_mut().ui.backstage_page = "options".into();
+    h.step();
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto from File › Options");
+    // A modal dialog keeps the keys: Customize Keyboard records the chord instead.
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "customizeKeyboard"})).unwrap();
+    h.step();
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "no reset while a modal dialog is open");
+}
+
+/// #4030 review: where Shift+0 types `=` (German, Swiss and Nordic layouts) egui-winit reports `=`
+/// as the key and the zero only as the physical key. That press is Ctrl+Shift+=, Superscript, as
+/// on main; it doesn't reset the interface size.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
+    let mut a = app();
+    a.run("document.setText", json!({"text": "x"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "Ctrl+Shift+= doesn't reset");
+    let pos = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+    let props = h.state().session.doc.para_at(&pos).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
+    assert_eq!(props.vert_align, Some(wordcraft_doc::props::VertAlign::Superscript), "Ctrl+Shift+= runs Superscript");
+}
+
+/// #4030 review: a Ctrl+Shift+0 the user binds in Customize Keyboard runs their command instead
+/// of resetting the interface size.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_bound_ctrl_shift_0_beats_the_interface_size_reset() {
+    let mut a = app();
+    a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Shift+0": "view.focus"}}));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "the size stays");
+    assert!(h.state().session.view.focus_mode, "the user's binding runs");
+}
+
 /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.
 #[test]
 fn interface_theme_resolves_against_the_os_appearance() {
@@ -6629,9 +7045,8 @@ fn going_to_file_and_back_keeps_the_tab() {
 
 fn png_bytes(c: [u8; 4]) -> Vec<u8> {
     let img = image::RgbaImage::from_fn(20, 10, |_, _| image::Rgba(c));
-    let mut b = Vec::new();
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
-    b
+
+    wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img).clone(), image::ImageFormat::Png).unwrap()
 }
 
 fn insert_picture(a: &mut WordApp, c: [u8; 4]) {
@@ -8070,6 +8485,118 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
 
+#[test]
+fn format_painter_single_click_formats_the_target_word_and_finishes() {
+    let mut a = app();
+    let text = "ORIGEM formatada e DESTINO comum";
+    a.run("text.insert", json!({"text": text})).unwrap();
+    let mut start = a.session.sel.focus.clone();
+    start.off = 0;
+    let mut end = start.clone();
+    end.off = "ORIGEM".len();
+    a.run("caret.set", json!({"pos": start})).unwrap();
+    a.run("caret.set", json!({"pos": end, "extend": true})).unwrap();
+    for id in ["format.bold", "format.italic", "format.underline"] {
+        a.run(id, json!({})).unwrap();
+    }
+    let source = a.session.doc.para_at(&start).unwrap().props_of_char(0).clone();
+    a.run("edit.formatPainter", json!({})).unwrap();
+    let mut target = start.clone();
+    target.off = text.find("DESTINO").unwrap() + 2;
+    let mut h = harness(a);
+    h.run_steps(6);
+    let caret = h.state_mut().session.layout().caret_on(&target, 0).unwrap();
+    let p = canvas::page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height * 0.5).unwrap();
+    h.event(egui::Event::PointerMoved(p));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert!(h.state().session.painter.is_none(), "one click consumes the non-sticky painter");
+    let para = h.state().session.doc.para_at(&target).unwrap();
+    let got = para.props_of_char(target.off);
+    assert_eq!((&got.bold, &got.italic, &got.underline), (&source.bold, &source.italic, &source.underline));
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), text);
+    assert_ne!(para.props_of_char(text.find("DESTINO").unwrap() + "DESTINO".len()).bold, source.bold, "trailing space stays plain");
+    assert_ne!(para.props_of_char(text.len() - 2).bold, source.bold, "surrounding text stays plain");
+}
+
+#[test]
+fn format_painter_double_click_drag_and_copy_paste_preserve_target_scope() {
+    for gesture in ["double", "drag", "commands"] {
+        let mut a = app();
+        let text = "ORIGEM formatada e DESTINO comum";
+        a.run("text.insert", json!({"text": text})).unwrap();
+        let mut source_start = a.session.sel.focus.clone();
+        source_start.off = 0;
+        let mut source_end = source_start.clone();
+        source_end.off = "ORIGEM".len();
+        a.run("caret.set", json!({"pos": source_start})).unwrap();
+        a.run("caret.set", json!({"pos": source_end, "extend": true})).unwrap();
+        for id in ["format.bold", "format.italic", "format.underline"] {
+            a.run(id, json!({})).unwrap();
+        }
+        let source = a.session.doc.para_at(&source_start).unwrap().props_of_char(0).clone();
+        let mut target_start = source_start.clone();
+        target_start.off = text.find("DESTINO").unwrap();
+        let mut target_end = target_start.clone();
+        target_end.off += "DESTINO".len();
+        a.run(if gesture == "commands" { "edit.copyFormat" } else { "edit.formatPainter" }, json!({})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(6);
+        if gesture == "commands" {
+            h.state_mut().run("caret.set", json!({"pos": target_start})).unwrap();
+            h.state_mut().run("caret.set", json!({"pos": target_end, "extend": true})).unwrap();
+            h.state_mut().run("edit.pasteFormat", json!({})).unwrap();
+        } else {
+            let mut press = target_start.clone();
+            if gesture == "double" {
+                press.off += 2;
+            }
+            let caret = h.state_mut().session.layout().caret_on(&press, 0).unwrap();
+            let start = canvas::page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height * 0.5).unwrap();
+            let caret = h.state_mut().session.layout().caret_on(&target_end, 0).unwrap();
+            let end = canvas::page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height * 0.5).unwrap();
+            h.event(egui::Event::PointerMoved(start));
+            h.run_steps(1);
+            let clicks = if gesture == "double" { 2 } else { 1 };
+            for _ in 0..clicks {
+                h.event(egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                h.run_steps(1);
+                let release = if gesture == "drag" {
+                    h.event(egui::Event::PointerMoved(end));
+                    h.run_steps(2);
+                    end
+                } else {
+                    start
+                };
+                h.event(egui::Event::PointerButton {
+                    pos: release,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                h.run_steps(1);
+            }
+        }
+        assert!(h.state().session.painter.is_none(), "{gesture}: one-use painter must disarm");
+        let para = h.state().session.doc.para_at(&target_start).unwrap();
+        for off in target_start.off..target_end.off {
+            let got = para.props_of_char(off);
+            assert_eq!((&got.bold, &got.italic, &got.underline), (&source.bold, &source.italic, &source.underline), "{gesture}: target offset {off}");
+        }
+        assert_ne!(para.props_of_char(target_end.off).bold, source.bold, "{gesture}: trailing space stays plain");
+        assert_ne!(para.props_of_char(text.len() - 2).bold, source.bold, "{gesture}: surrounding text stays plain");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), text);
+    }
+}
+
 /// Issue #2716: taking documents off the recent list is final — the open document must not be
 /// pushed back by the after-command re-add — and the change goes to the settings at once, so
 /// it survives the app being killed. Junk params return errors, never panics.
@@ -8172,4 +8699,388 @@ fn recent_list_edits_work_without_a_document() {
     assert!(works_without_document("ui.recentRemove") && works_without_document("ui.recentClear"));
     assert_eq!(a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap()["removed"], 1);
     assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
+}
+
+/// Issue #6146: touchpad scrolling on Linux/Wayland is scaled by `touchpad_factor` in
+/// `raw_input_hook` so swiping matches the desktop's speed instead of crawling 1:1.
+/// Wheel notches scale with `ui.scrollSpeed`. Both settings persist in `ui.json` and are set on
+/// `ui.touchpadScrollSpeed` and `ui.scrollSpeed`.
+#[test]
+fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |unit, y: f32, ctrl: bool| egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: if ctrl { egui::Modifiers::CTRL } else { egui::Modifiers::NONE },
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // 1. In `raw_input_hook`, touchpad Point deltas are scaled by touchpad_scroll_speed factor,
+    // while Line deltas and Ctrl/Command zoom events are untouched.
+    let mut raw = egui::RawInput {
+        events: vec![
+            wheel_event(egui::MouseWheelUnit::Point, -10.0, false),
+            wheel_event(egui::MouseWheelUnit::Point, -10.0, true),
+            wheel_event(egui::MouseWheelUnit::Line, -1.0, false),
+        ],
+        ..Default::default()
+    };
+    a.raw_input_hook(&ctx, &mut raw);
+    let dy: Vec<f32> = raw.events.iter().filter_map(|e| if let egui::Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).collect();
+    let expected_factor = crate::scroll::ScrollSpeed::Normal.touchpad_factor();
+    assert_eq!(dy[0], -10.0 * expected_factor, "point deltas are scaled by touchpad factor");
+    assert_eq!(dy[1], -10.0, "Ctrl+wheel zoom delta is NOT scaled");
+    assert_eq!(dy[2], -1.0, "Line deltas are NOT scaled by touchpad factor");
+
+    // Fast touchpad setting scales raw_input_hook point deltas by the Fast factor.
+    a.ui.touchpad_scroll_speed = crate::scroll::ScrollSpeed::Fast;
+    let mut raw_fast = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -10.0, false)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw_fast);
+    let expected_fast = if cfg!(target_arch = "wasm32") {
+        -10.0 * a.ui.scroll_speed.wheel_factor()
+    } else {
+        -10.0 * crate::scroll::ScrollSpeed::Fast.touchpad_factor()
+    };
+    if let egui::Event::MouseWheel { delta, .. } = &raw_fast.events[0] {
+        assert_eq!(delta.y, expected_fast);
+    }
+
+    // 2. Commands ui.touchpadScrollSpeed and ui.scrollSpeed set the preferences.
+    let r = a.run("ui.touchpadScrollSpeed", json!({"value": "fast"})).unwrap();
+    assert_eq!(r["touchpadScrollSpeed"], "fast");
+    assert_eq!(a.ui.touchpad_scroll_speed, crate::scroll::ScrollSpeed::Fast);
+
+    let r = a.run("ui.scrollSpeed", json!({"value": "fast"})).unwrap();
+    assert_eq!(r["scrollSpeed"], "fast");
+    assert_eq!(a.ui.scroll_speed, crate::scroll::ScrollSpeed::Fast);
+
+    assert!(a.run("ui.touchpadScrollSpeed", json!({"value": "warp"})).is_err());
+    assert!(a.run("ui.scrollSpeed", json!({"value": "warp"})).is_err());
+
+    // 3. Persistence between runs in ui.json
+    let saved = serde_json::to_string(&a.ui).unwrap();
+    let restored = UiState::from_json(saved.as_bytes()).unwrap();
+    assert_eq!(restored.touchpad_scroll_speed, crate::scroll::ScrollSpeed::Fast);
+    assert_eq!(restored.scroll_speed, crate::scroll::ScrollSpeed::Fast);
+}
+
+/// Issue #6146 / PR #6167: unconsumed raw input is replayed by eframe across hidden logic ticks.
+/// The touchpad scroll multiplier must be applied once per event, never compounded across replays.
+#[test]
+fn touchpad_point_scrolling_is_scaled_once_across_hidden_logic_ticks() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |unit, y: f32| egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    let mut raw = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -10.0)], ..Default::default() };
+
+    // 1. First raw_input_hook call scales the point delta by the touchpad factor.
+    a.raw_input_hook(&ctx, &mut raw);
+    let expected = -10.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    assert_eq!(raw.events[0], wheel_event(egui::MouseWheelUnit::Point, expected));
+
+    // 2. Hidden logic tick: eframe saves raw into pending_raw_input and invokes the hook again
+    // on the next tick without a UI pass having consumed it. The delta must not compound.
+    a.logic(&ctx);
+    a.raw_input_hook(&ctx, &mut raw);
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[0] {
+        assert_eq!(delta.y, expected, "hidden logic tick replay must not compound the scroll delta");
+    }
+
+    // 3. Appending a new event during a subsequent hidden tick: older events stay scaled once,
+    // and only the new event is scaled.
+    raw.events.push(wheel_event(egui::MouseWheelUnit::Point, -5.0));
+    a.logic(&ctx);
+    a.raw_input_hook(&ctx, &mut raw);
+    let expected_new = -5.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[0] {
+        assert_eq!(delta.y, expected, "initial event still scaled once");
+    }
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[1] {
+        assert_eq!(delta.y, expected_new, "new event is scaled once");
+    }
+
+    // 4. A UI pass consumes the input, acknowledging the frame.
+    ctx.run_ui(raw, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+
+    // 5. Subsequent fresh frame scales fresh input once.
+    let mut fresh = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -20.0)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut fresh);
+    let expected_fresh = -20.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    if let egui::Event::MouseWheel { delta, .. } = &fresh.events[0] {
+        assert_eq!(delta.y, expected_fresh, "fresh input is scaled once");
+    }
+}
+
+/// Issue #6146 / PR #6167 review: replay tracking must be cleared when a warm-up UI pass
+/// consumes the input (which returns before `flush_shot_and_synthetic`), so a fresh event
+/// on the next frame whose delta happens to equal the previous scaled delta is not falsely
+/// treated as a replay.
+#[test]
+fn fresh_scroll_event_matching_previous_scaled_delta_is_scaled_after_warmup_ui() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |y: f32| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // Ensure the app is in the warm-up phase (fonts_frames < 2).
+    a.fonts_frames = 0;
+
+    // 1. First frame: incoming Point delta is -1.0. At Normal speed on Wayland, it scales to -4.0.
+    let mut raw1 = egui::RawInput { events: vec![wheel_event(-1.0)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw1);
+    let factor = a.ui.touchpad_scroll_speed.touchpad_factor();
+    let scaled_1 = -factor;
+    assert_eq!(raw1.events[0], wheel_event(scaled_1));
+
+    // 2. Warm-up UI pass runs: window_ui returns early because fonts_frames < 2.
+    // This UI pass consumes raw1, so replay tracking must be cleared.
+    ctx.run_ui(raw1, |ui| {
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(a.fonts_frames, 1, "first warm-up frame executed");
+
+    // 3. Second frame: fresh incoming event happens to have delta equal to scaled_1 (-4.0).
+    // Because the previous frame's input was consumed by the UI, this is fresh input,
+    // NOT a replay, so it must be scaled by factor (e.g. -4.0 * 4.0 = -16.0).
+    let mut raw2 = egui::RawInput { events: vec![wheel_event(scaled_1)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw2);
+    let expected_2 = scaled_1 * factor;
+    if let egui::Event::MouseWheel { delta, .. } = &raw2.events[0] {
+        assert_eq!(delta.y, expected_2, "fresh event matching previous scaled delta must be scaled, not skipped as replay");
+    }
+}
+
+/// Issue #6146 / PR #6167 review: changing mouse-wheel scroll speed (Slow / Normal / Fast)
+/// must only affect scrolling distance, not Ctrl/⌘+wheel zoom distance for either Line or Point events.
+/// Tests both animation settings (`animate == true` eased zoom and `animate == false`
+/// `CanvasScroll::zoom` discrete steps) for both Line and Point mouse-wheel events.
+#[test]
+fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
+    let mut a = app();
+    let default_opts = egui::InputOptions::default();
+    let default_notch_zoom = (default_opts.scroll_zoom_speed * default_opts.line_scroll_speed).exp();
+
+    let ctrl_line_event = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    let ctrl_point_event = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 20.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // 1. Establish baseline zoom with Normal speed
+    a.ui.scroll_speed = crate::scroll::ScrollSpeed::Normal;
+    let mut baseline_eased_line_zoom = 1.0;
+    let mut baseline_cumulative_line_zoom = 1.0;
+    let mut baseline_discrete_line_zoom = 1.0;
+    let mut baseline_eased_point_zoom = 1.0;
+    let mut baseline_cumulative_point_zoom = 1.0;
+    let mut baseline_discrete_point_zoom = 1.0;
+    let mut baseline_pinch_zoom = 1.0;
+
+    // Line baseline across full smoothing:
+    let ctx_line_base = egui::Context::default();
+    a.logic(&ctx_line_base);
+    let opts_line_base = ctx_line_base.options(|o| o.input_options);
+    let mut canvas_scroll_base = crate::scroll::CanvasScroll::default();
+    ctx_line_base
+        .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
+            baseline_eased_line_zoom = ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+            if baseline_eased_line_zoom != 1.0 {
+                canvas_scroll_base.cancel();
+            }
+            baseline_cumulative_line_zoom *= baseline_eased_line_zoom;
+            let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+            baseline_discrete_line_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_line_base, false));
+        })
+        .drop_without_applying_deltas();
+    for f in 1..25 {
+        ctx_line_base
+            .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                let z = ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+                if z != 1.0 {
+                    canvas_scroll_base.cancel();
+                }
+                baseline_cumulative_line_zoom *= z;
+            })
+            .drop_without_applying_deltas();
+    }
+
+    // Point baseline across full smoothing:
+    let ctx_point_base = egui::Context::default();
+    a.logic(&ctx_point_base);
+    let opts_point_base = ctx_point_base.options(|o| o.input_options);
+    let mut canvas_scroll_point_base = crate::scroll::CanvasScroll::default();
+    ctx_point_base
+        .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
+            baseline_eased_point_zoom = ui.input(|i| canvas_scroll_point_base.zoom(i, &opts_point_base, true));
+            baseline_cumulative_point_zoom *= baseline_eased_point_zoom;
+            let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+            baseline_discrete_point_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_point_base, false));
+        })
+        .drop_without_applying_deltas();
+    for f in 1..25 {
+        ctx_point_base
+            .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                baseline_cumulative_point_zoom *= ui.input(|i| canvas_scroll_point_base.zoom(i, &opts_point_base, true));
+            })
+            .drop_without_applying_deltas();
+    }
+
+    // Pinch baseline:
+    let ctx_pinch_base = egui::Context::default();
+    a.logic(&ctx_pinch_base);
+    let opts_pinch_base = ctx_pinch_base.options(|o| o.input_options);
+    ctx_pinch_base
+        .run_ui(egui::RawInput { events: vec![egui::Event::Zoom(1.25)], time: Some(1.0), ..Default::default() }, |ui| {
+            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+            baseline_pinch_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_pinch_base, true));
+        })
+        .drop_without_applying_deltas();
+
+    assert!((baseline_discrete_line_zoom - default_notch_zoom).abs() < 1e-3, "discrete line zoom equals notch zoom");
+    assert!(baseline_eased_line_zoom > 1.0 && baseline_eased_line_zoom < default_notch_zoom, "eased line zoom begins in first frame");
+    assert!(
+        (baseline_cumulative_line_zoom - default_notch_zoom).abs() < 1e-3,
+        "cumulative completed eased line zoom matches default notch zoom ({baseline_cumulative_line_zoom} vs {default_notch_zoom})"
+    );
+    assert!(baseline_eased_point_zoom > 1.0, "point zoom applies in eased mode");
+    assert!(baseline_discrete_point_zoom > 1.0, "point zoom applies in discrete mode");
+    assert!((baseline_pinch_zoom - 1.25).abs() < 1e-4, "pinch zoom matches pinch factor");
+
+    // 2. Verify all scroll speeds preserve exact same zoom distance across animation settings and smoothing frames
+    for speed in [crate::scroll::ScrollSpeed::Slow, crate::scroll::ScrollSpeed::Normal, crate::scroll::ScrollSpeed::Fast] {
+        a.ui.scroll_speed = speed;
+
+        // Test Line-wheel zoom invariance across multiple frames:
+        let ctx_line = egui::Context::default();
+        a.logic(&ctx_line);
+        let opts = ctx_line.options(|o| o.input_options);
+        let factor = speed.wheel_factor();
+        assert!(
+            (opts.line_scroll_speed - default_opts.line_scroll_speed * factor).abs() < 1e-4,
+            "line scroll speed scales by factor for ordinary scrolling"
+        );
+        assert_eq!(
+            opts.scroll_zoom_speed, default_opts.scroll_zoom_speed,
+            "scroll zoom speed remains unscaled default so point-wheel zoom is unchanged"
+        );
+
+        let mut canvas_scroll_eased = crate::scroll::CanvasScroll::default();
+        let mut cumulative_line_zoom = 1.0;
+        ctx_line
+            .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
+                let eased_zoom = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                if eased_zoom != 1.0 {
+                    canvas_scroll_eased.cancel();
+                }
+                cumulative_line_zoom *= eased_zoom;
+                assert!(
+                    (eased_zoom - baseline_eased_line_zoom).abs() < 1e-5,
+                    "first frame eased line zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_line_zoom})"
+                );
+
+                let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+                let discrete_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts, false));
+                assert!(
+                    (discrete_zoom - baseline_discrete_line_zoom).abs() < 1e-5,
+                    "discrete CanvasScroll::zoom for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_line_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+
+        // Advance through subsequent empty frames until line smoothing completes
+        for f in 1..25 {
+            ctx_line
+                .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                    let z = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                    if z != 1.0 {
+                        canvas_scroll_eased.cancel();
+                    }
+                    cumulative_line_zoom *= z;
+                })
+                .drop_without_applying_deltas();
+        }
+        assert!(
+            (cumulative_line_zoom - baseline_cumulative_line_zoom).abs() < 1e-3,
+            "cumulative completed line zoom for speed {speed:?} matches baseline ({cumulative_line_zoom} vs {baseline_cumulative_line_zoom})"
+        );
+
+        // Test Point-wheel zoom invariance across multiple frames:
+        let ctx_point = egui::Context::default();
+        a.logic(&ctx_point);
+        let opts_point = ctx_point.options(|o| o.input_options);
+        let mut canvas_scroll_point = crate::scroll::CanvasScroll::default();
+        let mut cumulative_point_zoom = 1.0;
+        ctx_point
+            .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
+                let eased_zoom = ui.input(|i| canvas_scroll_point.zoom(i, &opts_point, true));
+                cumulative_point_zoom *= eased_zoom;
+                assert!(
+                    (eased_zoom - baseline_eased_point_zoom).abs() < 1e-5,
+                    "first frame eased point zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_point_zoom})"
+                );
+
+                let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+                let discrete_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_point, false));
+                assert!(
+                    (discrete_zoom - baseline_discrete_point_zoom).abs() < 1e-5,
+                    "discrete CanvasScroll::zoom point delta for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_point_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+
+        for f in 1..25 {
+            ctx_point
+                .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                    cumulative_point_zoom *= ui.input(|i| canvas_scroll_point.zoom(i, &opts_point, true));
+                })
+                .drop_without_applying_deltas();
+        }
+        assert!(
+            (cumulative_point_zoom - baseline_cumulative_point_zoom).abs() < 1e-3,
+            "cumulative completed point zoom for speed {speed:?} matches baseline ({cumulative_point_zoom} vs {baseline_cumulative_point_zoom})"
+        );
+
+        // Test pinch gesture independence from scroll speed settings:
+        let ctx_pinch = egui::Context::default();
+        a.logic(&ctx_pinch);
+        let opts_pinch = ctx_pinch.options(|o| o.input_options);
+        ctx_pinch
+            .run_ui(egui::RawInput { events: vec![egui::Event::Zoom(1.25)], time: Some(1.0), ..Default::default() }, |ui| {
+                let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+                let pinch_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_pinch, true));
+                assert!(
+                    (pinch_zoom - baseline_pinch_zoom).abs() < 1e-5,
+                    "pinch zoom for speed {speed:?} matches baseline ({pinch_zoom} vs {baseline_pinch_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+    }
 }
