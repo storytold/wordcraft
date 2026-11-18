@@ -27,6 +27,7 @@ fn cpu_cost(mut f: impl FnMut()) -> f64 {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn many_comments_save_without_quadratic_id_searches() {
     for imported in [true, false] {
         let small = comments(4_000, imported);

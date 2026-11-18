@@ -5,20 +5,46 @@ use wordcraft_doc::props::CharProps;
 
 use crate::Session;
 
-/// Creates a document with `lines` lines of text.
+/// The bundled face the fixtures are set in. Their page counts are exact to a line, so they must
+/// not depend on the face the host substitutes for the default Aptos: at 11 pt, Arial and
+/// Liberation Sans fit 28 of these lines on a page and DejaVu Sans, the only candidate on a bare
+/// FreeBSD system, fits 27. Inter is the bundled face whose metrics give each 0.5 pt step its own
+/// page boundary at this page size.
+const FIXTURE_FONT: &str = "Inter";
+
+/// Creates a document with `lines` lines of text in [`FIXTURE_FONT`]. Inter fits 25 lines on a
+/// page at 12 pt, 26 at 11.5 pt and 27 at 11 pt.
 fn create_multiline_doc(lines: usize) -> Session {
     let mut text = String::new();
     for i in 1..=lines {
         text.push_str(&format!("Line {i}: The quick brown fox jumps over the lazy dog.\n"));
     }
-    Session::new(Document::from_text(&text))
+    let mut doc = Document::from_text(&text);
+    std::sync::Arc::make_mut(&mut doc.styles).default_chr.font = Some(FIXTURE_FONT.into());
+    Session::new(doc)
 }
 
-/// A document that just spills onto a second page, whatever fonts this machine has: the most
-/// lines `make` can put on one page, then space before the last paragraph until it moves to
-/// page 2 ([`spill_last_paragraph`]). A plain document asks for Aptos, which test machines don't
-/// have, and the sans font that stands in for it differs between them (DejaVu Sans on FreeBSD),
-/// so a fixed line count overflows by a different amount on each.
+/// Asserts the body is laid out in the bundled [`FIXTURE_FONT`], not a substitute.
+fn assert_fixture_font(s: &mut Session) {
+    let layout = s.layout();
+    let mut runs = 0;
+    for page in &layout.pages {
+        for item in &page.items {
+            if let wordcraft_layout::Placed::Lines { story: wordcraft_doc::StoryRef::Body, para, .. } = item {
+                for style in &para.styles {
+                    runs += 1;
+                    assert_eq!(style.face.family, FIXTURE_FONT, "the fixture must not fall back to another family");
+                }
+            }
+        }
+    }
+    assert!(runs > 0, "the font check must inspect laid-out body text");
+}
+
+/// A document that just spills onto a second page: the most lines `make` can put on one page,
+/// then space before the last paragraph until it moves to page 2 ([`spill_last_paragraph`]).
+/// The fixtures are set in the bundled [`FIXTURE_FONT`], but a fixed line count still depends on
+/// that font's exact metrics and the page setup, so the tests find the spill point instead.
 fn just_spilling(make: impl Fn(usize) -> Session) -> Session {
     let mut lines = 10;
     while make(lines + 1).layout().pages.len() < 2 {
@@ -75,7 +101,7 @@ fn fit_one_page_fails_on_hard_page_break() {
 
 #[test]
 fn fit_one_page_refuses_page_break_before_before_search() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     assert_eq!(s.layout().pages.len(), 2);
     if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(&mut s.doc.body[1]) {
         p.props.page_break_before = Some(true);
@@ -110,7 +136,7 @@ fn fit_one_page_fails_on_next_page_section_break() {
 #[test]
 fn fit_one_page_condenses_slight_overflow_and_undoes() {
     // Find the boundary where the document just spills onto page 2
-    let mut lines = 30;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 2;
@@ -138,7 +164,7 @@ fn fit_one_page_condenses_slight_overflow_and_undoes() {
 
 #[test]
 fn fit_one_page_respects_max_delta() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     assert_eq!(s.layout().pages.len(), 2, "must start as 2-page document");
 
     let doc_backup = s.doc.clone();
@@ -168,6 +194,7 @@ fn fit_one_page_respects_step_pt() {
     };
     let mut s = just_spilling(at_11_4);
     assert_eq!(s.layout().pages.len(), 2, "must start as 2-page document at 11.4 pt");
+    assert_fixture_font(&mut s);
 
     // Both calls hold maxDeltaPt constant at 0.4 and disable spacing adjustments.
     // Default 0.5 pt step generates no candidates <= 0.4 pt, so it must fail.
@@ -184,7 +211,7 @@ fn fit_one_page_respects_step_pt() {
 
 #[test]
 fn fit_one_page_allows_spacing_only_at_font_floor() {
-    let mut lines = 35;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     let set_font = |s: &mut Session| {
         for b in &mut s.doc.body {
@@ -215,7 +242,7 @@ fn fit_one_page_allows_spacing_only_at_font_floor() {
 
 #[test]
 fn fit_one_page_fails_when_body_font_already_at_minimum_readable_size() {
-    let mut lines = 35;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     let set_font = |s: &mut Session| {
         for b in &mut s.doc.body {
@@ -245,7 +272,7 @@ fn fit_one_page_fails_when_body_font_already_at_minimum_readable_size() {
 
 #[test]
 fn fit_one_page_bounds_fine_step_loop() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 1;
@@ -261,7 +288,7 @@ fn fit_one_page_bounds_fine_step_loop() {
 
 #[test]
 fn fit_one_page_supports_max_delta_above_2pt() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 1;
@@ -281,7 +308,7 @@ fn fit_one_page_supports_max_delta_above_2pt() {
 
 #[test]
 fn fit_one_page_anti_compound_guard_prevents_repeated_invocations() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     loop {
         for b in &mut s.doc.body {
@@ -351,7 +378,7 @@ fn fit_one_page_already_fits_wins_over_exhausted_budget() {
 
 #[test]
 fn fit_one_page_checks_complex_script_font_floor() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 1;
@@ -377,7 +404,7 @@ fn fit_one_page_checks_complex_script_font_floor() {
 
 #[test]
 fn fit_one_page_checks_editable_text_box_font_floor() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 1;
@@ -423,7 +450,7 @@ fn fit_one_page_checks_editable_text_box_font_floor() {
 
 #[test]
 fn fit_one_page_fails_when_overflow_exceeds_limits() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 {
         lines += 1;
@@ -603,7 +630,7 @@ fn fit_one_page_fails_with_failed_cmd_error() {
 
 #[test]
 fn fit_one_page_never_populates_custom_props() {
-    let mut lines = 30;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 2;
@@ -619,7 +646,7 @@ fn fit_one_page_never_populates_custom_props() {
 fn fit_one_page_allows_subsequent_fit_after_typography_reset() {
     use std::sync::Arc;
 
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 1;
@@ -662,7 +689,7 @@ fn fit_one_page_allows_subsequent_fit_after_typography_reset() {
 
 #[test]
 fn fit_one_page_small_paragraph_mark_with_runs_never_blocks_fit() {
-    let mut lines = 30;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 2;
@@ -683,7 +710,7 @@ fn fit_one_page_small_paragraph_mark_with_runs_never_blocks_fit() {
 
 #[test]
 fn fit_one_page_small_comment_font_never_blocks_body_fit() {
-    let mut lines = 30;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 2;
@@ -703,7 +730,7 @@ fn fit_one_page_small_comment_font_never_blocks_body_fit() {
 
 #[test]
 fn fit_one_page_anti_compound_caps_total_reduction_across_runs() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     assert_eq!(s.layout().pages.len(), 2);
 
     // Initial fit with -0.5 pt font reduction (spacing disabled so font budget is exercised)
@@ -725,7 +752,7 @@ fn fit_one_page_anti_compound_caps_total_reduction_across_runs() {
 
 #[test]
 fn fit_one_page_tracks_reduced_text_provenance_without_global_minimum() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     // Add a 9.0 pt run to the first paragraph alongside 11.0 pt runs
     if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(&mut s.doc.body[0]) {
         p.runs.push(wordcraft_doc::para::Run { len: 5, props: CharProps { size: Some(9.0), ..Default::default() } });
@@ -762,7 +789,7 @@ fn fit_one_page_tracks_reduced_text_provenance_without_global_minimum() {
 
 #[test]
 fn fit_one_page_allows_spill_with_bottom_placed_footnote() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 1;
@@ -788,7 +815,7 @@ fn fit_one_page_allows_spill_with_bottom_placed_footnote() {
 
 #[test]
 fn fit_one_page_with_final_page_footnote() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 1;
@@ -821,7 +848,7 @@ fn fit_one_page_with_final_page_footnote() {
 
 #[test]
 fn fit_one_page_skips_deleted_text_when_markup_hidden() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     assert_eq!(s.layout().pages.len(), 2);
 
     // Insert a deleted text run with small font (e.g. 6.0 pt, below the 8.5 pt floor)
@@ -852,7 +879,7 @@ fn fit_one_page_skips_deleted_text_when_markup_hidden() {
 
 #[test]
 fn fit_one_page_tracks_reduced_complex_script_font_sizes() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     assert_eq!(s.layout().pages.len(), 2);
     let styles_before = s.doc.styles.clone();
 
@@ -892,6 +919,7 @@ fn fit_one_page_tracks_reduced_complex_script_font_sizes() {
 fn fit_one_page_preserves_budget_across_document_serialization() {
     let mut s = just_spilling(create_multiline_doc);
     assert_eq!(s.layout().pages.len(), 2);
+    assert_fixture_font(&mut s);
 
     // Apply fit
     let res = s.run("layout.fitOnePage", &json!({"maxDeltaPt": 0.5, "adjustSpacing": false}));
@@ -935,7 +963,7 @@ fn fit_one_page_enforces_durable_limit_when_fit_state_missing() {
         s.touch();
         s.relayout();
     };
-    let mut lines = 27;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     set_font(&mut s);
     while s.layout().pages.len() < 2 && lines < 120 {
@@ -959,7 +987,7 @@ fn fit_one_page_enforces_durable_limit_when_fit_state_missing() {
 
 #[test]
 fn fit_one_page_skips_hidden_text_when_hidden_marks_off() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     assert_eq!(s.layout().pages.len(), 2);
 
     // Insert a hidden text run with small font (6.0 pt, below the 8.5 pt floor) into an existing paragraph
@@ -993,7 +1021,7 @@ fn fit_one_page_skips_hidden_text_when_hidden_marks_off() {
 
 #[test]
 fn fit_one_page_accounts_for_vertical_alignment_padding() {
-    let mut s = create_multiline_doc(26);
+    let mut s = create_multiline_doc(25);
     let extra_p = wordcraft_doc::Paragraph::with_text("Spill line on page 2.", CharProps::default());
     s.doc.body.push(wordcraft_doc::para_block(extra_p));
 
@@ -1012,7 +1040,7 @@ fn fit_one_page_accounts_for_vertical_alignment_padding() {
 
 #[test]
 fn fit_one_page_accounts_for_note_separator_decor_story() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     while s.layout().pages.len() < 2 && lines < 80 {
         lines += 1;
@@ -1047,7 +1075,7 @@ fn fit_one_page_accounts_for_note_separator_decor_story() {
 
 #[test]
 fn fit_one_page_tracks_fixed_spacing_independent_of_paragraph_mark_size() {
-    let mut lines = 28;
+    let mut lines = 20;
     let mut s = create_multiline_doc(lines);
     let set_spacing = |s: &mut Session| {
         for b in &mut s.doc.body {
@@ -1088,7 +1116,7 @@ fn fit_one_page_tracks_fixed_spacing_independent_of_paragraph_mark_size() {
 
 #[test]
 fn fit_one_page_reports_search_exhaustion_when_candidates_cannot_remove_page() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     assert_eq!(s.layout().pages.len(), 2);
 
     // Calling with zero maxDeltaPt and adjustSpacing: false produces no candidate steps
@@ -1103,23 +1131,24 @@ fn fit_one_page_reports_search_exhaustion_when_candidates_cannot_remove_page() {
 
 #[test]
 fn fit_one_page_excludes_line_number_decorations_from_final_page_limits() {
-    let mut lines = 33;
-    let enable_line_numbers = |s: &mut Session| {
-        s.doc.last_section.line_numbers = Some(wordcraft_doc::section::LineNumbering::default());
-        s.touch();
-        s.relayout();
-    };
-    let mut s = create_multiline_doc(lines);
-    enable_line_numbers(&mut s);
-    while s.layout().pages.len() < 2 && lines < 60 {
-        lines += 1;
-        s = create_multiline_doc(lines);
-        enable_line_numbers(&mut s);
-    }
+    let mut s = create_multiline_doc(33);
+    s.doc.last_section.line_numbers = Some(wordcraft_doc::section::LineNumbering::default());
+    s.touch();
+    s.relayout();
     assert_eq!(s.layout().pages.len(), 2);
 
     // Every body line on the final page also places a line-number decoration. Counting those as
-    // content would double the final-page line count and refuse before any candidate is tried.
+    // content would double the final-page line count and refuse before any candidate is tried:
+    // between 7 and 12 body lines are within the 12-line limit, and twice as many are not.
+    let body_lines: usize = s.layout().pages[1]
+        .items
+        .iter()
+        .map(|item| match item {
+            wordcraft_layout::Placed::Lines { story: wordcraft_doc::StoryRef::Body, l0, l1, .. } => l1 - l0,
+            _ => 0,
+        })
+        .sum();
+    assert!((7..=12).contains(&body_lines), "the final page must carry 7 to 12 body lines, has {body_lines}");
     let decorated = s.layout().pages[1]
         .items
         .iter()
@@ -1134,7 +1163,7 @@ fn fit_one_page_excludes_line_number_decorations_from_final_page_limits() {
 
 #[test]
 fn fit_one_page_counts_side_by_side_footnote_cells_once() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     assert_eq!(s.layout().pages.len(), 2);
 
     // A footnote table whose row's cells sit side by side: their text occupies one vertical
@@ -1169,7 +1198,7 @@ fn fit_one_page_counts_side_by_side_footnote_cells_once() {
 
 #[test]
 fn fit_one_page_refuses_when_formatting_changes_cannot_be_tracked() {
-    let mut s = create_multiline_doc(27);
+    let mut s = create_multiline_doc(26);
     assert_eq!(s.layout().pages.len(), 2);
     s.doc.settings.track_changes = true;
     s.prefs.markup.track_formatting = true;
