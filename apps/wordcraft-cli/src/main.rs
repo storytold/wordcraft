@@ -266,7 +266,7 @@ fn parse_scale_arg(command: &str, args: &[String]) -> Result<Option<f64>, String
         OptionArg::Value(val) => {
             let scale = val.parse::<f64>().map_err(|_| format!("{command}: invalid --scale `{val}`: not a number"))?;
             if !scale.is_finite() || scale <= 0.0 {
-                return Err(format!("{command}: invalid --scale `{val}`: scale must be a positive number"));
+                return Err(format!("{command}: invalid --scale `{val}`: scale must be a finite positive number"));
             }
             Ok(Some(scale))
         }
