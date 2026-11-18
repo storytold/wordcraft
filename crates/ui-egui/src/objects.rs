@@ -504,7 +504,7 @@ fn shows_pixels(d: &ObjectDrag) -> bool {
 
 /// `o` drawn alone over its rotated bounds, as a texture, at the canvas's `scale` (screen points
 /// per page point).
-fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit, scale: f32) -> Option<egui::TextureHandle> {
+pub(crate) fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit, scale: f32) -> Option<egui::TextureHandle> {
     let obj = app.session.doc.para_at(&o.pos()).and_then(|p| p.object_at(o.off))?;
     let page = layout.pages.get(o.page)?;
     let mut opts = crate::canvas::screen_render_options();
@@ -554,8 +554,32 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
     let _ = app.run("arrange.bounds", params);
 }
 
+/// The object whose changes of place, size and angle are eased ([`crate::object_motion`]): the
+/// selected shape or picture, not a connector, a text box or a fixed object.
+pub(crate) fn motion_subject(app: &WordApp, layout: &DocLayout) -> Option<ObjectHit> {
+    let (o, editing) = active(app, layout)?;
+    let shape = matches!(selected(app), Some((_, InlineObject::Shape { kind, .. })) if !kind.is_connector());
+    let picture = matches!(selected(app), Some((_, InlineObject::Image { .. })));
+    (!editing && o.text_box.is_none() && !fixed(app, &o) && (shape || picture)).then_some(o)
+}
+
+/// A handle or the object itself being dragged, for [`crate::object_motion`].
+pub(crate) struct MotionDrag {
+    pub resize: bool,
+    /// The drag already shows the object's pixels.
+    pub pixels: bool,
+    pub to: crate::object_motion::Pose,
+}
+
+pub(crate) fn motion_drag(app: &WordApp) -> Option<MotionDrag> {
+    let d = app.canvas.obj_drag.as_ref().filter(|d| d.drag.moved && d.end.is_none())?;
+    let to = crate::object_motion::Pose { page: d.drag.to_page, rect: d.drag.rect, deg: d.drag.deg };
+    Some(MotionDrag { resize: matches!(d.drag.grab, Grab::Resize(_)), pixels: shows_pixels(d), to })
+}
+
 /// Draw the frame of the active object, or the drag preview.
 pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
+    crate::object_motion::update(app, painter, layout, pages, scale);
     if crate::crop::paint(app, painter, t, layout, pages, scale) {
         return;
     }
@@ -1223,6 +1247,49 @@ mod tests {
         let o = shape(&mut h);
         assert_eq!(o.page, 1, "dropped on the page under the pointer, not thrown back");
         assert!((o.rect.x - 100.0).abs() < 0.5, "kept its place across: {:?}", o.rect);
+    }
+
+    /// A command that turns or moves the selected object is eased on screen, a drag is not, and the
+    /// model is already final during the motion. With animation effects off nothing moves.
+    #[test]
+    fn commands_ease_the_selected_object_and_leave_the_model_final() {
+        for on in [true, false] {
+            let picture = InlineObject::Image {
+                media: "none".into(),
+                w: 200.0,
+                h: 100.0,
+                alt: String::new(),
+                float: wordcraft_doc::para::Float { wrap: Wrap::InFrontOfText, x: 150.0, y: 180.0, ..Default::default() },
+                crop: [0.0; 4],
+                ole: None,
+            };
+            let (mut app, _) = app_with(picture);
+            app.run("view.commentsPane", json!({"value": false})).unwrap();
+            app.run("ui.animations", json!({"value": if on { "on" } else { "off" }})).unwrap();
+            app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, OBJ.len_utf8())})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.02).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.ctx.all_styles_mut(|s| s.animation_time = 0.1);
+            crate::table_resize::tests::steps(&mut h, 8);
+            assert!(!crate::object_motion::in_flight(&h.ctx));
+            h.state_mut().run("arrange.rotation", json!({"degrees": 90.0})).unwrap();
+            let o = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap();
+            assert_eq!(o.spin.deg, 90.0, "the model is final at once");
+            crate::table_resize::tests::steps(&mut h, 2);
+            if on && let Ok(path) = std::env::var("WORDCRAFT_MOTION_SHOT") {
+                h.render().unwrap().save(path).unwrap();
+            }
+            assert_eq!(crate::object_motion::in_flight(&h.ctx), on, "motion only with animation effects on");
+            assert_eq!(h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().spin.deg, 90.0);
+            crate::table_resize::tests::steps(&mut h, 20);
+            assert!(!crate::object_motion::in_flight(&h.ctx), "and comes to rest");
+        }
     }
 
     /// A settled canvas for the rotation regressions, without taking focus on the desktop.

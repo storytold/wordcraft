@@ -64,6 +64,7 @@ pub mod ink;
 pub mod keys;
 pub mod keytips;
 pub mod mini_toolbar;
+pub mod object_motion;
 pub mod objects;
 pub mod options;
 pub mod panes;
