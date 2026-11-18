@@ -24,7 +24,7 @@ use egui::Ui;
 use serde_json::json;
 
 use crate::WordApp;
-use thumbs::TemplateThumbs;
+pub(crate) use thumbs::TemplateThumbs;
 
 /// The side menu: page id, label and icon (#1714).
 const PAGES: [(&str, &str, &str); 11] = [

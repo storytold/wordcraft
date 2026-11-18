@@ -1352,8 +1352,7 @@ mod tests {
     fn a_faked_click_never_turns_on_downloading() {
         let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN)).unwrap();
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         ctx.enable_accesskit();
         struct Reset;
@@ -1404,8 +1403,7 @@ mod tests {
     /// the context to draw it in.
     fn options_app(pane: &str, network: bool) -> (WordApp, egui::Context, std::sync::Arc<FixedBackend>) {
         let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN)).unwrap();
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         ctx.enable_accesskit();
         let backend = std::sync::Arc::new(FixedBackend::sample());
@@ -1687,8 +1685,7 @@ mod tests {
     fn with_no_list_yet_the_bar_offers_the_language_and_gets_it() {
         let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN)).unwrap();
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         ctx.enable_accesskit();
         struct Reset;

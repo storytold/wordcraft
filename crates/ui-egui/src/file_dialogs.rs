@@ -10,7 +10,7 @@
 //! zenity, #576) the service opens the framework's fallback chooser itself; the app only asks
 //! for it by name with [`PickRequest::fallback`].
 
-use craft::host::files::{PickId, PickRequest, Picked};
+use craft::host::{PickId, PickRequest, Picked};
 use serde_json::{Value, json};
 
 use crate::WordApp;
@@ -402,9 +402,8 @@ impl WordApp {
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        // PLAN: assumed `craft::dialogs::save_types::save_filters(&str) -> Vec<FileFilter>` (pf.C-W3)
         let mut req = PickRequest::save("document").file_name(name.clone()).save_as(true);
-        req.filters = craft::dialogs::save_types::save_filters(&name);
+        req.filters = crate::save_types::save_filters(&name);
         self.ask_file(req, AfterPick::SaveAs { after, document: self.session.document_id() })
     }
 

@@ -2,8 +2,7 @@ use craft::host::{PickId, Picked};
 use craft::platform::open::{DropTarget, DroppedFile, Intake};
 use craft::quit::{CloseAnswer, CloseGuard, CloseScope, GuardStep};
 use craft::ui::dialog::{DialogId, DialogResult, UnsavedChangesDialog};
-// PLAN: assumed module paths `host`, `platform::open`, `quit`, `ui::dialog` and `ui::shell::CloseDecision` under `craft`
-use craft::ui::shell::CloseDecision;
+use craft::ui::shell::embed::CloseDecision;
 
 use super::{AutoSaveBlock, PromptSave, Value, WordApp, file_dialogs, i18n, json, keeps_everything, panes, printing};
 

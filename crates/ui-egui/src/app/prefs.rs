@@ -1,6 +1,6 @@
 use craft::settings::{LoadReport, SaveStatus, SharedSettings};
 use craft::ui::shell::ScreenMode;
-use craft::ui_widgets::notices::settings::{SaveResult, SettingsLoad};
+use craft::ui::notices::{SaveResult, SettingsLoad};
 
 use super::{DEFAULT_TAB, MAX_DICTIONARY, WordApp, recent_fonts_from, theme};
 use crate::prefs::{Prefs, Shortcuts};
