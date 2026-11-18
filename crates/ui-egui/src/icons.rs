@@ -1386,6 +1386,35 @@ fn paint_file_and_tools(pen: &Pen, name: &str) -> bool {
     let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
     let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
     match name {
+        // Get Add-ins: a plug-in block (a square with a tab on top and one on the right) and a
+        // plus beside it.
+        "getAddins" => {
+            pen.closed(
+                &[
+                    (2.5, 6.0),
+                    (5.5, 6.0),
+                    (5.5, 4.0),
+                    (8.5, 4.0),
+                    (8.5, 6.0),
+                    (11.5, 6.0),
+                    (11.5, 9.0),
+                    (13.5, 9.0),
+                    (13.5, 12.0),
+                    (11.5, 12.0),
+                    (11.5, 15.0),
+                    (2.5, 15.0),
+                ],
+                c,
+            );
+            pen.line_c(&[(16.0, 2.5), (16.0, 8.5)], a);
+            pen.line_c(&[(13.0, 5.5), (19.0, 5.5)], a);
+        }
+        // My Add-ins: two plug-in blocks fitted together.
+        "myAddins" => {
+            pen.closed(&[(2.5, 4.0), (9.5, 4.0), (9.5, 7.0), (11.5, 7.0), (11.5, 10.0), (9.5, 10.0), (9.5, 13.0), (2.5, 13.0)], c);
+            pen.closed(&[(9.5, 7.0), (11.5, 7.0), (11.5, 10.0), (9.5, 10.0), (9.5, 13.0), (17.5, 13.0), (17.5, 7.0)], a);
+            pen.line_c(&[(5.0, 16.0), (15.0, 16.0)], a);
+        }
         // Open: a folder with its flap lifted.
         "open" => {
             pen.closed(&[(2.5, 5.0), (7.5, 5.0), (9.0, 6.5), (15.5, 6.5), (15.5, 9.0)], c);

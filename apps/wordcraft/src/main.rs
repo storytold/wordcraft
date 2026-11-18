@@ -736,6 +736,14 @@ fn main() -> eframe::Result {
                     log::warn!("local recovery unavailable: {e}");
                 }
             }
+            // Plug-ins (RFC-0046): the user's `Plug-ins` folder beside the settings, and the
+            // HTTPS client WordCraft checks for updates with, for catalogs and GitHub releases.
+            if prefs_enabled()
+                && let Some(dir) = wordcraft_control_key::settings_dir()
+            {
+                app.session.plugins.open_store(&dir);
+            }
+            app.session.plugins.set_fetch(wordcraft_ui_egui::plugin_http::http_fetch());
             app.ui.window = restored;
             app.set_window_builder(window_builder);
             app.integrated_titlebar = cfg!(target_os = "macos");

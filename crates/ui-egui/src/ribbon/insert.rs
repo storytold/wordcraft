@@ -231,6 +231,42 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
             mi(ui, app, "More Symbols…", "ui.dialog", json!({"name": "symbol"}));
         });
     });
+    group(ui, "Add-ins", None, app, |ui, app| {
+        big(ui, app, "getAddins", "Get Add-ins", "addins.get", json!({}), false);
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("myAddins", Some("My Add-ins"), "My Add-ins", true, ""), my_addins);
+    });
+}
+
+/// Insert › Add-ins › My Add-ins: each installed plug-in's commands (a command with parameters
+/// asks for them first), then getting more and the Plug-ins window (RFC-0046). Plug-in names are
+/// the authors' own and show as they wrote them.
+fn my_addins(ui: &mut Ui, app: &mut WordApp) {
+    let plugins: Vec<(String, String, String)> = app
+        .session
+        .plugins
+        .list()
+        .iter()
+        .flat_map(|p| {
+            let several = p.manifest.commands.len() > 1;
+            p.manifest.commands.iter().map(move |c| {
+                let name = if several { format!("{}: {}", p.manifest.name, c.label) } else { p.manifest.name.clone() };
+                (p.manifest.id.clone(), c.id.clone(), crate::language_packs::shown(&name, 80))
+            })
+        })
+        .collect();
+    if plugins.is_empty() {
+        ui.add_enabled(false, egui::Button::new(tl!("No plug-ins installed")).frame(false));
+    }
+    let enabled = crate::widgets::enabled(app, "plugin.run");
+    for (id, command, name) in plugins {
+        if ui.add_enabled(enabled, crate::rtl::menu_item(ui, &name, "", 200.0)).clicked() {
+            crate::dialogs_plugins::run_command(app, &id, &command);
+            ui.close();
+        }
+    }
+    ui.separator();
+    mi(ui, app, "Get Add-ins…", "addins.get", json!({}));
+    mi(ui, app, "Manage Plug-ins…", "ui.dialog", json!({"name": "plugins"}));
 }
 
 /// What a Drop Cap menu choice sends: the position, and `keep` so each selected paragraph that has

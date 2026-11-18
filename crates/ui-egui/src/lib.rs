@@ -60,6 +60,9 @@ pub mod objects;
 pub mod options;
 pub mod panes;
 pub mod paste_picture;
+/// HTTPS for plug-in downloads over WordCraft's own client (native only).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugin_http;
 pub mod previews;
 pub mod print_page;
 pub mod printing;
@@ -100,6 +103,7 @@ pub use dialogs::dialogs_layout;
 pub use dialogs::dialogs_lists;
 pub use dialogs::dialogs_notes;
 pub use dialogs::dialogs_para;
+pub use dialogs::dialogs_plugins;
 pub use dialogs::dialogs_refs;
 pub use dialogs::dialogs_review;
 pub use dialogs::dialogs_ribbon;

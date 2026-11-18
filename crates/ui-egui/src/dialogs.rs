@@ -491,6 +491,10 @@ pub enum Dialog {
     /// File › Info › Properties › Advanced Properties › Custom: the document's custom
     /// properties (#2982).
     CustomProperties(Box<CustomPropertiesForm>),
+    /// Insert › Add-ins: the Plug-ins window (RFC-0046).
+    Plugins(Box<crate::dialogs_plugins::PluginsForm>),
+    /// A plug-in command's parameters, asked before it runs.
+    PluginParams(Box<crate::dialogs_plugins::ParamsForm>),
 }
 
 impl Dialog {
@@ -579,6 +583,8 @@ impl Dialog {
             Dialog::Templates { .. } => "templates",
             Dialog::Organizer { .. } => "organizer",
             Dialog::CustomProperties(..) => "customProperties",
+            Dialog::Plugins(..) => "plugins",
+            Dialog::PluginParams(..) => "pluginParams",
             Dialog::Layout(d) => d.name(),
         }
     }
@@ -869,6 +875,8 @@ impl Dialog {
             "templates" => Dialog::Templates { form: Box::new(crate::dialogs_templates::TemplatesForm::read(app)) },
             "organizer" => Dialog::Organizer { form: Box::new(crate::dialogs_templates::OrganizerForm::read(app, None)) },
             "customProperties" => Dialog::CustomProperties(Box::new(CustomPropertiesForm::read(app))),
+            "plugins" => Dialog::Plugins(Box::new(crate::dialogs_plugins::PluginsForm::read(app, crate::dialogs_plugins::Page::Installed))),
+            "getPlugins" => Dialog::Plugins(Box::new(crate::dialogs_plugins::PluginsForm::read(app, crate::dialogs_plugins::Page::Get))),
             "controlProperties" => match crate::dialogs_controls::ControlForm::read(app) {
                 Some(form) => Dialog::Control { form: Box::new(form) },
                 None => {
@@ -934,6 +942,7 @@ pub mod dialogs_layout;
 pub mod dialogs_lists;
 pub mod dialogs_notes;
 pub mod dialogs_para;
+pub mod dialogs_plugins;
 pub mod dialogs_refs;
 pub mod dialogs_review;
 pub mod dialogs_ribbon;
