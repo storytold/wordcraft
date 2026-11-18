@@ -74,6 +74,17 @@ pub(super) fn set_column_widths(t: &mut Table, cells: &[(usize, usize)], w: f32)
     }
 }
 
+/// Horizontal float alignment corresponding to table alignment and direction.
+fn float_align_for_table(align: Option<Align>, bidi: bool) -> Option<wordcraft_doc::para::FloatAlign> {
+    match (align, bidi) {
+        (Some(Align::Center), _) => Some(wordcraft_doc::para::FloatAlign::Center),
+        (Some(Align::Right), false) => Some(wordcraft_doc::para::FloatAlign::End),
+        (Some(Align::Right), true) => None,
+        (_, true) => Some(wordcraft_doc::para::FloatAlign::End),
+        (_, false) => None,
+    }
+}
+
 /// Table Properties: table, row, column and cell settings in one undoable step. Row, column and
 /// cell settings apply to the selected rows, columns and cells, as in Word, and to the caret's
 /// when nothing is selected (#4857). Without any setting it returns the caret's current values.
@@ -176,61 +187,44 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Disabled("only top-level tables in the body text can wrap text".into()));
     }
     with_table(s, |t| {
-        if let Some(w) = wrapping {
-            if w == "none" {
-                t.props.float = None;
-            } else if w == "around" {
-                // Reuse existing float settings when present; only initialize a default when float is None.
-                if t.props.float.is_none() {
-                    let h_align = if !t.props.bidi_visual {
-                        match t.props.align {
-                            Some(Align::Center) => Some(wordcraft_doc::para::FloatAlign::Center),
-                            Some(Align::Right) => Some(wordcraft_doc::para::FloatAlign::End),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
-                    t.props.float = Some(wordcraft_doc::props::TableFloat {
-                        h_rel: wordcraft_doc::para::Anchor::Column,
-                        v_rel: wordcraft_doc::para::Anchor::Paragraph,
-                        h_align,
-                        x: if h_align.is_none() { t.props.indent.unwrap_or(0.0) } else { 0.0 },
-                        dist: [9.0, 0.0, 9.0, 0.0],
-                        overlap: true,
-                        ..Default::default()
-                    });
-                }
-            }
-        }
         if let Some(a) = align {
             t.props.align = Some(a);
-            if let Some(f) = &mut t.props.float
-                && !t.props.bidi_visual
-            {
-                f.h_align = match a {
-                    Align::Center => Some(wordcraft_doc::para::FloatAlign::Center),
-                    Align::Right => Some(wordcraft_doc::para::FloatAlign::End),
-                    _ => None,
-                };
-                if a == Align::Left {
-                    f.x = t.props.indent.unwrap_or(0.0);
-                }
-            }
         }
         if let Some(on) = rtl {
             t.props.bidi_visual = on;
-            if on && let Some(f) = &mut t.props.float {
-                f.h_align = None;
-            }
         }
         if let Some(i) = indent {
             t.props.indent = Some(i);
-            if let Some(f) = &mut t.props.float
-                && f.h_align.is_none()
-            {
-                f.x = i;
+        }
+        if let Some(w) = wrapping {
+            if w == "none" {
+                t.props.float = None;
+            } else if w == "around" && t.props.float.is_none() {
+                // Reuse existing float settings when present; only initialize a default when float is None.
+                let h_align = float_align_for_table(t.props.align, t.props.bidi_visual);
+                t.props.float = Some(wordcraft_doc::props::TableFloat {
+                    h_rel: wordcraft_doc::para::Anchor::Column,
+                    v_rel: wordcraft_doc::para::Anchor::Paragraph,
+                    h_align,
+                    x: if h_align.is_none() { t.props.indent.unwrap_or(0.0) } else { 0.0 },
+                    dist: [9.0, 0.0, 9.0, 0.0],
+                    overlap: true,
+                    ..Default::default()
+                });
             }
+        }
+        if (align.is_some() || rtl.is_some())
+            && let Some(f) = &mut t.props.float
+        {
+            f.h_align = float_align_for_table(t.props.align, t.props.bidi_visual);
+            if f.h_align.is_none() {
+                f.x = t.props.indent.unwrap_or(0.0);
+            }
+        } else if let Some(i) = indent
+            && let Some(f) = &mut t.props.float
+            && f.h_align.is_none()
+        {
+            f.x = i;
         }
         if let Some(cw) = column_width {
             set_column_widths(t, &cells, cw);
