@@ -1,4 +1,5 @@
-//! Rich Text Format (`.rtf`) import and export via `craft-rtf`.
+//! Rich Text Format (`.rtf`) import and export via `craft-rtf`, including per-section
+//! default/first/even header/footer stories and the document-wide facing-page setting.
 
 use wordcraft_doc::Document;
 
