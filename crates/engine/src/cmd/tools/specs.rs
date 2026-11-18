@@ -1,5 +1,6 @@
 use super::actions::{
     customize_keyboard, customize_ribbon, hf_nav, language, macros, preferred_language, quick_parts, search_commands, select_similar,
+    spreadsheet_rows,
 };
 use super::autocorrect::autocorrect_options;
 use super::compare::{COMPARE_PARAMS, compare};
@@ -121,17 +122,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.recover", "Recover Unsaved Documents", "File › Info", |s, v| s.recover(v))
         .params(r#"{"restore"?: recoveryId, "discard"?: recoveryId, "refresh"?: true}; desktop only; returns {enabled,busy,documents,error}; restore loads asynchronously without a file path"#)
         .pure(),
-        CommandSpec::new("file.newFromTemplate", "New from Template", "File › New", |s, v| {
-            let path = p::req_str(v, "path")?;
-            let mut doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
-            // As in Word, the new document is attached to the template it came from (#2852).
-            doc.settings.attached_template = Some(path.to_string());
-            s.add_document(doc);
-            s.dirty = true;
-            sel_result(s)
-        })
-        .params(r#"{"path": string} → a new, untitled document from the template, attached to it"#)
-        .pure(),
+        CommandSpec::new("file.newFromTemplate", "New from Template", "File › New", crate::cmd::file::new_from_template)
+            .params(
+                r#"{"path": string, "data"?: base64 (the template's bytes; `path` then only names it), "password"?: string (for a password-protected template), "replaceBlank"?: bool (an untouched blank document gives way to it, as to a file file.open opens)} → a new, untitled document from the template, attached to it"#,
+            )
+            .pure(),
         CommandSpec::new("file.saveTemplate", "Save as Template", "File › Save As", |s, v| {
             let path = p::req_str(v, "path")?;
             // A .dotm keeps its name (#2852); anything else becomes a .dotx.
@@ -219,10 +214,10 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"path": string}"#),
         CommandSpec::new("insert.spreadsheet", "Spreadsheet Table", "Insert › Tables", |s, v| {
-            let csv = p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6");
-            let rows = crate::cmd::mailings::parse_csv(csv);
+            let rows = spreadsheet_rows(v)?;
             let cols = rows.iter().map(Vec::len).max().unwrap_or(1).clamp(1, 63);
-            s.run("insert.table", &json!({"rows": rows.len().max(1), "cols": cols, "style": "GridTable1Light"}))?;
+            let style = p::str(v, "style").unwrap_or("GridTable1Light");
+            s.run("insert.table", &json!({"rows": rows.len().max(1), "cols": cols, "style": style}))?;
             let Some((tp, _, _)) = s.sel.focus.path.cell() else { return sel_result(s) };
             let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
             for (r, row) in rows.iter().enumerate() {
@@ -232,9 +227,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 }
             }
+            if p::bool(v, "header").unwrap_or(false)
+                && let Some(first) = t.rows.first_mut()
+            {
+                first.props.header = true;
+            }
             sel_result(s)
         })
-        .params(r#"{"csv"?: string}"#),
+        .params(r#"{"csv"?: string, "values"?: [[cell, …], …] (rows of equal length, at most 1000 rows × 63 columns; wins over csv), "header"?: bool (first row repeats on each page), "style"?: table style name (default GridTable1Light)}"#),
         CommandSpec::new("layout.linkToPrevious", "Link to Previous", "Header & Footer › Navigation", |s, v| {
             let header = p::bool(v, "footer").map(|f| !f).unwrap_or(true);
             let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
@@ -316,10 +316,9 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .params(r#"{"value": n}"#),
-        CommandSpec::new("para.defineBullet", "Define New Bullet", "Home › Paragraph › Bullets", |s, v| {
-            s.run("para.bullets", &json!({"kind": p::str(v, "char").unwrap_or("★")}))
-        })
-        .params(r#"{"char": string}"#),
+        CommandSpec::new("para.defineBullet", "Define New Bullet", "Home › Paragraph › Bullets", crate::cmd::lists::define_bullet).params(
+            r#"{"char"?: one character (default ★), "font"?: family (the bullet's own font; "" = the text's), "size"?: pt, "bold"?: bool, "italic"?: bool, "color"?: "RRGGBB" | "auto", "align"?: "left|center|right"} (the selected paragraphs get a list of their own; each keeps its level)"#,
+        ),
         CommandSpec::new("para.defineNumber", "Define New Number Format", "Home › Paragraph › Numbering", |s, v| {
             let fmt = wordcraft_doc::section::NumFormat::from_ooxml(p::str(v, "format").unwrap_or("decimal"));
             let text = p::str(v, "text").unwrap_or("%1.").to_string();
@@ -340,7 +339,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
         CommandSpec::new("review.language", "Language", "Review › Language", language).params(
-            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents)}"#,
+            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents), "scope"?: "selection" (default) | "document" (every run and paragraph mark of every story: body, headers, footers, notes, comments, text boxes, tables, glossary (skipped while Track Changes and Track Formatting are on); one undo step, selection unchanged; returns the caret, "scope":"document" and "glossarySkipped":true when the glossary was skipped)}"#,
         ),
         CommandSpec::new("review.language.preferred", "Set as Default Language", "File › Options › Language", preferred_language)
             .params(r#"{"lang": "en-US|en-GB|pl-PL|nl-NL|…" (BCP 47)} — only the saved default proofing language, what future blank documents are written in, as Options › Language › Set as default does; the open document, the selection and the undo history don't change. Returns {"preferred": tag}."#)

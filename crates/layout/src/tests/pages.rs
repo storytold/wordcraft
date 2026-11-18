@@ -35,6 +35,7 @@ fn body_left(l: &DocLayout) -> Vec<f32> {
 
 #[test]
 fn mirrored_margins_put_the_inside_margin_toward_the_binding() {
+    crate::test_fonts();
     // #452: inside 108 (plus a 10pt gutter), outside 36. Odd pages: inside on the left; even
     // pages: on the right.
     let mut d = Document::from_text(&"Body line\n".repeat(90));
@@ -55,6 +56,7 @@ fn mirrored_margins_put_the_inside_margin_toward_the_binding() {
 
 #[test]
 fn inside_and_outside_floats_swap_sides_on_even_pages() {
+    crate::test_fonts();
     // #1181: shapes Word places in the outside margin of a book (mirrored margins) all came out
     // in the right margin. Inside 108 plus a 10pt gutter, outside 36; the paragraph on page 2
     // carries the same six shapes as page 1's, told apart by their widths.
@@ -124,6 +126,7 @@ fn inside_and_outside_floats_swap_sides_on_even_pages() {
 
 #[test]
 fn outside_floating_tables_swap_sides_on_even_pages() {
+    crate::test_fonts();
     // #1181, for a floating table (`w:tblpXSpec="outside"`): on page 2 of a book the outside is
     // the left. One positioned from the page edge stays there on both pages.
     use wordcraft_doc::para::{Anchor, FloatAlign};
@@ -159,6 +162,7 @@ fn outside_floating_tables_swap_sides_on_even_pages() {
 
 #[test]
 fn a_tall_footer_pushes_the_body_up() {
+    crate::test_fonts();
     // #453: an eight-line footer reaches far above the 72pt bottom margin.
     let mut d = Document::from_text(&"Body line\n".repeat(60));
     let id = d.add_part(PartKind::Footer, paras("Footer line", 8));
@@ -184,6 +188,7 @@ fn a_tall_footer_pushes_the_body_up() {
 
 #[test]
 fn a_linked_tall_header_pushes_the_next_sections_body_down() {
+    crate::test_fonts();
     // #454: section 2 has no header of its own and shows section 1's (link to previous).
     let mut d = Document::from_text("First section\nSecond section");
     let id = d.add_part(PartKind::Header, paras("Header line", 8));
@@ -203,6 +208,7 @@ fn a_linked_tall_header_pushes_the_next_sections_body_down() {
 
 #[test]
 fn long_endnotes_continue_on_new_pages() {
+    crate::test_fonts();
     // #456: an 80-paragraph endnote after a one-line body.
     let mut d = Document::from_text("Body");
     let id = d.add_part(PartKind::Endnote, paras("Endnote paragraph", 80));
@@ -230,6 +236,7 @@ fn long_endnotes_continue_on_new_pages() {
 
 #[test]
 fn caret_in_a_continued_footnote_is_found_on_its_page() {
+    crate::test_fonts();
     // #457: one long footnote paragraph split over pages 1 and 2.
     let mut d = Document::from_text(&"Body text line.\n".repeat(16));
     let id = d.add_part(
@@ -264,6 +271,7 @@ fn caret_in_a_continued_footnote_is_found_on_its_page() {
 /// own pages). The footer shows each letter's last page, not the file's stale result.
 #[test]
 fn page_references_in_footers_show_their_bookmarks_page() {
+    crate::test_fonts();
     let field =
         |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
     let footer = |d: &mut Document, mark: &str| {
@@ -337,6 +345,296 @@ fn page_references_in_footers_show_their_bookmarks_page() {
     assert_eq!(texts, ["9"]);
 }
 
+/// Output (PDF, print, page images) shows each body `PAGEREF` its bookmark's page, counted from
+/// the section's restart, as Word fills them in when it prints or exports; the editor keeps the
+/// stored result until fields are updated, and a locked reference keeps it in output too.
+/// Measured in Word for Microsoft 365: references stored as "9" to a heading on the third page
+/// print and export as 3, or 2 when the second page starts a section numbered from 1; a locked
+/// one stays 9, in the body and in a footer.
+#[test]
+fn page_references_in_the_body_show_their_bookmarks_page_in_output() {
+    let field = |instr: &str, locked: bool| InlineObject::Field {
+        instr: instr.into(),
+        result: "9".into(),
+        locked,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("See page \nLocked \nBlank\nHeading");
+    for (i, instr, locked) in [(0, "PAGEREF _Toc1 \\h", false), (1, "PAGEREF _Toc1", true)] {
+        let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        let n = p.len();
+        p.insert_object(n, field(instr, locked), &Default::default()).unwrap();
+    }
+    for i in [2, 3] {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(true);
+    }
+    let heading = d.para_mut(StoryRef::Body, &Path::top(3)).unwrap();
+    heading.insert_object(0, InlineObject::BookmarkStart { name: "_Toc1".into() }, &Default::default()).unwrap();
+    let refs = |l: &DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .flat_map(|it| if let Placed::Lines { para, .. } = it { para.shown.iter().map(|s| s.1.clone()).collect() } else { vec![] })
+            .collect()
+    };
+    let output = LayoutOptions { output_page_refs: true, ..Default::default() };
+    // Only an unlocked reference calls for the extra pass: a locked one keeps its result.
+    assert!(crate::headers::flow_refers_to_pages(&d));
+    let mut all_locked = d.clone();
+    if let Some(InlineObject::Field { locked, .. }) = all_locked.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects.last_mut() {
+        *locked = true;
+    }
+    assert!(!crate::headers::flow_refers_to_pages(&all_locked));
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 3);
+    assert_eq!(refs(&l), ["9", "9"]);
+    assert_eq!(refs(&layout(&d, &mut LayoutCache::new(), &output)), ["3", "9"]);
+    // The second page starts a section that numbers its pages from 1.
+    let first = d.last_section.clone();
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section = Some(Box::new(first));
+    d.last_section.page_num_start = Some(1);
+    let l = layout(&d, &mut LayoutCache::new(), &output);
+    assert_eq!(l.pages.iter().map(|p| p.number).collect::<Vec<_>>(), [1, 1, 2]);
+    assert_eq!(refs(&l), ["2", "9"]);
+    assert_eq!(refs(&lay(&d)), ["9", "9"]);
+    // A footer's references: the unlocked one shows the page, the locked one keeps its result.
+    let mut fp = Paragraph::new();
+    fp.insert_object(0, field("PAGEREF _Toc1", false), &Default::default()).unwrap();
+    fp.insert_object(fp.len(), field("PAGEREF _Toc1", true), &Default::default()).unwrap();
+    d.last_section.footers.default = Some(d.add_part(PartKind::Footer, vec![para_block(fp)]));
+    assert_eq!(footer_shown(&lay(&d)).last().map(String::as_str), Some("2/9"));
+}
+
+/// Printed or exported, a reference to a bookmark the document doesn't have shows Word's error,
+/// whether or not the document has other bookmarks (measured in Word for Windows: "Error!
+/// Bookmark not defined."); the editor keeps the stored result, and so does a reference that
+/// shows "above" or "below" (`\p`).
+#[test]
+fn a_page_reference_to_a_missing_bookmark_shows_words_error_in_output() {
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let output = LayoutOptions { output_page_refs: true, ..Default::default() };
+    for other_mark in [false, true] {
+        let mut d = Document::from_text("See \nAbove \nTarget");
+        for (i, instr) in [(0, "PAGEREF NoSuchMark \\h"), (1, "PAGEREF NoSuchMark \\p")] {
+            let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            let n = p.len();
+            p.insert_object(n, field(instr), &Default::default()).unwrap();
+        }
+        if other_mark {
+            let p = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+            p.insert_object(0, InlineObject::BookmarkStart { name: "Elsewhere".into() }, &Default::default()).unwrap();
+        }
+        let shown = |l: &DocLayout| -> Vec<String> {
+            l.pages[0]
+                .items
+                .iter()
+                .flat_map(|it| if let Placed::Lines { para, .. } = it { para.shown.iter().map(|s| s.1.clone()).collect() } else { vec![] })
+                .collect()
+        };
+        assert_eq!(shown(&layout(&d, &mut LayoutCache::new(), &output)), [crate::fields::BOOKMARK_NOT_DEFINED, "9"], "other bookmark: {other_mark}");
+        assert_eq!(shown(&lay(&d)), ["9", "9"], "the editor, other bookmark: {other_mark}");
+        // One cache for the editor's layout and then output's: output doesn't reuse the
+        // editor's paragraphs, and the editor doesn't reuse output's after it.
+        let mut cache = LayoutCache::new();
+        let editor = LayoutOptions::default();
+        assert_eq!(shown(&layout(&d, &mut cache, &editor)), ["9", "9"]);
+        assert_eq!(
+            shown(&layout(&d, &mut cache, &output)),
+            [crate::fields::BOOKMARK_NOT_DEFINED, "9"],
+            "a shared cache, other bookmark: {other_mark}"
+        );
+        assert_eq!(shown(&layout(&d, &mut cache, &editor)), ["9", "9"], "the editor after output, other bookmark: {other_mark}");
+    }
+}
+
+/// Printed or exported, a reference to a bookmark in a text box shows the page of the box's
+/// anchor (measured in Word for Windows), not "Error! Bookmark not defined.".
+#[test]
+fn a_page_reference_to_a_bookmark_in_a_text_box_shows_its_anchors_page_in_output() {
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    let mut d = Document::from_text("See \nSecond");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+    let mut inner = Paragraph::with_text("Caption", Default::default());
+    inner.insert_object(0, InlineObject::BookmarkStart { name: "Boxed".into() }, &Default::default()).unwrap();
+    let story = d.add_part(PartKind::TextBox, vec![para_block(inner)]);
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 100.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::Inline, ..Default::default() },
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(0, shape, &Default::default()).unwrap();
+    let field =
+        InlineObject::Field { instr: "PAGEREF Boxed \\h".into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let n = p.len();
+    p.insert_object(n, field, &Default::default()).unwrap();
+    let output = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
+    let shown: Vec<String> = output.pages[0]
+        .items
+        .iter()
+        .flat_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+            _ => vec![],
+        })
+        .collect();
+    assert_eq!(shown, ["2"]);
+}
+
+/// The field results shown on page `page` by the lines of `story`.
+fn shown_in(l: &DocLayout, page: usize, story: StoryRef) -> Vec<String> {
+    l.pages[page]
+        .items
+        .iter()
+        .flat_map(|it| match it {
+            Placed::Lines { story: s, para, .. } if *s == story => para.shown.iter().map(|s| s.1.clone()).collect(),
+            _ => vec![],
+        })
+        .collect()
+}
+
+/// A page reference field showing `result` until it is updated.
+fn pageref(instr: &str, result: &str) -> InlineObject {
+    InlineObject::Field { instr: instr.into(), result: result.into(), locked: false, dirty: false, code: false, form: String::new() }
+}
+
+/// Three pages, a bookmark "Body" on the third; a text box on the first page and a footnote on
+/// the second refer to it, the footnote also to a bookmark that doesn't exist, and holds the
+/// bookmark "InNote"; the header holds the bookmark "InHeader". With `body_refs` the first
+/// paragraph refers to "InNote" and "InHeader" too. Returns the document and the box's and the
+/// note's stories.
+fn refs_outside_the_body(body_refs: bool) -> (Document, StoryRef, StoryRef) {
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    let mut d = Document::from_text("Intro \nSecond\nTarget");
+    for i in [1, 2] {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(true);
+    }
+    d.para_mut(StoryRef::Body, &Path::top(2))
+        .unwrap()
+        .insert_object(0, InlineObject::BookmarkStart { name: "Body".into() }, &Default::default())
+        .unwrap();
+    let mut boxed = Paragraph::with_text("Box ", Default::default());
+    boxed.insert_object(boxed.len(), pageref("PAGEREF Body \\h", "9"), &Default::default()).unwrap();
+    let box_story = d.add_part(PartKind::TextBox, vec![para_block(boxed)]);
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 100.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::Inline, ..Default::default() },
+        story: Some(box_story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(0, shape, &Default::default()).unwrap();
+    let mut note = Paragraph::with_text("Note ", Default::default());
+    note.insert_object(0, InlineObject::BookmarkStart { name: "InNote".into() }, &Default::default()).unwrap();
+    for f in [pageref("PAGEREF Body \\h", "9"), pageref("PAGEREF Gone \\h", "9")] {
+        note.insert_object(note.len(), f, &Default::default()).unwrap();
+    }
+    let note_id = d.add_part(PartKind::Footnote, vec![para_block(note)]);
+    d.insert_object(&Pos::body(1, 6), InlineObject::NoteRef { kind: NoteKind::Footnote, id: note_id, custom: String::new() }, &Default::default())
+        .unwrap();
+    let mut hp = Paragraph::with_text("Header", Default::default());
+    hp.insert_object(0, InlineObject::BookmarkStart { name: "InHeader".into() }, &Default::default()).unwrap();
+    d.last_section.headers.default = Some(d.add_part(PartKind::Header, vec![para_block(hp)]));
+    if body_refs {
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        for f in [pageref("PAGEREF InNote \\h", "9"), pageref("PAGEREF InHeader \\h", "9")] {
+            p.insert_object(p.len(), f, &Default::default()).unwrap();
+        }
+    }
+    (d, StoryRef::Part(box_story), StoryRef::Part(note_id))
+}
+
+/// Printed or exported, page references in text boxes and notes show their bookmarks' pages too,
+/// also when the body has none (the extra pass is for them as well); a bookmark in a note is on
+/// the page that shows the note; a reference to a bookmark that exists where pages aren't found
+/// (a header) keeps its result, and only one to a bookmark nowhere in the document shows Word's
+/// error. The editor keeps every stored result.
+#[test]
+fn page_references_outside_the_body_show_pages_in_output() {
+    let output = LayoutOptions { output_page_refs: true, ..Default::default() };
+    for body_refs in [false, true] {
+        let (d, boxed, note) = refs_outside_the_body(body_refs);
+        assert!(crate::headers::flow_refers_to_pages(&d));
+        let l = layout(&d, &mut LayoutCache::new(), &output);
+        assert_eq!(l.pages.len(), 3);
+        assert_eq!(shown_in(&l, 0, boxed), ["3"], "the text box, body refs: {body_refs}");
+        assert_eq!(shown_in(&l, 1, note), ["3", crate::fields::BOOKMARK_NOT_DEFINED], "the footnote, body refs: {body_refs}");
+        let body: Vec<String> = if body_refs { vec!["2".into(), "9".into()] } else { vec![] };
+        assert_eq!(shown_in(&l, 0, StoryRef::Body), body, "body refs: {body_refs}");
+        let editor = lay(&d);
+        assert_eq!(shown_in(&editor, 0, boxed), ["9"]);
+        assert_eq!(shown_in(&editor, 1, note), ["9", "9"]);
+    }
+}
+
+/// Output shows a reference to a missing bookmark in the text it is given for the interface
+/// language (Word prints its error in its own), English without one.
+#[test]
+fn a_missing_bookmarks_error_is_in_the_interface_language() {
+    let (d, _, note) = refs_outside_the_body(false);
+    let french: Arc<str> = "Erreur ! Signet non défini.".into();
+    let l =
+        layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, bookmark_error: Some(french.clone()), ..Default::default() });
+    assert_eq!(shown_in(&l, 1, note), ["3", &*french]);
+}
+
+/// The first pass of output, before any bookmark's page is known, shows the stored results (the
+/// closest guess: a table of contents isn't stretched by errors), not Word's error.
+#[test]
+fn outputs_first_pass_shows_stored_page_references() {
+    let mut d = Document::from_text("See ");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.insert_object(p.len(), pageref("PAGEREF Gone \\h", "9"), &Default::default()).unwrap();
+    let output = LayoutOptions { output_page_refs: true, ..Default::default() };
+    let totals = crate::cache::Totals::first_guess(d.sections().len());
+    let first = crate::pass::layout_pass(
+        &d,
+        &mut LayoutCache::new(),
+        &output,
+        (&std::collections::HashMap::new(), None),
+        &totals,
+        true,
+        (&crate::floats::EarlyFloats::new(), true),
+    );
+    let crate::ctx::Pass::Done(l) = first else { panic!("one page needs no other pass") };
+    assert_eq!(shown_in(&l, 0, StoryRef::Body), ["9"]);
+    assert_eq!(shown_in(&layout(&d, &mut LayoutCache::new(), &output), 0, StoryRef::Body), [crate::fields::BOOKMARK_NOT_DEFINED]);
+}
+
+/// Output's page references can change the page count after the totals settled (here many
+/// references to a missing bookmark grow from their stored "9" to Word's error, adding pages):
+/// the body's `NUMPAGES` still shows the pages the document ends with.
+#[test]
+fn output_page_references_that_change_the_page_count_leave_totals_right() {
+    const REFS: usize = 300;
+    let mut d = Document::from_text(&" ".repeat(REFS));
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for off in (1..=REFS).rev() {
+        p.insert_object(off, pageref("PAGEREF Gone \\h", "9"), &Default::default()).unwrap();
+    }
+    p.insert_object(0, pageref("NUMPAGES", "9"), &Default::default()).unwrap();
+    let stored = lay(&d).pages.len();
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
+    assert!(l.pages.len() > stored, "{} pages, {stored} with the stored results", l.pages.len());
+    assert_eq!(shown_in(&l, 0, StoryRef::Body).first(), Some(&l.pages.len().to_string()));
+}
+
 /// The fields' text in each page's footer, joined with "/".
 fn footer_shown(l: &DocLayout) -> Vec<String> {
     l.pages
@@ -379,6 +677,7 @@ fn mark(d: &mut Document, path: &Path, off: usize, name: &str) {
 /// section numbered in roman numerals are found on the page and in the format they land in.
 #[test]
 fn page_references_find_bookmarks_in_split_paragraphs_tables_and_roman_sections() {
+    crate::test_fonts();
     // One long paragraph over two pages, marked at its start and its end.
     let mut d = Document::from_text(&"Long paragraph text running on. ".repeat(160));
     let n = d.para(StoryRef::Body, &Path::top(0)).unwrap().len();
@@ -423,6 +722,7 @@ fn page_references_find_bookmarks_in_split_paragraphs_tables_and_roman_sections(
 /// A text box in a footer resolves its page references; one in the body keeps its result.
 #[test]
 fn page_references_in_footer_text_boxes_are_resolved() {
+    crate::test_fonts();
     use wordcraft_doc::para::{Float, ShapeKind, Wrap};
     let text_box = |d: &mut Document| {
         let mut p = Paragraph::new();
@@ -475,9 +775,11 @@ fn page_references_in_footer_text_boxes_are_resolved() {
 
 #[test]
 fn widow_control_moves_a_three_line_paragraph_whole() {
+    crate::test_fonts();
     // A three-line paragraph with room for two at the bottom of a page can't leave a widow (two
     // and one) nor an orphan (one and two): Word moves it whole. A four-line one splits two and
     // two. Sweep the paragraph down the page a point at a time and check every split.
+    // Shift the filler immediately before the probe, so the sweep tests partial-line room.
     let mut split4 = false;
     for (want, words) in [(3usize, 45usize), (4, 55)] {
         for (fill, shift) in (30usize..60).flat_map(|f| (0..15).step_by(2).map(move |s| (f, s))) {
@@ -508,6 +810,7 @@ fn widow_control_moves_a_three_line_paragraph_whole() {
 
 #[test]
 fn footer_border_limits_body() {
+    crate::test_fonts();
     use wordcraft_doc::props::{Border, Borders, HeightRule};
     let mut d = Document::from_text(&"Body line\n".repeat(40));
     d.last_section.page_h = 400.0;
@@ -537,6 +840,7 @@ fn footer_border_limits_body() {
 /// number format is known, isn't taken for the page's own footer.
 #[test]
 fn a_roman_page_number_in_the_footer_stays_roman_with_the_page_count_in_the_body() {
+    crate::test_fonts();
     let field = |instr: &str| InlineObject::Field {
         instr: instr.into(),
         result: String::new(),
@@ -611,4 +915,191 @@ fn a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits() {
         }
         assert!(past_margin > 0, "{multiple}: some shift should leave the last line's leading past the margin");
     }
+}
+
+#[test]
+fn a_sections_header_is_measured_without_the_previous_sections_grid() {
+    // #4501 follow-up: section 1 has a line grid, section 2 a tall header of its own. The header
+    // room is measured before section 2's grid is on, so section 1's pitch never reaches it.
+    let body_top = |grid: Option<wordcraft_doc::section::DocGrid>| {
+        let mut d = Document::from_text("First section\nSecond section");
+        let id = d.add_part(PartKind::Header, paras("Header line", 8));
+        d.last_section.headers.default = Some(id);
+        let first = SectionProps { doc_grid: grid, headers: Default::default(), ..d.last_section.clone() };
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+        let l = lay(&d);
+        assert_eq!(l.pages.len(), 2);
+        l.pages[1].body.y
+    };
+    let grid = wordcraft_doc::section::DocGrid { kind: wordcraft_doc::section::DocGridType::Lines, line_pitch: 18.0, char_space: 0 };
+    let plain = body_top(None);
+    assert!(plain > 72.0, "the header reaches past the top margin: {plain}");
+    assert_eq!(body_top(Some(grid)), plain, "section 1's grid leaked into section 2's header");
+}
+
+#[test]
+fn a_sections_header_is_measured_with_its_own_section_page_count() {
+    // #4501 follow-up: section 1 has one page ("one"), section 2 twenty-three ("twenty-three").
+    // Section 2's header room is measured with its own SECTIONPAGES, so its body starts below it.
+    // (The total in the body makes layout run again with the page totals found.)
+    let mut d = Document::from_text(&format!("First section\n{}", "Second section\n".repeat(22)));
+    for i in 1..d.body.len() {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(i > 1);
+    }
+    let field = InlineObject::Field {
+        instr: r"SECTIONPAGES \* CardText".into(),
+        result: String::new(),
+        locked: false,
+        dirty: true,
+        code: false,
+        form: String::new(),
+    };
+    let first_para = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    first_para.insert_object(first_para.len(), field.clone(), &Default::default()).unwrap();
+    let mut header = Paragraph::new();
+    for _ in 0..60 {
+        header.insert_object(header.len(), field.clone(), &Default::default()).unwrap();
+    }
+    let id = d.add_part(PartKind::Header, vec![para_block(header)]);
+    d.last_section.headers.default = Some(id);
+    let first = SectionProps { headers: Default::default(), ..d.last_section.clone() };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 24);
+    let p = &l.pages[1];
+    let (_, header_bottom) = extent(&p.header, StoryRef::Part(id)).unwrap();
+    assert!(header_bottom > 72.0, "the header reaches past the top margin: {header_bottom}");
+    assert!(header_bottom <= p.body.y + 0.01, "the body starts at {} inside the header ending at {header_bottom}", p.body.y);
+}
+
+/// A body PAGE field shows the page number in the section's number format, as Word does (a
+/// cardinal-text section shows "one"), and `\*` overrides it.
+#[test]
+fn body_page_field_uses_the_section_number_format() {
+    let mut d = Document::from_text("Page \nPage ");
+    d.last_section.page_num_format = wordcraft_doc::section::NumFormat::CardinalText;
+    for (i, instr) in ["PAGE", "PAGE \\* Upper"].into_iter().enumerate() {
+        let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        let off = p.len();
+        let field = InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+        p.insert_object(off, field, &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let shown: Vec<String> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para.shown.iter().map(|x| x.1.clone()).collect::<String>()) } else { None })
+        .collect();
+    assert_eq!(shown, ["one", "ONE"], "{shown:?}");
+}
+
+#[test]
+fn reflow_page_field_uses_the_current_section_number_format() {
+    let mut d = Document::from_text("First section\nSecond section");
+    let first = d.last_section.clone();
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+    d.last_section.page_num_format = wordcraft_doc::section::NumFormat::CardinalText;
+    let p = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    let off = p.len();
+    p.insert_object(
+        off,
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+
+    for view in [ViewMode::Web, ViewMode::Draft, ViewMode::Read, ViewMode::Outline] {
+        let mut cache = LayoutCache::new();
+        let layout = layout(&d, &mut cache, &LayoutOptions { view, ..Default::default() });
+        let shown: Vec<_> = layout
+            .pages
+            .iter()
+            .flat_map(|page| {
+                page.items.iter().filter_map(move |item| {
+                    if let Placed::Lines { para, path, .. } = item {
+                        (path == &Path::top(1)).then(|| (page.number, para.shown.iter().map(|x| x.1.as_str()).collect::<String>()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        assert!(!shown.is_empty(), "{view:?}: no second-section text");
+        for (number, text) in shown {
+            let expected = wordcraft_doc::section::NumFormat::CardinalText.format(number).to_lowercase();
+            assert!(text.ends_with(&expected), "{view:?}, page {number}: {text:?}, expected {expected:?}");
+        }
+    }
+}
+
+/// A PAGE field in a table that opens the body uses the section's number format too: the table
+/// is placed without the paragraph path that sets it.
+#[test]
+fn table_cell_page_field_uses_the_section_number_format() {
+    use wordcraft_doc::Table;
+    let mut d = Document::from_text("after");
+    d.last_section.page_num_format = wordcraft_doc::section::NumFormat::CardinalText;
+    let mut t = Table::new(1, 1, 200.0);
+    let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
+    let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    p.insert_object(0, field, &Default::default()).unwrap();
+    if let Some(c) = t.rows.first_mut().and_then(|r| r.cells.first_mut()) {
+        c.blocks = vec![para_block(p)];
+    }
+    d.insert_block(StoryRef::Body, &Path::top(0), Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let shown: String = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| {
+            if let Placed::Lines { para, path, .. } = it {
+                (path.0.len() > 1).then(|| para.shown.iter().map(|x| x.1.clone()).collect::<String>())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(shown, "one");
+}
+
+/// Printed or exported, a reference to a bookmark in a text box nested in text boxes shows the
+/// outermost box's anchor page as deep as layout shows the boxes ([`wordcraft_doc::MAX_TEXT_BOX_DEPTH`]
+/// levels); one nested deeper, which layout doesn't show, keeps its stored result.
+#[test]
+fn a_page_reference_into_nested_text_boxes_stops_where_layout_does() {
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    let shape = |story: u32| InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 100.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::Inline, ..Default::default() },
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let deepest = wordcraft_doc::MAX_TEXT_BOX_DEPTH + 1;
+    let mut d = Document::from_text("See \nSecond");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+    // From the deepest box out: box `level` holds bookmark "Level{level}" and the box inside it.
+    let mut inner: Option<u32> = None;
+    for level in (1..=deepest).rev() {
+        let mut p = Paragraph::with_text("Box", Default::default());
+        p.insert_object(0, InlineObject::BookmarkStart { name: format!("Level{level}") }, &Default::default()).unwrap();
+        if let Some(id) = inner {
+            p.insert_object(p.len(), shape(id), &Default::default()).unwrap();
+        }
+        inner = Some(d.add_part(PartKind::TextBox, vec![para_block(p)]));
+    }
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(0, shape(inner.unwrap()), &Default::default()).unwrap();
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for level in [1, wordcraft_doc::MAX_TEXT_BOX_DEPTH, deepest] {
+        let n = p.len();
+        p.insert_object(n, pageref(&format!("PAGEREF Level{level} \\h"), "9"), &Default::default()).unwrap();
+    }
+    let output = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
+    assert_eq!(shown_in(&output, 0, StoryRef::Body), ["2", "2", "9"]);
 }

@@ -1,5 +1,5 @@
 use super::language::mi_check;
-use super::{Align2, Rect, Sense, Tokens, Ui, Value, WordApp, big, group, json, small, vec2};
+use super::{Align2, MeasureExt, Rect, Sense, Stroke, Tokens, Ui, Value, WordApp, big, group, json, pos2, small, vec2};
 
 /// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
 /// labelled buttons in columns of three. Each shows the command's own icon and label.
@@ -65,6 +65,60 @@ pub(super) fn esc_cancelled(ui: &Ui, r: &egui::Response, id: egui::Id) -> bool {
     ui.data(|d| d.get_temp::<u64>(esc_key)).is_some_and(|at| now.saturating_sub(at) <= 2)
 }
 
+/// A W or H field of Picture or Shape Format › Size, `pt` shown in the interface unit: a size
+/// typed in any unit (`300 px` too, #1901) applies once typed (Enter, Tab or a click elsewhere;
+/// Esc cancels), never per keystroke; a drag applies as it goes, one undo step. Returns the new
+/// size in points to apply.
+pub(super) fn size_field(ui: &mut Ui, app: &mut WordApp, label: &str, pt: f32, id: egui::Id, hint: &str) -> Option<f32> {
+    let unit = crate::options::unit();
+    let k = unit.pt_per_unit();
+    let (lo, hi) = (1.0 / k, 4000.0 / k);
+    let name = ui.label(egui::RichText::new(tl!(label)).small());
+    let was = pt / k;
+    let mut v = was;
+    // `picture.size`'s own range. Not `clamp_existing_to_range`: egui would clamp a size outside
+    // it (a 1 px picture, a thin line) and report it as a change, resizing the object unasked.
+    let field = egui::DragValue::new(&mut v).speed(1.0 / k).range(lo..=hi).clamp_existing_to_range(false).measure(unit).max_decimals(2);
+    let r = ui.add(field.update_while_editing(false)).labelled_by(name.id).on_hover_text(hint);
+    // Only a new value (Enter, Tab, a click elsewhere, a drag) resizes, and Esc cancels.
+    let cancelled = esc_cancelled(ui, &r, id);
+    // Left without typing, the field reads back the text it showed, the size rounded to two
+    // decimals and kept in range: no change (#4196 review). Only a field edited since it took
+    // focus (or dragged) applies, a size at the range's bound too. Text typed, pasted, cut,
+    // composed or deleted counts while the field has focus (egui 0.37 reports no change until the
+    // editing ends) and in the frame that ends the editing (a character and Enter in one frame).
+    let typed_key = id.with("typed");
+    if r.gained_focus() {
+        ui.data_mut(|d| d.insert_temp(typed_key, false));
+    }
+    let edits = ui.input(|i| {
+        i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::Cut
+                    | egui::Event::Ime(egui::ImeEvent::Commit(_))
+                    | egui::Event::Key { key: egui::Key::Backspace | egui::Key::Delete, pressed: true, .. }
+            )
+        })
+    });
+    if (r.has_focus() && (r.changed() || edits)) || (r.lost_focus() && edits) {
+        ui.data_mut(|d| d.insert_temp(typed_key, true));
+    }
+    let typed = ui.data(|d| d.get_temp::<bool>(typed_key)).unwrap_or(false);
+    if r.lost_focus() {
+        ui.data_mut(|d| d.remove_temp::<bool>(typed_key));
+    }
+    if !r.changed() || v == was || cancelled || !(typed || r.dragged()) {
+        return None;
+    }
+    if r.dragged() && !r.drag_started() {
+        app.session.join_next_undo();
+    }
+    Some(v * k)
+}
+
 pub(super) fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     crate::rtl::vertical(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
@@ -89,6 +143,38 @@ pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {
     }
     ui.separator();
     mi(ui, app, crate::dialogs::PAPER_LABELS.more, "ui.dialog", json!({"name": "pageSetup"}));
+}
+
+/// The outline weights Word offers, in points: Text Outline, Shape Outline and the border dialogs.
+const OUTLINE_WEIGHTS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
+
+/// An outline's Weight submenu (#3917): each weight as its label and a line sample drawn at that
+/// weight, the `current` one highlighted. Choosing one runs `id` with `params(weight)`.
+pub(crate) fn weight_menu(ui: &mut Ui, app: &mut WordApp, id: &str, current: Option<f32>, params: impl Fn(f32) -> Value) {
+    let enabled = crate::widgets::enabled(app, id);
+    let t = Tokens::get(ui.ctx());
+    let color = if enabled { t.text } else { t.text_disabled };
+    // A hairline under a device pixel would vanish, so the thinnest samples get one.
+    let pixel = 1.0 / ui.ctx().pixels_per_point();
+    let labels = OUTLINE_WEIGHTS.map(|w| crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]));
+    // The samples start a short gap after the widest label and end as far from the right edge as
+    // the labels start from the left one.
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let widest = labels.iter().map(|l| ui.painter().layout_no_wrap(l.clone(), font.clone(), color).size().x).fold(0.0, f32::max);
+    let pad = ui.spacing().button_padding.x;
+    for (w, label) in OUTLINE_WEIGHTS.into_iter().zip(&labels) {
+        let checked = current.is_some_and(|c| (c - w).abs() < 0.01);
+        let resp = ui.add_enabled(enabled, egui::Button::new(label.as_str()).selected(checked).min_size(vec2(200.0, 22.0)));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, checked, label));
+        let r = resp.rect;
+        let y = r.center().y;
+        let (x0, x1) = (r.left() + pad + widest + 12.0, r.right() - pad);
+        ui.painter().line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(w.max(pixel), color));
+        if resp.clicked() {
+            crate::widgets::run_from_ribbon(app, id, params(w));
+            ui.close();
+        }
+    }
 }
 
 pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {

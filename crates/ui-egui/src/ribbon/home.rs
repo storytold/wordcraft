@@ -26,6 +26,23 @@ pub(super) fn painter_double_click(app: &mut WordApp) {
     let _ = app.run("edit.formatPainter", json!({"sticky": true}));
 }
 
+/// Change List Level › and Define New Bullet… at the foot of the Bullets drop-down (#2786).
+/// Change List Level is for a paragraph in a list of its own numbering, the one `para.listLevel`
+/// changes (a style's numbering it leaves alone).
+fn bullet_list_items(ui: &mut Ui, app: &mut WordApp) {
+    ui.separator();
+    let in_list = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props.numbering).is_some_and(|n| n.num != 0);
+    ui.add_enabled_ui(in_list, |ui| {
+        ui.menu_button(tl!("Change List Level"), |ui| {
+            for level in 0..9u8 {
+                let label = format!("{} {}", tl!("Level"), level + 1);
+                mi_text(ui, app, &label, "para.listLevel", json!({"level": level}));
+            }
+        });
+    });
+    mi(ui, app, "Define New Bullet…", "ui.dialog", json!({"name": "defineBullet"}));
+}
+
 pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
@@ -196,6 +213,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         }
                     });
                     mi(ui, app, "None", "para.bullets", json!({"off": true}));
+                    bullet_list_items(ui, app);
                 });
                 split(
                     ui,
@@ -328,6 +346,32 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                     },
                 );
             });
+        });
+    });
+    // Advanced paragraph tools (#5043): conversions and cleanup over the selection, or the
+    // whole document with Ctrl+A first (the commands take `scope: "all"` for that as well).
+    group(ui, "Paragraph Tools", None, app, |ui, app| {
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("pilcrow", Some("Paragraph\nTools"), "Paragraph Tools", true, ""), |ui, app| {
+            mi(ui, app, "Split Lines into Paragraphs", "para.convertBreaks", json!({}));
+            mi(ui, app, "Add Blank Paragraphs Between", "para.blankBetween", json!({}));
+            mi(ui, app, "Separate Paragraphs", "para.separateParagraphs", json!({}));
+            ui.separator();
+            mi(ui, app, "Delete Blank Paragraphs", "para.removeBlank", json!({}));
+            mi(ui, app, "Remove Leading Spaces", "para.trimLeadingSpaces", json!({}));
+            mi(ui, app, "Remove Extra Spaces", "para.removeExtraSpaces", json!({}));
+            ui.separator();
+            mi(ui, app, "Indent Leading Spaces", "para.spacesToIndent", json!({}));
+            mi(ui, app, "Indents to Leading Spaces", "para.indentToSpaces", json!({}));
+            mi(ui, app, "Join Lines", "para.removeLineBreaks", json!({}));
+            ui.separator();
+            // The whole document, not just the selection.
+            for (l, id) in [
+                ("Delete Blank Paragraphs in the Whole Document", "para.removeBlank"),
+                ("Remove Leading Spaces in the Whole Document", "para.trimLeadingSpaces"),
+                ("Remove Extra Spaces in the Whole Document", "para.removeExtraSpaces"),
+            ] {
+                mi(ui, app, l, id, json!({"scope": "all"}));
+            }
         });
     });
     group(ui, "Styles", Some("styles.pane"), app, |ui, app| {
