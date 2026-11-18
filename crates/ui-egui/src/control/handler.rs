@@ -235,7 +235,13 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
     // The session's preferences are guarded command by command; the File › Options settings the
     // window keeps itself (`ui.*` commands never reach `Session::run`) are compared here.
     let options_before = locked.then(|| WindowOptions::of(&app.ui));
-    let mut outcome = dispatch(app, ctx, req);
+    let doc_before = app.session.document_id();
+    let mut outcome = handle_request(app, ctx, req);
+    // A document a script opened doesn't bring up the missing-fonts box.
+    let doc_after = app.session.document_id();
+    if doc_after != doc_before {
+        crate::font_download::skip(app, doc_after);
+    }
     // The user's own edits after the request change preferences as usual.
     app.session.preferences_locked = false;
     if let Some(before) = options_before
@@ -303,7 +309,7 @@ impl WindowOptions {
     }
 }
 
-fn dispatch(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+fn handle_request(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     if DOC_METHODS.contains(&req.method.as_str()) {
         match addressed(app, p) {
