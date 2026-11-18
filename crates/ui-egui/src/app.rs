@@ -250,7 +250,7 @@ impl WordApp {
     }
 
     /// The drawn window's dialog host.
-    pub fn dialog_host_mut(&mut self) -> &mut craft_ui::dialog::DialogHost {
+    pub fn dialog_host_mut(&mut self) -> &mut craft::ui::dialog::DialogHost {
         &mut self.dialog_host
     }
 
