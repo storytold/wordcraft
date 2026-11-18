@@ -863,6 +863,10 @@ fn dismiss_ime_on_pointer_press(app: &mut WordApp, ui: &Ui, full: Rect) {
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
+    // End the composition before this frame's events are dispatched. A `Commit` queued in the
+    // same batch as the press belongs to the composition being discarded, not to fresh input;
+    // `stale_composition` needs the dismissal flags in place to drop it (#6916).
+    dismiss_ime_on_pointer_press(app, ui, full);
     // While a modal dialog ("Save changes?" too) is up, keys answer it rather than edit the
     // document behind it, also in the frame it opens, before the canvas has given up focus.
     if app.canvas.focused && !app.modal_open() {
@@ -870,7 +874,6 @@ fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocL
     } else {
         app.canvas.alt_code.clear();
     }
-    dismiss_ime_on_pointer_press(app, ui, full);
     crate::ink::replay_tick(app, ui.ctx());
     let layout = shown_layout(app);
     if let Some(anchor) = reflow_anchor
@@ -1480,11 +1483,14 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         && let Some(p) = resp.interact_pointer_pos()
         && let Some((page, x, y)) = page_at(rects, layout, geo.scale, p)
     {
-        // A right-click commits a live composition (update_canvas_focus interrupts it): keep the
-        // caret where it is this frame so the incoming commit lands at the composition, not at the
-        // pointer. Moving it now would rebuild the preview under the mouse and drag the pre-edit
-        // there. The context menu still opens at the pointer (#6916).
-        let composing = app.canvas.ime_preview.is_some();
+        // A right-click interrupts a live composition (update_canvas_focus). Keep the caret where
+        // it is this frame: moving it would rebuild any preview under the mouse and drag the
+        // pre-edit there, and a late platform result would land at the pointer instead of the
+        // composition. On Windows an interrupt normally cancels rather than commits that text.
+        // Read the live pre-edit, not the preview: an equation or a non-collapsed selection has
+        // no preview layout but still owns an active composition. The context menu still opens
+        // at the pointer (#6916).
+        let composing = !app.canvas.ime_preedit.is_empty();
         if crate::objects::select_at(app, layout, rects, geo.scale, p) {
             app.canvas.context_issue = None;
             app.canvas.context_synonyms = None;
@@ -1529,12 +1535,15 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     } = finish;
     update_canvas_scroll_state(app, ui, layout, geo, caret, &out, ScrollSync { base: scroll_base, rescaled, style: scroll_style });
     let (resp, rects) = out.inner;
+    // Capture the layout matching the real document *before* focus handling: an accessibility
+    // focus click dismisses the composition and clears `ime_preview`, which is what
+    // `document_layout` keys off. The layout this frame was drawn from does not change.
+    let doc_layout = document_layout(app, layout);
     // A click on the page leaves the selected comment balloon.
     dismiss_balloon_on_canvas_click(app, ui, &resp);
     update_canvas_focus(app, ui, &resp, ime_geometry, ime_interrupt);
     // Screen readers and clicks describe the document, not an uncommitted composition: read and
     // hit-test the real layout so positions never carry the pre-edit's offset (#6916).
-    let doc_layout = document_layout(app, layout);
     crate::a11y::expose(app, ui.ctx(), resp.id, &doc_layout, &rects, area);
     // The buttons that start or stop middle-click scrolling don't also click the page.
     let middle_gesture = app.canvas.auto_scroll.blocks_input();

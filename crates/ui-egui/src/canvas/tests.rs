@@ -161,12 +161,13 @@ fn composition_keeps_hit_testing_and_a11y_on_the_real_document() {
     assert!(std::sync::Arc::ptr_eq(&document_layout(&mut app, &plain), &plain), "no composition: one layout everywhere");
 }
 
-/// #6916: a right-click during a composition commits the pre-edit where it is (WPS) instead of
-/// leaving the uncommitted text to drift to the pointer. The click interrupts the composition so
-/// the platform's commit lands at the caret, and the caret must not move to the clicked spot in
-/// the meantime. The context menu still opens at the pointer.
+/// #6916: a right-click during a composition interrupts it instead of leaving the uncommitted
+/// text to drift to the pointer. The caret must not move to the clicked spot in the meantime, and
+/// the context menu still opens at the pointer. On Windows the interrupt normally cancels the
+/// composition, so the pre-edit does not enter the body; the last part of this test covers the
+/// rarer platform that answers with a result string, which must land at the composition.
 #[test]
-fn right_click_commits_the_composition_instead_of_dragging_it() {
+fn right_click_interrupts_the_composition_instead_of_dragging_it() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("甲乙丙丁")), Default::default());
     app.session.run("caret.docStart", &json!({})).unwrap();
     app.session.run("caret.right", &json!({})).unwrap();
@@ -202,17 +203,42 @@ fn right_click_commits_the_composition_instead_of_dragging_it() {
         h.step();
         interrupted |= h.output().platform_output.ime.as_ref().is_some_and(|ime| ime.should_interrupt_composition);
     }
-    assert!(interrupted, "the right-click interrupts the composition so its pre-edit is committed");
+    assert!(interrupted, "the right-click interrupts the composition");
     assert_eq!(h.state().session.sel.focus.off, caret_off, "the caret stays at the composition, it does not drift to the pointer");
     assert!(h.state().canvas.context_menu_open, "the context menu still opens at the pointer");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "甲乙丙丁", "an interrupted composition is not written into the body");
 
-    // The platform answers the interrupt with a commit: the pre-edit lands where it was composed,
-    // between 甲 and 乙, not at the spot under the mouse.
+    // A platform that does answer the interrupt with a result string: it lands where it was
+    // composed, between 甲 and 乙, not at the spot under the mouse.
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
     h.step();
     h.step();
     let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
     assert_eq!(text, "甲にほん乙丙丁", "the committed text stays at the composition: {text:?}");
+}
+
+/// #6916 review: a composition over a range has no preview copy (it falls back to the overlay),
+/// but its pre-edit is still live. A right-click must not move the caret to the pointer in that
+/// case either, or any platform result would land away from the composition it belongs to.
+#[test]
+fn right_click_keeps_the_caret_when_the_composition_has_no_preview() {
+    let (mut h, at) = composing_harness();
+    // `ime_preview_layout` refuses a non-collapsed selection, so there is no page copy to check.
+    h.state_mut().session.sel = wordcraft_engine::Selection {
+        anchor: wordcraft_doc::Pos::body(0, 3),
+        focus: wordcraft_doc::Pos::body(0, 6),
+    };
+    h.step();
+    assert!(!h.state().canvas.ime_preedit.is_empty(), "the composition is still live");
+    assert!(h.state().canvas.ime_preview.is_none(), "a range selection has no preview layout");
+    let sel = h.state().session.sel.clone();
+
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    assert_eq!(h.state().session.sel, sel, "the caret stays at the composition, not at the pointer");
+    assert!(h.state().canvas.context_menu_open, "the context menu still opens at the pointer");
 }
 
 /// #6916: a left-click places the caret at the pointer, but a live composition must not be rebuilt
@@ -349,6 +375,56 @@ fn stale_platform_events_after_a_click_are_neither_painted_nor_committed() {
     h.step();
     h.step();
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "甲乙丙丁", "a cancelled composition never enters the body");
+}
+
+/// #6916 review: a `Commit` queued in the same input batch as the press belongs to the
+/// composition the press discards. It must not reach `ime_commit` before the dismissal is
+/// recorded, or the discarded text lands in the body anyway.
+#[test]
+fn a_commit_in_the_press_batch_is_discarded_with_the_composition() {
+    let (mut h, at) = composing_harness();
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "甲乙丙丁", "the same-batch commit does not enter the body");
+    assert_eq!(shown_text(&h), "甲乙丙丁", "nor is it painted");
+}
+
+/// #6916 review: dropping one quarantined `Commit` ends that composition. A second commit in
+/// the same batch is fresh input and must still reach `ime_commit`.
+#[test]
+fn only_one_commit_is_quarantined_after_a_press() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("あ".into())));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(!text.contains("にほん"), "the canceled composition is dropped: {text:?}");
+    assert!(text.contains('あ'), "the following commit is fresh input: {text:?}");
+}
+
+/// #6916 review: ordinary input after a dismissal ends the quarantine. Otherwise a later,
+/// genuinely fresh `Commit` with no preceding pre-edit is lost.
+#[test]
+fn fresh_input_after_a_dismissal_releases_the_commit_quarantine() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    h.event(egui::Event::Text("X".into()));
+    h.step();
+    assert!(h.state().canvas.ime_dismissed_preedit.is_none(), "ordinary input ends the quarantine");
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("あ".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains('あ'), "a fresh commit reaches the document: {text:?}");
 }
 
 /// The dismissal is scoped to the composition the click ended: a genuinely new composition must

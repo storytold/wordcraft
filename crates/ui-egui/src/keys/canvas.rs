@@ -160,12 +160,21 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
                 // cancels it, but `WM_IME_ENDCOMPOSITION` can still carry a result string; it
                 // must not enter the body at the caret the pointer just moved to. Drop one: the
                 // composition is over, so a later commit is fresh input.
+                *interrupted_preedit = false;
+                *interrupted_replacement = EquationReplacementDrop::None;
                 app.canvas.ime_dismissed_preedit = None;
                 app.session.clear_ime_joins();
                 app.canvas.ime_join_text = None;
                 return true;
             }
             egui::Event::Ime(egui::ImeEvent::Preedit { .. }) => {
+                app.canvas.ime_dismissed_preedit = None;
+            }
+            // Ordinary input after the dismissal is fresh, so end the quarantine: a later
+            // commit must reach `ime_commit` at the caret. A replacement Text/Commit sequence
+            // belonging to the canceled composition is still dropped by the interrupted-preedit
+            // state below, which owns that case.
+            egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Key { pressed: true, .. } => {
                 app.canvas.ime_dismissed_preedit = None;
             }
             _ => {}
