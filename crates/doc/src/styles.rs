@@ -1113,8 +1113,6 @@ mod tests {
         assert_eq!(t.map(|t| (t.band_size, t.col_band_size)), Some((Some(1), Some(1))));
     }
 
-    /// A table style based on another inherits what it doesn't set itself; borders merge edge by
-    /// edge.
     /// Word gives a table nothing from Normal Table, whatever the file says, and goes by the name:
     /// measured in Word for Windows with each set in the style, the table naming it or a style
     /// based on it.
@@ -1138,7 +1136,20 @@ mod tests {
             table,
             ..Default::default()
         };
-        s.upsert(table("TableNormal", "Normal Table", None, Some(parts())));
+        // Nor from Normal Table's own base: measured with Normal Table based on a style that sets a
+        // centred paragraph, larger text and cell margins, which a table naming that style gets.
+        s.upsert(Style {
+            id: "Base".into(),
+            name: "Base".into(),
+            kind: StyleKind::Table,
+            para: ParaProps { space_after: Some(7.0), ..Default::default() },
+            chr: CharProps { bold: Some(true), ..Default::default() },
+            table: Some(TableStyleParts { band_fill: Some(Rgb(0, 0, 0xFF)), first_col_fill: Some(Rgb(0, 0xFF, 0)), ..Default::default() }),
+            ..Default::default()
+        });
+        let base = s.table_style("Base").unwrap();
+        assert_eq!((base.para.space_after, base.chr.bold, base.parts.band_fill), (Some(7.0), Some(true), Some(Rgb(0, 0, 0xFF))));
+        s.upsert(table("TableNormal", "Normal Table", Some("Base"), Some(parts())));
         s.upsert(table("Child", "Child", Some("TableNormal"), None));
         s.upsert(table("Own", "Own", Some("TableNormal"), Some(parts())));
         s.upsert(table("Grandchild", "Grandchild", Some("Own"), None));
@@ -1150,6 +1161,7 @@ mod tests {
         for id in ["Own", "Grandchild"] {
             let st = s.table_style(id).unwrap();
             assert_eq!((st.parts, st.para.align, st.chr.size), (parts(), Some(Align::Center), Some(24.0)), "{id}");
+            assert_eq!((st.para.space_after, st.chr.bold), (None, None), "{id}: nothing from Normal Table's base");
             assert!(s.table_style_has_normal_table(id), "{id}");
         }
         assert!(!s.table_style_has_normal_table("Alone"));
@@ -1164,6 +1176,8 @@ mod tests {
         assert!(StyleSheet::builtin().table_style_has_normal_table("TableGrid"));
     }
 
+    /// A table style based on another inherits what it doesn't set itself; borders merge edge by
+    /// edge.
     #[test]
     fn table_style_merges_based_on_chain() {
         let mut s = StyleSheet::builtin();
