@@ -6,7 +6,9 @@ use craft::ui::runtime::env::{Label, UnitKind};
 use wordcraft_doc::section::{DocGridType, PageVAlign};
 
 use super::host::{DialogHooks, Settle, open_with, run_as_one_step};
-use super::{Ui, Value, WordApp, json};
+use super::{Value, WordApp};
+use egui::Ui;
+use serde_json::json;
 
 /// Labels of Page Setup's paper size (#1433), in one place in case Word's wording differs.
 pub(crate) const PAPER_LABELS: PaperLabels = PaperLabels { more: "More Paper Sizes…" };

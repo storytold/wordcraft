@@ -1,7 +1,7 @@
 use super::*;
 use craft::ui::dialog::{DialogId, HeldOk};
 use egui_kittest::kittest::{NodeT, Queryable};
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 use wordcraft_doc::Pos;
 use wordcraft_doc::props::Align;
 use wordcraft_engine::Session;

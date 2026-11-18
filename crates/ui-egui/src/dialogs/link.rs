@@ -3,7 +3,8 @@ use craft::ui::dialog::DialogId;
 use craft::ui::runtime::env::Label;
 
 use super::host::{DialogHooks, Keyed, Settle, open_with};
-use super::{Value, WordApp, json};
+use super::{Value, WordApp};
+use serde_json::json;
 
 /// What a place of the Place in This Document list is, in list order across the groups.
 #[derive(Clone, Debug, PartialEq)]

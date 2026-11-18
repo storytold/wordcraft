@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use wordcraft_render::icon_lib::{self, Category};
 
 use super::host::{Asks, DialogHooks, Settle, WordForm, open_form, open_with};
-use super::{Ui, Value, WordApp, json};
+use super::{Value, WordApp};
+use egui::Ui;
+use serde_json::json;
 
 /// The innermost bookmark around the caret, which the Bookmark dialog opens on (as Word does);
 /// empty when the caret is in none.

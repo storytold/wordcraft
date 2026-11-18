@@ -9,7 +9,9 @@ use craft::ui::runtime::env::Label;
 use serde::{Deserialize, Serialize};
 
 use super::host::{Asks, WordForm, open_form};
-use super::{Ui, Value, WordApp, json};
+use super::{Value, WordApp};
+use egui::Ui;
+use serde_json::json;
 
 /// Edit › Paste Special: the formats the clipboard offers, the one picked and the payload the paste
 /// runs with. The payload is kept as JSON so the form stays serialisable.
