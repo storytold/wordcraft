@@ -177,6 +177,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-29 | trivial | File › Options › User Name left blank stays blank after a restart (it came back as the default name); a name of only spaces still keeps the default (#4368) |
 | 2026-10-29 | trivial | Window sizing uses the screen rectangle when the inner rectangle is missing, empty or not finite; an Equation symbol tooltip shows a missing glyph's linear name or code point once instead of twice |
 | 2026-10-29 | trivial | Displayed document titles and suggested file names omit NUL characters (X11 panicked on them) and use the localized untitled name when nothing remains (#3634) |
+| 2026-10-30 | trivial | Paragraph dialog: Word's Special box ((none), First line, Hanging) and By replace the signed First line box; picking a kind from (none) starts at 0.5", switching kinds keeps By, and a By typed in counts once committed |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
 | 2026-10-26 | trivial | Layout › Arrange › Group stays on while a group is selected, so Ungroup in its menu can be reached; it was greyed out because one object has nothing to group (#4229) |
 | 2026-10-27 | trivial | Port the existing Proofing pane and navigation/selection regressions to extracted engine/UI modules on main `436d444`; preserve compact context menus; new-SHA validation pending, readiness unchanged |
