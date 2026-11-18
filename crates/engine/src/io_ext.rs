@@ -114,14 +114,10 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
     let doc = out.as_ref().unwrap_or(doc);
     let lo = wordcraft_layout::LayoutOptions {
         comment_balloons: opts.markup && opts.comments,
- fix/5232-pdf-tracking-options-colours
         hide_marked: opts.revisions.hidden_deletions(),
-        numeral: opts.numeral,
-
         numeral: opts.numeral,
         output_page_refs: true,
         bookmark_error: crate::locale::bookmark_error(),
- main
         ..Default::default()
     };
     let l = wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &lo);

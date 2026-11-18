@@ -50,16 +50,13 @@ pub struct PdfOptions {
     /// How [`export`] shows digits (the Numeral setting; callers resolve `System`, see
     /// [`NumeralMode::resolve`]). [`export_layout`] keeps the layout it is given.
     pub numeral: NumeralMode,
- fix/5232-pdf-tracking-options-colours
     /// How tracked changes are marked (Track Changes Options): the insertion and deletion marks
     /// and colours the screen shows (#5232). Default: marks as on screen, colours by author.
     pub revisions: wordcraft_layout::display::MarkupOptions,
-
     /// What [`export`] shows for a page reference to a bookmark the document doesn't have, in the
     /// interface language (`None`: Word's English "Error! Bookmark not defined."). [`export_layout`]
     /// keeps the layout it is given.
     pub bookmark_error: Option<std::sync::Arc<str>>,
- main
 }
 
 /// How many characters of the watermark text the PDF draws.
@@ -113,11 +110,8 @@ impl Default for PdfOptions {
             links: true,
             paper: None,
             numeral: NumeralMode::Arabic,
- fix/5232-pdf-tracking-options-colours
             revisions: wordcraft_layout::display::MarkupOptions::default(),
-
             bookmark_error: None,
- main
         }
     }
 }
