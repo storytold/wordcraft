@@ -1,6 +1,6 @@
 use super::*;
 use crate::dialogs::host::FormHost;
-use crate::dialogs::mailings::RecipientListDialog;
+use crate::dialogs::{RecipientDraft, RecipientListDialog};
 use craft::host::{AppInfo, Host, Picked, ScriptedFiles};
 use std::sync::Arc;
 
@@ -197,7 +197,7 @@ fn recipient_list_dialog_carries_the_filter() {
     .unwrap();
     a.run("mailings.editRecipients", json!({})).unwrap();
     pump(&mut a, &egui::Context::default());
-    let Some(RecipientListDialog { draft: crate::dialogs::mailings::RecipientDraft { rows, filter, fields }, .. }) =
+    let Some(RecipientListDialog { draft: RecipientDraft { rows, filter, fields }, .. }) =
         a.dialog_host.get::<RecipientListDialog>()
     else {
         panic!("no recipient dialog")
