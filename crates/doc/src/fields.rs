@@ -93,6 +93,12 @@ impl Document {
         self.story(story).map(|bl| scan_story(story, bl).ranges).unwrap_or_default()
     }
 
+    /// The whole range fields of every story: the body first, then headers, footers, notes,
+    /// comments and text boxes by part id. Field shading (screen only) needs them all at once.
+    pub fn field_ranges_all(&self) -> Vec<FieldRange> {
+        self.story_refs().into_iter().flat_map(|story| self.field_ranges(story)).collect()
+    }
+
     /// `p` moved past the range-field ends right after it. A click just after a field's result
     /// lands before its end marker (the marker takes no room); typing or inserting there belongs
     /// after the field, as in Word, not in its result.
