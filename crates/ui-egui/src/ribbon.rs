@@ -327,11 +327,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     let u = Rect::from_center_size(pos2(r.center().x + shift.x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
                                     slide_underline(ui, tab, u, t.accent.gamma_multiply(entry), now, animate);
                                 }
+                                // As in Office: a click on the tab shown hides the ribbon, a click on
+                                // any tab brings it back (the Focus drop-down keeps its own).
                                 if resp.clicked() {
+                                    let toggle = tab != "File" && !app.session.view.focus_mode && (active || app.ui.ribbon_collapsed);
                                     let _ = app.run("ui.tab", json!({"tab": tab}));
-                                }
-                                if resp.double_clicked() && tab != "File" {
-                                    let _ = app.run("ui.collapseRibbon", json!({}));
+                                    if toggle {
+                                        let _ = app.run("ui.collapseRibbon", json!({}));
+                                    }
                                 }
                                 if ghost.is_none() {
                                     resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
