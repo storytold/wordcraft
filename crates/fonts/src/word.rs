@@ -269,6 +269,9 @@ pub fn has_installed_substitute(family: &str) -> bool {
 /// text drawn in a twin doesn't change the layout ([`metric_compatible`]). Not macOS Times or
 /// Courier: their advance widths differ from Times New Roman's and Courier New's. Not Selawik
 /// Semibold or Semilight: their advance widths differ from Segoe UI Semibold's and Semilight's.
+/// Selawik has no italic, so Segoe UI italic is slanted upright Selawik, about 2.6% wider than Segoe
+/// UI Italic (Carlito Italic, the fallback otherwise, is about 6.4% narrower): italic lines can wrap
+/// differently.
 const METRIC_TWINS: &[&[&str]] = &[
     &["Arial", "Liberation Sans", "Helvetica", "Arimo"],
     &["Times New Roman", "Liberation Serif", "Tinos"],

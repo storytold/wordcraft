@@ -287,7 +287,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 ## Revision history
 
-> 2026-11-18 · Missing Segoe UI and Segoe UI Light are drawn in Selawik and Selawik Light, Microsoft's open fallbacks with their advance widths, and keep Segoe UI's line (`fonts::word::tests::segoe_ui_drawn_in_selawik_keeps_segoe_uis_line`, #6990).
+> 2026-11-18 · Missing Segoe UI and Segoe UI Light are drawn in Selawik and Selawik Light, Microsoft's open fallbacks with their advance widths, and keep Segoe UI's line (`fonts::word::tests::segoe_ui_drawn_in_selawik_keeps_segoe_uis_line`, #6990). Selawik has no italic, so italic Segoe UI text is slanted upright Selawik and can wrap differently.
 
 > 2026-11-05 · Arabic letters join across a change of formatting and past hidden or deleted text (#4093): each run is shaped with the text shown on either side of it.
 

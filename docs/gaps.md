@@ -182,7 +182,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 ## Revision history
 
-> 2026-11-18 · Gap 4: Missing Segoe UI and Segoe UI Light are drawn in Selawik and Selawik Light, Microsoft's open fallbacks with their advance widths, and keep Segoe UI's line (`fonts::word::tests::segoe_ui_drawn_in_selawik_keeps_segoe_uis_line`, #6990). Readiness unchanged.
+> 2026-11-18 · Gap 4: Missing Segoe UI and Segoe UI Light are drawn in Selawik and Selawik Light, Microsoft's open fallbacks with their advance widths, and keep Segoe UI's line (`fonts::word::tests::segoe_ui_drawn_in_selawik_keeps_segoe_uis_line`, #6990). Selawik has no italic, so italic Segoe UI text is slanted upright Selawik and can wrap differently. Readiness unchanged.
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
 
