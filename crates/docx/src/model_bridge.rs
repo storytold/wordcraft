@@ -94,6 +94,15 @@ fn object_value_from_shared(
             };
             Ok(Target::Graphic { w, h, alt, float: convert(float)?, graphic })
         }
+        // This model has no picture frame shape: DrawingML's `frame` preset is read as a
+        // rectangle, without the frame's border width.
+        mut shape @ Source::Shape { kind: craft_wordmodel::para::ShapeKind::Frame, .. } => {
+            if let Source::Shape { kind, extra, .. } = &mut shape {
+                *kind = craft_wordmodel::para::ShapeKind::Rectangle;
+                extra.corner = None;
+            }
+            convert(shape)
+        }
         Source::Group { w, h, float, ch_w, ch_h, children, canvas } => Ok(Target::Group {
             w,
             h,
@@ -441,6 +450,110 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn doc_with(objects: Vec<craft_wordmodel::para::InlineObject>) -> craft_wordmodel::Document {
+        let mut source = craft_wordmodel::Document::new();
+        let mut para = craft_wordmodel::para::Paragraph::new();
+        para.objects = objects;
+        source.body = vec![Arc::new(craft_wordmodel::Block::Para(para))];
+        source
+    }
+
+    fn objects(doc: &wordcraft_doc::Document) -> Vec<wordcraft_doc::para::InlineObject> {
+        doc.body.first().and_then(|b| b.as_para()).map(|p| p.objects.clone()).unwrap_or_default()
+    }
+
+    fn chart_object(spec: craft_wordmodel::chart::ChartSpec) -> craft_wordmodel::para::InlineObject {
+        let graphic = craft_wordmodel::graphic::Graphic { chart: Some(Arc::new(spec)), ..Default::default() };
+        craft_wordmodel::para::InlineObject::Graphic { w: 100.0, h: 60.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) }
+    }
+
+    fn charts(doc: &wordcraft_doc::Document) -> Vec<Option<wordcraft_doc::chart::ChartSpec>> {
+        objects(doc)
+            .iter()
+            .filter_map(|o| match o {
+                wordcraft_doc::para::InlineObject::Graphic { graphic, .. } => Some(graphic.chart.as_deref().cloned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A picture frame shape opens as a rectangle instead of failing the whole document.
+    #[test]
+    fn a_frame_shape_reads_as_a_rectangle() {
+        let shape = |kind| craft_wordmodel::para::InlineObject::Shape {
+            kind,
+            w: 40.0,
+            h: 30.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float: Default::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: craft_wordmodel::connector::ShapeExtra { corner: Some(2604), ..Default::default() },
+        };
+        let doc = from_shared_model(doc_with(vec![shape(craft_wordmodel::para::ShapeKind::Frame)])).expect("from_shared_model");
+        let found = objects(&doc);
+        let [wordcraft_doc::para::InlineObject::Shape { kind, w, extra, .. }] = found.as_slice() else { panic!("{found:?}") };
+        assert_eq!((*kind, *w, extra.corner), (wordcraft_doc::para::ShapeKind::Rectangle, 40.0, None));
+    }
+
+    /// A chart's series formatting and axis settings survive the trip through this model, so
+    /// saving writes the chart part the reader read.
+    #[test]
+    fn chart_formatting_survives_the_bridge() {
+        use craft_wordmodel::chart::{ChartSpec, ChartType};
+        let mut formatted = ChartSpec::sample(ChartType::Line);
+        formatted.series[0].fill = Some(craft_wordmodel::props::Rgb(0x12, 0x34, 0x56));
+        formatted.series[0].line_w = Some(2.5);
+        formatted.series[1].smooth = true;
+        formatted.series[1].markers = Some(true);
+        formatted.series[2].labels = Some(true);
+        formatted.series[2].fmt = Some("0.0".into());
+        formatted.val_axis.title = Some("Sales".into());
+        formatted.val_axis.min = Some(0.0);
+        formatted.cat_axis.gridlines = true;
+        let mut scatter_lines = ChartSpec::sample(ChartType::Scatter);
+        scatter_lines.series[0].no_line = false;
+        let all = [formatted, ChartSpec::sample(ChartType::Scatter), ChartSpec::sample(ChartType::Pie), scatter_lines];
+        let doc = from_shared_model(doc_with(all.iter().cloned().map(chart_object).collect())).expect("from_shared_model");
+        assert!(charts(&doc).iter().all(Option::is_some));
+        let back = to_shared_model(&doc).expect("to_shared_model");
+        let back: Vec<ChartSpec> = back
+            .body
+            .first()
+            .and_then(|b| b.as_para())
+            .map(|p| {
+                p.objects
+                    .iter()
+                    .filter_map(|o| match o {
+                        craft_wordmodel::para::InlineObject::Graphic { graphic, .. } => graphic.chart.as_deref().cloned(),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(back, all);
+    }
+
+    /// A scatter chart this model makes is written as markers without lines, the same part the
+    /// shared model writes for its own new scatter chart.
+    #[test]
+    fn a_new_scatter_chart_is_written_without_lines() {
+        let local = wordcraft_doc::chart::ChartSpec::sample(wordcraft_doc::chart::ChartType::Scatter);
+        assert!(!local.series.is_empty() && local.series.iter().all(|s| s.no_line));
+        assert_eq!(
+            crate::chart_xml(&local),
+            craft_docx::chart_xml(&craft_wordmodel::chart::ChartSpec::sample(craft_wordmodel::chart::ChartType::Scatter)).into_bytes()
+        );
+        for kind in wordcraft_doc::chart::ChartType::ALL {
+            let local = wordcraft_doc::chart::ChartSpec::sample(kind);
+            let shared: craft_wordmodel::chart::ChartSpec = convert_ref(&local).expect("convert");
+            assert_eq!(shared, craft_wordmodel::chart::ChartSpec::sample(shared.kind), "{kind:?}");
+        }
+    }
 
     #[test]
     fn bridges_nested_stories_and_moves_media_both_directions() {
