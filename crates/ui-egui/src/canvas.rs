@@ -1294,7 +1294,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let content_origin = ui.min_rect().min;
         // The object a move has taken off its page: the page is drawn again without it (or it
         // would be on the page where it was and under the pointer at once).
-        let hidden = app.canvas.dragged_off_page();
+        crate::object_motion::begin(app, ui.ctx(), &layout, geo.scale);
+        let hidden = app.canvas.dragged_off_page().or_else(|| crate::object_motion::hidden(ui.ctx()));
         let view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
         for (i, pr) in geo.rects.iter().enumerate() {
             let sr = pr.translate(content_origin.to_vec2());

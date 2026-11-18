@@ -2,9 +2,14 @@
 //! angle, and a faint preview of the target size while a handle is dragged.
 //!
 //! This is only a picture drawn over the page. The document and its layout are never touched:
-//! the object is already at its final place under the picture, so a motion that is cut short,
-//! turned off or never drawn leaves nothing wrong behind. The picture is the object as it was
-//! (drawn alone before the change), carried from its old pose to its new one while it fades out.
+//! the object is already at its final place, so a motion that is cut short, turned off or never
+//! drawn leaves nothing wrong behind. While it goes the page is drawn without the object (as for
+//! a drag) and the object, drawn alone as it now is, is carried from its old pose to its new one,
+//! so it ends exactly where the page then shows it.
+//!
+//! While a handle or the object is dragged, the original and the target are two faint copies.
+//! On release the original sets off to the target, both still faint, and the solid
+//! object takes over when it gets there. A command does the same without the drag.
 //!
 //! Nothing here knows about shapes. A subject is a [`Pose`] (page, frame, angle) under a
 //! document position, so pictures and other objects can join by being offered by
@@ -23,8 +28,6 @@ use crate::WordApp;
 
 /// How long a motion takes (seconds).
 pub const SECS: f64 = 0.16;
-/// How strong the picture is when the motion starts (0–1).
-const START_OPACITY: f32 = 0.85;
 /// A pose that differs by less than this (points, degrees) has not moved.
 const EPS: f32 = 0.05;
 
@@ -116,7 +119,7 @@ pub fn corners(base: &Pose, bounds: Rect, at: &Pose) -> [(f32, f32); 4] {
     [at_corner(b.x, b.y), at_corner(b.x + b.w, b.y), at_corner(b.x + b.w, b.y + b.h), at_corner(b.x, b.y + b.h)]
 }
 
-/// The object as it was before the last change, drawn alone.
+/// The object as it looked before the last change, drawn alone: the faint picture of a resize.
 #[derive(Clone)]
 struct Seen {
     key: Pos,
@@ -126,13 +129,18 @@ struct Seen {
     tex: Option<egui::TextureHandle>,
 }
 
-/// A motion in flight: the picture taken at `base` carried along `tween`.
+/// A motion in flight: the object as it looks now (drawn alone, taken at `end`) carried along
+/// `tween` to where it is. The page is drawn without the object meanwhile ([`hidden`]).
 #[derive(Clone)]
 struct Live {
+    page_hidden: (usize, Pos),
     tween: Tween,
-    base: Pose,
+    end: Pose,
     bounds: Rect,
     tex: egui::TextureHandle,
+    /// Made this frame, which laid the page out again and drew it without the object: that time
+    /// is not part of the motion, so the clock starts with the next frame.
+    fresh: bool,
 }
 
 #[derive(Clone, Default)]
@@ -140,9 +148,14 @@ struct State {
     document: u64,
     seen: Option<Seen>,
     live: Option<Live>,
-    /// The last frame had a handle or the object being dragged (true: a resize).
-    drag: Option<bool>,
+    /// The object a drag has taken off its page: its original is drawn as a faint copy.
+    dragged: Option<(usize, Pos)>,
 }
+
+/// How strong the copy of the original is, while the object is dragged and on its way.
+const WAS: f32 = 0.35;
+/// How strong the copy at the target is.
+const TARGET: f32 = 0.45;
 
 fn state_id() -> egui::Id {
     egui::Id::new("object_motion")
@@ -172,10 +185,19 @@ fn fits(ctx: &egui::Context, b: Rect, scale: f32) -> bool {
     w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0 && w <= side && h <= side && w * h <= 16.0e6
 }
 
-/// Called each frame by the canvas before it draws the frame of the object: notices a change of
-/// pose caused by a command, and draws the motion and the resize preview.
-pub fn update(app: &WordApp, painter: &egui::Painter, layout: &wordcraft_layout::DocLayout, pages: &[egui::Rect], scale: f32) {
-    let ctx = painter.ctx();
+/// The object a motion is drawing, which the page is drawn without while it goes.
+pub fn hidden(ctx: &egui::Context) -> Option<(usize, Pos)> {
+    ctx.data(|d| d.get_temp::<State>(state_id())).and_then(|s| s.live.map(|l| l.page_hidden).or(s.dragged))
+}
+
+/// A motion is being drawn (for tests and tools).
+pub fn in_flight(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<State>(state_id())).is_some_and(|s| s.live.is_some())
+}
+
+/// Called each frame by the canvas before it draws the pages: notices a change of pose caused by
+/// a command (or by letting go of a handle) and starts the motion.
+pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocLayout, scale: f32) {
     let id = state_id();
     if !app.animations_on() || ctx.global_style().animation_time <= 0.0 || SECS <= 0.0 {
         ctx.data_mut(|d| d.remove::<State>(id));
@@ -187,47 +209,53 @@ pub fn update(app: &WordApp, painter: &egui::Painter, layout: &wordcraft_layout:
     if st.document != doc {
         st = State { document: doc, ..State::default() };
     }
+    if let Some(l) = st.live.as_mut().filter(|l| l.fresh) {
+        l.tween.start = now;
+        l.fresh = false;
+    }
+    if st.live.as_ref().is_some_and(|l| l.tween.done(now)) {
+        st.live = None;
+    }
 
     if let Some(drag) = crate::objects::motion_drag(app) {
-        st.drag = Some(drag.resize);
+        // Only an object with a picture of its original can be taken off its page.
+        let known = st.seen.as_ref().is_some_and(|s| s.key == drag.key && s.tex.is_some());
+        st.dragged = known.then_some((drag.page, drag.key));
         st.live = None;
-        // The faint picture of the size the drop gives (a picture that is not turned already
-        // shows its pixels while dragging).
-        if drag.resize
-            && !drag.pixels
-            && let Some(s) = &st.seen
-            && let Some(tex) = &s.tex
-            && let Some(page) = pages.get(drag.to.page)
-        {
-            let pts = on_screen(*page, scale, corners(&s.pose, s.bounds, &drag.to));
-            painter.add(quad(tex, pts, 0.45));
-        }
         ctx.data_mut(|d| d.insert_temp(id, st));
         return;
     }
-    // After a drag that moved or turned the object, the user saw it go: no second motion.
-    let saw_it = st.drag == Some(false);
-    st.drag = None;
+    // Letting go of a handle or of the object itself (a move, a resize, a turn) sets the faint
+    // copy of the original off to where the target copy showed.
+    st.dragged = None;
 
     let rev = app.session.rev();
     let subject = crate::objects::motion_subject(app, layout);
     let current = subject.as_ref().map(|o| (o.pos(), Pose { page: o.page, rect: o.rect, deg: o.spin.deg }, o.bounds()));
     match (current, st.seen.take()) {
-        (Some((key, pose, bounds)), Some(seen)) if seen.key == key => {
+        // Moving a shape through the text can anchor it to another paragraph: its position then
+        // changes, and the old one holds no object any more.
+        (Some((key, pose, bounds)), Some(seen))
+            if seen.key == key || (seen.rev != rev && layout.object(&seen.key, app.session.page_hint).is_none()) =>
+        {
             if seen.rev == rev && seen.pose.same(&pose) {
                 st.seen = Some(seen);
             } else {
-                if !saw_it
-                    && seen.pose.page == pose.page
-                    && !seen.pose.same(&pose)
-                    && let Some(tex) = seen.tex.clone()
+                if !seen.pose.same(&pose)
+                    && fits(ctx, bounds, scale)
+                    && let Some(o) = &subject
+                    && let Some(tex) = crate::objects::preview(app, ctx, layout, o, scale)
                 {
                     // A motion cut short by another change goes on from where it was drawn.
-                    let (from, base, base_bounds, tex) = match st.live.take() {
-                        Some(l) => (l.tween.pose(now), l.base, l.bounds, l.tex),
-                        None => (seen.pose, seen.pose, seen.bounds, tex),
-                    };
-                    st.live = Some(Live { tween: Tween { from, to: pose, start: now, secs: SECS }, base, bounds: base_bounds, tex });
+                    let from = st.live.take().map_or(seen.pose, |l| l.tween.pose(now));
+                    st.live = Some(Live {
+                        page_hidden: (o.page, key.clone()),
+                        tween: Tween { from, to: pose, start: now, secs: SECS },
+                        end: pose,
+                        bounds,
+                        tex,
+                        fresh: true,
+                    });
                 }
                 st.seen = Some(Seen { key, rev, pose, bounds, tex: None });
             }
@@ -237,7 +265,7 @@ pub fn update(app: &WordApp, painter: &egui::Painter, layout: &wordcraft_layout:
         }
         (None, _) => {}
     }
-    // The picture for the next change: the object as it is now.
+    // The faint picture for a resize: the object as it is now.
     if st.live.is_none()
         && let (Some(o), Some(s)) = (&subject, st.seen.as_mut())
         && s.tex.is_none()
@@ -245,23 +273,54 @@ pub fn update(app: &WordApp, painter: &egui::Painter, layout: &wordcraft_layout:
     {
         s.tex = crate::objects::preview(app, ctx, layout, o, scale);
     }
-
-    if let Some(l) = st.live.clone() {
-        if l.tween.done(now) {
-            st.live = None;
-        } else if let Some(page) = pages.get(l.tween.to.page) {
-            let at = l.tween.pose(now);
-            let alpha = START_OPACITY * (1.0 - l.tween.progress(now));
-            painter.add(quad(&l.tex, on_screen(*page, scale, corners(&l.base, l.bounds, &at)), alpha));
-            ctx.request_repaint();
-        }
-    }
     ctx.data_mut(|d| d.insert_temp(id, st));
 }
 
-/// A motion is being drawn (for tests and tools).
-pub fn in_flight(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp::<State>(state_id())).is_some_and(|s| s.live.is_some())
+/// Called each frame by the canvas over the pages: draws the object on its way, and the faint
+/// picture of the size a handle drag leads to. `pages` are the pages' screen rects.
+pub fn paint(app: &WordApp, painter: &egui::Painter, pages: &[egui::Rect], scale: f32) {
+    let ctx = painter.ctx();
+    let id = state_id();
+    let Some(st) = ctx.data(|d| d.get_temp::<State>(id)) else { return };
+    let now = ctx.input(|i| i.time);
+    if let Some(drag) = crate::objects::motion_drag(app) {
+        // The original, faint where it was (the page is drawn without it).
+        if let Some(s) = &st.seen
+            && let Some(tex) = &s.tex
+            && let Some(page) = pages.get(s.pose.page)
+        {
+            painter.add(quad(tex, on_screen(*page, scale, corners(&s.pose, s.bounds, &s.pose)), WAS));
+            // The target: a picture that is not turned already shows its pixels while dragging.
+            if drag.resize
+                && !drag.pixels
+                && let Some(page) = pages.get(drag.to.page)
+            {
+                painter.add(quad(tex, on_screen(*page, scale, corners(&s.pose, s.bounds, &drag.to)), TARGET));
+            }
+        }
+        return;
+    }
+    if let Some(l) = &st.live
+        && !l.tween.done(now)
+        && let Some(page) = pages.get(l.tween.to.page)
+    {
+        // Both copies stay faint until the original gets there, then the solid object takes over.
+        painter.add(quad(&l.tex, on_screen(*page, scale, corners(&l.end, l.bounds, &l.end)), TARGET));
+        let at = l.tween.pose(now);
+        let from = l.tween.from;
+        let pts = match pages.get(from.page) {
+            // Text moved it to another page: the corners go across the screen between the two.
+            Some(from_page) if from.page != l.tween.to.page => {
+                let t = l.tween.progress(now);
+                let a = on_screen(*from_page, scale, corners(&l.end, l.bounds, &from));
+                let b = on_screen(*page, scale, corners(&l.end, l.bounds, &l.end));
+                std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
+            }
+            _ => on_screen(*page, scale, corners(&l.end, l.bounds, &at)),
+        };
+        painter.add(quad(&l.tex, pts, WAS));
+        ctx.request_repaint();
+    }
 }
 
 #[cfg(test)]

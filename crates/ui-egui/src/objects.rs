@@ -555,17 +555,24 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
 }
 
 /// The object whose changes of place, size and angle are eased ([`crate::object_motion`]): the
-/// selected shape or picture, not a connector, a text box or a fixed object.
+/// selected shape (with text or without) or picture, or a text box being edited; not a connector
+/// or a fixed object.
 pub(crate) fn motion_subject(app: &WordApp, layout: &DocLayout) -> Option<ObjectHit> {
     let (o, editing) = active(app, layout)?;
-    let shape = matches!(selected(app), Some((_, InlineObject::Shape { kind, .. })) if !kind.is_connector());
-    let picture = matches!(selected(app), Some((_, InlineObject::Image { .. })));
-    (!editing && o.text_box.is_none() && !fixed(app, &o) && (shape || picture)).then_some(o)
+    let ok = match selected(app) {
+        Some((_, InlineObject::Shape { kind, .. })) => !kind.is_connector(),
+        Some((_, InlineObject::Image { .. })) => true,
+        Some(_) => false,
+        None => editing,
+    };
+    (ok && !fixed(app, &o)).then_some(o)
 }
 
 /// A handle or the object itself being dragged, for [`crate::object_motion`].
 pub(crate) struct MotionDrag {
     pub resize: bool,
+    pub page: usize,
+    pub key: Pos,
     /// The drag already shows the object's pixels.
     pub pixels: bool,
     pub to: crate::object_motion::Pose,
@@ -574,12 +581,15 @@ pub(crate) struct MotionDrag {
 pub(crate) fn motion_drag(app: &WordApp) -> Option<MotionDrag> {
     let d = app.canvas.obj_drag.as_ref().filter(|d| d.drag.moved && d.end.is_none())?;
     let to = crate::object_motion::Pose { page: d.drag.to_page, rect: d.drag.rect, deg: d.drag.deg };
-    Some(MotionDrag { resize: matches!(d.drag.grab, Grab::Resize(_)), pixels: shows_pixels(d), to })
+    Some(MotionDrag { resize: matches!(d.drag.grab, Grab::Resize(_)), page: d.object.page, key: d.object.pos(), pixels: shows_pixels(d), to })
 }
 
 /// Draw the frame of the active object, or the drag preview.
 pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
-    crate::object_motion::update(app, painter, layout, pages, scale);
+    crate::object_motion::paint(app, painter, pages, scale);
+    if crate::object_motion::in_flight(painter.ctx()) {
+        return;
+    }
     if crate::crop::paint(app, painter, t, layout, pages, scale) {
         return;
     }
@@ -1249,7 +1259,7 @@ mod tests {
         assert!((o.rect.x - 100.0).abs() < 0.5, "kept its place across: {:?}", o.rect);
     }
 
-    /// A command that turns or moves the selected object is eased on screen, a drag is not, and the
+    /// A command that turns or moves the selected object is eased on screen, and the
     /// model is already final during the motion. With animation effects off nothing moves.
     #[test]
     fn commands_ease_the_selected_object_and_leave_the_model_final() {
@@ -1290,6 +1300,137 @@ mod tests {
             crate::table_resize::tests::steps(&mut h, 20);
             assert!(!crate::object_motion::in_flight(&h.ctx), "and comes to rest");
         }
+    }
+
+    /// A shape holding text eases too, whatever its text does.
+    #[test]
+    fn a_text_box_is_eased_when_it_is_resized() {
+        for text in ["Some words inside", "", "A much longer text that wraps over several lines in this box"] {
+            let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+            app.run("insert.textBox", json!({"text": text})).unwrap();
+            app.run("view.commentsPane", json!({"value": false})).unwrap();
+            app.run("ui.animations", json!({"value": "on"})).unwrap();
+            let bx = app.session.layout().find_object(0, |o| o.text_box.is_some()).unwrap();
+            let end = Pos { off: bx.off + OBJ.len_utf8(), ..bx.pos() };
+            app.run("select.range", json!({"anchor": bx.pos(), "focus": end})).unwrap();
+            app.run("arrange.bounds", json!({"page": 0, "x": 150, "y": 180, "width": 200, "height": 100})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.02).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.ctx.all_styles_mut(|s| s.animation_time = 0.1);
+            crate::table_resize::tests::steps(&mut h, 8);
+            h.state_mut().run("arrange.bounds", json!({"width": 320, "height": 140})).unwrap();
+            crate::table_resize::tests::steps(&mut h, 2);
+            assert!(crate::object_motion::in_flight(&h.ctx), "text: {text:?}");
+            crate::table_resize::tests::steps(&mut h, 20);
+            assert!(!crate::object_motion::in_flight(&h.ctx));
+        }
+    }
+
+    /// Letting go of a handle or of the object itself eases it, whichever handle and whatever the object holds.
+    #[test]
+    fn letting_go_of_any_handle_or_a_move_starts_the_motion() {
+        use crate::table_resize::tests::{button, steps};
+        // (what, handle as a fraction of the frame, where the pointer ends up relative to it)
+        let cases = [
+            ("corner", (1.0, 1.0), (40.0, 30.0)),
+            ("bottom", (0.5, 1.0), (0.0, 40.0)),
+            ("right", (1.0, 0.5), (40.0, 0.0)),
+            ("top", (0.5, 0.0), (0.0, -30.0)),
+            ("left", (0.0, 0.5), (-30.0, 0.0)),
+            ("move", (0.25, 0.0), (60.0, 40.0)),
+        ];
+        for text in [Some("Words inside"), None] {
+            for (name, (fx, fy), (dx, dy)) in cases {
+                let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+                match text {
+                    Some(t) => app.run("insert.textBox", json!({"text": t})).unwrap(),
+                    None => app.run("insert.shape", json!({"kind": "rectangle", "width": 200, "height": 100})).unwrap(),
+                };
+                app.run("view.commentsPane", json!({"value": false})).unwrap();
+                app.run("ui.animations", json!({"value": "on"})).unwrap();
+                let bx = app.session.layout().find_object(0, |_| true).unwrap();
+                let end = Pos { off: bx.off + OBJ.len_utf8(), ..bx.pos() };
+                app.run("select.range", json!({"anchor": bx.pos(), "focus": end})).unwrap();
+                app.run("arrange.bounds", json!({"page": 0, "x": 200, "y": 200, "width": 200, "height": 100})).unwrap();
+                let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.02).build_ui_state(
+                    |ui, app: &mut WordApp| {
+                        let ctx = ui.ctx().clone();
+                        app.logic(&ctx);
+                        app.ui(ui);
+                    },
+                    app,
+                );
+                h.ctx.all_styles_mut(|s| s.animation_time = 0.1);
+                steps(&mut h, 8);
+                let o = h.state_mut().session.layout().find_object(0, |_| true).unwrap();
+                let at = crate::canvas::page_to_screen(h.state_mut(), 0, o.rect.x + o.rect.w * fx, o.rect.y + o.rect.h * fy).unwrap();
+                let to = at + egui::vec2(dx, dy);
+                h.event(egui::Event::PointerMoved(at));
+                steps(&mut h, 2);
+                button(&h, at, true);
+                h.step();
+                for k in 1..=4 {
+                    h.event(egui::Event::PointerMoved(at + (to - at) * (k as f32 / 4.0)));
+                    h.step();
+                }
+                assert!(h.state().canvas.obj_drag.is_some(), "{name} {text:?}: dragging");
+                button(&h, to, false);
+                steps(&mut h, 3);
+                let after = h.state_mut().session.layout().find_object(0, |_| true).unwrap();
+                assert_ne!(after.rect, o.rect, "{name} {text:?}: the drag changed the object");
+                assert!(crate::object_motion::in_flight(&h.ctx), "{name} {text:?}: eased");
+                steps(&mut h, 20);
+                assert!(!crate::object_motion::in_flight(&h.ctx));
+            }
+        }
+    }
+
+    /// A shape moved through the text can be anchored to another paragraph; it is eased all the same.
+    #[test]
+    fn a_shape_anchored_to_another_paragraph_is_eased() {
+        use crate::table_resize::tests::steps;
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+        for i in 0..90 {
+            app.run("text.insert", json!({"text": format!("Paragraph {i} with a few words to fill the line.\n")})).unwrap();
+        }
+        app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 0)})).unwrap();
+        app.run("insert.shape", json!({"kind": "rectangle", "width": 150, "height": 60})).unwrap();
+        app.run("view.commentsPane", json!({"value": false})).unwrap();
+        app.run("ui.animations", json!({"value": "on"})).unwrap();
+        let bx = app.session.layout().find_object(0, |_| true).unwrap();
+        let end = Pos { off: bx.off + OBJ.len_utf8(), ..bx.pos() };
+        app.run("select.range", json!({"anchor": bx.pos(), "focus": end})).unwrap();
+        app.run("arrange.bounds", json!({"page": 0, "x": 200, "y": 100, "width": 150, "height": 60})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.02).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.ctx.all_styles_mut(|s| s.animation_time = 0.1);
+        steps(&mut h, 8);
+        let before = h.state_mut().session.layout().find_object(0, |_| true).unwrap();
+        h.state_mut().run("arrange.bounds", json!({"page": 0, "x": 200, "y": 600, "width": 150, "height": 60})).unwrap();
+        steps(&mut h, 2);
+        let after = h.state_mut().session.layout().find_object(0, |_| true).unwrap();
+        eprintln!("anchor moved: {}", before.pos() != after.pos());
+        assert!(crate::object_motion::in_flight(&h.ctx), "eased, anchor moved: {}", before.pos() != after.pos());
+        steps(&mut h, 20);
+        assert!(!crate::object_motion::in_flight(&h.ctx));
+        // And to another page.
+        h.state_mut().run("arrange.bounds", json!({"page": 1, "x": 200, "y": 100, "width": 150, "height": 60})).unwrap();
+        steps(&mut h, 2);
+        let moved = h.state_mut().session.layout().find_object(1, |_| true);
+        assert!(moved.is_some(), "the shape is on page 2");
+        assert!(crate::object_motion::in_flight(&h.ctx), "eased across pages");
     }
 
     /// A settled canvas for the rotation regressions, without taking focus on the desktop.
