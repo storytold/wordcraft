@@ -48,6 +48,8 @@ wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 craft-codepage = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
+craft = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0", default-features = false }
+craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 
 # foundation
@@ -82,8 +84,7 @@ image = { version = "0.25", default-features = false }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0", default-features = false, features = ["write"] }
-# craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", features = ["ui"] }
+
 craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-docx = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }
 craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", version = "=0.1.0" }

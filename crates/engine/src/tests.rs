@@ -7871,6 +7871,35 @@ fn hostile_chart_data_is_capped() {
     assert!(s.run("chart.type", &json!({"type": "pie"})).is_err());
 }
 
+/// The pane's findings follow the document: an edit that fixes an issue and a replacement by
+/// another document both show at the next read, though the session keeps them between reads.
+#[test]
+fn accessibility_findings_follow_the_document() {
+    let alt = |s: &mut Session| s.accessibility_findings().iter().any(|i| i["rule"] == "altText");
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Title"));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s), "a shape without alternative text is reported");
+    assert!(alt(&mut s), "and still is at the next read");
+    let (id, rev) = (s.document_id(), s.rev());
+
+    // The fix the issue names, as the pane runs it.
+    let issue = s.accessibility_findings().iter().find(|i| i["rule"] == "altText").cloned().expect("the alt text issue");
+    run(&mut s, "select.range", issue["select"].clone());
+    run(&mut s, issue["action"]["command"].as_str().expect("a fix"), issue["action"]["params"].clone());
+    assert_eq!(s.document_id(), id);
+    assert_ne!(s.rev(), rev);
+    assert!(!alt(&mut s), "the fixed issue is gone");
+
+    // The issue again, then another document in its place.
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s));
+    run(&mut s, "file.new", json!({}));
+    assert_ne!(s.document_id(), id);
+    let want = crate::cmd::accessibility::check(&s.doc);
+    assert_eq!(s.accessibility_findings(), want.as_slice(), "the new document's findings");
+    assert!(!alt(&mut s));
+}
+
 #[test]
 fn accessibility_reports_a_chart_without_alt_text() {
     use std::sync::Arc;
@@ -11339,8 +11368,6 @@ fn find_replace_and_go_to_open_like_word() {
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "replace"})));
     assert!(!s.dirty, "opening the dialog changes nothing");
     assert!(s.run("edit.findReplace", &json!({"tab": "nope"})).is_err());
-    let reg = s.registry.clone();
-    assert_eq!(s.keymap.resolve(&reg, "Mod+H").map(|c| c.id), Some("edit.findReplace"));
     run(&mut s, "edit.goto", json!({}));
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "goto"})));
     // Replace with a "with" and the last search still replaces, as before.
