@@ -330,6 +330,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 
 > 2026-11-03 · Section `w:chapStyle` values preserve the full unsigned-byte range, including 10, while values above 255 are rejected.
 
+| 2026-11-15 | trivial | #4703: port table-only footer preservation to active shared DOCX IO; retain synthetic repeated-save and XML controls, no new native qualification. |
 | 2026-10-30 | trivial | DOCX section metadata now preserves independent printer trays, section endnote suppression, chapter numbering settings, and footnote columns through native JSON and repeated save/reopen |
 > 2026-10-28 · Charts and SmartArt: text the font lacks (Chinese axis labels and legends) is drawn in a fallback face instead of boxes, one face per run as in body text (#4720, `layout::tests::chart_text_the_font_lacks_is_drawn_in_a_fallback_face`).
 >
@@ -701,6 +702,18 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 | 2026-11-03 | trivial | Opening a password-protected file named on the command line shows the Password box also when a chosen region replaced the first blank document (the window followed the replacement only on the first frame, which dropped the box, #5299) |
 | 2026-10-27 | trivial | 2026-10-27 · #4533 review: numeric REF updates lazily index body bookmarks once per update, retaining the first body bookmark for duplicate names. Unsupported switches and ordinary REF/PAGEREF behavior are unchanged; a synthetic 64-reference regression covers repeated updates and duplicate names. Estimates unchanged. |
 | 2026-10-27 | trivial | 2026-10-27 · #4533: numeric REF fields use paragraph list numbers for no/full/relative context, reusing bounded numbering. Shared context already embedded in a level label is removed; merged-away cells do not count. Unsupported separator/text/position switches and ambiguous contexts or delimiter-free joins retain cached results. Synthetic OOXML regressions; no native Word or real-document validation, estimates unchanged. |
+| 2026-11-03 | trivial | PR #4703 — Footer table fidelity (2026-11-03): DOCX saves retain a table-only footer ending without adding an empty paragraph. If every table has no writable rows, the footer still receives its fallback paragraph; skipped tables beside real content add no blank spacing. The Windows disappearance in #3114 and native Word/Windows GUI acceptance remain unqualified. |
+| 2026-11-03 | trivial | Preserve table-only footer endings and the empty-written-footer fallback; synthetic fidelity controls; #3114 and native Windows acceptance remain unqualified (#4703). |
 | 2026-11-05 | trivial | DOCX: a block-level content control (including `w15:repeatingSection` / `w15:repeatingSectionItem` nested around one paragraph) followed by body-level bookmark, comment or permission markup (Word's `_GoBack` bookmark) is written back around its paragraph instead of inside it, so Word opens the saved file; the markers are kept at the end of that paragraph (P0069). |
 | 2026-11-04 | trivial | DOCX: paragraph and list-level indents (`w:ind`) and paragraph spacing (`w:spacing` before/after) written as plain twips beyond 16 bits keep their low 16 bits, as Word reads them (`w:left="66256"` is a 36 pt indent), instead of pushing the text off the page (`twips_wrap.rs`, P0059) |
 | 2026-11-12 | trivial | DOCX: `w:lnNumType` without a positive `w:countBy` leaves line numbering off, as Word does, instead of numbering every line on screen, in PDF export and on re-save; saving then omits the element (`section_line_numbering.rs`, #6209) |
+
+### Shared footer-writer integration — 2026-11-15
+
+The active shared writer includes [the supporting contribution](https://github.com/ro-legal-docx/craft-libs/commit/e038d25df7a271fb172ae271d6cff49d06e23c46)
+based on the existing shared-library pin. Same-revision dependencies move
+together; other pins and package versions stay unchanged. The retained consumer
+controls exercise the active reader/writer through the application model bridge.
+No local Cargo/build/tests or new native Word exports ran. The fork's available
+`doc.yml` does not execute craft-docx tests; equivalent consumer scenarios run in
+normal full WordCraft CI. No full-library workspace coverage is claimed.
