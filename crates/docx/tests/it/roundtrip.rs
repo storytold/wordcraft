@@ -989,7 +989,8 @@ fn toc_field_skips_nested_stories() {
     let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
     let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     let boxes: Vec<(usize, usize)> = xml.match_indices("<w:txbxContent>").map(|(a, _)| (a, a + xml[a..].find("</w:txbxContent>").unwrap())).collect();
-    assert_eq!(boxes.len(), 2, "{xml}");
+    // Each text box is written twice: in the drawing and in its VML fallback.
+    assert_eq!(boxes.len(), 4, "{xml}");
     let in_box = |i: usize| boxes.iter().any(|(a, b)| (*a..*b).contains(&i));
     for kind in ["begin", "separate", "end"] {
         let at: Vec<usize> = xml.match_indices(&format!(r#"fldCharType="{kind}""#)).map(|(i, _)| i).collect();
@@ -997,7 +998,7 @@ fn toc_field_skips_nested_stories() {
         assert!(!in_box(at[0]), "field {kind} written inside a text box: {xml}");
     }
     let (begin, end) = (xml.find(r#"fldCharType="begin""#).unwrap(), xml.find(r#"fldCharType="end""#).unwrap());
-    assert!(begin > boxes[0].1 && end > boxes[1].1 && end < xml.find("</w:sdt>").unwrap(), "{xml}");
+    assert!(begin > boxes[1].1 && end > boxes[3].1 && end < xml.find("</w:sdt>").unwrap(), "{xml}");
 }
 
 #[test]
@@ -1567,6 +1568,29 @@ fn attached_template_and_link_styles_round_trip() {
     assert!(!plain.settings.link_styles);
 }
 
+/// Gutter position Top (`w:gutterAtTop`) is kept when a document is opened and saved again, and
+/// is not written when it is off.
+#[test]
+fn gutter_at_top_survives_open_and_save() {
+    let settings_xml = |bytes: &[u8]| {
+        let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+        String::from_utf8(zip.read("word/settings.xml", 16 << 20).unwrap().unwrap()).unwrap()
+    };
+    let mut d = Document::new();
+    d.settings.gutter_at_top = true;
+    let first = wordcraft_docx::write(&d).expect("write");
+    assert_eq!(settings_xml(&first).matches("<w:gutterAtTop/>").count(), 1);
+
+    let opened = wordcraft_docx::read(&first).expect("read");
+    assert!(opened.settings.gutter_at_top);
+    let saved = wordcraft_docx::write(&opened).expect("write again");
+    assert_eq!(settings_xml(&saved).matches("<w:gutterAtTop/>").count(), 1);
+    assert!(wordcraft_docx::read(&saved).expect("read again").settings.gutter_at_top);
+
+    let plain = wordcraft_docx::write(&Document::new()).expect("write plain");
+    assert!(!settings_xml(&plain).contains("gutterAtTop"));
+}
+
 /// #995: the zoom a document was saved at (`w:zoom`), One Page (`fullPage`) included, is read
 /// and written back.
 #[test]
@@ -1922,8 +1946,21 @@ fn flat_opc_round_trip_equals_docx() {
     assert!(text.starts_with("<?xml") && text.contains("<?mso-application progid=\"Word.Document\"?>"));
     assert!(text.contains("pkg:name=\"/word/document.xml\"") && text.contains("<pkg:binaryData>"));
     assert_eq!(wordcraft_docx::sniff_xml(&xml), wordcraft_docx::XmlKind::FlatOpc);
-    let back = wordcraft_docx::read_xml(&xml).expect("read flat");
-    assert_eq!(back, rt(&d));
+    let mut back = wordcraft_docx::read_xml(&xml).expect("read flat");
+    // `pkg:xmlData` inlines a part without its XML declaration, so a kept XML part (the font
+    // table) comes back without one; the markup is the same.
+    let mut want = rt(&d);
+    for doc in [&mut back, &mut want] {
+        for v in doc.passthrough.values_mut() {
+            if let Some(rest) =
+                v.strip_prefix(b"<?xml").and_then(|r| r.iter().position(|&b| b == b'>').map(|e| r[e + 1..].trim_ascii_start().to_vec()))
+            {
+                *v = Arc::new(rest);
+            }
+        }
+    }
+    assert!(back.passthrough.contains_key("word/fontTable.xml"));
+    assert_eq!(back, want);
     assert_eq!(back.media.len(), 1);
 }
 
@@ -2398,6 +2435,10 @@ fn bibliography_sources_round_trip() {
 
     assert_bibliography_parts(&bytes);
     assert_bibliography_sources_round_trip(&bytes);
+    // Saved again after reading, the store keeps one relationship, from the main part.
+    let again = wordcraft_docx::write(&wordcraft_docx::read(&bytes).expect("read")).expect("write again");
+    assert_bibliography_parts(&again);
+    assert_eq!(wordcraft_docx::read(&again).expect("read again").sources.len(), d.sources.len());
 }
 
 /// #4848: a corporate author saves as Word's `b:Corporate`, in place of a name list (a role holds
@@ -2438,9 +2479,12 @@ fn assert_bibliography_parts(bytes: &[u8]) {
     assert!(zip.contains("customXml/itemProps1.xml"));
     assert!(zip.contains("customXml/_rels/item1.xml.rels"));
 
-    let rels_xml = String::from_utf8(zip.read("_rels/.rels", 16 << 20).unwrap().unwrap()).unwrap();
-    assert!(rels_xml.contains("relationships/customXml"), "{rels_xml}");
-    assert!(rels_xml.contains("Target=\"customXml/item1.xml\""), "{rels_xml}");
+    // The sources' data store is related from the main part's relationships only.
+    let rels_xml = String::from_utf8(zip.read("word/_rels/document.xml.rels", 16 << 20).unwrap().unwrap()).unwrap();
+    assert_eq!(rels_xml.matches("relationships/customXml\"").count(), 1, "{rels_xml}");
+    assert!(rels_xml.contains("Target=\"../customXml/item1.xml\""), "{rels_xml}");
+    let root_xml = String::from_utf8(zip.read("_rels/.rels", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(!root_xml.contains("relationships/customXml\""), "{root_xml}");
 
     let ct_xml = String::from_utf8(zip.read("[Content_Types].xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(ct_xml.contains("PartName=\"/customXml/item1.xml\""), "{ct_xml}");
