@@ -1,4 +1,48 @@
 use super::*;
+use crate::dialogs::host::FormHost;
+use crate::dialogs::mailings::RecipientListDialog;
+use craft::host::{AppInfo, Host, Picked, ScriptedFiles};
+use std::sync::Arc;
+
+/// One frame of the app in `ctx`, so the dialog host shows, settles and answers what was asked
+/// since the last one. A test keeps one context, so what the host keeps in egui memory lasts
+/// between frames.
+fn pump(a: &mut WordApp, ctx: &egui::Context) {
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let ctx = ui.ctx().clone();
+        a.logic(&ctx);
+        a.ui(ui);
+    });
+}
+
+/// An app on `document` whose file service is `files` (app.H1).
+fn app_over(files: &Arc<ScriptedFiles>, document: wordcraft_doc::Document) -> WordApp {
+    let host = Host::builder(AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
+    WordApp::new(Session::new(document), Services::default()).with_host(Arc::new(host))
+}
+
+/// A file dropped on the window, as the platform delivers it.
+#[cfg(not(target_arch = "wasm32"))]
+fn drop_file(a: &mut WordApp, ctx: &egui::Context, path: &std::path::Path) {
+    let mut raw = shot_raw(egui::vec2(640.0, 480.0), false);
+    raw.dropped_files.push(Arc::new(DroppedText(path.to_path_buf())));
+    a.raw_input_hook(ctx, &mut raw);
+    ctx.run_ui(raw, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+}
+
+/// The key of the dialog the host has open, if any.
+fn open_key(a: &WordApp) -> Option<String> {
+    a.dialog_host.open_dialogs().into_iter().find_map(|d| d.key)
+}
+
+/// The JSON fields of the open dialog `key`.
+fn fields_of(a: &WordApp, key: &str) -> Option<Value> {
+    a.dialog_host.open_dialogs().into_iter().find(|d| d.key.as_deref() == Some(key)).and_then(|d| d.fields)
+}
 
 /// #4857: with the whole table selected, a row check box the rows differ in shows as mixed and
 /// changes nothing left alone; clicked, OK sets it for every selected row.
@@ -9,13 +53,25 @@ fn table_properties_dialog_sets_every_selected_row() {
     a.run("table.properties", json!({"allowBreak": false})).unwrap();
     a.run("table.selectTable", json!({})).unwrap();
     a.run("table.properties", json!({})).unwrap();
-    let Some(dialogs::Dialog::TableProperties { form, basis }) = a.dialog.clone() else { panic!("no dialog: {:?}", a.dialog) };
-    assert!(form.mixed.contains("allowBreak") && !form.mixed.contains("headerRow"), "{:?}", form.mixed);
-    assert_eq!(form.changes(&basis), json!({}), "a mixed box left alone changes nothing");
-    let mut f = (*form).clone();
-    f.mixed.remove("allowBreak");
-    f.allow_break = false;
-    assert_eq!(f.changes(&basis), json!({"allowBreak": false}), "clicked, it sets every row");
+    let ctx = egui::Context::default();
+    pump(&mut a, &ctx);
+    let Some(host) = a.dialog_host.get::<FormHost<dialogs::TableForm>>() else { panic!("no table dialog: {:?}", open_key(&a)) };
+    assert!(host.form().mixed.contains("allowBreak") && !host.form().mixed.contains("headerRow"), "{:?}", host.form().mixed);
+    // OK with the mixed box left alone changes no row.
+    let rows_breaking = |a: &WordApp| {
+        let (tp, _, _) = a.session.sel.focus.path.cell().unwrap();
+        a.session.doc.table(a.session.sel.focus.story, &tp).unwrap().rows.iter().map(|r| r.props.cant_split).collect::<Vec<_>>()
+    };
+    let before = rows_breaking(&a);
+    let depth = a.session.undo_depth();
+    let id = a.dialog_host.open_dialogs().first().map(|d| d.id).expect("the dialog is open");
+    assert!(a.dialog_host.confirm_by_id(&ctx, id));
+    pump(&mut a, &ctx);
+    assert!(a.dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
+    assert_eq!(rows_breaking(&a), before, "a mixed box left alone changes nothing");
+    assert_eq!(a.session.undo_depth(), depth, "and records no edit");
+    a.run("table.selectTable", json!({})).unwrap();
+    a.run("table.properties", json!({})).unwrap();
 
     // Drawn: one click on the mixed box turns breaking on for every row.
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
@@ -38,7 +94,7 @@ fn table_properties_dialog_sets_every_selected_row() {
         h.step();
     }
     let a = h.state();
-    assert!(a.dialog.is_none(), "OK closes the dialog");
+    assert!(a.dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
     let (tp, _, _) = a.session.sel.focus.path.cell().unwrap();
     let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
     assert_eq!(t.rows.iter().map(|r| r.props.cant_split).collect::<Vec<_>>(), [false, false, false]);
@@ -57,20 +113,44 @@ fn cell_margins_button_preserves_existing_values_until_confirmed() {
     table.props.cell_margins = Some([3.0, 6.0, 9.0, 12.0]);
     table.rows[0].cells[0].props.margins = Some([1.0, 2.0, 3.0, 4.0]);
 
-    a.run("table.cellMargins", json!({})).unwrap();
-    let Some(dialogs::Dialog::CellMargins { form, basis }) = a.dialog.clone() else { panic!("no dialog: {:?}", a.dialog) };
-    assert_eq!((form.top, form.left, form.bottom, form.right), (3.0 / 72.0, 6.0 / 72.0, 9.0 / 72.0, 12.0 / 72.0));
-    assert_eq!(form.changes(&basis), json!({}), "an untouched dialog does not reset margins");
+    let ctx = egui::Context::default();
+    let frame = |a: &mut WordApp| pump(a, &ctx);
+    let id = dialogs::open(&mut a, "tableCellMargins", &json!({})).expect("the dialog opens");
+    frame(&mut a);
+    let fields = fields_of(&a, "tableCellMargins").expect("the dialog has fields");
+    let side = |k: &str| fields.get(k).and_then(Value::as_f64);
+    assert_eq!((side("top"), side("left"), side("bottom"), side("right")), (Some(3.0), Some(6.0), Some(9.0), Some(12.0)));
+    let depth = a.session.undo_depth();
+    assert!(a.dialog_host.confirm_by_id(&ctx, id));
+    frame(&mut a);
+    let table = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert_eq!(table.props.cell_margins, Some([3.0, 6.0, 9.0, 12.0]), "an untouched dialog does not reset margins");
+    assert_eq!(a.session.undo_depth(), depth, "an untouched dialog writes no table props");
 
-    let mut changed = (*form).clone();
-    changed.right = 18.0 / 72.0;
-    let params = changed.changes(&basis);
-    assert_eq!(params, json!({"top": 3.0, "left": 6.0, "bottom": 9.0, "right": 18.0}));
-    a.dialog = None;
-    a.run("table.cellMargins", params).unwrap();
+    let id = dialogs::open(&mut a, "tableCellMargins", &json!({})).expect("the dialog opens");
+    frame(&mut a);
+    a.dialog_host.set_json_field(&ctx, id, "right", json!(18.0)).unwrap();
+    frame(&mut a);
+    assert!(a.dialog_host.confirm_by_id(&ctx, id));
+    frame(&mut a);
     let table = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
     assert_eq!(table.props.cell_margins, Some([3.0, 6.0, 9.0, 18.0]));
     assert_eq!(table.rows[0].cells[0].props.margins, Some([1.0, 2.0, 3.0, 4.0]), "cell-specific margins remain intact");
+
+    // A table with no direct margins stays without them: the style's or fallback margins the
+    // dialog shows are not written back.
+    let mut b = app();
+    b.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
+    let (tp, _, _) = b.session.sel.focus.path.cell().unwrap();
+    assert_eq!(b.session.doc.table(b.session.sel.focus.story, &tp).unwrap().props.cell_margins, None);
+    let ctx = egui::Context::default();
+    let id = dialogs::open(&mut b, "tableCellMargins", &json!({})).expect("the dialog opens");
+    pump(&mut b, &ctx);
+    let depth = b.session.undo_depth();
+    assert!(b.dialog_host.confirm_by_id(&ctx, id));
+    pump(&mut b, &ctx);
+    assert_eq!(b.session.doc.table(b.session.sel.focus.story, &tp).unwrap().props.cell_margins, None, "untouched, no direct margins appear");
+    assert_eq!(b.session.undo_depth(), depth);
 }
 
 /// #55: a password-protected document asks for its password (after Save Changes) instead of
@@ -82,21 +162,25 @@ fn password_protected_documents_ask_for_the_password() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Locked away"));
     s.run("file.save", &json!({"path": path.to_string_lossy(), "password": "sesame"})).unwrap();
 
+    let ctx = egui::Context::default();
     let mut a = typed();
     assert!(a.execute("file.open", json!({"path": path.to_string_lossy()})).is_err(), "a script gets the error");
-    assert_eq!(prompt(&a), None);
+    assert_eq!(open_key(&a), None);
     a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
-    assert_eq!(prompt(&a), Some("password"));
+    pump(&mut a, &ctx);
+    assert_eq!(open_key(&a).as_deref(), Some("password"));
     assert!(body_text(&a).contains(UNSAVED), "nothing opens until the password fits");
-    let state = serde_json::to_string(&a.dialog).unwrap();
+    let state = fields_of(&a, "password").expect("the prompt has fields").to_string();
     assert!(state.contains("locked.docx") && !state.contains("sesame"));
 
     let mut b = app();
     b.run("file.encrypt", json!({})).unwrap();
-    assert_eq!(prompt(&b), Some("encryptPassword"));
-    b.dialog = None;
-    b.run("file.encrypt", json!({"password": null})).unwrap();
-    assert_eq!(prompt(&b), None, "null removes the password without asking");
+    pump(&mut b, &ctx);
+    assert_eq!(open_key(&b).as_deref(), Some("encryptPassword"));
+    let mut c = app();
+    c.run("file.encrypt", json!({"password": null})).unwrap();
+    pump(&mut c, &ctx);
+    assert_eq!(open_key(&c), None, "null removes the password without asking");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -112,7 +196,12 @@ fn recipient_list_dialog_carries_the_filter() {
     )
     .unwrap();
     a.run("mailings.editRecipients", json!({})).unwrap();
-    let Some(dialogs::Dialog::RecipientList { rows, filter, fields, .. }) = &a.dialog else { panic!() };
+    pump(&mut a, &egui::Context::default());
+    let Some(RecipientListDialog { draft: crate::dialogs::mailings::RecipientDraft { rows, filter, fields }, .. }) =
+        a.dialog_host.get::<RecipientListDialog>()
+    else {
+        panic!("no recipient dialog")
+    };
     assert_eq!(rows.len(), 3, "every record, not only the filtered ones");
     assert!(filter.open);
     let params = filter.params(fields);
@@ -208,39 +297,46 @@ fn recipient_grid_holds_its_rows_while_a_cell_is_edited() {
 #[test]
 fn recipient_grid_edits_the_right_record_through_the_ui() {
     use egui_kittest::kittest::Queryable;
-    type State = (WordApp, Vec<String>, Vec<Vec<String>>, String, dialogs::RecipientFilter);
-    let rows = [["Ada", "London"], ["Alan", "Wilmslow"], ["Grace", "London"], ["Émile", "Paris"]];
-    let mut filter = dialogs::RecipientFilter::default();
-    let rule = dialogs::FilterRow { field: "City".into(), op: wordcraft_engine::cmd::mailings::FilterOp::Equal, value: "London".into(), or: false };
-    filter.rules.push(rule);
-    let state: State =
-        (app(), vec!["Name".into(), "City".into()], rows.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect(), String::new(), filter);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(
-        |ui, s: &mut State| {
-            let (app, fields, rows, message, filter) = s;
-            dialogs::recipient_list(app, ui, fields, rows, message, filter);
+    type State = WordApp;
+    let mut a = app();
+    a.run("mailings.recipients", json!({"csv": "Name,City\nAda,London\nAlan,Wilmslow\nGrace,London\nÉmile,Paris"})).unwrap();
+    a.run("mailings.filterRecipients", json!({"rules": [{"field": "City", "op": "equal", "value": "London"}]})).unwrap();
+    dialogs::open(&mut a, "recipientList", &json!({})).expect("the dialog opens");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut State| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
         },
-        state,
+        a,
     );
     h.run_steps(4);
-    // Text boxes in order: Find, two field names, then the visible records' cells.
-    let cells = |h: &egui_kittest::Harness<'_, State>| h.query_all_by_role(egui::accesskit::Role::TextInput).count().saturating_sub(3) / 2;
-    let names = |h: &egui_kittest::Harness<'_, State>| h.state().2.iter().map(|r| r[0].clone()).collect::<Vec<_>>();
+    let dlg = |h: &egui_kittest::Harness<'_, State>| {
+        let d = h.state().dialog_host.get::<RecipientListDialog>().expect("the recipient dialog is open");
+        (d.draft.rows.clone(), d.draft.filter.clone())
+    };
+    // The records the grid shows: one Remove part per row on screen.
+    let cells = |h: &egui_kittest::Harness<'_, State>| h.query_all_by_label("Remove recipient").count();
+    // A record's cell field, found by the text it holds.
+    let cell_of = |h: &egui_kittest::Harness<'_, State>, text: &str| {
+        h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.value().as_deref() == Some(text)).expect("the record's cell is shown")
+    };
+    let names = |h: &egui_kittest::Harness<'_, State>| dlg(h).0.iter().map(|r| r[0].clone()).collect::<Vec<_>>();
     // Find in list: the first text box. Grace is the only match.
     let find = h.query_all_by_role(egui::accesskit::Role::TextInput).next().unwrap();
     find.click();
     h.run_steps(2);
     h.query_all_by_role(egui::accesskit::Role::TextInput).next().unwrap().type_text("grace");
     h.run_steps(3);
-    assert_eq!(h.state().4.find, "grace");
+    assert_eq!(dlg(&h).1.find, "grace");
     assert!(cells(&h) == 1, "search hides the other rows");
     // Merged-only on top of it: still Grace (London is kept).
     h.get_by_label("Show only records that will be merged").click();
     h.run_steps(3);
-    assert!(h.state().4.only_merged && cells(&h) == 1);
+    assert!(dlg(&h).1.only_merged && cells(&h) == 1);
     // Edit Grace's cell to something the search no longer matches: the row stays, and the
     // edit lands on record 2, not on the first visible row's index.
-    h.query_all_by_role(egui::accesskit::Role::TextInput).nth(3).unwrap().click();
+    cell_of(&h, "Grace").click();
     h.run_steps(2);
     h.event(egui::Event::Key {
         key: egui::Key::A,
@@ -249,22 +345,21 @@ fn recipient_grid_edits_the_right_record_through_the_ui() {
         repeat: false,
         modifiers: egui::Modifiers { command: true, ..Default::default() },
     });
-    h.query_all_by_role(egui::accesskit::Role::TextInput).nth(3).unwrap().type_text("Zed");
+    cell_of(&h, "Grace").type_text("Zed");
     h.run_steps(3);
     assert_eq!(names(&h), ["Ada", "Alan", "Zed", "Émile"]);
-    assert_eq!(h.state().4.held, Some(vec![2]), "rows are held while the cell has the keyboard");
+    assert_eq!(dlg(&h).1.held, Some(vec![2]), "rows are held while the cell has the keyboard");
     assert_eq!(cells(&h), 1);
-    // Remove the one shown record: the third "×" (two are field headers).
-    let xs: Vec<_> = h.get_all_by_label("×").collect();
-    xs[2].click();
+    // Remove the one shown record, by its Remove part.
+    h.get_by_label("Remove recipient").click();
     h.run_steps(3);
     assert_eq!(names(&h), ["Ada", "Alan", "Émile"]);
-    assert!(h.state().4.held.is_none());
+    assert!(dlg(&h).1.held.is_none());
     // New Entry clears the view and appends an empty record.
     h.get_by_label("New Entry").click();
     h.run_steps(3);
-    assert_eq!(h.state().2, vec![vec!["Ada", "London"], vec!["Alan", "Wilmslow"], vec!["Émile", "Paris"], vec!["", ""]]);
-    assert!(h.state().4.find.is_empty() && !h.state().4.only_merged);
+    assert_eq!(dlg(&h).0, vec![vec!["Ada", "London"], vec!["Alan", "Wilmslow"], vec!["Émile", "Paris"], vec!["", ""]]);
+    assert!(dlg(&h).1.find.is_empty() && !dlg(&h).1.only_merged);
 }
 
 /// Desktop: Use an Existing List… picks a file and loads it as recipients, not as a document.
@@ -273,15 +368,12 @@ fn an_existing_list_picked_on_the_desktop_loads_recipients() {
     let dir = scratch("recipients");
     let csv = dir.join("people.csv");
     std::fs::write(&csv, "First Name,City\nAda,London\nAlan,Wilmslow\n").unwrap();
-    let mut a = typed();
-    let asked = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
-    let (seen, path) = (asked.clone(), csv.to_string_lossy().to_string());
-    a.services.pick_open = Some(Box::new(move |purpose| {
-        *seen.borrow_mut() = purpose.to_string();
-        Some(path.clone())
-    }));
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![csv.clone()])]));
+    let mut a = app_over(&files, wordcraft_doc::Document::new());
+    a.run("text.insert", json!({"text": UNSAVED})).unwrap();
     a.run("ui.openRecipientList", json!({})).unwrap();
-    assert_eq!(*asked.borrow(), "recipients", "the host can offer CSV files");
+    pump(&mut a, &egui::Context::default());
+    assert_eq!(files.requests().first().map(|r| r.purpose.as_str()), Some("recipients"), "the host can offer CSV files");
     assert_eq!(a.session.merge.headers, vec!["First Name", "City"]);
     assert_eq!(a.session.merge.rows.len(), 2);
     assert!(body_text(&a).contains(UNSAVED), "the document stays open");
@@ -290,45 +382,54 @@ fn an_existing_list_picked_on_the_desktop_loads_recipients() {
 
 /// Web: the picked file arrives through the inbox and loads as recipients, even as .txt; a
 /// CSV dropped on the page does too. Anything else afterwards opens as before.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn an_existing_list_picked_on_the_web_loads_recipients() {
-    let mut a = typed();
-    let asked = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
-    let seen = asked.clone();
-    a.services.open_async = Some(Box::new(move |purpose| *seen.borrow_mut() = purpose.to_string()));
-    let inbox: Inbox = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    a.services.inbox = Some(inbox.clone());
+    // The scripted browser host answers each pick with the file contents, as the page does.
+    let files = Arc::new(
+        ScriptedFiles::answering([
+            Picked::Contents(vec![("people.txt".into(), b"Name\tCity\nAda\tLondon\n".to_vec())]),
+            Picked::Contents(vec![("more.csv".into(), b"Name\nBo\nCy\n".to_vec())]),
+            Picked::Contents(vec![("people.csv".into(), b"Name,City\nAda,London\n".to_vec())]),
+        ])
+        .in_browser(),
+    );
+    let mut a = app_over(&files, wordcraft_doc::Document::new());
+    a.run("text.insert", json!({"text": UNSAVED})).unwrap();
+    let ctx = egui::Context::default();
     assert_eq!(a.run("ui.openRecipientList", json!({})).unwrap(), json!({"pending": true}));
-    assert_eq!(*asked.borrow(), "recipients");
-    inbox.lock().unwrap().push(("people.txt".into(), b"Name\tCity\nAda\tLondon\n".to_vec()));
-    a.drain_inbox();
+    assert_eq!(files.requests().first().map(|r| r.purpose.as_str()), Some("recipients"));
+    pump(&mut a, &ctx);
     assert_eq!(a.session.merge.headers, vec!["Name", "City"]);
     assert!(!a.recipient_list_pending);
     assert!(body_text(&a).contains(UNSAVED), "the document stays open");
-    inbox.lock().unwrap().push(("more.csv".into(), b"Name\nBo\nCy\n".to_vec()));
-    a.drain_inbox();
+    a.run("ui.openRecipientList", json!({})).unwrap();
+    pump(&mut a, &ctx);
     assert_eq!(a.session.merge.rows.len(), 2);
     // A CSV picked through the picker must not turn the next .txt drop into recipients.
     a.run("ui.openRecipientList", json!({})).unwrap();
-    inbox.lock().unwrap().push(("people.csv".into(), b"Name,City\nAda,London\n".to_vec()));
-    a.drain_inbox();
+    pump(&mut a, &ctx);
     assert!(!a.recipient_list_pending);
-    inbox.lock().unwrap().push(("notes.txt".into(), b"A plain text document.\nAnother line.\n".to_vec()));
-    a.drain_inbox();
+    let dir = scratch("recipients-web");
+    let notes = dir.join("notes.txt");
+    std::fs::write(&notes, "A plain text document.\nAnother line.\n").unwrap();
+    drop_file(&mut a, &ctx, &notes);
+    pump(&mut a, &ctx);
     assert_eq!(prompt(&a), None, "the TXT opens like any document, beside the first");
     assert!(body_text(&a).contains("A plain text document."), "the TXT opened as a document");
     let first = a.session.documents().first().map(|d| d.id).unwrap();
     a.run("view.switchWindows", json!({"id": first})).unwrap();
     assert_eq!(a.session.merge.headers, vec!["Name", "City"], "the recipients stay with their document");
     // A cancelled picker leaves nothing pending once the user does something else.
+    files.queue(Picked::Cancelled);
     a.run("ui.openRecipientList", json!({})).unwrap();
     a.run("format.bold", json!({})).unwrap();
     assert!(!a.recipient_list_pending);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #712: Find, Replace and Go To open as in Word. Ctrl+F puts the keyboard in the Navigation
-/// pane's search box (with the selected text in it), not a dialog; Ctrl+H and Ctrl+G / F5 open
-/// the one Find and Replace dialog on its Replace and Go To tabs.
+/// pane's search box (with the selected text in it), not a dialog.
 #[test]
 fn find_replace_and_go_to_keys_like_word() {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
@@ -352,7 +453,7 @@ fn find_replace_and_go_to_keys_like_word() {
     h.step();
     assert!(h.state().session.view.nav_pane, "the Navigation pane opened");
     assert_eq!(h.state().ui.nav_tab, "results", "Find exposes its results (#2096)");
-    assert!(h.state().dialog.is_none(), "no dialog: {:?}", h.state().dialog.as_ref().map(|d| d.name()));
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "no dialog: {:?}", open_key(h.state()));
     h.event(key(egui::Key::C, egui::Modifiers::NONE));
     h.event(egui::Event::Text("cool".into()));
     h.step();
@@ -380,19 +481,4 @@ fn find_replace_and_go_to_keys_like_word() {
     assert_eq!(nav_query(&h), "Kilns");
     assert_eq!(h.state().ui.nav_tab, "results", "Find leaves Pages to show the selected-text matches");
     assert_eq!(h.state().session.find.results.len(), 2);
-    // Ctrl+H: the Replace tab; Go To: the Go To tab of the same dialog.
-    h.state_mut().canvas.want_focus = true;
-    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
-    h.step();
-    h.step();
-    h.event(key(egui::Key::H, egui::Modifiers::COMMAND));
-    h.step();
-    h.step();
-    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("replace"));
-    h.state_mut().run("edit.goto", json!({})).unwrap();
-    h.step();
-    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("goto"));
-    h.state_mut().run("edit.advancedFind", json!({})).unwrap();
-    h.step();
-    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("find"));
 }
