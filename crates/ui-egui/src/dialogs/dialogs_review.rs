@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::cmd::tools::AutoCorrectPrefs;
 
 use crate::WordApp;
-use crate::dialogs::host::{Asks, DialogHooks, Filed, FormHost, WordForm, open_form, open_form_with};
+use crate::dialogs::host::{Asks, DialogHooks, Filed, FormHost, Settle, WordForm, open_form, open_form_with};
 
 /// The dialog `ui.dialog` opens by `name`: `compare`, `combine` or `autoCorrect` (its `tab`
 /// parameter picks the page). Other names open nothing here.
@@ -340,11 +340,11 @@ fn list_change(app: &mut WordApp, f: &mut AutoCorrectForm, params: Value) -> boo
 /// Runs the list changes the body filed. The body never holds the app, so the changes run here,
 /// in the frame that filed them. Always `false`: the hook lives as long as the dialog, which may
 /// file again.
-fn settle_lists(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
-    let Some(host) = app.dialog_host.get_mut_by_id::<FormHost<AutoCorrectForm>>(id) else { return false };
+fn settle_lists(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
+    let Some(host) = app.dialog_host.get_mut_by_id::<FormHost<AutoCorrectForm>>(id) else { return Settle::Keep };
     let mut form = host.form().clone();
     if form.pending.is_empty() {
-        return false;
+        return Settle::Keep;
     }
     for edit in std::mem::take(&mut form.pending) {
         match edit {
@@ -364,7 +364,7 @@ fn settle_lists(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
     if let Some(host) = app.dialog_host.get_mut_by_id::<FormHost<AutoCorrectForm>>(id) {
         *host.form_mut() = form;
     }
-    false
+    Settle::Keep
 }
 
 const REPLACE: ColumnKey = ColumnKey::new("replace");

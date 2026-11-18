@@ -10,7 +10,7 @@ use craft::ui::runtime::env::WordTemplate;
 use serde_json::Value;
 
 use super::find::{SEARCH_SUGGESTIONS, find_in_navigation_pane};
-use super::host::{DialogHooks, open_with};
+use super::host::{DialogHooks, Settle, open_with};
 use crate::WordApp;
 
 /// The Search Commands dialog; its answer is the query of the fallback row, when that was picked.
@@ -68,12 +68,12 @@ pub(super) fn open(app: &mut WordApp, _name: &str, _params: &Value, parent: Opti
     Some(open_with(app, parent, SearchCommandsDialog::new(entries), DialogHooks { prepare: None, settle }))
 }
 
-fn settle(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> bool {
+fn settle(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> Settle {
     let Some(result) = app.dialog_host.take_by_id::<SearchCommandsDialog>(id) else {
-        return false;
+        return Settle::Keep;
     };
     if let DialogResult::Ok(Some(text)) = result {
         find_in_navigation_pane(app, ctx, text.trim());
     }
-    true
+    Settle::Done
 }

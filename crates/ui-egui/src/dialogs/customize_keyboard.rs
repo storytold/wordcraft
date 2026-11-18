@@ -10,7 +10,7 @@ use craft::ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, Stack
 use egui::{Context, Ui};
 use serde_json::{Value, json};
 
-use super::host::{DialogHooks, open_with};
+use super::host::{DialogHooks, Settle, open_with};
 use crate::WordApp;
 
 /// The name the dialog opens under (dg.A2) and the key of its id.
@@ -128,7 +128,7 @@ impl StackDialog for CustomizeKeyboardDialog {
 }
 
 /// Copies the edits to the session's keymap, and drops the hook once the dialog has finished.
-fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> bool {
+fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> Settle {
     let pending = app.dialog_host.get_mut_by_id::<CustomizeKeyboardDialog>(id).and_then(CustomizeKeyboardDialog::take_pending);
     if let Some(overrides) = pending {
         *app.session.keymap_mut() = overrides;
@@ -138,9 +138,9 @@ fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> bool {
             if let Some(Some(overrides)) = result.ok() {
                 *app.session.keymap_mut() = overrides;
             }
-            true
+            Settle::Done
         }
-        None => false,
+        None => Settle::Keep,
     }
 }
 

@@ -17,7 +17,7 @@ use craft::ui::sections::{DialogRole, FooterButton};
 use egui::{ColorImage, Context, Ui, Vec2, vec2};
 use serde_json::{Value, json};
 
-use super::host::{DialogHooks, open_with};
+use super::host::{DialogHooks, Settle, open_with};
 use crate::WordApp;
 
 /// The dialog's key, which is also the name `dialogs::open` knows it by.
@@ -237,11 +237,11 @@ fn prepare(app: &mut WordApp, id: DialogId) {
 
 /// Runs what the dialog asked for and refreshes the preview. True once the dialog is gone.
 // PLAN: assumed `DialogHooks::settle` returns true when the dialog finished and its hooks can be dropped (dg.A1, dialogs-w13).
-fn settle(app: &mut WordApp, ctx: &Context, id: DialogId) -> bool {
+fn settle(app: &mut WordApp, ctx: &Context, id: DialogId) -> Settle {
     if app.dialog_host.take_by_id::<ManageStylesDialog>(id).is_some() {
-        return true;
+        return Settle::Done;
     }
-    let Some(d) = app.dialog_host.get_mut_by_id::<ManageStylesDialog>(id) else { return true };
+    let Some(d) = app.dialog_host.get_mut_by_id::<ManageStylesDialog>(id) else { return Settle::Done };
     for request in std::mem::take(&mut d.requests) {
         match request {
             Request::Visibility { style, gallery, hidden } => {
@@ -269,7 +269,7 @@ fn settle(app: &mut WordApp, ctx: &Context, id: DialogId) -> bool {
         }
     }
     refresh_preview(app, ctx, id);
-    false
+    Settle::Keep
 }
 
 /// Makes the preview of the selected style when the one held was made for something else.

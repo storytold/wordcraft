@@ -15,7 +15,7 @@ use craft::ui::text::{NumberField, TextField};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::host::{Asks, DialogHooks, FormHost, WordForm, open_form, open_form_with, open_with};
+use super::host::{Asks, DialogHooks, FormHost, Settle, WordForm, open_form, open_form_with, open_with};
 use super::mailings::ADDRESS_PARTS;
 use crate::WordApp;
 
@@ -424,14 +424,14 @@ impl WordForm for MatchFieldsForm {
 }
 
 /// Puts a report's Copy text on the clipboard; spent once the report is gone.
-fn copy_report(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> bool {
+fn copy_report(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> Settle {
     let Some(report) = app.dialog_host.get_mut_by_id::<HostedReport>(id) else {
-        return true;
+        return Settle::Done;
     };
     if let Some(text) = report.take_copied() {
         ctx.copy_text(text);
     }
-    false
+    Settle::Keep
 }
 
 /// The dialog that shows a report command's result: Match Fields, Check for Errors.

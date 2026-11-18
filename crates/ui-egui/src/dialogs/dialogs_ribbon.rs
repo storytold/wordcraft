@@ -30,7 +30,7 @@ use egui::{Context, Ui};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::host::{DialogHooks, open_with};
+use super::host::{DialogHooks, Settle, open_with};
 use crate::WordApp;
 
 /// The dialog's two pages.
@@ -733,11 +733,11 @@ fn prompt_settle(_: &mut WordApp, _: &Context, _: DialogId) -> bool {
 }
 
 /// After the host runs: the Reset… answer, then the requests the body filed. True once the dialog is gone.
-fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> bool {
+fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> Settle {
     let Some(state) = app.dialog_host.get_mut_by_id::<RibbonDialog>(id).map(|d| {
         (std::mem::take(&mut d.requests), std::mem::take(&mut d.message), d.selected.clone(), std::mem::take(&mut d.qat_selected), d.reset, d.page)
     }) else {
-        return app.dialog_host.take_by_id::<RibbonDialog>(id).is_some();
+        return if app.dialog_host.take_by_id::<RibbonDialog>(id).is_some() { Settle::Done } else { Settle::Keep };
     };
     let (requests, message, selected, qat_selected, mut reset, page) = state;
     let mut picks = Picks { message, selected, qat_selected };
@@ -765,7 +765,7 @@ fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> bool {
         dialog.qat_selected = picks.qat_selected;
         dialog.reset = reset;
     }
-    false
+    Settle::Keep
 }
 
 /// Opens Customize Ribbon or Customize Quick Access Toolbar (`customizeRibbon`, `customizeQuickAccess`; dg.A2).

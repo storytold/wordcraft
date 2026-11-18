@@ -7,7 +7,7 @@ use craft::ui::dialog::{DialogId, dialog_id};
 use serde_json::{Value, json};
 
 use super::find::goto_page;
-use super::host::{DialogHooks, Keyed, open_with};
+use super::host::{DialogHooks, Keyed, Settle, open_with};
 use crate::WordApp;
 
 /// The key the dialog is known by.
@@ -74,12 +74,12 @@ fn prepare(app: &mut WordApp, id: DialogId) {
     }
 }
 
-fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
+fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     let request = match app.dialog_host.get_mut_by_id::<Keyed<FindReplaceDialog>>(id) {
         Some(d) => d.inner_mut().take_request(),
         None => {
             let _ = app.dialog_host.take_by_id::<Keyed<FindReplaceDialog>>(id);
-            return true;
+            return Settle::Done;
         }
     };
     if let Some(request) = request {
@@ -88,7 +88,7 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
             d.inner_mut().set_message(message);
         }
     }
-    false
+    Settle::Keep
 }
 
 fn params(query: &str, with: &str, o: &FindOptions) -> Value {

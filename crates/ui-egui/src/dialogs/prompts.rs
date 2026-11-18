@@ -6,7 +6,7 @@ use craft::ui::dialog::{DialogId, DialogResult, DialogStack, PromptChoice, Stack
 use craft::ui::patterns::form_dialogs::{PasswordDialog, PasswordPurpose, Secret};
 use serde_json::{Value, json};
 
-use super::host::{DialogHooks, Keyed, open_with};
+use super::host::{DialogHooks, Keyed, Settle, open_with};
 use crate::WordApp;
 
 /// Opens `password`, `encryptPassword` or `discardRecovery` by name; `None` for any other.
@@ -99,12 +99,12 @@ pub(crate) fn open_password(app: &mut WordApp, name: &str, then: &str, params: V
     open_prompt(app, None, Ask::Open { name: name.to_owned(), then: then.to_owned(), params }, None)
 }
 
-fn settle_password(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
+fn settle_password(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     let Some(result) = app.dialog_host.take_by_id::<PasswordPrompt>(id) else {
-        return false;
+        return Settle::Keep;
     };
     let DialogResult::Ok(PasswordReply { secret, ask }) = result else {
-        return true;
+        return Settle::Done;
     };
     match ask {
         Ask::Open { name, then, params } => {
@@ -141,7 +141,7 @@ fn settle_password(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> boo
             }
         }
     }
-    true
+    Settle::Done
 }
 
 /// Asks whether to discard recovery copy `id` of the document called `name`.
@@ -163,9 +163,9 @@ pub(crate) fn pending_discard_recovery(app: &WordApp) -> Option<DialogId> {
 }
 
 /// The only code that runs `file.recover {discard}`; the recovery id is the prompt's tag.
-fn settle_discard(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
+fn settle_discard(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     let Some(result) = app.dialog_host.take_by_id::<Keyed<StandardPrompt>>(id) else {
-        return false;
+        return Settle::Keep;
     };
     if let DialogResult::Ok(mut answer) = result
         && matches!(answer.choice, PromptChoice::Proceed)
@@ -174,5 +174,5 @@ fn settle_discard(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool
     {
         app.status(e);
     }
-    true
+    Settle::Done
 }

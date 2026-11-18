@@ -39,7 +39,7 @@ use wordcraft_doc::smart_art::{MAX_ITEMS, SmartArtColors, SmartArtLayout, SmartA
 use crate::WordApp;
 // PLAN: assumed dg.A5 `colors::{color_field, ColorFieldEmpty, AutoFace, Palette}` as the contract row gives them (ribbon-w11)
 use crate::colors::{AutoFace, ColorFieldEmpty, Palette, color_field};
-use crate::dialogs::host::{Asks, DialogHooks, WordForm, open_form, open_with};
+use crate::dialogs::host::{Asks, DialogHooks, Settle, WordForm, open_form, open_with};
 
 /// The picker's categories (`All` first), in the order shown.
 pub const CATEGORIES: [&str; 8] = ["All", "List", "Process", "Cycle", "Hierarchy", "Relationship", "Matrix", "Pyramid"];
@@ -698,14 +698,15 @@ fn more_colors(app: &mut WordApp, i: usize, current: Option<Rgb>) {
 }
 
 /// Routes a finished More Colors dialog to its target; true once the dialog is gone.
-fn settle_more_colors(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> bool {
+fn settle_more_colors(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> Settle {
     match app.dialog_host.take_by_id::<crate::colors::ColorPickerDialog>(id) {
         Some(DialogResult::Ok(result)) => {
             crate::colors::picked(app, ctx, result);
-            true
+            Settle::Done
         }
-        Some(DialogResult::Cancel) => true,
-        None => app.dialog_host.get_by_id::<crate::colors::ColorPickerDialog>(id).is_none(),
+        Some(DialogResult::Cancel) => Settle::Done,
+        None if app.dialog_host.get_by_id::<crate::colors::ColorPickerDialog>(id).is_none() => Settle::Done,
+        None => Settle::Keep,
     }
 }
 

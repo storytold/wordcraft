@@ -22,7 +22,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_engine::cmd::mailings::{FilterOp, FilterRule, SortKey};
 
-use super::host::{DialogHooks, open_with};
+use super::host::{DialogHooks, Settle, open_with};
 use crate::WordApp;
 
 /// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
@@ -293,17 +293,17 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
 /// Files the held draft: loads the table, then applies the filter; a refusal is the dialog's.
 /// "Use an Existing List…" hands over to the picker and closes.
 /// Returns `true` only once the dialog is gone and its result is taken: the hook files again after a refusal.
-fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
+fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     let Some((filed, pick)) = app.dialog_host.get_mut_by_id::<RecipientListDialog>(id).map(|d| (d.held.take(), std::mem::take(&mut d.pick))) else {
         let _ = app.dialog_host.take_by_id::<RecipientListDialog>(id);
-        return true;
+        return Settle::Done;
     };
     if pick {
         let _ = app.run("ui.openRecipientList", json!({}));
         app.dialog_host.close_by_id(id);
-        return false;
+        return Settle::Keep;
     }
-    let Some(draft) = filed else { return false };
+    let Some(draft) = filed else { return Settle::Keep };
     let result = recipient_table(&draft.fields, &draft.rows)
         .map_err(|e| tl!(e).to_string())
         .and_then(|params| app.load_recipients(params))
@@ -312,7 +312,7 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
     if let Some(d) = app.dialog_host.get_mut_by_id::<RecipientListDialog>(id) {
         d.held.answer(result.map(|_| ()).map_err(Into::into));
     }
-    false
+    Settle::Keep
 }
 
 /// What a grid or header field reported this pass.

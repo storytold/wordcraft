@@ -10,7 +10,7 @@ use craft::ui::runtime::env::{Env, Label};
 use egui::{Context, Ui};
 use serde_json::{Value, json};
 
-use super::host::{DialogHooks, open_with};
+use super::host::{DialogHooks, Settle, open_with};
 use crate::WordApp;
 
 /// The name the dialog opens under (dg.A2) and the key of its id.
@@ -120,7 +120,7 @@ fn prepare(app: &mut WordApp, id: DialogId) {
 }
 
 /// After the host runs: Delete presses, then the press that closed the dialog. True once the dialog is gone.
-fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> bool {
+fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> Settle {
     let presses = app.dialog_host.get_mut_by_id::<MacrosDialog>(id).map(|dialog| std::mem::take(&mut dialog.requests)).unwrap_or_default();
     for press in &presses {
         run_press(app, press);
@@ -130,9 +130,9 @@ fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> bool {
             if let Some(Some(press)) = result.ok() {
                 run_press(app, &press);
             }
-            true
+            Settle::Done
         }
-        None => false,
+        None => Settle::Keep,
     }
 }
 
