@@ -135,7 +135,7 @@ impl WordForm for DateTimeForm {
         vec![FooterButton::new(word("Set as Default"), DialogRole::Other).stays_open(true)]
     }
 
-    fn applied(&self, app: &mut WordApp, filed: Filed) {
+    fn applied(&mut self, app: &mut WordApp, filed: Filed, _outcome: Result<&[Value], &str>) {
         if matches!(filed, Filed::Extra(0)) {
             app.ui.date_time_format = self.format.clone();
             app.ui.date_time_language = self.language.clone();

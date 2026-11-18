@@ -193,7 +193,7 @@ impl WordForm for CaptionForm {
 
     /// Every preference write of the Caption dialog: the last label after OK, and the custom labels
     /// the form no longer lists after Delete Label.
-    fn applied(&self, app: &mut WordApp, filed: Filed) {
+    fn applied(&mut self, app: &mut WordApp, filed: Filed, _outcome: Result<&[Value], &str>) {
         match filed {
             Filed::Ok => app.ui.last_caption_label = self.label.clone(),
             Filed::Act(DELETE_LABEL) => app.ui.caption_labels.retain(|l| self.labels.contains(l)),
@@ -251,7 +251,7 @@ impl WordForm for NewLabelForm {
         self.label().is_some()
     }
 
-    fn applied(&self, app: &mut WordApp, filed: Filed) {
+    fn applied(&mut self, app: &mut WordApp, filed: Filed, _outcome: Result<&[Value], &str>) {
         if let (Filed::Ok, Some(name)) = (filed, self.label())
             && !BUILT_IN_LABELS.contains(&name.as_str())
             && !app.ui.caption_labels.contains(&name)

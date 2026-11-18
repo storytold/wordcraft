@@ -109,7 +109,7 @@ impl WordForm for TemplatesForm {
         vec![FooterButton::new(label(tl!("Organizer…")), DialogRole::Other).stays_open(true)]
     }
 
-    fn applied(&self, app: &mut WordApp, filed: Filed) {
+    fn applied(&mut self, app: &mut WordApp, filed: Filed, _outcome: Result<&[Value], &str>) {
         if matches!(filed, Filed::Extra(0)) {
             open_organizer(app, self.path.trim(), Some(dialog_id(self.key())));
         }
