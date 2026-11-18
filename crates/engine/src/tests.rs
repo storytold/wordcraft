@@ -3669,10 +3669,27 @@ fn table_properties_text_wrapping_float_alignment_and_preservation() {
     assert_eq!(t.props.float.unwrap().h_align, Some(wordcraft_doc::para::FloatAlign::End));
     run(&mut s, "table.properties", json!({"wrapping": "none"}));
 
-    // RTL table retains None for float h_align.
+    // RTL table float h_align: start (default / left) -> End (right margin), center -> Center, right -> None (visual left).
+    run(&mut s, "table.properties", json!({"align": "left", "rtl": true, "wrapping": "around"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float.unwrap().h_align, Some(wordcraft_doc::para::FloatAlign::End));
+    run(&mut s, "table.properties", json!({"wrapping": "none"}));
+
+    run(&mut s, "table.properties", json!({"align": "center", "rtl": true, "wrapping": "around"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float.unwrap().h_align, Some(wordcraft_doc::para::FloatAlign::Center));
+    run(&mut s, "table.properties", json!({"wrapping": "none"}));
+
     run(&mut s, "table.properties", json!({"align": "right", "rtl": true, "wrapping": "around"}));
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.props.float.unwrap().h_align, None);
+    run(&mut s, "table.properties", json!({"wrapping": "none"}));
+
+    // Turning rtl on for an already wrapped, centred table keeps FloatAlign::Center.
+    run(&mut s, "table.properties", json!({"align": "center", "rtl": false, "wrapping": "around"}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float.unwrap().h_align, Some(wordcraft_doc::para::FloatAlign::Center));
+    run(&mut s, "table.properties", json!({"rtl": true}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float.unwrap().h_align, Some(wordcraft_doc::para::FloatAlign::Center));
     run(&mut s, "table.properties", json!({"wrapping": "none", "rtl": false, "align": "left"}));
 
     // Left-aligned indented table retains position when wrapped around.
@@ -3737,6 +3754,67 @@ fn table_properties_text_wrapping_float_alignment_and_preservation() {
         })
         .unwrap();
     assert!((x_right_none - x_right_around).abs() < 1.0, "right-aligned table retains position when wrapped around");
+
+    // RTL tables retain position when wrapped around for start-aligned, centered, and right-aligned.
+    run(&mut s, "table.properties", json!({"align": "left", "rtl": true, "indent": 0.0, "wrapping": "none"}));
+    let x_rtl_start_none = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let x_rtl_start_around = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    assert!((x_rtl_start_none - x_rtl_start_around).abs() < 1.0, "RTL start-aligned table retains position when wrapped around");
+
+    run(&mut s, "table.properties", json!({"align": "center", "rtl": true, "wrapping": "none"}));
+    let x_rtl_center_none = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let x_rtl_center_around = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    assert!((x_rtl_center_none - x_rtl_center_around).abs() < 1.0, "RTL centered table retains position when wrapped around");
+
+    run(&mut s, "table.properties", json!({"align": "right", "rtl": true, "wrapping": "none"}));
+    let x_rtl_right_none = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let x_rtl_right_around = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    assert!((x_rtl_right_none - x_rtl_right_around).abs() < 1.0, "RTL right-aligned table retains position when wrapped around");
 }
 
 /// #5884: DOCX round-trip preserves table text wrapping ("around" and "none").

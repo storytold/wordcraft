@@ -506,4 +506,16 @@ fn table_properties_text_wrapping() {
     let mut w_nested = f_nested.clone();
     w_nested.wrapping = "around".into();
     assert_eq!(w_nested.changes(&f_nested), json!({}), "disabled wrapping produces no command parameter");
+
+    // Nested floating table can send "none" to unfloat.
+    let mut f_nested_float = f_nested.clone();
+    f_nested_float.wrapping = "around".into();
+    let mut f_nested_unfloat = f_nested_float.clone();
+    f_nested_unfloat.wrapping = "none".into();
+    assert_eq!(f_nested_unfloat.changes(&f_nested_float), json!({"wrapping": "none"}));
+
+    // When wrapping is around, indent is not emitted by TableForm changes.
+    let mut w_indent = w.clone();
+    w_indent.indent = 2.0;
+    assert_eq!(w_indent.changes(&w), json!({}));
 }
