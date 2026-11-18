@@ -15,7 +15,7 @@ use craft::ui::text::{NumberField, TextField};
 use egui::{Context, Ui};
 use serde_json::{Value, json};
 
-use super::host::{DialogHooks, open_with};
+use super::host::{DialogHooks, Settle, open_with};
 use super::styles::{ManageStylesDialog, label};
 use crate::WordApp;
 
@@ -225,11 +225,11 @@ fn modify_prepare(app: &mut WordApp, id: DialogId) {
 }
 
 /// Runs the held OK's command and answers it; hands the recent fonts back. True once the dialog is gone.
-fn modify_settle(app: &mut WordApp, _: &Context, id: DialogId) -> bool {
+fn modify_settle(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
     if app.dialog_host.take_by_id::<ModifyStyleDialog>(id).is_some() {
-        return true;
+        return Settle::Done;
     }
-    let Some(d) = app.dialog_host.get_mut_by_id::<ModifyStyleDialog>(id) else { return true };
+    let Some(d) = app.dialog_host.get_mut_by_id::<ModifyStyleDialog>(id) else { return Settle::Done };
     let requests = std::mem::take(&mut d.requests);
     let settings = d.settings.clone();
     let filed = d.held.take();
@@ -250,7 +250,7 @@ fn modify_settle(app: &mut WordApp, _: &Context, id: DialogId) -> bool {
             d.held.answer(answer);
         }
     }
-    false
+    Settle::Keep
 }
 
 /// Opens New Style based on the style named `based_on`, over `parent` (Manage Styles).
@@ -280,12 +280,12 @@ fn open_new_with(app: &mut WordApp, based_on: &str, parent: Option<DialogId>) ->
 }
 
 /// Runs `styles.create` for the held OK, answers it, and selects the created style in Manage Styles when that is the parent.
-fn new_settle(app: &mut WordApp, _: &Context, id: DialogId) -> bool {
+fn new_settle(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
     if app.dialog_host.take_by_id::<HostedParamDialog>(id).is_some() {
-        return true;
+        return Settle::Done;
     }
-    let Some(d) = app.dialog_host.get_mut_by_id::<HostedParamDialog>(id) else { return true };
-    let Some(ok) = d.take_ok() else { return false };
+    let Some(d) = app.dialog_host.get_mut_by_id::<HostedParamDialog>(id) else { return Settle::Done };
+    let Some(ok) = d.take_ok() else { return Settle::Keep };
     let text = |k: &str| ok.fields.text(k).unwrap_or_default().to_string();
     let result = app.run("styles.create", json!({"name": text("name"), "basedOn": text("basedOn")}));
     let answer = match result {
@@ -303,5 +303,5 @@ fn new_settle(app: &mut WordApp, _: &Context, id: DialogId) -> bool {
     if let Some(d) = app.dialog_host.get_mut_by_id::<HostedParamDialog>(id) {
         d.answer_ok(answer);
     }
-    false
+    Settle::Keep
 }

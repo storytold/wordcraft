@@ -134,7 +134,7 @@ fn copy_headers(app: &mut WordApp, id: DialogId) {
 pub(crate) fn open_insert_merge_field(app: &mut WordApp, parent: Option<DialogId>) -> DialogId {
     let fields = app.session.merge.headers.clone();
     let form = InsertMergeFieldForm { field: fields.first().cloned().unwrap_or_default(), fields };
-    open_form_with(app, parent, form, DialogHooks { prepare: Some(copy_headers), settle: |_, _, _| false })
+    open_form_with(app, parent, form, DialogHooks::prepare_only(copy_headers))
 }
 
 // ---------------------------------------------------------------------------------------------

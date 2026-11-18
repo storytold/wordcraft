@@ -19,7 +19,7 @@ use egui::{Context, Ui};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::host::{Asks, DialogHooks, Filed, WordForm, open_form, open_with};
+use super::host::{Asks, DialogHooks, Filed, Settle, WordForm, open_form, open_with};
 use super::styles::{action, label};
 use crate::WordApp;
 
@@ -329,14 +329,14 @@ fn organizer_prepare(app: &mut WordApp, id: DialogId) {
 
 /// Runs what the Organizer asked for. True once the dialog is gone.
 // PLAN: assumed `DialogHooks::settle` returns true when the dialog finished and its hooks can be dropped (dg.A1, dialogs-w13).
-fn organizer_settle(app: &mut WordApp, _: &Context, id: DialogId) -> bool {
+fn organizer_settle(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
     if app.dialog_host.take_by_id::<OrganizerDialog>(id).is_some() {
-        return true;
+        return Settle::Done;
     }
-    let Some(d) = app.dialog_host.get_mut_by_id::<OrganizerDialog>(id) else { return true };
+    let Some(d) = app.dialog_host.get_mut_by_id::<OrganizerDialog>(id) else { return Settle::Done };
     let requests = std::mem::take(&mut d.requests);
     for request in requests {
-        let Some(d) = app.dialog_host.get_mut_by_id::<OrganizerDialog>(id) else { return true };
+        let Some(d) = app.dialog_host.get_mut_by_id::<OrganizerDialog>(id) else { return Settle::Done };
         match request {
             Request::Load(path) => {
                 let loaded = OrganizerDialog::read_other(app, &path);
@@ -362,7 +362,7 @@ fn organizer_settle(app: &mut WordApp, _: &Context, id: DialogId) -> bool {
             }
         }
     }
-    false
+    Settle::Keep
 }
 
 fn set_message(app: &mut WordApp, id: DialogId, result: Result<Value, String>) {

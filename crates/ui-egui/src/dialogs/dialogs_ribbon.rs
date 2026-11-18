@@ -728,8 +728,8 @@ fn reset_prompt(page: Page) -> StandardPrompt {
 }
 
 /// A question the dialog opened needs no hook of its own: the dialog takes its answer.
-fn prompt_settle(_: &mut WordApp, _: &Context, _: DialogId) -> bool {
-    true
+fn prompt_settle(_: &mut WordApp, _: &Context, _: DialogId) -> Settle {
+    Settle::Done
 }
 
 /// After the host runs: the Reset… answer, then the requests the body filed. True once the dialog is gone.
