@@ -73,6 +73,8 @@ pub mod table_mouse;
 pub mod table_pen;
 pub mod table_resize;
 pub mod theme;
+pub mod desktop_theme; // owed by ribbon batch 2 (S-L348)
+pub mod rtl; // owed by ribbon batch 2 (S-L348)
 mod undo_marks;
 pub mod updates_ui;
 pub mod widgets;

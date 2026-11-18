@@ -255,3 +255,8 @@ impl From<Animations> for String {
         a.code().to_string()
     }
 }
+
+// owed by ribbon batch 2 (S-L348): the base items, until their readers port. Local items above shadow them.
+mod legacy;
+#[allow(unused_imports)]
+pub use legacy::*;
