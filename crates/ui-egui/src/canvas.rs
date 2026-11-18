@@ -104,6 +104,9 @@ pub struct CanvasState {
     pub(crate) context_request: Option<ContextAsk>,
     /// A press on a table's selection area or move handle is held (`table_mouse`).
     pub(crate) table_dragging: bool,
+    /// The table border drag in progress, a ruler's too, from the press to its release or cancel: the page paints
+    /// its dashed preview from it (`table_resize`).
+    pub(crate) table_resize: Option<crate::table_resize::ResizeDrag>,
     /// The ruler drag's gesture, from its first applied step to its commit or cancel.
     // PLAN: assumed `craft::behavior::GestureId` (the framework's `behavior::value::GestureId`).
     pub(crate) ruler_gesture: Option<craft::behavior::GestureId>,
@@ -309,6 +312,7 @@ impl Default for CanvasState {
             ruler_gesture: None,
             control_popup: None,
             table_dragging: false,
+            table_resize: None,
             smart_art_run: None,
             object_gesture: None,
             page_keys: PageKeys::default(),
