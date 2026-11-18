@@ -198,8 +198,9 @@ pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
 /// comment or text box is found too, and a REF to it shows that text as `stored` holds it, its
 /// own fields not yet refreshed, as Word's output does (measured in Word for Windows). The
 /// document's bookmarks are looked up once, and each bookmark's text read once, however many
-/// fields refer to it.
-fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) -> Vec<FieldResult> {
+/// fields refer to it. `error` is what a REF to a missing bookmark shows ([`REFERENCE_NOT_FOUND`]
+/// in English).
+fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document, error: &str) -> Vec<FieldResult> {
     let mut out = Vec::new();
     let mut starts: std::collections::HashMap<String, Pos> = std::collections::HashMap::new();
     for (name, start) in doc.bookmarks().into_iter().chain(part_bookmarks(doc)) {
@@ -220,7 +221,7 @@ fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) 
             let f = FieldCode::parse(instr);
             let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
             let Some(start) = starts.get(target) else {
-                out.push((StoryRef::Body, path.clone(), k, REFERENCE_NOT_FOUND.to_string()));
+                out.push((StoryRef::Body, path.clone(), k, error.to_string()));
                 continue;
             };
             let text = texts.entry(target.to_string()).or_insert_with(|| {
@@ -281,7 +282,15 @@ fn changed(doc: &wordcraft_doc::Document, mut results: Vec<FieldResult>) -> Vec<
 /// formulas keep their stored results (measured with Word for Windows, printing and exporting
 /// fields whose stored results were wrong). The document itself keeps its stored results.
 /// `None` when every such field already shows its fresh result, so nothing is copied then.
+/// A `REF` to a missing bookmark shows Word's error in the interface language
+/// ([`crate::set_reference_error`]).
 pub fn output_fields(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::Document> {
+    let error = crate::locale::reference_error();
+    output_fields_with(doc, error.as_deref().unwrap_or(REFERENCE_NOT_FOUND))
+}
+
+/// [`output_fields`], with `ref_error` for a `REF` to a missing bookmark.
+pub(crate) fn output_fields_with(doc: &wordcraft_doc::Document, ref_error: &str) -> Option<wordcraft_doc::Document> {
     // Numbers first, then the fields that read them: a STYLEREF to a heading holding a SEQ field,
     // and a REF to a bookmarked caption, show the new number.
     let seq = changed(doc, seq_results(doc));
@@ -293,7 +302,7 @@ pub fn output_fields(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::Doc
     if !styles.is_empty() {
         apply_results(out.get_or_insert_with(|| doc.clone()), styles).ok()?;
     }
-    let refs = changed(out.as_ref().unwrap_or(doc), ref_results(out.as_ref().unwrap_or(doc), doc));
+    let refs = changed(out.as_ref().unwrap_or(doc), ref_results(out.as_ref().unwrap_or(doc), doc, ref_error));
     if !refs.is_empty() {
         apply_results(out.get_or_insert_with(|| doc.clone()), refs).ok()?;
     }
@@ -317,6 +326,45 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     update_fields_in(s, false)
 }
 
+/// Each section's page number format (`w:pgNumType w:fmt`), by section index.
+pub(crate) fn page_formats(s: &Session) -> Vec<NumFormat> {
+    s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect()
+}
+
+/// The page holding `pos` in `l`: its index in the layout, its number, and its section's page
+/// number format (`formats` from [`page_formats`]). `None` when no page holds it.
+pub(crate) fn page_at(l: &wordcraft_layout::DocLayout, formats: &[NumFormat], pos: &Pos) -> Option<(usize, u32, NumFormat)> {
+    let c = l.caret(pos)?;
+    let page = l.pages.get(c.page)?;
+    Some((c.page, page.number, formats.get(page.section).copied().unwrap_or_default()))
+}
+
+/// A page number as the page's footer shows it (`ii` in a lowerRoman section), as the `PAGE`
+/// and `PAGEREF` fields write it without a `\*` switch.
+pub(crate) fn page_text(number: u32, fmt: NumFormat) -> String {
+    wordcraft_layout::fields::field_number("", fmt, number)
+}
+
+/// The page number of the page holding `pos`, in its section's number format: what generated
+/// lists (TOC, index, tables of figures and authorities) and page cross-references write. Page
+/// "1" when no page holds it.
+pub(crate) fn page_label(s: &mut Session, pos: &Pos) -> String {
+    let formats = page_formats(s);
+    let l = s.layout();
+    page_at(&l, &formats, pos).map_or_else(|| "1".into(), |(_, n, fmt)| page_text(n, fmt))
+}
+
+/// Where `PAGEREF` reads bookmark `name` (starting at `pos`): a hidden `_Ref` bookmark from the
+/// start of a heading that starts with page breaks reads the page its text is on, as when its
+/// cross-reference was inserted.
+fn bookmark_page_pos(doc: &wordcraft_doc::Document, name: &str, pos: Pos) -> Pos {
+    if pos.off == 0 && name.starts_with("_Ref") {
+        let off = crate::cmd::citations::leading_breaks(doc, &pos);
+        return Pos { off, ..pos };
+    }
+    pos
+}
+
 /// [`update_fields`], or with `all` the whole document: the body (with SEQ, citations and TOC) and
 /// every part story, wherever the caret is (what printing needs).
 pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
@@ -326,18 +374,12 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         update_seq(s)?;
     }
     let mut pages: std::collections::HashMap<String, (u32, NumFormat)> = Default::default();
-    let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
+    let formats = page_formats(s);
     let marks = s.doc.bookmarks();
     for (name, pos) in marks {
+        let pos = bookmark_page_pos(&s.doc, &name, pos);
         let l = s.layout();
-        let page_info = l
-            .caret(&pos)
-            .and_then(|c| l.pages.get(c.page))
-            .map(|p| {
-                let format = formats.get(p.section).copied().unwrap_or_default();
-                (p.number, format)
-            })
-            .unwrap_or((1, NumFormat::Decimal));
+        let page_info = page_at(&l, &formats, &pos).map_or((1, NumFormat::Decimal), |(_, n, fmt)| (n, fmt));
         pages.entry(name).or_insert(page_info);
     }
     let stories: Vec<StoryRef> =
