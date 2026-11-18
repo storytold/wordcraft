@@ -2443,6 +2443,30 @@ fn note_separators_and_continuation_notice_round_trip() {
     check(&wordcraft_docx::read(&out).unwrap());
 }
 
+/// A picture frame shape in a footnote or endnote separator opens as a rectangle, as it does in
+/// the body, instead of failing the whole document.
+#[test]
+fn a_frame_shape_in_a_note_separator_reads_as_a_rectangle() {
+    let frame = r#"<w:r><w:drawing><wp:inline><wp:extent cx="508000" cy="381000"/><wp:docPr id="1" name="F"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="frame"/></wps:spPr><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#;
+    let notes = |root: &str, item: &str| {
+        format!(r#"<w:{root} {W_NS}><w:{item} w:type="separator" w:id="-1"><w:p>{frame}<w:r><w:separator/></w:r></w:p></w:{item}></w:{root}>"#)
+    };
+    let footnotes = notes("footnotes", "footnote");
+    let endnotes = notes("endnotes", "endnote");
+    let bytes = docx(
+        "<w:p><w:r><w:t>Text</w:t></w:r></w:p>",
+        &[("rId1", "footnotes", "footnotes.xml"), ("rId2", "endnotes", "endnotes.xml")],
+        &[("word/footnotes.xml", &footnotes), ("word/endnotes.xml", &endnotes)],
+    );
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    for separators in [&d.footnote_separators, &d.endnote_separators] {
+        let sep = separators.separator.as_ref().unwrap()[0].as_para().unwrap();
+        let shapes: Vec<_> =
+            sep.objects.iter().filter_map(|o| if let InlineObject::Shape { kind, w, .. } = o { Some((*kind, *w)) } else { None }).collect();
+        assert_eq!(shapes, [(ShapeKind::Rectangle, 40.0)]);
+    }
+}
+
 /// Issue #534: East Asian number formats are read, labelled and written back as they were; a
 /// value the format doesn't define is decimal, and a level without `w:ind` has no indent.
 #[test]

@@ -169,6 +169,19 @@ fn glossary_value_from_shared(
     })
 }
 
+fn note_separators_from_shared(
+    source: craft_wordmodel::NoteSeparators,
+    graphics: &mut GraphicCache,
+) -> Result<wordcraft_doc::NoteSeparators, DocxError> {
+    let craft_wordmodel::NoteSeparators { separator, continuation_separator, continuation_notice } = source;
+    let mut blocks = |b: Option<craft_wordmodel::Blocks>| b.map(|b| blocks_from_shared(b, graphics)).transpose();
+    Ok(wordcraft_doc::NoteSeparators {
+        separator: blocks(separator)?,
+        continuation_separator: blocks(continuation_separator)?,
+        continuation_notice: blocks(continuation_notice)?,
+    })
+}
+
 fn missing_pictures_from_shared(source: craft_wordmodel::MissingPictures) -> Result<wordcraft_doc::MissingPictures, DocxError> {
     let mut target = wordcraft_doc::MissingPictures::default();
     target.truncated = source.truncated;
@@ -228,8 +241,8 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.core = convert(core)?;
     document.sources = convert(sources)?;
     document.custom_props = convert(custom_props)?;
-    document.footnote_separators = convert(footnote_separators)?;
-    document.endnote_separators = convert(endnote_separators)?;
+    document.footnote_separators = note_separators_from_shared(footnote_separators, &mut graphics)?;
+    document.endnote_separators = note_separators_from_shared(endnote_separators, &mut graphics)?;
     document.media = media;
     document.passthrough = passthrough;
     document.glossary = glossary.into_iter().map(|g| glossary_value_from_shared(g, &mut graphics)).collect::<Result<_, _>>()?;
