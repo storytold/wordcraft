@@ -1,22 +1,22 @@
 use std::sync::Arc;
 
-use craft::behavior::{Selection, SelectionChange, keyed};
+use craft::behavior::{ColumnWidth, Selection, SelectionChange, keyed};
 use craft::font_manager::Catalog;
 use craft::font_manager::picker::FontPickerSettings;
 use craft::ui::contract::{
-    Bind, CollectionEvent, ColumnKey, ColumnSpec, ColumnWidth, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    Bind, CollectionEvent, ColumnKey, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft::ui::display::Text;
 use craft::ui::form::Field;
 use craft::ui::layout_components::Stack;
-use craft::ui::list::ListRow;
+use craft::ui::list::{ListRow, ThumbAspect};
 use craft::ui::patterns::form_dialogs::{FormCx, FormDialog};
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::runtime::env::Label;
 use craft::ui::table::Table;
-use craft::ui::tabs::{TabItem, TabKind, TabStrip};
-use craft::ui::tile_grid::{CaptionPlace, ThumbAspect, Tile, TileGrid};
+use craft::ui::tabs::{Tab, TabKind, TabStrip};
+use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
 use egui::Ui;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -412,8 +412,8 @@ impl StackDialog for SymbolDialog {
         dialog_id("symbol")
     }
 
-    fn key(&self) -> Option<String> {
-        Some("symbol".to_string())
+    fn key(&self) -> Option<&str> {
+        Some("symbol")
     }
 
     fn modeless(&self) -> bool {
@@ -471,7 +471,7 @@ fn symbol_body(
         } else {
             let pages = [0u8, 1u8];
             let out = TabStrip::new(word("Symbol pages")).kind(TabKind::Text).shown(form.tab).show_items(ui, &keyed(&pages, |t: &u8| *t), &mut |t, _| {
-                TabItem::new(word(if *t == 0 { "Symbols" } else { "Special Characters" }))
+                Tab::new(word(if *t == 0 { "Symbols" } else { "Special Characters" }))
             });
             for event in out.response.events {
                 if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
@@ -534,7 +534,7 @@ fn special_table(ui: &mut Ui, form: &mut SymbolForm) -> bool {
             let row = ListRow::new(shown).cells(icx.cells()).cell(name.clone(), word(label));
             // The chord comes from the framework's command chords, as the ribbon's.
             // PLAN: assumed `CommandRef::from(&str)` and `ListRow::cell_chord(ColumnKey, Chord)` (ribbon-w8 chord rule).
-            match command.and_then(|id| craft::ui::runtime::commands::chord(&ctx, &craft::ui::contract::CommandRef::from(*id))) {
+            match command.and_then(|id| craft::ui::runtime::commands::chord(&ctx, &craft::ui::runtime::commands::CommandRef::from(*id))) {
                 Some(chord) => row.cell_chord(keys.clone(), chord),
                 None => row,
             }

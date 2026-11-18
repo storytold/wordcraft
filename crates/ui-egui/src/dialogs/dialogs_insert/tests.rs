@@ -347,7 +347,7 @@ fn date_time_dialog_keeps_open_and_displays_invalid_picture_error() {
     testing::confirm(&mut h, id);
     let a = h.state();
     match a.dialog_host.held_state(id) {
-        Some(craft_ui::dialog::HeldOk::Refused(message)) => assert!(message.as_str().contains("invalid date picture"), "{message:?}"),
+        Some(craft::ui::dialog::HeldOk::Refused(message)) => assert!(message.as_str().contains("invalid date picture"), "{message:?}"),
         other => panic!("expected a refusal, got {other:?}"),
     }
     assert!(a.dialog_host.get_dyn(id).is_some(), "the dialog stays open");
