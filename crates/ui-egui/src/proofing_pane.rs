@@ -373,6 +373,7 @@ mod tests {
     #[test]
     #[ignore = "offscreen visual review; requires a software or hardware graphics adapter"]
     fn spelling_review_dialog_preview() {
+        let _gpu = crate::table_resize::tests::gpu_turn();
         let mut a = app("The quick brwn fox.");
         a.run("review.spelling", json!({})).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).wgpu().build_ui_state(frame, a);

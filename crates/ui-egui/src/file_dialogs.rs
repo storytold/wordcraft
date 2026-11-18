@@ -40,7 +40,7 @@ const MAX_FONTS_PER_PICK: usize = 2000;
 
 const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const DOCUMENTS: &[&str] =
-    &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
+    &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 
 /// The file types Open offers, as (label, extensions; `*` is any file): pictures for Insert/Change
 /// Picture, recipient lists for Select Recipients › Use an Existing List…, documents otherwise.
@@ -120,12 +120,12 @@ impl WordApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn file_browser_open(&self) -> bool {
+    pub(crate) fn file_browser_open(&self) -> bool {
         self.file_browser.open.is_some()
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn file_browser_open(&self) -> bool {
+    pub(crate) fn file_browser_open(&self) -> bool {
         false
     }
 
@@ -171,12 +171,17 @@ impl WordApp {
         }
     }
 
-    /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up.
+    /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up;
+    /// returns the format of the export it was for, if any.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn give_up_file_dialog(&mut self) {
-        if let Some(d) = self.file_dialog.take() {
-            let _ = self.finish_pick(d.after, None);
+    pub(crate) fn give_up_file_dialog(&mut self) -> Option<String> {
+        if let Some(cancel) = &self.services.cancel_file_dialog {
+            cancel();
         }
+        let d = self.file_dialog.take()?;
+        let export = if let AfterPick::Export { ext } = &d.after { Some(ext.clone()) } else { None };
+        let _ = self.finish_pick(d.after, None);
+        export
     }
 
     /// The host couldn't show a system dialog (#576): ask in the built-in browser instead, which
@@ -292,16 +297,40 @@ impl WordApp {
                 Ok(json!({"picked": true}))
             }
             AfterPick::Export { ext } => {
-                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let Some(mut path) = picked else {
+                    // Cancelled: an earlier refusal is not news any more.
+                    self.clear_export_error();
+                    return Ok(json!({"cancelled": true}));
+                };
                 let r = if ext == "png" {
                     self.run("file.exportPng", json!({"path": path}))
-                } else if ext == crate::print_page::EXPORT_WORD_2003 {
-                    self.run("file.saveAs", json!({"path": path, "format": ext}))
+                } else if ext == "xml" || ext == crate::print_page::EXPORT_WORD_2003 {
+                    // The engine takes an explicit format only for an .xml path, and a system Save
+                    // dialog lets the user type any name: give it the extension, as the built-in
+                    // browser does (`notes.docx` becomes `notes.xml`, `notes.v2` `notes.v2.xml`).
+                    let named = crate::print_page::export_name(&path, "xml");
+                    if named != path {
+                        path = named;
+                        // The dialog only confirmed the name it was given, not this one.
+                        if std::path::Path::new(&path).exists() {
+                            // Callers drop the result, so say it where the person sees it.
+                            return Err(self.fail_export(format!("{path} already exists; choose another name")));
+                        }
+                    }
+                    // Word XML even over a Word 2003 XML file, which a save by path would keep.
+                    let format = if ext == "xml" { wordcraft_engine::cmd::file::FORMAT_FLAT_OPC } else { crate::print_page::EXPORT_WORD_2003 };
+                    self.run("file.saveAs", json!({"path": path, "format": format}))
                 } else {
                     self.run("file.saveAs", json!({"path": path}))
                 };
-                if r.is_ok() {
-                    self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
+                match &r {
+                    Ok(_) => {
+                        self.clear_export_error();
+                        self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
+                    }
+                    Err(e) => {
+                        self.fail_export(e.clone());
+                    }
                 }
                 r
             }
@@ -311,7 +340,7 @@ impl WordApp {
                 params["path"] = json!(path);
                 let r = self.run("file.printPdf", params);
                 if r.is_ok() {
-                    self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
+                    self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
                 }
                 r
             }
@@ -380,6 +409,18 @@ impl WordApp {
         }
     }
 
+    /// An export failed or was refused: say so on the status bar and, for the Export page,
+    /// there too, since Backstage's render loop skips the status bar (callers drop the result).
+    fn fail_export(&mut self, error: String) -> String {
+        self.status(error.clone());
+        self.export_error = error.clone();
+        error
+    }
+
+    fn clear_export_error(&mut self) {
+        self.export_error.clear();
+    }
+
     /// Drop a Save As page error once a later attempt has actually saved.
     fn clear_save_as_error(&mut self) {
         if let Some(ctx) = self.ctx.clone() {
@@ -433,8 +474,8 @@ impl WordApp {
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
-        let file_ext = if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext };
-        let name = format!("{}.{file_ext}", self.title_stem());
+        let name = format!("{}.{}", self.title_stem(), crate::print_page::export_file_ext(ext));
+        // A refusal or failure is reported by `finish_pick` itself (Export page and status bar).
         let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext: ext.to_string() });
     }
 

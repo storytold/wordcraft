@@ -67,6 +67,9 @@ pub(super) fn undrawable_bullet(text: &str, lvl: &Level, rc: &ResolvedChar) -> b
 #[derive(Clone, Debug)]
 pub struct StyleRun {
     pub face: FaceRef,
+    /// The face the run's font resolves to, which `face` replaces where it lacks a character (a
+    /// fallback face, the East Asian font for CJK): the face new text typed in the run asks for.
+    pub requested_face: FaceRef,
     pub size: f32,
     pub synth_bold: bool,
     pub synth_italic: bool,
@@ -87,7 +90,16 @@ impl StyleRun {
         let draw = self.rc.draw_size();
         let k = if draw > 0.0 { self.rc.size / draw } else { 1.0 };
         let raise = self.rc.position;
-        (self.ascent * k + raise.max(0.0), self.descent * k + (-raise).max(0.0))
+        let (mut a, mut d) = (self.ascent * k + raise.max(0.0), self.descent * k + (-raise).max(0.0));
+        // Emphasis marks sit above the characters (or below), and the line makes room for them
+        // (see `display::lines::emphasis_mark`).
+        let size = if self.rc.size.is_finite() { self.rc.size.clamp(0.0, 1638.0) } else { 0.0 };
+        match self.rc.emphasis {
+            wordcraft_doc::props::EmphasisMark::None => {}
+            wordcraft_doc::props::EmphasisMark::UnderDot => d = d.max(size * 0.42 + (-raise).max(0.0)),
+            _ => a = a.max(size * 1.32 + raise.max(0.0)),
+        }
+        (a, d)
     }
 }
 
