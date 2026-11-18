@@ -93,7 +93,7 @@ fn report_rect(bar: Bar) -> Rect {
     Rect::from_min_max(r.min, pos2(r.max.x.max(r.min.x + 1.0), r.max.y.max(r.min.y + 1.0)))
 }
 
-fn step(app: &mut WordApp, request: LookRequest<'_>) -> Look {
+fn step(app: &mut WordApp, request: LookRequest) -> Look {
     let mut glide = std::mem::take(&mut app.canvas.glide);
     let l = look(&mut glide, app, request);
     app.canvas.glide = glide;

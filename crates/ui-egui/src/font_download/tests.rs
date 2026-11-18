@@ -144,10 +144,10 @@ fn the_box_waits_for_an_open_dialog_and_can_be_opened_by_hand() {
     crate::dialogs::open(&mut a, "wordCount", &json!({}));
     let mut h = harness(a);
     assert_eq!(shown(&h).as_deref(), Some("wordCount"), "the open dialog stays");
-    crate::dialogs::close_all(h.state_mut(), &ctx);
+    crate::dialogs::host::close_all(h.state_mut(), &ctx);
     h.run_steps(3);
     assert_eq!(shown(&h).as_deref(), Some("fontDownload"), "then the box");
-    crate::dialogs::close_all(h.state_mut(), &ctx);
+    crate::dialogs::host::close_all(h.state_mut(), &ctx);
     h.run_steps(3);
     assert_eq!(shown(&h), None);
     // The status bar's menu (`ui.dialog`) opens it again, even with the box turned off.
