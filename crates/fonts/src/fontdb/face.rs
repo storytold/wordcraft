@@ -67,6 +67,11 @@ pub struct FontFace {
     /// values).
     pub cap_height: f64,
     pub x_height: f64,
+    /// Average character width in font units (`OS/2.xAvgCharWidth`), half the em for an East
+    /// Asian font, whose average a platform's text metrics report as its half-width cell rather
+    /// than the full-width figure in the table. Word's automatic spacing between East Asian and
+    /// Latin text is half of it (see `wordcraft_layout::para::grid::auto_space`).
+    pub avg_char_width: f64,
     pub shaper: harfrust::ShaperData,
     /// Variable fonts: the named instance's axis settings (user units; empty = default instance),
     /// the normalised location and the shaper's view of it.

@@ -357,6 +357,40 @@ fn non_latin_file_name_is_drawn_in_the_caption() {
     assert!(cjk.canvas.ime_faces.is_empty(), "CJK collections are not copied into the fallback list");
 }
 
+/// The CJK UI font a Japanese file name asks for is loaded and draws the name, also in a build
+/// without craft-i18n's CJK catalogs and craft-fonts' CJK faces. There it was never loaded, and
+/// the caption, like an input method's composition, showed boxes.
+#[test]
+fn a_japanese_file_name_is_drawn_in_the_caption() {
+    // A font to draw it with: an installed CJK font in a build without embedded CJK faces, or
+    // embedded faces that have the name's characters (embedded faces without them load no
+    // installed font for it).
+    let embedded = wordcraft_fonts::ui_cjk_fonts_for(false, false);
+    let drawable = if embedded.is_empty() {
+        wordcraft_fonts::system_cjk_ui_font_for(false, false, &[]).is_some()
+    } else {
+        wordcraft_fonts::ui_uncovered_cjk(&["日本語"], &embedded).is_empty()
+    };
+    // macOS and Windows always have one (Hiragino, Yu Gothic), and CI runs these tests on both (the
+    // Print job), so there a missing font fails instead of hiding a regression.
+    assert!(drawable || cfg!(not(any(target_os = "macos", windows))), "macOS and Windows have a CJK font, but none draws 日本語");
+    if !drawable {
+        eprintln!("skipped: no CJK font draws 日本語");
+        return;
+    }
+    let ctx = egui::Context::default();
+    let frame = |app: &mut WordApp| {
+        ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+    };
+    let mut a = app();
+    a.session.path = Some("日本語.docx".into());
+    // The fonts the name asks for load from the next frame.
+    frame(&mut a);
+    frame(&mut a);
+    assert!(a.want_system_cjk);
+    assert!(ctx.fonts_mut(|f| f.has_glyphs(&crate::theme::semibold(13.0), "日本語")), "the caption draws the name");
+}
+
 /// File › Recover draws the recovered documents' names with the interface faces: a Chinese
 /// name there was a row of boxes because nothing asked for the CJK UI font. (The Recent list
 /// has its own, `ensure_recent_fonts`.)
@@ -3584,6 +3618,27 @@ fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
     }
 }
 
+/// The Paste button is named "Paste": its hint adds the key as the platform writes it, so its
+/// name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
+#[test]
+fn the_paste_button_is_named_without_a_mac_key() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    assert!(h.query_by_role_and_label(Role::Button, "Paste").is_some(), "the Paste button is called \"Paste\"");
+    assert!(h.query_by_role_and_label(Role::Button, "Paste (⌘V)").is_none(), "no Mac key in its name");
+}
+
 /// #1015: focusing Save is not enough: its dialog must expose the question and any failed
 /// save's explanation, so assistive technology has context for the three choices.
 #[test]
@@ -3765,6 +3820,148 @@ fn the_print_button_shows_only_with_a_print_hook() {
             assert_eq!(printed.get(), 1, "the button printed");
         }
     }
+}
+
+/// A Print page with printers found (so it draws the job message), in English.
+fn print_page_harness(message: Option<crate::printing::Feedback>) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = app();
+    a.ui.language = "en".into();
+    a.services.printers = Some(Box::new(|| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(vec![printing::Printer { name: "Test queue".into(), label: String::new(), default: true }]);
+        receiver
+    }));
+    a.services.print_native = Some(Box::new(|_, _, _, _| std::sync::mpsc::channel().1));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    // The page's first drawing starts discovery, which replaces the message: draw it once, leave,
+    // and let the printers arrive.
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
+    h.run_steps(3);
+    set_print_message(&mut h, message);
+    h.state_mut().print_memo = Default::default();
+    h
+}
+
+/// A job message that arrives without the app's own `print_feedback` acting on it (a submitted job
+/// would close the Print page); what the window has said is set by the test.
+fn set_print_message(h: &mut egui_kittest::Harness<'_, WordApp>, message: Option<crate::printing::Feedback>) {
+    h.state_mut().printing.message = message.clone();
+    h.state_mut().print_feedback_seen = message;
+    h.state_mut().print_gen += 1;
+}
+
+fn leave_and_reopen_print(h: &mut egui_kittest::Harness<'_, WordApp>) {
+    let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
+    h.run_steps(2);
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(3);
+}
+
+/// Opened again, the Print page doesn't repeat how the last job went when the window already said
+/// it (in its status bar), but a failure that comes in while it is open stays, and what the
+/// printers are doing (none found) shows each time. The shared message is never cleared, so
+/// `ui.printSettings` still reports it.
+#[test]
+fn the_print_page_opens_without_the_last_jobs_message() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(Some(Feedback::Submitted("job 7".into())));
+    // A job went away earlier: its message was said in this window's status bar, and the page closed.
+    h.state_mut().print_memo.said = Some(h.state().print_gen);
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("job 7").is_none(), "the last job's message isn't repeated");
+    assert_eq!(h.state().printing.message, Some(Feedback::Submitted("job 7".into())), "but the shared message stays");
+    // A failure arrives while the page is open, said (by the status bar) in the very frame, so
+    // only the page being open keeps it showing: wrong reopen detection would hide it.
+    let failure = Some(Feedback::Failed("no paper".into()));
+    set_print_message(&mut h, failure.clone());
+    h.state_mut().print_memo.said = Some(h.state().print_gen);
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("no paper").is_some(), "a failure on the open page stays");
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("no paper").is_none(), "reopened, the failure isn't repeated");
+    assert_eq!(h.state().printing.message, failure, "but it is still the shared message");
+    set_print_message(&mut h, Some(Feedback::NoPrinters));
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("No printers found").is_some(), "no printers still shows");
+}
+
+/// A retry that fails again with the very same text is a new result: it shows, though the window
+/// said the same words for the job before.
+#[test]
+fn a_retry_that_fails_the_same_way_shows_again() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(None);
+    // Every job is refused at once, with the same words.
+    h.state_mut().services.print_native = Some(Box::new(|_, _, _, _| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(Err("no paper".to_owned()));
+        receiver
+    }));
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(3);
+    h.state_mut().run("ui.print", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())));
+    assert!(h.query_by_label_contains("no paper").is_some(), "the first failure shows");
+    leave_and_reopen_print(&mut h);
+    assert!(h.query_by_label_contains("no paper").is_none(), "reopened, it isn't repeated");
+    h.state_mut().run("ui.print", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())));
+    assert!(h.query_by_label_contains("no paper").is_some(), "the same failure of a new job shows");
+}
+
+/// A result nobody has said yet isn't dropped: a failure that arrived while File showed another
+/// page (so no status bar was drawn) shows when Print opens.
+#[test]
+fn the_print_page_shows_a_result_that_was_never_said() {
+    use crate::printing::Feedback;
+    use egui_kittest::kittest::Queryable;
+    let mut h = print_page_harness(None);
+    h.state_mut().ui.backstage = true;
+    h.state_mut().ui.backstage_page = "home".into();
+    h.run_steps(2);
+    // Through the app's own `print_feedback` (run each frame), which says it in a status bar that isn't drawn.
+    h.state_mut().printing.message = Some(Feedback::Failed("no paper".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().print_memo.said, None, "File's home page doesn't say it");
+    let _ = h.state_mut().run("file.print", json!({}));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("no paper").is_some());
+}
+
+/// Per window: what one window has said of the last job isn't another window's, and the shared
+/// message is the same in both. (The harness draws one viewport, which re-enters a window of its
+/// own, so the per-window state is checked where windows swap; `the_print_page_opens_without_the_last_jobs_message`
+/// and `the_print_page_shows_a_result_that_was_never_said` show what each state does on the page.)
+#[test]
+fn the_print_pages_of_two_windows_decide_separately() {
+    use crate::printing::Feedback;
+    let failure = Some(Feedback::Failed("no paper".into()));
+    let mut a = app();
+    a.printing.message = failure.clone();
+    let first = a.windows.shown();
+    a.print_gen = 1;
+    a.print_memo.said = Some(a.print_gen);
+    a.new_window();
+    assert_ne!(first, a.windows.shown());
+    assert_eq!(a.print_memo.said, None, "the second window never said it, so its page shows it");
+    assert_eq!(a.printing.message, failure, "the message is shared, and still there");
+    assert!(a.enter_window(first));
+    assert_eq!(a.print_memo.said, Some(1), "the first window said it, so its page doesn't repeat it");
+    assert_eq!(a.printing.message, failure);
 }
 
 /// Return on the Print page prints, as in Word, where ⌘P opens on Print as the default
@@ -4430,7 +4627,8 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         h.event(key(egui::Key::C, modifiers));
         h.step();
-        assert!(h.state().session.painter.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.painter.is_none(), "{modifiers:?}: Copy Formatting doesn't arm the Format Painter brush");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Copy Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: the existing clipboard text was preserved");
         assert!(copied(&h).is_empty(), "{modifiers:?}: no text reached the system clipboard: {:?}", copied(&h));
@@ -4441,12 +4639,47 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         h.event(key(egui::Key::V, modifiers));
         h.step();
         assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: Paste Formatting made the target bold");
-        assert!(h.state().session.painter.is_none(), "{modifiers:?}: the non-sticky painter is used up");
-        assert_eq!(body_text(h.state()), "Bold plain", "{modifiers:?}: pasting formatting left the document text alone");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: copied formatting stays for the next Paste Formatting");
+        // Pasted again, as in Word: formatting again, never the clipboard's text (#5616).
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        h.state_mut().run("text.insert", json!({"text": " more"})).unwrap();
+        h.state_mut().run("select.text", json!({"text": "more"})).unwrap();
+        // It types on in the pasted bold: make it plain first.
+        h.state_mut().run("format.bold", json!({})).unwrap();
+        assert_eq!(bold(&mut h), Some(false));
+        h.event(key(egui::Key::V, modifiers));
+        h.step();
+        assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: a second Paste Formatting made the next target bold");
+        assert_eq!(body_text(h.state()), "Bold plain more", "{modifiers:?}: the second paste left the text alone");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Paste Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: Paste Formatting preserved the clipboard text");
         assert!(copied(&h).is_empty(), "{modifiers:?}: pasting formatting put no text on the system clipboard: {:?}", copied(&h));
     }
+}
+
+/// #1537/#4943: with no formatting picked up, Ctrl/Cmd+Shift+V pastes the clipboard as text
+/// only (Word for Windows): the text arrives in the destination's formatting, not the source's.
+#[test]
+fn ctrl_shift_v_without_copied_formatting_pastes_text_only() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Bold plain"})).unwrap();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copy", json!({})).unwrap();
+    a.run("select.text", json!({"text": "plain"})).unwrap();
+    // The destination has formatting of its own, so a paste that dropped it would show.
+    a.run("format.italic", json!({})).unwrap();
+    assert!(a.session.painter.is_none());
+    let mut h = harness(a);
+    h.run_steps(6);
+    let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.step();
+    assert_eq!(body_text(h.state()), "Bold Bold", "the clipboard text replaced the selection");
+    let bold = h.state_mut().run("format.state", json!({})).unwrap().get("bold").and_then(Value::as_bool);
+    assert_ne!(bold, Some(true), "the pasted text took the destination's formatting, not the copied bold");
+    let italic = h.state_mut().run("format.state", json!({})).unwrap().get("italic").and_then(Value::as_bool);
+    assert_eq!(italic, Some(true), "the pasted text kept the destination's italic");
 }
 
 /// #1669: with Shift held, Backspace still erases (#707) and Delete cuts the selection, doing

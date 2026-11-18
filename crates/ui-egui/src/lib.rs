@@ -43,6 +43,7 @@ pub mod equation_tab;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file_browser;
 pub mod file_dialogs;
+pub mod font_download;
 pub mod format_shape;
 pub mod frame;
 pub mod guides;
@@ -91,6 +92,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
 pub use control::ControlRequest;
+pub use dialogs::dialogs_bullet;
 pub use dialogs::dialogs_chart;
 pub use dialogs::dialogs_controls;
 pub use dialogs::dialogs_insert;
@@ -434,6 +436,9 @@ pub struct UiState {
     /// spaces, or characters without spaces. Right-click the count in the status bar, or File ›
     /// Options › Display. Junk saved values read as words.
     pub status_count: StatusCount,
+    /// File › Options › General: tell about a document's missing fonts that can be downloaded
+    /// ([`font_download`]); the box's "Don't show this again" turns it off.
+    pub font_download_notice: bool,
     /// How far a mouse-wheel notch scrolls (#6146).
     #[serde(default, alias = "scrollSpeed")]
     pub scroll_speed: ScrollSpeed,
@@ -539,6 +544,7 @@ impl Default for UiState {
             dictionary: Vec::new(),
             display_server: DisplayServer::Auto,
             status_count: StatusCount::default(),
+            font_download_notice: true,
             scroll_speed: ScrollSpeed::default(),
             touchpad_scroll_speed: ScrollSpeed::default(),
         }
@@ -656,6 +662,9 @@ pub struct WordApp {
     pub clipboard_published: bool,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
+    /// Which job message is current: bumped when a job starts and whenever the message changes,
+    /// so a window can tell a new result from one it already said even when the text is the same.
+    print_gen: u64,
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
@@ -686,6 +695,11 @@ pub struct WordApp {
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
     pub(crate) focus_ribbon: bool,
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// The documents (by id) the missing-fonts download box has been considered for
+    /// ([`font_download::tick`]), in every window.
+    pub(crate) font_notice_seen: Vec<u64>,
+    /// Whether that box comes up by itself ([`WordApp::tell_about_font_downloads`]).
+    pub(crate) font_notices: bool,
     /// Language pack installs, the missing-pack bar ([`language_packs`]).
     pub(crate) packs_rt: language_packs::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
@@ -783,8 +797,13 @@ pub struct WordApp {
     /// The document's fonts that aren't installed, for the status bar and the font box, and the
     /// layout they were read from.
     pub missing_fonts: crate::chrome::MissingFontsMemo,
+    /// This window's refused or failed export, shown on its Export and Print pages; see [`WordApp::fail_export`].
+    pub export_error: String,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
+    /// What this window's Print page knows of the last job's message (the viewport and pass it was
+    /// last drawn in, and the generations of the result it said and holds back); per window.
+    print_memo: crate::print_page::Memo,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
