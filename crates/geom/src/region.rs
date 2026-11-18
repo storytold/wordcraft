@@ -122,15 +122,21 @@ impl Region {
     /// The system region from the locale variables `var` reads (the process environment) and,
     /// when none is set, the platform's first preferred locale `platform` gives. One tag for
     /// everything first (`WORDCRAFT_REGION`, then `LC_ALL`); otherwise Unix sets each convention
-    /// on its own: numbers (`LC_NUMERIC`, else `LANG`), paper (`LC_PAPER`) and measurement
-    /// (`LC_MEASUREMENT`). Empty, `C` and `POSIX` values count as unset.
+    /// on its own: numbers (`LC_NUMERIC`), paper (`LC_PAPER`) and measurement (`LC_MEASUREMENT`).
+    /// Each unset category falls back to `LANG`, then the platform locale. Empty, `C` and `POSIX`
+    /// values count as unset.
     pub fn from_locale_vars(var: impl Fn(&str) -> Option<String>, platform: impl FnOnce() -> Option<String>) -> Region {
         let var = |name: &str| var(name).filter(|v| usable_locale(v));
         if let Some(tag) = var("WORDCRAFT_REGION").or_else(|| var("LC_ALL")) {
             return Region::from_tag(&tag);
         }
-        let base = var("LC_NUMERIC").or_else(|| var("LANG")).unwrap_or_else(|| platform().unwrap_or_default());
-        Region::from_tag(&base).with_paper_and_measurement(var("LC_PAPER").as_deref(), var("LC_MEASUREMENT").as_deref())
+        let numeric = var("LC_NUMERIC");
+        let paper = var("LC_PAPER");
+        let measurement = var("LC_MEASUREMENT");
+        let fallback = var("LANG").or_else(|| if numeric.is_none() || paper.is_none() || measurement.is_none() { platform() } else { None });
+        let base = numeric.as_deref().or(fallback.as_deref()).unwrap_or_default();
+        let category_fallback = numeric.as_ref().map(|_| fallback.as_deref().unwrap_or_default());
+        Region::from_tag(base).with_paper_and_measurement(paper.as_deref().or(category_fallback), measurement.as_deref().or(category_fallback))
     }
 
     /// Does a new document start on US Letter here (otherwise A4)?
@@ -214,6 +220,51 @@ mod tests {
         assert_eq!((mixed.paper().0, mixed.units(), mixed.decimal()), ("A4", Unit::Centimeters, '.'));
         assert_eq!(Region::from_tag("pl-PL").with_paper_and_measurement(Some(""), Some("junk")).paper().0, "Letter", "junk is en-US");
         assert_eq!(us.format(Unit::Inches, 90.0), "1.25\"");
+    }
+
+    #[test]
+    fn numeric_locale_keeps_independent_paper_and_measurement() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| move |n: &str| pairs.iter().find(|(k, _)| *k == n).map(|(_, v)| v.to_string());
+        let none = || None;
+        let mixed = Region::from_locale_vars(env(&[("LANG", "pl_PL.UTF-8"), ("LC_NUMERIC", "en_US.UTF-8")]), none);
+        assert_eq!((mixed.paper().0, mixed.units(), mixed.decimal()), ("A4", Unit::Centimeters, '.'));
+        let mixed = Region::from_locale_vars(env(&[("LANG", "en_US.UTF-8"), ("LC_NUMERIC", "pl_PL.UTF-8")]), none);
+        assert_eq!((mixed.paper().0, mixed.units(), mixed.decimal()), ("Letter", Unit::Inches, ','));
+        let explicit =
+            Region::from_locale_vars(env(&[("LANG", "pl_PL"), ("LC_NUMERIC", "en_US"), ("LC_PAPER", "en_US"), ("LC_MEASUREMENT", "en_US")]), none);
+        assert_eq!((explicit.paper().0, explicit.units(), explicit.decimal()), ("Letter", Unit::Inches, '.'));
+        // Without a category override, the optional fields stay unset too.
+        assert_eq!(Region::from_locale_vars(env(&[("LANG", "pl_PL")]), none), Region::from_tag("pl_PL"));
+
+        let calls = std::cell::Cell::new(0);
+        let preferred = "pl_PL".to_string();
+        let platform = Region::from_locale_vars(env(&[("LC_NUMERIC", "en_US")]), || {
+            calls.set(calls.get() + 1);
+            Some(preferred)
+        });
+        assert_eq!((platform.paper().0, platform.units(), platform.decimal()), ("A4", Unit::Centimeters, '.'));
+        assert_eq!(calls.get(), 1);
+        let explicit = Region::from_locale_vars(env(&[("LC_NUMERIC", "pl_PL"), ("LC_PAPER", "en_US"), ("LC_MEASUREMENT", "en_US")]), || {
+            calls.set(calls.get() + 1);
+            None
+        });
+        assert_eq!((explicit.paper().0, explicit.units(), explicit.decimal()), ("Letter", Unit::Inches, ','));
+        assert_eq!(calls.get(), 1, "explicit categories need no platform lookup");
+        for global in ["WORDCRAFT_REGION", "LC_ALL"] {
+            let region = Region::from_locale_vars(
+                |name| match name {
+                    n if n == global => Some("de_DE".into()),
+                    "LANG" | "LC_NUMERIC" | "LC_PAPER" | "LC_MEASUREMENT" => Some("en_US".into()),
+                    _ => None,
+                },
+                || {
+                    calls.set(calls.get() + 1);
+                    None
+                },
+            );
+            assert_eq!(region, Region::from_tag("de_DE"));
+        }
+        assert_eq!(calls.get(), 1, "global overrides need no platform lookup");
     }
 
     #[test]
