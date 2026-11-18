@@ -1,13 +1,15 @@
 //! Language-aware proofing task pane, laid out from black-box observation of Word on Windows.
 
 use craft::behavior::{DisplayOrder, ItemSource};
-use craft::ui::buttons::Button;
+use craft::behavior::IconId;
+use craft::ui::buttons::{Button, IconButton};
 use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow};
 use craft::ui::menu::Menu;
 use craft::ui::notices::Notice;
+use craft::ui::primitives::IconSpec;
 use craft::ui::style::{Span, TypeRole};
 use craft::ui::text::TextField;
 use craft::theme::variant::Tone;
