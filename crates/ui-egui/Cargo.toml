@@ -35,6 +35,9 @@ image = { workspace = true }
 # The system's preferred interface languages (#8) and region (#838). Native: OS APIs; wasm:
 # the browser's languages (`js`).
 sys-locale = { version = "0.3", features = ["js"] }
+# `Prefs::merge_rule`'s key functions read the settings store's TOML values; the version is the one
+# `craft::settings` builds, so the types are the same.
+toml_edit = "0.25"
 
 # Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
 # `desktop_theme.rs`). Already in the tree, with these features, through egui's own accessibility

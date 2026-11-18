@@ -33,7 +33,8 @@ use craft::behavior::{Axis, CanvasView, Cursor, CursorIcon, GesturePhase, Input,
 use craft::draw::ui::transform::{LineEnd, LineEnds, LineLook, RotateZone, TransformBox};
 use craft::keymap::Mods;
 use craft::pages::ui::{PageBody, PageSnap, PlacedPage};
-use craft::ui::canvas::{SelectionOutline, ToolContext, ToolPointer};
+use craft::ui::canvas::{ToolContext, ToolPointer};
+use craft::ui::canvas_controls::SelectionOutline;
 use craft::ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, Props, Role, Show as _};
 use craft::ui::primitives::{Draw, PaintShape, StrokeWidth, TextureCache};
 use craft::ui::runtime::env::Label;

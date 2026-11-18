@@ -1,6 +1,6 @@
 //! Interface language tests (#8).
 
-use craft_ui::fonts::{Sample, assert_covers};
+use craft::ui::fonts::{Sample, assert_covers};
 
 use super::*;
 
@@ -111,11 +111,10 @@ fn the_language_setting_is_a_ui_command_and_persists() {
     frame(&ctx, &mut app);
     assert_eq!(current(), lang("zh-hant"));
     let saved = serde_json::to_string(&app.ui).unwrap();
-    // PLAN(app-hub): `UiState` is renamed `Prefs` (S-L136).
-    let restored: crate::Prefs = serde_json::from_str(&saved).unwrap();
+    let restored: crate::prefs::Prefs = serde_json::from_str(&saved).unwrap();
     assert_eq!(restored.language, "zh-hant");
     // Settings saved before this option existed follow the system.
-    let legacy: crate::Prefs = serde_json::from_str(r#"{"tab":"Home"}"#).unwrap();
+    let legacy: crate::prefs::Prefs = serde_json::from_str(r#"{"tab":"Home"}"#).unwrap();
     assert_eq!(legacy.language, AUTO);
     app.run("ui.language", serde_json::json!({"value": "auto"})).unwrap();
     assert_eq!(app.ui.language, AUTO);
@@ -179,7 +178,7 @@ fn a_system_locale_and_a_saved_preference_pick_the_language_and_leave_the_docume
         assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before, "{code}: the document is untouched");
         assert_eq!(app.session.editing_lang, editing, "{code}: choosing it changes no document");
         let saved = serde_json::to_string(&app.ui).unwrap();
-        let restored: crate::Prefs = serde_json::from_str(&saved).unwrap();
+        let restored: crate::prefs::Prefs = serde_json::from_str(&saved).unwrap();
         assert_eq!(Lang::from_pref(&restored.language), l, "{code}: the saved preference restores it");
         assert!(app.run("ui.language", serde_json::json!({"value": format!("{code}-unknown")})).is_err());
         assert_eq!(app.ui.language, *code, "{code}: an invalid preference keeps the saved language");
@@ -383,7 +382,7 @@ fn arabic_lookups_keep_typing_order() {
     // A ribbon location reads from the right: the tab first, the mark pointing left.
     assert_eq!(location("Home › Font"), "الرئيسية ‹ الخط");
     // A search query typed in reading order is a plain substring of the label.
-    assert!(craft_i18n::Folder::new(current().code()).contains(t("Table of Contents"), "جدول المحتويات"));
+    assert!(craft::i18n::Folder::new(current().code()).contains(t("Table of Contents"), "جدول المحتويات"));
     apply_language(Lang::EN);
     assert_eq!(location("Home › Font"), "Home › Font");
 }
@@ -392,12 +391,12 @@ fn arabic_lookups_keep_typing_order() {
 /// interface, so Arabic folders do not scramble; in English it carries no isolate.
 #[test]
 fn a_path_in_a_message_is_isolated_in_a_right_to_left_interface() {
-    use craft_i18n::Direction;
+    use craft::i18n::Direction;
     let path = r"C:\ملفات\تقرير.docx";
-    let rtl = fmt("تعذر فتح {path}: {error}", &[("path", &craft_i18n::path(path, Direction::Rtl)), ("error", "bad")]);
+    let rtl = fmt("تعذر فتح {path}: {error}", &[("path", &craft::i18n::path(path, Direction::Rtl)), ("error", "bad")]);
     assert_eq!(rtl, "تعذر فتح \u{2066}C:\\\u{200E}ملفات\\\u{200E}تقرير\u{200E}.docx\u{2069}: \u{2068}bad\u{2069}");
-    assert_eq!(craft_i18n::path(path, Direction::Ltr), path, "a left-to-right interface adds no marks");
-    let ltr = fmt("Couldn't open {path}: {error}", &[("path", &craft_i18n::path(path, Direction::Ltr)), ("error", "bad")]);
+    assert_eq!(craft::i18n::path(path, Direction::Ltr), path, "a left-to-right interface adds no marks");
+    let ltr = fmt("Couldn't open {path}: {error}", &[("path", &craft::i18n::path(path, Direction::Ltr)), ("error", "bad")]);
     assert!(!ltr.contains('\u{2066}') && !ltr.contains('\u{200E}'), "{ltr:?}");
 }
 

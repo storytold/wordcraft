@@ -37,9 +37,9 @@
 use std::cell::Cell;
 use std::sync::{LazyLock, OnceLock};
 
-use craft_i18n::I18n;
+use craft::i18n::I18n;
 
-pub use craft_i18n::{fmt, fmt_plain};
+pub use craft::i18n::{fmt, fmt_plain};
 
 include!(concat!(env!("OUT_DIR"), "/craft_i18n.rs"));
 
@@ -142,7 +142,7 @@ const RTL_LANGUAGES: [&str; 1] = ["ar"];
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
 #[derive(Clone, Copy)]
 pub struct Lang {
-    lang: craft_i18n::Lang,
+    lang: craft::i18n::Lang,
     /// The catalogs it is looked up in: the embedded ones ([`I18N`]), or a test fixture's.
     catalogs: Option<&'static I18n>,
 }
@@ -162,12 +162,12 @@ impl PartialEq for Lang {
 impl Eq for Lang {}
 
 impl Lang {
-    pub const EN: Lang = Lang { lang: craft_i18n::Lang::EN, catalogs: None };
+    pub const EN: Lang = Lang { lang: craft::i18n::Lang::EN, catalogs: None };
 
     /// The pseudo locale: every looked-up string comes back marked `⟦…⟧`, so the audit can tell
     /// text that skipped translation. It resolves in the embedded catalogs ([`I18N`]).
     #[cfg(test)]
-    pub(crate) const PSEUDO: Lang = Lang { lang: craft_i18n::Lang::PSEUDO, catalogs: None };
+    pub(crate) const PSEUDO: Lang = Lang { lang: craft::i18n::Lang::PSEUDO, catalogs: None };
 
     fn i18n(self) -> &'static I18n {
         self.catalogs.unwrap_or_else(|| LazyLock::force(&I18N))
@@ -313,10 +313,10 @@ pub fn system_region() -> wordcraft_engine::Region {
     }
     // craft-i18n reads the platform's own settings (locale variables, the OS's region and
     // paper); the engine's region carries the same answers.
-    let system = craft_i18n::Region::system();
+    let system = craft::i18n::Region::system();
     let mut region = wordcraft_engine::Region::from_tag(&system.numbers);
-    region.letter = Some(system.paper == craft_i18n::Paper::Letter);
-    region.inches = Some(system.measurement == craft_i18n::Measurement::Us);
+    region.letter = Some(system.paper == craft::i18n::Paper::Letter);
+    region.inches = Some(system.measurement == craft::i18n::Measurement::Us);
     region
 }
 
@@ -440,10 +440,10 @@ pub fn prefixed(prefix: &str, rest: &str) -> String {
 /// Turkish casing.
 #[cfg(test)]
 pub(crate) fn fixture_lang(code: &'static str, source: &'static str) -> Lang {
-    let embedded: &'static craft_i18n::Embedded = Box::leak(Box::new([(code, "", source)]));
+    let embedded: &'static craft::i18n::Embedded = Box::leak(Box::new([(code, "", source)]));
     let (i18n, _) = I18n::new(embedded, &[code]);
     let i18n: &'static I18n = Box::leak(Box::new(i18n));
-    let lang = i18n.from_code(code).unwrap_or(craft_i18n::Lang::EN);
+    let lang = i18n.from_code(code).unwrap_or(craft::i18n::Lang::EN);
     Lang { lang, catalogs: Some(i18n) }
 }
 
@@ -452,10 +452,10 @@ pub(crate) fn fixture_lang(code: &'static str, source: &'static str) -> Lang {
 /// the framework reads must be built over that same catalog.
 #[cfg(test)]
 pub(crate) fn fixture_host(ctx: &egui::Context, code: &'static str, source: &'static str) -> Lang {
-    let embedded: &'static craft_i18n::Embedded = Box::leak(Box::new([(code, "", source)]));
+    let embedded: &'static craft::i18n::Embedded = Box::leak(Box::new([(code, "", source)]));
     let (i18n, _) = I18n::new(embedded, &[code]);
     let shared: &'static std::sync::Arc<I18n> = Box::leak(Box::new(std::sync::Arc::new(i18n)));
-    let lang = shared.from_code(code).unwrap_or(craft_i18n::Lang::EN);
+    let lang = shared.from_code(code).unwrap_or(craft::i18n::Lang::EN);
     install_test_host(ctx, std::sync::Arc::clone(shared), lang);
     let lang = Lang { lang, catalogs: Some(&**shared) };
     apply_language(lang);
@@ -470,11 +470,11 @@ pub(crate) fn embedded_host(ctx: &egui::Context) {
         let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
         std::sync::Arc::new(I18n::new(CRAFT_I18N, &offered).0)
     });
-    install_test_host(ctx, std::sync::Arc::clone(&EMBEDDED), craft_i18n::Lang::EN);
+    install_test_host(ctx, std::sync::Arc::clone(&EMBEDDED), craft::i18n::Lang::EN);
 }
 
 #[cfg(test)]
-fn install_test_host(ctx: &egui::Context, i18n: std::sync::Arc<I18n>, lang: craft_i18n::Lang) {
+fn install_test_host(ctx: &egui::Context, i18n: std::sync::Arc<I18n>, lang: craft::i18n::Lang) {
     craft::host::Host::builder(craft::host::AppInfo { id: "wordcraft", name: "WordCraft", version: "0" }).i18n(i18n).lang(lang).install(ctx);
 }
 

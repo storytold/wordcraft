@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::scroll::ScrollSpeed;
-use crate::{DEFAULT_TAB, DisplayServer, MAX_RECENT, MAX_RECENT_FONTS, StatusCount, dialogs_insert, i18n, keytips, panes, print_page, theme, window_geometry};
+use crate::{DEFAULT_TAB, DisplayServer, MAX_RECENT, MAX_RECENT_FONTS, StatusCount, dialogs_insert, i18n, keytips, panes, print_page, theme};
 
 /// The user's custom shortcuts. A wrapper because `craft::keymap::Overrides` has no `PartialEq`, which
 /// [`Settings`] needs to see whether a save is due.
@@ -53,7 +53,7 @@ pub struct Prefs {
     pub recent_colors: Vec<String>,
     /// The font pickers' stars and Recently Used Fonts (the section at the top of the font list,
     /// #2068), shared by every font box.
-    pub font_picker: craft::font_manager::FontPickerSettings,
+    pub font_picker: craft::font_manager::picker::FontPickerSettings,
     /// Interface theme: light, dark, or follow the OS appearance (#115).
     pub theme: theme::Appearance,
     /// Interface size (#475, #822): Auto (the display scale the system reports) or an absolute
@@ -98,10 +98,6 @@ pub struct Prefs {
     /// the default; a saved empty name stays empty (#4368).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
-    /// The main window's size and position as `ui.json` held them; read once by
-    /// [`import_legacy_window`], never written (the window store keeps them now).
-    #[serde(skip_serializing)]
-    pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
     /// Editing preferences; the session owns them while running (see [`crate::WordApp::prefs`]).
@@ -210,7 +206,7 @@ impl Default for Prefs {
             date_time_language: String::new(),
             date_time_update: false,
             recent_colors: Vec::new(),
-            font_picker: craft::font_manager::FontPickerSettings::default(),
+            font_picker: craft::font_manager::picker::FontPickerSettings::default(),
             theme: theme::Appearance::default(),
             interface_size: theme::InterfaceSize::default(),
             legacy_interface_size: None,
@@ -226,7 +222,6 @@ impl Default for Prefs {
             nav_collapsed: Default::default(),
             show_discord: true,
             author: None,
-            window: None,
             language: i18n::AUTO.into(),
             editing: wordcraft_engine::Prefs::default(),
             read_aloud_rate: 1.0,
@@ -357,7 +352,7 @@ fn migrate_units_of(v: &mut Value) {
 fn legacy_keyboard(saved: &Value) -> Option<Shortcuts> {
     if saved.get("assigned").is_some() || saved.get("removed").is_some() {
         let reg = wordcraft_engine::cmd::registry();
-        return Some(Shortcuts(wordcraft_engine::overrides_from_legacy(&reg, saved)));
+        return Some(Shortcuts(wordcraft_engine::keymap::overrides_from_legacy(&reg, saved)));
     }
     serde_json::from_value(saved.clone()).ok()
 }
