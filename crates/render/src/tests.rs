@@ -1938,6 +1938,31 @@ fn paths_far_past_every_canvas_are_not_flattened() {
     assert!(!path_extent_ok(Affine::IDENTITY, &line(f64::NAN)));
 }
 
+#[test]
+fn rules_of_one_width_cover_the_same_whole_pixels_at_every_zoom() {
+    for zoom in [0.5, 0.6, 0.75] {
+        for ppp in [1.0, 1.25] {
+            let k = zoom * ppp * 96.0 / 72.0;
+            let view = Affine::new([k, 0.0, 0.0, k, 37.3, 12.9]);
+            let mut widths = Vec::new();
+            for i in 0..20 {
+                let pos = 10.0 + f64::from(i) * 17.37;
+                let (w_h, (_, oy)) = snap_rule(view, (5.0, pos, 400.0, pos), 0.5).unwrap();
+                let (w_v, (ox, _)) = snap_rule(view, (pos, 5.0, pos, 400.0), 0.5).unwrap();
+                widths.push(w_h);
+                widths.push(w_v);
+                for (w, centre) in [(w_h, (pos + oy) * k + 12.9), (w_v, (pos + ox) * k + 37.3)] {
+                    let edge = centre - w / 2.0;
+                    assert!((edge - edge.round()).abs() < 1e-9, "zoom {zoom} ppp {ppp}: edge {edge} is off the pixel grid");
+                }
+            }
+            assert!(widths.iter().all(|w| *w == widths[0] && *w >= 1.0 && w.fract() == 0.0), "zoom {zoom} ppp {ppp}: {widths:?}");
+        }
+    }
+    assert!(snap_rule(Affine::rotate(0.3), (0.0, 0.0, 9.0, 0.0), 0.5).is_none());
+    assert!(snap_rule(Affine::scale(2.0), (0.0, 0.0, 9.0, 4.0), 0.5).is_none());
+}
+
 /// The same three pictures that don't draw as in the PDF test: each stays a grey box, and the page's
 /// pixels are what they were before strict export existed (#6005).
 #[test]
@@ -1984,7 +2009,7 @@ fn undecodable_pictures_keep_their_grey_box_pixels() {
 fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
     use craft_metafile::{ClipPath, Tile};
     let segs = |n: usize| vec![Seg::Line(0.0, 0.0); n];
-    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
     let base = crate::media::geometry_bytes(&pic(vec![]));
     let tile = Arc::new(Tile { width: 1000, height: 1000, rgba: vec![0; 4_000_000], cell: [1.0, 1.0], origin: [0.0, 0.0] });
     let pattern = |tile: &Arc<Tile>| Item::Pattern { segs: segs(1000), even_odd: false, tile: tile.clone(), region: None, clips: vec![] };
@@ -2017,7 +2042,7 @@ fn geometry_bytes_counts_pattern_tiles_and_clips_once() {
 #[test]
 fn geometry_bytes_charges_the_capacity_of_segment_and_dash_vectors() {
     use craft_metafile::LineStyle;
-    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
     let path = |segs: Vec<Seg>, dash: Vec<f32>| Item::Path {
         segs,
         fill: None,
@@ -2041,7 +2066,7 @@ fn geometry_bytes_charges_the_capacity_of_segment_and_dash_vectors() {
 #[test]
 fn geometry_bytes_counts_dash_arrays_and_text_records() {
     use craft_metafile::{Font, HAlign, LineStyle, Text, VAlign};
-    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, skipped_records: 0 };
+    let pic = |items: Vec<Item>| Picture { width: 10.0, height: 10.0, items, ..Default::default() };
     let path = |dash: usize| Item::Path {
         segs: vec![Seg::Line(0.0, 0.0); 2],
         fill: None,
