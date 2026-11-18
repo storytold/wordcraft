@@ -297,7 +297,8 @@ impl<'a, 'o> Walk<'a, 'o> {
                 push_chars(&mut cur, "\n", x, w);
             }
             // An empty line still has one (empty) run for the caret to sit in.
-            flush(&mut cur, &mut pieces, &mut runs, runs == 0);
+            let first_run = runs == 0;
+            flush(&mut cur, &mut pieces, &mut runs, first_run);
 
             let horizontal = at.turn == TextDirection::Horizontal && !(line.rtl || !line.vis.is_empty());
             let line_rect = at.rect(wordcraft_geom::Rect::new(line.left, top, 0.0, line.height));
