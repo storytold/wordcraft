@@ -86,7 +86,9 @@ pub(super) fn if_result(instr: &str) -> Option<String> {
 }
 
 /// The words of an `IF` code after its name and before its first switch: each a quoted text (the
-/// quotes dropped, `true`) or a run of non-blank characters.
+/// quotes dropped, `true`) or a run of non-blank characters. In a quoted text a backslash keeps
+/// the character after it from ending the text, and both stay in it, as Word for Windows shows
+/// them (`"He said \"yes\""` shows `He said \"yes\"`, `"a\\b"` shows `a\\b`).
 fn if_words(instr: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let mut chars = instr.trim_start().chars().skip_while(|c| !c.is_whitespace()).peekable();
@@ -95,7 +97,18 @@ fn if_words(instr: &str) -> Vec<(String, bool)> {
             chars.next();
         } else if c == '"' {
             chars.next();
-            out.push((chars.by_ref().take_while(|&c| c != '"').collect(), true));
+            let mut w = String::new();
+            while let Some(c) = chars.next() {
+                match c {
+                    '"' => break,
+                    '\\' => {
+                        w.push(c);
+                        w.extend(chars.next());
+                    }
+                    c => w.push(c),
+                }
+            }
+            out.push((w, true));
         } else if c == '\\' {
             break;
         } else {

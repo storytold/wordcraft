@@ -589,6 +589,15 @@ fn update_fields_evaluates_if_fields_as_word_does() {
         (r#"IF 1,000 = 1000 "comma" "nocomma""#, "comma"),
         ("IF 1 = 1", ""),
         (r#"IF "z" > "Z" "lower" "upper""#, "upper"),
+        // A backslash keeps a quote from ending the text, and Word shows both.
+        (r#"IF 1 = 1 "He said \"yes\"" "no""#, r#"He said \"yes\""#),
+        (r#"IF 1 = 2 "no" "She said \"no\"""#, r#"She said \"no\""#),
+        (r#"IF 1 = 1 "a\\b" "no""#, r"a\\b"),
+        (r#"IF 1 = 1 "a\b" "no""#, r"a\b"),
+        (r#"IF 1 = 1 "end\\" "no""#, r"end\\"),
+        (r#"IF 1 = 1 "x \* y" "no""#, r"x \* y"),
+        (r#"IF "a\"b" = "a\"b" "T" "F""#, "T"),
+        (r#"IF "a\"b" = "a" "T" "F""#, "F"),
         // A field written out in braces isn't evaluated: the IF keeps its result.
         (r#"IF { PAGE } = 1 "first" "other""#, "stale"),
     ];

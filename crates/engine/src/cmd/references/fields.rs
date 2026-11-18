@@ -488,12 +488,12 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     updates.push((k, count_text(instr, chars)));
                 }
                 "REVNUM" => updates.push((k, count_text(instr, core.revision as usize))),
-                // DOCPROPERTY <name>: a custom property first, then a built-in one (#1798).
                 "IF" => {
                     if let Some(r) = if_result(instr) {
                         updates.push((k, text_result(instr, r)));
                     }
                 }
+                // DOCPROPERTY <name>: a custom property first, then a built-in one (#1798).
                 "DOCPROPERTY" => {
                     if let Some(name) = doc_property_arg(instr)
                         && let Some(v) = doc_property(&s.doc, &core, &name)
