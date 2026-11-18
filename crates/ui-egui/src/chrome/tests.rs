@@ -91,6 +91,59 @@ fn status_bar_controls_hold_still_across_zoom_levels() {
     }
 }
 
+/// #6012: a click on the page indicator toggles the Navigation pane, as a status bar control
+/// that shows where you are in the document: closed → opens on the tab last used, open → closes
+/// from any tab, and reopening comes back to that tab. It no longer opens Find and Replace.
+#[test]
+fn clicking_the_page_indicator_toggles_the_navigation_pane_on_its_last_tab() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let mut n = 0_u32;
+    let mut run = |a: &mut WordApp, events: Vec<egui::Event>| {
+        n += 1;
+        let input = egui::RawInput {
+            time: Some(f64::from(n) / 60.0),
+            predicted_dt: 1.0 / 60.0,
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| status_bar(a, ui));
+        out.textures_delta.clear();
+        out.platform_output.accesskit_update.take()
+    };
+    let centre = run(&mut a, vec![])
+        .and_then(|u| u.nodes.into_iter().find(|(_, node)| node.label() == Some("Page 1 of 1")))
+        .and_then(|(_, node)| node.bounds())
+        .map(|b| egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32))
+        .expect("the page indicator is drawn");
+    let mut click = |a: &mut WordApp| {
+        let button =
+            |pressed| egui::Event::PointerButton { pos: centre, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        run(a, vec![egui::Event::PointerMoved(centre), button(true)]);
+        run(a, vec![button(false)]);
+    };
+
+    assert!(!a.session.view.nav_pane, "the pane starts closed");
+    // The tab last used is kept: the indicator never resets it.
+    a.ui.nav_tab = "pages".into();
+    click(&mut a);
+    assert!(a.session.view.nav_pane, "a click opens the pane");
+    assert_eq!(a.ui.nav_tab, "pages", "it opens on the tab last used, not on one of its own");
+    assert!(a.dialog.is_none(), "the click no longer opens Find and Replace");
+
+    // Another tab chosen meanwhile: a click on the open pane closes it, from whichever tab.
+    a.ui.nav_tab = "results".into();
+    click(&mut a);
+    assert!(!a.session.view.nav_pane, "a click on the open pane closes it");
+    assert_eq!(a.ui.nav_tab, "results", "closing leaves the tab as it was");
+
+    click(&mut a);
+    assert!(a.session.view.nav_pane, "a third click opens it again");
+    assert_eq!(a.ui.nav_tab, "results", "and on the tab it was last on");
+}
+
 /// #2797: the count line's wording per unit — words (the default), characters with spaces,
 /// characters without spaces — whole document or "selected of total".
 #[test]
