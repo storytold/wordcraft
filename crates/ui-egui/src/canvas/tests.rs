@@ -4,6 +4,7 @@ use crate::table_resize::tests::{H, screen, steps};
 mod markup;
 mod overlays;
 
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.
