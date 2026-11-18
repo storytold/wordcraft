@@ -1,5 +1,5 @@
 use super::language::mi_check;
-use super::{Align2, MeasureExt, Rect, Sense, Tokens, Ui, Value, WordApp, big, group, json, small, vec2};
+use super::{Align2, MeasureExt, Rect, Sense, Stroke, Tokens, Ui, Value, WordApp, big, group, json, pos2, small, vec2};
 
 /// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
 /// labelled buttons in columns of three. Each shows the command's own icon and label.
@@ -143,6 +143,38 @@ pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {
     }
     ui.separator();
     mi(ui, app, crate::dialogs::PAPER_LABELS.more, "ui.dialog", json!({"name": "pageSetup"}));
+}
+
+/// The outline weights Word offers, in points: Text Outline, Shape Outline and the border dialogs.
+const OUTLINE_WEIGHTS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
+
+/// An outline's Weight submenu (#3917): each weight as its label and a line sample drawn at that
+/// weight, the `current` one highlighted. Choosing one runs `id` with `params(weight)`.
+pub(crate) fn weight_menu(ui: &mut Ui, app: &mut WordApp, id: &str, current: Option<f32>, params: impl Fn(f32) -> Value) {
+    let enabled = crate::widgets::enabled(app, id);
+    let t = Tokens::get(ui.ctx());
+    let color = if enabled { t.text } else { t.text_disabled };
+    // A hairline under a device pixel would vanish, so the thinnest samples get one.
+    let pixel = 1.0 / ui.ctx().pixels_per_point();
+    let labels = OUTLINE_WEIGHTS.map(|w| crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]));
+    // The samples start a short gap after the widest label and end as far from the right edge as
+    // the labels start from the left one.
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let widest = labels.iter().map(|l| ui.painter().layout_no_wrap(l.clone(), font.clone(), color).size().x).fold(0.0, f32::max);
+    let pad = ui.spacing().button_padding.x;
+    for (w, label) in OUTLINE_WEIGHTS.into_iter().zip(&labels) {
+        let checked = current.is_some_and(|c| (c - w).abs() < 0.01);
+        let resp = ui.add_enabled(enabled, egui::Button::new(label.as_str()).selected(checked).min_size(vec2(200.0, 22.0)));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, checked, label));
+        let r = resp.rect;
+        let y = r.center().y;
+        let (x0, x1) = (r.left() + pad + widest + 12.0, r.right() - pad);
+        ui.painter().line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(w.max(pixel), color));
+        if resp.clicked() {
+            crate::widgets::run_from_ribbon(app, id, params(w));
+            ui.close();
+        }
+    }
 }
 
 pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
