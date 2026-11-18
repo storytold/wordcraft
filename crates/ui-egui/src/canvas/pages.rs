@@ -231,7 +231,9 @@ pub(super) fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
 /// again. Falls back to the document's own layout outside a body composition.
 fn ime_shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
     let preedit = app.canvas.ime_preedit.clone();
-    if preedit.is_empty() || app.session.math.is_some() {
+    // A pointer press discarded the composition and moved the caret. Do not lay the pre-edit out
+    // again at that new position while the platform is still winding the old composition down.
+    if preedit.is_empty() || app.canvas.ime_dismissed_preedit.is_some() || app.session.math.is_some() {
         app.canvas.ime_preview = None;
         return app.session.layout();
     }

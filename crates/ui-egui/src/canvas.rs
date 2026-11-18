@@ -305,6 +305,11 @@ pub struct CanvasState {
     /// A nonempty preedit lost its body/equation target. The next canvas event batch must
     /// reject that old composition's queued replacement before dispatching any mutation.
     pub(crate) ime_interrupted_preedit: bool,
+    /// The pre-edit text a pointer press discarded. The interrupt reaches the platform a frame
+    /// or two later, and until then it can keep reporting the old composition. Painting that
+    /// text again would put it under the pointer, because the press also moved the caret; a
+    /// different pre-edit starts a new composition, an empty one ends the old one.
+    pub(crate) ime_dismissed_preedit: Option<String>,
     /// The last bounded surrounding window and the `(revision, cursor, anchor)` it was built
     /// from. An idle pass reuses it instead of walking a long paragraph again.
     pub(crate) ime_window_cache: Option<(u64, wordcraft_doc::Pos, wordcraft_doc::Pos, Option<wordcraft_doc::ime_text::ImeWindow>)>,
@@ -475,6 +480,7 @@ impl Default for CanvasState {
             ime_reset: false,
             ime_interrupt_now: false,
             ime_interrupted_preedit: false,
+            ime_dismissed_preedit: None,
             ime_window_cache: None,
             ime_tracker: egui::ImeContextTracker::new(),
             ime_viewport: None,
@@ -823,6 +829,37 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
     (scroll_area, before.y + from_partner)
 }
 
+/// Discard a live composition after a pointer press, without putting its text into the body.
+///
+/// Everything that paints or consumes the pre-edit goes away together. In particular the cached
+/// preview copy must be dropped: `shown_doc` returns it, so leaving it in place keeps drawing the
+/// discarded text from the raster. A late `Commit` for that composition is quarantined too — on
+/// Windows an interrupt cancels, but `WM_IME_ENDCOMPOSITION` can still carry a result string.
+fn dismiss_ime_composition(app: &mut WordApp) {
+    if app.canvas.ime_preedit.is_empty() && app.canvas.ime_preview.is_none() {
+        return;
+    }
+    app.canvas.ime_dismissed_preedit = Some(std::mem::take(&mut app.canvas.ime_preedit));
+    app.canvas.ime_preedit_range = None;
+    app.canvas.ime_preview = None;
+    app.canvas.ime_interrupted_preedit = true;
+}
+
+/// A primary press on the page moves the caret later in this same frame (`handle_primary_press`).
+/// End the composition before the pages are laid out: rebuilt afterwards, the preview copy would
+/// insert the pre-edit at the pointer and the discarded text would appear to follow the mouse
+/// (#6916). The pre-edit is interface state, not document text, so nothing is committed.
+fn dismiss_ime_on_pointer_press(app: &mut WordApp, ui: &Ui, full: Rect) {
+    let press = ui.input(|i| {
+        i.events.iter().any(|e| {
+            matches!(e, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } if full.contains(*pos))
+        })
+    });
+    if press {
+        dismiss_ime_composition(app);
+    }
+}
+
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
@@ -833,6 +870,7 @@ fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocL
     } else {
         app.canvas.alt_code.clear();
     }
+    dismiss_ime_on_pointer_press(app, ui, full);
     crate::ink::replay_tick(app, ui.ctx());
     let layout = shown_layout(app);
     if let Some(anchor) = reflow_anchor
@@ -1004,8 +1042,16 @@ fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, im
     let secondary_click = resp.clicked_by(egui::PointerButton::Secondary);
     let accesskit_click = resp.clicked() && !pointer_click && !keyboard_click;
     let focus_click = pointer_click || accesskit_click || resp.drag_started();
-    // A right-click on the page commits a composition like a left-click does (WPS): interrupt it
-    // so the pending pre-edit lands in the body instead of drifting to the pointer (#6916).
+    // Both buttons end a live composition: the interrupt closes the platform's candidate window.
+    // A left-click also moves the caret below. `prepare_layout` already discarded the pre-edit on
+    // the press, before the caret moved; this covers clicks without a press (accessibility) and
+    // drags. Interrupting an IME cancels its composition, so the text is dropped rather than
+    // committed, and a late platform Commit is quarantined. A right-click leaves the caret alone
+    // this frame (see `handle_secondary_selection`) and opens its menu at the pointer, so it keeps
+    // its composition until the platform answers the interrupt.
+    if focus_click {
+        dismiss_ime_composition(app);
+    }
     if focus_click || secondary_click {
         ui.memory_mut(|memory| memory.interrupt_ime());
     }
@@ -1926,7 +1972,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             // no such layout was possible, as the overlay below. Never paint both.
             let mut preedit_color = None;
             let mut ime_dx = 0.0;
-            if focused && !app.canvas.ime_preedit.is_empty() && app.canvas.ime_preview.is_none() {
+            if focused && app.canvas.ime_dismissed_preedit.is_none() && !app.canvas.ime_preedit.is_empty() && app.canvas.ime_preview.is_none() {
                 // The composition is interface text, but it may be in a script the interface fonts lack
                 // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
                 let new = crate::theme::faces_for_preedit(

@@ -139,6 +139,38 @@ fn read_mode_events(app: &mut WordApp, ctx: &egui::Context, events: &[egui::Even
 fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool {
     let Batch { interrupted_preedit, interrupted_replacement, .. } = b;
     *interrupted_preedit |= std::mem::take(&mut app.canvas.ime_interrupted_preedit);
+    // A pointer press discarded a composition. The platform may keep reporting its old pre-edit
+    // for a frame or two after the interrupt. Drop those events *without* releasing the
+    // quarantine: the replacement belonging to that composition may be queued right behind
+    // them. A different pre-edit starts a fresh composition; an empty pre-edit or a commit ends
+    // the old one. In particular nothing here paints the discarded text again at the caret the
+    // click moved to (#6916).
+    if let Some(dismissed) = app.canvas.ime_dismissed_preedit.clone() {
+        match e {
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if !text.is_empty() && *text == dismissed => {
+                app.canvas.ime_preedit.clear();
+                app.canvas.ime_preedit_range = None;
+                app.canvas.ime_preview = None;
+                app.session.clear_ime_joins();
+                app.canvas.ime_join_text = None;
+                return true;
+            }
+            egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
+                // The replacement queued for the composition the click discarded. An interrupt
+                // cancels it, but `WM_IME_ENDCOMPOSITION` can still carry a result string; it
+                // must not enter the body at the caret the pointer just moved to. Drop one: the
+                // composition is over, so a later commit is fresh input.
+                app.canvas.ime_dismissed_preedit = None;
+                app.session.clear_ime_joins();
+                app.canvas.ime_join_text = None;
+                return true;
+            }
+            egui::Event::Ime(egui::ImeEvent::Preedit { .. }) => {
+                app.canvas.ime_dismissed_preedit = None;
+            }
+            _ => {}
+        }
+    }
     let stale_composition_event = if *interrupted_preedit {
         match &e {
             egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { .. } | egui::ImeEvent::DeleteSurroundingBytes { .. }) => {
