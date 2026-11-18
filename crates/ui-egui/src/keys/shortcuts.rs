@@ -1,5 +1,4 @@
-use super::canvas::leave_full_screen;
-use super::{Key, Modifiers, Value, WordApp, json};
+use super::{Key, Modifiers, WordApp, json};
 
 /// The registry's name for a key.
 pub fn key_name(k: Key) -> Option<&'static str> {
@@ -99,91 +98,6 @@ pub fn combo(m: Modifiers, key: &str, with_shift: bool) -> String {
     s
 }
 
-/// Shortcuts for interface commands (`ui.*`), which aren't in the engine's keymap: Alt+Q moves
-/// to "Tell me" command search, as in Word for Windows (#819). Not on macOS, where Option+Q types
-/// a character. On macOS ⌘⌥R collapses or expands the ribbon, as in Word for Mac.
-pub(super) fn ui_shortcut(key: Key, m: Modifiers) -> Option<(&'static str, Value)> {
-    let alt_only = m.alt && !m.command && !m.ctrl && !m.mac_cmd && !m.shift;
-    let mac_cmd_alt = cfg!(target_os = "macos") && m.mac_cmd && m.alt && !m.ctrl && !m.shift;
-    match key {
-        Key::Q if alt_only && !cfg!(target_os = "macos") => Some(("ui.dialog", json!({"name": "commands"}))),
-        Key::R if mac_cmd_alt => Some(("ui.collapseRibbon", json!({}))),
-        // Ctrl+F1 collapses or expands the ribbon, as in Word for Windows (#1678). Not on macOS,
-        // where Ctrl+F1 is the system's keyboard-access switch.
-        Key::F1 if m.ctrl && !m.alt && !m.shift && !m.mac_cmd && !cfg!(target_os = "macos") => Some(("ui.collapseRibbon", json!({}))),
-        _ => None,
-    }
-}
-
-/// Find and run the command bound to this key. Returns true if handled.
-pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
-    let reg = app.session.registry.clone();
-    let name = key_name(key);
-    let bound = name.and_then(|n| app.session.keymap.resolve(&reg, &combo(m, n, true)));
-    // Ctrl+F1 collapses the ribbon only when the user hasn't given it to a command (#1678); the
-    // other interface shortcuts (Alt+Q, ⌘⌥R) keep their place ahead of the keymap.
-    if let Some((id, params)) = ui_shortcut(key, m).filter(|_| key != Key::F1 || bound.is_none()) {
-        let _ = app.run(id, params);
-        return true;
-    }
-    if let Some(spec) = bound {
-        // Option+Shift+- types an em dash on macOS; Word's Alt+Shift+- (Collapse) only works in
-        // Outline view, so elsewhere the key stays typing (#1933).
-        if m.alt && !crate::widgets::enabled(app, spec.id) {
-            return false;
-        }
-        // Mod+Shift+V pastes the formatting Mod+Shift+C (or the Format Painter) picked up; with
-        // none picked up it pastes the clipboard as text only, as Word for Windows does (#1537,
-        // #4943). Another key bound to Paste Formatting only pastes formatting.
-        let id = if spec.id == "edit.pasteFormat" {
-            let formatting = app.session.painter.is_some() || app.session.copied_format.is_some();
-            let chord = key == Key::V && m.command && m.shift && !m.alt;
-            // A browser sends a paste event after that chord (the desktop doesn't): after
-            // pasting formatting it's ignored; with none, it pastes the text there, once. A
-            // rebinding to another key makes no paste event.
-            let paste_follows = chord && app.canvas.paste_event_follows_chord;
-            app.canvas.ignore_next_paste = formatting && paste_follows;
-            // Handled from the canvas's key events: its V release (Shift may go up first, so the
-            // release reads as plain Mod+V) mustn't paste again through the picture hook. Not
-            // from `global_shortcuts` (canvas unfocused), where no release is ever seen.
-            if chord && app.canvas.focused {
-                app.canvas.pasted = true;
-            }
-            app.canvas.paste_wait_since = None;
-            if !formatting && paste_follows {
-                return true;
-            }
-            if !formatting && chord { "edit.pasteText" } else { spec.id }
-        } else {
-            spec.id
-        };
-        let _ = app.run(id, json!({}));
-        return true;
-    }
-    let Some(name) = name else { return false };
-    // Shift extends caret movement; Shift+Backspace still erases (#707).
-    if m.shift
-        && let Some(spec) = app.session.keymap.resolve(&reg, &combo(m, name, false))
-        && let Some(params) = shift_variant_params(spec.id)
-    {
-        let _ = app.run(spec.id, params);
-        return true;
-    }
-    false
-}
-
-/// How a command bound to a plain key runs when Shift is also held and nothing is bound to the
-/// shifted combo: caret moves extend the selection, Backspace erases as usual (#707).
-pub(super) fn shift_variant_params(id: &str) -> Option<Value> {
-    if id.starts_with("caret.") {
-        Some(json!({"extend": true}))
-    } else if id == "text.backspace" {
-        Some(json!({}))
-    } else {
-        None
-    }
-}
-
 /// Shift+Delete, which cuts the selection and does nothing without one, as in Word for Windows
 /// (#1669). On Windows the windowing layer already sends it as a Cut; elsewhere it arrives as the
 /// key, and no shortcut was bound to it.
@@ -195,11 +109,6 @@ pub(super) fn is_shift_delete(key: Key, m: Modifiers) -> bool {
 /// reach the app: the windowing layer drops it.)
 pub(super) fn is_context_menu_key(key: Key, m: Modifiers) -> bool {
     key == Key::F10 && m.shift && !m.command && !m.alt && !m.ctrl
-}
-
-/// F1–F12: shortcuts on these work without the canvas focused.
-fn is_function_key(key: Key) -> bool {
-    matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 | Key::F11 | Key::F12)
 }
 
 /// Keys while editing inside an equation. Returns true when handled.
@@ -261,38 +170,4 @@ pub(super) enum EquationReplacementDrop {
     /// The replacement's `Text` was dropped; its immediately following `Commit` also belongs
     /// to that same platform replacement.
     TextDropped,
-}
-
-/// Whether a key runs its shortcut with the canvas unfocused (after a ribbon click, say): Mod and
-/// Alt shortcuts (Alt+Q reaches Search from anywhere, as in Word, #819) and the function keys.
-pub(super) fn is_global_shortcut(key: Key, m: Modifiers) -> bool {
-    m.command || m.alt || is_function_key(key)
-}
-
-/// Command shortcuts when the canvas isn't focused and no text field is: nothing has the
-/// keyboard, or a button or a pane's title bar does. A focused widget in an open dialog or popup
-/// keeps the keys, so Ctrl+Z on a dialog button can't undo the document behind it.
-pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
-    // No shortcuts run while a modal dialog is open (#3859); Customize Keyboard records the keys
-    // pressed meanwhile.
-    if app.canvas.focused || ctx.text_edit_focused() || (ctx.egui_wants_keyboard_input() && crate::panes::overlay_open(app, ctx)) || app.modal_open()
-    {
-        return;
-    }
-    let events = ctx.input(|i| i.events.clone());
-    let window = app.windows.shown();
-    for e in events {
-        // The rest of the keys were pressed in a window that closed or went to the back.
-        if app.windows.shown() != window {
-            break;
-        }
-        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
-            if leave_full_screen(app, ctx, key, modifiers, false) {
-                continue;
-            }
-            if is_global_shortcut(key, modifiers) {
-                dispatch(app, key, modifiers);
-            }
-        }
-    }
 }
