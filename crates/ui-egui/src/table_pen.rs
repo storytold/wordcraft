@@ -97,12 +97,15 @@ pub(crate) fn regions(app: &WordApp, layout: &DocLayout) -> Vec<PageRegion> {
     if app.canvas.table_tool.is_none() {
         return Vec::new();
     }
-    // PLAN: assumed `PageRegion::new(page: usize, rect: craft::behavior::kurbo::Rect)` in page points (S-L236).
+    // The whole page, as a polygon in the page's own points from its top left corner.
     layout
         .pages
         .iter()
         .enumerate()
-        .map(|(i, pg)| PageRegion::new(i, craft::behavior::kurbo::Rect::new(0.0, 0.0, f64::from(pg.w), f64::from(pg.h))))
+        .map(|(i, pg)| {
+            let (w, h) = (f64::from(pg.w), f64::from(pg.h));
+            PageRegion::polygon(i, vec![Point::new(0.0, 0.0), Point::new(w, 0.0), Point::new(w, h), Point::new(0.0, h)])
+        })
         .collect()
 }
 
