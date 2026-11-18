@@ -198,6 +198,8 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | trivial | #4723: integrate current main, retaining both inherited-list/hanging-indent and previous-sentence regressions; command implementation and existing native qualification limits unchanged. |
+| 2026-11-05 | trivial | PR #4723: resolve inherited list levels and table-aware hanging indents; preserve cancellation and no-op boundaries. Existing six synthetic Word Mac property controls and command/history/DOCX regressions remain the evidence. Styled-list direct overrides and native table acceptance remain limited; original #4322 credit retained. |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-10-30 | trivial | #5: a list item deleted whole under Track Changes shows its number as deleted text, in the deletion's colour and mark, and hides it where deletions are hidden (#4828); estimate unchanged |
 | 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |
