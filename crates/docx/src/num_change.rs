@@ -44,18 +44,47 @@ pub(crate) struct SnapshotEntry {
     pub snapshot: Option<NumRef>,
 }
 
-/// Serialize `entries` as the namespaced custom XML store, returning `None` if oversized.
-pub(crate) fn write(entries: &[SnapshotEntry]) -> Result<Option<Vec<u8>>, DocxError> {
+/// Parsed store result with completeness and integrity metadata.
+pub(crate) struct SnapshotStore {
+    pub entries: HashMap<String, SnapshotEntry>,
+    /// When `false`, the store was truncated by size/entry limits on write. The reader treats
+    /// every `numberingChange` *without* an entry as unresolved rather than falling back to
+    /// cache inference.
+    pub complete: bool,
+    /// Hash of the ordered `(loc, original)` pairs for every `numberingChange` at the time the
+    /// document was saved. The reader recomputes this from the shared model and invalidates all
+    /// overrides when the document was changed externally (e.g., another editor inserted a
+    /// paragraph, shifting block positions so entries land on the wrong paragraphs).
+    pub fingerprint: Option<u64>,
+}
+
+/// Serialize `entries` as the namespaced custom XML store.
+///
+/// `fingerprint` is a hash of the ordered `(loc, original)` pairs for every `numberingChange`
+/// in the document (not just overrides). The reader verifies it against the shared model on
+/// import and invalidates all overrides when the document was changed externally.
+///
+/// When the full set exceeds `MAX_ENTRIES` or `MAX_STORE_BYTES`, a small stub with
+/// `complete="false"` is written instead so the reader treats every `numberingChange` without
+/// an entry as unresolved rather than falling back to cache inference.
+pub(crate) fn write(entries: &[SnapshotEntry], fingerprint: u64) -> Result<Option<Vec<u8>>, DocxError> {
     if entries.is_empty() {
         return Ok(None);
     }
     let capped = entries.get(..MAX_ENTRIES).unwrap_or(entries);
     let json = serde_json::to_string(capped).map_err(|e| DocxError::Xml(e.to_string()))?;
     let esc_json = craft_xml::esc(&json);
-    let xml =
-        format!(r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}"><entries>{esc_json}</entries></{ROOT}>"#).into_bytes();
-    if xml.len() > MAX_STORE_BYTES {
-        return Ok(None);
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}" fp="{fingerprint}"><entries>{esc_json}</entries></{ROOT}>"#
+    )
+    .into_bytes();
+    if xml.len() > MAX_STORE_BYTES || capped.len() < entries.len() {
+        // Emit a minimal stub so the reader knows the store existed but was incomplete.
+        let stub = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}" complete="false" fp="{fingerprint}"><entries>[]</entries></{ROOT}>"#
+        )
+        .into_bytes();
+        return Ok(Some(stub));
     }
     Ok(Some(xml))
 }
@@ -67,7 +96,7 @@ pub(crate) fn is_store(bytes: &[u8]) -> bool {
 }
 
 /// Read snapshot overrides from a custom XML part's bytes, if it is ours and within limits.
-pub(crate) fn read_from_bytes(bytes: &[u8]) -> Option<HashMap<String, SnapshotEntry>> {
+pub(crate) fn read_from_bytes(bytes: &[u8]) -> Option<SnapshotStore> {
     if bytes.len() > MAX_STORE_BYTES {
         return None;
     }
@@ -75,12 +104,15 @@ pub(crate) fn read_from_bytes(bytes: &[u8]) -> Option<HashMap<String, SnapshotEn
     if root.local() != ROOT || root.attr("kind") != Some(KIND) {
         return None;
     }
+    let complete = root.attr("complete") != Some("false");
+    let fingerprint = root.attr("fp").and_then(|s| s.parse::<u64>().ok());
     let text = root.child_text("entries")?;
     if text.len() > MAX_STORE_BYTES {
         return None;
     }
     let entries: Vec<SnapshotEntry> = serde_json::from_str(text.as_ref()).ok()?;
-    Some(entries.into_iter().take(MAX_ENTRIES).map(|e| (e.loc.clone(), e)).collect())
+    let entries = entries.into_iter().take(MAX_ENTRIES).map(|e| (e.loc.clone(), e)).collect();
+    Some(SnapshotStore { entries, complete, fingerprint })
 }
 
 /// Remove `part` and any manifest/root bookkeeping lines naming it from `passthrough`.
@@ -283,6 +315,114 @@ pub(crate) fn collect_overrides(source: &wordcraft_doc::Document, shared: &craft
     collector.entries
 }
 
+const FNV1A_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV1A_PRIME: u64 = 0x0100_0000_01b3;
+
+fn fnv1a_bytes(h: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        *h ^= u64::from(b);
+        *h = h.wrapping_mul(FNV1A_PRIME);
+    }
+    // Length/field separator so ("a", "bc") != ("ab", "c").
+    *h ^= 0xff;
+    *h = h.wrapping_mul(FNV1A_PRIME);
+}
+
+fn fnv1a_pair(h: &mut u64, loc: &str, original: &str) {
+    fnv1a_bytes(h, loc.as_bytes());
+    fnv1a_bytes(h, original.as_bytes());
+}
+
+/// Hash of every `numberingChange` paragraph's `(loc, original)` in the shared model (write side).
+///
+/// When the document is later opened, `fingerprint_shared_model` recomputes this from the
+/// `craft_wordmodel::Document` and the reader invalidates all overrides if the hash differs.
+pub(crate) fn fingerprint_doc(source: &wordcraft_doc::Document, shared: &craft_wordmodel::Document) -> u64 {
+    let mut h = FNV1A_OFFSET;
+    fn walk(blocks: &wordcraft_doc::Blocks, prefix: &str, numbering: &wordcraft_doc::numbering::Numbering, h: &mut u64, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for (i, block) in blocks.iter().enumerate() {
+            let loc = format!("{prefix}:{i}");
+            match block.as_ref() {
+                wordcraft_doc::Block::Para(p) => {
+                    if let Some(nc) = p.props.num_change.as_deref() {
+                        let original = if !nc.original.is_empty() {
+                            nc.original.clone()
+                        } else if let Some(nr) = nc.snapshot {
+                            numbering.change_original(nr.num, nr.level).unwrap_or_default()
+                        } else {
+                            String::new()
+                        };
+                        fnv1a_pair(h, &loc, &original);
+                    }
+                }
+                wordcraft_doc::Block::Table(t) => {
+                    for (r, row) in t.rows.iter().enumerate() {
+                        for (c, cell) in row.cells.iter().enumerate() {
+                            walk(&cell.blocks, &format!("{loc}/{r}/{c}"), numbering, h, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    walk(&source.body, "b", source.numbering.as_ref(), &mut h, 0);
+    if source.parts.values().any(|part| blocks_have_num_change(&part.blocks, 0)) {
+        let labels = part_labels(shared);
+        let mut labeled: Vec<(&str, &wordcraft_doc::Part)> =
+            source.parts.iter().filter_map(|(&id, part)| labels.get(&id).map(|l| (l.as_str(), part))).collect();
+        labeled.sort_by_key(|(label, _)| *label);
+        for (label, part) in labeled {
+            walk(&part.blocks, label, source.numbering.as_ref(), &mut h, 0);
+        }
+    }
+    for (i, g) in source.glossary.iter().enumerate() {
+        walk(&g.blocks, &format!("g{i}"), source.numbering.as_ref(), &mut h, 0);
+    }
+    h
+}
+
+/// Recompute the fingerprint from a `craft_wordmodel::Document` (read side) for verification.
+pub(crate) fn fingerprint_shared_model(source: &craft_wordmodel::Document) -> u64 {
+    let mut h = FNV1A_OFFSET;
+    fn walk(blocks: &craft_wordmodel::Blocks, prefix: &str, h: &mut u64, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for (i, block) in blocks.iter().enumerate() {
+            let loc = format!("{prefix}:{i}");
+            match block.as_ref() {
+                craft_wordmodel::Block::Para(p) => {
+                    if let Some(nc) = p.props.num_change.as_deref() {
+                        fnv1a_pair(h, &loc, &nc.original);
+                    }
+                }
+                craft_wordmodel::Block::Table(t) => {
+                    for (r, row) in t.rows.iter().enumerate() {
+                        for (c, cell) in row.cells.iter().enumerate() {
+                            walk(&cell.blocks, &format!("{loc}/{r}/{c}"), h, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    walk(&source.body, "b", &mut h, 0);
+    let labels = part_labels(source);
+    let mut labeled: Vec<(&str, &craft_wordmodel::Part)> =
+        source.parts.iter().filter_map(|(&id, part)| labels.get(&id).map(|l| (l.as_str(), part))).collect();
+    labeled.sort_by_key(|(label, _)| *label);
+    for (label, part) in labeled {
+        walk(&part.blocks, label, &mut h, 0);
+    }
+    for (i, g) in source.glossary.iter().enumerate() {
+        walk(&g.blocks, &format!("g{i}"), &mut h, 0);
+    }
+    h
+}
+
 fn blocks_have_num_change(blocks: &wordcraft_doc::Blocks, depth: usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -310,11 +450,11 @@ impl Collector<'_> {
     }
 
     fn blocks(&mut self, blocks: &wordcraft_doc::Blocks, prefix: &str, depth: usize) {
-        if depth > MAX_DEPTH || self.entries.len() >= MAX_ENTRIES {
+        if depth > MAX_DEPTH || self.entries.len() > MAX_ENTRIES {
             return;
         }
         for (i, block) in blocks.iter().enumerate() {
-            if self.entries.len() >= MAX_ENTRIES {
+            if self.entries.len() > MAX_ENTRIES {
                 break;
             }
             let loc = format!("{prefix}:{i}");
@@ -355,14 +495,40 @@ mod tests {
             SnapshotEntry { loc: "b:0".into(), original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 2, level: 0 }) },
             SnapshotEntry { loc: "b:1".into(), original: "%1:1:0:.".into(), snapshot: None },
         ];
-        let xml = write(&entries).expect("serialize").expect("nonempty");
-        let parsed = read_from_bytes(&xml).expect("parse");
-        assert_eq!(parsed.get("b:0").and_then(|e| e.snapshot), Some(NumRef { num: 2, level: 0 }));
-        assert_eq!(parsed.get("b:1").and_then(|e| e.snapshot), None);
+        let xml = write(&entries, 42).expect("serialize").expect("nonempty");
+        let store = read_from_bytes(&xml).expect("parse");
+        assert!(store.complete);
+        assert_eq!(store.fingerprint, Some(42));
+        assert_eq!(store.entries.get("b:0").and_then(|e| e.snapshot), Some(NumRef { num: 2, level: 0 }));
+        assert_eq!(store.entries.get("b:1").and_then(|e| e.snapshot), None);
 
-        assert!(write(&[]).expect("empty").is_none());
+        assert!(write(&[], 0).expect("empty").is_none());
         assert!(read_from_bytes(b"<other kind=\"wordcraft-numchange-v1\"/>").is_none());
         let oversized = vec![b'x'; MAX_STORE_BYTES + 1];
         assert!(read_from_bytes(&oversized).is_none());
+    }
+
+    #[test]
+    fn oversized_store_emits_incomplete_stub() {
+        // Exceed MAX_ENTRIES: generate more entries than the limit.
+        let entries: Vec<SnapshotEntry> = (0..MAX_ENTRIES + 1)
+            .map(|i| SnapshotEntry { loc: format!("b:{i}"), original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 1, level: 0 }) })
+            .collect();
+        let xml = write(&entries, 99).expect("serialize").expect("should emit stub, not None");
+        let store = read_from_bytes(&xml).expect("parse stub");
+        assert!(!store.complete, "stub must be marked incomplete");
+        assert!(store.entries.is_empty(), "stub has no entries");
+        assert_eq!(store.fingerprint, Some(99));
+    }
+
+    #[test]
+    fn byte_limit_emits_incomplete_stub() {
+        // A single entry with a huge original string to exceed MAX_STORE_BYTES.
+        let big_original = "x".repeat(MAX_STORE_BYTES);
+        let entries = vec![SnapshotEntry { loc: "b:0".into(), original: big_original, snapshot: None }];
+        let xml = write(&entries, 77).expect("serialize").expect("should emit stub, not None");
+        let store = read_from_bytes(&xml).expect("parse stub");
+        assert!(!store.complete, "stub must be marked incomplete");
+        assert!(store.entries.is_empty(), "stub has no entries");
     }
 }
