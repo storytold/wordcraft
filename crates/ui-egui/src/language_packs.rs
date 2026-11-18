@@ -622,8 +622,6 @@ fn status_text(row: &LanguageRow, running: Option<(u64, u64)>) -> String {
 /// File › Options › Language › Your languages: the languages in use and installed, each with
 /// where its proofing comes from and what can be done, and Add a language….
 pub(crate) fn your_languages(app: &mut WordApp, ui: &mut Ui) {
-    // Language names include Arabic and other scripts; ask for a system Arabic face when none is embedded.
-    app.want_system_arabic = true;
     let env = Env::of(ui);
     let format = env.format().clone();
     let ctx = ui.ctx().clone();
@@ -837,9 +835,9 @@ impl StackDialog for AddLanguage {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
-        // Pack names include Arabic and other scripts: the app asks for a system face where it draws (`settle_picker`).
         let injected = injected(ui.ctx());
-        let format = Env::of(ui).format().clone();
+        let env = Env::of(ui);
+        let format = env.format();
         let index = packs::available();
         let installed = packs::installed();
         let list = picker_packs(&index, &installed, &self.search);
@@ -926,8 +924,6 @@ fn settle_picker(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settl
     let _ = app.dialog_host.take_by_id::<AddLanguage>(id);
     let Some(dialog) = app.dialog_host.get_mut_by_id::<AddLanguage>(id) else { return Settle::Done };
     let asks = std::mem::take(&mut dialog.asks);
-    // Pack names include Arabic and other scripts; ask for a system Arabic face when none is embedded.
-    app.want_system_arabic = true;
     for ask in asks {
         match ask {
             Want::Install(pack, injected) => start_install_with(app, injected, &pack),
@@ -1003,8 +999,7 @@ mod tests {
     /// A request as a control client (or MCP's `click`) sends it, with frames until its input
     /// has gone in.
     fn as_agent(a: &mut WordApp, ctx: &egui::Context, method: &str, params: Value) {
-        let (req, _reply) = craft::control::ControlRequest::new(method, params);
-        // PLAN: assumed `crate::control::handle(app, ctx, &ControlRequest) -> _` injects through the window host (shell-w10)
+        let (req, _reply) = craft::automation::control::ControlRequest::new(method, params);
         let _ = crate::control::handle(a, ctx, &req);
         let host = craft::ui::runtime::windows::WindowHost::of(ctx);
         for _ in 0..200 {

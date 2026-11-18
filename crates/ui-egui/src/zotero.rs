@@ -108,8 +108,7 @@ fn start(app: &mut WordApp, cmd: Command, ctx: Option<egui::Context>) -> Result<
     let (done_tx, done_rx) = channel();
     let wake = ctx.clone();
     let opts = app.zotero.options.clone();
-    // PLAN: assumed `WordApp::host() -> &Host` (app-hub) with `Host::jobs()`.
-    app.host().jobs().spawn(
+    app.host.jobs().spawn(
         "zotero",
         Box::new(move || {
             let r = wordcraft_zotero::client::run_command(&opts, cmd, &mut |call| {
@@ -192,8 +191,7 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     }
     if changed {
         app.canvas.scroll_to_caret = true;
-        // PLAN: assumed `CaretGlide::restart` (cv.A11, canvas-w10).
-        app.canvas.glide.restart();
+        app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
     }
     let done = app.zotero.done.as_ref().and_then(|rx| rx.try_recv().ok());
     if let Some(r) = done {
