@@ -91,6 +91,43 @@ fn status_bar_controls_hold_still_across_zoom_levels() {
     }
 }
 
+/// #6012: hovering the page indicator tints it with the status bar's own hover colour, and
+/// moving off it takes the tint away.
+#[test]
+fn hovering_the_page_indicator_tints_it() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let tint = crate::theme::Tokens::light().status_hover;
+    let run = |a: &mut WordApp, n: u32, events: Vec<egui::Event>| {
+        let input = egui::RawInput {
+            time: Some(f64::from(n) / 60.0),
+            predicted_dt: 1.0 / 60.0,
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| status_bar(a, ui));
+        out.textures_delta.clear();
+        let update = out.platform_output.accesskit_update.take();
+        let tinted = out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == tint));
+        (update, tinted)
+    };
+    let (update, tinted) = run(&mut a, 1, vec![]);
+    assert!(!tinted, "nothing is tinted with the pointer elsewhere");
+    let centre = update
+        .and_then(|u| u.nodes.into_iter().find(|(_, node)| node.label() == Some("Page 1 of 1")))
+        .and_then(|(_, node)| node.bounds())
+        .map(|b| egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32))
+        .expect("the page indicator is drawn");
+    run(&mut a, 2, vec![egui::Event::PointerMoved(centre)]);
+    let (_, tinted) = run(&mut a, 3, vec![]);
+    assert!(tinted, "the page indicator is tinted under the pointer");
+    run(&mut a, 4, vec![egui::Event::PointerMoved(egui::pos2(600.0, 100.0))]);
+    let (_, tinted) = run(&mut a, 5, vec![]);
+    assert!(!tinted, "the tint goes when the pointer leaves");
+}
+
 /// #2797: the count line's wording per unit — words (the default), characters with spaces,
 /// characters without spaces — whole document or "selected of total".
 #[test]

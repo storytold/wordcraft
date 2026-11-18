@@ -300,6 +300,8 @@ pub struct Tokens {
     pub ruler_margin: Color32,
     pub ruler_tick: Color32,
     pub status_bar: Color32,
+    /// A status bar item under the pointer. `hover` is too close to `status_bar` to see there.
+    pub status_hover: Color32,
     pub selection: Color32,
     /// Find › Reading Highlight.
     pub find_highlight: Color32,
@@ -369,6 +371,7 @@ impl Tokens {
             ruler_margin: Color32::from_rgb(0xD4, 0xD4, 0xD4),
             ruler_tick: Color32::from_rgb(0x70, 0x70, 0x70),
             status_bar: Color32::from_rgb(0xF0, 0xF0, 0xF0),
+            status_hover: Color32::from_rgb(0xDC, 0xDC, 0xDC),
             selection: Color32::from_rgba_unmultiplied(0x3B, 0x5B, 0xDB, 0x48),
             find_highlight: Color32::from_rgba_unmultiplied(0xFF, 0xE0, 0x3D, 0x90),
             page_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x22),
@@ -436,6 +439,7 @@ impl Tokens {
             ruler_margin: Color32::from_rgb(0x2E, 0x2E, 0x2E),
             ruler_tick: Color32::from_rgb(0xB4, 0xB4, 0xB4),
             status_bar: Color32::from_rgb(0x1F, 0x1F, 0x1F),
+            status_hover: Color32::from_rgb(0x3A, 0x3A, 0x3A),
             selection: Color32::from_rgba_unmultiplied(0x7A, 0x93, 0xF0, 0x55),
             find_highlight: Color32::from_rgba_unmultiplied(0xC8, 0xA8, 0x00, 0x70),
             page_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x60),
@@ -1024,6 +1028,16 @@ mod tests {
         };
         let (x, y) = (lum(a), lum(b));
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// #6012: a status bar item under the pointer is tinted visibly against the bar, in both
+    /// themes. `hover` sat at 238 on a 240 bar, which nobody could see.
+    #[test]
+    fn status_item_hover_shows_against_the_status_bar() {
+        for (name, t) in [("light", super::Tokens::light()), ("dark", super::Tokens::dark())] {
+            let r = contrast(t.status_hover, t.status_bar);
+            assert!(r >= 1.15, "{name}: the hover tint is {r:.2}:1 against the status bar");
+        }
     }
 
     /// #1885: the ✕ on a window's close box reads on its hover and pressed reds in both themes.
