@@ -684,7 +684,7 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
     super::apply_language(ar);
     let mut app = start(&ctx);
     // PLAN(app-hub): sh.A1 `root_env` sets `RootEnv::direction` from the language.
-    assert_eq!(app.root_env().direction, craft_i18n::Direction::Rtl);
+    assert_eq!(app.root_env().direction, craft::i18n::Direction::Rtl);
     let x_of = |drawn: &[(String, f32)], english: &str| {
         let label = super::tr(ar, english);
         drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap_or_else(|| panic!("{english} is not drawn"))
@@ -716,7 +716,7 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
         assert!(x("File") < x("Home") && x("Home") < x("Insert") && x("Insert") < 400.0 && x("Share") > 1400.0);
         assert!(x("Clipboard") < x("Font") && x("Font") < x("Styles"));
         assert!(x("Cut") < 200.0, "ribbon buttons keep their icon on the left and start at the left");
-        assert_eq!(app.root_env().direction, craft_i18n::Direction::Ltr);
+        assert_eq!(app.root_env().direction, craft::i18n::Direction::Ltr);
         super::apply_language(ar);
     }
     // Everything else: no panic at any width.
