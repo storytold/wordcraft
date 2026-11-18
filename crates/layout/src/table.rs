@@ -906,7 +906,8 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 story,
                 // A fixed table's cell too narrow for any text (its lines are laid out 4 pt wide)
                 // clips them, as Word does, rather than letting them run past its edges.
-                clip: (exact && c.h > span_h + 0.01) || cut || (t.props.fixed && c.w - c.margins[1] - c.margins[3] < 4.0),            });
+                clip: (exact && c.h > span_h + 0.01) || cut || (t.props.fixed && c.w - c.margins[1] - c.margins[3] < 4.0),
+            });
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             parts.push(CellPart { top, items: first..items.len(), end, align });
         }
