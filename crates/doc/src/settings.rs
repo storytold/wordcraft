@@ -170,6 +170,11 @@ pub struct Settings {
     /// it is laid out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub odf: Option<OdfLayout>,
+    /// The document was read from a Word file (DOCX, Word XML), so Thai in a run that isn't
+    /// complex script (neither `w:cs` nor `w:rtl`) breaks only at its spaces, as Word lays it out.
+    /// Text typed in WordCraft is marked complex script where it is Thai, as Word marks it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub word_thai_breaks: bool,
 }
 
 /// A document opened from ODF, for the layout: rules of the standard that differ from Word's (a
@@ -329,6 +334,7 @@ impl Default for Settings {
             remove_personal_info: false,
             remove_date_time: false,
             odf: None,
+            word_thai_breaks: false,
         }
     }
 }

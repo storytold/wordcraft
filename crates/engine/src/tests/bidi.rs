@@ -323,3 +323,28 @@ fn a_latin_link_inserted_into_reopened_hebrew_is_saved_left_to_right() {
     assert_eq!(s.typing_props().rtl, None);
     assert_eq!(s.typing_props().lang_bidi.as_deref(), Some("he-IL"), "the bidi language stays");
 }
+
+/// Word marks the Thai it types complex script (`w:cs`), where Thai breaks between words, and
+/// leaves Latin, digits and the spaces between them alone: so does typing in WordCraft.
+#[test]
+fn typed_thai_is_marked_complex_script_as_word_marks_it() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    crate::cmd::type_text(&mut s, "Plan แผนงาน 2569 ปี").unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p.text, "Plan แผนงาน 2569 ปี");
+    let is_thai = |c: char| ('\u{0E00}'..='\u{0E7F}').contains(&c);
+    let mut off = 0;
+    let mut thai_runs = 0;
+    for r in &p.runs {
+        let t = &p.text[off..off + r.len];
+        off += r.len;
+        if t.is_empty() {
+            continue;
+        }
+        let thai = t.chars().all(is_thai);
+        assert!(thai || !t.chars().any(is_thai), "a run mixes Thai and other text: {t:?}");
+        assert_eq!(r.props.cs, thai.then_some(true), "{t:?}");
+        thai_runs += usize::from(thai);
+    }
+    assert_eq!(thai_runs, 2);
+}

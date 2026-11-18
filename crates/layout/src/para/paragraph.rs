@@ -691,6 +691,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let bt = BreakText::new(&p.text, skip);
     let has_thai = !crate::kinsoku::thai_text_runs(&bt.text).is_empty();
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
+    if env.doc.settings.word_thai_breaks {
+        keep_plain_thai_whole(&mut sh.b.clusters, &sh.b.styles, &p.text);
+    }
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
@@ -820,6 +823,24 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
             ends.push((text.len(), i + c.len_utf8()));
         }
         (text.into(), ends)
+    }
+}
+
+/// Thai in a run that isn't complex script (no `w:cs` or `w:rtl`) breaks only where spaces and
+/// marks allow, not between its words: measured in Word for Windows (TH SarabunPSK and Tahoma,
+/// widths of 40 to 320 pt), such a run breaks at its spaces and, where a stretch is too long for
+/// the line, anywhere, whatever its language (`w:lang` th-TH, bidi th-TH or none); with `w:cs` it
+/// breaks between words. Files Word saves mark their Thai `w:cs`; files from other tools often
+/// don't. Only for documents read from Word files ([`wordcraft_doc::Settings::word_thai_breaks`]).
+fn keep_plain_thai_whole(clusters: &mut [Cluster], styles: &[super::model::StyleRun], text: &str) {
+    let plain = |c: &Cluster| {
+        text.get(c.start..c.end).and_then(|t| t.chars().next()).is_some_and(|ch| matches!(ch, '\u{0E00}'..='\u{0E7F}'))
+            && styles.get(c.style as usize).is_some_and(|s| !s.rc.cs && !s.rc.rtl)
+    };
+    for k in 1..clusters.len() {
+        if clusters[k - 1].break_after && plain(&clusters[k - 1]) && plain(&clusters[k]) {
+            clusters[k - 1].break_after = false;
+        }
     }
 }
 

@@ -454,3 +454,40 @@ fn khmer_ignores_the_ligature_setting() {
     assert_eq!(gids(Some(hd)), gids(None));
     assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
 }
+
+/// Measured in Word for Windows: Thai in a run that isn't complex script breaks only at its
+/// spaces (and anywhere when a stretch is too long for the line), whatever its language; with
+/// `w:cs` it breaks between words. That's for documents read from Word files: elsewhere Thai
+/// breaks between words in any run.
+#[test]
+fn thai_outside_a_complex_script_run_breaks_only_at_spaces_in_word_files() {
+    let text = "เอกสารต้นทางเพื่อให้ผู้เสนอพิสูจน์เส้นทางข้อมูล การนำเข้าและจัดมาตรฐาน";
+    let breaks_inside = |cs: Option<bool>, word: bool| {
+        let mut d = Document::from_text("");
+        d.settings.word_thai_breaks = word;
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, wordcraft_doc::CharProps { cs, ..Default::default() }))];
+        let l = lay(&d);
+        let pl = para_layout(&l, 0);
+        let thai = |k: usize| {
+            text.get(pl.clusters[k].start..pl.clusters[k].end).and_then(|t| t.chars().next()).is_some_and(|c| ('\u{0E00}'..='\u{0E7F}').contains(&c))
+        };
+        (1..pl.clusters.len()).filter(|&k| pl.clusters[k - 1].break_after && thai(k - 1) && thai(k)).count()
+    };
+    assert_eq!(breaks_inside(None, true), 0, "a plain run breaks only at its space");
+    assert_eq!(breaks_inside(Some(false), true), 0, "nor one that says it isn't complex script");
+    assert!(breaks_inside(Some(true), true) > 3, "w:cs: between words");
+    assert!(breaks_inside(None, false) > 3, "not read from Word: between words");
+}
+
+/// A plain Thai run in a Word file too long for the line still wraps, between letters.
+#[test]
+fn a_long_plain_thai_run_in_a_word_file_still_wraps() {
+    let text = "เอกสารต้นทางเพื่อให้ผู้เสนอพิสูจน์เส้นทางข้อมูล".repeat(8);
+    let mut d = Document::from_text(&text);
+    d.settings.word_thai_breaks = true;
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1, "it wraps: {} line(s)", pl.lines.len());
+    let shown: String = pl.lines.iter().map(|l| &text[l.start..l.stop]).collect();
+    assert_eq!(shown, text, "no text is lost");
+}

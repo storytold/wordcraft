@@ -424,7 +424,18 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
         if !part.is_empty() {
             inserted = true;
             let starts_para = direction_unset(s, &at);
-            at = s.doc.insert_text(&at, &part, &props)?;
+            for (piece, thai) in thai_pieces(&part) {
+                // Word marks the Thai it types complex script (`w:cs`), where Thai breaks between
+                // words; elsewhere it breaks only at spaces (`Settings::word_thai_breaks`).
+                let marked;
+                let props = if thai && props.cs.is_none() {
+                    marked = wordcraft_doc::CharProps { cs: Some(true), ..props.clone() };
+                    &marked
+                } else {
+                    &props
+                };
+                at = s.doc.insert_text(&at, piece, props)?;
+            }
             // Typing Arabic, Hebrew… as the first letters of a paragraph whose direction nothing
             // sets makes it a right-to-left paragraph, so the caret and text start at the right
             // margin. Paragraphs that already have letters, or a direction, keep theirs.
@@ -441,6 +452,26 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     s.goal_x = None;
     let content_changed = deletion.content_changed || inserted;
     Ok(InsertEffect { content_changed, state_changed: deletion.state_changed || content_changed || placeholder_changed })
+}
+
+/// `text` cut where it goes into or out of Thai, each piece with whether it is Thai.
+fn thai_pieces(text: &str) -> Vec<(&str, bool)> {
+    let thai = |c: char| matches!(c, '\u{0E00}'..='\u{0E7F}');
+    let mut out: Vec<(&str, bool)> = Vec::new();
+    let mut start = 0;
+    let mut current = None;
+    for (i, c) in text.char_indices() {
+        let t = thai(c);
+        if current.is_some_and(|k| k != t) {
+            out.push((&text[start..i], current == Some(true)));
+            start = i;
+        }
+        current = Some(t);
+    }
+    if start < text.len() {
+        out.push((&text[start..], current == Some(true)));
+    }
+    out
 }
 
 /// Is the paragraph at `at` still without letters (empty, or only spaces, digits and
