@@ -3,11 +3,11 @@
 use std::collections::HashMap;
 
 use wordcraft_doc::para::Wrap;
-use wordcraft_doc::props::TextDirection;
+use wordcraft_doc::props::{CharProps, TextDirection};
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
-use crate::para::{PARA_MARK_WIDTH, ParaLayout, StyleRun};
+use crate::para::{PARA_MARK_WIDTH, ParaLayout, TypingFace};
 use crate::{DocLayout, Page, Placed};
 
 /// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
@@ -727,12 +727,14 @@ impl DocLayout {
         None
     }
 
-    /// The style run text typed at `pos` would take (the character's before it, or at the start
-    /// of a paragraph the first character's) and the baseline it sits on, on the page: `pos`'s
-    /// line's, raised or lowered by the run's shift (superscript, `w:position`). An input method's
-    /// composition is drawn with them, as Word draws it in the text's own font and size. `None` in
-    /// turned text, whose lines aren't horizontal.
-    pub fn typing_style(&self, pos: &Pos, page_hint: usize) -> Option<(StyleRun, f32)> {
+    /// How text typed at `pos` with the run formatting `props` (`Session::typing_props`: the
+    /// formatting picked at the caret, or the first selected character's) is drawn, and the
+    /// baseline it sits on, on the page: `pos`'s line's, raised or lowered by its shift
+    /// (superscript, `w:position`). Resolved in the paragraph's style and table cell as laid-out
+    /// text is ([`crate::para::typing_face`]). An input method's composition is drawn with them, as
+    /// Word draws it in the font and size the text will have. `None` in turned text, whose lines
+    /// aren't horizontal.
+    pub fn typing_at(&self, doc: &Document, pos: &Pos, props: &CharProps, page_hint: usize) -> Option<(TypingFace, f32)> {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, y, turn, .. } = it else { continue };
             let li = para.line_of(pos.off);
@@ -744,9 +746,9 @@ impl DocLayout {
             }
             let first = para.lines.get(*l0)?;
             let line = para.lines.get(li)?;
-            let at = |off: usize| para.clusters.iter().find(|c| c.start <= off && off < c.end).and_then(|c| para.styles.get(c.style as usize));
-            let run = pos.off.checked_sub(1).and_then(at).or_else(|| at(pos.off)).or_else(|| para.styles.first())?;
-            return Some((run.clone(), y + line.baseline - first.top - run.shift));
+            let style = doc.para_at(pos).and_then(|p| p.props.style.as_deref());
+            let face = crate::para::typing_face(doc, style, para.cell_chr.as_ref(), props);
+            return Some((face, y + line.baseline - first.top - face.shift));
         }
         None
     }

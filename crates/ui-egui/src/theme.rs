@@ -552,18 +552,34 @@ pub fn composition_family(window: u64) -> FontFamily {
     FontFamily::Name(format!("composition {window}").into())
 }
 
-/// Bind window `window`'s [`composition_family`] to `face` followed by the interface fonts, so a
-/// composition looks like the text around it, as in Word. A face larger than the composition
-/// borrows (see [`faces_for_preedit`]) is left out: the interface fonts draw the composition then.
-pub fn set_composition_face(fonts: &mut FontDefinitions, window: u64, face: Option<wordcraft_fonts::FaceRef>) {
+/// The document faces a window's composition is drawn in ([`set_composition_face`]).
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct CompositionFaces {
+    /// The face the font of the text typed at the caret asks for.
+    pub face: Option<wordcraft_fonts::FaceRef>,
+    /// That text's East Asian font's face (`w:eastAsia`), when it is another font and installed.
+    pub east_asian: Option<wordcraft_fonts::FaceRef>,
+}
+
+/// Bind window `window`'s [`composition_family`] to its `faces`, the font's and then the East
+/// Asian font's, followed by the interface fonts, so a composition looks like the text around
+/// it, as in Word: kana and Han the font lacks are drawn in the East Asian font. A face larger
+/// than the composition borrows (see [`faces_for_preedit`]) is left out: the interface fonts draw
+/// what it would have.
+pub fn set_composition_face(fonts: &mut FontDefinitions, window: u64, faces: CompositionFaces) {
     let mut family = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    if let Some(f) = face.filter(|f| f.data().len() <= 16 << 20) {
+    let mut first = 0;
+    for f in [faces.face, faces.east_asian].into_iter().flatten().filter(|f| f.data().len() <= 16 << 20) {
         let f = f.get();
         let name = format!("composition {} {} {}", f.family, f.style, f.id());
+        if family.iter().take(first).any(|n| *n == name) {
+            continue;
+        }
         let mut data = FontData::from_static(f.data());
         data.index = f.index();
         fonts.font_data.insert(name.clone(), Arc::new(data));
-        family.insert(0, name);
+        family.insert(first, name);
+        first += 1;
     }
     fonts.families.insert(composition_family(window), family);
 }

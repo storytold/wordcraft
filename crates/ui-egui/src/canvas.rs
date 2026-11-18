@@ -188,9 +188,9 @@ pub struct CanvasState {
     /// Document faces added to the interface fonts so the input method's composition (#565) and a
     /// file name in the window caption can be drawn.
     pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
-    /// The document face this window's composition is drawn in, as the fonts were last installed
-    /// (its [`crate::theme::composition_family`]).
-    pub(crate) ime_face: Option<wordcraft_fonts::FaceRef>,
+    /// The document faces this window's composition is drawn in, as the fonts were last
+    /// installed (its [`crate::theme::composition_family`]).
+    pub(crate) ime_face: crate::theme::CompositionFaces,
     pub want_focus: bool,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
@@ -433,7 +433,7 @@ impl Default for CanvasState {
             ime_preedit: String::new(),
             ime_preedit_range: None,
             ime_faces: Vec::new(),
-            ime_face: None,
+            ime_face: Default::default(),
             want_focus: true,
             context_issue: None,
             context_synonyms: None,
@@ -1976,15 +1976,18 @@ fn paint_composition(app: &mut WordApp, ctx: &egui::Context, painter: &egui::Pai
     let new = crate::theme::faces_for_preedit(&app.canvas.ime_preedit, &app.canvas.ime_faces, crate::theme::caption_char_covered, |c| {
         wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
     });
-    // Word draws the composition in the font and size of the text it goes into: take the
-    // face, size and baseline the layout gives text typed here (not in turned text). The
-    // face is the one the run's font asks for, not a fallback face that drew the
-    // character before the caret (a Chinese character in a Latin font).
-    let typing = if at.turned { None } else { layout.typing_style(&app.session.sel.focus, app.session.page_hint) };
-    let face = typing.as_ref().map(|(run, _)| run.requested_face);
-    if !new.is_empty() || face != app.canvas.ime_face {
+    // Word draws the composition in the font and size the text will have: the formatting typing
+    // takes here (picked at the caret, the first selected character's, body text after a note
+    // number), with the faces, size and baseline the layout gives it (not in turned text). The
+    // faces are the ones its fonts ask for, not a fallback face that drew the character before
+    // the caret (a Chinese character in a Latin font).
+    let typing =
+        if at.turned { None } else { layout.typing_at(&app.session.doc, &app.session.sel.focus, &app.session.typing_props(), app.session.page_hint) };
+    let faces =
+        typing.as_ref().map_or_else(Default::default, |(t, _)| crate::theme::CompositionFaces { face: Some(t.face), east_asian: t.east_asian });
+    if !new.is_empty() || faces != app.canvas.ime_face {
         app.canvas.ime_faces.extend(new);
-        app.canvas.ime_face = face;
+        app.canvas.ime_face = faces;
         // With every other window's faces too: the fonts are the app's.
         app.apply_ui_fonts(ctx);
         ctx.request_repaint();
@@ -2000,8 +2003,8 @@ fn paint_composition(app: &mut WordApp, ctx: &egui::Context, painter: &egui::Pai
     let most = (at.max_tex / 4.0).min(1024.0) / at.ppp;
     let size = |s: f32| s.min(most).max(1.0);
     let (font, base) = match &typing {
-        Some((run, base)) if bound && run.size.is_finite() && run.size > 0.0 => {
-            (egui::FontId::new(size(run.size * at.scale), family), Some(at.pr.min.y + base * at.scale))
+        Some((t, base)) if bound && t.size.is_finite() && t.size > 0.0 => {
+            (egui::FontId::new(size(t.size * at.scale), family), Some(at.pr.min.y + base * at.scale))
         }
         _ => (regular(size(at.height * at.scale * 0.8)), None),
     };
