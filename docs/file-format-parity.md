@@ -339,7 +339,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-18 | trivial | A width-0 table or cell border is drawn as a hairline that takes no room and is kept by the table style dialog and Table Style Modify. Word (Mac and Windows) gives a table border without `w:sz` the same output as `w:sz="0"`, not ⅛ pt; reading it so, and ODT and RTF export of it at the thinnest line, are in craft-libs with the DOCX reader (#5764) |
+| 2026-11-18 | trivial | A width-0 table or cell border is drawn as a hairline that takes no room and is kept by the table style dialog and Table Style Modify. Word (Mac and Windows) gives a table border without `w:sz` the same output as `w:sz="0"`, not ⅛ pt; reading it so, and ODT and RTF export of it at the thinnest line, are in craft-libs with the DOCX reader (storytold/craft-libs#2203; #5764) |
 | 2026-11-13 | trivial | A rounded rectangle without a corner size of its own (`roundRect` with an empty `a:avLst`) takes the preset's default `adj` of 16667, a sixth of its shorter side; it was drawn with 16%. Measured in Word for Windows: such a shape of 300 x 100 pt has corners of 16.67 pt, one of 300 x 40 pt of 6.67 pt and one of 60 x 150 pt of 10 pt (#6546) (`doc::connector::tests::corner_radius_follows_the_shorter_side`). |
 | 2026-11-04 | trivial | ODT: a later paragraph default style that names no font no longer clears the document's default font; a regression from the #4501 refactor (#4683) |
 | 2026-11-08 | trivial | ODT row corrected: a file whose tab stops are measured from the indent is saved measuring from it, not always from the margin (the 2026-11-03 change); the default stops are counted from the indent |
