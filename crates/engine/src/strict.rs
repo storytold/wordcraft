@@ -197,7 +197,11 @@ pub(crate) fn pdf_options(opts: &ExportOptions) -> wordcraft_pdf::PdfOptions {
         include_markup: opts.markup,
         comments: opts.markup && opts.comments,
         numeral: opts.numeral,
+ fix/5232-pdf-tracking-options-colours
         revisions: opts.revisions.clone(),
+
+        bookmark_error: crate::locale::bookmark_error(),
+ main
         ..Default::default()
     }
 }
