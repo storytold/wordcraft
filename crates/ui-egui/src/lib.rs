@@ -44,6 +44,7 @@ pub mod equation_tab;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file_browser;
 pub mod file_dialogs;
+pub mod font_download;
 pub mod format_shape;
 pub mod frame;
 pub mod guides;
@@ -92,6 +93,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
 pub use control::ControlRequest;
+pub use dialogs::dialogs_bullet;
 pub use dialogs::dialogs_chart;
 pub use dialogs::dialogs_controls;
 pub use dialogs::dialogs_insert;
@@ -435,6 +437,9 @@ pub struct UiState {
     /// spaces, or characters without spaces. Right-click the count in the status bar, or File ›
     /// Options › Display. Junk saved values read as words.
     pub status_count: StatusCount,
+    /// File › Options › General: tell about a document's missing fonts that can be downloaded
+    /// ([`font_download`]); the box's "Don't show this again" turns it off.
+    pub font_download_notice: bool,
     /// How far a mouse-wheel notch scrolls (#6146).
     #[serde(default, alias = "scrollSpeed")]
     pub scroll_speed: ScrollSpeed,
@@ -540,6 +545,7 @@ impl Default for UiState {
             dictionary: Vec::new(),
             display_server: DisplayServer::Auto,
             status_count: StatusCount::default(),
+            font_download_notice: true,
             scroll_speed: ScrollSpeed::default(),
             touchpad_scroll_speed: ScrollSpeed::default(),
         }
@@ -690,6 +696,11 @@ pub struct WordApp {
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
     pub(crate) focus_ribbon: bool,
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// The documents (by id) the missing-fonts download box has been considered for
+    /// ([`font_download::tick`]), in every window.
+    pub(crate) font_notice_seen: Vec<u64>,
+    /// Whether that box comes up by itself ([`WordApp::tell_about_font_downloads`]).
+    pub(crate) font_notices: bool,
     /// Language pack installs, the missing-pack bar ([`language_packs`]).
     pub(crate) packs_rt: language_packs::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
