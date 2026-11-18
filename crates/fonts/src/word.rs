@@ -194,6 +194,22 @@ pub fn symbol_line(family: &str, resolved: &Resolved) -> Option<(f64, f64)> {
     (resolved.substituted || one_em(line_metrics(&resolved.face), resolved.face.upem)).then_some(m)
 }
 
+/// The (ascent, descent) in em of a line in `family` when it isn't installed and a metric twin
+/// with a shorter hhea line draws it ([`twin_line_em`]). The face is named as Word names it
+/// (Selawik Light, not Selawik at weight 300).
+pub fn twin_line(family: &str, resolved: &Resolved) -> Option<(f64, f64)> {
+    twin_line_em(family, &resolved.face.legacy_family, resolved.substituted)
+}
+
+/// Selawik has Segoe UI's advance widths and OS/2 win metrics (2210 / 514 per 2048), but its hhea
+/// line is 2027 / -431 where Segoe UI's is 2210 / -514. Word for Mac takes the line from hhea, so
+/// Segoe UI text drawn in Selawik keeps Segoe UI's line: a page then holds as many lines as in Word.
+fn twin_line_em(requested: &str, drawn: &str, substituted: bool) -> Option<(f64, f64)> {
+    let base = charset_base_family(requested.split(';').map(str::trim).find(|f| !f.is_empty())?);
+    let segoe = matches!(base.to_ascii_lowercase().as_str(), "segoe ui" | "segoe ui light");
+    (substituted && segoe && metric_compatible(base, drawn)).then_some((2210.0 / 2048.0, 514.0 / 2048.0))
+}
+
 /// Is a line's (ascent, descent) one `upem` em tall?
 fn one_em((ascent, descent): (f64, f64), upem: f64) -> bool {
     upem > 0.0 && ((ascent + descent) / upem - 1.0).abs() < 0.005
@@ -232,17 +248,20 @@ pub fn has_installed_substitute(family: &str) -> bool {
 /// Fonts made to measure alike (the same advance widths and line height), so text drawn in one
 /// wraps and paginates as in the others: Carlito for Calibri, Caladea for Cambria, Liberation and
 /// Croscore fonts for Arial, Times New Roman and Courier New, the Palatino look-alikes for Palatino
-/// Linotype and Book Antiqua, and Arial and Helvetica (drawn to Helvetica's widths) for one
-/// another. The one list of them: a missing font is drawn in its first installed twin
-/// ([`substitute`]), and text drawn in a twin doesn't change the layout ([`metric_compatible`]).
-/// Not macOS Times or Courier: their advance widths differ from Times New Roman's and Courier
-/// New's.
+/// Linotype and Book Antiqua, Selawik for Segoe UI and Segoe UI Light (its line taken from Segoe
+/// UI, [`twin_line`]), and Arial and Helvetica (drawn to Helvetica's widths) for one another. The
+/// one list of them: a missing font is drawn in its first installed twin ([`substitute`]), and
+/// text drawn in a twin doesn't change the layout ([`metric_compatible`]). Not macOS Times or
+/// Courier: their advance widths differ from Times New Roman's and Courier New's. Not Selawik
+/// Semibold or Semilight: their advance widths differ from Segoe UI Semibold's and Semilight's.
 const METRIC_TWINS: &[&[&str]] = &[
     &["Arial", "Liberation Sans", "Helvetica", "Arimo"],
     &["Times New Roman", "Liberation Serif", "Tinos"],
     &["Courier New", "Liberation Mono", "Cousine"],
     &["Calibri", "Carlito"],
     &["Cambria", "Caladea"],
+    &["Segoe UI", "Selawik"],
+    &["Segoe UI Light", "Selawik Light"],
     &["Palatino Linotype", "Palatino", "Book Antiqua", "TeX Gyre Pagella", "P052", "URW Palladio L", "Palladio"],
 ];
 
@@ -815,11 +834,27 @@ mod tests {
     }
 
     #[test]
+    fn segoe_ui_drawn_in_selawik_keeps_segoe_uis_line() {
+        let segoe = Some((2210.0 / 2048.0, 514.0 / 2048.0));
+        assert_eq!(twin_line_em("Segoe UI", "Selawik", true), segoe);
+        assert_eq!(twin_line_em(" segoe ui light ", "Selawik Light", true), segoe);
+        // Only for the twin, only when Segoe UI is missing, and not for Selawik asked for by name.
+        assert_eq!(twin_line_em("Segoe UI", "Helvetica Neue", true), None);
+        assert_eq!(twin_line_em("Segoe UI", "Segoe UI", false), None);
+        assert_eq!(twin_line_em("Selawik", "Selawik", false), None);
+        assert_eq!(twin_line_em("Segoe UI Semibold", "Selawik Semibold", true), None);
+    }
+
+    #[test]
     fn metric_compatible_substitutes_are_known() {
         assert!(metric_compatible("Calibri", "Carlito"));
         assert!(metric_compatible(" arial ", "Liberation Sans"));
         assert!(metric_compatible("Arial CE", "Helvetica"));
         assert!(metric_compatible("Book Antiqua", "TeX Gyre Pagella"));
+        assert!(metric_compatible("Segoe UI", "Selawik"));
+        assert!(metric_compatible("Segoe UI Light", "Selawik Light"));
+        assert!(!metric_compatible("Segoe UI Semibold", "Selawik Semibold"));
+        assert!(!metric_compatible("Segoe UI", "Selawik Light"));
         assert!(!metric_compatible("Calibri", "Helvetica Neue"));
         assert!(!metric_compatible("Open Sans", "Carlito"));
         assert!(!metric_compatible("Times New Roman", "Times"));
@@ -833,7 +868,9 @@ mod tests {
         for family in METRIC_TWINS.iter().flat_map(|g| g.iter()) {
             let r = resolve(family, false, false);
             if r.substituted && metric_twins(family).any(|t| db.has_family(t)) {
-                assert!(metric_compatible(family, &r.face.family), "{family} → {}", r.face.family);
+                // Word's name for the face: Segoe UI Light is drawn in Selawik's Light face.
+                let drawn = [&r.face.family, &r.face.legacy_family];
+                assert!(drawn.iter().any(|d| metric_compatible(family, d)), "{family} → {drawn:?}");
             }
         }
     }
