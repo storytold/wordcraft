@@ -699,13 +699,13 @@ fn more_colors(app: &mut WordApp, i: usize, current: Option<Rgb>) {
 
 /// Routes a finished More Colors dialog to its target; true once the dialog is gone.
 fn settle_more_colors(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> Settle {
-    match app.dialog_host.take_by_id::<crate::colors::ColorPickerDialog>(id) {
+    match app.dialog_host.take_by_id::<craft::color_ui::ui::ColorPickerDialog>(id) {
         Some(DialogResult::Ok(result)) => {
             crate::colors::picked(app, ctx, result);
             Settle::Done
         }
         Some(DialogResult::Cancel) => Settle::Done,
-        None if app.dialog_host.get_by_id::<crate::colors::ColorPickerDialog>(id).is_none() => Settle::Done,
+        None if app.dialog_host.get_by_id::<craft::color_ui::ui::ColorPickerDialog>(id).is_none() => Settle::Done,
         None => Settle::Keep,
     }
 }
