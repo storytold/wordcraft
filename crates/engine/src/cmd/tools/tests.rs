@@ -1257,10 +1257,83 @@ fn compare_unchanged_text_table_tracks_table_row_cell_props_and_grid_widths() {
     assert!(grid_tables[0].rows[0].cells[0].blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.del.is_some()));
     assert!(grid_tables[1].rows[0].cells[0].blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.ins.is_some()));
 
+    let mut s_grid_acc = Session::new(s_grid.doc.clone());
+    s_grid_acc.run("review.acceptAll", &json!({})).unwrap();
+    let acc_tables: Vec<&wordcraft_doc::table::Table> = s_grid_acc.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(acc_tables.len(), 1, "Accept All must leave exactly one table");
+    assert_eq!(acc_tables[0].grid, vec![260.0], "Accept All must leave the revised table layout");
+
+    let mut s_grid_rej = Session::new(s_grid.doc.clone());
+    s_grid_rej.run("review.rejectAll", &json!({})).unwrap();
+    let rej_tables: Vec<&wordcraft_doc::table::Table> = s_grid_rej.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(rej_tables.len(), 1, "Reject All must leave exactly one table");
+    assert_eq!(rej_tables[0].grid, vec![200.0], "Reject All must leave the original table layout");
+
+    let cmp_grid_path = tmp.path("cmp-grid.docx");
+    crate::io::save_path(&cmp_grid_path, &s_grid.doc).unwrap();
+    let reopened_grid = crate::io::open_path(&cmp_grid_path).unwrap();
+
+    let mut s_reopened_acc = Session::new(reopened_grid.clone());
+    s_reopened_acc.run("review.acceptAll", &json!({})).unwrap();
+    let acc_reopened_tables: Vec<&wordcraft_doc::table::Table> = s_reopened_acc.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(acc_reopened_tables.len(), 1, "Accept All after DOCX round-trip leaves exactly one table");
+    assert_eq!(acc_reopened_tables[0].grid, vec![260.0]);
+
+    let mut s_reopened_rej = Session::new(reopened_grid);
+    s_reopened_rej.run("review.rejectAll", &json!({})).unwrap();
+    let rej_reopened_tables: Vec<&wordcraft_doc::table::Table> = s_reopened_rej.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(rej_reopened_tables.len(), 1, "Reject All after DOCX round-trip leaves exactly one table");
+    assert_eq!(rej_reopened_tables[0].grid, vec![200.0]);
+
     let mut s_grid_no_fmt = Session::new(make_grid_doc(200.0));
     let r_grid_no_fmt =
         s_grid_no_fmt.run("review.compare", &json!({"path": grid_path.to_string_lossy(), "showIn": "new", "formatting": false})).unwrap();
     assert_eq!(r_grid_no_fmt["changes"], 0, "grid width difference ignored when formatting is false");
+}
+
+#[test]
+fn compare_whole_table_deletion_and_insertion_resolve_to_expected_table_count() {
+    let tmp = TempTestDir::new("wc-compare-tbl-del-ins");
+
+    let make_doc_with_table = || -> Document {
+        let mut d = Document::new();
+        let mut t = wordcraft_doc::table::Table::new(1, 1, 200.0);
+        t.rows[0].cells[0].blocks = vec![Arc::new(Block::Para(Paragraph::with_text("Content", CharProps::default())))];
+        d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::new()))];
+        d
+    };
+
+    let make_doc_without_table = || -> Document { Document::from_text("Plain text without tables.") };
+
+    // Case 1: Op::Del (base has table, revised does not)
+    let no_table_path = tmp.path("no-table.docx");
+    crate::io::save_path(&no_table_path, &make_doc_without_table()).unwrap();
+    let mut s_del = Session::new(make_doc_with_table());
+    let r_del = s_del.run("review.compare", &json!({"path": no_table_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert!(r_del["changes"].as_u64().unwrap_or(0) > 0);
+
+    let mut s_del_acc = Session::new(s_del.doc.clone());
+    s_del_acc.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s_del_acc.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 0, "Accept All on deleted table removes the table");
+
+    let mut s_del_rej = Session::new(s_del.doc.clone());
+    s_del_rej.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_del_rej.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1, "Reject All on deleted table restores the table");
+
+    // Case 2: Op::Ins (base has no table, revised has table)
+    let has_table_path = tmp.path("has-table.docx");
+    crate::io::save_path(&has_table_path, &make_doc_with_table()).unwrap();
+    let mut s_ins = Session::new(make_doc_without_table());
+    let r_ins = s_ins.run("review.compare", &json!({"path": has_table_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert!(r_ins["changes"].as_u64().unwrap_or(0) > 0);
+
+    let mut s_ins_acc = Session::new(s_ins.doc.clone());
+    s_ins_acc.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s_ins_acc.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1, "Accept All on inserted table keeps the table");
+
+    let mut s_ins_rej = Session::new(s_ins.doc.clone());
+    s_ins_rej.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_ins_rej.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 0, "Reject All on inserted table removes the table");
 }
 
 #[test]
