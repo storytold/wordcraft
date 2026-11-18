@@ -230,7 +230,7 @@ fn long_endnotes_continue_on_new_pages() {
     }
     assert_eq!(seen, (0..80u32).map(|i| vec![i]).collect::<Vec<_>>(), "every paragraph once, in order");
     // The caret reaches the last paragraph, on a page.
-    let c = l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(79), off: 0, affinity: None }).unwrap();
+    let c = l.caret(&Pos::new(StoryRef::Part(id), Path::top(79), 0)).unwrap();
     assert!(c.top < 792.0 - 72.0, "{c:?}");
 }
 
@@ -254,7 +254,7 @@ fn caret_in_a_continued_footnote_is_found_on_its_page() {
             _ => None,
         })
         .expect("the note continues on page 2");
-    let at = |off: usize| Pos { story: StoryRef::Part(id), path: Path::top(0), off, affinity: None };
+    let at = |off: usize| Pos::new(StoryRef::Part(id), Path::top(0), off);
     let cont = at(para.lines[k + 1].start);
     for hint in [0, 1] {
         assert_eq!(l.caret_on(&at(0), hint).map(|c| c.page), Some(0), "start, hint {hint}");
@@ -428,11 +428,7 @@ fn a_page_reference_to_a_missing_bookmark_shows_words_error_in_output() {
             p.insert_object(0, InlineObject::BookmarkStart { name: "Elsewhere".into() }, &Default::default()).unwrap();
         }
         let shown = |l: &DocLayout| -> Vec<String> {
-            l.pages[0]
-                .items
-                .iter()
-                .flat_map(|it| if let Placed::Lines { para, .. } = it { para.shown.iter().map(|s| s.1.clone()).collect() } else { vec![] })
-                .collect()
+            l.pages[0].items.iter().flat_map(|it| if let Placed::Lines { para, .. } = it { field_results(para) } else { vec![] }).collect()
         };
         assert_eq!(shown(&layout(&d, &mut LayoutCache::new(), &output)), [crate::fields::BOOKMARK_NOT_DEFINED, "9"], "other bookmark: {other_mark}");
         assert_eq!(shown(&lay(&d)), ["9", "9"], "the editor, other bookmark: {other_mark}");
@@ -491,13 +487,27 @@ fn a_page_reference_to_a_bookmark_in_a_text_box_shows_its_anchors_page_in_output
     assert_eq!(shown, ["2"]);
 }
 
+/// The field results of `para`, joining multi-cluster results of the same field.
+fn field_results(para: &ParaLayout) -> Vec<String> {
+    let mut results: Vec<(usize, String)> = Vec::new();
+    for (k, text, _) in &para.shown {
+        let start = para.clusters.get(*k).map_or(*k, |cl| cl.start);
+        if let Some(last) = results.last_mut().filter(|(s, _)| *s == start) {
+            last.1.push_str(text);
+        } else {
+            results.push((start, text.clone()));
+        }
+    }
+    results.into_iter().map(|(_, text)| text).collect()
+}
+
 /// The field results shown on page `page` by the lines of `story`.
 fn shown_in(l: &DocLayout, page: usize, story: StoryRef) -> Vec<String> {
     l.pages[page]
         .items
         .iter()
         .flat_map(|it| match it {
-            Placed::Lines { story: s, para, .. } if *s == story => para.shown.iter().map(|s| s.1.clone()).collect(),
+            Placed::Lines { story: s, para, .. } if *s == story => field_results(para),
             _ => vec![],
         })
         .collect()

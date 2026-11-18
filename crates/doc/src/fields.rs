@@ -105,7 +105,7 @@ impl Document {
             }
             off += OBJ.len_utf8();
         }
-        Pos { off, ..p.clone() }
+        if off == p.off { p.clone() } else { p.at(off) }
     }
 
     /// Whether any story holds a range-field marker without its partner.

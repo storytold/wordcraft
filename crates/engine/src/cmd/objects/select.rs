@@ -142,7 +142,7 @@ pub fn selected_all(s: &Session, max: usize) -> Vec<(Pos, InlineObject)> {
                 continue;
             }
             if let Some(o) = p.object_at(off).filter(|o| o.is_drawing()) {
-                out.push((Pos { story, path: path.clone(), off, affinity: None }, o.clone()));
+                out.push((Pos::new(story, path.clone(), off), o.clone()));
                 if out.len() >= max {
                     return out;
                 }
@@ -275,7 +275,7 @@ pub(crate) fn all_objects(s: &Session) -> Vec<(Pos, InlineObject)> {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         for off in p.object_offsets() {
             if let Some(o) = p.object_at(off).filter(|o| o.is_drawing()) {
-                v.push((Pos { story: StoryRef::Body, path: path.clone(), off, affinity: None }, o.clone()));
+                v.push((Pos::new(StoryRef::Body, path.clone(), off), o.clone()));
             }
         }
     }

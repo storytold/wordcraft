@@ -595,8 +595,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             {
                 *top = top.saturating_add(u32::try_from(shift).unwrap_or(u32::MAX));
             }
-            let page = page_at(&l, &formats, &Pos::new(StoryRef::Body, target, e.lead))
-                .map_or_else(|| "1".into(), |(_, n, fmt)| page_text(n, fmt));
+            let page = page_at(&l, &formats, &Pos::new(StoryRef::Body, target, e.lead)).map_or_else(|| "1".into(), |(_, n, fmt)| page_text(n, fmt));
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
             let link = links.get(k).cloned().flatten();
             // With a bookmark to point at, the page number is a `PAGEREF` field, as Word writes

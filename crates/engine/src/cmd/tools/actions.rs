@@ -268,9 +268,9 @@ pub(super) fn select_similar(s: &mut Session, _: &Value) -> CmdResult {
             if *c == target {
                 count += 1;
                 if first.is_none() {
-                    first = Some(Pos { story: f.story, path: path.clone(), off: r.start, affinity: None });
+                    first = Some(Pos::new(f.story, path.clone(), r.start));
                 }
-                last = Some(Pos { story: f.story, path: path.clone(), off: r.end, affinity: None });
+                last = Some(Pos::new(f.story, path.clone(), r.end));
             }
         }
     }

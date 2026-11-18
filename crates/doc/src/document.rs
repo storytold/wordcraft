@@ -329,13 +329,15 @@ impl Document {
     /// Clamp a position into the document (valid path, char boundary).
     pub fn clamp(&self, p: &Pos) -> Pos {
         if let Some(para) = self.para_at(p) {
-            return Pos::with_affinity(p.story, p.path.clone(), para.clamp(p.off), p.affinity);
+            let off = para.clamp(p.off);
+            let affinity = (off == p.off).then_some(p.affinity).flatten();
+            return Pos::with_affinity(p.story, p.path.clone(), off, affinity);
         }
         let story = if self.story(p.story).is_some() { p.story } else { StoryRef::Body };
         let all = self.para_paths(story);
         let path = all.iter().rev().find(|q| **q <= p.path).or(all.first()).cloned().unwrap_or_else(|| Path::top(0));
         let off = self.para(story, &path).map(|q| q.clamp(p.off)).unwrap_or(0);
-        Pos::with_affinity(story, path, off, p.affinity)
+        Pos::new(story, path, off)
     }
 
     /// The whole text of a story, paragraphs separated by `\n` (tables: cells by `\t`).

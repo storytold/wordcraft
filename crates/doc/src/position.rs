@@ -56,13 +56,43 @@ impl std::fmt::Display for Path {
 }
 
 /// A position in a document.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+///
+/// `affinity` is a transient visual-line hint for wrapped inline objects (such as multi-line field
+/// results) whose fragments share the same document byte range. Equality, ordering, and hashing
+/// compare only `(story, path, off)` and ignore `affinity`.
+#[derive(Clone, Debug, Eq, Serialize, Deserialize, Default)]
 pub struct Pos {
     pub story: StoryRef,
     pub path: Path,
     pub off: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub affinity: Option<usize>,
+}
+
+impl PartialEq for Pos {
+    fn eq(&self, other: &Self) -> bool {
+        (self.story, &self.path, self.off) == (other.story, &other.path, other.off)
+    }
+}
+
+impl Ord for Pos {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.story, &self.path, self.off).cmp(&(other.story, &other.path, other.off))
+    }
+}
+
+impl PartialOrd for Pos {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl std::hash::Hash for Pos {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.story.hash(state);
+        self.path.hash(state);
+        self.off.hash(state);
+    }
 }
 
 impl Pos {
@@ -74,5 +104,10 @@ impl Pos {
     }
     pub fn body(block: usize, off: usize) -> Pos {
         Pos { story: StoryRef::Body, path: Path::top(block), off, affinity: None }
+    }
+    /// Same story and paragraph path at byte offset `off`, with visual-line affinity cleared.
+    #[must_use]
+    pub fn at(&self, off: usize) -> Pos {
+        Pos { story: self.story, path: self.path.clone(), off, affinity: None }
     }
 }

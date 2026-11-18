@@ -716,14 +716,14 @@ impl Document {
     pub fn insert_text(&mut self, pos: &Pos, s: &str, props: &CharProps) -> Result<Pos> {
         let p = self.para_mut(pos.story, &pos.path)?;
         let n = p.insert_text(pos.off, s, props)?;
-        Ok(Pos { off: pos.off + n, ..pos.clone() })
+        Ok(pos.at(pos.off + n))
     }
 
     /// Insert an inline object at `pos`; returns the position after it.
     pub fn insert_object(&mut self, pos: &Pos, obj: InlineObject, props: &CharProps) -> Result<Pos> {
         let p = self.para_mut(pos.story, &pos.path)?;
         p.insert_object(pos.off, obj, props)?;
-        Ok(Pos { off: pos.off + crate::para::OBJ.len_utf8(), ..pos.clone() })
+        Ok(pos.at(pos.off + crate::para::OBJ.len_utf8()))
     }
 
     /// Split the paragraph at `pos`; returns the start of the new (second) paragraph.
@@ -791,6 +791,7 @@ impl Document {
     /// is unchanged: both ends are checked before anything is deleted.
     pub fn delete_range(&mut self, a: &Pos, b: &Pos) -> Result<Pos> {
         let (a, b) = order(a, b);
+        let a = a.at(a.off);
         if a == b {
             return Ok(a);
         }
@@ -1549,7 +1550,7 @@ impl Document {
             target.append(tail);
             target.props = keep;
             target.section = sect;
-            return Ok(Pos { off: pos.off + added, ..pos.clone() });
+            return Ok(pos.at(pos.off + added));
         }
         // Multi-block: split, merge first into left part, last into right part.
         let after = self.split_paragraph(pos)?;
