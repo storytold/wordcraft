@@ -38,7 +38,13 @@ pub(crate) struct WindowUi {
     pub(crate) sent_full_screen: bool,
     pub(crate) seen_full_screen: Option<bool>,
     pub(crate) escape_free: bool,
-    pub(crate) word_count: (u64, usize),
+    pub(crate) status_counts: (u64, crate::StatusCounts),
+    pub(crate) print_memo: crate::print_page::Memo,
+    /// Per window, as each window shows its own layout: one shared list would be read again
+    /// on every frame of every window.
+    pub(crate) missing_fonts: crate::chrome::MissingFontsMemo,
+    /// This window's refused or failed export, shown on its Export and Print pages (Backstage hides the status bar).
+    pub(crate) export_error: String,
     pub(crate) last_autosave: f64,
     pub(crate) equation_prev_tab: Option<String>,
     pub(crate) smart_art_item: Option<usize>,
@@ -66,8 +72,8 @@ pub(crate) struct WindowUi {
     pub(crate) alt_modifier_seen: bool,
 }
 
-/// A word count that matches no document revision, so the next frame counts.
-pub(crate) const NOT_COUNTED: (u64, usize) = (u64::MAX, 0);
+/// Status-bar counts that match no document revision, so the next frame counts.
+pub(crate) const NOT_COUNTED: (u64, crate::StatusCounts) = (u64::MAX, crate::StatusCounts { words: 0, chars: 0, chars_no_spaces: 0 });
 
 impl WindowUi {
     /// A new window showing open document `document`: nothing open over the page, Home tab.
@@ -108,7 +114,10 @@ impl WindowUi {
             sent_full_screen: false,
             seen_full_screen: None,
             escape_free: false,
-            word_count: NOT_COUNTED,
+            status_counts: NOT_COUNTED,
+            print_memo: Default::default(),
+            missing_fonts: Default::default(),
+            export_error: String::new(),
             last_autosave: 0.0,
             equation_prev_tab: None,
             smart_art_item: None,
@@ -160,6 +169,7 @@ impl WordApp {
             services: _,
             printing: _,
             print_feedback_seen: _,
+            print_gen: _,
             font_generation: _,
             integrated_titlebar: _,
             mac_titlebar: _,
@@ -167,6 +177,9 @@ impl WordApp {
             updates_rt: _,
             // An announcement lasts three seconds, from whichever window's shortcut made it.
             announcement: _,
+            font_notice_seen: _,
+            font_notices: _,
+            packs_rt: _,
             // The control channel's screenshots and input go to the active window, whichever it is.
             shots: _,
             capture_epoch: _,
@@ -175,6 +188,8 @@ impl WordApp {
             synthetic: _,
             synthetic_pending: _,
             synthetic_injected: _,
+            raw_scroll_events_scaled: _,
+            last_scaled_scroll_events: _,
             // The current command's origin, set and cleared around it.
             ime_origin: _,
             styled: _,
@@ -182,13 +197,17 @@ impl WordApp {
             fonts_korean: _,
             fonts_hant: _,
             fonts_system_cjk: _,
+            fonts_system_arabic: _,
             want_system_cjk: _,
+            want_system_arabic: _,
             recent_fonts_for: _,
             // File › Recover lists the copies of every window's documents.
             recover_fonts_for: _,
             fonts_frames: _,
             applied_theme: _,
             native_scale: _,
+            auto_scale_limit: _,
+            monitor_zoom: _,
             legacy_interface_size: _,
             desktop_theme: _,
             desktop_dark: _,
@@ -233,7 +252,10 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
+            print_memo,
+            missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -247,6 +269,7 @@ impl WordApp {
             file_browser,
             info_editing,
             shown_document,
+            clipboard_published: _,
         } = self;
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while
@@ -255,6 +278,9 @@ impl WordApp {
             quick_access_toolbar: _,
             recent: _,
             recent_symbols: _,
+            date_time_format: _,
+            date_time_language: _,
+            date_time_update: _,
             recent_colors: _,
             recent_fonts: _,
             theme: _,
@@ -263,6 +289,10 @@ impl WordApp {
             animations: _,
             legacy_dark: _,
             nav_tab: _,
+            display_server: _,
+            status_count: _,
+            scroll_speed: _,
+            touchpad_scroll_speed: _,
             nav_pane: _,
             show_discord: _,
             author: _,
@@ -289,6 +319,7 @@ impl WordApp {
             print_backgrounds: _,
             update_fields_before_print: _,
             dictionary: _,
+            font_download_notice: _,
             // Where each task pane sits, and their order.
             styles_pane_dock: _,
             styles_pane_float: _,
@@ -330,7 +361,10 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
+            print_memo,
+            missing_fonts,
+            export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,

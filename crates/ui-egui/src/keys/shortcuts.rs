@@ -132,9 +132,34 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
         if m.alt && !crate::widgets::enabled(app, spec.id) {
             return false;
         }
+        // Mod+Shift+V pastes the formatting Mod+Shift+C (or the Format Painter) picked up; with
+        // none picked up it pastes the clipboard as text only, as Word for Windows does (#1537,
+        // #4943). Another key bound to Paste Formatting only pastes formatting.
+        let id = if spec.id == "edit.pasteFormat" {
+            let formatting = app.session.painter.is_some() || app.session.copied_format.is_some();
+            let chord = key == Key::V && m.command && m.shift && !m.alt;
+            // A browser sends a paste event after that chord (the desktop doesn't): after
+            // pasting formatting it's ignored; with none, it pastes the text there, once. A
+            // rebinding to another key makes no paste event.
+            let paste_follows = chord && app.canvas.paste_event_follows_chord;
+            app.canvas.ignore_next_paste = formatting && paste_follows;
+            // Handled from the canvas's key events: its V release (Shift may go up first, so the
+            // release reads as plain Mod+V) mustn't paste again through the picture hook. Not
+            // from `global_shortcuts` (canvas unfocused), where no release is ever seen.
+            if chord && app.canvas.focused {
+                app.canvas.pasted = true;
+            }
+            app.canvas.paste_wait_since = None;
+            if !formatting && paste_follows {
+                return true;
+            }
+            if !formatting && chord { "edit.pasteText" } else { spec.id }
+        } else {
+            spec.id
+        };
         // Screen readers hear what a formatting shortcut did, as Word says it ("Bold On").
-        if app.run(spec.id, json!({})).is_ok() {
-            crate::announce::after_shortcut(app, spec.id);
+        if app.run(id, json!({})).is_ok() {
+            crate::announce::after_shortcut(app, id);
         }
         return true;
     }
@@ -251,11 +276,9 @@ pub(super) fn is_global_shortcut(key: Key, m: Modifiers) -> bool {
 /// keyboard, or a button or a pane's title bar does. A focused widget in an open dialog or popup
 /// keeps the keys, so Ctrl+Z on a dialog button can't undo the document behind it.
 pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
-    // Customize Keyboard records the keys pressed; they never run commands meanwhile.
-    if app.canvas.focused
-        || ctx.text_edit_focused()
-        || (ctx.egui_wants_keyboard_input() && crate::panes::overlay_open(app, ctx))
-        || matches!(app.dialog, Some(crate::dialogs::Dialog::CustomizeKeyboard { .. }))
+    // No shortcuts run while a modal dialog is open (#3859); Customize Keyboard records the keys
+    // pressed meanwhile.
+    if app.canvas.focused || ctx.text_edit_focused() || (ctx.egui_wants_keyboard_input() && crate::panes::overlay_open(app, ctx)) || app.modal_open()
     {
         return;
     }

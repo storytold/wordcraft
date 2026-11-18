@@ -5,7 +5,7 @@ use super::{
 use wordcraft_doc::para::OBJ;
 
 /// Compare and Combine take the same settings.
-pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character", "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
+pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
 
 /// What Compare / Combine compares (the More >> settings of Word's dialog).
 struct CompareOptions {
@@ -27,6 +27,16 @@ impl CompareOptions {
     }
 }
 
+/// Context and tracking counters for diffing paragraph contents.
+struct DiffCtx<'a> {
+    ins: u32,
+    del: u32,
+    opts: &'a CompareOptions,
+    budget: &'a mut u64,
+    char_fallbacks: &'a mut usize,
+    plain_revised: bool,
+}
+
 /// Changed paragraphs longer than this (in characters) are compared word by word even at
 /// character level, so the comparison table stays small.
 const MAX_CHAR_DIFF: usize = 2000;
@@ -35,11 +45,16 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// result shows the differences as tracked insertions, deletions and formatting changes, labelled
 /// with `author`. Options Word offers that the comparison can't honour yet (moves, comments,
 /// headers and footers, footnotes, text boxes, fields) are accepted and listed in the result.
+/// When character-level comparison is requested (`"level": "character"`) but any paragraph exceeds
+/// [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that paragraph, surfaces the
+/// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
-    let revised = if let Some(t) = p::str(v, "text") {
-        Document::from_text(t)
+    // A revised side given as plain text carries no real runs or properties; one opened from a
+    // path does. The diff takes the revised formatting only in the latter case.
+    let (revised, plain_revised) = if let Some(t) = p::str(v, "text") {
+        (Document::from_text(t), true)
     } else if let Some(path) = p::str(v, "path") {
-        crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
+        (crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?, false)
     } else {
         return Err(CmdError::Params("`path` or `text` of the revised document is required".into()));
     };
@@ -61,7 +76,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         formatting: p::bool(v, "formatting").unwrap_or(true),
         characters: matches!(level, "character" | "char"),
     };
-    let not_honoured: Vec<&str> =
+    let mut not_honoured: Vec<&str> =
         ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
@@ -83,7 +98,9 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         Block::Table(_) => format!("\u{0}table\u{0}{}", opts.key(&block_text(b, 0))),
     };
     let mut budget = MAX_COMPARE_CELLS;
+    let mut char_fallbacks = 0usize;
     let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut budget);
+    let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks, plain_revised };
     let mut out: Vec<Arc<Block>> = Vec::new();
     let (mut i, mut j) = (0usize, 0usize);
     let mut changes = 0usize;
@@ -97,7 +114,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                     if !same_objects(&s.doc, pa, pb) {
                         // Same text, but objects (text boxes, pictures…) differ: diffed, so the
                         // original's objects aren't lost.
-                        out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut budget)));
+                        out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx)));
                         changes += 1;
                         i += 1;
                         j += 1;
@@ -129,9 +146,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 for x in 0..dels.max(inss) {
                     let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
                     match (a.map(|x| &**x), b.map(|x| &**x)) {
-                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => {
-                            out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut budget)))
-                        }
+                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx))),
                         _ => {
                             if let Some(x) = a {
                                 out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
@@ -162,8 +177,21 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         // Compare creates an untitled result from the current document.
         s.clear_versions();
     }
+    if char_fallbacks > 0 {
+        log::warn!(
+            "compare: {char_fallbacks} paragraph(s) exceeded character diff limit of {MAX_CHAR_DIFF}; fell back from character to word level diff"
+        );
+        if !not_honoured.contains(&"level") {
+            not_honoured.push("level");
+        }
+    }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
-    Ok(json!({"changes": changes, "author": author, "notHonoured": not_honoured}))
+    Ok(json!({
+        "changes": changes,
+        "author": author,
+        "notHonoured": not_honoured,
+        "characterFallback": char_fallbacks,
+    }))
 }
 
 /// A block's text (a table's cells in order), for matching blocks.
@@ -177,13 +205,14 @@ fn block_text(b: &Block, depth: usize) -> String {
     }
 }
 
-/// A copy of the block with every run (in tables, every cell's) changed by `f`.
+/// Returns a copy of `b` with all text runs and paragraph marks (or nested table cells) updated by `f`.
 fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
     match b {
         Block::Para(p) => {
             let mut p = p.clone();
             let len = p.len();
             let _ = p.format(0, len, f);
+            f(&mut p.mark);
             Block::Para(p)
         }
         Block::Table(t) => {
@@ -205,59 +234,96 @@ pub(super) enum Op {
     Ins,
 }
 
-/// Longest sequence the comparison table is built for; the rest of a longer sequence is
-/// compared as deleted and inserted, never dropped.
+/// Longest sequence window per LCS comparison table chunk; sequences longer than this are
+/// aligned in successive chunked windows rather than truncated, preserving tail alignment.
 const MAX_LCS: usize = 4000;
 
 /// Comparison table cells one compare may fill over all its tables (blocks and every changed
 /// paragraph pair); once spent, the remaining middles are compared as deleted and inserted.
 const MAX_COMPARE_CELLS: u64 = 50_000_000;
 
-/// LCS edit script between two sequences: the common start and end are matched first, then the
-/// middle (bounded size). The middle's table is charged to `budget`; when it doesn't fit, the
-/// middle is deleted and inserted whole.
+/// Computes the longest common subsequence (LCS) edit script (`Op::Same`, `Op::Del`, `Op::Ins`)
+/// between sequences `a` and `b`.
+///
+/// Strips common prefix and suffix first, then iterates over windows capped at [`MAX_LCS`],
+/// charging comparison cells against `budget`. Between windows, intermediate common prefixes
+/// are trimmed to re-anchor alignment without table allocations. When the remaining cells
+/// exceed `budget`, the unaligned tail degrades honestly as whole deletions and insertions.
 pub(super) fn lcs_ops<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> Vec<Op> {
     let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
     let (ra, rb) = (a.get(pre..).unwrap_or_default(), b.get(pre..).unwrap_or_default());
     let suf = ra.iter().rev().zip(rb.iter().rev()).take_while(|(x, y)| x == y).count();
-    let (a, b) = (ra.get(..ra.len() - suf).unwrap_or_default(), rb.get(..rb.len() - suf).unwrap_or_default());
+    let mut rem_a = ra.get(..ra.len().saturating_sub(suf)).unwrap_or_default();
+    let mut rem_b = rb.get(..rb.len().saturating_sub(suf)).unwrap_or_default();
     let mut ops = vec![Op::Same; pre];
-    let (mut n, mut m) = (a.len().min(MAX_LCS), b.len().min(MAX_LCS));
-    let cells = (n as u64).saturating_mul(m as u64);
-    if cells > *budget {
-        (n, m) = (0, 0);
-    } else {
-        *budget -= cells;
-    }
-    let mut t = vec![vec![0u32; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            let v = if a.get(i) == b.get(j) {
-                t.get(i + 1).and_then(|r| r.get(j + 1)).copied().unwrap_or(0) + 1
-            } else {
-                t.get(i + 1).and_then(|r| r.get(j)).copied().unwrap_or(0).max(t.get(i).and_then(|r| r.get(j + 1)).copied().unwrap_or(0))
-            };
-            if let Some(c) = t.get_mut(i).and_then(|r| r.get_mut(j)) {
-                *c = v;
+
+    while !rem_a.is_empty() && !rem_b.is_empty() {
+        let p = rem_a.iter().zip(rem_b).take_while(|(x, y)| x == y).count();
+        if p > 0 {
+            ops.extend(std::iter::repeat_n(Op::Same, p));
+            rem_a = rem_a.get(p..).unwrap_or_default();
+            rem_b = rem_b.get(p..).unwrap_or_default();
+            if rem_a.is_empty() || rem_b.is_empty() {
+                break;
             }
         }
-    }
-    let (mut i, mut j) = (0, 0);
-    while i < n && j < m {
-        if a.get(i) == b.get(j) {
-            ops.push(Op::Same);
-            i += 1;
-            j += 1;
-        } else if t.get(i + 1).and_then(|r| r.get(j)) >= t.get(i).and_then(|r| r.get(j + 1)) {
-            ops.push(Op::Del);
-            i += 1;
-        } else {
-            ops.push(Op::Ins);
-            j += 1;
+
+        let n = rem_a.len().min(MAX_LCS);
+        let m = rem_b.len().min(MAX_LCS);
+        let cells = (n as u64).saturating_mul(m as u64);
+        if cells > *budget || n == 0 || m == 0 {
+            break;
         }
+        *budget = budget.saturating_sub(cells);
+
+        let stride = m.saturating_add(1);
+        let table_len = n.saturating_add(1).saturating_mul(stride);
+        let mut t = vec![0u32; table_len];
+
+        for i in (0..n).rev() {
+            let row = i.saturating_mul(stride);
+            let next_row = i.saturating_add(1).saturating_mul(stride);
+            for j in (0..m).rev() {
+                let v = if rem_a.get(i) == rem_b.get(j) {
+                    t.get(next_row.saturating_add(j).saturating_add(1)).copied().unwrap_or(0).saturating_add(1)
+                } else {
+                    let down = t.get(next_row.saturating_add(j)).copied().unwrap_or(0);
+                    let right = t.get(row.saturating_add(j).saturating_add(1)).copied().unwrap_or(0);
+                    down.max(right)
+                };
+                if let Some(c) = t.get_mut(row.saturating_add(j)) {
+                    *c = v;
+                }
+            }
+        }
+
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < n && j < m {
+            let row = i.saturating_mul(stride);
+            let next_row = i.saturating_add(1).saturating_mul(stride);
+            if rem_a.get(i) == rem_b.get(j) {
+                ops.push(Op::Same);
+                i = i.saturating_add(1);
+                j = j.saturating_add(1);
+            } else {
+                let down = t.get(next_row.saturating_add(j)).copied().unwrap_or(0);
+                let right = t.get(row.saturating_add(j).saturating_add(1)).copied().unwrap_or(0);
+                if down >= right {
+                    ops.push(Op::Del);
+                    i = i.saturating_add(1);
+                } else {
+                    ops.push(Op::Ins);
+                    j = j.saturating_add(1);
+                }
+            }
+        }
+
+        rem_a = rem_a.get(i..).unwrap_or_default();
+        rem_b = rem_b.get(j..).unwrap_or_default();
     }
-    ops.extend(std::iter::repeat_n(Op::Del, a.len() - i));
-    ops.extend(std::iter::repeat_n(Op::Ins, b.len() - j));
+
+    ops.extend(std::iter::repeat_n(Op::Del, rem_a.len()));
+    ops.extend(std::iter::repeat_n(Op::Ins, rem_b.len()));
     ops.extend(std::iter::repeat_n(Op::Same, suf));
     ops
 }
@@ -330,9 +396,11 @@ fn flatten_region(out: &mut Vec<Op>, region: &[(Op, usize, Kind)]) {
 
 /// A token of a changed paragraph: a word (or character), or an inline object without text
 /// of its own (a text box anchor, a picture, a bookmark…), which is compared and kept whole.
+/// Each token also carries the byte range it came from in its source paragraph, so the output
+/// segment can take the formatting of the run it came from instead of the paragraph's first run.
 enum Tok<'a> {
-    Text(String),
-    Obj(&'a InlineObject),
+    Text(String, std::ops::Range<usize>),
+    Obj(&'a InlineObject, std::ops::Range<usize>),
 }
 
 /// What a comparison sees of a token: the text as the options say, an object with the text of
@@ -358,89 +426,217 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
-/// between them. Objects with text (fields, equations…) count as their text.
+/// between them. Objects with text (fields, equations…) count as their text. Each token records
+/// the byte range it came from in `p`, so its output segment can take that source run's
+/// formatting. An object's flattened text (or a broken marker's placeholder) maps to the marker's
+/// own range, which is the nearest formatting the object has.
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
-    fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, c: char, characters: bool) {
+    fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, start: usize, end: usize, c: char, characters: bool) {
         cur.push(c);
         if characters || c == ' ' {
-            v.push(Tok::Text(std::mem::take(cur)));
+            v.push(Tok::Text(std::mem::take(cur), start..end));
         }
     }
     let mut v = Vec::new();
     let mut cur = String::new();
+    let mut cur_start = 0usize;
     let mut objects = p.objects.iter();
-    for c in p.text.chars() {
+    for (i, c) in p.text.char_indices() {
+        let marker = i..i + OBJ.len_utf8();
         if c != OBJ {
-            push(&mut v, &mut cur, c, characters);
+            if cur.is_empty() {
+                cur_start = i;
+            }
+            push(&mut v, &mut cur, cur_start, i + c.len_utf8(), c, characters);
             continue;
         }
         match objects.next() {
             Some(o) if o.plain_text().is_empty() => {
                 if !cur.is_empty() {
-                    v.push(Tok::Text(std::mem::take(&mut cur)));
+                    v.push(Tok::Text(std::mem::take(&mut cur), cur_start..i));
                 }
-                v.push(Tok::Obj(o));
+                v.push(Tok::Obj(o, marker));
             }
-            Some(o) => o.plain_text().chars().for_each(|c| push(&mut v, &mut cur, c, characters)),
+            Some(o) => {
+                for c in o.plain_text().chars() {
+                    if cur.is_empty() {
+                        cur_start = i;
+                    }
+                    push(&mut v, &mut cur, cur_start, marker.end, c, characters);
+                }
+            }
             None => {
                 // A marker without its object (a broken paragraph): kept as a visible
                 // placeholder, so the loss shows in the result instead of vanishing.
                 log::warn!("compare: an object marker without its object");
-                push(&mut v, &mut cur, char::REPLACEMENT_CHARACTER, characters);
+                if cur.is_empty() {
+                    cur_start = i;
+                }
+                push(&mut v, &mut cur, cur_start, marker.end, char::REPLACEMENT_CHARACTER, characters);
             }
         }
     }
     if !cur.is_empty() {
-        v.push(Tok::Text(cur));
+        v.push(Tok::Text(cur, cur_start..p.text.len()));
     }
     v
+}
+
+/// One side's run formatting for `word_diff`: the paragraph's run ranges (from
+/// [`Paragraph::run_ranges`]), walked with a forward cursor. `word_diff` consumes each side's
+/// tokens in increasing offset order, so the cursor makes a token's lookup amortised O(1)
+/// instead of rescanning the runs from the start for every token; an out-of-order offset falls
+/// back to a binary search, so the lookup stays correct for any offset.
+struct SideProps<'a> {
+    ranges: Vec<(std::ops::Range<usize>, &'a CharProps)>,
+    mark: &'a CharProps,
+    cursor: usize,
+}
+
+impl<'a> SideProps<'a> {
+    fn new(p: &'a Paragraph) -> Self {
+        SideProps { ranges: p.run_ranges().collect(), mark: &p.mark, cursor: 0 }
+    }
+
+    /// The props of the run holding byte `off`: that run's props, or the paragraph mark when
+    /// `off` is past the last run — the same answer `Paragraph::props_of_char` gives.
+    fn run_props(&mut self, off: usize) -> &'a CharProps {
+        while self.cursor < self.ranges.len() && self.ranges[self.cursor].0.end <= off {
+            self.cursor += 1;
+        }
+        if let Some((range, props)) = self.ranges.get(self.cursor)
+            && range.contains(&off)
+        {
+            return props;
+        }
+        let idx = self.ranges.partition_point(|(r, _)| r.start <= off);
+        match idx.checked_sub(1).and_then(|i| self.ranges.get(i)) {
+            Some((range, props)) if range.contains(&off) => props,
+            _ => self.mark,
+        }
+    }
+
+    /// The formatting of the source run a token came from: the run holding the token's first
+    /// byte, with the revision metadata stripped. `ins`, `del` and `fmt_change` are indices into
+    /// the *source* document's own revision table, and the rebuilt paragraph lives in the result
+    /// document, whose table is a different one, so a source mark can never be carried across;
+    /// `word_diff` stamps the compare's own `ins`/`del` on the segments it marks. The consequence
+    /// is plain: a pre-existing pending revision inside a changed paragraph (say another author's
+    /// deletion) is superseded by the compare result rather than preserved. The hyperlink is
+    /// kept, because Reject restores it on a deleted run (at token granularity: the link is taken
+    /// from the token's first byte, so a token that starts unlinked can lose a mid-token link).
+    fn props_of(&mut self, t: &Tok<'_>) -> CharProps {
+        let off = match t {
+            Tok::Text(_, range) | Tok::Obj(_, range) => range.start,
+        };
+        let c = self.run_props(off);
+        CharProps { ins: None, del: None, fmt_change: None, ..c.clone() }
+    }
+}
+
+/// The props of an output token: those of the source run it came from, or — never expected, since
+/// [`tokens`] and [`lcs_ops`] consume both sides in step — the given fallback. A miss is loud.
+fn output_props(side: &mut SideProps<'_>, t: Option<&Tok<'_>>, fallback: &CharProps) -> CharProps {
+    if t.is_none() {
+        log::warn!("compare: a token range lookup missed; `tokens` and `lcs_ops` are out of step");
+    }
+    t.map(|t| side.props_of(t)).unwrap_or_else(|| fallback.clone())
 }
 
 /// Add a token at the end of `p` with `props`.
 fn put(p: &mut Paragraph, t: Option<&Tok<'_>>, props: &CharProps) {
     let at = p.len();
     match t {
-        Some(Tok::Text(t)) => {
+        Some(Tok::Text(t, _)) => {
             let _ = p.insert_text(at, t, props);
         }
-        Some(Tok::Obj(o)) => {
+        Some(Tok::Obj(o, _)) => {
             let _ = p.insert_object(at, (*o).clone(), props);
         }
         None => {}
     }
 }
 
-fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ins: u32, del: u32, opts: &CompareOptions, budget: &mut u64) -> Paragraph {
-    let (at, bt) = (a.plain_text(), b.plain_text());
-    let chars = opts.characters && at.chars().count().max(bt.chars().count()) <= MAX_CHAR_DIFF;
-    let (ta, tb) = (tokens(a, chars), tokens(b, chars));
-    let key = |t: &Tok<'_>| match t {
-        Tok::Text(t) => Key::Text(opts.key(t)),
-        Tok::Obj(o) => obj_key(doc, o),
+/// Returns `true` if paragraph `p` contains more characters than `limit`.
+///
+/// Bounded to scan at most `limit + 1` characters without allocating unless inline objects
+/// are present, avoiding O(n) traversal of large paragraphs.
+fn para_exceeds_char_limit(p: &Paragraph, limit: usize) -> bool {
+    if p.objects.is_empty() {
+        p.text.chars().take(limit.saturating_add(1)).count() > limit
+    } else {
+        p.plain_text().chars().take(limit.saturating_add(1)).count() > limit
+    }
+}
+
+/// Diffs two matched paragraphs either at word granularity or at character granularity according
+/// to `ctx.opts.characters`. When character-level diff is requested but either paragraph exceeds
+/// [`MAX_CHAR_DIFF`] characters, falls back to word-level diff and increments `ctx.char_fallbacks`
+/// so callers can discover the fallback.
+fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>) -> Paragraph {
+    let chars = if ctx.opts.characters {
+        if para_exceeds_char_limit(a, MAX_CHAR_DIFF) || para_exceeds_char_limit(b, MAX_CHAR_DIFF) {
+            *ctx.char_fallbacks = ctx.char_fallbacks.saturating_add(1);
+            false
+        } else {
+            true
+        }
+    } else {
+        false
     };
-    let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), budget);
+    let plain_revised = ctx.plain_revised;
+    let (ta, tb) = (tokens(a, chars), tokens(b, chars));
+    let (mut a_props, mut b_props) = (SideProps::new(a), SideProps::new(b));
+    let key = |t: &Tok<'_>| match t {
+        Tok::Text(t, _) => Key::Text(ctx.opts.key(t)),
+        Tok::Obj(o, _) => obj_key(doc, o),
+    };
+    let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), ctx.budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
     // but a matched single character very often does (digits, punctuation), so only there does
     // a short interior match need folding back into its surrounding edit.
     let ops = if chars { collapse_noise_matches(&ops) } else { ops };
     let mut p = Paragraph::new();
-    p.props = b.props.clone();
-    let base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
+    // The revised paragraph's properties are used with its revision bookkeeping stripped, like runs
+    // (`SideProps::props_of`) and the mark, because `fmt_change`/`num_change` are indices into the revised
+    // document's own revision table and are meaningless in the result document. A plain-text
+    // revised side, which carries no paragraph properties of its own, falls back to the original's,
+    // stripped the same way, so pre-existing revision state never leaks into the rebuilt paragraph.
+    p.props = if plain_revised && b.props.is_empty() { a.props.formatting() } else { b.props.formatting() };
+    // The paragraph mark (the formatting typing into the paragraph's end would get) is the revised
+    // paragraph's when it comes from a document, and the original's when the revised side is plain
+    // text and has no mark of its own. Its own revision bookkeeping (`ins`, `del`, `fmt_change`)
+    // is cleared because those indices belong to another document's revision table.
+    p.mark = if plain_revised {
+        CharProps { ins: None, del: None, fmt_change: None, ..a.mark.clone() }
+    } else {
+        CharProps { ins: None, del: None, fmt_change: None, ..b.mark.clone() }
+    };
+    let fallback = a.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
+    let fallback_b = b.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
     let (mut i, mut j) = (0, 0);
     for op in ops {
         match op {
             Op::Same => {
-                // Equal as compared (perhaps up to case or spacing): the revised text.
-                put(&mut p, tb.get(j), &base);
+                // Equal as compared (perhaps up to case or spacing): the revised text, but the
+                // formatting of the run it stands for. For a document revised side that is the
+                // revised run, as issue #3749 prescribes ("Copy unchanged tokens from the revised
+                // paragraph with their own properties"); a plain-text revised side has no runs to
+                // speak of, so the original run's formatting is kept instead.
+                let props =
+                    if plain_revised { output_props(&mut a_props, ta.get(i), &fallback) } else { output_props(&mut b_props, tb.get(j), &fallback_b) };
+                put(&mut p, tb.get(j), &props);
                 i += 1;
                 j += 1;
             }
             Op::Del => {
-                put(&mut p, ta.get(i), &CharProps { del: Some(del), ..base.clone() });
+                let props = output_props(&mut a_props, ta.get(i), &fallback);
+                put(&mut p, ta.get(i), &CharProps { del: Some(ctx.del), ..props });
                 i += 1;
             }
             Op::Ins => {
-                put(&mut p, tb.get(j), &CharProps { ins: Some(ins), ..base.clone() });
+                let props = tb.get(j).map(|t| b_props.props_of(t)).unwrap_or_else(|| fallback.clone());
+                put(&mut p, tb.get(j), &CharProps { ins: Some(ctx.ins), ..props });
                 j += 1;
             }
         }

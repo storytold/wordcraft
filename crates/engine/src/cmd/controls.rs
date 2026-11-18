@@ -7,6 +7,7 @@
 //! typing and deleting commands.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::control::{ContentControl, ControlKind, ControlLock, ControlRange, ListItem, MAX_CONTROL_TEXT, MAX_LIST_ITEMS};
 use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::{CharProps, Rgb, TextColor};
@@ -172,7 +173,7 @@ fn placeholder_style_id(doc: &wordcraft_doc::Document) -> String {
 /// The placeholder style, added to the document when it hasn't one.
 fn ensure_placeholder_style(s: &mut Session) {
     if s.doc.styles.get(&placeholder_style_id(&s.doc)).is_none() {
-        s.doc.styles.styles.push(Style {
+        Arc::make_mut(&mut s.doc.styles).styles.push(Style {
             id: PLACEHOLDER_STYLE.into(),
             name: PLACEHOLDER_STYLE_NAME.into(),
             kind: StyleKind::Character,
@@ -799,6 +800,8 @@ mod tests {
 
 #[cfg(test)]
 mod editing_tests {
+    use std::sync::Arc;
+
     use serde_json::json;
     use wordcraft_doc::StoryRef;
     use wordcraft_doc::control::ControlKind;
@@ -829,8 +832,8 @@ mod editing_tests {
         let typed_style = |run_props: Option<CharProps>| {
             let mut s = Session::new(wordcraft_doc::Document::new());
             let grey = CharProps { color: Some(TextColor::Rgb(Rgb(0x80, 0x80, 0x80))), ..Default::default() };
-            s.doc.styles.styles.push(style("Platzhaltertext", "Placeholder Text", grey));
-            s.doc.styles.styles.push(style("Eingabe", "Eingabe", CharProps { bold: Some(true), ..Default::default() }));
+            Arc::make_mut(&mut s.doc.styles).styles.push(style("Platzhaltertext", "Placeholder Text", grey));
+            Arc::make_mut(&mut s.doc.styles).styles.push(style("Eingabe", "Eingabe", CharProps { bold: Some(true), ..Default::default() }));
             run(&mut s, "text.insert", json!({"text": "Name: "}));
             run(&mut s, "developer.plainText", json!({"tag": "name"}));
             let start = s.doc.control_at(&s.sel.focus).unwrap().start;
@@ -852,7 +855,7 @@ mod editing_tests {
         // style goes all the same.
         let mut s = Session::new(wordcraft_doc::Document::new());
         let grey = CharProps { color: Some(TextColor::Rgb(Rgb(0x80, 0x80, 0x80))), ..Default::default() };
-        s.doc.styles.styles.push(style("TexteEspaceReserve", "Texte de l'espace réservé", grey));
+        Arc::make_mut(&mut s.doc.styles).styles.push(style("TexteEspaceReserve", "Texte de l'espace réservé", grey));
         run(&mut s, "text.insert", json!({"text": "Nom : "}));
         run(&mut s, "developer.plainText", json!({"tag": "nom"}));
         let r = s.doc.control_at(&s.sel.focus).unwrap();

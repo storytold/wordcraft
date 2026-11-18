@@ -84,7 +84,7 @@ fn level_row(ui: &mut Ui, t: &Tokens, caption: &str, value: &str, dim: bool, tip
             let text = egui::RichText::new(value).font(regular(12.5)).color(if dim { t.text_disabled } else { t.text });
             ui.add(egui::Label::new(text).wrap());
         });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Min), |ui| {
             let (r, resp) = ui.allocate_exact_size(vec2(22.0, 20.0), egui::Sense::click());
             let enabled = !disabled;
             if enabled && resp.hovered() {
