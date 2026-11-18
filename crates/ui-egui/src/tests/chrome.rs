@@ -304,7 +304,6 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     a.run("tools.autocorrect", json!({})).unwrap();
     // PLAN: assumed the AutoCorrect dialog's host key is "autoCorrect" (dialogs sets)
     assert!(a.dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("autoCorrect")));
-    let ctx = h.ctx.clone();
     // PLAN: assumed `dialogs::close_all(app: &mut WordApp, ctx: &egui::Context)` (dialogs-w13)
     crate::dialogs::close_all(a, &ctx);
     // Neither keys nor commands reach the hidden placeholder.
@@ -449,8 +448,8 @@ fn print_page_harness(message: Option<Feedback>, rec: &Recorder) -> egui_kittest
     let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
     h.run_steps(3);
     set_print_message(&mut h, message);
-    h.state_mut().ui.print.said = None;
-    h.state_mut().ui.print.hidden = None;
+    h.state_mut().print.said = None;
+    h.state_mut().print.hidden = None;
     h
 }
 
@@ -477,7 +476,7 @@ fn leave_and_reopen_print(h: &mut egui_kittest::Harness<'_, WordApp>) {
 fn the_print_page_opens_without_the_last_jobs_message() {
     let mut h = print_page_harness(Some(Feedback::Submitted("job 7".into())), &Recorder::new(Reply::Sent));
     // A job went away earlier: its message was said in this window's status bar, and the page closed.
-    h.state_mut().ui.print.said = Some(h.state().print_gen);
+    h.state_mut().print.said = Some(h.state().print_gen);
     let _ = h.state_mut().run("file.print", json!({}));
     h.run_steps(4);
     assert!(h.query_by_label_contains("job 7").is_none(), "the last job's message isn't repeated");
@@ -486,7 +485,7 @@ fn the_print_page_opens_without_the_last_jobs_message() {
     // only the page being open keeps it showing: wrong reopen detection would hide it.
     let failure = Some(Feedback::Failed("no paper".into()));
     set_print_message(&mut h, failure.clone());
-    h.state_mut().ui.print.said = Some(h.state().print_gen);
+    h.state_mut().print.said = Some(h.state().print_gen);
     h.run_steps(3);
     assert!(h.query_by_label_contains("no paper").is_some(), "a failure on the open page stays");
     leave_and_reopen_print(&mut h);
@@ -528,7 +527,7 @@ fn the_print_page_shows_a_result_that_was_never_said() {
     // Through the app's own `print_feedback` (run each frame), which says it in a status bar that isn't drawn.
     h.state_mut().printing.message = Some(Feedback::Failed("no paper".into()));
     h.run_steps(3);
-    assert_eq!(h.state().ui.print.said, None, "File's home page doesn't say it");
+    assert_eq!(h.state().print.said, None, "File's home page doesn't say it");
     let _ = h.state_mut().run("file.print", json!({}));
     h.run_steps(4);
     assert!(h.query_by_label_contains("no paper").is_some());
@@ -545,13 +544,13 @@ fn the_print_pages_of_two_windows_decide_separately() {
     a.printing.message = failure.clone();
     let first = a.windows.shown();
     a.print_gen = 1;
-    a.ui.print.said = Some(a.print_gen);
+    a.print.said = Some(a.print_gen);
     a.new_window();
     assert_ne!(first, a.windows.shown());
-    assert_eq!(a.ui.print.said, None, "the second window never said it, so its page shows it");
+    assert_eq!(a.print.said, None, "the second window never said it, so its page shows it");
     assert_eq!(a.printing.message, failure, "the message is shared, and still there");
     assert!(a.enter_window(first));
-    assert_eq!(a.ui.print.said, Some(1), "the first window said it, so its page doesn't repeat it");
+    assert_eq!(a.print.said, Some(1), "the first window said it, so its page doesn't repeat it");
     assert_eq!(a.printing.message, failure);
 }
 
