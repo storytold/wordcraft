@@ -120,6 +120,9 @@ pub struct CanvasState {
     pub(crate) object_gesture: Option<crate::objects::ObjectGesture>,
     /// Page content fingerprints of the current layout, for the page revision.
     pub(crate) page_keys: PageKeys,
+    /// The caret colour last worked out and the key of the place it was worked out for, so a blink doesn't rebuild the
+    /// page's draw list every frame (`cursor::caret_color_at`).
+    pub(crate) caret_bg: Option<(u64, Color32)>,
     /// Whether the document has tracked formatting changes, moves and deletions, by document
     /// revision: finding out walks every paragraph, too slow for every frame (#811).
     markup_facts: Cell<Option<((u64, u64), [bool; 3])>>,
@@ -316,6 +319,7 @@ impl Default for CanvasState {
             smart_art_run: None,
             object_gesture: None,
             page_keys: PageKeys::default(),
+            caret_bg: None,
             markup_facts: Cell::new(None),
             scroll_to_caret: true,
             keep_view: false,
