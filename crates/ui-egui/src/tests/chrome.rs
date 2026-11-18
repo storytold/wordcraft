@@ -1,81 +1,220 @@
 use super::*;
+use egui_kittest::kittest::{By, Queryable};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 
-/// #1678: Focus hides the title bar, ribbon and status bar; "⋯" drops the ribbon over the
+use craft::print::spool::{Pending, Spool, SpoolBackend};
+use craft::print::ui::Feedback;
+
+/// The title bar's search field.
+const SEARCH_NAME: &str = "Search commands and help";
+/// The title bar's community button.
+const DISCORD_TITLE_NAME: &str = "Discord";
+/// The community link of the File page's menu.
+const DISCORD_LINK_NAME: &str = "Discord community";
+
+/// What a job of the test spooler does when it runs.
+#[derive(Clone)]
+enum Reply {
+    /// The job is accepted at once.
+    Sent,
+    /// The job fails at once with this text.
+    Fail(&'static str),
+    /// The job never answers while the test lives, as a printer driver that sleeps.
+    Hold,
+}
+
+/// A spooler backend that records the PDFs it is given and answers as the test says, so a trial
+/// drives the real `Spool` without a printer.
+#[derive(Clone)]
+struct Recorder {
+    reply: Arc<Mutex<Reply>>,
+    sent: Arc<Mutex<Vec<Vec<u8>>>>,
+    cancels: Arc<AtomicUsize>,
+    held: Arc<Mutex<Vec<mpsc::Sender<()>>>>,
+    never_sent: bool,
+    names: Vec<&'static str>,
+}
+
+impl Recorder {
+    fn new(reply: Reply) -> Self {
+        Recorder {
+            reply: Arc::new(Mutex::new(reply)),
+            sent: Arc::default(),
+            cancels: Arc::default(),
+            held: Arc::default(),
+            never_sent: true,
+            names: vec!["Test queue"],
+        }
+    }
+
+    /// The printers the spooler lists; the first is the default.
+    fn with_printers<const N: usize>(mut self, names: [&'static str; N]) -> Self {
+        self.names = names.to_vec();
+        self
+    }
+
+    /// A recorder whose cancel answers `never_sent`.
+    fn cancelling(reply: Reply, never_sent: bool) -> Self {
+        Recorder { never_sent, ..Recorder::new(reply) }
+    }
+
+    fn sent_count(&self) -> usize {
+        self.sent.lock().unwrap().len()
+    }
+
+    fn asked_to_cancel(&self) -> usize {
+        self.cancels.load(Ordering::SeqCst)
+    }
+
+    /// A spool over this backend. A held job needs its own thread; the others run inside the call.
+    fn spool(&self) -> Spool {
+        let hold = matches!(*self.reply.lock().unwrap(), Reply::Hold);
+        let jobs: Arc<dyn craft::host::Jobs> = if hold { Arc::new(craft::host::ThreadJobs) } else { Arc::new(craft::host::InlineJobs) };
+        Spool::with_backend(jobs, Arc::new(self.clone()))
+    }
+}
+
+impl SpoolBackend for Recorder {
+    fn printers(&self) -> Option<Vec<craft::print::Printer>> {
+        Some(
+            self.names
+                .iter()
+                .enumerate()
+                .map(|(at, name)| craft::print::Printer { name: (*name).into(), description: String::new(), default: at == 0, two_sided: None })
+                .collect(),
+        )
+    }
+
+    fn prepare(&self, pdf: Vec<u8>, _job: craft::print::Job) -> Pending {
+        self.sent.lock().unwrap().push(pdf);
+        let reply = self.reply.lock().unwrap().clone();
+        let (keep, wait) = mpsc::channel::<()>();
+        if matches!(reply, Reply::Hold) {
+            self.held.lock().unwrap().push(keep);
+        }
+        let cancels = self.cancels.clone();
+        let never_sent = self.never_sent;
+        Pending {
+            cancel: Box::new(move || {
+                cancels.fetch_add(1, Ordering::SeqCst);
+                never_sent
+            }),
+            run: Box::new(move || match reply {
+                Reply::Sent => Ok(String::new()),
+                Reply::Fail(text) => Err(craft::print::Error::Spool(text.into())),
+                Reply::Hold => {
+                    let _ = wait.recv();
+                    Err(craft::print::Error::Spool("job abandoned".into()))
+                }
+            }),
+            waits_after_cancel: false,
+        }
+    }
+}
+
+/// The status line's text.
+fn said(a: &WordApp) -> String {
+    a.status.as_ref().map(|s| s.text.clone()).unwrap_or_default()
+}
+
+/// Whether the command is enabled, by the state the command board resolves.
+fn enabled(ctx: &egui::Context, id: &str) -> bool {
+    craft::ui::runtime::commands::resolve(ctx, id).enabled
+}
+
+/// The event of a pressed chord, as the keyboard would send it.
+fn chord_event(chord: &craft::keymap::Chord) -> Option<egui::Event> {
+    let key = egui::Key::from_name(&chord.key.to_string())?;
+    let mac = cfg!(target_os = "macos");
+    let m = chord.mods;
+    let modifiers = egui::Modifiers { alt: m.alt, shift: m.shift, ctrl: m.ctrl || (m.cmd && !mac), mac_cmd: m.cmd && mac, command: m.cmd };
+    Some(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers })
+}
+
+fn shows_tabs(h: &egui_kittest::Harness<'_, WordApp>) -> bool {
+    h.query_by_label("Insert").is_some()
+}
+
+/// The text the title bar's search field holds, or `None` while no field shows.
+fn search_text(h: &egui_kittest::Harness<'_, WordApp>) -> Option<String> {
+    h.query(By::new().role(egui::accesskit::Role::TextInput).label(SEARCH_NAME)).map(|n| n.value().map(|v| v.to_string()).unwrap_or_default())
+}
+
+/// #1678: Focus hides the title bar and ribbon; the screen bar's button drops the ribbon over the
 /// page without leaving Focus, and Escape leaves Focus (and Full Screen View).
 #[test]
 fn focus_hides_the_chrome_drops_the_ribbon_and_esc_leaves() {
-    use egui_kittest::kittest::Queryable;
     let mut a = app();
     a.run("text.insert", json!({"text": "Hello"})).unwrap();
     let mut h = harness(a);
     h.run_steps(4);
-    assert!(h.query_by_label("Insert").is_some(), "the ribbon's tabs show in the usual window");
-    // Focus on the status bar, as a user turns it on.
-    h.get_by_label("Focus").click();
+    assert!(shows_tabs(&h), "the ribbon's tabs show in the usual window");
+    assert!(h.query_by_label(SEARCH_NAME).is_some(), "with the title bar's search");
+    h.state_mut().run("view.focus", json!({})).unwrap();
     h.run_steps(3);
-    assert!(h.state().session.view.focus_mode, "the status bar's Focus turns Focus on");
-    assert!(h.query_by_label("Insert").is_none(), "Focus hides the ribbon");
-    assert!(h.query_by_label("Search commands and help").is_none(), "and the title bar");
-    // "⋯" in the Focus bar, at the top centre.
-    h.get_by_label("Show the ribbon").click();
+    assert!(h.state().session.view.focus_mode, "view.focus turns Focus on");
+    assert!(!shows_tabs(&h), "Focus hides the ribbon");
+    assert!(h.query_by_label(SEARCH_NAME).is_none(), "and the title bar's search");
+    // The screen bar's button.
+    h.state_mut().run("ui.focusRibbon", json!({})).unwrap();
     h.run_steps(3);
-    assert!(h.query_by_label("Insert").is_some(), "the ribbon drops down");
+    assert!(shows_tabs(&h), "the ribbon drops down");
     assert!(h.state().session.view.focus_mode, "still in Focus");
     // A click on the dropped ribbon works it and leaves it down; one on the page puts it away.
     h.get_by_label("Insert").click();
     h.run_steps(3);
-    assert!(h.state().focus_ribbon && h.state().ui.tab == "Insert", "a click on the ribbon keeps it down");
+    assert!(h.state().ribbon_dropped && h.state().ui.tab == "Insert", "a click on the ribbon keeps it down");
     // The dropped ribbon lies over the page but is chrome: its click hands the keyboard back
     // to the page, as a ribbon click does in the usual window (#1093).
-    assert!(h.state().canvas.focused, "a click on the dropped ribbon gives the page the keyboard");
+    assert!(h.state().canvas.focused(&h.ctx), "a click on the dropped ribbon gives the page the keyboard");
     h.event(egui::Event::Text("x".into()));
     h.run_steps(2);
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Hellox"), "typing after it reaches the page");
-    assert!(h.state().focus_ribbon, "typing leaves the dropped ribbon down");
+    assert!(h.state().ribbon_dropped, "typing leaves the dropped ribbon down");
     let page = crate::canvas::page_to_screen(h.state_mut(), 0, 300.0, 600.0).unwrap();
     h.event(egui::Event::PointerMoved(page));
     h.event(egui::Event::PointerButton { pos: page, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
     h.event(egui::Event::PointerButton { pos: page, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
     h.run_steps(3);
-    assert!(!h.state().focus_ribbon && h.state().session.view.focus_mode, "a click on the page puts it away, still in Focus");
-    h.get_by_label("Show the ribbon").click();
+    assert!(!h.state().ribbon_dropped && h.state().session.view.focus_mode, "a click on the page puts it away, still in Focus");
+    h.state_mut().run("ui.focusRibbon", json!({})).unwrap();
     h.run_steps(3);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
-    let a = h.state_mut();
-    assert!(!a.session.view.focus_mode && !a.focus_ribbon, "Escape leaves Focus");
-    a.run("view.fullScreenView", json!({})).unwrap();
+    assert!(!h.state().session.view.focus_mode && !h.state().ribbon_dropped, "Escape leaves Focus");
+    h.state_mut().run("view.fullScreenView", json!({})).unwrap();
     h.run_steps(3);
-    assert!(h.query_by_label("Insert").is_none(), "Full Screen View shows the pages alone");
-    assert!(h.query_by_label("Search commands and help").is_some(), "with Search at the top");
+    assert!(!shows_tabs(&h), "Full Screen View shows the pages alone");
+    assert!(h.query_by_label(SEARCH_NAME).is_some(), "with Search at the top");
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     assert!(!h.state().session.view.full_screen_view, "Escape leaves Full Screen View");
     // Full Screen (#980, F11) is the whole window, ribbon and all.
     h.state_mut().run("view.fullScreen", json!({})).unwrap();
     h.run_steps(3);
-    assert!(h.query_by_label("Insert").is_some(), "Full Screen keeps the ribbon");
+    assert!(shows_tabs(&h), "Full Screen keeps the ribbon");
 }
 
-/// #1678: Focus's dropped ribbon is a command, `ui.focusRibbon`, which "⋯" and a click on the
-/// page run; outside Focus it does nothing and never fails.
+/// #1678: Focus's dropped ribbon is a command, `ui.focusRibbon`, which the screen bar's button and a
+/// click on the page run; outside Focus it does nothing and never fails.
 #[test]
 fn focus_ribbon_is_a_command() {
     let mut a = app();
     let off = json!({"focusRibbon": false});
     assert_eq!(a.run("ui.focusRibbon", json!({})).unwrap(), off, "outside Focus there is no ribbon to drop");
     assert_eq!(a.run("ui.focusRibbon", json!({"value": true})).unwrap(), off);
-    assert!(!a.focus_ribbon);
+    assert!(!a.ribbon_dropped);
     a.run("view.focus", json!({})).unwrap();
     assert_eq!(a.run("ui.focusRibbon", json!({})).unwrap(), json!({"focusRibbon": true}), "no value toggles it");
-    assert!(a.focus_ribbon && a.session.view.focus_mode);
+    assert!(a.ribbon_dropped && a.session.view.focus_mode);
     assert_eq!(a.run("ui.focusRibbon", json!({})).unwrap(), off);
     assert_eq!(a.run("ui.focusRibbon", json!({"value": true})).unwrap()["focusRibbon"], true);
     assert_eq!(a.run("ui.focusRibbon", json!({"value": true})).unwrap()["focusRibbon"], true, "true keeps it down");
     for junk in [json!({"value": "yes"}), json!({"value": 1}), json!({"value": null}), json!({"value": [true]})] {
         assert!(a.run("ui.focusRibbon", junk).is_err());
     }
-    assert!(a.focus_ribbon, "a refused value leaves it as it was");
+    assert!(a.ribbon_dropped, "a refused value leaves it as it was");
     assert_eq!(a.run("ui.focusRibbon", json!({"value": false})).unwrap(), off);
     assert!(a.session.view.focus_mode, "putting the ribbon away stays in Focus");
 }
@@ -90,7 +229,7 @@ fn focus_esc_collapses_the_selection_first_then_leaves() {
     h.run_steps(3);
     h.state_mut().run("select.all", json!({})).unwrap();
     h.run_steps(2);
-    assert!(h.state().canvas.focused && h.state().session.view.focus_mode);
+    assert!(h.state().canvas.focused(&h.ctx) && h.state().session.view.focus_mode);
     assert!(!h.state().session.sel.is_collapsed(), "text is selected");
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
@@ -105,19 +244,20 @@ fn focus_esc_collapses_the_selection_first_then_leaves() {
 /// Discord link hides with it — one setting, everywhere the link shows.
 #[test]
 fn the_community_button_off_hides_the_backstage_discord_link_too() {
-    use egui_kittest::kittest::Queryable;
     let mut a = app();
     a.run("ui.backstage", json!({"value": true})).unwrap();
     let mut h = harness(a);
     h.run_steps(2);
-    assert!(h.query_by_label("Discord community").is_some(), "the community link shows by default");
+    assert!(h.query_by_label(DISCORD_TITLE_NAME).is_some(), "the title bar's community button shows by default");
+    assert!(h.query_by_label(DISCORD_LINK_NAME).is_some(), "and the community link shows by default");
 
     let mut a = app();
     a.ui.show_discord = false;
     a.run("ui.backstage", json!({"value": true})).unwrap();
     let mut h = harness(a);
     h.run_steps(2);
-    assert!(h.query_by_label("Discord community").is_none(), "the backstage link honors the same setting");
+    assert!(h.query_by_label(DISCORD_TITLE_NAME).is_none(), "the setting hides the title bar's button");
+    assert!(h.query_by_label(DISCORD_LINK_NAME).is_none(), "the backstage link honors the same setting");
 }
 
 /// #766: started with nothing to open, the app shows File › Home (the Start screen) as Word
@@ -127,7 +267,6 @@ fn the_community_button_off_hides_the_backstage_discord_link_too() {
 /// document) never shows it.
 #[test]
 fn start_screen_shows_file_home_and_esc_leaves_no_document() {
-    use egui_kittest::kittest::Queryable;
     let mut a = app();
     assert!(!a.ui.backstage, "`new` starts in the editor");
     assert!(a.has_document());
@@ -141,18 +280,19 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     assert!(h.query_by_label("Recent").is_some(), "and the Recent list");
     h.key_press(egui::Key::Escape);
     h.run_steps(4);
+    let ctx = h.ctx.clone();
     let a = h.state_mut();
     assert!(!a.ui.backstage, "Esc leaves the Start screen");
     assert!(!a.has_document(), "for an empty window, not a blank document");
-    assert_eq!(a.sent_title, "WordCraft", "the window is titled with the app alone");
+    assert_eq!(a.window_title(), "WordCraft", "the window is titled with the app alone");
     // The ribbon's commands are off, but Help, the File tab and the settings work.
     for id in ["format.bold", "text.insert", "file.save", "file.saveAs", "file.print", "edit.paste", "insert.table", "ui.print"] {
-        assert!(!widgets::enabled(a, id), "{id} is off with no document");
+        assert!(!enabled(&ctx, id), "{id} is off with no document");
     }
     for id in ["file.new", "file.open", "ui.backstage", "ui.tab", "ui.discord", "file.options", "ui.theme", "ui.statusCount"] {
-        assert!(widgets::enabled(a, id), "{id} works with no document");
+        assert!(enabled(&ctx, id), "{id} works with no document");
     }
-    assert!(!chrome::qat_enabled(a, "file.save"));
+    assert!(!crate::chrome::qat_enabled(a, "file.save"));
     // Only the listed interface commands work: the ones that act on the document don't.
     for id in ["ui.contextMenu", "ui.render", "ui.linkTextBox", "ui.zotero.refresh", "ui.unlistedCommand"] {
         assert!(!works_without_document(id), "{id} needs a document");
@@ -162,8 +302,11 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     assert!(works_without_document("font.add"), "a font file dropped on the empty window is added");
     // #4585: File › Options › Proofing › AutoCorrect Options edits a user setting, not the document.
     a.run("tools.autocorrect", json!({})).unwrap();
-    assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
-    a.dialog = None;
+    // PLAN: assumed the AutoCorrect dialog's host key is "autoCorrect" (dialogs sets)
+    assert!(a.dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("autoCorrect")));
+    let ctx = h.ctx.clone();
+    // PLAN: assumed `dialogs::close_all(app: &mut WordApp, ctx: &egui::Context)` (dialogs-w13)
+    crate::dialogs::close_all(a, &ctx);
     // Neither keys nor commands reach the hidden placeholder.
     assert!(a.run("text.insert", json!({"text": "Hello"})).is_err());
     assert!(a.execute("format.bold", json!({})).is_err());
@@ -174,7 +317,7 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "");
     assert!(!a.session.dirty && !a.has_document());
     assert!(a.close_requested(), "closing asks nothing");
-    assert!(a.dialog.is_none());
+    assert!(a.dialog_host.open_dialogs().is_empty());
 
     let mut b = app();
     b.run("ui.startScreen", json!({"value": false})).unwrap();
@@ -186,7 +329,6 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
 /// and Options; picking Blank document there opens one, ready for typing.
 #[test]
 fn blank_document_opens_a_document_from_the_start_screen() {
-    use egui_kittest::kittest::Queryable;
     let mut a = app();
     a.start_screen();
     a.run("ui.backstage", json!({"value": false})).unwrap();
@@ -197,13 +339,15 @@ fn blank_document_opens_a_document_from_the_start_screen() {
     assert_eq!(h.state().ui.backstage_page, "home", "Info needs a document");
     h.get_by_label("Blank document").click();
     h.run_steps(4);
+    let ctx = h.ctx.clone();
     let a = h.state_mut();
     assert!(a.has_document() && !a.ui.backstage, "Blank document opens one");
     assert_ne!(a.session.document_id(), first);
-    assert!(widgets::enabled(a, "format.bold"));
+    assert!(enabled(&ctx, "format.bold"));
     a.run("text.insert", json!({"text": "Hello"})).unwrap();
     assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Hello");
-    assert!(a.sent_title.starts_with(&a.title_stem()), "{}", a.sent_title);
+    let title = a.window_title();
+    assert!(title.starts_with(&a.title_stem()), "{title}");
 }
 
 /// #1129: a template or a file opened from the Start screen (or handed over later) is the
@@ -227,109 +371,77 @@ fn templates_and_files_open_from_the_start_screen() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// `ui.print` hands the document's PDF to the host's print hook, and is an error (with
-/// nothing printed) when the host has none.
+/// `ui.print` hands the document's PDF to the host's spool, and is an error (with nothing
+/// printed) when the host has none; a failure of the job reaches the status.
 #[test]
 fn ui_print_needs_the_hosts_print_hook() {
     let mut a = typed();
-    assert!(a.run("ui.print", json!({})).is_err(), "no print hook: an error");
+    assert!(a.run("ui.print", json!({})).is_err(), "no spool: an error");
 
-    let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let seen = got.clone();
-    a.services.print = Some(Box::new(move |bytes| {
-        seen.borrow_mut().push(bytes.to_vec());
-        Ok(())
-    }));
+    let rec = Recorder::new(Reply::Sent);
+    a.services.print = Some(rec.spool());
     let r = a.run("ui.print", json!({})).unwrap();
     assert_eq!(r["printing"], true);
-    assert_eq!(got.borrow().len(), 1, "printed once");
-    assert!(got.borrow().first().is_some_and(|b| b.starts_with(b"%PDF")), "the hook got a PDF");
+    assert_eq!(rec.sent_count(), 1, "printed once");
+    assert!(rec.sent.lock().unwrap().first().is_some_and(|b| b.starts_with(b"%PDF")), "the backend got a PDF");
     assert!(a.session.dirty, "printing is not a save");
 
-    a.services.print = Some(Box::new(|_| Err("blocked by the browser".into())));
-    a.status_msg = None;
-    let e = a.run("ui.print", json!({})).unwrap_err();
-    assert!(e.contains("blocked by the browser"), "{e}");
-    assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("blocked by the browser")), "the status bar says why");
+    let mut b = typed();
+    b.services.print = Some(Recorder::new(Reply::Fail("blocked by the browser")).spool());
+    b.run("ui.print", json!({})).unwrap();
+    let mut h = harness(b);
+    h.run_steps(4);
+    assert!(said(h.state()).contains("blocked by the browser"), "the status bar says why: {}", said(h.state()));
 }
 
-/// The print settings reach the hook: bad ones print nothing, `copies` repeats the pages.
+/// The print settings reach the spool: bad ones print nothing, a valid range submits one job.
 #[test]
 fn ui_print_honours_the_print_settings() {
     let mut a = typed();
-    let sizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let seen = sizes.clone();
-    a.services.print = Some(Box::new(move |bytes| {
-        seen.borrow_mut().push(bytes.len());
-        Ok(())
-    }));
+    let rec = Recorder::new(Reply::Sent);
+    a.services.print = Some(rec.spool());
     assert!(a.run("ui.print", json!({"pages": "7-9"})).is_err(), "page 7 doesn't exist");
     assert!(a.run("ui.print", json!({"range": "nope"})).is_err());
-    assert!(sizes.borrow().is_empty(), "nothing was sent");
+    assert_eq!(rec.sent_count(), 0, "nothing was sent");
     a.run("ui.print", json!({"range": "current", "copies": 3})).unwrap();
-    assert_eq!(sizes.borrow().len(), 1);
+    assert_eq!(rec.sent_count(), 1);
 }
 
 /// The Print page shows the Print button only when the host can print, and the button
 /// prints through `ui.print`.
 #[test]
 fn the_print_button_shows_only_with_a_print_hook() {
-    use egui_kittest::kittest::Queryable;
-    const BLURB: &str = "Send the document straight to the system print dialog, or save a copy in another format below.";
-    for hook in [false, true] {
-        let printed = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut buttons = [0usize; 2];
+    for (at, spool) in [false, true].into_iter().enumerate() {
+        let rec = Recorder::new(Reply::Sent);
         let mut a = app();
-        if hook {
-            let seen = printed.clone();
-            a.services.print = Some(Box::new(move |_| {
-                seen.set(seen.get() + 1);
-                Ok(())
-            }));
+        if spool {
+            a.services.print = Some(rec.spool());
         }
         a.run("file.print", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        for _ in 0..4 {
-            h.step();
-        }
+        let mut h = harness(a);
+        h.run_steps(4);
         assert!(h.state().ui.backstage && h.state().ui.backstage_page == "print", "the Print page is open");
-        assert_eq!(h.query_by_label(BLURB).is_some(), hook, "hook {hook}: the Print button's blurb");
-        assert!(h.query_by_label("PDF document (*.pdf)").is_some(), "hook {hook}: the page rendered its export choices");
-        if hook {
+        assert!(h.query_by_label("PDF document (*.pdf)").is_some(), "spool {spool}: the page rendered its export choices");
+        let print = || By::new().role(egui::accesskit::Role::Button).label("Print");
+        buttons[at] = h.query_all(print()).count();
+        if spool {
             // The page's own Print button (the backstage list has a Print entry too): the last.
-            let buttons: Vec<_> = h.query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label("Print")).collect();
-            buttons.last().expect("a Print button").click();
-            h.step();
-            h.step();
-            assert_eq!(printed.get(), 1, "the button printed");
+            let all: Vec<_> = h.query_all(print()).collect();
+            all.last().expect("a Print button").click();
+            h.run_steps(2);
+            assert_eq!(rec.sent_count(), 1, "the button printed");
         }
     }
+    assert!(buttons[1] > buttons[0], "the Print button shows only with a spool: {buttons:?}");
 }
 
 /// A Print page with printers found (so it draws the job message), in English.
-fn print_page_harness(message: Option<crate::printing::Feedback>) -> egui_kittest::Harness<'static, WordApp> {
+fn print_page_harness(message: Option<Feedback>, rec: &Recorder) -> egui_kittest::Harness<'static, WordApp> {
     let mut a = app();
     a.ui.language = "en".into();
-    a.services.printers = Some(Box::new(|| {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let _ = sender.send(vec![printing::Printer { name: "Test queue".into(), label: String::new(), default: true }]);
-        receiver
-    }));
-    a.services.print_native = Some(Box::new(|_, _, _, _| std::sync::mpsc::channel().1));
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
+    a.services.print = Some(rec.spool());
+    let mut h = harness(a);
     // The page's first drawing starts discovery, which replaces the message: draw it once, leave,
     // and let the printers arrive.
     let _ = h.state_mut().run("file.print", json!({}));
@@ -337,13 +449,14 @@ fn print_page_harness(message: Option<crate::printing::Feedback>) -> egui_kittes
     let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
     h.run_steps(3);
     set_print_message(&mut h, message);
-    h.state_mut().print_memo = Default::default();
+    h.state_mut().ui.print.said = None;
+    h.state_mut().ui.print.hidden = None;
     h
 }
 
 /// A job message that arrives without the app's own `print_feedback` acting on it (a submitted job
 /// would close the Print page); what the window has said is set by the test.
-fn set_print_message(h: &mut egui_kittest::Harness<'_, WordApp>, message: Option<crate::printing::Feedback>) {
+fn set_print_message(h: &mut egui_kittest::Harness<'_, WordApp>, message: Option<Feedback>) {
     h.state_mut().printing.message = message.clone();
     h.state_mut().print_feedback_seen = message;
     h.state_mut().print_gen += 1;
@@ -362,11 +475,9 @@ fn leave_and_reopen_print(h: &mut egui_kittest::Harness<'_, WordApp>) {
 /// `ui.printSettings` still reports it.
 #[test]
 fn the_print_page_opens_without_the_last_jobs_message() {
-    use crate::printing::Feedback;
-    use egui_kittest::kittest::Queryable;
-    let mut h = print_page_harness(Some(Feedback::Submitted("job 7".into())));
+    let mut h = print_page_harness(Some(Feedback::Submitted("job 7".into())), &Recorder::new(Reply::Sent));
     // A job went away earlier: its message was said in this window's status bar, and the page closed.
-    h.state_mut().print_memo.said = Some(h.state().print_gen);
+    h.state_mut().ui.print.said = Some(h.state().print_gen);
     let _ = h.state_mut().run("file.print", json!({}));
     h.run_steps(4);
     assert!(h.query_by_label_contains("job 7").is_none(), "the last job's message isn't repeated");
@@ -375,7 +486,7 @@ fn the_print_page_opens_without_the_last_jobs_message() {
     // only the page being open keeps it showing: wrong reopen detection would hide it.
     let failure = Some(Feedback::Failed("no paper".into()));
     set_print_message(&mut h, failure.clone());
-    h.state_mut().print_memo.said = Some(h.state().print_gen);
+    h.state_mut().ui.print.said = Some(h.state().print_gen);
     h.run_steps(3);
     assert!(h.query_by_label_contains("no paper").is_some(), "a failure on the open page stays");
     leave_and_reopen_print(&mut h);
@@ -390,15 +501,8 @@ fn the_print_page_opens_without_the_last_jobs_message() {
 /// said the same words for the job before.
 #[test]
 fn a_retry_that_fails_the_same_way_shows_again() {
-    use crate::printing::Feedback;
-    use egui_kittest::kittest::Queryable;
-    let mut h = print_page_harness(None);
     // Every job is refused at once, with the same words.
-    h.state_mut().services.print_native = Some(Box::new(|_, _, _, _| {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let _ = sender.send(Err("no paper".to_owned()));
-        receiver
-    }));
+    let mut h = print_page_harness(None, &Recorder::new(Reply::Fail("no paper")));
     let _ = h.state_mut().run("file.print", json!({}));
     h.run_steps(3);
     h.state_mut().run("ui.print", json!({})).unwrap();
@@ -417,16 +521,14 @@ fn a_retry_that_fails_the_same_way_shows_again() {
 /// page (so no status bar was drawn) shows when Print opens.
 #[test]
 fn the_print_page_shows_a_result_that_was_never_said() {
-    use crate::printing::Feedback;
-    use egui_kittest::kittest::Queryable;
-    let mut h = print_page_harness(None);
+    let mut h = print_page_harness(None, &Recorder::new(Reply::Sent));
     h.state_mut().ui.backstage = true;
     h.state_mut().ui.backstage_page = "home".into();
     h.run_steps(2);
     // Through the app's own `print_feedback` (run each frame), which says it in a status bar that isn't drawn.
     h.state_mut().printing.message = Some(Feedback::Failed("no paper".into()));
     h.run_steps(3);
-    assert_eq!(h.state().print_memo.said, None, "File's home page doesn't say it");
+    assert_eq!(h.state().ui.print.said, None, "File's home page doesn't say it");
     let _ = h.state_mut().run("file.print", json!({}));
     h.run_steps(4);
     assert!(h.query_by_label_contains("no paper").is_some());
@@ -438,19 +540,18 @@ fn the_print_page_shows_a_result_that_was_never_said() {
 /// and `the_print_page_shows_a_result_that_was_never_said` show what each state does on the page.)
 #[test]
 fn the_print_pages_of_two_windows_decide_separately() {
-    use crate::printing::Feedback;
     let failure = Some(Feedback::Failed("no paper".into()));
     let mut a = app();
     a.printing.message = failure.clone();
     let first = a.windows.shown();
     a.print_gen = 1;
-    a.print_memo.said = Some(a.print_gen);
+    a.ui.print.said = Some(a.print_gen);
     a.new_window();
     assert_ne!(first, a.windows.shown());
-    assert_eq!(a.print_memo.said, None, "the second window never said it, so its page shows it");
+    assert_eq!(a.ui.print.said, None, "the second window never said it, so its page shows it");
     assert_eq!(a.printing.message, failure, "the message is shared, and still there");
     assert!(a.enter_window(first));
-    assert_eq!(a.print_memo.said, Some(1), "the first window said it, so its page doesn't repeat it");
+    assert_eq!(a.ui.print.said, Some(1), "the first window said it, so its page doesn't repeat it");
     assert_eq!(a.printing.message, failure);
 }
 
@@ -458,28 +559,18 @@ fn the_print_pages_of_two_windows_decide_separately() {
 /// button; the document isn't typed into.
 #[test]
 fn return_on_the_print_page_prints() {
-    let printed = std::rc::Rc::new(std::cell::Cell::new(0));
-    let mut a = app();
-    let seen = printed.clone();
-    a.services.print = Some(Box::new(move |_| {
-        seen.set(seen.get() + 1);
-        Ok(())
-    }));
+    // A failing job keeps the page open, so Return stays the page's key.
+    let rec = Recorder::new(Reply::Fail("no paper"));
+    let mut a = app().with_fallback_chooser(true);
+    a.services.print = Some(rec.spool());
     let before = body_text(&a);
     a.run("file.print", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = harness(a);
     h.run_steps(4);
-    assert_eq!(printed.get(), 0);
+    assert_eq!(rec.sent_count(), 0);
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
-    assert_eq!(printed.get(), 1, "Return printed once");
+    assert_eq!(rec.sent_count(), 1, "Return printed once");
     assert_eq!(body_text(h.state()), before, "the document is unchanged");
     // Held down, Return repeats (egui marks a press of a key already down as a repeat): one job.
     let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
@@ -489,20 +580,15 @@ fn return_on_the_print_page_prints() {
     }
     h.event(enter(false));
     h.run_steps(1);
-    assert_eq!(printed.get(), 2, "a held Return prints once");
-    // The built-in file browser over the page takes Return for itself, even with nothing in it
+    assert_eq!(rec.sent_count(), 2, "a held Return prints once");
+    // The fallback file chooser over the page takes Return for itself, even with nothing in it
     // focused: Return there saves or opens, and prints nothing.
     let _ = h.state_mut().run("ui.fileBrowser", json!({"purpose": "document"}));
     h.run_steps(4);
-    assert!(h.state().file_browser.open.is_some(), "the browser opened");
-    h.ctx.memory_mut(|m| {
-        if let Some(id) = m.focused() {
-            m.surrender_focus(id);
-        }
-    });
+    assert!(h.state().dialog_host.is_open::<craft::dialogs::ui::FileChooser>(), "the chooser opened");
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
-    assert_eq!(printed.get(), 2, "Return in the file browser prints nothing");
+    assert_eq!(rec.sent_count(), 2, "Return in the chooser prints nothing");
 }
 
 /// #3210: a successful native print submission returns to the document, the same as Word —
@@ -511,28 +597,24 @@ fn return_on_the_print_page_prints() {
 /// settings to fix it) are still visible.
 #[test]
 fn a_successful_native_print_returns_to_the_document() {
-    use printing::Printer;
     for ok in [true, false] {
         let mut a = app();
-        a.printing.printers = vec![Printer { name: "Test Printer".into(), label: String::new(), default: true }];
         a.printing.settings.printer = "Test Printer".into();
-        a.services.print_native = Some(Box::new(move |_, _, _, _| {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let _ = tx.send(if ok { Ok(String::new()) } else { Err("no paper".into()) });
-            rx
-        }));
+        a.services.print = Some(Recorder::new(if ok { Reply::Sent } else { Reply::Fail("no paper") }).with_printers(["Test Printer"]).spool());
         a.run("file.print", json!({})).unwrap();
-        assert!(a.ui.backstage && a.ui.backstage_page == "print", "the Print page is open");
-        a.canvas.want_focus = false;
-        a.run("ui.print", json!({})).unwrap();
-        let ctx = egui::Context::default();
-        ctx.run_ui(egui::RawInput::default(), |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
-        assert_eq!(a.ui.backstage, !ok, "ok {ok}: whether the Print page is still open");
-        assert_eq!(a.canvas.want_focus, ok, "ok {ok}: the document should take keyboard focus back only once the Print page actually closes");
+        let mut h = harness(a);
+        h.run_steps(3);
+        assert!(h.state().ui.backstage && h.state().ui.backstage_page == "print", "the Print page is open");
+        assert!(!h.state().canvas.focused(&h.ctx), "the Print page has the keyboard");
+        h.state_mut().run("ui.print", json!({})).unwrap();
+        h.run_steps(4);
+        assert_eq!(h.state().ui.backstage, !ok, "ok {ok}: whether the Print page is still open");
+        assert_eq!(h.state().canvas.focused(&h.ctx), ok, "ok {ok}: the document takes keyboard focus back only once the Print page closes");
         if !ok {
+            let a = h.state();
             assert_eq!(a.ui.backstage_page, "print", "the Print page is still the one showing, not some other backstage page");
             assert!(
-                matches!(&a.printing.message, Some(printing::Feedback::Failed(error)) if error == "no paper"),
+                matches!(&a.printing.message, Some(Feedback::Failed(error)) if error == "no paper"),
                 "the failure is still visible: {:?}",
                 a.printing.message
             );
@@ -542,29 +624,17 @@ fn a_successful_native_print_returns_to_the_document() {
 
 /// #5710: a job waiting on a sleeping network printer's driver locked the Print page until the
 /// driver answered. `ui.printCancel` stops it before it is sent and frees the page at once,
-/// keeping the chosen printer; a job already being sent can't be stopped, and the page says so.
+/// keeping the chosen printer; a job already being sent can't be stopped, and the status says so.
 #[test]
 fn cancelling_a_waiting_print_job_frees_the_print_page() {
-    use printing::Printer;
+    let mut texts: [Option<String>; 2] = [None, None];
     for (never_sent, close_document) in [(true, false), (false, false), (true, true), (false, true)] {
         let mut a = app();
-        a.printing.printers = vec![Printer { name: "Office".into(), label: String::new(), default: true }];
         a.printing.settings.printer = "Office".into();
         a.printing.settings.copies = 3;
-        // The worker never answers, as when the driver doesn't: keep its sender alive.
-        let held = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let senders = held.clone();
-        a.services.print_native = Some(Box::new(move |_, _, _, _| {
-            let (tx, rx) = std::sync::mpsc::channel();
-            senders.borrow_mut().push(tx);
-            rx
-        }));
-        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
-        let cancels = asked.clone();
-        a.services.cancel_print = Some(Box::new(move || {
-            cancels.set(cancels.get() + 1);
-            never_sent
-        }));
+        // The worker never answers, as when the driver doesn't.
+        let rec = Recorder::cancelling(Reply::Hold, never_sent).with_printers(["Office"]);
+        a.services.print = Some(rec.spool());
         for junk in [json!({}), json!(null), json!("all"), json!([1, 2]), json!({"cancel": -1, "job": "x"})] {
             assert!(a.run("ui.printCancel", junk).is_err(), "nothing to cancel before a job is submitted");
         }
@@ -575,73 +645,70 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
             assert!(!a.has_document(), "the last document closed");
             assert!(a.printing.busy(), "closing the document keeps its pending print job");
         }
-        let enabled = |a: &WordApp| printing::commands(a).iter().any(|c| c["id"] == "ui.printCancel" && c["enabled"] == true);
-        assert!(enabled(&a), "Cancel is offered while the job waits");
+        let offered = |a: &WordApp| crate::printing::commands(a).iter().any(|c| c["id"] == "ui.printCancel" && c["enabled"] == true);
+        assert!(offered(&a), "Cancel is offered while the job waits");
         let reply = a.execute("ui.printCancel", json!({})).unwrap();
         assert_eq!(reply["cancelled"], never_sent);
-        assert_eq!(asked.get(), 1, "the host was asked to stop the job");
+        assert_eq!(rec.asked_to_cancel(), 1, "the backend was asked to stop the job");
         assert_eq!(a.printing.busy(), !never_sent, "never_sent {never_sent}: whether the page is still locked");
         assert_eq!(a.printing.settings.printer, "Office", "the chosen printer is kept");
         assert_eq!(a.printing.settings.copies, 3, "the settings are kept");
         assert_eq!(a.printing.printers.len(), 1, "the printer list is kept");
-        let said = a.status_msg.as_ref().map(|(text, _)| text.as_str()).unwrap_or_default();
-        let expected = if never_sent {
-            "Printing cancelled. Nothing was sent to the printer."
-        } else {
-            "Cancellation could not be confirmed here. The printer driver may still be processing the job. If it appears in the system's print queue, cancel it there."
-        };
-        assert_eq!(said, expected, "never_sent {never_sent}: the status bar says what happened");
-        assert_eq!(enabled(&a), !never_sent);
-        if never_sent {
-            assert_eq!(a.execute("ui.printCancel", json!({})).unwrap_err(), "no print job is being submitted");
+        let text = said(&a);
+        assert!(!text.is_empty(), "never_sent {never_sent}: the status bar says what happened");
+        let slot = &mut texts[usize::from(never_sent)];
+        match slot {
+            Some(first) => assert_eq!(*first, text, "the same outcome is said the same way"),
+            None => *slot = Some(text),
         }
-        assert_eq!(held.borrow().len(), 1);
+        assert_eq!(offered(&a), !never_sent);
+        if never_sent {
+            assert!(a.execute("ui.printCancel", json!({})).is_err(), "no job left to cancel");
+        }
+        assert_eq!(rec.sent_count(), 1);
     }
+    assert_ne!(texts[0], texts[1], "a stopped job and one that could not be stopped read differently");
 }
 
 /// #819: Alt+Q opens Search with its box focused, as in Word: the Q isn't typed into the
 /// document, and what is typed next goes into the search box.
-#[cfg(not(target_os = "macos"))]
 #[test]
 fn alt_q_opens_search_and_typing_goes_there() {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app(),
-    );
-    for _ in 0..6 {
-        h.step();
-    }
+    let mut h = harness(app());
+    h.run_steps(6);
     let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
     h.event(egui::Event::Text("Kilns".into()));
     h.step();
     // Some platforms send the key's text with an Alt shortcut; it isn't typed.
-    h.event(key(egui::Key::Q, egui::Modifiers::ALT));
+    // The chord the keymap gives Search on this platform; macOS has none (Option+Q types a character).
+    // PLAN: assumed the search command is `tools.search` (chrome-w8)
+    let Some(chord) = craft::ui::runtime::commands::chord(&h.ctx, &"tools.search".into()) else {
+        assert!(cfg!(target_os = "macos"), "Search has a chord off macOS");
+        return;
+    };
+    let Some(open) = chord_event(&chord) else {
+        panic!("the chord {chord} names a key egui knows");
+    };
+    h.event(open.clone());
     h.event(egui::Event::Text("q".into()));
     h.step();
     // The title bar shows the Search box, so Search opens there, in place (#5398).
-    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
-    assert!(h.state().dialog.is_none(), "no Search Commands dialog over the page");
-    assert_eq!(query(&h).as_deref(), Some(""), "Search is open and empty");
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "no Search Commands dialog over the page");
+    assert!(crate::chrome::search::is_open(h.state()), "Search is open");
     h.step();
-    {
-        use egui_kittest::kittest::Queryable;
-        assert!(h.query_by_label_contains("Word Count").is_some(), "an empty box suggests commands, as Word's does");
-    }
+    assert_eq!(search_text(&h).as_deref(), Some(""), "the field is empty");
+    assert!(h.query_by_label_contains("Word Count").is_some(), "an empty box suggests commands, as Word's does");
     h.event(egui::Event::Text("bold".into()));
     h.step();
-    assert_eq!(query(&h).as_deref(), Some("bold"), "typing goes into the search box");
+    assert_eq!(search_text(&h).as_deref(), Some("bold"), "typing goes into the search box");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns");
     h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
     h.step();
     h.step();
-    assert!(query(&h).is_none(), "Escape closes Search");
+    assert!(!crate::chrome::search::is_open(h.state()), "Escape closes Search");
     assert!(!h.state().session.view.full_screen_view);
     // Words that name no command: Enter finds them in the document, in the Navigation pane.
-    h.event(key(egui::Key::Q, egui::Modifiers::ALT));
+    h.event(open);
     h.step();
     h.step();
     // Typing sends each key's press before its text.
@@ -651,7 +718,7 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
     h.step();
     h.step();
-    assert!(query(&h).is_none(), "Enter ran the search");
+    assert!(!crate::chrome::search::is_open(h.state()), "Enter ran the search");
     assert!(h.state().session.view.nav_pane, "the Navigation pane shows the results");
     assert_eq!(h.state().session.find.results.len(), 1);
 }
@@ -660,16 +727,8 @@ fn alt_q_opens_search_and_typing_goes_there() {
 /// Focus comes on; and Search left open when Focus comes on doesn't keep Escape from leaving it.
 #[test]
 fn focus_mode_search_never_opens_in_the_hidden_box() {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app(),
-    );
+    let mut h = harness(app());
     h.run_steps(6);
-    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
     let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
     // Search, as Alt+Q opens it (Windows and Linux; macOS has no Alt+Q, Option+Q types a character).
     let search = |h: &mut egui_kittest::Harness<WordApp>| {
@@ -679,18 +738,21 @@ fn focus_mode_search_never_opens_in_the_hidden_box() {
     h.state_mut().run("view.focus", json!({"value": true})).unwrap();
     search(&mut h);
     h.step();
-    assert!(query(&h).is_none(), "no Search in a box Focus hides");
-    assert!(matches!(h.state().dialog, Some(dialogs::Dialog::Commands { .. })), "Search opens as the dialog");
-    h.state_mut().dialog = None;
+    assert!(!crate::chrome::search::is_open(h.state()), "no Search in a box Focus hides");
+    assert!(!h.state().dialog_host.open_dialogs().is_empty(), "Search opens as the dialog");
+    let ctx = h.ctx.clone();
+    // PLAN: assumed `dialogs::close_all(app: &mut WordApp, ctx: &egui::Context)` (dialogs-w13)
+    crate::dialogs::close_all(h.state_mut(), &ctx);
+    h.step();
     h.state_mut().run("view.focus", json!({"value": false})).unwrap();
     h.run_steps(3);
     // Search open in the title bar, then Focus comes on: Escape leaves Focus.
     search(&mut h);
     h.run_steps(2);
-    assert!(query(&h).is_some());
+    assert!(crate::chrome::search::is_open(h.state()));
     h.state_mut().run("view.focus", json!({"value": true})).unwrap();
     h.run_steps(3);
-    assert!(query(&h).is_none(), "Search whose box is gone is dropped");
+    assert!(!crate::chrome::search::is_open(h.state()), "Search whose box is gone is dropped");
     h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
     h.run_steps(2);
     assert!(!h.state().session.view.focus_mode, "Escape leaves Focus");
@@ -710,9 +772,9 @@ fn search_command_matches_every_word() {
     }));
     assert_eq!(a.run("tools.search", json!({"query": "   "})).unwrap()["matches"], json!([]));
     assert_eq!(a.run("tools.search", json!({"query": "zzqqxx"})).unwrap()["matches"], json!([]));
-    assert!(a.dialog.is_none(), "a query never opens the box");
+    assert!(a.dialog_host.open_dialogs().is_empty(), "a query never opens the box");
     a.run("tools.search", json!({})).unwrap();
-    assert!(matches!(a.dialog, Some(dialogs::Dialog::Commands { .. })), "no query opens Search");
+    assert!(!a.dialog_host.open_dialogs().is_empty(), "no query opens Search");
 }
 
 /// Issue #2716: taking documents off the list needs no open document — the Start screen shows
