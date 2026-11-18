@@ -30,17 +30,32 @@ fn main() {
     if let Err(e) = std::fs::write(&out, generate(&json, &people)) {
         println!("cargo::warning=writing {}: {e}", out.display());
     }
+    let (table, catalogs) = craft_i18n();
     let out = out.with_file_name("craft_i18n.rs");
-    if let Err(e) = std::fs::write(&out, craft_i18n()) {
+    if let Err(e) = std::fs::write(&out, table) {
         println!("cargo::error=writing {}: {e}", out.display());
+    }
+    embed_fonts(catalogs);
+}
+
+/// Write `craft_fonts.rs`: the craft-fonts faces (from `CRAFT_FONTS_DIR`) with the CJK interface faces
+/// cut to the characters of the embedded catalogs. A web build has a size budget, so it embeds only
+/// the Japanese interface face.
+fn embed_fonts(catalogs: Vec<std::path::PathBuf>) {
+    println!("cargo::rerun-if-changed=build.rs");
+    let wasm = craft_fonts_build::target_is_wasm();
+    let embedded = craft_fonts_build::Embed::new().subset_to(catalogs).filter(move |face| !wasm || face.has_script("Jpan")).write("craft_fonts.rs");
+    if let Err(e) = embedded {
+        println!("cargo::error={e}");
     }
 }
 
 /// The catalog this app reads in each locale: `locales/<locale>/wordcraft.tsv`.
 const APP_CATALOG: &str = "wordcraft.tsv";
 
-/// `CRAFT_I18N` from `CRAFT_I18N_DIR`: the `Embedded` list the craft-i18n crate reads.
-fn craft_i18n() -> String {
+/// `CRAFT_I18N` from `CRAFT_I18N_DIR`: the `Embedded` list the craft-i18n crate reads, and the
+/// catalog files it names (`wordcraft.tsv` and `common.tsv`).
+fn craft_i18n() -> (String, Vec<std::path::PathBuf>) {
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_REQUIRED");
     let required = std::env::var("CRAFT_I18N_REQUIRED").is_ok_and(|v| v.trim() == "1");
@@ -63,13 +78,16 @@ fn craft_i18n() -> String {
     };
     let mut o = String::from("/// (locale, shared catalog, WordCraft's catalog), one entry per locale; `\"\"` for a missing file.\n");
     o.push_str("pub static CRAFT_I18N: &craft_i18n::Embedded = &[\n");
+    let mut catalogs = Vec::new();
     for (code, shared, app) in entries {
+        catalogs.extend(shared.iter().cloned());
+        catalogs.push(app.clone());
         // `{:?}` escapes the path (Windows backslashes) as a Rust string literal.
         let shared = shared.map_or_else(|| "\"\"".to_string(), |p| format!("include_str!({p:?})"));
         let _ = writeln!(o, "    ({code:?}, {shared}, include_str!({app:?})),");
     }
     o.push_str("];\n");
-    o
+    (o, catalogs)
 }
 
 /// A locale's code, its `common.tsv` if any, and its app catalog.
