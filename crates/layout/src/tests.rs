@@ -15615,6 +15615,30 @@ fn a_line_of_only_pictures_takes_no_descent_at_least_spaced() {
     assert!((para.lines[0].height - 30.0).abs() < 0.01, "lowered 25 pt: line {}", para.lines[0].height);
 }
 
+/// A tall list label makes its line tall enough for it, also on the line after an opening page
+/// break, where the label goes.
+#[test]
+fn a_tall_label_after_an_opening_page_break_sets_its_lines_height() {
+    let line_with_label = |opening_break: bool| {
+        let text = if opening_break { "Before\n\u{000C}x" } else { "Before\nx" };
+        let mut d = Document::from_text(text);
+        let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        Arc::make_mut(&mut d.numbering).abstracts[0].levels[0].chr.size = Some(40.0);
+        d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+        let l = lay(&d);
+        let para = l
+            .pages
+            .iter()
+            .flat_map(|pg| pg.items.iter())
+            .filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None })
+            .find(|para| para.label.is_some())
+            .unwrap();
+        para.lines[para.label_line()].height
+    };
+    let (plain, after_break) = (line_with_label(false), line_with_label(true));
+    assert!((plain - after_break).abs() < 0.01, "label line {after_break} after a break, {plain} without");
+}
+
 /// A numbered paragraph opening with a page break has its label on the line after the break:
 /// a picture there keeps the descent below it under at-least spacing, as beside text.
 #[test]
