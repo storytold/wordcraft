@@ -17,9 +17,9 @@ use craft::ui::contract::{
 use craft::ui::menu::Menu;
 use craft::ui::pickers::{Calendar, CalendarView, DatePrecision, PickedDate};
 use craft::ui::popover::Popover;
-use craft::ui::primitives::{PaintShape, StrokeWidth, TextRun, TypeRole};
+use craft::ui::primitives::{PaintShape, StrokeWidth, TextRun};
 use craft::ui::runtime::env::Label;
-use craft::ui::style::{ComponentStyle, StyleColor, StyleCx};
+use craft::ui::style::{ComponentStyle, StyleColor, StyleCx, TypeRole};
 use egui::{CornerRadius, Rect, Response, Ui, Vec2, pos2, vec2};
 use serde_json::json;
 use wordcraft_doc::Pos;
