@@ -348,3 +348,33 @@ fn typed_thai_is_marked_complex_script_as_word_marks_it() {
     }
     assert_eq!(thai_runs, 2);
 }
+
+/// Typed one key at a time, digits and spaces after Thai go with its complex-script run (as with a
+/// Thai keyboard in Word), but Latin letters don't take its mark: they'd be drawn in the
+/// complex-script font and size.
+#[test]
+fn latin_typed_after_thai_is_not_marked_complex_script() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    for part in ["แผนงาน", " 2569 ", "Plan", " ปี"] {
+        crate::cmd::type_text(&mut s, part).unwrap();
+    }
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p.text, "แผนงาน 2569 Plan ปี");
+    let cs_of = |piece: &str| {
+        let at = p.text.find(piece).unwrap();
+        let mut off = 0;
+        p.runs
+            .iter()
+            .find(|r| {
+                off += r.len;
+                off > at
+            })
+            .unwrap()
+            .props
+            .cs
+    };
+    assert_eq!(cs_of("แผนงาน"), Some(true));
+    assert_eq!(cs_of("2569"), Some(true), "digits go with the Thai run");
+    assert_eq!(cs_of("Plan"), None, "Latin letters aren't complex script");
+    assert_eq!(cs_of("ปี"), Some(true));
+}
