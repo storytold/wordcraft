@@ -1,7 +1,7 @@
 use super::boxes::{BoxInput, BoxLayout, layout_box};
 use super::ctx::Ctx;
 use super::floats::left_out_objects;
-use super::page::{PageBuilder, item_bottom};
+use super::page::PageBuilder;
 use super::placed::Placed;
 use super::{
     Block, Blocks, Border, Document, HashMap, HideDeleted, InlineObject, Page, ParaLayout, Paragraph, Rect, StoryRef, TextDirection, fields, para,
@@ -176,20 +176,7 @@ pub(crate) struct NoteBox {
 
 /// The vertical extent of an item laid out in a horizontal frame.
 pub(crate) fn v_span(it: &Placed) -> (f32, f32) {
-    if let Some(r) = it.turned_bounds() {
-        return (r.y, r.y + r.h);
-    }
-    match it {
-        Placed::Lines { para, l0, l1, y, .. } => (*y, item_bottom(*y, para, *l0, *l1).unwrap_or(*y)),
-        Placed::Fill { rect, .. }
-        | Placed::Image { rect, .. }
-        | Placed::Shape { rect, .. }
-        | Placed::Graphic { rect, .. }
-        | Placed::Clip { rect, .. }
-        | Placed::Cell { rect, .. }
-        | Placed::Object { rect, .. } => (rect.y, rect.y + rect.h),
-        Placed::Rule { y0, y1, .. } => (y0.min(*y1), y0.max(*y1)),
-    }
+    it.vertical_span()
 }
 
 impl NoteBox {

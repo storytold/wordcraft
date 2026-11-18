@@ -3,6 +3,19 @@ use wordcraft_doc::Pos;
 use wordcraft_doc::props::Align;
 use wordcraft_engine::Session;
 
+/// Paste Special lists and pastes the same formats the engine chose: the clipboard ownership
+/// result must survive into the dialog's payload, or another program's copy could be replaced
+/// by WordCraft's own fragment.
+#[test]
+fn paste_special_dialog_keeps_the_clipboard_ownership_result() {
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+    let d = Dialog::paste_special(&a, &json!({"text": "Bold", "privateClipboard": false}));
+    let Dialog::PasteSpecial { formats, payload, .. } = d else { panic!("not Paste Special") };
+    assert_eq!(formats, ["text"], "another program's copy isn't our fragment");
+    assert_eq!(payload.get("privateClipboard"), Some(&json!(false)));
+    assert_eq!(payload.get("text").and_then(Value::as_str), Some("Bold"));
+}
+
 /// #3931: hovering Insert › Table's grid asks the page for a preview of that table (rows by
 /// columns) and changes nothing; leaving the grid drops it; a click inserts the table with no
 /// preview left over for the page to show on top of it.
@@ -669,6 +682,201 @@ fn paragraph_dialog_keeps_fixed_line_spacing() {
     assert_eq!(props(&app).line_spacing, Some(LineSpacing::Multiple(1.5)));
 }
 
+/// The Paragraph dialog's Special box, as in Word: (none), First line or Hanging, By how much.
+/// Hanging is a first-line indent below 0; picking a kind from (none) starts at half an inch,
+/// switching between First line and Hanging keeps By, and a By typed in counts once committed.
+#[test]
+fn paragraph_dialog_sets_first_line_and_hanging_indents() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Some text");
+    app.dialog = Dialog::open("paragraph", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    let pick = |h: &mut egui_kittest::Harness<'_, WordApp>, kind: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Special:").click();
+        h.run_steps(4);
+        h.get_by_label(kind).click();
+        h.run_steps(4);
+    };
+    let first = |h: &egui_kittest::Harness<'_, WordApp>| match &h.state().dialog {
+        Some(Dialog::Paragraph { first, .. }) => *first,
+        _ => panic!("no paragraph dialog"),
+    };
+    for _ in 0..4 {
+        h.step();
+    }
+    let ok = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    };
+    h.run_steps(4);
+    pick(&mut h, "Hanging");
+    assert_eq!(first(&h), -0.5, "Hanging starts at half an inch");
+    // Typing 0.75 over By: the leading 0 doesn't turn Special to (none) on the way. The box,
+    // not its label: the one "By:" node that isn't a label.
+    fn by_box<'h>(h: &'h egui_kittest::Harness<'_, WordApp>) -> egui_kittest::Node<'h> {
+        h.get_all_by_label("By:").find(|n| n.accesskit_node().role() != egui::accesskit::Role::Label).expect("the By box")
+    }
+    by_box(&h).click();
+    h.run_steps(2);
+    by_box(&h).type_text("0");
+    h.run_steps(2);
+    assert_eq!(first(&h), -0.5, "a value still being typed doesn't count yet");
+    by_box(&h).type_text(".75");
+    // Tab moves on and commits it (Enter would also press OK, as in Word).
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(first(&h), -0.75, "the typed By counts once committed");
+    pick(&mut h, "First line");
+    assert_eq!(first(&h), 0.75, "switching kinds keeps By");
+    // By has a range, 0 to Word's 22": a larger value stops there (and dragging down stops at 0).
+    by_box(&h).click();
+    h.run_steps(2);
+    by_box(&h).type_text("30");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(first(&h), 22.0, "By stops at 22\"");
+    by_box(&h).click();
+    h.run_steps(2);
+    by_box(&h).type_text("0.75");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(first(&h), 0.75);
+    pick(&mut h, "Hanging");
+    ok(&mut h);
+    assert_eq!(props(h.state()).indent_first, Some(-54.0), "a hanging indent of 0.75\"");
+    // Opened again, it shows Hanging by 0.75"; (none) takes the indent away.
+    let app = h.state_mut();
+    let d = Dialog::open("paragraph", app);
+    app.dialog = d;
+    h.run_steps(4);
+    assert_eq!(first(&h), -0.75);
+    pick(&mut h, "(none)");
+    assert_eq!(first(&h), 0.0);
+    ok(&mut h);
+    assert_eq!(props(h.state()).indent_first, Some(0.0));
+}
+
+/// The Special box opens from the paragraph: a first-line indent above 0 shows First line by its
+/// size, and By reads and takes lengths in the measurement unit File › Options sets (centimetres,
+/// points), as Word's dialog does.
+#[test]
+fn paragraph_dialog_special_box_opens_from_the_paragraph_in_the_measurement_unit() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Some text");
+    let _ = app.run("para.set", json!({"props": {"indentFirst": 28.35}}));
+    app.session.prefs.units = Some(wordcraft_geom::Unit::Centimeters);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    // The frames before copy the unit for dialog code; the dialog opens in it.
+    h.run_steps(2);
+    let open = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        let app = h.state_mut();
+        let d = Dialog::open("paragraph", app);
+        app.dialog = d;
+        h.run_steps(4);
+    };
+    let first = |h: &egui_kittest::Harness<'_, WordApp>| match &h.state().dialog {
+        Some(Dialog::Paragraph { first, .. }) => *first,
+        _ => panic!("no paragraph dialog"),
+    };
+    let special = |h: &egui_kittest::Harness<'_, WordApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Special:").accesskit_node().value().map(|v| v.to_string())
+    };
+    let ok = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    };
+    open(&mut h);
+    assert!((first(&h) - 1.0).abs() < 0.01, "1 cm: {}", first(&h));
+    assert_eq!(special(&h).as_deref(), Some("First line"));
+    // 2 typed over By counts 2 cm.
+    let by = h.get_all_by_label("By:").find(|n| n.accesskit_node().role() != egui::accesskit::Role::Label).expect("the By box");
+    by.click();
+    h.run_steps(2);
+    let by = h.get_all_by_label("By:").find(|n| n.accesskit_node().role() != egui::accesskit::Role::Label).expect("the By box");
+    by.type_text("2");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    ok(&mut h);
+    let set = props(h.state()).indent_first.unwrap_or_default();
+    assert!((set - 56.69).abs() < 0.05, "2 cm is {set} pt");
+    // In points: the same indent shows 56.69, and Hanging keeps it, below 0.
+    h.state_mut().session.prefs.units = Some(wordcraft_geom::Unit::Points);
+    h.run_steps(2);
+    open(&mut h);
+    assert!((first(&h) - set).abs() < 0.01, "in points: {}", first(&h));
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Special:").click();
+    h.run_steps(4);
+    h.get_by_label("Hanging").click();
+    h.run_steps(4);
+    ok(&mut h);
+    assert!((props(h.state()).indent_first.unwrap_or_default() + set).abs() < 0.01, "a hanging indent of the same size");
+}
+/// Selected paragraphs with different first-line indents: Special and By show blank, an
+/// unchanged OK leaves each indent as it was, and picking a kind starts By at half an inch for
+/// all of them.
+#[test]
+fn paragraph_dialog_special_box_over_differing_first_line_indents() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("One\nTwo\nThree");
+    let _ = app.run("caret.docStart", json!({}));
+    let _ = app.run("para.set", json!({"props": {"indentLeft": 36, "indentFirst": 18}}));
+    let _ = app.run("caret.down", json!({}));
+    let _ = app.run("para.set", json!({"props": {"indentLeft": 36, "indentFirst": -18}}));
+    let _ = app.run("select.all", json!({}));
+    let was: Vec<_> = (0..3).map(|i| para_props(&app, i).indent_first).collect();
+    assert_eq!(was, [Some(18.0), Some(-18.0), None]);
+    app.dialog = Dialog::open("paragraph", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let ok = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    };
+    let Some(Dialog::Paragraph { mixed, .. }) = &h.state().dialog else { panic!("no paragraph dialog") };
+    assert!(mixed.contains("indentFirst"), "{mixed:?}");
+    let special = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Special:");
+    assert_eq!(special.accesskit_node().value().as_deref(), Some(""), "Special shows blank");
+    ok(&mut h);
+    assert_eq!((0..3).map(|i| para_props(h.state(), i).indent_first).collect::<Vec<_>>(), was, "an unchanged OK keeps each indent");
+    // Hanging from the blank box: half an inch for every selected paragraph.
+    let app = h.state_mut();
+    let d = Dialog::open("paragraph", app);
+    app.dialog = d;
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Special:").click();
+    h.run_steps(4);
+    h.get_by_label("Hanging").click();
+    h.run_steps(4);
+    let Some(Dialog::Paragraph { first, mixed, .. }) = &h.state().dialog else { panic!("no paragraph dialog") };
+    assert_eq!((*first, mixed.contains("indentFirst")), (-0.5, false));
+    ok(&mut h);
+    assert_eq!((0..3).map(|i| para_props(h.state(), i).indent_first).collect::<Vec<_>>(), [Some(-36.0); 3]);
+}
+
 #[test]
 fn font_dialog_sets_the_asian_and_latin_fonts_separately() {
     // #505: the Asian text font box and the Latin text font box each set their own font, and
@@ -880,6 +1088,88 @@ fn modify_style_font_box_finds_the_family() {
     assert!(h.state().dialog.is_none(), "Enter pressed OK");
     let rc = h.state().session.doc.styles.resolve_char(Some("Normal"), &wordcraft_doc::CharProps::default());
     assert_eq!(rc.font, wordcraft_doc::styles::HEADING_FONT);
+}
+
+/// #2786: Define New Bullet's Font… is this Font dialog, opened on the bullet's formatting. OK
+/// hands the font, size and bold back to Define New Bullet without formatting the text;
+/// Cancel, and the title bar's close box, go back with the form as it was.
+#[test]
+fn font_dialog_formats_a_bullet_and_hands_it_back() {
+    use crate::dialogs_bullet::DefineBulletForm;
+    use crate::dialogs_insert::InsertDialog;
+    use egui_kittest::kittest::Queryable;
+    let back = |button: &str| -> (DefineBulletForm, wordcraft_doc::props::CharProps) {
+        let mut app = app_with("Example");
+        let _ = app.run("para.bullets", json!({"kind": "▪"}));
+        let form = DefineBulletForm { font: "Arial".into(), ..DefineBulletForm::plain("▪") };
+        app.dialog = font_for_bullet(&mut app, form);
+        let Some(Dialog::Font { size, bold, bullet, .. }) = &mut app.dialog else { panic!("the Font dialog is open") };
+        assert!(bullet.is_some(), "it carries the form");
+        assert!(!*bold && size.is_empty(), "it shows the bullet's formatting, not the text's");
+        *size = "16".into();
+        *bold = true;
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                if fonts {
+                    show(app, &ctx);
+                } else {
+                    crate::theme::install_fonts_for(&ctx, false);
+                    fonts = true;
+                }
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label(button).click();
+        h.run_steps(3);
+        let app = h.state_mut();
+        let Some(Dialog::Insert(d)) = app.dialog.take() else { panic!("back to Define New Bullet") };
+        let InsertDialog::DefineBullet(f) = *d else { panic!("back to Define New Bullet") };
+        let text = app.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
+        (f, text)
+    };
+    let (f, text) = back("OK");
+    assert_eq!((f.ch.as_str(), f.font.as_str(), f.size.as_str(), f.bold), ("▪", "Arial", "16", true));
+    assert_ne!(text.bold, Some(true), "the text isn't formatted");
+    assert_ne!(text.size, Some(16.0), "the text isn't formatted");
+    for button in ["Cancel", "Close"] {
+        let (f, _) = back(button);
+        assert_eq!((f.font.as_str(), f.size.as_str(), f.bold), ("Arial", "", false), "{button} keeps the form");
+    }
+    // A bullet in the text's font (no font of its own) keeps it when OK doesn't change the
+    // font box, though the box shows the text's font (review of #2860).
+    let mut app = app_with("Example");
+    let _ = app.run("para.bullets", json!({"kind": "▪"}));
+    let Some(mut d) = font_for_bullet(&mut app, DefineBulletForm::plain("▪")) else { panic!("the Font dialog opens") };
+    if let Dialog::Font { font, .. } = &d {
+        assert!(!font.is_empty(), "the box shows the text's font");
+    }
+    if let Dialog::Font { bullet: Some(b), font, font_was, .. } = &mut d {
+        assert_eq!(font, font_was);
+        assert!(b.font.is_empty());
+    }
+    app.dialog = Some(d);
+    let mut fonts = false;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            if fonts {
+                show(app, &ctx);
+            } else {
+                crate::theme::install_fonts_for(&ctx, false);
+                fonts = true;
+            }
+        },
+        app,
+    );
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let Some(Dialog::Insert(d)) = h.state_mut().dialog.take() else { panic!("back to Define New Bullet") };
+    let InsertDialog::DefineBullet(f) = *d else { panic!("back to Define New Bullet") };
+    assert_eq!(f.font, "", "still the text's font");
 }
 
 /// A dialog was pinned by its anchor, so dragging its title bar did nothing (#732).
@@ -1855,6 +2145,27 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
 
+/// A tall dialog on a short screen stays inside it and scrolls.
+#[test]
+fn a_tall_dialog_fits_a_short_screen() {
+    let mut app = app_with("Some text");
+    app.dialog = Dialog::open("pageSetup", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 360.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let id = egui::Id::unique(("dialog", "Page Setup"));
+    let rect = h.ctx.memory(|m| m.area_rect(id)).expect("the dialog is open");
+    assert!(rect.height() <= 360.5, "the dialog is {}pt tall on a 360pt screen", rect.height());
+}
+
 /// #3859: a dialog is modal, as in Word. While Font is open, typing (from the frame it opens),
 /// Mod+O and a click on File reach nothing behind it, and the dialog itself still works. Find
 /// and Replace is modeless: with it open, File still opens.
@@ -2076,6 +2387,116 @@ fn the_page_waits_for_the_keyboard_until_a_modal_dialog_closes() {
     h.event(egui::Event::Text("!".into()));
     h.run_steps(2);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "!", "the page has it after the dialog");
+}
+
+/// Drags from `at` to 30 points right in `h`, and counts the window drags the app asked for.
+fn window_drags(h: &mut egui_kittest::Harness<WordApp>, at: egui::Pos2) -> usize {
+    let mut drags = 0;
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let events = [egui::Event::PointerMoved(at), button(at, true)]
+        .into_iter()
+        .chain([10.0, 20.0, 30.0].map(|dx| egui::Event::PointerMoved(at + vec2(dx, 0.0))))
+        .chain([button(at + vec2(30.0, 0.0), false)]);
+    for e in events {
+        h.event(e);
+        h.step();
+        drags += h.output().viewport_output.values().flat_map(|v| &v.commands).filter(|c| matches!(c, egui::ViewportCommand::StartDrag)).count();
+    }
+    drags
+}
+
+/// #5124: behind a modal dialog the window still moves by its title bar, as in Word for Mac, where
+/// WordCraft draws it, or by the top of File's side menu, which covers it there; elsewhere the
+/// system's title bar does, and WordCraft's bar under it doesn't.
+#[test]
+fn the_window_moves_by_its_title_bar_behind_a_modal_dialog() {
+    for (mac, backstage) in [(true, false), (true, true), (false, false), (false, true)] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.integrated_titlebar = mac;
+        a.ui.backstage = backstage;
+        let mut h = app_harness(a);
+        h.run_steps(6);
+        let font = Dialog::open("font", h.state_mut());
+        h.state_mut().dialog = font;
+        h.run_steps(4);
+        let at = egui::pos2(if backstage { 100.0 } else { 300.0 }, 12.0);
+        assert_eq!(window_drags(&mut h, at), usize::from(mac), "macOS: {mac}, File: {backstage}");
+        assert!(matches!(h.state().dialog, Some(Dialog::Font { .. })), "Font stays");
+        assert_eq!(h.state().ui.backstage, backstage, "nothing behind it opened or closed");
+    }
+}
+
+/// Opens a modal state in `a`: the built-in file browser, a dialog by name, or Colors.
+fn open_modal_state(a: &mut WordApp, state: &str) {
+    match state {
+        "none" => {}
+        "fileBrowser" => {
+            let document = a.session.document_id();
+            a.show_file_browser(
+                crate::file_dialogs::FileDialogRequest::Open { purpose: "document".into() },
+                crate::file_dialogs::AfterPick::OpenDocument { document },
+                false,
+            );
+        }
+        "colors" => a.colors = Some(crate::colors::ColorsDialog::new(None, crate::colors::Target::cmd("format.color"))),
+        dialog => a.dialog = Dialog::open(dialog, a),
+    }
+}
+
+/// The file browser, a modal dialog and Colors each block the window; nothing open or a modeless
+/// dialog doesn't.
+#[test]
+fn modal_open_is_true_for_the_file_browser_a_modal_dialog_and_colors() {
+    for (state, modal) in [("none", false), ("find", false), ("font", true), ("fileBrowser", true), ("colors", true)] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        open_modal_state(&mut a, state);
+        assert_eq!(a.modal_open(), modal, "{state}");
+    }
+}
+
+/// #5124: whatever is open, a drag on the title bar macOS draws moves the window; where the system
+/// draws it, WordCraft's bar under it only does while nothing blocks it.
+#[test]
+fn the_title_bar_moves_the_window_in_every_modal_state() {
+    for (state, modal) in [("none", false), ("find", false), ("font", true), ("fileBrowser", true), ("colors", true)] {
+        for mac in [true, false] {
+            let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            a.integrated_titlebar = mac;
+            let mut h = app_harness(a);
+            h.run_steps(6);
+            open_modal_state(h.state_mut(), state);
+            h.run_steps(4);
+            assert_eq!(h.state().modal_open(), modal, "{state}");
+            assert_eq!(window_drags(&mut h, egui::pos2(300.0, 12.0)), usize::from(mac || !modal), "{state}, macOS: {mac}");
+            assert_eq!(h.state().modal_open(), modal, "{state} stays open");
+        }
+    }
+}
+
+/// #5124: where a dialog reaches over the title bar (a short window), a drag on the dialog is the
+/// dialog's own and doesn't move the window.
+#[test]
+fn a_drag_on_a_dialog_over_the_title_bar_doesnt_move_the_window() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.integrated_titlebar = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 420.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let font = Dialog::open("font", h.state_mut());
+    h.state_mut().dialog = font;
+    h.run_steps(4);
+    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Font")))).expect("the dialog is open");
+    let at = egui::pos2(rect.center().x, rect.top() + 8.0);
+    assert!(at.y < 30.0, "the dialog reaches over the title bar: {rect:?}");
+    assert_eq!(window_drags(&mut h, at), 0, "a drag on its title");
+    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Font")))).expect("the dialog is open");
+    assert_eq!(window_drags(&mut h, egui::pos2(rect.center().x, rect.top() + 1.0)), 0, "nor just inside its edge");
 }
 
 #[test]
