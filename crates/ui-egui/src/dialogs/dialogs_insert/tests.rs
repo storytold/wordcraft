@@ -353,7 +353,7 @@ fn date_time_dialog_controls_insert_portuguese_fixed_text() {
     // Go through the actual language combo box and then select a long Portuguese date.
     // Scope the click to this dialog: the ribbon has another English-language button.
     // The popup choice has a plain accessible label; the main ribbon uses a different control.
-    h.get_by_role_and_label(Role::Window, "Date and Time").get_by_role(Role::ComboBox).click();
+    h.get_by_role_and_label(Role::Dialog, "Date and Time").get_by_role(Role::ComboBox).click();
     h.run_steps(3);
     h.get_by_role_and_label(Role::Button, "Portuguese (Brazil)").click();
     h.run_steps(3);

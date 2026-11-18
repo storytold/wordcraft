@@ -37,7 +37,7 @@ fn settle(h: &mut egui_kittest::Harness<'static, WordApp>) {
 }
 
 fn tab_button<'a>(h: &'a egui_kittest::Harness<'static, WordApp>, label: &'a str) -> egui_kittest::Node<'a> {
-    h.query_all_by_role_and_label(egui::accesskit::Role::Button, label).last().unwrap_or_else(|| panic!("no {label} button"))
+    h.query_all_by_role_and_label(egui::accesskit::Role::Tab, label).last().unwrap_or_else(|| panic!("no {label} tab"))
 }
 
 /// Click each tab in turn. After every click `page` must report its index.
