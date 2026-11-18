@@ -27,7 +27,7 @@ fn word_share(spaces: u32) -> f32 {
 /// (compatibility mode 15; Georgia 11 and 20 pt, Times New Roman 12 pt, Arial 11 and 20 pt; words
 /// of 8 to 123 pt on lines of 14 to 51 spaces, the right indent stepped a twip at a time): at most
 /// a quarter of the spaces' width, and at most 0.3337 + 0.215 / n of the word's own (0.350 with 13
-/// spaces, 0.339 with 50; all twenty sweeps within 0.0002 of the word's width).
+/// spaces, 0.338 with 50; all 23 sweeps within 0.0002 of the word's width).
 pub(super) fn space_room(spaces: f32, n: u32, word: f32) -> f32 {
     (spaces * MAX_SPACE_SHRINK).min(word.max(0.0) * word_share(n))
 }
