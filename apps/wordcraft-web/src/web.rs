@@ -76,10 +76,12 @@ pub fn start() {
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
-                    let mut app = WordApp::new(session, services);
+                    let control = crate::api::install(cc.egui_ctx.clone());
+                    let mut app = WordApp::new(session, services).with_control(control);
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
+                    app.tell_about_font_downloads();
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
                     let stored = stored_prefs();
                     crate::prefs::restore(&mut app, stored.as_deref());
