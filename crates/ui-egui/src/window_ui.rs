@@ -60,6 +60,7 @@ pub(crate) struct WindowUi {
     pub(crate) shown_document: u64,
     // From UiState.
     pub(crate) tab: String,
+    pub(crate) ribbon_collapsed: bool,
     pub(crate) backstage: bool,
     pub(crate) backstage_page: String,
     pub(crate) print: print_page::PrintSettings,
@@ -80,6 +81,7 @@ impl WindowUi {
     pub(crate) fn new(document: u64) -> WindowUi {
         let UiState {
             tab,
+            ribbon_collapsed,
             backstage,
             backstage_page,
             print,
@@ -132,6 +134,7 @@ impl WindowUi {
             info_editing: None,
             shown_document: document,
             tab,
+            ribbon_collapsed,
             backstage,
             backstage_page,
             print,
@@ -272,7 +275,6 @@ impl WordApp {
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while
             // running.
-            ribbon_collapsed: _,
             quick_access_toolbar: _,
             recent: _,
             recent_symbols: _,
@@ -326,6 +328,7 @@ impl WordApp {
             pane_order: _,
             // Per window.
             tab,
+            ribbon_collapsed,
             backstage,
             backstage_page,
             print,
@@ -377,6 +380,7 @@ impl WordApp {
             info_editing,
             shown_document,
             tab,
+            ribbon_collapsed,
             backstage,
             backstage_page,
             print,
@@ -400,7 +404,7 @@ mod tests {
     use crate::{Services, WordApp, dialogs::Dialog};
 
     /// Swapping in a new window shows its fresh state; swapping back restores the first window's
-    /// dialog, status message, composition, scroll request and tab. The session and the
+    /// dialog, status message, composition, scroll request, tab and hidden ribbon. The session and the
     /// preferences stay put both ways.
     #[test]
     fn swap_window_round_trip() {
@@ -410,6 +414,7 @@ mod tests {
         let rev = a.session.rev();
         a.ui.recent_count = 7;
         a.ui.tab = "Insert".into();
+        a.ui.ribbon_collapsed = true;
         a.dialog =
             Some(Dialog::SaveChanges { name: "Report".into(), then: "file.close".into(), params: json!({}), document: doc, message: String::new() });
         a.status_msg = Some(("Saved".into(), 1.0));
@@ -425,6 +430,7 @@ mod tests {
         assert!(a.canvas.scroll_to_caret && !a.canvas.nav_to_caret, "a new window goes to the caret");
         assert_eq!(a.ui.tab, crate::DEFAULT_TAB);
         assert_eq!(w.tab, "Insert");
+        assert!(!a.ui.ribbon_collapsed && w.ribbon_collapsed, "a new window shows its ribbon");
         assert_eq!((a.session.document_id(), a.session.rev(), a.ui.recent_count), (doc, rev, 7), "app-wide state stays");
 
         a.swap_window(&mut w);
@@ -433,6 +439,7 @@ mod tests {
         assert_eq!((a.canvas.ime_preedit.as_str(), a.canvas.ime_preedit_range.clone()), ("ni", Some(0..2)));
         assert!(!a.canvas.scroll_to_caret && a.canvas.nav_to_caret);
         assert_eq!(a.ui.tab, "Insert");
+        assert!(a.ui.ribbon_collapsed, "the first window's ribbon is still hidden");
         assert!(w.dialog.is_none() && w.tab == crate::DEFAULT_TAB);
         assert_eq!((a.session.document_id(), a.session.rev(), a.ui.recent_count), (doc, rev, 7));
         assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Kept");
