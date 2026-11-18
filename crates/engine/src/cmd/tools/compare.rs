@@ -145,8 +145,6 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     };
     let mut budget = MAX_COMPARE_CELLS;
     let mut char_fallbacks = 0usize;
-    // This comparison owns the flags it turns on, not those a previous one recorded.
-    s.doc.compare_hf = None;
     let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks, plain_revised };
     let (out, body_changes, sources) = compare_blocks(&mut s.doc, &run, &mut ctx, &old, &new, true);
     s.doc.body = out;
@@ -329,7 +327,8 @@ struct SectionContext<'a> {
 /// so inserted First or Even stories remain selectable under layout. Precomputed `res_ends`
 /// avoids rescanning document sections on every slot assignment.
 fn assign_section_slot(s: &mut Session, ctx: &SectionContext<'_>, footer: bool, slot: HfSlot, id: u32, enable_flag: bool) {
-    let end_opt = if ctx.res_si + 1 < ctx.res_ends.len() { ctx.res_ends.get(ctx.res_si).copied() } else { None };
+    let sec_key = (ctx.res_si + 1 < ctx.res_ends.len()).then_some(ctx.res_si);
+    let end_opt = sec_key.and_then(|si| ctx.res_ends.get(si).copied());
 
     if let Some(end) = end_opt {
         let sect = s.doc.section_mut(end);
@@ -346,8 +345,8 @@ fn assign_section_slot(s: &mut Session, ctx: &SectionContext<'_>, footer: bool, 
 
     if enable_flag && slot == HfSlot::First && !ctx.orig_title_page {
         let flags = s.doc.compare_hf.get_or_insert_with(Default::default);
-        if !flags.title_page.iter().any(|(e, _)| *e == end_opt) {
-            flags.title_page.push((end_opt, false));
+        if !flags.title_page.iter().any(|(k, _)| *k == sec_key) {
+            flags.title_page.push((sec_key, false));
         }
     }
 
@@ -442,12 +441,29 @@ fn hf_blocks_identical(doc: &Document, revised: &Document, snap_blocks: &[Arc<Bl
     if snap_boxes != rev_boxes {
         return false;
     }
-    for id in snap_boxes {
-        match (doc.parts.get(&id), revised.parts.get(&id)) {
+    let mut todo: Vec<(u32, u32)> = snap_boxes.into_iter().zip(rev_boxes).collect();
+    let mut seen = std::collections::HashSet::new();
+    while let Some((id1, id2)) = todo.pop() {
+        if !seen.insert((id1, id2)) {
+            continue;
+        }
+        match (doc.parts.get(&id1), revised.parts.get(&id2)) {
             (Some(p1), Some(p2)) => {
                 if p1.blocks != p2.blocks {
                     return false;
                 }
+                let mut b1 = Vec::new();
+                for b in &p1.blocks {
+                    block_box_ids(b, &mut b1);
+                }
+                let mut b2 = Vec::new();
+                for b in &p2.blocks {
+                    block_box_ids(b, &mut b2);
+                }
+                if b1.len() != b2.len() {
+                    return false;
+                }
+                todo.extend(b1.into_iter().zip(b2));
             }
             (None, None) => {}
             _ => return false,
@@ -556,6 +572,9 @@ fn compare_headers_and_footers(
                     }
                 });
 
+                let enable_flag = (slot == HfSlot::First && rev_sec.is_some_and(|sec| sec.title_page))
+                    || (slot == HfSlot::Even && revised.settings.even_odd_headers);
+
                 match (orig_id, rev_id) {
                     (Some(o), Some(r)) => {
                         let target = if let Some(&existing_target) = pair_to_target.get(&(o, r)) {
@@ -584,11 +603,9 @@ fn compare_headers_and_footers(
                             }
                             target
                         };
-                        assign_section_slot(s, &sec_ctx, footer, slot, target, false);
+                        assign_section_slot(s, &sec_ctx, footer, slot, target, enable_flag);
                     }
                     (None, Some(r)) => {
-                        let enable_flag = (slot == HfSlot::First && rev_sec.is_some_and(|sec| sec.title_page))
-                            || (slot == HfSlot::Even && revised.settings.even_odd_headers);
                         let doc_id = if let Some(&existing_id) = inserted_clones.get(&r) {
                             existing_id
                         } else {
@@ -753,26 +770,6 @@ fn compare_blocks(
                     out.push(para_block(p));
                     if track_sources {
                         sources.push((Some(i), Some(j)));
-                    }
-                } else if let (Some(x), Some(y)) = (a, b) {
-                    if x == y {
-                        out.push(y.clone());
-                        if track_sources {
-                            sources.push((Some(i), Some(j)));
-                        }
-                    } else {
-                        // Equal as compared (a table by its flattened text) but not the same
-                        // content or structure: a tracked replacement, so rejecting puts the
-                        // original table back instead of silently keeping the revised one.
-                        out.push(Arc::new(mark_block(x, &|c| c.del = Some(run.del), 0)));
-                        if track_sources {
-                            sources.push((Some(i), None));
-                        }
-                        out.push(Arc::new(mark_block(y, &|c| c.ins = Some(run.ins), 0)));
-                        if track_sources {
-                            sources.push((None, Some(j)));
-                        }
-                        changes += 1;
                     }
                 } else if let Some(x) = b.or(a) {
                     out.push(x.clone());

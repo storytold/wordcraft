@@ -1480,14 +1480,13 @@ impl Document {
         let mut parts = frag.parts.clone();
         let mut media_remap = BTreeMap::new();
         for (k, v) in &frag.media {
-            if let Some(existing) = self.media.get(k) {
-                if existing.as_slice() != v.as_slice() {
-                    let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
-                    let new_key = self.add_media((**v).clone(), ext);
-                    media_remap.insert(k.clone(), new_key);
-                }
-            } else {
-                self.media.insert(k.clone(), v.clone());
+            if self.media.get(k).is_some_and(|existing| existing.as_slice() == v.as_slice()) {
+                continue;
+            }
+            let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
+            let new_key = self.add_media((**v).clone(), ext);
+            if new_key != *k {
+                media_remap.insert(k.clone(), new_key);
             }
         }
         if !media_remap.is_empty() {

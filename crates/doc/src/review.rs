@@ -65,8 +65,8 @@ impl Document {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CompareHfFlags {
-    /// Sections whose `title_page` compare turned on: the section's end block (`None` = the last
-    /// section) and the value it had.
+    /// Sections whose `title_page` compare turned on: the section's ordinal index in
+    /// `Document::sections()` (`None` = the last section) and the value it had.
     pub title_page: Vec<(Option<usize>, bool)>,
     /// `even_odd_headers` before compare turned it on.
     pub even_odd: Option<bool>,
