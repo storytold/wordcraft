@@ -144,6 +144,7 @@ fn parts_and_media() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn many_distinct_media_add_in_linear_time() {
     // An import with tens of thousands of small distinct images (same length, differing only at
     // the end) used to compare each against every earlier one.
@@ -645,6 +646,7 @@ fn para_of_objects(objs: Vec<InlineObject>) -> Paragraph {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn object_walks_are_linear_in_the_paragraph() {
     // #3614: loops of object_offsets + object_at recounted the objects before each one, so a
     // paragraph of 40,000 markers took seconds per walk.
@@ -691,6 +693,7 @@ fn object_walks_are_linear_in_the_paragraph() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn deleting_across_many_lone_control_markers_is_not_quadratic() {
     // A millisecond now; the old delete took 18 s at 1,500 markers and 114 s at 3,000.
     let n = 3_000;
@@ -725,6 +728,7 @@ fn control_markers_kept_are_sorted() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn lone_table_open_markers_linear_time() {
     let mut d = Document::new();
     let mut t = Table::new(1, 1, 100.0);
