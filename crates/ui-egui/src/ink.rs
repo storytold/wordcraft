@@ -451,9 +451,8 @@ mod tests {
     fn live_ink_follows_the_dark_page() {
         let black = wordcraft_doc::Rgb(0, 0, 0);
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        let ink = |app: &WordApp, c: wordcraft_doc::Rgb, alpha: u8| {
-            screen_ink(crate::canvas::dark_page(app), crate::canvas::page_paper(app), c, alpha)
-        };
+        let ink =
+            |app: &WordApp, c: wordcraft_doc::Rgb, alpha: u8| screen_ink(crate::canvas::dark_page(app), crate::canvas::page_paper(app), c, alpha);
         assert_eq!(ink(&app, black, 255), Color32::from_rgba_unmultiplied(0, 0, 0, 255));
         // Black pen on a dark page turns light, like the saved stroke.
         app.run("view.darkMode", serde_json::json!({"value": true})).unwrap();
