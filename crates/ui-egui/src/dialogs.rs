@@ -321,6 +321,12 @@ pub enum Dialog {
         #[serde(skip)]
         note: String,
     },
+    /// The document's missing fonts that can be downloaded, and how ([`crate::font_download`]).
+    FontDownload {
+        fonts: Vec<crate::font_download::Row>,
+        /// "Don't show this again".
+        dont_show: bool,
+    },
     /// Tabs: 0 About, 1 Contributors, 2 Models.
     About {
         tab: u8,
@@ -550,6 +556,7 @@ impl Dialog {
             Dialog::Icons { .. } => "icons",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
+            Dialog::FontDownload { .. } => "fontDownload",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::RecipientList { .. } => "recipientList",
@@ -803,6 +810,7 @@ impl Dialog {
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "renameDocument" => Dialog::RenameDocument { name: app.title_stem(), message: String::new(), focus: true },
             "about" => Dialog::About { tab: 0 },
+            "fontDownload" => crate::font_download::open(app),
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
             "languageData" => Dialog::About { tab: 3 },
