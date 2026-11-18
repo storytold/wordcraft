@@ -152,7 +152,7 @@ struct Exempt<'a> {
 /// input, not interface wording; a character the interface fonts lack becomes its linear name
 /// (`┬` → `\below`), so the exact strings are recognized rather than a pattern.
 fn math_placeholders(ctx: &egui::Context) -> std::collections::HashSet<String> {
-    let font = crate::theme::regular(11.0);
+    let font = egui::FontId::proportional(11.0);
     math_placeholders_with(|c| ctx.fonts_mut(|fonts| fonts.has_glyph(&font, c)))
 }
 

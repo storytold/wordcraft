@@ -111,11 +111,10 @@ fn the_language_setting_is_a_ui_command_and_persists() {
     frame(&ctx, &mut app);
     assert_eq!(current(), lang("zh-hant"));
     let saved = serde_json::to_string(&app.ui).unwrap();
-    // PLAN(app-hub): `UiState` is renamed `Prefs` (S-L136).
-    let restored: crate::Prefs = serde_json::from_str(&saved).unwrap();
+    let restored: crate::prefs::Prefs = serde_json::from_str(&saved).unwrap();
     assert_eq!(restored.language, "zh-hant");
     // Settings saved before this option existed follow the system.
-    let legacy: crate::Prefs = serde_json::from_str(r#"{"tab":"Home"}"#).unwrap();
+    let legacy: crate::prefs::Prefs = serde_json::from_str(r#"{"tab":"Home"}"#).unwrap();
     assert_eq!(legacy.language, AUTO);
     app.run("ui.language", serde_json::json!({"value": "auto"})).unwrap();
     assert_eq!(app.ui.language, AUTO);
@@ -179,7 +178,7 @@ fn a_system_locale_and_a_saved_preference_pick_the_language_and_leave_the_docume
         assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before, "{code}: the document is untouched");
         assert_eq!(app.session.editing_lang, editing, "{code}: choosing it changes no document");
         let saved = serde_json::to_string(&app.ui).unwrap();
-        let restored: crate::Prefs = serde_json::from_str(&saved).unwrap();
+        let restored: crate::prefs::Prefs = serde_json::from_str(&saved).unwrap();
         assert_eq!(Lang::from_pref(&restored.language), l, "{code}: the saved preference restores it");
         assert!(app.run("ui.language", serde_json::json!({"value": format!("{code}-unknown")})).is_err());
         assert_eq!(app.ui.language, *code, "{code}: an invalid preference keeps the saved language");
