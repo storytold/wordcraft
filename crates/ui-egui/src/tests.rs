@@ -1611,8 +1611,8 @@ fn a_protected_template_from_the_platform_asks_for_its_password_and_stays_a_new_
     a.open_from_platform(&name, None).unwrap();
     assert_eq!(prompt(&a), Some("password"));
     let (_, fields) = open_dialog(&a).expect("the password dialog is open");
-    let params = fields["params"].clone();
-    assert_eq!(fields["then"], "file.newFromTemplate");
+    let (then, params) = (fields["then"].as_str().unwrap_or_default().to_string(), fields["params"].clone());
+    assert_eq!(then, "file.newFromTemplate");
     let mut with = params;
     with["password"] = json!("sesame");
     a.execute(&then, with).unwrap();
