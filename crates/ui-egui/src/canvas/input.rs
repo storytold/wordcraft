@@ -3,7 +3,7 @@ use std::sync::Arc;
 use craft::behavior::CursorIcon;
 use craft::behavior::cursor::{Cursor, PaintedCursor};
 use craft::behavior::value::CancelReason;
-use craft::host::{Os, Runtime, ShellInfo};
+use craft::host::target::{Os, Runtime, ShellInfo};
 use craft::pages::ui::{PageBody, PlacedPage};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
