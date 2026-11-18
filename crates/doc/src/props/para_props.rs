@@ -282,9 +282,10 @@ impl Border {
     pub fn is_visible(&self) -> bool {
         self.style != BorderStyle::None && self.width > 0.0
     }
-    /// Drawn: visible, or a width-0 line (`w:sz="0"` or no `w:sz` on a table border), drawn as a
-    /// hairline that takes no room. Word for Mac draws one for a table style's border and none for
-    /// a direct cell or table border; it takes no room in either.
+    /// Drawn: visible, or a width-0 line (`w:sz="0"`, or a table border without `w:sz`), drawn as
+    /// a hairline that takes no room. Word for Windows draws every one at its thinnest line; Word
+    /// for Mac draws a table style's and nothing for a direct cell or table border. Neither gives
+    /// it room.
     pub fn is_drawn(&self) -> bool {
         self.style != BorderStyle::None && self.width.is_finite() && self.width >= 0.0
     }
