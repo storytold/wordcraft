@@ -12821,6 +12821,10 @@ fn cell_widths_override_grid() {
     }
 }
 
+/// The room a 100% wide table's columns share in the percentage tests below: from Word 2013 the halves
+/// of its 0.5 pt outer lines that stand outside its edges come off the 468 pt between the margins.
+const ROOM: f32 = 468.0 - 0.5;
+
 #[test]
 fn percentage_cell_widths_that_disagree_or_span_columns() {
     // Measured in Word (A4, 451.3 pt between the margins; 468 pt here), autofit tables 100% wide:
@@ -12860,7 +12864,7 @@ fn percentage_cell_widths_that_disagree_or_span_columns() {
     let near = |got: Vec<f32>, want: [f32; 4], what: &str| {
         assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "{what}: columns start at {got:?}, not {want:?}");
     };
-    let at = |shares: [f32; 3]| [0.0, shares[0] * 468.0, shares[1] * 468.0, shares[2] * 468.0];
+    let at = |shares: [f32; 3]| [0.0, shares[0] * ROOM, shares[1] * ROOM, shares[2] * ROOM];
     let p = |v: f32| (Some(v), 1);
     let auto = (None, 1);
     let open = [auto, auto, auto, auto];
@@ -12875,7 +12879,7 @@ fn percentage_cell_widths_that_disagree_or_span_columns() {
         "the other order",
     );
     let merged = starts_at(table(&[&[(Some(50.0), 2), p(10.0), p(40.0)], &open]), &[0], 1);
-    near(vec![merged[0], merged[2], merged[3]].into_iter().chain([0.0]).collect(), [0.0, 0.5 * 468.0, 0.6 * 468.0, 0.0], "merged 50%");
+    near(vec![merged[0], merged[2], merged[3]].into_iter().chain([0.0]).collect(), [0.0, 0.5 * ROOM, 0.6 * ROOM, 0.0], "merged 50%");
     near(
         starts_at(table(&[&[p(40.0), p(10.0), p(10.0), p(40.0)], &[(Some(20.0), 2), auto, auto], &open]), &[0], 2),
         at([0.4, 0.5, 0.6]),
@@ -12936,10 +12940,10 @@ fn percentage_cell_widths_size_the_columns_whichever_rows_ask() {
     fixed.props.fixed = true;
     near(starts(fixed.clone()), of(460.3));
     fixed.props.width_pct = Some(100.0);
-    near(starts(fixed), of(468.0));
+    near(starts(fixed), of(ROOM));
     let mut full = table(0, [40.0, 10.0, 10.0, 40.0]);
     full.props.width_pct = Some(100.0);
-    near(starts(full), of(468.0));
+    near(starts(full), of(ROOM));
     let mut narrow = table(0, [20.0, 5.0, 5.0, 20.0]);
     narrow.props.width = Some(360.0);
     near(starts(narrow), of(360.0));
