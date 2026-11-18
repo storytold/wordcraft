@@ -180,13 +180,20 @@ fn font_key(name: &str, ppp: f32) -> String {
 }
 
 impl Previews {
+    /// Ensure the cached family lists and style preview textures match the current font generation.
+    fn check_fonts(&mut self) {
+        let generation = wordcraft_fonts::FontDb::global().generation();
+        if self.font_gen != generation {
+            self.fonts_changed();
+        }
+    }
+
     /// The font list: installed families, each by its name in the interface language when it has
     /// one (宋体 for SimSun in Chinese, #505), like Word's.
     pub fn families(&mut self) -> Vec<String> {
+        self.check_fonts();
         let lang = crate::i18n::current().code();
-        let generation = wordcraft_fonts::FontDb::global().generation();
-        if self.families.as_ref().is_none_or(|(l, _)| *l != lang) || self.font_gen != generation {
-            self.font_gen = generation;
+        if self.families.as_ref().is_none_or(|(l, _)| *l != lang) {
             let db = wordcraft_fonts::FontDb::global();
             let mut f: Vec<String> = db.families_in(lang).into_iter().filter(|f| !f.starts_with('.')).collect();
             for w in [wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT] {
@@ -237,11 +244,15 @@ impl Previews {
         self.english_names.get(shown).cloned().unwrap_or_else(|| shown.to_string())
     }
 
-    /// Fonts were added or removed: list the families again. The font menus' entries see the
-    /// change themselves ([`FontAtlas`]), in every window.
+    /// Fonts were added or removed: list the families again and clear cached style preview
+    /// textures so any style rendered with a fallback face refreshes with newly available fonts.
+    /// The font menus' entries see the change themselves ([`FontAtlas`]), in every window.
     pub fn fonts_changed(&mut self) {
         self.families = None;
         self.east_asian = None;
+        // Style previews may have been rasterised with a fallback face before a font was installed.
+        self.tex.clear();
+        self.font_gen = wordcraft_fonts::FontDb::global().generation();
     }
 
     /// A closure drawing a font-menu entry in its own face, from the fonts' atlas.
@@ -299,7 +310,10 @@ impl Previews {
         })
     }
 
+    /// Look up a cached preview texture under `key`, or render and insert it if missing.
+    /// Invalidates the cache first if the font generation has changed.
     pub(crate) fn get_or(&mut self, ctx: &egui::Context, key: &str, make: impl FnOnce() -> Option<egui::ColorImage>) -> Option<TextureHandle> {
+        self.check_fonts();
         if let Some(t) = self.tex.get(key) {
             return Some(t.clone());
         }
@@ -540,6 +554,32 @@ fn snippet_blocks(base: &Document, blocks: Vec<Block>, options: SnippetOptions) 
     let img = wordcraft_render::render_area(&d, page, wordcraft_geom::Rect::new(0.0, 0.0, w + 2.0 * margin, h + margin), ppp, &opts);
     let px = img.to_straight();
     Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px))
+}
+
+/// One character formatted by `chr` (at its size, or fitted to `r` without one), centred in `r`
+/// and drawn with `tint`:
+/// laid out like document text, so symbol fonts show what the page will (Define New Bullet, #2786).
+pub fn glyph(app: &mut WordApp, ui: &mut Ui, r: Rect, ch: &str, chr: &CharProps, tint: egui::Color32) {
+    let ppp = ui.ctx().pixels_per_point();
+    let key = format!("glyph:{ch}:{chr:?}:{ppp}:{}x{}", r.width(), r.height());
+    let tex = app.previews.get_or(ui.ctx(), &key, || {
+        let chr = CharProps { size: Some(chr.size.unwrap_or(r.height() * 0.7)), ..chr.clone() };
+        let mut p = Paragraph::with_text(ch, chr);
+        p.props.align = Some(wordcraft_doc::props::Align::Center);
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        snippet_blocks(
+            &Document::new(),
+            vec![Block::Para(p)],
+            SnippetOptions { width: r.width(), height: r.height(), pixels_per_point: ppp, margin: 0.0, paper: None, dark: false },
+        )
+    });
+    if let Some(hd) = tex {
+        let sz = hd.size_vec2() / ppp;
+        let ir = Rect::from_min_size(r.min, sz.min(r.size()));
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
+        ui.painter().with_clip_rect(r).image(hd.id(), ir, uv, tint);
+    }
 }
 
 /// Manage Styles' preview of one style (`ty`: the `styles.manage` type), `size` points wide and
