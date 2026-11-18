@@ -40,8 +40,8 @@ const MAX_FONTS_PER_PICK: usize = 2000;
 
 const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const DOCUMENTS: &[&str] = &[
-    "docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "markdown", "html", "htm", "mht", "mhtml", "tex",
-    "latex", "ltx", "json", "xml",
+    "docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht",
+    "mhtml", "tex", "latex", "ltx", "json", "xml",
 ];
 
 /// The file types Open offers, as (label, extensions; `*` is any file): pictures for Insert/Change
