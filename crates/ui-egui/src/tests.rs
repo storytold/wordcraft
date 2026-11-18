@@ -4452,19 +4452,24 @@ fn status_bar_zoom_is_in_percent_and_its_controls_in_reading_order() {
     let mut order = Vec::new();
     names(group, &mut order);
     assert_eq!(order, ["Focus", "Read Mode", "Print Layout", "Web Layout", "Zoom Out", "Zoom", "Zoom In"]);
-    // Dragging the slider with the mouse to a point along it.
-    fn drag_along(h: &mut egui_kittest::Harness<'static, WordApp>, label: &str, fraction: f32) -> f64 {
+    // Dragging the slider with the mouse from its middle to a point along it: the value after the
+    // press (the slider jumps to the pointer) and the value where the drag ends.
+    fn drag_along(h: &mut egui_kittest::Harness<'static, WordApp>, label: &str, fraction: f32) -> (f64, f64) {
+        let value = |h: &egui_kittest::Harness<'static, WordApp>| {
+            h.get_by_role_and_label(Role::Slider, label).accesskit_node().numeric_value().map_or(0.0, f64::round)
+        };
         let rect = h.get_by_role_and_label(Role::Slider, label).rect();
         let (from, to) = (rect.center(), egui::pos2(rect.min.x + rect.width() * fraction, rect.center().y));
         h.event(egui::Event::PointerMoved(from));
         h.run_steps(2);
         h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
         h.run_steps(2);
+        let pressed = value(h);
         h.event(egui::Event::PointerMoved(to));
         h.run_steps(2);
         h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
         h.run_steps(3);
-        h.get_by_role_and_label(Role::Slider, label).accesskit_node().numeric_value().map_or(0.0, f64::round)
+        (pressed, value(h))
     }
     // Set as a screen reader sets it.
     for percent in [250.0, 100.0] {
@@ -4477,8 +4482,8 @@ fn status_bar_zoom_is_in_percent_and_its_controls_in_reading_order() {
         let scale = h.state().canvas.scale / crate::canvas::PX_PER_PT;
         assert!((f64::from(scale) - factor).abs() < 1e-4, "the page is drawn at {percent}%: {scale}");
     }
-    let dragged = drag_along(&mut h, "Zoom", 0.75);
-    assert!(dragged > 100.0, "dragging right zooms in: {dragged}");
+    let (pressed, dragged) = drag_along(&mut h, "Zoom", 0.75);
+    assert!(dragged > pressed && dragged > 100.0, "dragging right zooms in: {pressed} on the press, {dragged} at the end");
     let scale = f64::from(h.state().canvas.scale / crate::canvas::PX_PER_PT);
     assert!((scale - dragged / 100.0).abs() < 1e-4, "the page is drawn at the {dragged}% dragged to: {scale}");
     h.get_by_role_and_label(Role::Slider, "Zoom").set_value_accesskit(100.0);
@@ -4495,8 +4500,11 @@ fn status_bar_zoom_is_in_percent_and_its_controls_in_reading_order() {
     let view = &h.state().session.view;
     assert!((view.read_zoom - 1.2).abs() < 1e-4, "120 is the reading zoom 1.2: {}", view.read_zoom);
     assert!((view.zoom - 1.0).abs() < 1e-4, "the normal zoom stays at 100%: {}", view.zoom);
-    let dragged = drag_along(&mut h, "Text Size", 0.25);
-    assert!((75.0..120.0).contains(&dragged), "dragging left makes the text smaller: {dragged}");
+    let (pressed, dragged) = drag_along(&mut h, "Text Size", 0.25);
+    assert!(
+        dragged < pressed && (75.0..120.0).contains(&dragged),
+        "dragging left makes the text smaller: {pressed} on the press, {dragged} at the end"
+    );
     let view = &h.state().session.view;
     assert!((f64::from(view.read_zoom) - dragged / 100.0).abs() < 1e-4, "the reading zoom follows the {dragged}% dragged to: {}", view.read_zoom);
     assert!((view.zoom - 1.0).abs() < 1e-4, "the normal zoom still stays at 100%: {}", view.zoom);
