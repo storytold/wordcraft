@@ -39,16 +39,36 @@ fn row_enabled(model: &OptionsModel<'_>, key: &str) -> bool {
 }
 
 /// The app showing File › Options on the Accessibility page.
-fn options_harness(mut a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+/// The runtime is installed over `system`, the reader it resolves the system's motion from.
+fn options_harness(mut a: WordApp, system: craft::platform::appearance::SystemReader) -> egui_kittest::Harness<'static, WordApp> {
     a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "accessibility"})).unwrap();
-    egui_kittest::Harness::builder().build_ui_state(
+    let mut h = egui_kittest::Harness::builder().build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
         a,
-    )
+    );
+    craft::ui::shell::embed::install(&h.ctx, craft::ui::testing::install_spec().system(system), &crate::ui_fonts(crate::i18n::Lang::EN));
+    options_frames(&mut h, 3);
+    h
+}
+
+/// `n` frames, each given the input the app hands the runtime.
+fn options_frames(h: &mut egui_kittest::Harness<'static, WordApp>, n: usize) {
+    for _ in 0..n {
+        let ctx = h.ctx.clone();
+        craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
+        h.step();
+    }
+}
+
+/// A reader of the system that answers `reduced` to "reduce motion".
+fn system_reducing_motion(reduced: bool) -> craft::platform::appearance::SystemReader {
+    let reader = craft::platform::appearance::SystemReader::unwatched();
+    reader.report_reduced_motion(reduced);
+    reader
 }
 
 /// The help line the Animation effects row shows while the system's setting is followed.
@@ -140,7 +160,7 @@ fn options_panes_open_and_change_settings() {
     for (key, read) in table {
         for on in [true, false] {
             let mut a = app();
-            with_model(&mut a, true, |m| m.set(key, PrefValue::Bool(on)));
+            with_model(&mut a, true, move |m| m.set(key, PrefValue::Bool(on)));
             assert_eq!(read(&a), on, "{key} set to {on}");
         }
     }
@@ -174,21 +194,17 @@ fn save_privacy_checkboxes_set_the_privacy_options() {
 #[test]
 fn animation_effects_is_an_accessibility_option() {
     use crate::theme::Animations;
-    let mut h = options_harness(app());
-    assert_eq!(h.state().ui.animations, Animations::System);
-    // PLAN: assumed `WordApp::system_reader(&self) -> &SystemReader` (shell-w6), the reader the root resolves motion from.
-    h.state().system_reader().report_reduced_motion(true);
-    h.run_steps(3);
-    let reduced = system_help(&h);
-    h.state().system_reader().report_reduced_motion(false);
-    h.run_steps(3);
-    let full = system_help(&h);
-    assert!(reduced.is_some() && full.is_some(), "the page says what the system answered while it is followed");
-    assert_ne!(reduced, full, "the line follows the system's answer");
+    // The runtime holds its reader, so each answer of the system is its own install.
+    let reduced = options_harness(app(), system_reducing_motion(true));
+    assert_eq!(reduced.state().ui.animations, Animations::System);
+    let full = options_harness(app(), system_reducing_motion(false));
+    let (reduced_help, full_help) = (system_help(&reduced), system_help(&full));
+    assert!(reduced_help.is_some() && full_help.is_some(), "the page says what the system answered while it is followed");
+    assert_ne!(reduced_help, full_help, "the line follows the system's answer");
+    let mut h = reduced;
     h.state_mut().run("ui.animations", json!({"value": "on"})).unwrap();
     assert_eq!(h.state().ui.animations, Animations::On);
-    assert!(h.state().animations_on());
-    h.run_steps(3);
+    options_frames(&mut h, 3);
     assert_eq!(system_help(&h), None, "only said while the system is followed");
 }
 

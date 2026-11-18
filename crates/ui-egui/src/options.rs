@@ -97,7 +97,7 @@ fn default_of<T: Default>(_: &T) -> T {
 
 /// Choice entries from (id, label) pairs.
 fn entries<'a>(items: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<Entry<&'a str>> {
-    items.into_iter().map(|(id, label)| Entry::new(id, label)).collect()
+    items.into_iter().map(|(id, label)| Entry::new(id, label.to_string())).collect()
 }
 
 /// Choice entries from owned pairs.
@@ -144,9 +144,6 @@ impl Strings {
         sizes.extend(InterfaceSize::PRESETS.iter().map(|p| (p.to_string(), format!("{p}%"))));
         let size_id = app.ui.interface_size.percent().map_or_else(|| "auto".to_string(), |p| p.to_string());
 
-        // The language names are in their own scripts: fonts for them load from the next frame.
-        app.want_system_cjk = true;
-        app.want_system_arabic = true;
         let system = crate::i18n::system_lang();
         let mut languages = vec![(AUTO.to_string(), crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]))];
         languages.extend(Lang::for_picker().into_iter().map(|l| (l.code().to_string(), l.name().to_string())));

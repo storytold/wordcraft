@@ -76,7 +76,6 @@ impl WordApp {
         self.info_editing = None;
         // Caches keyed by the revision alone: another document's revision can be the same number.
         self.status_counts = crate::window_ui::NOT_COUNTED;
-        self.find_fonts_for = None;
         self.previews.document_changed();
         // The Start screen's placeholder (#1129) goes once a document is open beside it.
         if let Some(placeholder) = self.no_document
@@ -264,7 +263,7 @@ pub(crate) fn switch_windows_menu(ui: &mut egui::Ui, app: &mut WordApp) {
         app.session.documents().into_iter().map(|d| (d.id, format!("{}{}", display_title(&d), if d.dirty { " •" } else { "" }), d.active)).collect()
     };
     for (key, label, current) in entries {
-        if MenuItem::new(label).radio_mark(Some(current)).show(ui).ran {
+        if MenuItem::new(label).radio_mark(current).show(ui).ran {
             if native {
                 app.show_window(key);
             } else {
@@ -303,7 +302,7 @@ mod tests {
 
     /// The key of the topmost open dialog.
     fn prompt(a: &WordApp) -> Option<String> {
-        a.open_dialogs().last().map(|d| d.key.to_string())
+        a.dialog_host.open_dialogs().last().and_then(|d| d.key.clone())
     }
 
     /// Mod+N with text typed opens a second document beside the first; Switch Windows lists both

@@ -110,13 +110,13 @@ pub fn alt_text(app: &mut WordApp, ui: &mut Ui) {
         {
             if new.text != current.text {
                 let text = match &new.text {
-                    craft::behavior::Mixed::Value(t) => t.clone(),
+                    craft::behavior::Mixed::Same(t) => t.clone(),
                     _ => String::new(),
                 };
                 let _ = app.run("object.altText", json!({"text": text}));
             }
             if new.decorative != current.decorative {
-                let decorative = matches!(new.decorative, craft::behavior::Mixed::Value(true));
+                let decorative = matches!(new.decorative, craft::behavior::Mixed::Same(true));
                 let _ = app.run("object.altText", json!({"decorative": decorative}));
             }
         }
