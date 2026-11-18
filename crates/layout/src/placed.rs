@@ -36,6 +36,8 @@ pub enum Placed {
         path: Path,
         off: usize,
         spin: Spin,
+        /// Brightness, contrast and transparency (see [`wordcraft_doc::picfx`]).
+        fx: wordcraft_doc::picfx::PicFx,
     },
     Shape {
         rect: Rect,
@@ -48,7 +50,7 @@ pub enum Placed {
         effects: wordcraft_doc::effects::ShapeEffects,
         spin: Spin,
         /// Arrowheads and text warp (see [`wordcraft_doc::connector::ShapeExtra`]).
-        extra: wordcraft_doc::connector::ShapeExtra,
+        extra: Box<wordcraft_doc::connector::ShapeExtra>,
         /// The floating object it draws (a Drawing Canvas's members: the canvas's), for leaving
         /// exactly one object out of a page (see [`crate::display::DisplayOptions::hide_object`]).
         object: Option<wordcraft_doc::Pos>,
@@ -103,6 +105,10 @@ pub enum Placed {
         /// Its paragraph's column left and top: where offsets relative to the column and the
         /// paragraph (`Anchor::Column` / `Anchor::Paragraph`) start.
         origin: wordcraft_geom::Point,
+        /// A group's text boxes: each one's upright frame relative to `rect`'s top-left (so it
+        /// moves with the group; [`Placed::turn`] turns it with the group) and the story it shows.
+        /// Empty for anything else.
+        group_boxes: Vec<(Rect, u32)>,
     },
 }
 
@@ -155,6 +161,27 @@ impl Placed {
         Some(turn_rect(*turn, *x, *y, Rect::new(0.0, 0.0, len, last.top + last.height - first.top)))
     }
 
+    /// The vertical extent `(top, bottom)` the item occupies on its page.
+    ///
+    /// Items side by side (a table row's cells, say) report overlapping extents; callers that sum
+    /// them take the union instead.
+    pub fn vertical_span(&self) -> (f32, f32) {
+        if let Some(r) = self.turned_bounds() {
+            return (r.y, r.y + r.h);
+        }
+        match self {
+            Placed::Lines { para, l0, l1, y, .. } => (*y, super::page::item_bottom(*y, para, *l0, *l1).unwrap_or(*y)),
+            Placed::Fill { rect, .. }
+            | Placed::Image { rect, .. }
+            | Placed::Shape { rect, .. }
+            | Placed::Graphic { rect, .. }
+            | Placed::Clip { rect, .. }
+            | Placed::Cell { rect, .. }
+            | Placed::Object { rect, .. } => (rect.y, rect.y + rect.h),
+            Placed::Rule { y0, y1, .. } => (y0.min(*y1), y0.max(*y1)),
+        }
+    }
+
     /// Move an item laid out in a turned frame (a table cell's text running `turn`) onto the
     /// page, the frame's origin landing on page point (`x`, `y`).
     pub(crate) fn turn(&mut self, turn: TextDirection, x: f32, y: f32) {
@@ -177,9 +204,15 @@ impl Placed {
             | Placed::Cell { rect, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
             }
-            Placed::Object { rect, origin, .. } => {
-                *rect = turn_rect(turn, x, y, *rect);
+            Placed::Object { rect, origin, group_boxes, .. } => {
+                let old = *rect;
+                *rect = turn_rect(turn, x, y, old);
                 (origin.x, origin.y) = turn_point(turn, x, y, origin.x, origin.y);
+                // A group's text boxes turn with it, kept relative to its new frame.
+                for (r, _) in group_boxes.iter_mut() {
+                    let t = turn_rect(turn, x, y, Rect::new(old.x + r.x, old.y + r.y, r.w, r.h));
+                    *r = Rect::new(t.x - rect.x, t.y - rect.y, t.w, t.h);
+                }
             }
             Placed::Clip { rect, items, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);

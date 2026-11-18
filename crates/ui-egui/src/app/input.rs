@@ -24,10 +24,15 @@ impl WordApp {
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
         }
+        self.apply_raw_input_scroll(raw);
         if self.synthetic_pending || self.synthetic.is_empty() || self.fonts_frames < 2 || !self.control_input_is_roots(ctx) {
+            self.record_scaled_scroll_events(raw);
             return;
         }
-        let Some((events, n)) = self.peek_synthetic() else { return };
+        let Some((events, n)) = self.peek_synthetic() else {
+            self.record_scaled_scroll_events(raw);
+            return;
+        };
         if events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))) {
             // Control input belongs to this window's remembered widget even while another app
             // is active. Give only this input frame egui focus, without requesting OS activation.
@@ -40,6 +45,44 @@ impl WordApp {
         raw.events.extend(events);
         self.synthetic_pending = true;
         self.synthetic_injected = n;
+        self.record_scaled_scroll_events(raw);
+    }
+
+    /// Scales point-wheel events in the incoming [`egui::RawInput`] by the touchpad / wheel speed multiplier.
+    /// When eframe or web runners replay an unconsumed [`egui::RawInput`] across hidden logic ticks,
+    /// already-scaled events in the pending prefix are skipped so the multiplier is applied exactly once per event (#6146).
+    fn apply_raw_input_scroll(&mut self, raw: &mut egui::RawInput) {
+        let previously_scaled = self.raw_scroll_events_scaled;
+        let is_replayed = previously_scaled > 0
+            && raw.events.len() >= previously_scaled
+            && raw.events.get(..previously_scaled) == Some(&self.last_scaled_scroll_events[..]);
+        let start_idx = if is_replayed { previously_scaled } else { 0 };
+        if let Some(new_events) = raw.events.get_mut(start_idx..) {
+            self.ui.touchpad_scroll_speed.apply_events_scroll(new_events, self.ui.scroll_speed);
+        }
+    }
+
+    /// Records the current state of scaled events in the raw input batch so replay across hidden ticks
+    /// does not compound multipliers.
+    fn record_scaled_scroll_events(&mut self, raw: &egui::RawInput) {
+        self.raw_scroll_events_scaled = raw.events.len();
+        self.last_scaled_scroll_events = raw.events.clone();
+    }
+
+    /// Clears recorded scroll replay tracking when the UI pass consumes the frame's input.
+    pub(crate) fn clear_raw_scroll_replay(&mut self) {
+        self.raw_scroll_events_scaled = 0;
+        self.last_scaled_scroll_events.clear();
+    }
+
+    /// Whether this pass's input came from the control channel (`ui.click`, `ui.key`, `ui.drag`,
+    /// `ui.text`…, which MCP's `click`, `key` and `type` tools send). Decisions that are only the
+    /// user's ignore it: letting agent messages through again, and answering an agent's question
+    /// (#959 review). A real click in the same frame as a control step is ignored too, which errs
+    /// the safe way.
+    pub(crate) fn input_from_control(&self, ctx: &egui::Context) -> bool {
+        let viewport = ctx.viewport_id();
+        self.synthetic_pending || ctx.with_plugin(|p: &mut crate::windows::ViewportInput| p.injected == Some(viewport)).unwrap_or(false)
     }
 
     /// The control channel's next input frame, taken off the queue.
@@ -77,7 +120,9 @@ impl WordApp {
         #[cfg(not(target_arch = "wasm32"))]
         if ctx.current_pass_index() == 0 {
             let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-            if !dropped.is_empty() {
+            // A drop behind a modal dialog does nothing: it would insert a picture or open a
+            // document under it.
+            if !dropped.is_empty() && !self.modal_open() {
                 self.open_dropped_files(dropped);
                 let lang = i18n::Lang::from_pref(&self.ui.language);
                 self.install_ui_fonts(ctx, lang);
@@ -86,7 +131,12 @@ impl WordApp {
         // SmartArt Text Pane (#2701): Tab demotes and Shift+Tab promote the focused item, as
         // Word's pane does. This is an input action, so it runs in the first UI pass only; hidden
         // `run_logic` ticks still see the previous shown frame's keys.
-        if ctx.current_pass_index() == 0 && self.session.view.smart_art_pane && self.smart_art_row_focused && self.smart_art_item.is_some() {
+        if ctx.current_pass_index() == 0
+            && self.session.view.smart_art_pane
+            && self.smart_art_row_focused
+            && self.smart_art_item.is_some()
+            && !self.modal_open()
+        {
             let shift_tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
             let tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
             if shift_tab || tab {

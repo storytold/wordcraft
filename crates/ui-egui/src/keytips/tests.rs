@@ -12,6 +12,25 @@ fn input_frame(ctx: &egui::Context, app: &mut WordApp, events: Vec<egui::Event>)
     ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| logic(app, ui.ctx())).drop_without_applying_deltas();
 }
 
+/// #4497: a compact button is nearly all icon (`widgets::small`: 17×17 in 24×22), and its
+/// badge sat on 63% of the glyph. It now hangs out over the corner and covers a sliver, for a
+/// one-letter and a two-letter badge alike; a big control keeps its corner badge.
+#[test]
+fn a_compact_buttons_badge_leaves_its_icon_visible() {
+    let button = Rect::from_min_size(egui::pos2(100.0, 60.0), Vec2::new(24.0, 22.0));
+    let icon = Rect::from_center_size(egui::pos2(button.min.x + 12.0, button.center().y), Vec2::splat(17.0));
+    for (width, most) in [(7.0, 0.10), (14.0, 0.20)] {
+        let r = badge_rect(button, width);
+        let covered = r.intersect(icon);
+        let share = covered.width().max(0.0) * covered.height().max(0.0) / (icon.width() * icon.height());
+        assert!(share <= most, "a badge {width} wide covers {share:.2} of the icon (at most {most})");
+        assert!(r.min.x >= button.min.x - 4.0 && r.min.y >= button.min.y - 4.0, "it hangs out of the corner by no more than 4 px");
+        assert!(r.width() >= 12.0 && r.height() >= 12.0, "and stays big enough to read");
+    }
+    let big = Rect::from_min_size(egui::pos2(100.0, 60.0), Vec2::new(44.0, 66.0));
+    assert_eq!(badge_rect(big, 7.0), Rect::from_min_size(egui::pos2(102.0, 61.0), Vec2::new(15.0, 15.0)));
+}
+
 #[test]
 fn native_alt_taps_toggle_once_in_either_event_order() {
     let alt = egui::Modifiers { alt: true, ..Default::default() };
@@ -126,6 +145,22 @@ fn every_keytip_command_is_registered() {
     assert!(missing.is_empty(), "unregistered: {missing:#?}");
 }
 
+/// layout.fitOnePage has a KeyTip badge on the Layout tab.
+#[test]
+fn layout_tab_includes_fit_one_page_keytip() {
+    let a = app();
+    let (_, cmds) = letters(&a);
+    let layout_cmds = cmds.iter().find(|(t, _)| t == "Layout").expect("Layout tab exists");
+    let ctrls = controls("Layout");
+    let fit_idx = ctrls.iter().position(|c| match &c.target {
+        Target::Cmd { id, .. } => *id == "layout.fitOnePage",
+        _ => false,
+    });
+    assert!(fit_idx.is_some(), "layout.fitOnePage must be present in Layout controls");
+    let badge = layout_cmds.1.get(fit_idx.unwrap()).expect("badge exists");
+    assert!(!badge.is_empty(), "fitOnePage badge must not be empty");
+}
+
 #[test]
 fn letters_are_unique_inside_every_tab() {
     let a = app();
@@ -143,6 +178,60 @@ fn letters_are_unique_inside_every_tab() {
         assert!(!tl.contains(l), "duplicate tab letter {l}");
         tl.push(l.clone());
     }
+}
+
+/// #4498: no badge is the start of another, on any tab, or the short one runs as soon as its
+/// letter is typed and the long one can never be reached.
+#[test]
+fn no_badge_starts_another_badge() {
+    let mut a = app();
+    a.run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
+    let (_, cmds) = letters(&a);
+    let mut two_letter = 0;
+    for (tab, ls) in &cmds {
+        for l in ls {
+            assert!(!l.is_empty() && !l.starts_with('?'), "{tab}: a control without a badge ({l:?})");
+            two_letter += usize::from(l.chars().count() > 1);
+            let others = ls.iter().filter(|o| *o != l && o.starts_with(l.as_str())).count();
+            assert_eq!(others, 0, "{tab}: badge {l} starts another badge in {ls:?}");
+        }
+    }
+    assert!(two_letter > 0, "Home has more controls than letters, so some badges take two");
+}
+
+/// #4498: the first letter of a two-letter badge keeps KeyTips on and waits; the second runs
+/// the command. A letter that completes nothing ends KeyTips and runs nothing.
+#[test]
+fn a_two_letter_badge_is_completed_by_its_second_letter() {
+    let key = |c: char| egui::Key::from_name(&c.to_string()).unwrap();
+    let mut a = app();
+    a.canvas.focused = false;
+    a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
+    let ls = letters_for(&a, "Home");
+    let long: Vec<&String> = ls.iter().filter(|l| l.chars().count() == 2).collect();
+    let target = *long.first().expect("Home has two-letter badges");
+    let (first, second) = (target.chars().next().unwrap(), target.chars().nth(1).unwrap());
+    let sibling = long.iter().find(|l| l.starts_with(first) && *l != &target).map(|l| l.chars().nth(1).unwrap());
+    let before = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    activate(&mut a);
+    assert!(handle_key(&mut a, egui::Key::H));
+    assert_eq!(a.ui.keytips, Phase::Commands);
+    assert!(handle_key(&mut a, key(first)));
+    assert_eq!((a.ui.keytips, a.ui.keytip_prefix.as_str()), (Phase::Commands, first.to_string().as_str()), "waits for the second letter");
+    assert!(handle_key(&mut a, key(second)));
+    assert_eq!(a.ui.keytips, Phase::Off, "the second letter completes it");
+    assert!(a.ui.keytip_prefix.is_empty());
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before, "no letter reached the document");
+    // The first letter then a second that completes nothing: off, and nothing runs.
+    let unused = ('A'..='Z').find(|c| !ls.contains(&format!("{first}{c}"))).unwrap();
+    a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
+    activate(&mut a);
+    handle_key(&mut a, egui::Key::H);
+    handle_key(&mut a, key(first));
+    assert!(handle_key(&mut a, key(unused)));
+    assert_eq!((a.ui.keytips, a.ui.keytip_prefix.as_str()), (Phase::Off, ""));
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before);
+    assert!(sibling.is_none() || sibling != Some(second), "siblings of a prefix have distinct second letters");
 }
 
 #[test]
@@ -300,12 +389,13 @@ fn keytip_state_machine() {
     assert_eq!(a.ui.keytips, Phase::Commands);
     assert!(handle_key(&mut a, egui::Key::F));
     assert_eq!(a.ui.keytips, Phase::Off);
-    // Alt, F: the Backstage, and keytips end.
+    // Alt, F: the Backstage, with its pages' keytips (#4960).
     a.ui.backstage = false;
     activate(&mut a);
     assert!(handle_key(&mut a, egui::Key::F));
     assert!(a.ui.backstage, "Alt, F opens File");
-    assert_eq!(a.ui.keytips, Phase::Off);
+    assert_eq!(a.ui.keytips, Phase::Backstage);
+    a.ui.keytips = Phase::Off;
     // Alt, W: View; Alt, R: Review (Word's letters, not V and S).
     a.ui.backstage = false;
     activate(&mut a);
@@ -540,4 +630,85 @@ fn alt_then_q_opens_search() {
     assert!(handle_key(&mut a, egui::Key::Q));
     assert_eq!(a.ui.keytips, Phase::Off);
     assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::Commands { .. })), "{:?}", a.dialog.as_ref().map(|d| d.name()));
+}
+
+/// #4960: Alt, F opens the Backstage with badges on its pages, as in Word; Alt, F, P and Word's
+/// older Alt, F, V open the Print page (Print Preview). Typed through `logic`, the path real
+/// keys take, which keytips used to leave as soon as the Backstage opened.
+#[test]
+fn file_keytips_reach_the_backstage_pages() {
+    let ctx = egui::Context::default();
+    let tap = |ctx: &egui::Context, a: &mut WordApp| {
+        input_frame(ctx, a, vec![key_event(egui::Key::AltLeft, true, egui::Modifiers::ALT)]);
+        input_frame(ctx, a, vec![key_event(egui::Key::AltLeft, false, egui::Modifiers::NONE)]);
+    };
+    let letter = |ctx: &egui::Context, a: &mut WordApp, k: egui::Key| {
+        input_frame(ctx, a, vec![key_event(k, true, egui::Modifiers::NONE), key_event(k, false, egui::Modifiers::NONE)]);
+    };
+    for (second, page) in [(egui::Key::P, "print"), (egui::Key::V, "print"), (egui::Key::A, "saveAs"), (egui::Key::T, "options")] {
+        let mut a = app();
+        if cfg!(target_os = "macos") {
+            activate(&mut a);
+        } else {
+            tap(&ctx, &mut a);
+        }
+        assert_eq!(a.ui.keytips, Phase::Tabs);
+        letter(&ctx, &mut a, egui::Key::F);
+        assert!(a.ui.backstage, "F opens the Backstage");
+        assert_eq!(a.ui.keytips, Phase::Backstage, "and its pages show badges");
+        input_frame(&ctx, &mut a, vec![]);
+        assert_eq!(a.ui.keytips, Phase::Backstage, "the badges stay while it waits");
+        letter(&ctx, &mut a, second);
+        assert_eq!((a.ui.backstage, a.ui.backstage_page.as_str()), (true, page), "{second:?}");
+        assert_eq!(a.ui.keytips, Phase::Off);
+    }
+    // A letter with no page ends the badges and leaves the Backstage open; Esc too.
+    for k in [egui::Key::Q, egui::Key::Escape] {
+        let mut a = app();
+        activate(&mut a);
+        letter(&ctx, &mut a, egui::Key::F);
+        let page = a.ui.backstage_page.clone();
+        letter(&ctx, &mut a, k);
+        assert_eq!((a.ui.keytips, a.ui.backstage, a.ui.backstage_page.clone()), (Phase::Off, true, page), "{k:?}");
+    }
+    assert_eq!(crate::backstage::keytip_page("P"), Some("print"));
+    assert_eq!(crate::backstage::keytip_page("V"), Some("print"));
+    assert_eq!(crate::backstage::keytip_page("R"), None);
+}
+
+/// #4981 review: the Backstage closed while its badges show (the back chevron, a mouse Save)
+/// ends them. The next letter is typed, and never picks a page with the Backstage gone: C used
+/// to close the document and S to save it.
+#[test]
+fn closing_the_backstage_ends_its_keytips() {
+    let mut a = app();
+    a.canvas.focused = true;
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let key = |key| key_event(key, true, egui::Modifiers::NONE);
+    h.input_mut().events.push(key(egui::Key::F10));
+    h.step();
+    assert_eq!(h.state().ui.keytips, Phase::Tabs);
+    h.input_mut().events.extend([key(egui::Key::F), egui::Event::Text("f".into())]);
+    h.step();
+    assert_eq!((h.state().ui.backstage, h.state().ui.keytips), (true, Phase::Backstage));
+    // What the back chevron does.
+    h.state_mut().ui.backstage = false;
+    h.state_mut().canvas.want_focus = true;
+    h.run_steps(2);
+    assert_eq!(h.state().ui.keytips, Phase::Off, "the badges end with the Backstage");
+    h.input_mut().events.extend([key(egui::Key::C), egui::Event::Text("c".into())]);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.keytips, Phase::Off);
+    assert!(h.state().has_document(), "C does not close the document");
+    assert!(!h.state().ui.backstage);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "c", "C is typed");
 }
