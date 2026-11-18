@@ -9656,11 +9656,20 @@ fn a_footnote_continuing_on_the_next_page_ends_on_the_bottom_margin() {
     // separator, the note's last line on the page sitting on the bottom margin.
     let bottom = Document::default().last_section.page_h - Document::default().last_section.margin_bottom;
     let mut slack = Vec::new();
-    for body in 11..24 {
-        let (d, id) = long_note_after(body, 60, false);
+    // With widow/orphan control too, which can leave more room than a plain cut.
+    for (body, widow) in (11..24).flat_map(|b| [(b, false), (b, true)]) {
+        let (d, id) = long_note_after(body, 60, widow);
         let l = lay(&d);
         let pieces = note_pieces(&l, id);
-        assert!(pieces.len() >= 2 && pieces[0].0 == 0 && pieces[1].0 == 1, "{body}: {pieces:?}");
+        assert!(pieces.len() >= 2 && pieces[0].0 == 0 && pieces[1].0 == 1, "{body} {widow}: {pieces:?}");
+        // Every line of the note is placed once, in order.
+        let lines = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| if let Placed::Lines { story: StoryRef::Part(s), para, .. } = it { (*s == id).then(|| para.lines.len()) } else { None })
+            .unwrap();
+        assert_eq!(pieces.windows(2).find(|w| w[0].2 != w[1].1), None, "{body} {widow}: pieces follow on: {pieces:?}");
+        assert_eq!((pieces[0].1, pieces.last().map(|p| p.2)), (0, Some(lines)), "{body} {widow}: all {lines} lines: {pieces:?}");
         let (para, l0, l1, y) = l.pages[0]
             .items
             .iter()
@@ -9673,6 +9682,60 @@ fn a_footnote_continuing_on_the_next_page_ends_on_the_bottom_margin() {
         slack.push(bottom - end);
     }
     assert!(slack.iter().all(|s| s.abs() < 0.05), "room left under the note: {slack:?}");
+}
+
+#[test]
+fn a_footnote_beneath_the_text_stays_under_it_when_it_continues() {
+    crate::test_fonts();
+    // Footnotes placed beneath the text (`w:pos w:val="beneathText"`) start right under the page's
+    // last line even when one continues on the next page: the room left stays below them, not
+    // above the separator as for notes at the page bottom.
+    use wordcraft_doc::section::{NotePos, NoteProps};
+    let mut gaps = Vec::new();
+    for body in 11..24 {
+        let (mut d, id) = long_note_after(body, 60, false);
+        d.settings.footnote_pr = NoteProps { pos: Some(NotePos::BeneathText), ..Default::default() };
+        let l = lay(&d);
+        let pieces = note_pieces(&l, id);
+        assert!(pieces.len() >= 2 && pieces[0].0 == 0, "{body}: {pieces:?}");
+        let body_bottom = l.pages[0]
+            .items
+            .iter()
+            .filter_map(
+                |it| if let Placed::Lines { story: StoryRef::Body, y, para, l0, l1, .. } = it { item_bottom(*y, para, *l0, *l1) } else { None },
+            )
+            .fold(0.0f32, f32::max);
+        gaps.push(pieces[0].3 - body_bottom);
+    }
+    let first = gaps[0];
+    assert!(gaps.iter().all(|g| (g - first).abs() < 0.05), "the note starts the same distance under the text: {gaps:?}");
+}
+
+#[test]
+fn a_footnote_continued_onto_pages_of_notes_stays_above_the_bottom_margin_when_centred() {
+    crate::test_fonts();
+    // A centred (or bottom-aligned) section whose last page's note runs on over pages of notes
+    // alone: each page is aligned once, before its notes are placed, so no note line is moved
+    // past the bottom margin by aligning a page again after its notes went on it.
+    use wordcraft_doc::section::PageVAlign;
+    let bottom = Document::default().last_section.page_h - Document::default().last_section.margin_bottom;
+    for va in [PageVAlign::Center, PageVAlign::Bottom] {
+        let (mut d, id) = long_note_after(3, 400, false);
+        d.last_section.valign = va;
+        let l = lay(&d);
+        let pieces = note_pieces(&l, id);
+        assert!(pieces.iter().map(|p| p.0).max().unwrap_or(0) >= 2, "{va:?}: the note runs over pages of notes alone: {pieces:?}");
+        for (pi, p) in l.pages.iter().enumerate() {
+            for it in &p.items {
+                if let Placed::Lines { story: StoryRef::Part(s), para, l0, l1, y, .. } = it
+                    && *s == id
+                {
+                    let end = item_bottom(*y, para, *l0, *l1).unwrap();
+                    assert!(end <= bottom + 0.05, "{va:?}: page {pi} note lines end at {end}, below the bottom margin {bottom}");
+                }
+            }
+        }
+    }
 }
 
 #[test]
