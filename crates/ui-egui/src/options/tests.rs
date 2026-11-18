@@ -395,6 +395,42 @@ fn document_checkboxes_are_off_on_the_start_screen() {
     }
 }
 
+/// A protected document refuses its privacy options and proofing exceptions, so their
+/// checkboxes are off while it is protected and on again once protection stops.
+#[test]
+fn document_checkboxes_are_off_while_the_document_is_protected() {
+    for (pane, labels) in DOCUMENT_CHECKBOXES {
+        let mut a = app();
+        a.run("file.new", json!({})).unwrap();
+        a.run("file.options", json!({"pane": pane})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let disabled = |h: &egui_kittest::Harness<'_, WordApp>, label: &str| {
+            h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).accesskit_node().is_disabled()
+        };
+        for label in labels {
+            assert!(!disabled(&h, label), "{pane}: {label} with a document open");
+        }
+        h.state_mut().run("review.restrict", json!({"mode": "trackedChanges"})).unwrap();
+        h.run_steps(4);
+        for label in labels {
+            assert!(disabled(&h, label), "{pane}: {label} while protected");
+        }
+        h.state_mut().run("review.restrict", json!({"stop": true})).unwrap();
+        h.run_steps(4);
+        for label in labels {
+            assert!(!disabled(&h, label), "{pane}: {label} after protection stops");
+        }
+    }
+}
+
 /// The disabled checkboxes' labels are painted dimmed but legible, and inside the pane and the
 /// window, in a 1440 by 900 window at interface sizes from 75% to 150%.
 #[test]

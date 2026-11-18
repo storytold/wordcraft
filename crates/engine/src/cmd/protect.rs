@@ -293,6 +293,12 @@ impl Facts {
 /// author may edit takes no other edits at all.
 pub(crate) fn greyed_out(s: &Session, id: &str, facts: impl FnOnce() -> Facts) -> Option<&'static str> {
     let mode = s.doc.settings.protection.as_deref()?;
+    // `check_before` refuses these under every protection mode, exceptions or not.
+    match id {
+        "file.privacyOptions" => return Some("stop protection before changing the privacy options"),
+        "file.proofingExceptions" => return Some("stop protection before hiding or showing the document's proofing errors"),
+        _ => {}
+    }
     if always_allowed(id, &Value::Null) {
         return None;
     }

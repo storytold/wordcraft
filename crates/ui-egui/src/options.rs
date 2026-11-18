@@ -362,8 +362,9 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
         ("Hide spelling errors in this document only", "hideSpellingErrors", open && settings.hide_spelling_errors),
         ("Hide grammar errors in this document only", "hideGrammarErrors", open && settings.hide_grammar_errors),
     ];
-    // Off and unchecked on the Start screen, where no document takes the setting.
-    ui.add_enabled_ui(open, |ui| {
+    // Off and unchecked on the Start screen, where no document takes the setting, and off while
+    // the document is protected.
+    ui.add_enabled_ui(crate::widgets::enabled(app, "file.proofingExceptions"), |ui| {
         for (label, key, value) in rows {
             let mut v = value;
             if ui.checkbox(&mut v, tl!(label)).changed()
@@ -537,8 +538,9 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
         ("Remove my name from comments, changes and file properties when saving", "removePersonalInfo", open && settings.remove_personal_info),
         ("Leave out the date and time of comments and tracked changes when saving", "removeDateTime", open && settings.remove_date_time),
     ];
-    // Off and unchecked on the Start screen, where no document takes the setting.
-    ui.add_enabled_ui(open, |ui| {
+    // Off and unchecked on the Start screen, where no document takes the setting, and off while
+    // the document is protected.
+    ui.add_enabled_ui(crate::widgets::enabled(app, "file.privacyOptions"), |ui| {
         for (label, key, value) in rows {
             let mut v = value;
             if ui.checkbox(&mut v, tl!(label)).changed()

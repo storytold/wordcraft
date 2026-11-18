@@ -304,6 +304,30 @@ fn file_commands_that_change_the_document_are_protected() {
     s.run("file.inspect", &json!({"remove": ["comments"]})).unwrap();
 }
 
+/// The privacy options and proofing exceptions are greyed out in every protection mode, also
+/// when an exception lets the author edit part of the document, as `check_before` refuses them.
+#[test]
+fn document_settings_commands_are_greyed_out_while_protected() {
+    let ids = ["file.privacyOptions", "file.proofingExceptions"];
+    let s = Session::new(Document::from_text("Some text."));
+    for id in ids {
+        assert_eq!(s.why_disabled(id), None, "{id} without protection");
+    }
+    for mode in ["readOnly", "forms", "comments", "trackedChanges"] {
+        for exception in [false, true] {
+            let mut s = Session::new(Document::from_text("Some text."));
+            if exception {
+                select(&mut s, "Some text.");
+                s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+            }
+            s.run("review.restrict", &json!({"mode": mode})).unwrap();
+            for id in ids {
+                assert!(s.why_disabled(id).is_some(), "{mode} (exception {exception}) {id}");
+            }
+        }
+    }
+}
+
 /// The user name is the identity a named exception range is checked against, and the author
 /// the new revisions and comments are recorded under: a protected document refuses to change
 /// it (#1327 follow-up).
