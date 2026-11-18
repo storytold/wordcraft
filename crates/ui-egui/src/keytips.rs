@@ -239,14 +239,15 @@ fn shortcut_letter(app: &WordApp, id: &str) -> Option<char> {
 struct Control {
     tip: &'static str,
     target: Target,
+    menu: bool,
 }
 
 /// A tab's controls in the order they are drawn; mirrors `ribbon.rs`, so badges land in order.
 fn controls(tab: &str) -> Vec<Control> {
-    let c = |tip: &'static str, id: &'static str| Control { tip, target: Target::Cmd { id, params: serde_json::json!({}) } };
-    let m = c;
-    let d = |tip: &'static str, name: &'static str| Control { tip, target: Target::Dialog { name } };
-    let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, target: Target::Cmd { id, params } };
+    let c = |tip: &'static str, id: &'static str| Control { tip, target: Target::Cmd { id, params: serde_json::json!({}) }, menu: false };
+    let m = |tip: &'static str, id: &'static str| Control { menu: true, ..c(tip, id) };
+    let d = |tip: &'static str, name: &'static str| Control { tip, target: Target::Dialog { name }, menu: false };
+    let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, target: Target::Cmd { id, params }, menu: false };
     match tab {
         "Home" => vec![
             m("Paste", "edit.paste"),
@@ -524,6 +525,15 @@ fn controls(tab: &str) -> Vec<Control> {
     }
 }
 
+/// Contextual menus whose command, run with `{}`, only opens the menu or changes nothing.
+const SAFE_CONTEXTUAL_MENUS: &[&str] = &["arrange.wrap"];
+
+const CONTEXTUAL_TABS: &[&str] = &["Picture Format", "Shape Format", "SmartArt Design", "Chart Design"];
+
+fn contextual_tab(tab: &str) -> bool {
+    CONTEXTUAL_TABS.contains(&tab)
+}
+
 /// The badge letter for every control of a tab, in drawing order.
 /// A command keeps its own `Alt+letter` shortcut letter; the rest take a free name/word
 /// initial, then any free letter — never a reserved or already-assigned one.
@@ -555,11 +565,9 @@ fn letters_for(app: &WordApp, tab: &str) -> Vec<String> {
         Target::Tab(_) => "ui.tab",
     };
 
-    // These contextual ribbon menus have no selection parameters in a KeyTip invocation, so the
-    // command would apply a destructive default instead of opening the menu. Keep their slots in
-    // the list to preserve ribbon drawing order, but leave them without a badge or key mapping.
-    let unsafe_menu_default =
-        |ctl: &Control| matches!(id_of(ctl), "picture.corrections" | "picture.color" | "picture.transparency" | "picture.style" | "picture.border");
+    // A menu opens from a click. A key tip runs its command with `{}`, which can apply a default.
+    // Contextual menus get no key tip unless listed in `SAFE_CONTEXTUAL_MENUS`.
+    let unsafe_menu_default = |ctl: &Control| ctl.menu && contextual_tab(tab) && !SAFE_CONTEXTUAL_MENUS.contains(&id_of(ctl));
 
     // Pass 1: own shortcut letters. First-come keeps it if two commands somehow share a letter.
     for (i, ctl) in ctrls.iter().enumerate() {

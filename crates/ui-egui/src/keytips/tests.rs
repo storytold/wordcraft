@@ -661,13 +661,10 @@ fn contextual_tabs_badge_their_controls() {
         assert!(ids.iter().all(|id| a.session.registry.get(id).is_some() || id.starts_with("ui.")), "{tab}: unknown command id");
         let letters = letters_for(&a, tab);
         assert!(!letters.is_empty(), "{tab} has controls");
-        let disabled_menus = ["picture.corrections", "picture.color", "picture.transparency", "picture.style", "picture.border"];
-        for (id, letter) in ids.iter().zip(&letters) {
-            assert_eq!(
-                letter.is_empty(),
-                tab == "Picture Format" && disabled_menus.contains(id),
-                "{tab} {id}: only menus with unsafe default commands lack keytips"
-            );
+        for (ctl, letter) in controls(tab).iter().zip(&letters) {
+            let id = if let Target::Cmd { id, .. } = &ctl.target { *id } else { "" };
+            let blocked = ctl.menu && !SAFE_CONTEXTUAL_MENUS.contains(&id);
+            assert_eq!(letter.is_empty(), blocked, "{tab} {}: only unsafe menus lack a key tip", ctl.tip);
         }
         let mut seen: Vec<String> = letters.iter().filter(|l| !l.is_empty()).cloned().collect();
         seen.sort();
