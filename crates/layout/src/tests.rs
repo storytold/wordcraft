@@ -3620,7 +3620,51 @@ fn character_border_draws_one_box_around_run() {
     assert_eq!(horiz.len(), 2);
     assert_eq!(vert.len(), 2);
     assert!(horiz.iter().any(|h| (h.1 - top).abs() < 0.01) && horiz.iter().any(|h| (h.1 - bottom).abs() < 0.01), "{lines:?}");
-    assert!(horiz.iter().all(|h| (h.0 - gx0).abs() < 0.01 && (h.2 - gx1).abs() < 0.01), "{lines:?} {gx0} {gx1}");
+    // Top and bottom run on over half the 0.5 pt side lines, closing the corners.
+    assert!(horiz.iter().all(|h| (h.0 - (gx0 - 0.25)).abs() < 0.01 && (h.2 - (gx1 + 0.25)).abs() < 0.01), "{lines:?} {gx0} {gx1}");
+}
+
+#[test]
+fn words_underline_draws_one_line_per_word() {
+    let mut d = Document::from_text("ab cd");
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.underline = Some(wordcraft_doc::props::Underline::Words)).unwrap();
+    assert_eq!(border_lines(&d).len(), 2, "{:?}", border_lines(&d));
+    // A space condensed to no width still parts the words.
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.spacing = Some(-4.0)).unwrap();
+    assert_eq!(border_lines(&d).len(), 2, "{:?}", border_lines(&d));
+    // A bookmark between two letters doesn't part them.
+    let mut d = Document::from_text("ab cd");
+    d.insert_object(&Pos::body(0, 1), InlineObject::BookmarkStart { name: "x".into() }, &Default::default()).unwrap();
+    let end = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().text.len();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, end), &|c| c.underline = Some(wordcraft_doc::props::Underline::Words)).unwrap();
+    assert_eq!(border_lines(&d).len(), 2, "{:?}", border_lines(&d));
+}
+
+#[test]
+fn paragraph_border_lines_meet_in_square_corners() {
+    use wordcraft_doc::props::{Border, Borders};
+    let mut d = Document::from_text("Boxed");
+    let (thick, thin) = (Some(Border::single(3.0)), Some(Border::single(1.0)));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { top: thick, left: thin, bottom: thick, ..Borders::default() });
+    let lines = border_lines(&d);
+    let [left] = lines.iter().filter(|l| l.0 == l.2).collect::<Vec<_>>()[..] else { panic!("{lines:?}") };
+    let horiz: Vec<_> = lines.iter().filter(|l| l.1 == l.3).collect();
+    assert_eq!(horiz.len(), 2, "{lines:?}");
+    // Word: the 3 pt lines run on over half the 1 pt left line, and end half their own width past
+    // the right edge, where there is no line (docxide-pdf's samtale and english_town_council_report).
+    let right = d.last_section.page_w - d.last_section.margin_right;
+    for h in &horiz {
+        assert!((h.0 - (left.0 - 0.5)).abs() < 0.01 && (h.2 - (right + 1.5)).abs() < 0.01, "{lines:?} {right}");
+    }
+    // The left line runs on to the top and bottom lines' outer edges; with no top line it ends square.
+    assert!((left.1 - (horiz[0].1.min(horiz[1].1) - 1.5)).abs() < 0.01 && (left.3 - (horiz[0].1.max(horiz[1].1) + 1.5)).abs() < 0.01, "{lines:?}");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { left: thin, bottom: thick, ..Borders::default() });
+    let lines = border_lines(&d);
+    let [left] = lines.iter().filter(|l| l.0 == l.2).collect::<Vec<_>>()[..] else { panic!("{lines:?}") };
+    let [bottom] = lines.iter().filter(|l| l.1 == l.3).collect::<Vec<_>>()[..] else { panic!("{lines:?}") };
+    assert!((left.3 - (bottom.1 + 1.5)).abs() < 0.01, "{lines:?}");
+    let first = lay(&d).pages[0].items.iter().find_map(|i| if let Placed::Lines { y, .. } = i { Some(*y) } else { None }).unwrap();
+    assert!((left.1 - (first - 0.5)).abs() < 0.01, "{lines:?} {first}");
 }
 
 #[test]
@@ -10721,6 +10765,41 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
     }
 }
 
+/// Text typed after a raised or lowered character sits where that character does: an input
+/// method's composition there is drawn on the line's baseline shifted as the run is (positive up),
+/// as the committed text is drawn, not on the line's own baseline.
+#[test]
+fn typing_style_takes_the_runs_baseline_shift() {
+    use wordcraft_doc::props::VertAlign;
+    let mut d = Document::from_text("x2");
+    d.format_range(&Pos::body(0, 1), &Pos::body(0, 2), &|c| c.vert_align = Some(VertAlign::Superscript)).unwrap();
+    let l = lay(&d);
+    let (plain, line) = l.typing_style(&Pos::body(0, 1), 0).expect("after the x");
+    let (raised, base) = l.typing_style(&Pos::body(0, 2), 0).expect("after the superscript 2");
+    assert_eq!(plain.shift, 0.0);
+    assert!(raised.shift > 0.0, "a superscript is raised: {}", raised.shift);
+    assert!((line - raised.shift - base).abs() < 0.01, "line {line}, shift {}, baseline {base}", raised.shift);
+}
+
+/// Text typed after a character the run's font lacks asks for the run's own font, not the fallback
+/// face that drew that character: an input method's composition after a Chinese character in a
+/// Latin font draws its letters as the committed letters are drawn.
+#[test]
+fn typing_style_asks_for_the_runs_font_after_a_fallback_character() {
+    let text = "A\u{4f60}";
+    let l = lay(&Document::from_text(text));
+    let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let face_at = |off: usize| para.clusters.iter().find(|c| c.start == off).map(|c| para.styles[c.style as usize].face.id());
+    let (latin, han) = (face_at(0), face_at(1));
+    if latin == han {
+        eprintln!("skipped: the body font has the character, or no installed font does");
+        return;
+    }
+    let (run, _) = l.typing_style(&Pos::body(0, text.len()), 0).expect("after the Chinese character");
+    assert_eq!(Some(run.face.id()), han, "the character before the caret is drawn in a fallback face");
+    assert_eq!(Some(run.requested_face.id()), latin, "text typed there asks for the run's own font");
+}
+
 #[test]
 fn a_missing_east_asian_font_is_drawn_in_its_font_table_alternate() {
     crate::test_fonts();
@@ -10784,7 +10863,7 @@ fn footer_page_total_needs_one_body_pass() {
     d.last_section.footers.default = Some(id);
     let first = |d: &Document| {
         let totals = Totals::first_guess(d.sections().len());
-        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, true, (&EarlyFloats::new(), true))
+        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), (&HashMap::new(), None), &totals, true, (&EarlyFloats::new(), true))
     };
     assert!(matches!(first(&d), Pass::Done(l) if l.pages.len() == 3), "the footer's total asked for another pass");
     // The same field in the body is only known once every page is laid out.
@@ -12441,6 +12520,219 @@ fn cell_widths_override_grid() {
         let [(x2, _, _)] = para_at(&l, &[0, 0, 2, 0])[..] else { panic!("cell missing") };
         assert!((x1 - x0 - 50.0).abs() < 0.01);
         assert!((x2 - x0 - 110.0).abs() < 0.01);
+    }
+}
+
+#[test]
+fn percentage_cell_widths_that_disagree_or_span_columns() {
+    // Measured in Word (A4, 451.3 pt between the margins; 468 pt here), autofit tables 100% wide:
+    // rows asking 30/10/10/30 and 10/30/10/30, in either order, give 30/30/10/30 (each column its
+    // largest); a merged cell asking 50% over the first two columns, beside 10% and 40%, gives
+    // those two 50% between them; a merged 20% over columns asking 40% and 10% changes nothing;
+    // and a nested table's percentages are of its own width.
+    let cell_text = |s: &str| vec![wordcraft_doc::para_block(Paragraph::with_text(s, Default::default()))];
+    let table = |rows: &[&[(Option<f32>, u32)]]| {
+        let mut t = Table::new(rows.len(), 4, 460.3);
+        t.grid = vec![107.3, 37.2, 31.95, 283.85];
+        t.props.width_pct = Some(100.0);
+        for (row, spec) in t.rows.iter_mut().zip(rows) {
+            row.cells.truncate(spec.len());
+            for (cell, (pct, span)) in row.cells.iter_mut().zip(spec.iter()) {
+                cell.props.width = None;
+                cell.props.width_pct = *pct;
+                cell.props.span = *span;
+                cell.blocks = cell_text("A");
+            }
+        }
+        t
+    };
+    let starts_at = |t: Table, prefix: &[u32], row: u32| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let x: Vec<f32> = (0..4)
+            .map(|c| {
+                let path: Vec<u32> = prefix.iter().copied().chain([row, c, 0]).collect();
+                let [(x, _, _)] = para_at(&l, &path)[..] else { panic!("cell {c} missing") };
+                x
+            })
+            .collect();
+        x.iter().map(|v| v - x[0]).collect::<Vec<_>>()
+    };
+    let near = |got: Vec<f32>, want: [f32; 4], what: &str| {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "{what}: columns start at {got:?}, not {want:?}");
+    };
+    let at = |shares: [f32; 3]| [0.0, shares[0] * 468.0, shares[1] * 468.0, shares[2] * 468.0];
+    let p = |v: f32| (Some(v), 1);
+    let auto = (None, 1);
+    let open = [auto, auto, auto, auto];
+    near(
+        starts_at(table(&[&[p(30.0), p(10.0), p(10.0), p(30.0)], &[p(10.0), p(30.0), p(10.0), p(30.0)], &open]), &[0], 2),
+        at([0.3, 0.6, 0.7]),
+        "rows disagree",
+    );
+    near(
+        starts_at(table(&[&[p(10.0), p(30.0), p(10.0), p(30.0)], &[p(30.0), p(10.0), p(10.0), p(30.0)], &open]), &[0], 2),
+        at([0.3, 0.6, 0.7]),
+        "the other order",
+    );
+    let merged = starts_at(table(&[&[(Some(50.0), 2), p(10.0), p(40.0)], &open]), &[0], 1);
+    near(vec![merged[0], merged[2], merged[3]].into_iter().chain([0.0]).collect(), [0.0, 0.5 * 468.0, 0.6 * 468.0, 0.0], "merged 50%");
+    near(
+        starts_at(table(&[&[p(40.0), p(10.0), p(10.0), p(40.0)], &[(Some(20.0), 2), auto, auto], &open]), &[0], 2),
+        at([0.4, 0.5, 0.6]),
+        "a smaller merged cell",
+    );
+    // The nested table fills the outer table's only cell, less the cell's margins.
+    let inner = table(&[&[p(40.0), p(10.0), p(10.0), p(40.0)], &open]);
+    let mut outer = Table::new(1, 1, 468.0);
+    outer.props.width_pct = Some(100.0);
+    outer.rows[0].cells[0].props.width_pct = Some(100.0);
+    outer.rows[0].cells[0].blocks = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(inner)), wordcraft_doc::para_block(Paragraph::new())];
+    let nested = starts_at(outer, &[0, 0, 0, 0], 1);
+    let w = nested[3] / 0.6;
+    near(nested, [0.0, 0.4 * w, 0.5 * w, 0.6 * w], "nested");
+    assert!(w > 400.0 && w <= 468.0, "the nested table is {w} wide");
+}
+#[test]
+fn percentage_cell_widths_size_the_columns_whichever_rows_ask() {
+    // Measured in Word (A4, 451.3 pt between the margins; 468 pt here): a 40/10/10/40 header row
+    // over rows without cell widths lays out 40/10/10/40 of the table, from the grid
+    // 107.3/37.2/32/283.9 pt a document saved. The same with the row in the middle, in a fixed
+    // table, with the table 100% wide or without a width; 144 pt for 40% of a 360 pt table; and
+    // 20/5/5/20 scaled up to fill the table.
+    let starts = |t: Table| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let x: Vec<f32> = (0..4)
+            .map(|c| {
+                let [(x, _, _)] = para_at(&l, &[0, 2, c, 0])[..] else { panic!("cell {c} missing") };
+                x
+            })
+            .collect();
+        x.iter().map(|v| v - x[0]).collect::<Vec<_>>()
+    };
+    let table = |pct_row: usize, pcts: [f32; 4]| {
+        let mut t = Table::new(4, 4, 460.3);
+        t.grid = vec![107.3, 37.2, 31.95, 283.85];
+        for (r, row) in t.rows.iter_mut().enumerate() {
+            for (cell, p) in row.cells.iter_mut().zip(pcts) {
+                cell.props.width = None;
+                cell.props.width_pct = (r == pct_row).then_some(p);
+                cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
+            }
+        }
+        t
+    };
+    let near = |got: Vec<f32>, want: [f32; 4]| {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "columns start at {got:?}, not {want:?}");
+    };
+    let of = |w: f32| [0.0, w * 0.4, w * 0.5, w * 0.6];
+    near(starts(table(0, [40.0, 10.0, 10.0, 40.0])), of(468.0));
+    near(starts(table(1, [40.0, 10.0, 10.0, 40.0])), of(468.0));
+    near(starts(table(0, [20.0, 5.0, 5.0, 20.0])), of(468.0));
+    // A fixed table without a width of its own keeps its grid's 460.3 pt; 100% wide, it takes
+    // the text width.
+    let mut fixed = table(0, [40.0, 10.0, 10.0, 40.0]);
+    fixed.props.fixed = true;
+    near(starts(fixed.clone()), of(460.3));
+    fixed.props.width_pct = Some(100.0);
+    near(starts(fixed), of(468.0));
+    let mut full = table(0, [40.0, 10.0, 10.0, 40.0]);
+    full.props.width_pct = Some(100.0);
+    near(starts(full), of(468.0));
+    let mut narrow = table(0, [20.0, 5.0, 5.0, 20.0]);
+    narrow.props.width = Some(360.0);
+    near(starts(narrow), of(360.0));
+    // A row that starts one column in gives its percentages to the columns it covers: 10/10/40
+    // there agree with the header row's 10/10/40 over the last three columns.
+    let mut shifted = table(0, [40.0, 10.0, 10.0, 40.0]);
+    shifted.rows[1].props.grid_before = 1;
+    shifted.rows[1].cells.remove(0);
+    for (cell, p) in shifted.rows[1].cells.iter_mut().zip([10.0, 10.0, 40.0]) {
+        cell.props.width_pct = Some(p);
+    }
+    near(starts(shifted), of(468.0));
+    // Past 100% Word gives every column but the last its share of the table and the last what
+    // is left: 44/11/11/44 starts the columns at 44%, 55% and 66%. At 60/20/20/60 nothing is left,
+    // so the last column takes its longest word and the other three give up the same width.
+    near(starts(table(0, [44.0, 11.0, 11.0, 44.0])), [0.0, 0.44, 0.55, 0.66].map(|f| f * 468.0));
+    let over = starts(table(0, [60.0, 20.0, 20.0, 60.0]));
+    let lost = [0.6 * 468.0 - over[1], 0.2 * 468.0 - (over[2] - over[1]), 0.2 * 468.0 - (over[3] - over[2])];
+    assert!(lost[0] > 1.0 && lost.iter().all(|l| (l - lost[0]).abs() < 0.01), "columns start at {over:?}");
+    // A fixed table gives the last column 2 pt and clips its text to the cell instead; the
+    // others share the rest of its 460.3 pt (Word: 275.5, 91.5, 91 and 2 pt).
+    let mut fixed_over = table(0, [60.0, 20.0, 20.0, 60.0]);
+    fixed_over.props.fixed = true;
+    for row in &mut fixed_over.rows {
+        row.cells[3].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Lorem ipsum", Default::default()))];
+    }
+    near(starts(fixed_over.clone()), [0.0, 0.6, 0.8, 1.0].map(|f| f * (460.3 - 2.0)));
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(fixed_over)).unwrap();
+    let l = lay(&d);
+    let cells: Vec<(usize, f32, bool)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Placed::Cell { cell, rect, clip, row: 0, .. } = i { Some((*cell, rect.w, *clip)) } else { None })
+        .collect();
+    assert!(cells.iter().any(|&(c, w, clip)| c == 3 && (w - 2.0).abs() < 0.01 && clip), "the last cell is 2 pt and clipped: {cells:?}");
+    assert!(cells.iter().all(|&(c, _, clip)| c == 3 || !clip), "only the last cell is clipped: {cells:?}");
+    // When the columns before the last already pass 100% (80/40/40/20), Word gives them their
+    // shares left to right until the width runs out, and the table keeps its width: in a fixed
+    // table the third and fourth columns get 2 pt, the shares being of 460.3 - 4 pt; in an
+    // autofit table they get their longest words, the first two giving up the same width.
+    let widths = |t: Table| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let mut w: Vec<(usize, f32)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Cell { cell, rect, row: 0, .. } = i { Some((*cell, rect.w)) } else { None })
+            .collect();
+        w.sort_by_key(|c| c.0);
+        w.into_iter().map(|c| c.1).collect::<Vec<f32>>()
+    };
+    let mut fixed_far = table(0, [80.0, 40.0, 40.0, 20.0]);
+    fixed_far.props.fixed = true;
+    let got = widths(fixed_far);
+    let room = 460.3 - 4.0;
+    let want = [0.8 * room, 0.2 * room, 2.0, 2.0];
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "fixed 80/40/40/20: {got:?}, not {want:?}");
+    assert!((got.iter().sum::<f32>() - 460.3).abs() < 0.01, "fixed 80/40/40/20 is {} wide", got.iter().sum::<f32>());
+    // A fixed grid narrower than 2 pt a column keeps its width: the columns share it.
+    let mut fixed_narrow = table(0, [80.0, 40.0, 40.0, 20.0]);
+    fixed_narrow.props.fixed = true;
+    fixed_narrow.grid = vec![1.5; 4];
+    let got = widths(fixed_narrow);
+    assert!(got.iter().all(|w| (w - 1.5).abs() < 0.01), "a fixed 6 pt grid of 80/40/40/20: {got:?}");
+    let got = widths(table(0, [80.0, 40.0, 40.0, 20.0]));
+    assert!((got.iter().sum::<f32>() - 468.0).abs() < 0.01, "autofit 80/40/40/20 is {} wide: {got:?}", got.iter().sum::<f32>());
+    let lost = [0.8 * 468.0 - got[0], 0.2 * 468.0 - got[1]];
+    assert!(lost[0] > 1.0 && (lost[0] - lost[1]).abs() < 0.01 && got[2] > 1.0 && got[3] > 1.0, "autofit 80/40/40/20: {got:?}");
+    // A smaller percentage in another row of a column changes nothing: the column takes its
+    // largest. A merged cell's 20% goes to the two columns under it, which ask none.
+    let mut disagreeing = table(0, [40.0, 10.0, 10.0, 40.0]);
+    disagreeing.rows[1].cells[0].props.width_pct = Some(10.0);
+    near(starts(disagreeing), of(468.0));
+    let mut spanned = table(0, [40.0, 10.0, 10.0, 40.0]);
+    spanned.rows[0].cells.remove(2);
+    spanned.rows[0].cells[1].props.span = 2;
+    spanned.rows[0].cells[1].props.width_pct = Some(20.0);
+    let got = starts(spanned);
+    assert!((got[1] - 0.4 * 468.0).abs() < 0.01 && (got[3] - 0.6 * 468.0).abs() < 0.01, "merged 20%: columns start at {got:?}");
+    // A column no cell sizes and an absolute width alongside keep the grid.
+    let grid = [0.0, 107.3, 144.5, 176.45];
+    let mut unsized_column = table(0, [40.0, 10.0, 10.0, 40.0]);
+    unsized_column.rows[0].cells[3].props.width_pct = None;
+    let mut absolute = table(0, [40.0, 10.0, 10.0, 40.0]);
+    absolute.rows[1].cells[0].props.width = Some(100.0);
+    for t in [unsized_column, absolute] {
+        let got = starts(t);
+        let k = got[3] / grid[3];
+        near(got, grid.map(|g| g * k));
     }
 }
 
@@ -14585,7 +14877,15 @@ fn last_rewrap_pass_keeps_early_floats_clear_of_text() {
     let one_page = picture_above_anchor(&"Earlier text flows beside the picture placed above its anchor. ".repeat(3), 4, 72.0);
     for d in [one_page, early_float_across_pages()] {
         let totals = Totals::first_guess(d.sections().len());
-        let pass = layout_pass(&d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, false, (&EarlyFloats::new(), false));
+        let pass = layout_pass(
+            &d,
+            &mut LayoutCache::new(),
+            &LayoutOptions::default(),
+            (&HashMap::new(), None),
+            &totals,
+            false,
+            (&EarlyFloats::new(), false),
+        );
         let Pass::Done(l) = pass else { panic!("a last pass is done") };
         let (under, n) = text_under_shapes(&l);
         assert_eq!(under, None);
