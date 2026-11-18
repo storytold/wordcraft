@@ -250,6 +250,7 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.darkMode", json!({"value": dark_page}));
     }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
+    ui.checkbox(&mut app.ui.font_download_notice, tl!("Tell me when a document's missing fonts can be downloaded"));
     default_app_button(app, ui);
     ui.add_space(8.0);
     section(ui, "Start-up");
@@ -675,6 +676,9 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         templates_folder(app, ui);
     }
     ui.add_space(8.0);
+    section(ui, "Scrolling");
+    scroll_speed_picker(app, ui);
+    ui.add_space(8.0);
     section(ui, "Customize");
     ui.horizontal(|ui| {
         ui.label(tl!("Keyboard shortcuts:"));
@@ -768,8 +772,8 @@ fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
     // The template keeps the percent sign outside its placeholder, so `fmt` isolates the number
     // without it and a right-to-left line draws "(%200)": the sign goes inside the isolate.
-    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())])
-        .replace("\u{2069}%", "%\u{2069}");
+    let drawn = InterfaceSize::AUTO.drawn_percent_within(native, app.auto_scale_limit);
+    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &drawn.to_string())]).replace("\u{2069}%", "%\u{2069}");
     let selected = size.percent().map_or_else(|| auto.clone(), |pct| format!("{pct}%"));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface size:"));
@@ -838,6 +842,42 @@ fn display_server_picker(app: &mut WordApp, ui: &mut Ui) {
         combo.response.labelled_by(label.id);
     });
     note(ui, "Applies the next time WordCraft starts.");
+}
+
+/// Scroll speed preferences (#6146): mouse wheel and touchpad (Wayland / macOS).
+fn scroll_speed_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::scroll::ScrollSpeed;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Mouse wheel scroll speed:"));
+        let combo = craft_ui::ComboBox::from_id_salt("scroll_speed").selected_text(tl!(app.ui.scroll_speed.label())).width(220.0).show_ui(ui, |ui| {
+            for s in ScrollSpeed::ALL {
+                if ui.selectable_label(app.ui.scroll_speed == s, tl!(s.label())).clicked() {
+                    let _ = app.run("ui.scrollSpeed", json!({"value": s.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    // Windows and browsers do not report touchpads in points.
+    if !cfg!(any(target_os = "windows", target_arch = "wasm32")) {
+        let row = ui.horizontal(|ui| {
+            let label = ui.label(tl!("Touchpad scroll speed:"));
+            let combo = craft_ui::ComboBox::from_id_salt("touchpad_scroll_speed")
+                .selected_text(tl!(app.ui.touchpad_scroll_speed.label()))
+                .width(220.0)
+                .show_ui(ui, |ui| {
+                    for s in ScrollSpeed::ALL {
+                        if ui.selectable_label(app.ui.touchpad_scroll_speed == s, tl!(s.label())).clicked() {
+                            let _ = app.run("ui.touchpadScrollSpeed", json!({"value": s.code()}));
+                        }
+                    }
+                });
+            combo.response.labelled_by(label.id);
+        });
+        if !cfg!(target_os = "macos") {
+            row.response.on_hover_text(tl!("On X11, the touchpad follows the mouse wheel speed."));
+        }
+    }
 }
 
 /// Interface language: follow the system (the default) or pick one (#8).
