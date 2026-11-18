@@ -44,7 +44,7 @@ mod links;
 mod navigation;
 mod pages;
 mod reading;
-mod rulers;
+pub(crate) mod rulers;
 mod source;
 mod story;
 
