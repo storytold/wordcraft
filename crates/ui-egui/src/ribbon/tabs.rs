@@ -193,6 +193,13 @@ pub(super) fn slide_underline(ui: &egui::Ui, tab: &str, target: egui::Rect, colo
     ui.painter().rect_filled(egui::Rect::from_center_size(egui::pos2(x, target.center().y), egui::vec2(width, target.height())), 2.0, color);
 }
 
+/// The tab window `viewport`'s underline is under, or sliding to.
+#[cfg(test)]
+pub(crate) fn underline_tab(ctx: &egui::Context, viewport: egui::ViewportId) -> Option<String> {
+    let id = egui::Id::unique("tab_underline").with(viewport);
+    ctx.data(|d| d.get_temp::<Underline>(id)).map(|u| u.tab)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct TabChange {
     tab: String,

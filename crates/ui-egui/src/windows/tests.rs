@@ -123,6 +123,7 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     let first = a.session.document_id();
     frames(&ctx, &mut a, 3);
     a.ui.tab = "Insert".into();
+    a.run("ui.collapseRibbon", json!({})).unwrap();
     a.run("ui.dialog", json!({"name": "paragraph"})).unwrap();
     assert_eq!(prompt(&a), Some("paragraph"));
 
@@ -130,7 +131,7 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     let second = a.session.document_id();
     assert_ne!(second, first);
     assert_eq!(a.window_count(), 2);
-    assert!(a.dialog.is_none() && a.ui.tab == crate::DEFAULT_TAB, "the new window starts afresh");
+    assert!(a.dialog.is_none() && a.ui.tab == crate::DEFAULT_TAB && !a.ui.ribbon_collapsed, "the new window starts afresh");
     frames(&ctx, &mut a, 3);
     let child = a.active_viewport();
     assert_ne!(child, ViewportId::ROOT, "the new window has a viewport of its own");
@@ -149,9 +150,20 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     assert_eq!(a.active_viewport(), ViewportId::ROOT);
     assert_eq!(a.session.document_id(), first);
     assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a)), ("First".into(), "Insert", Some("paragraph")));
+    assert!(a.ui.ribbon_collapsed, "the first window's ribbon stays hidden");
     focus(child);
     frames(&ctx, &mut a, 2);
     assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a)), ("Second".into(), crate::DEFAULT_TAB, None));
+    assert!(!a.ui.ribbon_collapsed, "and the second window's shown");
+    // Each window's tab underline follows its own tab, whatever the other window shows.
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 2);
+    a.run("ui.collapseRibbon", json!({})).unwrap();
+    frames(&ctx, &mut a, 4);
+    assert!(!a.ui.ribbon_collapsed, "the first window's ribbon is back");
+    let underline = |id| crate::ribbon::underline_tab(&ctx, id);
+    assert_eq!(underline(ViewportId::ROOT).as_deref(), Some("Insert"));
+    assert_eq!(underline(child).as_deref(), Some(crate::DEFAULT_TAB));
 }
 
 fn docx_on_disk(name: &str, body: &str) -> std::path::PathBuf {

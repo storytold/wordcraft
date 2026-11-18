@@ -71,6 +71,8 @@ use shape::shape_format;
 use table::{table_design, table_layout};
 #[cfg(test)]
 use tabs::MIN_TAB_W;
+#[cfg(test)]
+pub(crate) use tabs::underline_tab;
 use tabs::{
     CONTENT_SWITCH_SLIDE, MORE_TABS_W, TAB_ENTRY_SECS, TAB_ENTRY_SLIDE, ease_out_cubic, note_contextual_tabs, reading_toolbar, slide_underline,
     tab_content_entry, tab_entry,
