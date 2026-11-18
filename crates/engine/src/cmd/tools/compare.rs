@@ -417,9 +417,13 @@ fn obj_key(doc: &Document, o: &InlineObject) -> Key {
     for story in o.text_box_slots() {
         *story = None;
     }
-    // A field compares by what it shows: Word keeps an edited field code that shows the same
-    // result as the revised document's, unmarked (#6271).
-    if let InlineObject::Field { instr, .. } = &mut o {
+    // A field with a visible result compares by what it shows: Word keeps an edited field code
+    // that shows the same result as the revised document's, unmarked (#6271). A field without a
+    // result (an XE index entry, a TC entry) shows nothing, so its code is all there is to
+    // compare: a changed entry stays a tracked change that Reject can undo.
+    if let InlineObject::Field { instr, result, .. } = &mut o
+        && !result.is_empty()
+    {
         instr.clear();
     }
     Key::Obj(Box::new(o), texts)
