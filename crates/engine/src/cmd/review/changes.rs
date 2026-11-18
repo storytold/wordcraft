@@ -100,19 +100,72 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     Ok(true)
 }
 
+/// Accept or reject every style-definition change when the whole body is selected. A text range
+/// that merely begins at the document start must not resolve unrelated style revisions.
+fn resolve_styles_sel(s: &mut Session, whole_body: bool, accept: bool) -> Result<bool, CmdError> {
+    if !whole_body {
+        return Ok(false);
+    }
+    if !s.doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
+        return Ok(false);
+    }
+    for st in &mut std::sync::Arc::make_mut(&mut s.doc.styles).styles {
+        fmt_revisions::resolve_style(st, accept);
+    }
+    Ok(true)
+}
+
+/// The style-definition change Next / Previous Change selected (#2697). Every style change sits
+/// at the same collapsed anchor at the start of the document, so the selection alone can't say
+/// which one it is: this does, for the Accept or Reject that follows, while the selection stays
+/// where the navigation left it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StyleTarget {
+    document: u64,
+    sel: Selection,
+    style: String,
+    rev: u32,
+}
+
+/// The navigated style change, when the selection is still the one navigation made.
+fn navigated_style(s: &Session) -> Option<StyleTarget> {
+    s.review_style.clone().filter(|t| t.document == s.document_id() && t.sel == s.sel)
+}
+
+/// Accept or reject the navigated style change alone: that revision in that style. Returns whether
+/// it was still there.
+fn resolve_style_change(s: &mut Session, t: &StyleTarget, accept: bool) -> bool {
+    let revs = |st: &wordcraft_doc::styles::Style| [st.para_change.as_ref().map(|c| c.rev), st.chr_change.as_ref().map(|c| c.rev)];
+    if !s.doc.styles.styles.iter().any(|st| st.id == t.style && revs(st).contains(&Some(t.rev))) {
+        return false;
+    }
+    for st in std::sync::Arc::make_mut(&mut s.doc.styles).styles.iter_mut().filter(|st| st.id == t.style) {
+        fmt_revisions::resolve_style_rev(st, t.rev, accept);
+    }
+    true
+}
+
+/// Select change `c` and remember which style change it is, if it is one.
+fn select_change(s: &mut Session, c: &Change) {
+    s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
+    s.review_style = c.style.clone().zip(c.rev).map(|(style, rev)| StyleTarget { document: s.document_id(), sel: s.sel.clone(), style, rev });
+}
+
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
-/// `delete`, `format`), revision, and for a formatting change the properties it set.
+/// `delete`, `format`), revision, and for a formatting change the properties it set; for a
+/// style-definition change, the style's id.
 struct Change {
     a: Pos,
     b: Pos,
     kind: &'static str,
     rev: Option<u32>,
     props: Vec<Value>,
+    style: Option<String>,
 }
 
 impl Change {
     fn format(a: Pos, b: Pos, rev: u32, props: Vec<Value>) -> Change {
-        Change { a, b, kind: "format", rev: Some(rev), props }
+        Change { a, b, kind: "format", rev: Some(rev), props, style: None }
     }
 }
 
@@ -130,7 +183,7 @@ fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Opti
     } else {
         a.clone()
     };
-    Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new() })
+    Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new(), style: None })
 }
 
 /// The kind of an insertion / deletion change: `insert`, `delete`, or for one end of a move
@@ -196,12 +249,17 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
             resolve_para(s, st, &path, (0, len), (true, true), accept)?;
         }
     }
-    // Tables, rows, cells and sections.
+    // Tables, rows, cells, sections and style definitions.
     fmt_revisions::resolve_containers(&mut s.doc.body, accept, 0);
     for part in s.doc.parts.values_mut() {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
     }
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
+    if s.doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
+        for st in &mut std::sync::Arc::make_mut(&mut s.doc.styles).styles {
+            fmt_revisions::resolve_style(st, accept);
+        }
+    }
     // The note separators are block lists of their own, not stories; they must not keep ids of
     // revisions that are about to be dropped.
     for sep in [&mut s.doc.footnote_separators, &mut s.doc.endnote_separators] {
@@ -267,7 +325,19 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
 }
 
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
+    // The style change Next / Previous Change selected: that one alone. A caret put at the
+    // document start any other way resolves no style change.
+    let navigated = navigated_style(s);
+    s.review_style = None;
+    if let Some(t) = navigated
+        && resolve_style_change(s, &t, accept)
+    {
+        return if next { select_next_unresolved(s) } else { sel_result(s) };
+    }
     let (a, b) = s.sel.ordered();
+    // Capture this before text revisions are resolved: accepting a deletion or rejecting an
+    // insertion can change the body's end position.
+    let whole_body = a != b && a == s.doc.start_of(StoryRef::Body) && b == s.doc.end_of(StoryRef::Body);
     // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
     let mut caret_mark = None;
     // A caret in a paragraph whose own formatting changed (and no tracked text around it).
@@ -314,6 +384,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         }
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
+    resolve_styles_sel(s, whole_body, accept)?;
     s.sel = Selection::caret(a);
     s.clamp_selection();
     if next { select_next_unresolved(s) } else { sel_result(s) }
@@ -322,6 +393,13 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
 fn changes(s: &Session) -> Vec<Change> {
     let mut out: Vec<Change> = Vec::new();
     let mk = |path: &wordcraft_doc::Path, off| Pos { story: StoryRef::Body, path: path.clone(), off };
+    // Style-definition changes sit at the start of the document, as Word shows them.
+    let start = s.doc.start_of(StoryRef::Body);
+    for st in &s.doc.styles.styles {
+        for (rev, props) in fmt_revisions::style_diffs(st) {
+            out.push(Change { style: Some(st.id.clone()), ..Change::format(start.clone(), start.clone(), rev, props) });
+        }
+    }
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         // A table's, row's and cell's changes sit at the start of the cell's first paragraph.
@@ -346,7 +424,7 @@ fn changes(s: &Session) -> Vec<Change> {
         for (r, c) in p.run_ranges() {
             let kind = run_kind(&s.doc, c.ins, c.del);
             if !kind.is_empty() {
-                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new() });
+                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new(), style: None });
             }
             let Some(ch) = &c.fmt_change else { continue };
             let props = fmt_revisions::char_diff(c);
@@ -391,6 +469,9 @@ pub fn format_changes(s: &Session) -> Vec<(Pos, String, Vec<Value>)> {
 /// Whether the document has any tracked formatting change (cheap: stops at the first).
 pub fn has_format_changes(doc: &wordcraft_doc::Document) -> bool {
     if doc.last_section.fmt_change.is_some() {
+        return true;
+    }
+    if doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
         return true;
     }
     doc.para_paths(StoryRef::Body).iter().any(|path| {
@@ -495,13 +576,16 @@ pub fn has_deletions(doc: &wordcraft_doc::Document) -> bool {
 pub(super) fn nav_change(s: &mut Session, dir: i32) -> CmdResult {
     let list = changes(s);
     let caret = s.sel.ordered();
-    let t = if dir > 0 {
-        list.iter().find(|c| c.a >= caret.1 && (c.a > caret.0 || c.b > caret.1)).or(list.first())
-    } else {
-        list.iter().rev().find(|c| c.b <= caret.0 && (c.b < caret.1 || c.a < caret.0)).or(list.last())
+    // From a navigated style change, the one next to it in the list (they share their anchor).
+    let at = navigated_style(s).and_then(|t| list.iter().position(|c| c.style.as_deref() == Some(t.style.as_str()) && c.rev == Some(t.rev)));
+    let t = match at {
+        Some(i) if dir > 0 && i + 1 < list.len() => list.get(i + 1),
+        Some(i) if dir < 0 && i > 0 => list.get(i - 1),
+        _ if dir > 0 => list.iter().find(|c| c.a >= caret.1 && (c.a > caret.0 || c.b > caret.1)).or(list.first()),
+        _ => list.iter().rev().find(|c| c.b <= caret.0 && (c.b < caret.1 || c.a < caret.0)).or(list.last()),
     };
     if let Some(c) = t {
-        s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
+        select_change(s, c);
     }
     sel_result(s)
 }
@@ -513,7 +597,7 @@ fn select_next_unresolved(s: &mut Session) -> CmdResult {
     let list = changes(s);
     let caret = s.sel.ordered().0;
     if let Some(c) = list.iter().find(|c| c.a >= caret).or(list.first()) {
-        s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
+        select_change(s, c);
     }
     sel_result(s)
 }

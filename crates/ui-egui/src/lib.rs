@@ -43,6 +43,7 @@ pub mod equation_tab;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file_browser;
 pub mod file_dialogs;
+pub mod font_download;
 pub mod format_shape;
 pub mod frame;
 pub mod guides;
@@ -54,6 +55,7 @@ pub mod keys;
 pub mod keytips;
 pub(crate) mod language_packs;
 mod local_time;
+pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
@@ -69,6 +71,7 @@ pub mod ribbon_fit;
 pub mod rtl;
 pub mod ruler_tabs;
 pub mod scroll;
+pub use scroll::ScrollSpeed;
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
@@ -89,6 +92,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
 pub use control::ControlRequest;
+pub use dialogs::dialogs_bullet;
 pub use dialogs::dialogs_chart;
 pub use dialogs::dialogs_controls;
 pub use dialogs::dialogs_insert;
@@ -294,6 +298,12 @@ pub struct UiState {
     pub recent: Vec<String>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
+    /// Saved choices in Insert > Date & Time: format picture.
+    pub date_time_format: String,
+    /// Saved language tag in Insert > Date & Time.
+    pub date_time_language: String,
+    /// Saved preference for updating inserted date/time fields automatically (defaults to false).
+    pub date_time_update: bool,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
     pub recent_colors: Vec<String>,
     /// Fonts applied from the font box, the mini toolbar or the Font dialog, most recent first:
@@ -426,6 +436,15 @@ pub struct UiState {
     /// spaces, or characters without spaces. Right-click the count in the status bar, or File ›
     /// Options › Display. Junk saved values read as words.
     pub status_count: StatusCount,
+    /// File › Options › General: tell about a document's missing fonts that can be downloaded
+    /// ([`font_download`]); the box's "Don't show this again" turns it off.
+    pub font_download_notice: bool,
+    /// How far a mouse-wheel notch scrolls (#6146).
+    #[serde(default, alias = "scrollSpeed")]
+    pub scroll_speed: ScrollSpeed,
+    /// How far a touchpad swipe the system reports in points (Wayland, macOS) scrolls (#6146).
+    #[serde(default, alias = "touchpadScrollSpeed")]
+    pub touchpad_scroll_speed: ScrollSpeed,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -435,6 +454,24 @@ pub const DEFAULT_TAB: &str = "Home";
 
 /// ⌘Q, which only the Mac sends: quit.
 const QUIT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q);
+/// Ctrl+Shift+0 (⌘⇧0): back to the Auto interface size (#4030). Not Ctrl+Alt+0, which is AltGr+0
+/// on some layouts and types a character there (#3424).
+const RESET_INTERFACE_SIZE: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::Num0);
+
+/// Consume Ctrl+Shift+0 (⌘⇧0), matched on the key the layout types and exactly these modifiers.
+/// Where Shift+0 types `=` (German, Swiss and Nordic layouts) the press is Ctrl+Shift+=, which
+/// stays Superscript; an extra Alt (AltGr+Shift+0) doesn't match.
+fn consume_reset_interface_size(input: &mut egui::InputState) -> bool {
+    let mut found = false;
+    input.events.retain(|e| {
+        let hit = matches!(e, egui::Event::Key { key: egui::Key::Num0, pressed: true, modifiers, .. }
+            if modifiers.matches_exact(RESET_INTERFACE_SIZE.modifiers));
+        found |= hit;
+        !hit
+    });
+    found
+}
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.
@@ -445,6 +482,7 @@ pub const MAX_RECENT_FONTS: usize = 10;
 pub const MAX_FONT_NAME_BYTES: usize = 128;
 
 impl Default for UiState {
+    /// Default user interface preferences matching Word defaults.
     fn default() -> Self {
         UiState {
             tab: DEFAULT_TAB.into(),
@@ -455,6 +493,9 @@ impl Default for UiState {
             quick_access_toolbar: true,
             recent: Vec::new(),
             recent_symbols: Vec::new(),
+            date_time_format: String::new(),
+            date_time_language: String::new(),
+            date_time_update: false,
             recent_colors: Vec::new(),
             recent_fonts: Vec::new(),
             theme: theme::Appearance::default(),
@@ -503,6 +544,9 @@ impl Default for UiState {
             dictionary: Vec::new(),
             display_server: DisplayServer::Auto,
             status_count: StatusCount::default(),
+            font_download_notice: true,
+            scroll_speed: ScrollSpeed::default(),
+            touchpad_scroll_speed: ScrollSpeed::default(),
         }
     }
 }
@@ -614,8 +658,13 @@ pub struct WordApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// Only a successfully published copy may reuse this window's private fragment.
+    pub clipboard_published: bool,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
+    /// Which job message is current: bumped when a job starts and whenever the message changes,
+    /// so a window can tell a new result from one it already said even when the text is the same.
+    print_gen: u64,
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
@@ -646,6 +695,11 @@ pub struct WordApp {
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
     pub(crate) focus_ribbon: bool,
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// The documents (by id) the missing-fonts download box has been considered for
+    /// ([`font_download::tick`]), in every window.
+    pub(crate) font_notice_seen: Vec<u64>,
+    /// Whether that box comes up by itself ([`WordApp::tell_about_font_downloads`]).
+    pub(crate) font_notices: bool,
     /// Language pack installs, the missing-pack bar ([`language_packs`]).
     pub(crate) packs_rt: language_packs::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
@@ -664,6 +718,11 @@ pub struct WordApp {
     synthetic_pending: bool,
     /// How many events of `synthetic` the pending batch contains.
     synthetic_injected: usize,
+    /// Number of raw input events whose scroll delta has already been scaled in the pending host batch.
+    pub(crate) raw_scroll_events_scaled: usize,
+    /// Exact snapshot of the raw input events scaled during the current pending batch, to avoid
+    /// compounding scroll multipliers when eframe replays unconsumed RawInput across hidden logic ticks.
+    pub(crate) last_scaled_scroll_events: Vec<egui::Event>,
     /// macOS: the primary button went down with Control, so it is being read as the secondary.
     control_click: bool,
     /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).
@@ -703,6 +762,12 @@ pub struct WordApp {
     /// The display scale (native pixels per point) seen in the last frame, 1.0 before the first;
     /// `ui.interfaceSize` reports the size Auto draws at with it.
     native_scale: f32,
+    /// The most pixels per point Auto may draw at on this screen ([`theme::auto_scale_limit`], #4030).
+    auto_scale_limit: f32,
+    /// The zoom factor in force during the previous frame's `logic`: egui-winit turns each
+    /// window's monitor size into points with the zoom of the frame before a pending change is
+    /// applied, so the physical size is that size times this zoom ([`theme::auto_scale_limit_over`]).
+    monitor_zoom: f32,
     /// A pre-#822 interface size (percent on top of the display scale) waiting for the first frame
     /// that knows the display's scale, to become the absolute size it drew at
     /// ([`theme::migrate_legacy_interface_size`]).
@@ -732,8 +797,13 @@ pub struct WordApp {
     /// The document's fonts that aren't installed, for the status bar and the font box, and the
     /// layout they were read from.
     pub missing_fonts: crate::chrome::MissingFontsMemo,
+    /// This window's refused or failed export, shown on its Export and Print pages; see [`WordApp::fail_export`].
+    pub export_error: String,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
+    /// What this window's Print page knows of the last job's message (the viewport and pass it was
+    /// last drawn in, and the generations of the result it said and holds back); per window.
+    print_memo: crate::print_page::Memo,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
@@ -812,6 +882,9 @@ pub(crate) fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files.sort();
     files
 }
+
+#[cfg(test)]
+mod tests_dialog_tabs;
 
 #[cfg(test)]
 mod tests;

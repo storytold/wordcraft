@@ -433,6 +433,7 @@ mod tests {
 
     #[test]
     fn parses_names_levels_and_switches() {
+        crate::test_fonts();
         let c = parse(r#"STYLEREF "Heading 1" \l \n \t \* MERGEFORMAT"#);
         assert_eq!(c.style, "Heading 1");
         assert!(c.last && c.suppress && !c.position);
@@ -491,6 +492,7 @@ mod tests {
 
     #[test]
     fn suppress_keeps_the_number() {
+        crate::test_fonts();
         assert_eq!(suppress("Chapter 2.", &[(0, "2".into(), true)], 0), "2");
         assert_eq!(suppress("Chapter", &[(0, "a".into(), false)], 1), "", "an ancestor's number the label doesn't show");
         assert_eq!(suppress("Section3", &[(0, "3".into(), true)], 1), "3", "the text attached to the number");
