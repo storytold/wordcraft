@@ -318,7 +318,7 @@ fn font_row(
 
 /// A check box over `value`; true when this pass ticked or cleared it.
 fn tick(ui: &mut Ui, value: &mut bool, label: &str) -> bool {
-    match Checkbox::new(Bind::given(*value)).label(Label::from(label)).show(ui).value().cloned() {
+    match Checkbox::new(Bind::given(*value)).label(Label::from(label.to_owned())).show(ui).value().cloned() {
         Some(now) => {
             *value = now;
             true

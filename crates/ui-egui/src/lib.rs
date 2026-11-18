@@ -510,6 +510,8 @@ pub struct WordApp {
     pub dialog_host: craft::ui::dialog::DialogHost,
     /// What the window's dialogs ask of the app, by dialog.
     pub(crate) dialog_hooks: Vec<(craft::ui::dialog::DialogId, dialogs::host::DialogHooks)>,
+    /// A finished child form's answer for its parent form, by parent dialog and form key; the parent's pass takes it.
+    pub(crate) dialog_answers: Vec<(craft::ui::dialog::DialogId, String, serde_json::Value)>,
     /// Field gestures as undo steps ([`undo_marks`]).
     pub(crate) edits: craft::ui::edit::GestureHost<WordApp>,
     /// The Equation tab's symbol set.

@@ -56,7 +56,7 @@ fn open_rename(app: &mut WordApp, ctx: &Context, parent: Option<DialogId>) -> Di
     let dialog = HostedParamDialog::new(ctx, "renameDocument", fields, |fields| {
         let params = vec![Param::new("name", tl!("Document name").to_string(), ParamKind::text("")).max_chars(200)];
         ParamDialog::command("renameDocument", tl!("Rename Document").to_string(), params)
-            .ok_label(tl!("Rename").to_string())
+            .ok_label(Label::from(tl!("Rename")))
             .values(Bind::bound(fields))
             .alt_resets(false)
     });

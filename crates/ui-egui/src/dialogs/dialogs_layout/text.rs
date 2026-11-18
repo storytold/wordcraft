@@ -106,7 +106,7 @@ impl WordForm for LineNumbersForm {
         RadioGroup::new(tl!("Numbering:").to_string(), Bind::bound(&mut self.restart)).show(ui, |ui, _| {
             Stack::new().show(ui, |ui, cx| {
                 for (at, (v, l)) in opts.iter().enumerate() {
-                    cx.labelled(ui, at, l.to_string(), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                    cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
                 }
             });
         });

@@ -4,6 +4,7 @@
 use craft::ui::contract::Show as _;
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, PromptChoice, StackDialog, StandardPrompt, dialog_id};
 use craft::ui::patterns::form_dialogs::{PasswordDialog, PasswordPurpose, Secret};
+use craft::ui::runtime::env::Label;
 use serde_json::{Value, json};
 
 use super::host::{DialogHooks, Keyed, Settle, open_with};
@@ -72,7 +73,7 @@ impl StackDialog for PasswordPrompt {
         };
         let mut dialog = PasswordDialog::new(purpose);
         if let Some(error) = &self.error {
-            dialog = dialog.error(error.clone());
+            dialog = dialog.error(Label::from(error.clone()));
         }
         let out = dialog.show(ui);
         match (out.answer, out.closed) {

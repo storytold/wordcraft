@@ -303,8 +303,8 @@ impl WordForm for PageNumbersForm {
         Select::new(tl!("Number format").to_string(), Bind::bound(&mut self.format), &formats).show(ui);
         RadioGroup::new(tl!("Page numbering").to_string(), Bind::bound(&mut self.cont)).show(ui, |ui, _| {
             Stack::new().show(ui, |ui, cx| {
-                cx.labelled(ui, 0, tl!("Continue from previous section").to_string(), SideLabel::new().layout(FieldLayout::After), Radio::new(true));
-                cx.labelled(ui, 1, tl!("Start at:").to_string(), SideLabel::new().layout(FieldLayout::After), Radio::new(false));
+                cx.labelled(ui, 0, Label::from(tl!("Continue from previous section")), SideLabel::new().layout(FieldLayout::After), Radio::new(true));
+                cx.labelled(ui, 1, Label::from(tl!("Start at:")), SideLabel::new().layout(FieldLayout::After), Radio::new(false));
             });
         });
         super::count_field(ui, &tl!("Start at:"), &mut self.start, 0..=100_000, !self.cont);

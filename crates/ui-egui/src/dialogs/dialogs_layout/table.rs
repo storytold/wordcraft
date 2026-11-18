@@ -171,7 +171,7 @@ impl WordForm for SortForm {
             RadioGroup::new(tl!("Order").to_string(), Bind::bound(&mut order)).show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, cx| {
                     for (at, (v, l)) in orders.iter().enumerate() {
-                        cx.labelled(ui, at, l.to_string(), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
                     }
                 });
             });
@@ -183,7 +183,7 @@ impl WordForm for SortForm {
             RadioGroup::new(tl!("My list has").to_string(), Bind::bound(&mut header)).show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, cx| {
                     for (at, (v, l)) in headers.iter().enumerate() {
-                        cx.labelled(ui, at, l.to_string(), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
                     }
                 });
             });
@@ -428,7 +428,7 @@ impl WordForm for TextToTableForm {
             RadioGroup::new(tl!("AutoFit behavior").to_string(), Bind::bound(&mut self.autofit)).show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, cx| {
                     for (at, (v, l)) in fits.iter().enumerate() {
-                        cx.labelled(ui, at, l.to_string(), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
                     }
                 });
             });
@@ -441,7 +441,7 @@ impl WordForm for TextToTableForm {
             RadioGroup::new(tl!("Separate text at").to_string(), Bind::bound(&mut self.separator)).show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, cx| {
                     for (at, (v, l)) in separators.iter().enumerate() {
-                        cx.labelled(ui, at, l.to_string(), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
                     }
                 });
             });
@@ -512,7 +512,7 @@ impl WordForm for TableToTextForm {
             RadioGroup::new(tl!("Separate text with").to_string(), Bind::bound(&mut self.separator)).show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, cx| {
                     for (at, (v, l)) in separators.iter().enumerate() {
-                        cx.labelled(ui, at, l.to_string(), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                        cx.labelled(ui, at, Label::from(*l), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
                     }
                 });
             });

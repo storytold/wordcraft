@@ -570,7 +570,7 @@ impl StackDialog for RecipientListDialog {
     }
 
     fn json_fields(&self) -> Option<Value> {
-        let message = self.held.refusal().map(|(m, _)| m.to_string()).unwrap_or_default();
+        let message = self.held.refusal().map(|(m, _)| m.as_str().to_string()).unwrap_or_default();
         Some(json!({"fields": self.draft.fields, "rows": self.draft.rows, "filter": self.draft.filter, "message": message}))
     }
 

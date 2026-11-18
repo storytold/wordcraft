@@ -45,6 +45,15 @@ fn browse_reason(ui: &Ui) -> Option<Label> {
     (!can_pick).then(|| label(tl!("Pick a template on the desktop app")))
 }
 
+/// A template path row over `value`, with Browse switched off for `reason` when there is one.
+fn template_row<'a>(name: Label, value: Bind<'a, String>, reason: Option<Label>) -> PathRow<'a> {
+    let row = PathRow::new(name, value).pick(template_pick());
+    match reason {
+        Some(reason) => row.browse_reason(reason),
+        None => row,
+    }
+}
+
 fn template_pick() -> PickRequest {
     PickRequest::open("template")
 }
@@ -90,7 +99,7 @@ impl WordForm for TemplatesForm {
         let reason = browse_reason(ui);
         let picked = Field::new(label(tl!("Document template:")))
             .show(ui, |ui, _| {
-                PathRow::new(label(tl!("Document template:")), Bind::bound(&mut self.path)).pick(template_pick()).browse_reason(reason).show(ui).picked
+                template_row(label(tl!("Document template:")), Bind::bound(&mut self.path), reason).show(ui).picked
             })
             .inner
             .flatten();
@@ -281,7 +290,7 @@ impl OrganizerDialog {
                         self.right = key.clone();
                     }
                 }
-                let picked = PathRow::new(label(tl!("Template")), Bind::bound(&mut self.file)).pick(template_pick()).browse_reason(reason).show(ui).picked;
+                let picked = template_row(label(tl!("Template")), Bind::bound(&mut self.file), reason).show(ui).picked;
                 if let Some(path) = picked {
                     self.requests.push(Request::Load(path));
                 }

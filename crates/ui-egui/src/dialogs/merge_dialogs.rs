@@ -53,7 +53,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option
 /// (Enter or a double click).
 fn pick_name(ui: &mut egui::Ui, label: &str, names: &[String], current: &str) -> (Option<String>, bool) {
     let idx: Vec<usize> = (0..names.len()).collect();
-    let response = List::<usize>::new(label).select(SelectMode::Single).show_items(ui, &keyed(&idx, |i| *i), &mut |key, _| {
+    let response = List::<usize>::new(Label::from(label.to_owned())).select(SelectMode::Single).show_items(ui, &keyed(&idx, |i| *i), &mut |key, _| {
         let name = names.get(*key).cloned().unwrap_or_default();
         let on = name == current;
         ListRow::new(name).selected(on)
@@ -346,7 +346,7 @@ impl WordForm for MergeRuleForm {
         if self.fields.is_empty() {
             TextField::new(tl!("Field:"), Bind::bound(&mut self.field)).show(ui);
         } else {
-            let entries: Vec<Entry<String>> = self.fields.iter().map(|f| Entry::new(f.clone(), f.as_str())).collect();
+            let entries: Vec<Entry<String>> = self.fields.iter().map(|f| Entry::new(f.clone(), Label::from(f.clone()))).collect();
             if let Some(f) = Select::new(tl!("Field:"), Bind::given(self.field.clone()), &entries).show(ui).value().cloned() {
                 self.field = f;
             }

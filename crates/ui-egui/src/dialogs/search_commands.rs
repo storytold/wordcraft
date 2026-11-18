@@ -6,7 +6,7 @@ use craft::ui::contract::{Bind, Show as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::menu::HelpEntry;
 use craft::ui::patterns::panels::CommandPalette;
-use craft::ui::runtime::env::WordTemplate;
+use craft::ui::runtime::env::{Label, WordTemplate};
 use serde_json::Value;
 
 use super::find::{SEARCH_SUGGESTIONS, find_in_navigation_pane};
@@ -47,7 +47,7 @@ impl StackDialog for SearchCommandsDialog {
 
     fn show(&mut self, ui: &mut egui::Ui, _: &DialogStack) -> Option<DialogResult<Option<String>>> {
         let out = CommandPalette::new(tl!("Search Commands"), &self.entries, Bind::bound(&mut self.open))
-            .suggested((tl!("Suggested"), self.suggested.clone()))
+            .suggested((Label::from(tl!("Suggested")), self.suggested.clone()))
             .fallback(self.fallback.clone())
             .show(ui);
         if let Some(text) = out.fallback {

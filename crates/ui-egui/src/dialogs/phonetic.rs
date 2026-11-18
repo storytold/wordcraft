@@ -47,8 +47,6 @@ impl PhoneticForm {
         let v = wordcraft_engine::cmd::phonetic::state(&app.session);
         let f = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
         let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        // Base and ruby text are usually Chinese or Japanese: fonts for them load from the next frame.
-        app.want_system_cjk = true;
         PhoneticForm {
             base: s("base"),
             ruby: s("ruby"),
@@ -71,7 +69,7 @@ impl WordForm for PhoneticForm {
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         Field::new(Label::from(tl!("Base text:"))).show(ui, |ui, _| {
-            Text::new(Label::from(self.base.as_str())).show(ui);
+            Text::new(Label::from(self.base.clone())).show(ui);
         });
         Field::new(Label::from(tl!("Ruby text:"))).show(ui, |ui, _| {
             TextField::new(Label::from(tl!("Ruby text:")), Bind::bound(&mut self.ruby)).show(ui);
