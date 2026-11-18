@@ -196,21 +196,7 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
                         out.push(para_block(p));
                     }
                 } else if let (Some(Block::Table(ta)), Some(Block::Table(tb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
-                    if ta == tb {
-                        if let Some(x) = b {
-                            out.push(x.clone());
-                        }
-                    } else if depth < wordcraft_doc::table::MAX_TABLE_DEPTH && same_table_cells(ta, tb) {
-                        out.push(Arc::new(Block::Table(diff_table(doc, ta, tb, ctx, depth))));
-                    } else {
-                        if let Some(x) = a {
-                            out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del), depth)));
-                        }
-                        if let Some(x) = b {
-                            out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins), depth)));
-                        }
-                        ctx.changes = ctx.changes.saturating_add(1);
-                    }
+                    diff_matched_table(doc, (a, ta), (b, tb), ctx, depth, &mut out);
                 } else if let Some(x) = b.or(a) {
                     out.push(x.clone());
                 }
@@ -230,10 +216,10 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
                         (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(doc, pa, pb, ctx))),
                         _ => {
                             if let Some(x) = a {
-                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del), depth)));
+                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del))));
                             }
                             if let Some(x) = b {
-                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins), depth)));
+                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins))));
                             }
                         }
                     }
@@ -249,17 +235,108 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
     out
 }
 
-/// Whether two tables have matching row counts, cell counts, spans and vertical merges so their
-/// cells can be diffed 1-to-1 without losing structural layout changes.
-fn same_table_cells(a: &wordcraft_doc::table::Table, b: &wordcraft_doc::table::Table) -> bool {
-    a.rows.len() == b.rows.len()
+/// Emit a matched (`Op::Same`) table pair into `out`, recursing cell by cell when compatible or
+/// falling back to tracked whole-table deletion and insertion.
+fn diff_matched_table(
+    doc: &mut Document,
+    (a, ta): (Option<&Arc<Block>>, &wordcraft_doc::table::Table),
+    (b, tb): (Option<&Arc<Block>>, &wordcraft_doc::table::Table),
+    ctx: &mut DiffCtx<'_>,
+    depth: usize,
+    out: &mut Vec<Arc<Block>>,
+) {
+    if ta == tb {
+        if let Some(x) = b {
+            out.push(x.clone());
+        }
+    } else if depth < wordcraft_doc::table::MAX_TABLE_DEPTH && same_table_cells(ta, tb, ctx) {
+        out.push(Arc::new(Block::Table(diff_table(doc, ta, tb, ctx, depth))));
+    } else {
+        if let Some(x) = a {
+            out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del))));
+        }
+        if let Some(x) = b {
+            out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins))));
+        }
+        ctx.changes = ctx.changes.saturating_add(1);
+    }
+}
+
+/// Whether two tables have compatible grid widths, content controls, row counts, cell counts,
+/// spans and vertical merges so their properties and cells can be diffed 1-to-1 without losing
+/// untrackable layout changes.
+fn same_table_cells(a: &wordcraft_doc::table::Table, b: &wordcraft_doc::table::Table, ctx: &DiffCtx<'_>) -> bool {
+    let track_fmt = ctx.opts.formatting && !ctx.plain_revised;
+    (!track_fmt || a.grid == b.grid)
+        && a.controls == b.controls
+        && a.rows.len() == b.rows.len()
         && a.rows.iter().zip(&b.rows).all(|(ra, rb)| {
-            ra.cells.len() == rb.cells.len()
-                && ra.cells.iter().zip(&rb.cells).all(|(ca, cb)| ca.span() == cb.span() && ca.props.vmerge == cb.props.vmerge)
+            ra.controls == rb.controls
+                && ra.props.grid_before == rb.props.grid_before
+                && ra.props.grid_after == rb.props.grid_after
+                && ra.cells.len() == rb.cells.len()
+                && ra
+                    .cells
+                    .iter()
+                    .zip(&rb.cells)
+                    .all(|(ca, cb)| ca.controls == cb.controls && ca.span() == cb.span() && ca.props.vmerge == cb.props.vmerge)
         })
 }
 
-/// Diff two tables with matching cell counts cell by cell, tracking cell content and picture edits.
+/// Strip revision bookkeeping from table properties for formatting comparison.
+fn strip_table_props(t: &wordcraft_doc::props::TableProps) -> wordcraft_doc::props::TableProps {
+    wordcraft_doc::props::TableProps { fmt_change: None, ..t.clone() }
+}
+
+/// Strip revision bookkeeping from row properties (and any nested row table-property exceptions).
+fn strip_row_props(r: &wordcraft_doc::props::RowProps) -> wordcraft_doc::props::RowProps {
+    wordcraft_doc::props::RowProps { fmt_change: None, exceptions: r.exceptions.as_deref().map(|e| Box::new(strip_table_props(e))), ..r.clone() }
+}
+
+/// Strip revision bookkeeping and structural merge fields from cell properties.
+fn strip_cell_props(c: &wordcraft_doc::props::CellProps) -> wordcraft_doc::props::CellProps {
+    wordcraft_doc::props::CellProps { fmt_change: None, span: 0, vmerge: wordcraft_doc::props::VMerge::None, ..c.clone() }
+}
+
+/// Build a formatting [`wordcraft_doc::props::PropChange`] when formatting tracking is active and
+/// `old` differs from `new`.
+fn fmt_prop_change<T: PartialEq>(doc: &mut Document, ctx: &DiffCtx<'_>, old: T, new: &T) -> Option<Box<wordcraft_doc::props::PropChange<T>>> {
+    if !ctx.opts.formatting || ctx.plain_revised || old == *new {
+        return None;
+    }
+    let fmt_rev = format_revision(doc, ctx.author, ctx.date);
+    wordcraft_doc::props::PropChange::boxed(fmt_rev, old)
+}
+
+/// Like [`fmt_prop_change`], also counting a container-level formatting change in `ctx.changes`.
+fn record_prop_change<T: PartialEq>(doc: &mut Document, ctx: &mut DiffCtx<'_>, old: T, new: &T) -> Option<Box<wordcraft_doc::props::PropChange<T>>> {
+    let ch = fmt_prop_change(doc, ctx, old, new);
+    if ch.is_some() {
+        ctx.changes = ctx.changes.saturating_add(1);
+    }
+    ch
+}
+
+/// Record a cell-property change when formatting tracking is active or the cell's background
+/// picture changed (`#6086`), so replaced cell media stays rejectable even with `formatting: false`.
+fn record_cell_change(
+    doc: &mut Document,
+    ctx: &mut DiffCtx<'_>,
+    ca: &wordcraft_doc::props::CellProps,
+    cb: &wordcraft_doc::props::CellProps,
+) -> Option<Box<wordcraft_doc::props::PropChange<wordcraft_doc::props::CellProps>>> {
+    let old = strip_cell_props(ca);
+    let new = strip_cell_props(cb);
+    if ctx.plain_revised || (!ctx.opts.formatting && ca.picture == cb.picture) || old == new {
+        return None;
+    }
+    let fmt_rev = format_revision(doc, ctx.author, ctx.date);
+    ctx.changes = ctx.changes.saturating_add(1);
+    wordcraft_doc::props::PropChange::boxed(fmt_rev, old)
+}
+
+/// Diff two compatible tables cell by cell, tracking table, row, and cell property differences
+/// alongside cell content edits.
 fn diff_table(
     doc: &mut Document,
     a: &wordcraft_doc::table::Table,
@@ -268,15 +345,14 @@ fn diff_table(
     depth: usize,
 ) -> wordcraft_doc::table::Table {
     let mut t = b.clone();
+    t.props = strip_table_props(&t.props);
+    t.props.fmt_change = record_prop_change(doc, ctx, strip_table_props(&a.props), &t.props);
     for (ra, rb) in a.rows.iter().zip(&mut t.rows) {
+        rb.props = strip_row_props(&rb.props);
+        rb.props.fmt_change = record_prop_change(doc, ctx, strip_row_props(&ra.props), &rb.props);
         for (ca, cb) in ra.cells.iter().zip(&mut rb.cells) {
-            if ca.props.picture != cb.props.picture {
-                let fmt_rev = format_revision(doc, ctx.author, ctx.date);
-                let old =
-                    wordcraft_doc::props::CellProps { fmt_change: None, span: 0, vmerge: wordcraft_doc::props::VMerge::None, ..ca.props.clone() };
-                cb.props.fmt_change = wordcraft_doc::props::PropChange::boxed(fmt_rev, old);
-                ctx.changes = ctx.changes.saturating_add(1);
-            }
+            cb.props.fmt_change = None;
+            cb.props.fmt_change = record_cell_change(doc, ctx, &ca.props, &cb.props);
             if ca.blocks != cb.blocks {
                 cb.blocks = diff_blocks(doc, &ca.blocks, &cb.blocks, ctx, depth + 1);
                 if cb.blocks.is_empty() {
@@ -402,26 +478,27 @@ fn block_text(b: &Block, depth: usize) -> String {
     }
 }
 
-/// Returns a copy of `b` with all text runs and paragraph marks (or nested table cells) updated by `f`.
-fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
-    match b {
-        Block::Para(p) => {
-            let mut p = p.clone();
-            let len = p.len();
-            let _ = p.format(0, len, f);
-            f(&mut p.mark);
-            Block::Para(p)
-        }
-        Block::Table(t) => {
-            let mut t = t.clone();
-            if depth < wordcraft_doc::table::MAX_TABLE_DEPTH {
+/// Returns a copy of `b` with all text runs and paragraph marks across all nested table cells
+/// updated by `f` iteratively, without recursion or depth truncation.
+fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps)) -> Block {
+    let mut out = b.clone();
+    let mut todo = vec![&mut out];
+    while let Some(blk) = todo.pop() {
+        match blk {
+            Block::Para(p) => {
+                let len = p.len();
+                let _ = p.format(0, len, f);
+                f(&mut p.mark);
+                p.touch();
+            }
+            Block::Table(t) => {
                 for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
-                    c.blocks = c.blocks.iter().map(|x| Arc::new(mark_block(x, f, depth + 1))).collect();
+                    todo.extend(c.blocks.iter_mut().map(Arc::make_mut));
                 }
             }
-            Block::Table(t)
         }
     }
+    out
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -770,7 +847,7 @@ fn para_exceeds_char_limit(p: &Paragraph, limit: usize) -> bool {
 /// to `ctx.opts.characters`. When character-level diff is requested but either paragraph exceeds
 /// [`MAX_CHAR_DIFF`] characters, falls back to word-level diff and increments `ctx.char_fallbacks`
 /// so callers can discover the fallback.
-fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>) -> Paragraph {
+fn word_diff(doc: &mut Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>) -> Paragraph {
     let chars = if ctx.opts.characters {
         if para_exceeds_char_limit(a, MAX_CHAR_DIFF) || para_exceeds_char_limit(b, MAX_CHAR_DIFF) {
             *ctx.char_fallbacks = ctx.char_fallbacks.saturating_add(1);
@@ -784,11 +861,14 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     let plain_revised = ctx.plain_revised;
     let (ta, tb) = (tokens(a, chars), tokens(b, chars));
     let (mut a_props, mut b_props) = (SideProps::new(a), SideProps::new(b));
-    let key = |t: &Tok<'_>| match t {
-        Tok::Text(t, _) => Key::Text(ctx.opts.key(t)),
-        Tok::Obj(o, _) => obj_key(doc, o),
+    let (ka, kb): (Vec<_>, Vec<_>) = {
+        let key = |t: &Tok<'_>| match t {
+            Tok::Text(t, _) => Key::Text(ctx.opts.key(t)),
+            Tok::Obj(o, _) => obj_key(doc, o),
+        };
+        (ta.iter().map(&key).collect(), tb.iter().map(&key).collect())
     };
-    let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), ctx.budget);
+    let ops = lcs_ops(&ka, &kb, ctx.budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
     // but a matched single character very often does (digits, punctuation), so only there does
     // a short interior match need folding back into its surrounding edit.
@@ -800,6 +880,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     // revised side, which carries no paragraph properties of its own, falls back to the original's,
     // stripped the same way, so pre-existing revision state never leaks into the rebuilt paragraph.
     p.props = if plain_revised && b.props.is_empty() { a.props.formatting() } else { b.props.formatting() };
+    p.props.fmt_change = fmt_prop_change(doc, ctx, a.props.formatting(), &p.props);
     // The paragraph mark (the formatting typing into the paragraph's end would get) is the revised
     // paragraph's when it comes from a document, and the original's when the revised side is plain
     // text and has no mark of its own. Its own revision bookkeeping (`ins`, `del`, `fmt_change`)
@@ -809,6 +890,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     } else {
         CharProps { ins: None, del: None, fmt_change: None, ..b.mark.clone() }
     };
+    p.mark.fmt_change = fmt_prop_change(doc, ctx, a.mark.formatting(), &p.mark.formatting());
     let fallback = a.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
     let fallback_b = b.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
     let (mut i, mut j) = (0, 0);
@@ -818,10 +900,18 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
                 // Equal as compared (perhaps up to case or spacing): the revised text, but the
                 // formatting of the run it stands for. For a document revised side that is the
                 // revised run, as issue #3749 prescribes ("Copy unchanged tokens from the revised
-                // paragraph with their own properties"); a plain-text revised side has no runs to
-                // speak of, so the original run's formatting is kept instead.
-                let props =
-                    if plain_revised { output_props(&mut a_props, ta.get(i), &fallback) } else { output_props(&mut b_props, tb.get(j), &fallback_b) };
+                // paragraph with their own properties"), recording a formatting revision when
+                // `ctx.opts.formatting` is enabled so Reject All restores the original formatting;
+                // a plain-text revised side has no runs to speak of, so the original run's
+                // formatting is kept instead.
+                let old_props = output_props(&mut a_props, ta.get(i), &fallback);
+                let props = if plain_revised {
+                    old_props
+                } else {
+                    let mut p_b = output_props(&mut b_props, tb.get(j), &fallback_b);
+                    p_b.fmt_change = fmt_prop_change(doc, ctx, old_props.formatting(), &p_b.formatting());
+                    p_b
+                };
                 put(&mut p, tb.get(j), &props);
                 i += 1;
                 j += 1;
