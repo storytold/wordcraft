@@ -170,7 +170,7 @@ fn programmatic_close_guard_covers_every_form() {
 fn programmatic_close_keeps_a_save_the_picker_hasnt_finished() {
     let ctx = egui::Context::default();
     for (method, params) in [("engine.execute", json!({"command": "file.close"})), ("file.close", json!({})), ("app.quit", json!({}))] {
-        let (mut a, saves, _last) = web_picker_app();
+        let (mut a, saves) = web_picker_app();
         a.run("file.close", json!({})).unwrap();
         let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
         assert_eq!(r["pending"], "save", "{r}");
@@ -287,7 +287,8 @@ fn control_keyboard_reaches_the_background_document_once() {
     let mut a = app();
     a.run("document.setText", json!({"text": "Seed"})).unwrap();
     let mut h = harness(a);
-    h.state_mut().canvas.focus_page(&h.ctx.clone());
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
     frames(&mut h, 4);
     h.state_mut().run("select.all", json!({})).unwrap();
     send(&mut h, "ui.type", json!({"text": "Written"}));

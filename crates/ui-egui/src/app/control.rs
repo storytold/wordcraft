@@ -1,3 +1,4 @@
+use craft::automation::control::ControlChannel;
 use craft::automation::screenshot::DocumentId;
 use craft::ui::runtime::motion::now;
 use craft::ui::runtime::windows::WindowHost;
@@ -6,6 +7,12 @@ use super::WordApp;
 use crate::control;
 
 impl WordApp {
+    /// Answers the requests that arrive on `channel`: the control server's, or an example's or a test's own.
+    pub fn with_control(mut self, channel: ControlChannel) -> Self {
+        self.control = Some(channel);
+        self
+    }
+
     /// The active document as a screenshot sees it: its generation changes on every switch.
     fn capture_document(&self) -> Option<DocumentId> {
         Some(DocumentId::new(self.session.document_id(), self.session.rev()))
