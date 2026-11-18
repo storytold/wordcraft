@@ -871,6 +871,7 @@ fn citation_source_lookups_keep_first_duplicates_case_and_style_order() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn citation_refresh_source_lookup_work_scales_with_document_size() {
     fn doc(n: usize) -> Session {
         let mut p = Paragraph::new();
