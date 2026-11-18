@@ -16,7 +16,11 @@ pub static CRAFT_FONTS: &[EmbeddedFace] = include!(concat!(env!("OUT_DIR"), "/cr
 pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
     let codes: Vec<&str> = Lang::all().map(Lang::code).collect();
     let os_locale = wordcraft_engine::system_locale();
-    let fonts = UiFonts::new(&I18nScripts).craft_faces(CRAFT_FONTS).languages(&codes).ui_language(lang.code()).os_locale(os_locale);
+    let fonts = UiFonts::new(&I18nScripts).craft_faces(CRAFT_FONTS).languages(&codes).ui_language(lang.code());
+    let fonts = match os_locale {
+        Some(locale) => fonts.os_locale(locale),
+        None => fonts,
+    };
     #[cfg(not(target_arch = "wasm32"))]
     let fonts = fonts.on_demand(Arc::new(SystemCandidates));
     fonts
