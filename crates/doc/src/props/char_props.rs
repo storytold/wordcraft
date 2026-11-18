@@ -568,19 +568,25 @@ impl CharProps {
     /// The fields of `self` that differ from `base` (equal ones unset): what `self` adds when
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
+        let font = self.font.clone();
         self.minus_text_style(base);
-        self.minus_latin_theme(base);
+        self.minus_latin_theme(base, font);
         self.minus_run_visibility(base);
         self.minus_script_style(base);
         self.minus_document_marks(base);
         self
     }
 
-    fn minus_latin_theme(&mut self, base: &CharProps) {
+    fn minus_latin_theme(&mut self, base: &CharProps, font: Option<String>) {
         // A slot stays with a font that stays: overlaid alone, the font would clear the base's
         // slots (`overlay_latin_theme`), so dropping a slot equal to the base's would lose it.
         let keep = (self.font_ascii_theme, self.font_hansi_theme);
         drop_same_fields!(self, base; font_ascii_theme, font_hansi_theme);
+        // And a font equal to the base's stays when its slots differ (a chosen font clears
+        // them): without it the patch's `None` slots would inherit the base's again.
+        if self.font.is_none() && font.is_some() && keep != (base.font_ascii_theme, base.font_hansi_theme) {
+            self.font = font;
+        }
         if self.font.is_some() {
             (self.font_ascii_theme, self.font_hansi_theme) = keep;
         }
@@ -598,7 +604,15 @@ impl CharProps {
     fn minus_script_style(&mut self, base: &CharProps) {
         // As for the Latin slots: a slot stays while its named font does.
         let keep = (self.font_ea_theme, self.font_cs_theme);
+        let (ea, cs) = (self.font_ea.clone(), self.font_cs.clone());
         drop_same_fields!(self, base; cs, font_cs, font_ea, font_ea_theme, font_cs_theme, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        // A font equal to the base's stays when its slot differs, as for the Latin slots.
+        if self.font_ea.is_none() && keep.0 != base.font_ea_theme {
+            self.font_ea = ea;
+        }
+        if self.font_cs.is_none() && keep.1 != base.font_cs_theme {
+            self.font_cs = cs;
+        }
         if self.font_ea.is_some() {
             self.font_ea_theme = keep.0;
         }
@@ -627,12 +641,13 @@ impl CharProps {
     }
 
     fn overlay_latin_theme(&mut self, patch: &CharProps) {
-        // A font set without its theme slots replaces the slots too (as for `font_ea_theme`).
-        if patch.font.is_some() && patch.font_ascii_theme.is_none() && patch.font_hansi_theme.is_none() {
-            self.font_ascii_theme = None;
-            self.font_hansi_theme = None;
+        // A font set replaces both slots with its own, `None` included (as for `font_ea_theme`):
+        // a slot left from the base would name another font, and Word reads it over `font`.
+        if patch.font.is_some() {
+            (self.font_ascii_theme, self.font_hansi_theme) = (patch.font_ascii_theme, patch.font_hansi_theme);
+        } else {
+            overlay_fields!(self, patch; font_ascii_theme, font_hansi_theme);
         }
-        overlay_fields!(self, patch; font_ascii_theme, font_hansi_theme);
     }
 
     fn overlay_text_style(&mut self, patch: &CharProps) {

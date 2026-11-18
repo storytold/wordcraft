@@ -77,6 +77,41 @@ mod tests {
         assert_eq!(base.font_ea_theme, None);
     }
 
+    /// A run that names its base's font but none of its slots (a font chosen in place of the
+    /// theme's) keeps that font in the patch, so overlaying it clears the slots again.
+    #[test]
+    fn minus_keeps_a_same_font_that_clears_its_slots() {
+        let s = |v: &str| Some(v.to_string());
+        let base = CharProps {
+            font: s("Aptos"),
+            font_ascii_theme: Some(ThemeFont::MinorHAnsi),
+            font_hansi_theme: Some(ThemeFont::MinorHAnsi),
+            font_ea: s("SimSun"),
+            font_ea_theme: Some(ThemeFont::MinorEastAsia),
+            font_cs: s("Arial"),
+            font_cs_theme: Some(ThemeFont::MinorBidi),
+            ..Default::default()
+        };
+        let run = CharProps { font_ascii_theme: None, font_hansi_theme: None, font_ea_theme: None, font_cs_theme: None, ..base.clone() };
+        let mut back = base.clone();
+        back.overlay(&run.clone().minus(&base));
+        assert_eq!(back, run);
+    }
+
+    /// A named font with only one of its Latin slots replaces the other slot too: the base's
+    /// would name another font.
+    #[test]
+    fn a_font_with_one_latin_slot_replaces_both() {
+        let mut base = CharProps {
+            font: Some("Verdana".into()),
+            font_ascii_theme: Some(ThemeFont::MinorHAnsi),
+            font_hansi_theme: Some(ThemeFont::MinorHAnsi),
+            ..Default::default()
+        };
+        base.overlay(&CharProps { font: Some("Georgia".into()), font_ascii_theme: Some(ThemeFont::MajorAscii), ..Default::default() });
+        assert_eq!((base.font_ascii_theme, base.font_hansi_theme), (Some(ThemeFont::MajorAscii), None));
+    }
+
     #[test]
     fn rgb_hex() {
         assert_eq!(Rgb(255, 0, 16).hex(), "FF0010");

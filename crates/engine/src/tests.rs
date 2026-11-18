@@ -13870,7 +13870,8 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
 /// `w:cstheme`), as the DOCX reader keeps them.
 fn themed_session(styles: &str) -> Session {
     use wordcraft_doc::props::ThemeFont;
-    let run = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:eastAsia="SimSun" w:cs="Arial"/></w:rPr><w:t>Themed text</w:t></w:r></w:p>"#;
+    let run =
+        r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:eastAsia="SimSun" w:cs="Arial"/></w:rPr><w:t>Themed text</w:t></w:r></w:p>"#;
     let mut doc = wordcraft_docx::read(&docx_with_styles(run, styles)).unwrap();
     let Some(wordcraft_doc::Block::Para(p)) = doc.body.get_mut(0).map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
     let c = &mut p.runs[0].props;
