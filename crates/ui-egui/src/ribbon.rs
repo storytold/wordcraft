@@ -35,6 +35,7 @@ use charts::{chart_design, smart_art_design};
 pub(crate) use common::mi;
 #[cfg(test)]
 pub(crate) use common::size_menu;
+pub(crate) use common::weight_menu;
 use common::{custom_groups, edge_cue};
 use design::design;
 #[cfg(test)]
