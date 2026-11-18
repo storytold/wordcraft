@@ -196,7 +196,8 @@ impl WordApp {
         }
         let (answer, all) = match result {
             DialogResult::Ok(a) => (a.answer, a.apply_to_all),
-            DialogResult::Cancel => (CloseAnswer::Cancel, false),
+            // Cancel, and any way of ending the prompt the framework adds: nothing is decided.
+            _ => (CloseAnswer::Cancel, false),
         };
         if let Err(e) = self.apply_close_answer(answer, all) {
             self.status(e);
@@ -314,12 +315,12 @@ impl WordApp {
     pub(crate) fn settle_saves(&mut self) {
         let tickets: Vec<PickId> = self.saves_in_flight.iter().map(|s| s.ticket).collect();
         for ticket in tickets {
-            // PLAN: assumed `WordApp::host` with `files()` giving `take_answer(PickId) -> Option<Picked>`
             let Some(picked) = self.host.files().take_answer(ticket) else { continue };
             let Some(i) = self.saves_in_flight.iter().position(|s| s.ticket == ticket) else { continue };
             let save = self.saves_in_flight.swap_remove(i);
             let current = self.session.document_id();
-            if matches!(picked, Picked::Paths(_)) {
+            // A download the browser accepted is a finished save too: the page holds no file of it.
+            if matches!(picked, Picked::Paths(_) | Picked::Downloaded(_)) {
                 log::info!("saved {} through the save picker", save.name);
             } else if save.marked_saved && save.document == current {
                 self.session.dirty = true;
@@ -347,16 +348,17 @@ impl WordApp {
             }
             let result = match picked {
                 // Only when nothing changed since and no later save of it is still unconfirmed.
-                Picked::Paths(_) if !self.session.dirty && self.session.rev() == save.rev && !self.save_unconfirmed() => {
+                Picked::Paths(_) | Picked::Downloaded(_) if !self.session.dirty && self.session.rev() == save.rev && !self.save_unconfirmed() => {
                     let step = self.with_guard(|g| g.saved());
                     self.drive_guard(step, None)
                 }
                 // Edited while the picker was open (those edits may not be written yet): ask again.
-                Picked::Paths(_) => {
+                Picked::Paths(_) | Picked::Downloaded(_) => {
                     let step = self.with_guard(|g| g.retry_after_failure());
                     self.drive_guard(step, None)
                 }
-                Picked::Cancelled => {
+                // No picker could be shown, or the answer is not one a save gets: nothing was written.
+                Picked::Cancelled | Picked::Unavailable(_) | Picked::Contents(_) => {
                     let name = self.prompt_name();
                     let message = i18n::fmt(tl!("Saving {name} was cancelled, so it is still open and nothing was lost."), &[("name", &name)]);
                     self.prompt_again(message);
