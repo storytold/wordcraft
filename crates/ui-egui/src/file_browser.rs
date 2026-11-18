@@ -144,6 +144,8 @@ pub(crate) struct FileBrowser {
     listing: Result<Listing, String>,
     /// The highlighted entry.
     selected: Option<PathBuf>,
+    /// The highlighted entry was a folder when it was selected.
+    selected_is_dir: bool,
     note: Note,
     focus_name: bool,
 }
@@ -182,6 +184,7 @@ impl FileBrowser {
             exports,
             listing: Ok(Listing::default()),
             selected: None,
+            selected_is_dir: false,
             note: Note::None,
             focus_name: true,
         };
@@ -199,6 +202,7 @@ impl FileBrowser {
         self.location = dir.to_string_lossy().into_owned();
         self.dir = dir;
         self.selected = None;
+        self.selected_is_dir = false;
         self.note = Note::None;
     }
 
@@ -222,11 +226,13 @@ impl FileBrowser {
     /// pick. Save adds the chosen type's extension to a name without one (an export replaces a
     /// known document extension with the type's) and asks once more before replacing a file; Open wants a file that exists.
     pub(crate) fn accept(&mut self) -> Step {
-        if let Some(dir) = self.selected.take().filter(|p| p.is_dir()) {
+        if let Some(dir) = self.selected.clone().filter(|p| p.is_dir()) {
             self.navigate(dir);
             return Step::Stay;
         }
-        let Some(mut path) = resolve(&self.dir, &self.name) else { return Step::Stay };
+        // A removed folder remains a folder selection, not a proposed file name.
+        let selected_file = self.selected.clone().filter(|_| !self.selected_is_dir);
+        let Some(mut path) = selected_file.or_else(|| resolve(&self.dir, &self.name)) else { return Step::Stay };
         if path.is_dir() {
             self.name.clear();
             self.navigate(path);
@@ -262,6 +268,7 @@ impl FileBrowser {
     /// A click on an entry: highlight it, and a file's name goes into the file name field.
     fn select(&mut self, e: &Entry) {
         self.selected = Some(e.path.clone());
+        self.selected_is_dir = e.dir;
         if !e.dir {
             self.name = e.name.clone();
         }
@@ -419,6 +426,9 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
                 }
                 for e in entries.get(range).unwrap_or(&[]) {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), b.selected.as_ref() == Some(&e.path), &e.name)
+                    });
                     if b.selected.as_ref() == Some(&e.path) {
                         ui.painter().rect_filled(r, 2.0, t.checked);
                     } else if resp.hovered() {
@@ -487,6 +497,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         }
         if r.changed() {
             b.selected = None;
+            b.selected_is_dir = false;
             b.note = Note::None;
         }
         let before = b.filter;
@@ -596,6 +607,74 @@ mod tests {
         b.name = "old".into();
         assert_eq!(b.accept(), Step::Stay, "asks before replacing");
         assert_eq!(b.accept(), Step::Pick(dir.join("drafts").join("old.docx")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A selected file keeps its exact name for Open and both steps of Save's replacement check.
+    #[test]
+    fn selecting_a_file_preserves_leading_spaces() {
+        let dir = scratch("selected-path");
+        let selected = dir.join(" report.docx");
+        let sibling = dir.join("report.docx");
+        std::fs::write(&selected, b"selected original").unwrap();
+        std::fs::write(&sibling, b"sibling original").unwrap();
+        for save in [false, true] {
+            let req = if save {
+                FileDialogRequest::Save { name: "Draft.docx".into(), dir: None }
+            } else {
+                FileDialogRequest::Open { purpose: "document".into() }
+            };
+            let mut browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+            let entry = browser.listing.as_ref().unwrap().entries.iter().find(|entry| entry.path == selected).unwrap().clone();
+            browser.select(&entry);
+            if save {
+                assert_eq!(browser.accept(), Step::Stay, "Save still asks before replacing the selected file");
+                assert_eq!(browser.note, Note::Replace(selected.clone()));
+            }
+            assert_eq!(browser.accept(), Step::Pick(selected.clone()));
+            assert_eq!(std::fs::read(&selected).unwrap(), b"selected original");
+            assert_eq!(std::fs::read(&sibling).unwrap(), b"sibling original");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder selection keeps its kind even if the folder disappears before Save.
+    #[test]
+    fn a_selected_folder_never_replaces_the_typed_save_name() {
+        for removed in [false, true] {
+            let dir = scratch(if removed { "selected-folder-removed" } else { "selected-folder-live" });
+            let folder = dir.join("Drafts");
+            std::fs::create_dir(&folder).unwrap();
+            let req = FileDialogRequest::Save { name: "chapter.docx".into(), dir: None };
+            let mut browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+            let entry = browser.listing.as_ref().unwrap().entries.iter().find(|entry| entry.path == folder).unwrap().clone();
+            browser.select(&entry);
+            assert_eq!(browser.name, "chapter.docx");
+            if removed {
+                std::fs::remove_dir(&folder).unwrap();
+                assert_eq!(browser.accept(), Step::Pick(dir.join("chapter.docx")));
+                assert!(!dir.join("Drafts.docx").exists());
+            } else {
+                assert_eq!(browser.accept(), Step::Stay);
+                assert_eq!(browser.dir, folder);
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A selected file still names the exact Save target after external deletion.
+    #[test]
+    fn a_removed_selected_file_keeps_its_exact_save_path() {
+        let dir = scratch("removed-selected-file");
+        let selected = dir.join(" report.docx");
+        std::fs::write(&selected, b"original").unwrap();
+        let req = FileDialogRequest::Save { name: "Draft.docx".into(), dir: None };
+        let mut browser = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        let entry = browser.listing.as_ref().unwrap().entries.iter().find(|entry| entry.path == selected).unwrap().clone();
+        browser.select(&entry);
+        std::fs::remove_file(&selected).unwrap();
+        assert_eq!(browser.accept(), Step::Pick(selected));
+        assert_eq!(browser.note, Note::None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -763,6 +842,54 @@ mod tests {
             false,
         );
         assert!(crate::keytips::suppressed(&a, &ctx));
+    }
+
+    /// Drawn entries have names and selection state, and choosing one still picks its path.
+    #[test]
+    fn entries_expose_names_selection_and_picking() {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let dir = scratch("entry_accessibility");
+        let folder = dir.join("Drafts");
+        let file = dir.join("chapter.docx");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(&file, b"x").unwrap();
+        let browser =
+            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        // Font changes take effect next frame; the buttons need the named semibold family.
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(760.0, 520.0)).build_ui_state(
+            move |ui, state: &mut (FileBrowser, Option<Option<PathBuf>>)| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                if let Some(picked) = body(ui, &mut state.0, &t) {
+                    state.1 = Some(picked);
+                }
+            },
+            (browser, None),
+        );
+        h.run_steps(4);
+        for name in ["Drafts", "chapter.docx"] {
+            assert_eq!(h.get_by_role_and_label(Role::Button, name).accesskit_node().toggled(), Some(Toggled::False));
+        }
+        h.get_by_role_and_label(Role::Button, "Drafts").click();
+        h.run_steps(2);
+        assert_eq!(h.state().0.selected.as_ref(), Some(&folder));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Drafts").accesskit_node().toggled(), Some(Toggled::True));
+        h.get_by_role_and_label(Role::Button, "chapter.docx").click();
+        h.run_steps(2);
+        assert_eq!(h.state().0.selected.as_ref(), Some(&file));
+        assert_eq!(h.state().0.name, "chapter.docx");
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Drafts").accesskit_node().toggled(), Some(Toggled::False));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "chapter.docx").accesskit_node().toggled(), Some(Toggled::True));
+        h.get_by_role_and_label(Role::Button, "Open").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1, Some(Some(file)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// #3535: exporting offers File › Export's formats as the types; the chosen one is the format,
