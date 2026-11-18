@@ -346,7 +346,7 @@ fn save_as_starts_in_the_folder_of_the_open_file() {
     let (mut fresh, shown) = async_app();
     typed(&mut fresh);
     fresh.save_as_dialog();
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Document1.docx".into(), dir: None });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: format!("{UNSAVED}.docx"), dir: None });
     answer(&shown, None);
     let _ = std::fs::remove_dir_all(&dir);
 }
