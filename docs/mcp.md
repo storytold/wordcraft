@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-11-14 · Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+> **Last updated:** 2026-11-17 · The protocol core is the shared `craft-mcp-server` crate (#778); `click` and `key` list every argument they accept. Earlier: Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -35,6 +35,17 @@ unknown outcome. Unreadable replies are reported as errors without replaying the
 On stdio, an invalid UTF-8 request line returns JSON-RPC parse error `-32700`. It never reaches
 the backend, and the server continues with the next line instead of substituting characters
 in text or paths.
+
+The protocol core (framing, lifecycle, `tools/*`, `resources/*`) is the shared `craft-mcp-server`
+crate; WordCraft supplies the tools, resources and instructions. What that means for a client:
+
+- A request line over 1 MiB gets `-32600` "request too large" and the server keeps serving.
+- A JSON-RPC batch holds at most 1000 messages; a larger one gets `-32600` "batch too large".
+- A `tools/call` whose arguments do not match the tool's schema (a missing required argument, an
+  argument the tool does not list, or one of the wrong type) or that names an unknown tool returns
+  a tool result with `isError: true` naming the problem, not a JSON-RPC error.
+- `resources/read` with no `uri` is `-32002` (unknown resource), like any unknown `uri`.
+- `initialize` reports `listChanged: false` for tools and resources; `prompts/list` is empty.
 
 ## Scripts from the command line
 
