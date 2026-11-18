@@ -9707,8 +9707,8 @@ fn a_footnote_beneath_the_text_stays_under_it_when_it_continues() {
             .fold(0.0f32, f32::max);
         gaps.push(pieces[0].3 - body_bottom);
     }
-    let first = gaps[0];
-    assert!(gaps.iter().all(|g| (g - first).abs() < 0.05), "the note starts the same distance under the text: {gaps:?}");
+    // Under the last line by the default separator's height, whatever the body's length.
+    assert!(gaps.iter().all(|g| (g - crate::notes::NOTE_SEP).abs() < 0.05), "the note starts the separator's height under the text: {gaps:?}");
 }
 
 #[test]
