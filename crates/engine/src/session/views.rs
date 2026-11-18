@@ -135,12 +135,14 @@ impl Session {
         let current = document_id == self.document_id && rev == self.rev;
         self.sel = sel;
         self.view = view;
-        self.view.read_page_color = self.prefs.read_page_color;
+        self.view.follow_prefs(&self.prefs);
         self.pending = pending;
         self.goal_x = goal_x;
         self.page_hint = page_hint;
         self.column_mode = column_mode;
         self.math = math;
+        // A picked Drawing Canvas member (#2637) is not part of a view's saved selection.
+        self.member = None;
         if current {
             self.hf_return = hf_return;
             self.typing_open = typing_open;

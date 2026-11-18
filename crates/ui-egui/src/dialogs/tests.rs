@@ -3,6 +3,19 @@ use wordcraft_doc::Pos;
 use wordcraft_doc::props::Align;
 use wordcraft_engine::Session;
 
+/// Paste Special lists and pastes the same formats the engine chose: the clipboard ownership
+/// result must survive into the dialog's payload, or another program's copy could be replaced
+/// by WordCraft's own fragment.
+#[test]
+fn paste_special_dialog_keeps_the_clipboard_ownership_result() {
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+    let d = Dialog::paste_special(&a, &json!({"text": "Bold", "privateClipboard": false}));
+    let Dialog::PasteSpecial { formats, payload, .. } = d else { panic!("not Paste Special") };
+    assert_eq!(formats, ["text"], "another program's copy isn't our fragment");
+    assert_eq!(payload.get("privateClipboard"), Some(&json!(false)));
+    assert_eq!(payload.get("text").and_then(Value::as_str), Some("Bold"));
+}
+
 /// #3931: hovering Insert › Table's grid asks the page for a preview of that table (rows by
 /// columns) and changes nothing; leaving the grid drops it; a click inserts the table with no
 /// preview left over for the page to show on top of it.
@@ -247,6 +260,28 @@ fn command_search_matches_every_word() {
     assert!(!command_matches(table, "insert chart"), "every word has to match");
     assert!(!command_matches(table, ""), "an empty box lists nothing");
     assert!(!command_matches(table, "   "));
+}
+
+/// #3398: the interactive command-search result opens the paper-colour selector. The engine
+/// command itself remains parameterised for scripts, agents and other programmatic callers.
+#[test]
+fn screen_paper_color_search_result_opens_general_options() {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_engine::cmd::view::PaperColor;
+
+    let mut app = app_with("Unchanged document");
+    app.dialog = Some(Dialog::Commands { query: "screen paper color".into(), swallow: false });
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Screen Paper Color"))
+        .expect("the paper-colour command is a search result")
+        .click();
+    h.run_steps(3);
+
+    assert!(h.state().ui.backstage);
+    assert_eq!(h.state().ui.backstage_page, "options");
+    assert_eq!(h.state().ui.options_pane, "general");
+    assert_eq!(h.state().session.prefs.paper_color, PaperColor::Document, "opening the selector does not choose a preset");
 }
 
 /// Ordinary Turkish queries must find dotted-I labels, while canonical English labels and
@@ -860,6 +895,88 @@ fn modify_style_font_box_finds_the_family() {
     assert_eq!(rc.font, wordcraft_doc::styles::HEADING_FONT);
 }
 
+/// #2786: Define New Bullet's Font… is this Font dialog, opened on the bullet's formatting. OK
+/// hands the font, size and bold back to Define New Bullet without formatting the text;
+/// Cancel, and the title bar's close box, go back with the form as it was.
+#[test]
+fn font_dialog_formats_a_bullet_and_hands_it_back() {
+    use crate::dialogs_bullet::DefineBulletForm;
+    use crate::dialogs_insert::InsertDialog;
+    use egui_kittest::kittest::Queryable;
+    let back = |button: &str| -> (DefineBulletForm, wordcraft_doc::props::CharProps) {
+        let mut app = app_with("Example");
+        let _ = app.run("para.bullets", json!({"kind": "▪"}));
+        let form = DefineBulletForm { font: "Arial".into(), ..DefineBulletForm::plain("▪") };
+        app.dialog = font_for_bullet(&mut app, form);
+        let Some(Dialog::Font { size, bold, bullet, .. }) = &mut app.dialog else { panic!("the Font dialog is open") };
+        assert!(bullet.is_some(), "it carries the form");
+        assert!(!*bold && size.is_empty(), "it shows the bullet's formatting, not the text's");
+        *size = "16".into();
+        *bold = true;
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                if fonts {
+                    show(app, &ctx);
+                } else {
+                    crate::theme::install_fonts_for(&ctx, false);
+                    fonts = true;
+                }
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label(button).click();
+        h.run_steps(3);
+        let app = h.state_mut();
+        let Some(Dialog::Insert(d)) = app.dialog.take() else { panic!("back to Define New Bullet") };
+        let InsertDialog::DefineBullet(f) = *d else { panic!("back to Define New Bullet") };
+        let text = app.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
+        (f, text)
+    };
+    let (f, text) = back("OK");
+    assert_eq!((f.ch.as_str(), f.font.as_str(), f.size.as_str(), f.bold), ("▪", "Arial", "16", true));
+    assert_ne!(text.bold, Some(true), "the text isn't formatted");
+    assert_ne!(text.size, Some(16.0), "the text isn't formatted");
+    for button in ["Cancel", "Close"] {
+        let (f, _) = back(button);
+        assert_eq!((f.font.as_str(), f.size.as_str(), f.bold), ("Arial", "", false), "{button} keeps the form");
+    }
+    // A bullet in the text's font (no font of its own) keeps it when OK doesn't change the
+    // font box, though the box shows the text's font (review of #2860).
+    let mut app = app_with("Example");
+    let _ = app.run("para.bullets", json!({"kind": "▪"}));
+    let Some(mut d) = font_for_bullet(&mut app, DefineBulletForm::plain("▪")) else { panic!("the Font dialog opens") };
+    if let Dialog::Font { font, .. } = &d {
+        assert!(!font.is_empty(), "the box shows the text's font");
+    }
+    if let Dialog::Font { bullet: Some(b), font, font_was, .. } = &mut d {
+        assert_eq!(font, font_was);
+        assert!(b.font.is_empty());
+    }
+    app.dialog = Some(d);
+    let mut fonts = false;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            if fonts {
+                show(app, &ctx);
+            } else {
+                crate::theme::install_fonts_for(&ctx, false);
+                fonts = true;
+            }
+        },
+        app,
+    );
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let Some(Dialog::Insert(d)) = h.state_mut().dialog.take() else { panic!("back to Define New Bullet") };
+    let InsertDialog::DefineBullet(f) = *d else { panic!("back to Define New Bullet") };
+    assert_eq!(f.font, "", "still the text's font");
+}
+
 /// A dialog was pinned by its anchor, so dragging its title bar did nothing (#732).
 #[test]
 fn dragging_a_dialog_title_bar_moves_it() {
@@ -983,6 +1100,145 @@ fn opened_paper(app: &mut WordApp) -> ((f32, f32), Option<&'static str>) {
     let Some(Dialog::PageSetup { paper, .. }) = Dialog::open("pageSetup", app) else { panic!("no page setup dialog") };
     let ppu = crate::options::unit().pt_per_unit();
     ((paper.0 * ppu, paper.1 * ppu), paper_entry(paper))
+}
+
+/// #5650: a long paste scrolls inside Page Setup's number boxes instead of enlarging the
+/// dialog, including after leaving the field and reopening the dialog.
+#[test]
+fn page_setup_number_fields_do_not_expand_after_paste() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    for label in ["Bottom:", "Top:", "Left:", "Right:", "Width:", "Height:", "Characters per line:", "Lines per page:"] {
+        let mut h = app_harness(app_with("Page"));
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        if let Some(Dialog::PageSetup { grid, .. }) = h.state_mut().dialog.as_mut() {
+            grid.0 = 2; // Enable both document-grid number boxes.
+        }
+        h.run_steps(3);
+        let width =
+            |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Page Setup")))).unwrap().width();
+        let before = width(&h);
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Paste("a".repeat(400)));
+        h.run_steps(3);
+        assert!(width(&h) <= before + 2.0, "{label}: pasted text grew the dialog from {before} to {}", width(&h));
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        assert!(width(&h) <= before + 2.0, "{label}: leaving the field kept a larger dialog");
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        assert!(width(&h) <= before + 2.0, "{label}: reopening kept a larger dialog");
+    }
+}
+
+/// A finite value can outgrow DragValue's unfocused button even when its editor clips.
+#[test]
+fn page_setup_large_numeric_margins_do_not_expand_after_leaving_field() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    for label in ["Bottom:", "Top:", "Left:", "Right:"] {
+        let mut h = app_harness(app_with("Page"));
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        let width =
+            |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Page Setup")))).unwrap().width();
+        let before = width(&h);
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Paste(format!("1{}", "0".repeat(36))));
+        h.run_steps(3);
+        let Some(Dialog::PageSetup { top, bottom, left, right, .. }) = h.state().dialog.as_ref() else { panic!("no page setup dialog") };
+        let value = match label {
+            "Bottom:" => *bottom,
+            "Top:" => *top,
+            "Left:" => *left,
+            _ => *right,
+        };
+        assert!(value.is_finite() && value > 1e35, "{label}: the large finite paste was accepted: {value}");
+        assert!(width(&h) <= before + 2.0, "{label}: editing grew the dialog from {before} to {}", width(&h));
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        let Some(Dialog::PageSetup { top, bottom, left, right, .. }) = h.state().dialog.as_ref() else { panic!("no page setup dialog") };
+        let after = match label {
+            "Bottom:" => *bottom,
+            "Top:" => *top,
+            "Left:" => *left,
+            _ => *right,
+        };
+        assert_eq!(after, value, "{label}: leaving the field keeps the accepted value");
+        assert!(width(&h) <= before + 2.0, "{label}: leaving the large numeric field grew the dialog from {before} to {}", width(&h));
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+    }
+}
+
+/// A clipped wide number in a mirrored form can still be clicked where it is visible.
+#[test]
+fn page_setup_rtl_large_margin_can_be_edited_again_after_blur() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Page");
+    app.run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    let ar = crate::i18n::fixture_lang("ar", "\tMargins\tMargins\n");
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // Draw the actual dialog in a fixture language even without embedded catalogs.
+            crate::i18n::set_current(ar);
+            crate::rtl::sync(&ctx);
+            assert!(crate::rtl::on() && ctx.global_style().right_to_left);
+            show(app, &ctx);
+            crate::i18n::set_current(crate::i18n::Lang::EN);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let initial = h.get_by_role_and_label(Role::SpinButton, "Bottom:").rect();
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Top:").rect().center().x > initial.center().x, "the form is mirrored");
+    let window = |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Page Setup")))).unwrap();
+    let before = window(&h).width();
+    h.get_by_role_and_label(Role::SpinButton, "Bottom:").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste(format!("1{}", "0".repeat(36))));
+    h.run_steps(3);
+    let value = match h.state().dialog.as_ref() {
+        Some(Dialog::PageSetup { bottom, .. }) => *bottom,
+        _ => panic!("no page setup dialog"),
+    };
+    assert!(value.is_finite() && value > 1e35);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog.as_ref(), Some(Dialog::PageSetup { bottom, .. }) if *bottom == value));
+    let field = h.get_by_role_and_label(Role::SpinButton, "Bottom:");
+    assert!(!field.is_focused());
+    let wide = field.rect();
+    let visible = wide.intersect(initial).intersect(window(&h));
+    assert!(wide.width() > 80.0 && visible.is_positive() && !visible.contains(wide.center()));
+    assert!(window(&h).width() <= before + 2.0);
+    // The AccessKit bounds include clipped text: click the visible part, not their centre.
+    let pos = visible.center();
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Bottom:").is_focused(), "the visible field enters editing");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste("2.5".into()));
+    h.run_steps(3);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog.as_ref(), Some(Dialog::PageSetup { bottom, .. }) if *bottom == 2.5), "the field accepts a normal value again");
+    assert!(window(&h).width() <= before + 2.0);
 }
 
 /// #1433: Page Setup's Paper size shows the named size the section has, in either
@@ -1694,6 +1950,27 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
 
+/// A tall dialog on a short screen stays inside it and scrolls.
+#[test]
+fn a_tall_dialog_fits_a_short_screen() {
+    let mut app = app_with("Some text");
+    app.dialog = Dialog::open("pageSetup", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 360.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let id = egui::Id::unique(("dialog", "Page Setup"));
+    let rect = h.ctx.memory(|m| m.area_rect(id)).expect("the dialog is open");
+    assert!(rect.height() <= 360.5, "the dialog is {}pt tall on a 360pt screen", rect.height());
+}
+
 /// #3859: a dialog is modal, as in Word. While Font is open, typing (from the frame it opens),
 /// Mod+O and a click on File reach nothing behind it, and the dialog itself still works. Find
 /// and Replace is modeless: with it open, File still opens.
@@ -1915,4 +2192,151 @@ fn the_page_waits_for_the_keyboard_until_a_modal_dialog_closes() {
     h.event(egui::Event::Text("!".into()));
     h.run_steps(2);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "!", "the page has it after the dialog");
+}
+
+/// Drags from `at` to 30 points right in `h`, and counts the window drags the app asked for.
+fn window_drags(h: &mut egui_kittest::Harness<WordApp>, at: egui::Pos2) -> usize {
+    let mut drags = 0;
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let events = [egui::Event::PointerMoved(at), button(at, true)]
+        .into_iter()
+        .chain([10.0, 20.0, 30.0].map(|dx| egui::Event::PointerMoved(at + vec2(dx, 0.0))))
+        .chain([button(at + vec2(30.0, 0.0), false)]);
+    for e in events {
+        h.event(e);
+        h.step();
+        drags += h.output().viewport_output.values().flat_map(|v| &v.commands).filter(|c| matches!(c, egui::ViewportCommand::StartDrag)).count();
+    }
+    drags
+}
+
+/// #5124: behind a modal dialog the window still moves by its title bar, as in Word for Mac, where
+/// WordCraft draws it, or by the top of File's side menu, which covers it there; elsewhere the
+/// system's title bar does, and WordCraft's bar under it doesn't.
+#[test]
+fn the_window_moves_by_its_title_bar_behind_a_modal_dialog() {
+    for (mac, backstage) in [(true, false), (true, true), (false, false), (false, true)] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.integrated_titlebar = mac;
+        a.ui.backstage = backstage;
+        let mut h = app_harness(a);
+        h.run_steps(6);
+        let font = Dialog::open("font", h.state_mut());
+        h.state_mut().dialog = font;
+        h.run_steps(4);
+        let at = egui::pos2(if backstage { 100.0 } else { 300.0 }, 12.0);
+        assert_eq!(window_drags(&mut h, at), usize::from(mac), "macOS: {mac}, File: {backstage}");
+        assert!(matches!(h.state().dialog, Some(Dialog::Font { .. })), "Font stays");
+        assert_eq!(h.state().ui.backstage, backstage, "nothing behind it opened or closed");
+    }
+}
+
+/// Opens a modal state in `a`: the built-in file browser, a dialog by name, or Colors.
+fn open_modal_state(a: &mut WordApp, state: &str) {
+    match state {
+        "none" => {}
+        "fileBrowser" => {
+            let document = a.session.document_id();
+            a.show_file_browser(
+                crate::file_dialogs::FileDialogRequest::Open { purpose: "document".into() },
+                crate::file_dialogs::AfterPick::OpenDocument { document },
+                false,
+            );
+        }
+        "colors" => a.colors = Some(crate::colors::ColorsDialog::new(None, crate::colors::Target::cmd("format.color"))),
+        dialog => a.dialog = Dialog::open(dialog, a),
+    }
+}
+
+/// The file browser, a modal dialog and Colors each block the window; nothing open or a modeless
+/// dialog doesn't.
+#[test]
+fn modal_open_is_true_for_the_file_browser_a_modal_dialog_and_colors() {
+    for (state, modal) in [("none", false), ("find", false), ("font", true), ("fileBrowser", true), ("colors", true)] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        open_modal_state(&mut a, state);
+        assert_eq!(a.modal_open(), modal, "{state}");
+    }
+}
+
+/// #5124: whatever is open, a drag on the title bar macOS draws moves the window; where the system
+/// draws it, WordCraft's bar under it only does while nothing blocks it.
+#[test]
+fn the_title_bar_moves_the_window_in_every_modal_state() {
+    for (state, modal) in [("none", false), ("find", false), ("font", true), ("fileBrowser", true), ("colors", true)] {
+        for mac in [true, false] {
+            let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            a.integrated_titlebar = mac;
+            let mut h = app_harness(a);
+            h.run_steps(6);
+            open_modal_state(h.state_mut(), state);
+            h.run_steps(4);
+            assert_eq!(h.state().modal_open(), modal, "{state}");
+            assert_eq!(window_drags(&mut h, egui::pos2(300.0, 12.0)), usize::from(mac || !modal), "{state}, macOS: {mac}");
+            assert_eq!(h.state().modal_open(), modal, "{state} stays open");
+        }
+    }
+}
+
+/// #5124: where a dialog reaches over the title bar (a short window), a drag on the dialog is the
+/// dialog's own and doesn't move the window.
+#[test]
+fn a_drag_on_a_dialog_over_the_title_bar_doesnt_move_the_window() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.integrated_titlebar = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 420.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let font = Dialog::open("font", h.state_mut());
+    h.state_mut().dialog = font;
+    h.run_steps(4);
+    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Font")))).expect("the dialog is open");
+    let at = egui::pos2(rect.center().x, rect.top() + 8.0);
+    assert!(at.y < 30.0, "the dialog reaches over the title bar: {rect:?}");
+    assert_eq!(window_drags(&mut h, at), 0, "a drag on its title");
+    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Font")))).expect("the dialog is open");
+    assert_eq!(window_drags(&mut h, egui::pos2(rect.center().x, rect.top() + 1.0)), 0, "nor just inside its edge");
+}
+
+#[test]
+fn font_sample_props_map_each_field_to_its_property() {
+    use super::font::font_sample_props;
+    use wordcraft_doc::props::Underline;
+    let mut app = app_with("Example");
+    let white = wordcraft_doc::Rgb(255, 255, 255);
+    let mut p = |fx: (bool, bool, bool, bool), sc: (bool, bool, bool)| font_sample_props(&mut app, white, "Serif", "12", "", fx, sc, 1.5);
+    let q = p((true, false, false, true), (true, false, false));
+    assert_eq!((q.bold, q.italic, q.strike), (Some(true), Some(false), Some(true)));
+    assert_eq!((q.small_caps, q.caps, q.spacing), (Some(true), Some(false), Some(1.5)));
+    let q = p((false, true, false, false), (false, true, false));
+    assert_eq!((q.italic, q.small_caps, q.caps), (Some(true), Some(false), Some(true)));
+    assert_eq!(p((false, false, false, false), (false, false, true)).underline, Some(Underline::Dotted));
+    assert_eq!(p((false, false, true, false), (false, false, true)).underline, Some(Underline::Single));
+}
+
+#[test]
+fn font_dialog_opens_at_its_final_size() {
+    let mut app = app_with("Example");
+    app.dialog = Dialog::open("font", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    use egui_kittest::kittest::Queryable;
+    let mut widths = Vec::new();
+    for _ in 0..8 {
+        h.step();
+        widths.push(h.get_by_label("OK").rect().min.x);
+    }
+    assert!(widths[2..].windows(2).all(|w| w[0] == w[1]), "the dialog keeps growing: {widths:?}");
 }
