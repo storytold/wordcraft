@@ -2051,12 +2051,8 @@ fn self_showing_text_box_saves_bounded() {
         extra: Default::default(),
     };
     for _ in 0..30 {
-        d.insert_object(
-            &wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0, affinity: None },
-            shape(),
-            &CharProps::default(),
-        )
-        .unwrap();
+        d.insert_object(&wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Part(id), wordcraft_doc::Path::top(0), 0), shape(), &CharProps::default())
+            .unwrap();
     }
     d.insert_object(&wordcraft_doc::Pos::body(0, 0), shape(), &CharProps::default()).unwrap();
     let bytes = wordcraft_docx::write(&d).unwrap();

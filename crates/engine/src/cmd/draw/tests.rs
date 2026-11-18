@@ -32,7 +32,7 @@ fn a_stroke_inserts_floating_ink_through_its_points_in_one_undo_step() {
     assert_eq!(f.ink, Some(InkTool::Pen));
     assert_eq!(f.paths[0].pts, vec![[1.0, 1.0], [51.0, 31.0], [101.0, 6.0]], "NaN dropped, shape-local");
     // Laid out where it was drawn.
-    let at = wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0, affinity: None };
+    let at = wordcraft_doc::Pos::body(0, 0);
     let hit = s.layout().object(&at, 0).unwrap();
     assert!((hit.rect.x - 99.0).abs() < 0.01 && (hit.rect.y - 89.0).abs() < 0.01, "{:?}", hit.rect);
     s.run("edit.undo", &json!({})).unwrap();

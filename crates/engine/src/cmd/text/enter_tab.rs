@@ -188,12 +188,12 @@ pub(super) fn tab(s: &mut Session, _: &Value) -> CmdResult {
         }
         let mut path = tpath.0.clone();
         path.extend([nr as u32, nc as u32, 0]);
-        let start = Pos { story, path: wordcraft_doc::Path(path), off: 0, affinity: None };
+        let start = Pos::new(story, wordcraft_doc::Path(path), 0);
         // Select the cell's content like Word.
         let end_path = s.doc.para_paths(story).into_iter().rfind(|q| q.0.starts_with(&start.path.0[..start.path.0.len() - 1]));
         let end = end_path.map(|q| {
             let off = s.doc.para(story, &q).map(|x| x.len()).unwrap_or(0);
-            Pos { story, path: q, off, affinity: None }
+            Pos::new(story, q, off)
         });
         s.sel = Selection { anchor: start.clone(), focus: end.unwrap_or(start) };
         return sel_result(s);
@@ -239,7 +239,7 @@ fn tab_indents(s: &mut Session, f: &Pos) -> bool {
         return s.doc.styles.resolve_para(&para.props).numbering.is_none_or(|n| n.num == 0);
     }
     let l = s.layout();
-    l.line_bounds(f, s.page_hint).is_some_and(|(a, _)| a == *f)
+    l.line_bounds(f, s.page_hint).is_some_and(|(a, _)| a.affinity.is_none() && a == *f)
 }
 
 /// Tab before the first line indents the first line by one default tab stop; before any other
@@ -281,7 +281,7 @@ pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
         };
         let mut path = tpath.0.clone();
         path.extend([nr as u32, nc as u32, 0]);
-        s.sel = Selection::caret(Pos { story, path: wordcraft_doc::Path(path), off: 0, affinity: None });
+        s.sel = Selection::caret(Pos::new(story, wordcraft_doc::Path(path), 0));
         return sel_result(s);
     }
     let f = s.sel.focus.clone();

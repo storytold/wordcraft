@@ -941,9 +941,7 @@ fn a_ref_bookmark_before_a_page_break_reads_the_heading_page() {
         s.doc.para_paths(StoryRef::Body).into_iter().find(|p| s.doc.para(StoryRef::Body, p).is_some_and(|p| p.text.contains("Preface"))).unwrap();
     let len = s.doc.para(StoryRef::Body, &path).unwrap().len();
     let props = CharProps::default();
-    s.doc
-        .insert_object(&Pos::new(StoryRef::Body, path.clone(), len), InlineObject::BookmarkEnd { name: "_Ref000000003".into() }, &props)
-        .unwrap();
+    s.doc.insert_object(&Pos::new(StoryRef::Body, path.clone(), len), InlineObject::BookmarkEnd { name: "_Ref000000003".into() }, &props).unwrap();
     s.doc.insert_object(&Pos::new(StoryRef::Body, path, 0), InlineObject::BookmarkStart { name: "_Ref000000003".into() }, &props).unwrap();
     s.run("caret.docEnd", &json!({})).unwrap();
     s.run("insert.crossReference", &json!({"to": "heading", "target": "Preface", "show": "page"})).unwrap();

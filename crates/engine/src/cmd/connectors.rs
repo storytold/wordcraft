@@ -52,7 +52,7 @@ fn scan(s: &Session) -> (HashMap<u32, Pos>, Vec<Pos>, Vec<Pos>) {
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(para) = s.doc.para(StoryRef::Body, &path) else { continue };
         for (off, obj) in para.objects_with_offsets() {
-            let pos = Pos { story: StoryRef::Body, path: path.clone(), off, affinity: None };
+            let pos = Pos::new(StoryRef::Body, path.clone(), off);
             match obj {
                 InlineObject::Shape { kind, extra, float, .. } => {
                     if extra.id != 0 {
@@ -164,7 +164,7 @@ fn body_pos(e: &Value) -> Option<Pos> {
     let path: Option<Vec<u32>> =
         e.get("path").and_then(Value::as_array).map(|a| a.iter().take(64).filter_map(Value::as_u64).filter_map(|x| u32::try_from(x).ok()).collect());
     match (path, p::u64(e, "off").and_then(|o| usize::try_from(o).ok())) {
-        (Some(path), Some(off)) if !path.is_empty() => Some(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(path), off, affinity: None }),
+        (Some(path), Some(off)) if !path.is_empty() => Some(Pos::new(StoryRef::Body, wordcraft_doc::Path(path), off)),
         _ => super::parse_pos(e).filter(|t| t.story == StoryRef::Body),
     }
 }
@@ -255,7 +255,7 @@ fn connect(s: &mut Session, v: &Value) -> CmdResult {
             if !line && let Some(pg) = layout.pages.get(page) {
                 for it in &pg.items {
                     let wordcraft_layout::Placed::Object { rect, spin, story: StoryRef::Body, path, off, .. } = it else { continue };
-                    let at = Pos { story: StoryRef::Body, path: path.clone(), off: *off, affinity: None };
+                    let at = Pos::new(StoryRef::Body, path.clone(), *off);
                     if at == pos {
                         continue;
                     }

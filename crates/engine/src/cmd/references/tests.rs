@@ -835,7 +835,7 @@ fn output_counts_locked_seq_fields_and_not_deleted_ones() {
     para.touch();
     // The second Del field is a tracked deletion.
     let off = s.doc.para(StoryRef::Body, &top).unwrap().object_offsets()[1];
-    let at = |off| Pos { story: StoryRef::Body, path: top.clone(), off, affinity: None };
+    let at = |off| Pos::new(StoryRef::Body, top.clone(), off);
     s.doc.format_range(&at(off), &at(off + '\u{FFFC}'.len_utf8()), &|c| c.del = Some(1)).unwrap();
     let out = output_fields(&s.doc).expect("the stale results change");
     let shown: Vec<String> = out
@@ -993,7 +993,7 @@ fn stale_last_paragraph(s: &mut Session, stale: &str) -> wordcraft_doc::Path {
 #[test]
 fn output_keeps_a_reference_to_a_bookmark_over_paragraphs_as_stored() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Alpha one\nBeta two\nShort mark\nRefs "));
-    let at = |block: usize, off: usize| wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(block), off, affinity: None };
+    let at = |block: usize, off: usize| wordcraft_doc::Pos::body(block, off);
     s.sel = crate::Selection { anchor: at(0, 6), focus: at(1, 4) };
     s.run("insert.bookmark", &json!({"name": "Span"})).unwrap();
     s.run("select.text", &json!({"text": "Short mark"})).unwrap();
@@ -1015,7 +1015,7 @@ fn a_style_reference_reads_the_headings_new_sequence_number() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Chapter \nBody\nRefs "));
     s.run("select.text", &json!({"text": "Chapter "})).unwrap();
     s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
-    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 8, affinity: None });
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 8));
     s.run("insert.field", &json!({"instr": "SEQ Chapter \\* ARABIC", "result": "x"})).unwrap();
     s.run("caret.docEnd", &json!({})).unwrap();
     s.run("insert.field", &json!({"instr": "STYLEREF \"Heading 1\"", "result": "x"})).unwrap();

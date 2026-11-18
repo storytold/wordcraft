@@ -368,7 +368,7 @@ fn word_count_including_notes_counts_used_boxes_and_notes_only() {
     d.add_part(PartKind::Header, para_of("header words"));
     d.add_part(PartKind::Comment, para_of("comment words"));
     d.insert_object(&Pos::body(0, 3), shape(boxed), &CharProps::default()).unwrap();
-    d.insert_object(&Pos { story: StoryRef::Part(boxed), path: Path::top(0), off: 0, affinity: None }, shape(nested), &CharProps::default()).unwrap();
+    d.insert_object(&Pos::new(StoryRef::Part(boxed), Path::top(0), 0), shape(nested), &CharProps::default()).unwrap();
     d.insert_object(
         &Pos::body(0, 0),
         InlineObject::NoteRef { kind: para::NoteKind::Footnote, id: note, custom: String::new() },
@@ -401,7 +401,7 @@ fn counted_stories_survive_self_nested_boxes() {
         extra: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape.clone(), &CharProps::default()).unwrap();
-    d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None }, shape, &CharProps::default()).unwrap();
+    d.insert_object(&Pos::new(StoryRef::Part(id), Path::top(0), 0), shape, &CharProps::default()).unwrap();
     assert_eq!(d.word_count_including_notes(), 2);
 }
 
@@ -430,7 +430,7 @@ fn prune_text_boxes_drops_only_unshown_ones() {
     let hdr = d.add_part(PartKind::Header, para_of("header"));
     let in_header = d.add_part(PartKind::TextBox, para_of("box in the header"));
     d.insert_object(&Pos::body(0, 0), shape(shown), &CharProps::default()).unwrap();
-    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None };
+    let at = |id| Pos::new(StoryRef::Part(id), Path::top(0), 0);
     d.insert_object(&at(shown), shape(nested), &CharProps::default()).unwrap();
     d.insert_object(&at(orphan), shape(orphan_child), &CharProps::default()).unwrap();
     d.insert_object(&at(hdr), shape(in_header), &CharProps::default()).unwrap();
@@ -557,7 +557,7 @@ fn notes_in_text_box_follow_nested_boxes_once() {
     let outer = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::new())]);
     let inner = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::new())]);
     let (n1, n2) = (d.add_part(PartKind::Footnote, Vec::new()), d.add_part(PartKind::Footnote, Vec::new()));
-    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None };
+    let at = |id| Pos::new(StoryRef::Part(id), Path::top(0), 0);
     // outer: [note n1][box inner][box outer (itself)]; inner: [note n2]
     d.insert_object(&at(outer), shape(outer), &CharProps::default()).unwrap();
     d.insert_object(&at(outer), shape(inner), &CharProps::default()).unwrap();
@@ -817,4 +817,43 @@ fn missing_pictures_are_capped_deduplicated_and_not_content() {
     assert!(d.same_content(&e));
     assert!(!serde_json::to_string(&d).unwrap().contains("p0"));
     assert_eq!(MissingPictureReason::ExternalTarget.label(), "external target");
+}
+
+#[test]
+fn pos_affinity_is_transient_in_comparisons_clamping_and_edits() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let hash_of = |p: &Pos| {
+        let mut h = DefaultHasher::new();
+        p.hash(&mut h);
+        h.finish()
+    };
+
+    let a = Pos::with_affinity(StoryRef::Body, Path::top(0), 3, Some(1));
+    let b = Pos::with_affinity(StoryRef::Body, Path::top(0), 3, Some(2));
+    let plain = Pos::body(0, 3);
+    assert_eq!(a, b);
+    assert_eq!(a, plain);
+    assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
+    assert_eq!(hash_of(&a), hash_of(&plain));
+    assert_eq!(a.at(5).affinity, None);
+    assert_eq!(a.at(5).off, 5);
+
+    let mut d = Document::from_text("hello world");
+    // Unchanged in-bounds clamp retains valid affinity; clamping that changes offset or path clears it.
+    assert_eq!(d.clamp(&a).affinity, Some(1));
+    let past_end = Pos::with_affinity(StoryRef::Body, Path::top(0), 99, Some(1));
+    assert_eq!(d.clamp(&past_end), Pos::body(0, 11));
+    assert_eq!(d.clamp(&past_end).affinity, None);
+    let missing_para = Pos::with_affinity(StoryRef::Body, Path::top(4), 2, Some(1));
+    assert_eq!(d.clamp(&missing_para).affinity, None);
+
+    // Edits clear affinity on the returned position.
+    let inserted = d.insert_text(&a, "!", &CharProps::default()).unwrap();
+    assert_eq!(inserted.off, 4);
+    assert_eq!(inserted.affinity, None);
+    let collapsed = d.delete_range(&Pos::with_affinity(StoryRef::Body, Path::top(0), 3, Some(1)), &Pos::body(0, 4)).unwrap();
+    assert_eq!(collapsed.off, 3);
+    assert_eq!(collapsed.affinity, None);
 }

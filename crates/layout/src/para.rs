@@ -301,6 +301,26 @@ impl ParaLayout {
         self.is_continuation_cluster(li, l.c0)
     }
 
+    /// The visual line for `pos`: honours `pos.affinity` only when `pos.off` is a valid caret
+    /// offset on that line ([`Self::line_offsets`]), falling back to [`Self::line_of`].
+    pub fn line_for(&self, pos: &wordcraft_doc::Pos) -> usize {
+        pos.affinity.filter(|&a| a < self.lines.len() && self.line_offsets(a).contains(&pos.off)).unwrap_or_else(|| self.line_of(pos.off))
+    }
+
+    /// Visual-line affinity for a hit or vertical move onto line `li` at `off`: `Some(li)` when
+    /// `li` begins with a continuation fragment and `off` is a valid caret offset on `li`.
+    pub(crate) fn continuation_affinity(&self, li: usize, off: usize) -> Option<usize> {
+        (self.is_line_continuation(li) && self.line_offsets(li).contains(&off)).then_some(li)
+    }
+
+    /// Caret position identifying the start of visual line `li`, retaining `Some(li)` affinity
+    /// and a valid caret offset on `li` when `li` begins with a continuation fragment.
+    pub(crate) fn line_start_pos(&self, story: wordcraft_doc::StoryRef, path: wordcraft_doc::Path, li: usize) -> Option<wordcraft_doc::Pos> {
+        let line = self.lines.get(li)?;
+        let off = if self.is_line_continuation(li) { self.line_offsets(li).into_iter().min().unwrap_or(line.start) } else { line.start };
+        Some(wordcraft_doc::Pos::with_affinity(story, path, off, self.continuation_affinity(li, off)))
+    }
+
     /// Caret offsets a click or arrow key can reach on line `li`: whole-grapheme starts and the
     /// line end, except after a line-ending break or past a wrapped line's trailing space.
     pub fn line_offsets(&self, li: usize) -> Vec<usize> {
@@ -326,8 +346,10 @@ impl ParaLayout {
     /// Byte offset closest to x on line `li`.
     pub fn off_at_x(&self, li: usize, x: f32) -> usize {
         let Some(l) = self.lines.get(li) else { return self.text_len };
+        let fallback =
+            if l.c1 > l.c0 && self.is_continuation_cluster(li, l.c0) { self.clusters.get(l.c0).map_or(l.start, |c| c.end) } else { l.start };
         if !l.vis.is_empty() {
-            let mut best = (l.start, f32::MAX);
+            let mut best = (fallback, f32::MAX);
             for (off, cx) in self.line_carets(li) {
                 let d = cx.map_or(f32::MAX, |cx| (cx - x).abs());
                 if d < best.1 {
@@ -336,8 +358,7 @@ impl ParaLayout {
             }
             return best.0;
         }
-        let mut best =
-            if l.c1 > l.c0 && self.is_continuation_cluster(li, l.c0) { self.clusters.get(l.c0).map(|c| c.end).unwrap_or(l.start) } else { l.start };
+        let mut best = fallback;
         let mut bestd = f32::MAX;
         for k in l.c0..=l.c1 {
             let Some(cx) = l.xs.get(k - l.c0) else { break };

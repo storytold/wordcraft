@@ -2357,7 +2357,7 @@ fn shift_right_at_the_end_of_a_cell_selects_the_cell_first() {
     // In an empty cell the first press takes it.
     let mut empty = table.0.clone();
     empty.extend([1, 0, 0]);
-    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path(empty), off: 0, affinity: None };
+    let pos = Pos::new(StoryRef::Body, wordcraft_doc::Path(empty), 0);
     run(&mut s, "caret.set", json!({"pos": pos}));
     assert_eq!(shift_right(&mut s), Some(((1, 1), (0, 0))));
 }
@@ -3056,7 +3056,7 @@ fn backspace_with_the_whole_table_selected_removes_the_table() {
     assert_eq!(tables(&s), 0, "the table stays: {:?}", table_cells(&s));
     assert_eq!(texts(&s), ["before", "after"]);
     // The caret is in the paragraph that followed the table.
-    assert_eq!(s.sel.focus, Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(1), off: 0, affinity: None });
+    assert_eq!(s.sel.focus, Pos::body(1, 0));
     assert!(s.sel.is_collapsed());
     // One undo brings it back.
     run(&mut s, "edit.undo", json!({}));
@@ -3099,7 +3099,7 @@ fn delete_or_backspace_with_the_paragraph_before_and_the_table_selected_removes_
         run(&mut s, key, json!({}));
         assert_eq!(tables(&s), 0, "{key}: {:?}", table_cells(&s));
         assert_eq!(texts(&s), ["after"], "{key}");
-        assert_eq!(s.sel.focus, Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0, affinity: None }, "{key}");
+        assert_eq!(s.sel.focus, Pos::body(0, 0), "{key}");
     }
 }
 
@@ -4340,4 +4340,132 @@ fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
         assert_eq!(second.drop_cap_distance, None, "{position}");
         assert_eq!(second.drop_cap_font, None, "{position}");
     }
+}
+
+/// Moving Down onto a middle continuation line of a wrapped field sets a transient visual-line
+/// affinity, which logical moves (`Left`, `Right`, `wordLeft`, `wordRight`, `paraUp`, `paraDown`)
+/// and edits (`text.insert`, `text.backspace`) immediately clear so the caret is never drawn on a
+/// stale continuation line (#5838 review).
+#[test]
+fn wrapped_field_affinity_clears_on_logical_moves_and_edits() {
+    use wordcraft_doc::{Document, InlineObject, Paragraph, StoryRef, para_block};
+
+    let make_session = |with_next_para: bool| {
+        let mut doc = Document::new();
+        doc.last_section.margin_left = 200.0;
+        doc.last_section.margin_right = 200.0;
+        let prefix = "Intro ";
+        let mut p0 = Paragraph::with_text(prefix, Default::default());
+        let long_text = "The quick brown fox jumps over the lazy dog and runs across the wide open fields ".repeat(4);
+        p0.insert_object(
+            prefix.len(),
+            InlineObject::Field { instr: "MERGEFIELD body".into(), result: long_text, locked: false, dirty: false, code: false, form: String::new() },
+            &Default::default(),
+        )
+        .unwrap();
+        let field_end = p0.len();
+        p0.insert_text(field_end, " tail", &Default::default()).unwrap();
+        doc.body = if with_next_para {
+            vec![para_block(p0), para_block(Paragraph::with_text("Next paragraph", Default::default()))]
+        } else {
+            vec![para_block(p0)]
+        };
+        (Session::new(doc), prefix.len(), field_end)
+    };
+
+    let line_tops = |s: &mut Session| -> Vec<f32> {
+        let l = s.layout();
+        let wordcraft_layout::Placed::Lines { para, y, l0, .. } = &l.pages[0].items[0] else { panic!("expected paragraph lines") };
+        let base = para.lines[*l0].top;
+        para.lines.iter().map(|ln| y + (ln.top - base)).collect()
+    };
+
+    // 1. Down onto line 1 -> type "x": inserts after the field on the final line and draws the caret there.
+    let (mut s, field_start, field_end) = make_session(true);
+    let tops = line_tops(&mut s);
+    assert!(tops.len() >= 3, "expected wrapped field across >= 3 lines, got {}", tops.len());
+    run(&mut s, "caret.down", json!({}));
+    assert_eq!(s.sel.focus.off, field_end);
+    assert_eq!(s.sel.focus.affinity, Some(1));
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[1]).abs() < 2.0, "caret drawn on continuation line 1");
+
+    run(&mut s, "text.insert", json!({"text": "x"}));
+    assert_eq!(s.sel.focus.off, field_end + 1);
+    assert_eq!(s.sel.focus.affinity, None, "typing clears visual-line affinity");
+    let new_tops = line_tops(&mut s);
+    let c_typed = s.layout().caret(&s.sel.focus).unwrap();
+    assert!(
+        (c_typed.top - *new_tops.last().unwrap()).abs() < 2.0,
+        "typed caret draws on the final line ({}) not line 1 ({})",
+        c_typed.top,
+        new_tops[1]
+    );
+
+    // 2. Down onto line 1 -> Left: moves to field start on line 0 and draws on line 0.
+    let (mut s, _, _) = make_session(true);
+    let tops = line_tops(&mut s);
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.sel.focus.off, field_start);
+    assert_eq!(s.sel.focus.affinity, None, "Left clears visual-line affinity");
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[0]).abs() < 2.0, "Left draws caret on line 0");
+
+    // 3. Down onto line 1 -> Right: moves into " tail" on the final line and draws there.
+    let (mut s, _, _) = make_session(true);
+    let tops = line_tops(&mut s);
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    assert_eq!(s.sel.focus.off, field_end + 1);
+    assert_eq!(s.sel.focus.affinity, None, "Right clears visual-line affinity");
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - *tops.last().unwrap()).abs() < 2.0, "Right draws caret on the final line");
+
+    // 4. Down onto line 1 -> Ctrl+Up (caret.paraUp): moves to offset 0 and draws on line 0.
+    let (mut s, _, _) = make_session(true);
+    let tops = line_tops(&mut s);
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.paraUp", json!({}));
+    assert_eq!(s.sel.focus.off, 0);
+    assert_eq!(s.sel.focus.affinity, None, "paraUp clears visual-line affinity");
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[0]).abs() < 2.0, "paraUp draws caret on line 0");
+
+    // 5. Down onto line 1 -> wordLeft / wordRight / paraDown (without next paragraph) clear affinity.
+    let (mut s, _, _) = make_session(false);
+    let tops = line_tops(&mut s);
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.wordLeft", json!({}));
+    assert_eq!(s.sel.focus.affinity, None);
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[0]).abs() < 2.0, "wordLeft draws caret on line 0");
+
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.paraDown", json!({}));
+    assert_eq!(s.sel.focus.affinity, None);
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - *tops.last().unwrap()).abs() < 2.0, "paraDown draws caret on the final line");
+
+    // 6. Click line 1 of wrapped field, then shift-click line 2 of the same field: collapsed caret, so Ctrl+B sets pending bold.
+    let (mut s, _, _) = make_session(false);
+    let (hit1, hit2) = {
+        let l = s.layout();
+        let wordcraft_layout::Placed::Lines { para, x, y, .. } = &l.pages[0].items[0] else { panic!("expected paragraph lines") };
+        let h1 = l.hit(0, x + para.lines[1].left + 10.0, y + para.lines[1].top + 4.0, StoryRef::Body).unwrap();
+        let h2 = l.hit(0, x + para.lines[2].left + 10.0, y + para.lines[2].top + 4.0, StoryRef::Body).unwrap();
+        (h1, h2)
+    };
+    assert_eq!(hit1.affinity, Some(1));
+    assert_eq!(hit2.affinity, Some(2));
+    run(&mut s, "caret.set", json!({"pos": hit1}));
+    run(&mut s, "caret.set", json!({"pos": hit2, "extend": true}));
+    assert!(s.sel.is_collapsed(), "same field offset with different visual-line affinities is still a collapsed caret");
+    run(&mut s, "format.bold", json!({}));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.bold), Some(true), "Ctrl+B sets pending bold at collapsed field caret");
+
+    // 7. Home and End on a middle continuation line keep the caret on that visual line.
+    let (mut s, _, _) = make_session(true);
+    let tops = line_tops(&mut s);
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.home", json!({}));
+    assert_eq!(s.sel.focus.affinity, Some(1), "Home on continuation line 1 stays on line 1");
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[1]).abs() < 2.0);
+    run(&mut s, "caret.end", json!({}));
+    assert_eq!(s.sel.focus.affinity, Some(1), "End on continuation line 1 stays on line 1");
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[1]).abs() < 2.0);
 }

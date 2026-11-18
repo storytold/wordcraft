@@ -163,7 +163,7 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
     let y = y.max(12.0 - h).min(pg.h.min(MAX_OFFSET) - 12.0);
     // The paragraph under the middle of its top edge: in the column it mostly lands in.
     let (anchor, on_page) = match anchor_paragraph(&s.doc, &layout, page, (x + w / 2.0, y), story) {
-        Some(path) => (Pos { story, path, off: 0, affinity: None }, false),
+        Some(path) => (Pos::new(story, path, 0), false),
         None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
     };
     // Move its character to the anchor, unless it's already in that paragraph and drawn on this
@@ -330,5 +330,5 @@ pub(crate) fn nearest_line(layout: &wordcraft_layout::DocLayout, page: usize, y:
         d(a).total_cmp(&d(b))
     })?;
     let off = best.para.lines.get(best.li)?.start;
-    Some(Pos { story, path: best.path.clone(), off, affinity: None })
+    Some(Pos::new(story, best.path.clone(), off))
 }

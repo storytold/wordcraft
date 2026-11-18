@@ -235,7 +235,7 @@ pub fn join_next_para(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Pa
     let next = path.with_last(path.last().saturating_add(1));
     let len = s.doc.para(story, path).map(|p| p.len()).unwrap_or(0);
     let revs = s.doc.para(story, &next).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
-    s.doc.delete_range(&Pos { story, path: path.clone(), off: len, affinity: None }, &Pos { story, path: next, off: 0, affinity: None })?;
+    s.doc.delete_range(&Pos::new(story, path.clone(), len), &Pos::new(story, next, 0))?;
     let p = s.doc.para_mut(story, path)?;
     (p.mark.ins, p.mark.del) = revs;
     p.touch();

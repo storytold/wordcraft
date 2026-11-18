@@ -169,7 +169,7 @@ fn shape_shadow_is_cast_offset_from_the_shape() {
             effects,
             extra: Default::default(),
         };
-        let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0, affinity: None };
+        let at = wordcraft_doc::Pos::body(0, 0);
         d.insert_object(&at, shape, &Default::default()).unwrap();
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
         render_page(&d, &l.pages[0], 1.0, &RenderOptions::default())
@@ -229,7 +229,7 @@ fn shape_gradients_and_transparency_are_drawn() {
     let stops = vec![GradStop { pos: 0.0, color: Rgb::BLACK, transparency: 0.0 }, GradStop { pos: 100.0, color: Rgb::WHITE, transparency: 0.0 }];
     let grad = |kind| Fill::Gradient(Arc::new(Gradient { stops: stops.clone(), kind, tile: None, rot_with_shape: true, flip: GradientFlip::None }));
     let mut d = Document::from_text("");
-    let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0, affinity: None };
+    let at = wordcraft_doc::Pos::body(0, 0);
     // Left to right: top-to-bottom linear, circular, navy under 30%-opaque white.
     let objs = [
         shape(grad(GradientKind::Linear { angle: 90.0, scaled: false }), 0.0),

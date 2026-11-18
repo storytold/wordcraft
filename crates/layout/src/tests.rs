@@ -707,7 +707,7 @@ fn selection_bar_finds_the_line_beside_the_pointer() {
     assert_eq!(l.selection_bar_at(0, -5.0, c.top + 2.0), None);
     assert_eq!(l.selection_bar_at(0, f32::NAN, c.top), None);
     assert_eq!(l.selection_bar_at(9, 30.0, c.top), None);
-    let cell = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![2, 0, 0, 0]), off: 0, affinity: None }).unwrap();
+    let cell = l.caret(&Pos::new(StoryRef::Body, Path(vec![2, 0, 0, 0]), 0)).unwrap();
     assert_eq!(l.selection_bar_at(0, 30.0, cell.top + cell.height / 2.0), None);
     // Dragging takes the nearest top-level line at any height.
     assert_eq!(l.body_line_at(0, -100.0), Some(Pos::body(0, 0)));
@@ -1129,32 +1129,49 @@ fn staggered_opposite_floats_field_result_straddles_without_overflowing() {
     let float2_w = 150.0;
     let float2_h = 50.0;
 
-    // A word (~180pt at 12pt font) wider than the 100pt straddling row between the floats,
-    // but narrower than the 250pt available in each individual float slice.
-    let word = "a".repeat(26);
+    // Space-separated words (~180pt each at 12pt font) wider than the 100pt straddling row between
+    // the floats, but narrower than the 250pt available in each individual float slice, spanning
+    // past y=50 so a row hits the y=50 straddle boundary and wraps/skips identically to plain text
+    // instead of remaining one 180pt cluster that overflows into float 2.
+    let text = vec!["a".repeat(26); 6].join(" ");
 
-    let mut d_field = Document::new();
-    d_field.last_section.page_w = col_w;
-    d_field.last_section.margin_left = 0.0;
-    d_field.last_section.margin_right = 0.0;
-    d_field.last_section.margin_top = 0.0;
-    d_field.last_section.margin_bottom = 0.0;
-    Arc::make_mut(&mut d_field.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
-    Arc::make_mut(&mut d_field.styles).default_chr.size = Some(12.0);
+    let build_doc = |as_field: bool| {
+        let mut d = Document::new();
+        d.last_section.page_w = col_w;
+        d.last_section.margin_left = 0.0;
+        d.last_section.margin_right = 0.0;
+        d.last_section.margin_top = 0.0;
+        d.last_section.margin_bottom = 0.0;
+        Arc::make_mut(&mut d.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+        Arc::make_mut(&mut d.styles).default_chr.size = Some(12.0);
+        if as_field {
+            let _ = d.insert_object(
+                &Pos::body(0, 0),
+                InlineObject::Field {
+                    instr: "DOCVARIABLE straddle".into(),
+                    result: text.clone(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                },
+                &Default::default(),
+            );
+        } else {
+            d.insert_text(&Pos::body(0, 0), &text, &Default::default()).unwrap();
+        }
+        let f1 = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() };
+        d.insert_object(&Pos::body(0, 0), rect_shape(float1_w, float1_h, f1), &Default::default()).unwrap();
+        let f2 =
+            Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: float2_x, y: float2_y, dist: 0.0, ..Default::default() };
+        d.insert_object(&Pos::body(0, 0), rect_shape(float2_w, float2_h, f2), &Default::default()).unwrap();
+        d
+    };
 
-    let _ = d_field.insert_object(
-        &Pos::body(0, 0),
-        InlineObject::Field { instr: "DOCVARIABLE straddle".into(), result: word, locked: false, dirty: false, code: false, form: String::new() },
-        &Default::default(),
-    );
-
-    let f1 = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() };
-    d_field.insert_object(&Pos::body(0, 0), rect_shape(float1_w, float1_h, f1), &Default::default()).unwrap();
-
-    let f2 = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: float2_x, y: float2_y, dist: 0.0, ..Default::default() };
-    d_field.insert_object(&Pos::body(0, 0), rect_shape(float2_w, float2_h, f2), &Default::default()).unwrap();
-
-    let l = lay(&d_field);
+    let l = lay(&build_doc(true));
+    let l_plain = lay(&build_doc(false));
+    let mut saw_above = false;
+    let mut saw_below = false;
 
     for page in &l.pages {
         for item in &page.items {
@@ -1164,6 +1181,8 @@ fn staggered_opposite_floats_field_result_straddles_without_overflowing() {
                     let line_bottom = line_top + line.height;
                     let x_start = line.xs.first().copied().unwrap_or(0.0);
                     let x_end = line.xs.last().copied().unwrap_or(0.0);
+                    saw_above |= line_top < float1_h;
+                    saw_below |= line_bottom > float2_y;
 
                     // If line vertically intersects float 1 (y: 0..50, x: 0..150)
                     if line_top < float1_h && line_bottom > 0.0 {
@@ -1185,6 +1204,10 @@ fn staggered_opposite_floats_field_result_straddles_without_overflowing() {
             }
         }
     }
+    assert!(saw_above && saw_below, "fixture must span across y=50 into both staggered float bands");
+    let Placed::Lines { para: p_f, .. } = &l.pages[0].items[0] else { panic!("expected field lines") };
+    let Placed::Lines { para: p_p, .. } = &l_plain.pages[0].items[0] else { panic!("expected plain lines") };
+    assert_eq!(p_f.lines.len(), p_p.lines.len(), "staggered-float field must match plain-text line count");
 }
 
 /// An RTL field result with asymmetric indents respects float exclusions and does not overflow.
@@ -3210,7 +3233,7 @@ fn tables_lay_out_cells() {
     t.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("cell text", Default::default()))];
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     let l = lay(&d);
-    let pos = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0, affinity: None };
+    let pos = Pos::new(StoryRef::Body, Path(vec![1, 0, 1, 0]), 0);
     let c = l.caret(&pos).unwrap();
     assert!(c.x > 72.0 + 150.0 && c.x < 72.0 + 170.0, "{c:?}");
     let after = l.caret(&Pos::body(2, 0)).unwrap();
@@ -3305,7 +3328,7 @@ fn turned_cell_text_runs_down_the_cell() {
     let cell = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, cell: 1, .. } = i { Some(*rect) } else { None }).unwrap();
     assert!(cell.h >= b.h, "{cell:?}");
     // The caret lies across the page and moves down as the text goes on.
-    let pos = |off| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off, affinity: None };
+    let pos = |off| Pos::new(StoryRef::Body, Path(vec![1, 0, 1, 0]), off);
     let c0 = l.caret(&pos(0)).unwrap();
     let c1 = l.caret(&pos(text.len())).unwrap();
     assert!(c0.width > 5.0 && c0.height == 0.0, "{c0:?}");
@@ -3335,7 +3358,7 @@ fn turned_up_cell_text_reads_bottom_to_top() {
     let b = turned_lines(&l).turned_bounds().unwrap();
     // Against the cell's left edge; the text starts at the bottom and climbs.
     assert!((b.x - (72.0 + 156.0 + 5.4)).abs() < 1.0, "{b:?}");
-    let pos = |off| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off, affinity: None };
+    let pos = |off| Pos::new(StoryRef::Body, Path(vec![1, 0, 1, 0]), off);
     let (c0, c1) = (l.caret(&pos(0)).unwrap(), l.caret(&pos(text.len())).unwrap());
     assert!((c0.top - b.bottom()).abs() < 1.0 && c1.top < c0.top - 50.0, "{c0:?} {c1:?} {b:?}");
     let hit = l.hit(0, b.x + b.w / 2.0, b.bottom() - 2.0, StoryRef::Body).unwrap();
@@ -3520,7 +3543,7 @@ fn hostile_turned_cells_never_panic() {
         for row in [None, Some(0.5), Some(1e9)] {
             let mut d = turned_table(dir, "", row);
             let l = lay(&d);
-            let _ = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0, affinity: None });
+            let _ = l.caret(&Pos::new(StoryRef::Body, Path(vec![1, 0, 1, 0]), 0));
             let mut inner = Table::new(1, 1, 20.0);
             inner.rows[0].cells[0].props.text_direction = dir;
             if let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) {
@@ -3779,7 +3802,7 @@ fn headers_and_page_fields() {
         let label = p.footer.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clusters.len()) } else { None });
         assert!(label.is_some(), "page {i}");
     }
-    let c = l.caret_on(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None }, 1).unwrap();
+    let c = l.caret_on(&Pos::new(StoryRef::Part(id), Path::top(0), 0), 1).unwrap();
     assert_eq!(c.page, 1);
     assert!(c.top > 700.0);
 }
@@ -3798,7 +3821,7 @@ fn caret_after_hanging_spaces_stays_at_the_margin() {
             let pos = if header {
                 let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)]);
                 d.last_section.headers.default = Some(id);
-                Pos { story: StoryRef::Part(id), path: Path::top(0), off: text.len(), affinity: None }
+                Pos::new(StoryRef::Part(id), Path::top(0), text.len())
             } else {
                 d.body = vec![wordcraft_doc::para_block(p)];
                 Pos::body(0, text.len())
@@ -4527,7 +4550,7 @@ fn footnotes_sit_at_page_bottom() {
     )
     .unwrap();
     let l = lay(&d);
-    let c = l.caret_on(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None }, 0).unwrap();
+    let c = l.caret_on(&Pos::new(StoryRef::Part(id), Path::top(0), 0), 0).unwrap();
     assert_eq!(c.page, 0);
     assert!(c.top > 650.0 && c.top < 720.0, "{c:?}");
     let body_bottom = l.pages[0]
@@ -4536,7 +4559,7 @@ fn footnotes_sit_at_page_bottom() {
         .filter_map(|it| if let Placed::Lines { story: StoryRef::Body, y, para, l0, l1, .. } = it { item_bottom(*y, para, *l0, *l1) } else { None })
         .fold(0.0f32, f32::max);
     assert!(body_bottom < c.top, "{body_bottom} {}", c.top);
-    assert!(l.caret_on(&Pos { story: StoryRef::Part(eid), path: Path::top(0), off: 0, affinity: None }, 0).is_some());
+    assert!(l.caret_on(&Pos::new(StoryRef::Part(eid), Path::top(0), 0), 0).is_some());
 }
 
 #[test]
@@ -5347,7 +5370,7 @@ fn line_numbers_borders_text_boxes() {
     let numbers = p.items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(u32::MAX), .. })).count();
     assert_eq!(numbers, 3);
     assert!(p.items.iter().filter(|i| matches!(i, Placed::Rule { .. })).count() >= 4);
-    assert!(l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None }).is_some());
+    assert!(l.caret(&Pos::new(StoryRef::Part(id), Path::top(0), 0)).is_some());
 }
 
 #[test]
@@ -6317,17 +6340,13 @@ fn paragraph_style_and_direct_formatting_beat_table_style() {
         para: ParaProps { space_after: Some(12.0), ..Default::default() },
         ..Default::default()
     });
-    d.format_paragraphs(
-        &Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0, affinity: None },
-        &Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0, affinity: None },
-        &|p| p.style = Some("Spaced".into()),
-    )
+    d.format_paragraphs(&Pos::new(StoryRef::Body, Path(vec![1, 0, 0, 0]), 0), &Pos::new(StoryRef::Body, Path(vec![1, 0, 0, 0]), 0), &|p| {
+        p.style = Some("Spaced".into())
+    })
     .unwrap();
-    d.format_paragraphs(
-        &Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 0, affinity: None },
-        &Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 0, affinity: None },
-        &|p| p.space_after = Some(3.0),
-    )
+    d.format_paragraphs(&Pos::new(StoryRef::Body, Path(vec![1, 1, 0, 0]), 0), &Pos::new(StoryRef::Body, Path(vec![1, 1, 0, 0]), 0), &|p| {
+        p.space_after = Some(3.0)
+    })
     .unwrap();
     let l = lay(&d);
     let styled = cell_para(&l, 0, 0);
@@ -6372,12 +6391,7 @@ fn derived_table_style_merges_its_base() {
     // Direct formatting still wins over the table style.
     let mut d2 = d.clone();
     let path = Path(vec![1, 2, 0, 0]);
-    d2.format_range(
-        &Pos { story: StoryRef::Body, path: path.clone(), off: 0, affinity: None },
-        &Pos { story: StoryRef::Body, path, off: 5, affinity: None },
-        &|c| c.bold = Some(false),
-    )
-    .unwrap();
+    d2.format_range(&Pos::new(StoryRef::Body, path.clone(), 0), &Pos::new(StoryRef::Body, path, 5), &|c| c.bold = Some(false)).unwrap();
     assert!(!cell_para(&lay(&d2), 2, 0).styles[0].rc.bold);
 }
 
@@ -6472,7 +6486,7 @@ fn clicks_inside_a_text_box_hit_its_story() {
     assert_eq!(l.story_at(0, c.x, c.top + c.height / 2.0), Some(StoryRef::Body));
     assert_ne!(l.story_at(0, r.right() + 8.0, r.y + 10.0), Some(box_story));
     // The caret in the box sits inside it.
-    let bc = l.caret(&Pos { story: box_story, path: Path::top(0), off: 0, affinity: None }).unwrap();
+    let bc = l.caret(&Pos::new(box_story, Path::top(0), 0)).unwrap();
     assert!(r.contains(wordcraft_geom::Point::new(bc.x, bc.top)), "{bc:?} outside {r:?}");
 }
 
@@ -6786,7 +6800,7 @@ fn text_boxes_show_in_headers_footers_cells_and_notes() {
     let in_footer = text_box_at(&mut d, &e, "Footer box", 100.0, 30.0, page_float(300.0, 740.0));
     // A table cell and a footnote.
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(wordcraft_doc::Table::new(1, 1, 300.0))).unwrap();
-    let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0, affinity: None };
+    let cell = Pos::new(StoryRef::Body, Path(vec![1, 0, 0, 0]), 0);
     let in_cell = text_box_at(&mut d, &cell, "In a cell", 120.0, 30.0, Default::default());
     let note = footnote(&mut d, &Pos::body(0, 4), "Note: ");
     let e = d.end_of(StoryRef::Part(note));
@@ -6857,8 +6871,7 @@ fn box_fan_out(levels: usize, fan: usize) -> Document {
     for (k, id) in ids.iter().enumerate() {
         let next = *ids.get(k + 1).unwrap_or(id);
         for _ in 0..fan {
-            d.insert_object(&Pos { story: StoryRef::Part(*id), path: Path::top(0), off: 0, affinity: None }, shape(next), &Default::default())
-                .unwrap();
+            d.insert_object(&Pos::new(StoryRef::Part(*id), Path::top(0), 0), shape(next), &Default::default()).unwrap();
         }
     }
     d.insert_object(&Pos::body(0, 0), shape(ids[0]), &Default::default()).unwrap();
@@ -9127,7 +9140,7 @@ fn hidden_float_in_a_text_box_is_not_placed() {
     let id = text_box(&mut d, 0, "Box words.", 200.0, 120.0, Default::default());
     let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
     let hidden = wordcraft_doc::CharProps { hidden: Some(true), ..Default::default() };
-    let at = Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0, affinity: None };
+    let at = Pos::new(StoryRef::Part(id), Path::top(0), 0);
     d.insert_object(&at, rect_shape(30.0, 20.0, f), &hidden).unwrap();
     let count = |show_hidden: bool| {
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
@@ -11481,7 +11494,7 @@ fn table_cell_footnotes_are_placed() {
     crate::test_fonts();
     let mut d = Document::from_text("After the table.");
     d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(wordcraft_doc::Table::new(1, 1, 300.0))).unwrap();
-    let cell = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0, affinity: None };
+    let cell = Pos::new(StoryRef::Body, Path(vec![0, 0, 0, 0]), 0);
     d.para_mut(StoryRef::Body, &cell.path).unwrap().insert_text(0, "Table reference", &Default::default()).unwrap();
     let id = footnote(&mut d, &Pos { off: "Table reference".len(), ..cell }, "Table note payload.");
     let l = lay(&d);
@@ -11771,7 +11784,7 @@ fn a_hidden_cell_mark_takes_no_room() {
         }
         d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
         let l = lay(&d);
-        let at = |r: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, r, 0, 0]), off: 0, affinity: None }).unwrap().top;
+        let at = |r: u32| l.caret(&Pos::new(StoryRef::Body, Path(vec![1, r, 0, 0]), 0)).unwrap().top;
         // Rows 1 and 2 together.
         at(2) - at(0)
     };
@@ -11784,7 +11797,7 @@ fn a_hidden_cell_mark_takes_no_room() {
         t.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("R3", Default::default()))];
         d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
         let l = lay(&d);
-        let at = |r: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, r, 0, 0]), off: 0, affinity: None }).unwrap().top;
+        let at = |r: u32| l.caret(&Pos::new(StoryRef::Body, Path(vec![1, r, 0, 0]), 0)).unwrap().top;
         assert!(both > at(1) - at(0));
         at(1) - at(0)
     };
@@ -11820,7 +11833,7 @@ fn a_text_frame_in_a_cell_floats_beside_the_text() {
     t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(framed), wordcraft_doc::para_block(text)];
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     let l = lay(&d);
-    let at = |i: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, i]), off: 0, affinity: None }).unwrap();
+    let at = |i: u32| l.caret(&Pos::new(StoryRef::Body, Path(vec![1, 0, 0, i]), 0)).unwrap();
     let (frame, text) = (at(0), at(1));
     assert!((frame.top - text.top).abs() < 0.5, "the frame takes no room: {} vs {}", frame.top, text.top);
     assert!(frame.x > text.x + 200.0, "right-aligned in the cell: {} vs {}", frame.x, text.x);
@@ -11844,7 +11857,7 @@ fn a_frame_inside_a_text_box_flows_with_its_text() {
     };
     d.parts.get_mut(&id).unwrap().blocks = vec![para("Name", true), para("Secretary", true), para("Commissioner", false)];
     let l = lay(&d);
-    let top = |i: usize| l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(i), off: 0, affinity: None }).unwrap().top;
+    let top = |i: usize| l.caret(&Pos::new(StoryRef::Part(id), Path::top(i), 0)).unwrap().top;
     let (name, secretary, commissioner) = (top(0), top(1), top(2));
     assert!(secretary > name + 5.0, "the second framed paragraph goes under the first: {secretary} vs {name}");
     assert!(commissioner > secretary + 5.0, "the text after them follows: {commissioner} vs {secretary}");
@@ -12671,7 +12684,7 @@ fn automatic_paragraph_spacing_drops_at_cell_edges() {
         d.insert_block(StoryRef::Body, &Path::top(2), wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("Below", Default::default())))
             .unwrap();
         let l = lay(&d);
-        let in_cell = |i: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, i]), off: 0, affinity: None }).unwrap().top;
+        let in_cell = |i: u32| l.caret(&Pos::new(StoryRef::Body, Path(vec![1, 0, 0, i]), 0)).unwrap().top;
         (in_cell(0), in_cell(1), l.caret(&Pos::body(2, 0)).unwrap().top)
     };
     let (a0, a1, a_below) = cell_tops(true);
@@ -12731,7 +12744,7 @@ fn automatic_spacing_drops_between_list_items() {
             d.body = paras;
         }
         let at = |i: u32| {
-            if in_cell { Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, i]), off: 0, affinity: None } } else { Pos::body(i as usize, 0) }
+            if in_cell { Pos::new(StoryRef::Body, Path(vec![0, 0, 0, i]), 0) } else { Pos::body(i as usize, 0) }
         };
         let l = lay(&d);
         [0, 1, 2, 3, 4].map(|i| l.caret(&at(i)).unwrap().top)
@@ -17419,9 +17432,179 @@ fn vertical_navigation_through_wrapped_field() {
         let (prev_pos, _) = l.vertical(&up_pos, None, -1, 0).expect("up move should succeed");
         let prev_c = l.caret_on(&prev_pos, 0).expect("caret on field line moving up");
         assert_eq!(prev_c.top, expected_c.top, "moving up to line {} must match downward caret top ({})", line_idx, expected_c.top);
+        assert!(para.line_offsets(line_idx).contains(&prev_pos.off), "line {} offsets must contain {}", line_idx, prev_pos.off);
         assert_eq!(prev_pos.path.0, vec![0], "back in paragraph 0");
         up_pos = prev_pos;
     }
+}
+
+/// Stale visual-line affinity whose offset is not on that line is ignored by `caret_on`,
+/// `line_bounds`, `line_span`, and `visual_step`, and a soft hyphen immediately after a wrapped
+/// field does not add hyphens at interior field wraps (#5838 review).
+#[test]
+fn stale_field_affinity_is_rejected_and_trailing_soft_hyphen_skips_interior_wraps() {
+    let mut doc = Document::new();
+    doc.last_section.margin_left = 200.0;
+    doc.last_section.margin_right = 200.0;
+    let prefix = "Intro ";
+    let suffix = "\u{00AD}tail";
+    let mut p = Paragraph::with_text(prefix, Default::default());
+    let long_text = "The quick brown fox jumps over the lazy dog and runs across the wide open fields ".repeat(4);
+    p.insert_object(
+        prefix.len(),
+        InlineObject::Field { instr: "MERGEFIELD note".into(), result: long_text, locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    let field_end = p.len();
+    p.insert_text(field_end, suffix, &Default::default()).unwrap();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+
+    let l = lay(&doc);
+    let Placed::Lines { para, .. } = &l.pages[0].items[0] else { panic!("expected laid out paragraph") };
+    assert!(para.lines.len() >= 3, "expected at least 3 lines, got {}", para.lines.len());
+    for (i, line) in para.lines.iter().enumerate().take(para.lines.len().saturating_sub(1)) {
+        assert!(line.hyphen.is_none(), "interior field wrap on line {i} must not draw a trailing soft hyphen");
+    }
+
+    // Offset 0 belongs to line 0, never continuation line 1; offset field_end + 3 ("t".."ail") belongs to the final line.
+    let stale_start = Pos::with_affinity(StoryRef::Body, Path::top(0), 0, Some(1));
+    assert_eq!(l.caret(&stale_start), l.caret(&Pos::body(0, 0)), "stale affinity at paragraph start must resolve to line 0");
+    assert_eq!(l.line_bounds(&stale_start, 0), l.line_bounds(&Pos::body(0, 0), 0));
+    assert_eq!(l.line_span(&stale_start, 0), l.line_span(&Pos::body(0, 0), 0));
+    assert_eq!(l.visual_step(&stale_start, false, 0), l.visual_step(&Pos::body(0, 0), false, 0));
+
+    let tail_off = field_end + "\u{00AD}".len() + 1;
+    let stale_tail = Pos::with_affinity(StoryRef::Body, Path::top(0), tail_off, Some(1));
+    assert_eq!(l.caret(&stale_tail), l.caret(&Pos::body(0, tail_off)), "stale affinity in trailing text must resolve to the tail's line");
+
+    // Home/End (`line_bounds`), selection bar (`selection_bar_at`/`body_line_at` + `line_span`),
+    // and column selection (`column_segments`) honour continuation-line affinity.
+    let body_y = l.pages[0].body.y;
+    let last_li = para.lines.len() - 1;
+    for li in [1usize, last_li] {
+        let on_li = Pos::with_affinity(StoryRef::Body, Path::top(0), field_end, Some(li));
+        let (home, end) = l.line_bounds(&on_li, 0).expect("line_bounds on continuation line");
+        assert_eq!(para.line_for(&home), li, "Home on continuation line {li} must stay on line {li}");
+        assert_eq!(para.line_for(&end), li, "End on continuation line {li} must stay on line {li}");
+        assert!(para.line_offsets(li).contains(&home.off));
+        assert!(para.line_offsets(li).contains(&end.off));
+
+        let mid_y = body_y + para.lines[li].top + para.lines[li].height * 0.5;
+        let bar_pos = l.selection_bar_at(0, 20.0, mid_y).expect("selection bar beside continuation line");
+        assert_eq!(para.line_for(&bar_pos), li, "selection_bar_at beside continuation line {li} must resolve to line {li}");
+        assert_eq!(l.body_line_at(0, mid_y), Some(bar_pos.clone()));
+        let (_, span_end, is_last) = l.line_span(&bar_pos, 0).expect("line_span from selection_bar_at");
+        assert_eq!(is_last, li == last_li);
+        if li == last_li {
+            assert_eq!(span_end.off, para.text_len, "last continuation line span must include trailing text");
+        }
+    }
+
+    let c1 = Pos::with_affinity(StoryRef::Body, Path::top(0), field_end, Some(1));
+    let c2 = Pos::with_affinity(StoryRef::Body, Path::top(0), field_end, Some(2));
+    let left_x = l.pages[0].body.x + 10.0;
+    let right_x = l.pages[0].body.x + 80.0;
+    let fwd = l.column_segments(&doc, hit::ColumnSelection { start: &c1, end: &c2, left: left_x, right: right_x, page_hint: 0, max_lines: 10 });
+    let rev = l.column_segments(&doc, hit::ColumnSelection { start: &c2, end: &c1, left: left_x, right: right_x, page_hint: 0, max_lines: 10 });
+    assert_eq!(fwd.len(), 2, "column selection across continuation lines 1..=2 must keep both rows");
+    assert_eq!(rev, fwd, "reverse column drag across continuation lines must select the same rows");
+}
+
+/// Drop-cap narrowing splits oversized field words within margins, and hyphenated numbers inside
+/// RTL field results split runs on bidi-level changes so UAX #9 L2 keeps `12-34` in order.
+#[test]
+fn field_result_respects_drop_cap_narrowing_and_bidi_level_splits() {
+    // 1. Drop cap: 300pt column, 3-line drop cap on 'A', followed by a ~250pt unbroken field word.
+    let make_drop_doc = |with_drop_cap: bool| {
+        let mut d = Document::new();
+        d.last_section.page_w = 300.0;
+        d.last_section.margin_left = 0.0;
+        d.last_section.margin_right = 0.0;
+        d.last_section.margin_top = 0.0;
+        d.last_section.margin_bottom = 0.0;
+        Arc::make_mut(&mut d.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+        Arc::make_mut(&mut d.styles).default_chr.size = Some(12.0);
+        let mut p = Paragraph::with_text("A", Default::default());
+        if with_drop_cap {
+            p.props.drop_cap = Some(3);
+            p.props.drop_cap_distance = Some(80.0);
+        }
+        p.insert_object(
+            p.len(),
+            InlineObject::Field {
+                instr: "DOCVARIABLE dc".into(),
+                result: "W".repeat(22),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+
+    let l_plain_width = lay(&make_drop_doc(false));
+    let Placed::Lines { para: p_no_dc, .. } = &l_plain_width.pages[0].items[0] else { panic!("expected lines") };
+    assert_eq!(p_no_dc.lines.len(), 1, "without drop cap, ~250pt field word fits in 300pt column on 1 line");
+
+    let l_drop = lay(&make_drop_doc(true));
+    let Placed::Lines { para: p_dc, .. } = &l_drop.pages[0].items[0] else { panic!("expected lines") };
+    assert!(p_dc.lines.len() >= 2, "with drop cap narrowing, ~250pt field word must wrap across lines");
+    for (i, line) in p_dc.lines.iter().enumerate() {
+        let max_x = line.xs.iter().copied().fold(0.0f32, f32::max);
+        assert!(max_x <= 300.5, "drop-cap line {i} overflowed 300pt column: max_x={max_x}");
+    }
+
+    // 2. Bidi hyphenated number inside RTL field (`"\u{05d0}\u{05d1}12-34\u{05d2}\u{05d3}"`).
+    let bidi_text = "\u{05d0}\u{05d1}12-34\u{05d2}\u{05d3}";
+    let visual_glyph_ids = |as_field: bool| -> Vec<u32> {
+        let mut d = Document::new();
+        Arc::make_mut(&mut d.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+        Arc::make_mut(&mut d.styles).default_chr.font_cs = Some(WRAP_TEST_FONT.into());
+        let mut p = if as_field {
+            let mut p = Paragraph::new();
+            p.insert_object(
+                0,
+                InlineObject::Field {
+                    instr: "MERGEFIELD code".into(),
+                    result: bidi_text.into(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                },
+                &Default::default(),
+            )
+            .unwrap();
+            p
+        } else {
+            Paragraph::with_text(bidi_text, Default::default())
+        };
+        p.props.bidi = Some(true);
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let Placed::Lines { para, .. } = &l.pages[0].items[0] else { panic!("expected lines") };
+        let line = &para.lines[0];
+        let mut positioned: Vec<(f32, u32)> = (line.c0..line.c1)
+            .flat_map(|k| {
+                let c = &para.clusters[k];
+                let x0 = line.cl_left(k).unwrap_or(0.0);
+                para.glyphs[c.g0 as usize..c.g1 as usize].iter().map(move |g| (x0 + g.dx, g.gid))
+            })
+            .collect();
+        positioned.sort_by(|a, b| a.0.total_cmp(&b.0));
+        positioned.into_iter().map(|(_, id)| id).collect()
+    };
+
+    assert_eq!(
+        visual_glyph_ids(true),
+        visual_glyph_ids(false),
+        "field result with hyphenated number in RTL text must match plain-text visual glyph order"
+    );
 }
 
 /// A word inside a field result that uses fallback faces keeps individual cluster styles

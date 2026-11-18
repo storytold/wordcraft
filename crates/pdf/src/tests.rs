@@ -2951,7 +2951,7 @@ fn shape_gradients_export_as_shadings() {
     let grad =
         |kind| ShapeFill::Gradient(Arc::new(Gradient { stops: stops.clone(), kind, tile: None, rot_with_shape: true, flip: GradientFlip::None }));
     let mut d = Document::from_text("");
-    let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0, affinity: None };
+    let at = wordcraft_doc::Pos::body(0, 0);
     for fill in [
         grad(GradientKind::Linear { angle: 90.0, scaled: false }),
         grad(GradientKind::Path { shape: PathShape::Circle, focus: [50.0; 4] }),

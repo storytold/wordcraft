@@ -1034,7 +1034,7 @@ fn comment_list_skips_comment_text() {
     s.run("select.all", &json!({})).unwrap();
     let id = s.run("review.newComment", &json!({"text": "note"})).unwrap()["id"].as_u64().unwrap() as u32;
     let part = s.doc.comments.get(&id).unwrap().part;
-    let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(part), path: wordcraft_doc::Path::top(0), off: 0, affinity: None };
+    let at = wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Part(part), wordcraft_doc::Path::top(0), 0);
     s.doc.insert_object(&at, wordcraft_doc::InlineObject::CommentStart { id }, &Default::default()).unwrap();
     let list = super::comment_list(&s);
     assert_eq!(list.iter().filter(|(x, _)| *x == id).count(), 1);

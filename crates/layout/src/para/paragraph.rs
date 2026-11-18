@@ -310,6 +310,7 @@ impl<'a> Shaped<'a> {
         // In margin: they keep their indent and the letter hangs left of them.
         let indent = if rp.drop_cap_margin { 0.0 } else { w + rp.drop_cap_distance };
         self.drop_cap = Some((self.b.clusters.len() - before, rp.drop_cap, indent));
+        self.b.drop_cap_indent = Some(indent);
         self.drop_cap_w = w;
         // The letter hangs beside the text; lines flow at the indent `break_lines` adds.
         for c in self.b.clusters.iter_mut().skip(before) {
@@ -672,6 +673,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         shown: Vec::new(),
         substituted: Vec::new(),
         span_bound: None,
+        drop_cap_indent: None,
     };
     let mut cx =
         Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp), shown: None };

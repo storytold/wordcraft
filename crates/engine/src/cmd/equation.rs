@@ -653,7 +653,7 @@ fn convert(s: &mut Session, v: &Value) -> CmdResult {
                     .map(|p| p.object_offsets().into_iter().filter(|o| matches!(p.object_at(*o), Some(InlineObject::Equation { .. }))).collect())
                     .unwrap_or_default();
                 for off in offs {
-                    let at = Pos { story, path: path.clone(), off, affinity: None };
+                    let at = Pos::new(story, path.clone(), off);
                     let (_, one) = with_eq(s, &at, |math, _| convert_math(math, professional, latex))?;
                     effect.merge(one);
                     n += 1;
