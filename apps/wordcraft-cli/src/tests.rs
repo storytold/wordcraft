@@ -267,19 +267,19 @@ fn render_rejects_missing_or_invalid_page_and_scale() {
     assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--page", "-1"])), Err("render: invalid --page `-1`: not a valid integer".into()));
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "0"])),
-        Err("render: invalid --scale `0`: scale must be a positive number".into())
+        Err("render: invalid --scale `0`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "-2"])),
-        Err("render: invalid --scale `-2`: scale must be a positive number".into())
+        Err("render: invalid --scale `-2`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "NaN"])),
-        Err("render: invalid --scale `NaN`: scale must be a positive number".into())
+        Err("render: invalid --scale `NaN`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "inf"])),
-        Err("render: invalid --scale `inf`: scale must be a positive number".into())
+        Err("render: invalid --scale `inf`: scale must be a finite positive number".into())
     );
 
     // Duplicate options
@@ -322,19 +322,19 @@ fn run_rejects_missing_or_invalid_page_and_scale() {
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "0"])),
-        Err("run: invalid --scale `0`: scale must be a positive number".into())
+        Err("run: invalid --scale `0`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "-1"])),
-        Err("run: invalid --scale `-1`: scale must be a positive number".into())
+        Err("run: invalid --scale `-1`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "NaN"])),
-        Err("run: invalid --scale `NaN`: scale must be a positive number".into())
+        Err("run: invalid --scale `NaN`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "inf"])),
-        Err("run: invalid --scale `inf`: scale must be a positive number".into())
+        Err("run: invalid --scale `inf`: scale must be a finite positive number".into())
     );
 
     // Duplicate options
@@ -495,6 +495,27 @@ fn command_line_template_wins_over_the_scripts_file() {
     assert!(!std::fs::read_to_string(&a).unwrap().contains("FROM FILE"));
     run(&args(&["run", "--script", &script, "--save", &b.to_string_lossy()])).unwrap();
     assert!(std::fs::read_to_string(&b).unwrap().contains("FROM FILE"));
+}
+
+#[test]
+fn cmd_value_missing_is_reported() {
+    let missing = std::env::temp_dir().join(format!(
+        "wc-cli-missing-cmd-{}-{}.docx",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+    ));
+    assert!(!missing.exists());
+    let missing = missing.to_string_lossy();
+    for argv in [
+        vec!["run", "--cmd"],
+        vec!["run", "--cmd", "--save", "out.docx"],
+        vec!["run", "--cmd", "caret.docEnd", "--cmd", "--print"],
+        vec!["run", "--cmd", "--bogus"],
+        vec!["run", "--cmd", "--file", &missing],
+    ] {
+        assert_eq!(run(&args(&argv)), Err("--cmd needs a value".into()), "{argv:?}");
+    }
+    assert!(run(&args(&["run", "--cmd", "caret.docEnd", "--cmd", "caret.docStart"])).is_ok());
 }
 
 #[test]
