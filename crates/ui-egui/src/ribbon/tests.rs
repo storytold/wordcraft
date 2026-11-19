@@ -199,6 +199,68 @@ fn design_style_set_gallery_reads_from_the_right_in_rtl() {
     }
 }
 
+/// #3917: an outline's Weight submenu offers Word's nine weights, each a named entry with a
+/// line sample drawn at its weight; the current weight is highlighted, and choosing one sets it.
+#[test]
+fn weight_menu_draws_each_weight_and_applies_it() {
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    a.run("select.all", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let current = crate::wordart_menus::current_outline(app).map(|c| c.1);
+            weight_menu(ui, app, "format.textEffects", current, |w| json!({"outline": {"color": "1F4E79", "width": w}}));
+        },
+        a,
+    );
+    h.run_steps(2);
+    let labels = ["0.25 pt", "0.5 pt", "0.75 pt", "1 pt", "1.5 pt", "2.25 pt", "3 pt", "4.5 pt", "6 pt"];
+    for label in labels {
+        let node = h.get_by_label(label);
+        assert_eq!(node.accesskit_node().toggled(), Some(Toggled::False), "{label} not highlighted with no outline set");
+    }
+    // One line sample per weight, at that weight.
+    let widths: Vec<f32> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::LineSegment { stroke, .. } => Some(stroke.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(widths, [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0].map(|w: f32| w.max(1.0)), "samples, a pixel at least");
+    let outline = |h: &egui_kittest::Harness<'_, WordApp>| crate::wordart_menus::current_outline(h.state());
+    for (label, width) in [("6 pt", 6.0), ("0.25 pt", 0.25)] {
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert_eq!(outline(&h), Some((wordcraft_doc::Rgb::parse("1F4E79").unwrap(), width)), "{label}");
+        assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True), "{label} is highlighted once chosen");
+        assert_eq!(h.get_by_label("1 pt").accesskit_node().toggled(), Some(Toggled::False));
+    }
+}
+
+/// #3917 review: Shape Outline › Weight on a drawing canvas reads the canvas's border, so its
+/// weight is highlighted and a new weight keeps the border's colour instead of turning it black.
+#[test]
+fn shape_outline_weight_keeps_a_canvas_borders_colour() {
+    use super::shape::{selected_outline, shape_weight_menu};
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("insert.canvas", json!({})).unwrap();
+    a.run("shape.outline", json!({"color": "1F4E79", "width": 1.5})).unwrap();
+    let blue = wordcraft_doc::Rgb::parse("1F4E79");
+    assert_eq!(selected_outline(&a.session), blue.map(|c| (c, 1.5)), "the canvas's border");
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(|ui, app: &mut WordApp| shape_weight_menu(ui, app), a);
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("1.5 pt").accesskit_node().toggled(), Some(Toggled::True), "the border's weight");
+    h.get_by_label("3 pt").click();
+    h.run_steps(2);
+    assert_eq!(selected_outline(&h.state().session), blue.map(|c| (c, 3.0)), "a new weight keeps the border blue");
+}
+
 /// #2738: Home › Underline's drop-down: every line sample is a named entry (assistive
 /// technology, tooltips) that applies its own style; Words only, None and Underline Color ›
 /// Automatic do what they say.
@@ -1091,4 +1153,153 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     let before = (size(&a), a.session.undo_depth());
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
+}
+
+fn table_design_harness(language: &str, theme: egui::Theme) -> egui_kittest::Harness<'static, WordApp> {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app.run("ui.language", json!({"value": language})).unwrap();
+    app.run("ui.theme", json!({"value": if theme == egui::Theme::Dark { "dark" } else { "light" }})).unwrap();
+    egui_kittest::Harness::builder().with_size(vec2(1600.0, 700.0)).with_theme(theme).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            assert_eq!(ctx.global_style().visuals.dark_mode, theme == egui::Theme::Dark, "the requested palette is active while drawing");
+            ui.horizontal_top(|ui| table_design(app, ui));
+        },
+        app,
+    )
+}
+
+/// The Shading arrow's name: "Shading options", in the interface language (#3172).
+fn shading_options() -> String {
+    crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Shading"))])
+}
+
+/// #1726: the text must actually be painted, and both hit targets must share one row in
+/// Table Styles' vertical stack. Accessibility labels alone cannot prove visible text.
+#[test]
+fn table_shading_label_is_painted_beside_its_arrow() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    // Vietnamese and German labels need the embedded catalogs (CI has them); English always runs.
+    let languages: &[&str] = if crate::i18n::catalogs_embedded() { &["en", "vi", "de"] } else { &["en"] };
+    for &language in languages {
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let mut h = table_design_harness(language, theme);
+            h.run_steps(3);
+            let label = tl!("Shading");
+            let main = h.get_by_role_and_label(Role::Button, label).rect();
+            let arrow = h.get_by_role_and_label(Role::Button, &shading_options()).rect();
+            assert!((main.top() - arrow.top()).abs() < 0.01 && (main.bottom() - arrow.bottom()).abs() < 0.01);
+            assert!((main.right() - arrow.left()).abs() < 0.01, "{language}: {main:?}, {arrow:?}");
+            let text = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == label => Some(t),
+                    _ => None,
+                })
+                .expect("Shading is drawn as text, not just a hover tip");
+            let text_rect = Rect::from_min_size(text.pos, text.galley.size());
+            assert!(main.contains_rect(text_rect), "{language}: {text_rect:?} outside {main:?}");
+            assert!(text_rect.left() >= main.left() + 24.0, "the label starts after the icon");
+        }
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+fn first_cell_shading(app: &WordApp) -> Option<wordcraft_doc::Rgb> {
+    app.session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells[0].props.shading
+}
+
+fn painted_text_rect(output: &egui::FullOutput, text: &str) -> Option<Rect> {
+    output.shapes.iter().find_map(|s| match &s.shape {
+        egui::Shape::Text(t) if t.galley.text() == text => Some(Rect::from_min_size(t.pos, t.galley.size())),
+        _ => None,
+    })
+}
+
+/// #1726: the arrow opens the real colour menu without applying the remembered colour;
+/// picking a swatch remembers it, and the command half reapplies it after one-step undo.
+#[test]
+fn table_shading_split_keeps_palette_and_apply_separate() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut h = table_design_harness("en", egui::Theme::Light);
+    h.state_mut().canvas.last_shading = "0070C0".into();
+    h.run_steps(3);
+    let original = first_cell_shading(h.state());
+    h.get_by_role_and_label(Role::Button, &shading_options()).click();
+    h.run();
+    assert_eq!(first_cell_shading(h.state()), original, "opening the palette must not apply the last colour");
+    assert!(painted_text_rect(h.output(), "No Color").is_some(), "the arrow opens the shading palette");
+    // Swatches are drawn controls; locate the red standard swatch from its painted box.
+    let red = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.fill == egui::Color32::RED && r.rect.size() == vec2(15.0, 15.0) => Some(r.rect.center()),
+            _ => None,
+        })
+        .expect("red standard colour is visible in the palette");
+    h.hover_at(red);
+    h.drag_at(red);
+    h.drop_at(red);
+    h.run();
+    assert_eq!(first_cell_shading(h.state()), Some(wordcraft_doc::Rgb(255, 0, 0)));
+    assert_eq!(h.state().canvas.last_shading, "FF0000");
+    assert!(painted_text_rect(h.output(), "No Color").is_none(), "a colour pick closes the palette");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(2);
+    assert_eq!(first_cell_shading(h.state()), original);
+    h.get_by_role_and_label(Role::Button, "Shading").click();
+    h.run();
+    assert_eq!(first_cell_shading(h.state()), Some(wordcraft_doc::Rgb(255, 0, 0)));
+    assert!(painted_text_rect(h.output(), "No Color").is_none(), "the command half must not open the palette");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(first_cell_shading(h.state()), original);
+    h.get_by_role_and_label(Role::Button, "Shading").click();
+    h.run();
+    assert_eq!(first_cell_shading(h.state()), Some(wordcraft_doc::Rgb(255, 0, 0)));
+    h.get_by_role_and_label(Role::Button, &shading_options()).click();
+    h.run();
+    let clear = painted_text_rect(h.output(), "No Color").expect("No Color is visible in the palette").center();
+    h.hover_at(clear);
+    h.drag_at(clear);
+    h.drop_at(clear);
+    h.run();
+    assert_eq!(first_cell_shading(h.state()), None);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(first_cell_shading(h.state()), Some(wordcraft_doc::Rgb(255, 0, 0)), "No Color is undone in one step");
+}
+
+/// #1726 with #662: in a compact group the labelled split button drops its label and keeps only
+/// its icon and arrow, as small buttons do; its name stays for the tooltip and screen readers.
+#[test]
+fn a_labelled_split_button_shows_only_its_icon_when_compact() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    for compact in [false, true] {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 100.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                crate::ribbon_fit::set_compact(ui.ctx(), compact);
+                let action = crate::widgets::ButtonAction::new("table.shading", json!({}), false);
+                crate::widgets::split_labeled(ui, app, "shadingNoBar", "Shading", action, None, |_, _| {});
+            },
+            app,
+        );
+        h.run_steps(2);
+        let button = h.get_by_role_and_label(Role::Button, "Shading").rect();
+        assert_eq!(painted_text_rect(h.output(), "Shading").is_some(), !compact, "compact: {compact}");
+        if compact {
+            assert_eq!(button.width(), 24.0, "only the icon");
+        } else {
+            assert!(button.width() > 30.0, "icon and label: {button:?}");
+        }
+    }
 }

@@ -116,8 +116,9 @@ fn with_page_map<T>(ctx: &mut Ctx, map: &mut Vec<(usize, u32)>, f: impl FnOnce(&
 /// drawn by its first and last paragraph.
 #[derive(Clone, Copy)]
 struct Rooms {
-    /// Joined to the paragraph above.
+    /// Joined to the paragraph above, and to the one below.
     above: bool,
+    below: bool,
     top: f32,
     bottom: f32,
 }
@@ -127,7 +128,7 @@ impl Rooms {
         let above = joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None);
         let below = joined(ctx.doc, &ctx.doc.body, block, Some(block + 1), None);
         let own = Edges::own(pl, 0, pl.lines.len());
-        Rooms { above, top: if above { 0.0 } else { own.top }, bottom: if below { 0.0 } else { own.bottom } }
+        Rooms { above, below, top: if above { 0.0 } else { own.top }, bottom: if below { 0.0 } else { own.bottom } }
     }
 }
 
@@ -348,9 +349,14 @@ impl<'a> Flow<'a> {
         // The room left on the page below this paragraph (with the 0.01 pt of slack below).
         // Unlimited where this paragraph does not fit here itself: it moves anyway, and the run
         // is counted whole as before.
-        let room = pb.bottom + 0.01 - pb.y - height;
-        let room = if room < 0.0 { f32::INFINITY } else { room };
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, room, &mut ctx.counters.clone()) } else { 0.0 };
+        let after = if rp.keep_next { space_after_kept(ctx, self.block, rp, self.label.is_some()) } else { 0.0 };
+        let room = pb.bottom + 0.01 - pb.y - height - after;
+        // During balancing, a trial column that cuts a kept run must grow until the run fits.
+        let balancing = pb.balance.is_some_and(|(page, _)| pb.pages.len() == page + 1);
+        let room = if room < 0.0 || balancing { f32::INFINITY } else { room };
+        let need = height
+            + after
+            + if rp.keep_next { next_first_line(ctx, self.block, &rp.style, self.width, 0, room, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         let next_room = pb.next_room(self.body_top);
@@ -359,7 +365,7 @@ impl<'a> Flow<'a> {
         let whole_run_fits = |ctx: &mut Ctx| {
             !rp.keep_next
                 || room.is_infinite()
-                || height + next_first_line(ctx, self.block, self.width, 0, f32::INFINITY, &mut ctx.counters.clone()) <= next_room
+                || height + after + next_first_line(ctx, self.block, &rp.style, self.width, 0, f32::INFINITY, &mut ctx.counters.clone()) <= next_room
         };
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= next_room && whole_run_fits(ctx) {
             pb.advance(self.block, self.body_top);
@@ -541,7 +547,12 @@ impl<'a> Flow<'a> {
             pb.bottom = pb.body_floor().max(placed_bottom).min(pb.orig_bottom);
         }
         let mut items = Vec::new();
-        let mut edges = Edges { top: if l0 == 0 { rooms.top } else { 0.0 }, bottom: if l1 >= n { rooms.bottom } else { 0.0 }, up: 0.0 };
+        let mut edges = Edges {
+            top: if l0 == 0 { rooms.top } else { 0.0 },
+            bottom: if l1 >= n { rooms.bottom } else { 0.0 },
+            up: 0.0,
+            joined: [l0 == 0 && rooms.above, l1 >= n && rooms.below],
+        };
         if l0 == 0
             && rooms.above
             && let Some((page, col, end)) = pb.para_end
@@ -1016,7 +1027,7 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// fit in the `room` left on the page after the paragraphs before it breaks as usual, like a
 /// single kept paragraph that does not fit (measured in Word for Windows): the chain ends there
 /// and only its first lines count, so the paragraphs before it stay on the page.
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, room: f32, counters: &mut Counters) -> f32 {
+fn next_first_line(ctx: &mut Ctx, block: usize, previous_style: &str, width: f32, depth: usize, room: f32, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
@@ -1052,11 +1063,13 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, room: 
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
             let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-            let whole = pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after;
+            let before = if pl.rp.contextual_spacing && pl.rp.style == previous_style { 0.0 } else { pl.rp.space_before };
+            let paragraph = before + top + pl.height + bottom;
+            let whole = paragraph + pl.rp.space_after;
             // It fits when it does, without its space after: placement measures a paragraph's
             // own fit without trailing spacing too. The spacing still counts for what follows.
-            if pl.rp.keep_next && depth < 8 && whole - pl.rp.space_after <= room {
-                whole + next_first_line(ctx, block + 1, width, depth + 1, room - whole, counters)
+            if pl.rp.keep_next && depth < 8 && paragraph <= room {
+                whole + next_first_line(ctx, block + 1, &pl.rp.style, width, depth + 1, room - whole, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
@@ -1064,7 +1077,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, room: 
                     (Some(first), Some(last)) => last.top + last.height - first.top,
                     _ => 0.0,
                 };
-                pl.rp.space_before
+                before
                     + top
                     + if pl.rp.keep_lines {
                         // Placed whole, with its bottom border room.
