@@ -258,6 +258,38 @@ fn automation_root_flags_are_taken_out_of_the_mcp_arguments() {
 }
 
 #[test]
+fn automation_roots_preserve_mcp_option_operand_boundaries() {
+    let dir = std::env::temp_dir().to_string_lossy().into_owned();
+    let missing = std::env::temp_dir().join(format!(
+        "wc-cli-missing-root-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+    ));
+    assert!(!missing.exists());
+    let missing = missing.to_string_lossy();
+    for (option, value) in [("--author", "Alice"), ("--connect", "127.0.0.1:9")] {
+        for root in ["--automation-read-root", "--automation-write-root"] {
+            let inline = format!("{root}={dir}");
+            for malformed in [args(&[option, root, &dir, value]), args(&[option, &inline, value]), args(&[option, root, &missing, value])] {
+                let error = automation_roots("mcp", &malformed).err().unwrap();
+                assert_eq!(error, format!("mcp: {option} requires a value"), "{malformed:?}");
+            }
+            for valid in [
+                args(&[option, value, root, &dir]),
+                args(&[root, &dir, option, value]),
+                args(&[option, value, &inline]),
+                args(&[&inline, option, value]),
+            ] {
+                let (roots, left) = automation_roots("mcp", &valid).unwrap();
+                assert!(roots.is_some(), "{valid:?}");
+                assert_eq!(left, args(&[option, value]), "{valid:?}");
+                assert!(validate_options("mcp", &left, MCP_OPTIONS).is_ok(), "{valid:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn automation_root_flags_reject_bad_operands_and_missing_folders() {
     for bad in [
         args(&["--automation-read-root"]),
