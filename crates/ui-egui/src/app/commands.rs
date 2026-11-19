@@ -4,6 +4,9 @@ use super::{
     table_pen, theme, widgets, zotero,
 };
 
+/// The document's own save stamps: zoom, last-modified-by, created, modified and revision.
+type SaveStamps = (Option<wordcraft_doc::Zoom>, String, String, String, u32);
+
 impl WordApp {
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
     pub(crate) fn run_keep_view(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -28,6 +31,10 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // While Markdown Source is open, Undo and Redo work on its typing, as Ctrl+Z does there.
+        if matches!(id, "edit.undo" | "edit.redo") && self.session.md_source.is_some() {
+            return crate::md_source::undo(self, id == "edit.redo");
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -105,6 +112,42 @@ impl WordApp {
         r
     }
 
+    /// File › Export's `copy` (#6131) writes a copy and never the document's own file. The host
+    /// page's Save writes the opened file under its own name and its flag can't say "copy", so a
+    /// copy named like the opened file would overwrite it with unsaved text; and `password`
+    /// changes the document's own later saves. Both are refused before anything is written.
+    fn copy_save(&self, id: &str, name: &str, params: &Value) -> Result<bool, String> {
+        let as_copy = params.get("copy").and_then(Value::as_bool) == Some(true);
+        if !as_copy {
+            return Ok(false);
+        }
+        if self.services.host_save.is_some() {
+            let opened = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+            if opened.as_deref() == Some(name) {
+                return Err("a copy can't have the same name as the open document: choose another name".into());
+            }
+        }
+        if matches!(id, "file.save" | "file.saveAs") && params.get("password").is_some_and(|pw| !pw.is_null()) {
+            return Err("`password` changes the document's own saves, so it can't come with `copy` (use file.encrypt)".into());
+        }
+        Ok(true)
+    }
+
+    /// A copy (File › Export, #6131) writes its bytes with fresh save stamps; the document's own
+    /// are then put back, so its next Save still goes to the original file.
+    fn restore_copy_stamps(&mut self, as_copy: bool, stamps: &SaveStamps) {
+        if as_copy {
+            let (zoom, by, created, modified, revision) = stamps;
+            (
+                self.session.doc.settings.zoom,
+                self.session.doc.core.last_modified_by,
+                self.session.doc.core.created,
+                self.session.doc.core.modified,
+                self.session.doc.core.revision,
+            ) = (*zoom, by.clone(), created.clone(), modified.clone(), *revision);
+        }
+    }
+
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -141,35 +184,31 @@ impl WordApp {
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
-            let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+            // Inspect only the suffix bytes: no full-name allocation or UTF-8 slicing.
+            let has_pdf_suffix = name.as_bytes().last_chunk::<4>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".pdf"));
+            let name = if id == "file.exportPdf" && !has_pdf_suffix { format!("{name}.pdf") } else { name };
             // `copy` (File › Export, #6131) writes a copy: the document keeps its unsaved changes,
             // its name and its save stamps, as for a PDF.
-            let as_copy = params.get("copy").and_then(Value::as_bool) == Some(true);
-            // The host page's Save writes the opened file under its own name and its flag can't say
-            // "copy": a copy named like the opened file would overwrite it with unsaved text.
-            if as_copy && self.services.host_save.is_some() {
-                let opened = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
-                if opened.as_deref() == Some(name.as_str()) {
-                    return Err("a copy can't have the same name as the open document: choose another name".into());
-                }
-            }
+            let as_copy = self.copy_save(id, &name, &params)?;
             // A save with a password encrypts this and later saves (`file.save`'s `password`).
             if matches!(id, "file.save" | "file.saveAs")
                 && let Some(pw) = params.get("password").filter(|v| !v.is_null())
             {
-                if as_copy {
-                    return Err("`password` changes the document's own saves, so it can't come with `copy` (use file.encrypt)".into());
-                }
                 if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
                     return Err("only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password, and it can't be empty".into());
                 }
                 self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
             }
+            // Like a failed native save, a failed serialization or delivery keeps the save stamps.
+            let before_stamp = (
+                self.session.doc.settings.zoom,
+                self.session.doc.core.last_modified_by.clone(),
+                self.session.doc.core.created.clone(),
+                self.session.doc.core.modified.clone(),
+                self.session.doc.core.revision,
+            );
             // A save is a save, download or not: advance the revision and modified stamp (#262).
             // A copy carries fresh stamps too, but the document's own are put back after.
-            let doc = &self.session.doc;
-            let before_stamp =
-                (doc.settings.zoom, doc.core.last_modified_by.clone(), doc.core.created.clone(), doc.core.modified.clone(), doc.core.revision);
             if matches!(id, "file.save" | "file.saveAs") {
                 self.session.stamp_save();
             }
@@ -177,12 +216,20 @@ impl WordApp {
             let password =
                 if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
             let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
-            let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts);
-            if as_copy {
-                let core = &mut self.session.doc.core;
-                (self.session.doc.settings.zoom, core.last_modified_by, core.created, core.modified, core.revision) = before_stamp;
-            }
-            let bytes = bytes?;
+            let bytes = match wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    (
+                        self.session.doc.settings.zoom,
+                        self.session.doc.core.last_modified_by,
+                        self.session.doc.core.created,
+                        self.session.doc.core.modified,
+                        self.session.doc.core.revision,
+                    ) = before_stamp;
+                    return Err(error);
+                }
+            };
+            self.restore_copy_stamps(as_copy, &before_stamp);
             // A ticket left over from an earlier call isn't this save's.
             let saves = self.services.async_saves.clone();
             if let Some(saves) = &saves {
@@ -202,6 +249,13 @@ impl WordApp {
                 (None, None) => Ok(()),
             };
             if let Err(e) = delivered {
+                (
+                    self.session.doc.settings.zoom,
+                    self.session.doc.core.last_modified_by,
+                    self.session.doc.core.created,
+                    self.session.doc.core.modified,
+                    self.session.doc.core.revision,
+                ) = before_stamp;
                 let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
                 log::error!("download of {name} failed: {e}");
                 self.status(msg.clone());
@@ -278,6 +332,13 @@ impl WordApp {
             && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
         {
             self.autosave_path = self.session.path.clone();
+        }
+        // A Markdown file edited in the formatted view was written out again, not kept as it was.
+        if let Ok(v) = &r
+            && matches!(id, "file.save" | "file.saveAs")
+            && v.get("rewritten").and_then(Value::as_bool) == Some(true)
+        {
+            self.status_long(tl!("Saved. Edits in the formatted view meant writing the Markdown out again, so its own layout wasn't kept."));
         }
         // A renamed file is the same file: AutoSave keeps covering it, and Recent drops the old name.
         if r.is_ok()
@@ -679,7 +740,7 @@ impl WordApp {
                     }
                 }
                 let size = self.ui.interface_size;
-                json!({"auto": size.is_auto(), "percent": size.drawn_percent(self.native_scale)})
+                json!({"auto": size.is_auto(), "percent": size.drawn_percent_within(self.native_scale, self.auto_scale_limit)})
             }
             "ui.animations" => {
                 // `system` (follow the system's animation setting), `on` or `off`; no value reads
@@ -703,6 +764,28 @@ impl WordApp {
                     }
                 }
                 json!({"statusCount": self.ui.status_count.code()})
+            }
+            "ui.scrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: mouse-wheel scroll speed (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.scroll_speed = s,
+                        None => return Some(Err(format!("unknown scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"scrollSpeed": self.ui.scroll_speed.code(), "factor": self.ui.scroll_speed.wheel_factor()})
+            }
+            "ui.touchpadScrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: touchpad scroll speed on Wayland (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.touchpad_scroll_speed = s,
+                        None => return Some(Err(format!("unknown touchpad scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"touchpadScrollSpeed": self.ui.touchpad_scroll_speed.code(), "factor": self.ui.touchpad_scroll_speed.touchpad_factor()})
             }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
@@ -765,7 +848,7 @@ impl WordApp {
                 json!({"dir": dir})
             }
             // The built-in file browser (#576), for when the system's file dialog doesn't show up
-            // (desktop only): `purpose` is document (default), picture, recipients or save. A system
+            // (desktop only): `purpose` is document (default), picture, recipients, save or export. A system
             // dialog still waiting for an answer is given up as cancelled.
             #[cfg(not(target_arch = "wasm32"))]
             "ui.fileBrowser" => {
@@ -1146,6 +1229,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.recentClear"
             | "ui.displayServer"
             | "ui.statusCount"
+            | "ui.scrollSpeed"
+            | "ui.touchpadScrollSpeed"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }
