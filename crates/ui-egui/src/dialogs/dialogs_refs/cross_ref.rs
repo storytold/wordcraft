@@ -157,6 +157,7 @@ impl WordForm for CrossRefForm {
         let mut selection = self.selected.map_or_else(|| Selection::new(Vec::new(), None, None), Selection::single);
         let targets = &self.targets;
         let _ = List::new(Label::from(tl!("For which item:").to_string()))
+            .max_rows(8)
             .select(SelectMode::Single)
             .empty(Label::from(tl!("Nothing of this type in the document.").to_string()))
             .selection(Bind::bound(&mut selection))

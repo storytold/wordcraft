@@ -242,6 +242,7 @@ impl WordForm for CustomPropertiesForm {
         let mut selection = if self.selected < rows.len() { Selection::single(self.selected) } else { Selection::default() };
         List::new(Label::from(tl!("Properties").to_string()))
             .id_salt("props")
+            .max_rows(6)
             .select(SelectMode::Single)
             .allow_empty(true)
             .empty(Label::from(tl!("This document has no custom properties.").to_string()))

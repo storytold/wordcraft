@@ -168,8 +168,9 @@ pub(crate) struct OrganizerDialog {
 fn glyph(ty: &str) -> &'static str {
     match ty {
         "character" => "a",
-        "table" => "⊞",
-        "numbering" => "≡",
+        // Plain characters: the interface fonts have no glyph for the box-plus and three-bar symbols.
+        "table" => "#",
+        "numbering" => "1.",
         _ => "¶",
     }
 }

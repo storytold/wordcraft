@@ -30,6 +30,14 @@ fn app_with(text: &str) -> WordApp {
     app
 }
 
+/// An app in Focus: the title bar's in-place search is hidden there, so `commands` opens the Search Commands dialog
+/// (S-L305: `search_commands::open` alone decides between the two faces).
+fn app_in_focus(text: &str) -> WordApp {
+    let mut app = app_with(text);
+    app.session.view.focus_mode = true;
+    app
+}
+
 fn props(app: &WordApp) -> wordcraft_doc::props::ParaProps {
     app.session.doc.para_at(&app.session.sel.focus).map(|p| p.props.clone()).unwrap_or_default()
 }
@@ -63,6 +71,18 @@ fn fields_of(app: &WordApp, key: &str) -> Json {
     app.dialog_host.open_dialogs().into_iter().find(|d| d.key.as_deref() == Some(key)).and_then(|d| d.fields).unwrap_or(Json::Null)
 }
 
+/// What the focused text box shows. The Search Commands and Icons boxes keep their query inside the framework's
+/// palette and picker, which expose no JSON field, so the box is read as a user (or a screen reader) sees it.
+fn focused_text(h: &egui_kittest::Harness<'_, WordApp>) -> String {
+    use egui::accesskit::Role;
+    [Role::TextInput, Role::SearchInput]
+        .into_iter()
+        .flat_map(|role| h.query_all(egui_kittest::kittest::By::new().role(role)))
+        .find(|n| n.accesskit_node().is_focused())
+        .and_then(|n| n.value())
+        .unwrap_or_default()
+}
+
 /// Opens the named dialog through the name table and lets it show.
 fn open_named(h: &mut egui_kittest::Harness<'_, WordApp>, name: &str, params: Json) -> DialogId {
     let opened = super::open(h.state_mut(), name, &params);
@@ -78,7 +98,12 @@ fn set_field(h: &mut egui_kittest::Harness<'_, WordApp>, key: &str, field: &str,
 }
 
 fn press(h: &mut egui_kittest::Harness<'_, WordApp>, label: &str) {
-    h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+    // A dialog over another hides the one beneath from the tree, so only the shown button answers.
+    let shown: Vec<_> = h.query_all_by_role_and_label(egui::accesskit::Role::Button, label).filter(|n| !n.accesskit_node().is_hidden()).collect();
+    assert_eq!(shown.len(), 1, "one shown {label} button");
+    for button in shown {
+        button.click();
+    }
     h.run_steps(3);
 }
 
@@ -168,7 +193,8 @@ fn the_table_grid_previews_the_hovered_table_until_the_click() {
     a.run("ui.tab", json!({"tab": "Insert"})).unwrap();
     let mut h = app_harness(a);
     h.run_steps(4);
-    h.get_by_label("Add a Table").click();
+    // The ribbon button is named "Table"; "Add a Table" is its tooltip.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Table").click();
     h.run_steps(3);
     // The row 3, column 4 square: the smallest node that names a 4×3 table.
     // PLAN: assumed the picker's squares are named "<columns>×<rows> …" (ribbon-w16, `TableSizePicker`).
@@ -320,9 +346,9 @@ fn shortcut_text_is_swallowed_once() {
         repeat: false,
         modifiers: egui::Modifiers { alt, ..Default::default() },
     };
-    let query = |h: &egui_kittest::Harness<'_, WordApp>| fields_of(h.state(), "commands").get("query").and_then(Value::as_str).unwrap_or("?").to_string();
+    let query = |h: &egui_kittest::Harness<'_, WordApp>| focused_text(h);
     let fresh = || {
-        let mut h = app_harness(app_with("Text"));
+        let mut h = app_harness(app_in_focus("Text"));
         h.run_steps(4);
         h
     };
@@ -360,11 +386,12 @@ fn shortcut_text_is_swallowed_once() {
 fn screen_paper_color_search_result_opens_general_options() {
     use wordcraft_engine::cmd::view::PaperColor;
 
-    let mut h = app_harness(app_with("Unchanged document"));
+    let mut h = app_harness(app_in_focus("Unchanged document"));
     h.run_steps(3);
     open_named(&mut h, "commands", json!({}));
-    set_field(&mut h, "commands", "query", json!("screen paper color"));
-    h.run_steps(2);
+    // The palette keeps its query to itself: type it, as a user does.
+    h.event(egui::Event::Text("screen paper color".into()));
+    h.run_steps(3);
     h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Screen Paper Color"))
         .expect("the paper-colour command is a search result")
         .click();
@@ -383,17 +410,18 @@ fn screen_paper_color_search_result_opens_general_options() {
 #[test]
 fn boxes_that_keep_focus_do_not_interrupt_ime_every_frame() {
     // The dialog key and JSON field of the box each dialog types into; Go To is the Find dialog's `goToTarget`.
-    let typed = |app: &WordApp, name: &str| -> String {
+    // The Search Commands and Icons boxes keep their query in the framework's palette and picker: read the focused box.
+    let typed = |h: &egui_kittest::Harness<'_, WordApp>, name: &str| -> String {
         let (key, field) = match name {
-            "commands" | "icons" => (name, "query"),
+            "commands" | "icons" => return focused_text(h),
             "goto" => ("find", "goToTarget"),
             _ => (name, "newLabel"),
         };
-        fields_of(app, key).get(field).and_then(Value::as_str).unwrap_or_default().to_string()
+        fields_of(h.state(), key).get(field).and_then(Value::as_str).unwrap_or_default().to_string()
     };
     let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
     for name in ["commands", "icons", "goto", "newLabel"] {
-        let mut h = app_harness(app_with("Unchanged document"));
+        let mut h = app_harness(app_in_focus("Unchanged document"));
         h.run_steps(2);
         let opened = super::open(h.state_mut(), name, &json!({}));
         assert!(opened.is_some(), "{name} opens");
@@ -410,7 +438,7 @@ fn boxes_that_keep_focus_do_not_interrupt_ime_every_frame() {
             h.step();
             assert_eq!(interrupted(&h), Some(false), "{name}: typing {t} resets the input method");
         }
-        assert_eq!(typed(h.state(), name), "ab", "{name}: the keys reach the box");
+        assert_eq!(typed(&h, name), "ab", "{name}: the keys reach the box");
 
         // Tab moves the keyboard to the dialog's next control and the box takes it back. As
         // egui-winit does, count a reset when IME comes back on or is interrupted while on.
@@ -435,7 +463,7 @@ fn boxes_that_keep_focus_do_not_interrupt_ime_every_frame() {
         h.event(key(egui::Key::C));
         h.event(egui::Event::Text("c".into()));
         h.step();
-        assert_eq!(typed(h.state(), name), "abc", "{name}: the box has the keyboard back after Tab");
+        assert_eq!(typed(&h, name), "abc", "{name}: the box has the keyboard back after Tab");
     }
 }
 
@@ -478,13 +506,14 @@ fn merge_records_dialog_checks_the_range_before_merging() {
     h.run_steps(3);
     let id = open_named(&mut h, "mergeRecords", json!({}));
     set_field(&mut h, "mergeRecords", "choice", json!(2));
-    set_field(&mut h, "mergeRecords", "from", json!("3"));
-    set_field(&mut h, "mergeRecords", "to", json!("2"));
+    // The range fields are number fields: they hold numbers, not text.
+    set_field(&mut h, "mergeRecords", "from", json!(3));
+    set_field(&mut h, "mergeRecords", "to", json!(2));
     press(&mut h, "OK");
     assert!(is_open(h.state(), "mergeRecords"), "the dialog stays open");
     let held = h.state().dialog_host.held_state(id);
     assert!(matches!(held, Some(HeldOk::Refused(_))), "the range with no records is refused");
-    set_field(&mut h, "mergeRecords", "to", json!("3"));
+    set_field(&mut h, "mergeRecords", "to", json!(3));
     press(&mut h, "OK");
     assert!(!is_open(h.state(), "mergeRecords"), "nothing to ask about: the merge opens beside");
     assert_ne!(h.state().session.document_id(), source, "the merge is a new document");
@@ -1423,8 +1452,12 @@ fn every_dialog_name_opens_its_dialog_or_none() {
     // PLAN: the keys of the names added above are assumed equal to the names, except the border tabs (one dialog).
     for name in always {
         let mut a = app_with("Some text\nMore text");
+        // The hosted parameter dialogs open nothing before the window's context is known.
+        a.ctx = Some(egui::Context::default());
         a.run("mailings.recipients", json!({"csv": "Name\nAda\nAlan"})).unwrap();
         let _ = a.run("select.all", json!({}));
+        // The in-place title-bar search takes `commands` unless the screen hides it.
+        a.session.view.focus_mode = name == "commands";
         let opened = super::open(&mut a, name, &json!({}));
         assert!(opened.is_some(), "{name} opens");
         let keys = open_keys(&a);

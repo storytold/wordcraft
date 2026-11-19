@@ -85,6 +85,8 @@ fn legacy_menu_keys_stay_off_the_ribbon_letters_and_all_resolve() {
         assert!(!taken.iter().any(|l| l.starts_with(first)), "{keys} starts on a ribbon letter");
         assert!(!legacy().iter().any(|(k, _)| *k != keys && k.starts_with(keys)), "{keys} hides a longer sequence");
         let mut b = app();
+        // The hosted parameter dialogs open nothing before the window's context is known.
+        b.ctx = Some(egui::Context::default());
         if command.id == "ui.dialog" {
             b.run(&command.id, command.params.clone()).unwrap();
             assert!(!b.dialog_host.is_empty(), "{keys}: dialog {}", command.params);

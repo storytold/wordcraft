@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel};
-use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft::ui::layout_components::Stack;
 use craft::ui::patterns::form_dialogs::{
     ActionEnabled, FormCx, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerWords,
@@ -46,10 +46,8 @@ pub(super) fn bookmark_names(doc: &wordcraft_doc::Document, by_location: bool, h
 /// and once a bookmark is deleted Cancel reads Close. The list names come from the session each
 /// pass (`prepare`); the dialog keeps only the user's choices.
 pub(crate) struct BookmarkDialog {
-    /// The name the box opens with, taken on the first pass.
-    initial: Option<String>,
-    /// The name the box opened with: what an outside OK (`confirm`) adds.
-    opened: String,
+    /// The name box's text: it opens on the bookmark around the caret, and an outside OK (`confirm`) adds it.
+    name: String,
     by_location: bool,
     hidden: bool,
     /// The names listed, refreshed from the session before every pass.
@@ -83,8 +81,23 @@ impl StackDialog for BookmarkDialog {
         Some("bookmark")
     }
 
+    fn json_fields(&self) -> Option<Value> {
+        Some(json!({"name": self.name}))
+    }
+
+    fn set_json_field(&mut self, _ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        match (field, value.as_str()) {
+            ("name", Some(name)) => {
+                self.name = name.to_owned();
+                Ok(())
+            }
+            ("name", None) => Err(FieldRefusal::Rejects(&value).message(field)),
+            _ => Err(FieldRefusal::Unknown.message(field)),
+        }
+    }
+
     fn confirm(&mut self, _ctx: &egui::Context) -> Option<Self::Result> {
-        let name = self.opened.trim();
+        let name = self.name.trim();
         if !wordcraft_engine::cmd::insert::bookmark_name_ok(name) {
             return None;
         }
@@ -94,10 +107,10 @@ impl StackDialog for BookmarkDialog {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Self::Result>> {
         let words = Env::of(ui).words::<ListManagerWords>();
         let entries: Vec<ListManagerEntry> = self.names.iter().map(|n| ListManagerEntry::new(n.clone(), n.clone())).collect();
-        let initial = self.initial.take();
-        let (by_location, hidden) = (&mut self.by_location, &mut self.hidden);
+        let (by_location, hidden, name) = (&mut self.by_location, &mut self.hidden, &mut self.name);
         let mut list = ListManager::new(Label::from(tl!("Bookmark")), Label::from(tl!("Bookmark name:")), entries, Self::actions(&words))
             .empty(Label::from(tl!("The document has no bookmarks yet.")))
+            .name_box(Bind::bound(name))
             .name_check(|n| wordcraft_engine::cmd::insert::bookmark_name_ok(n.trim()))
             .under_list(move |ui| {
                 RadioGroup::new(Label::from(tl!("Sort by:")), Bind::bound(&mut *by_location)).show(ui, |ui, _| {
@@ -110,9 +123,6 @@ impl StackDialog for BookmarkDialog {
                 });
                 Checkbox::new(Bind::bound(&mut *hidden)).label(Label::from(tl!("Hidden bookmarks"))).show(ui);
             });
-        if let Some(name) = initial {
-            list = list.name(name);
-        }
         if self.deleted {
             list = list.cancel_label(Label::from(tl!("Close")));
         }
@@ -168,10 +178,8 @@ fn prepare_bookmark(app: &mut WordApp, id: DialogId) {
 
 /// Opens Insert › Bookmark on the bookmark around the caret.
 fn open_bookmark(app: &mut WordApp, parent: Option<DialogId>) -> DialogId {
-    let opened = bookmark_at_caret(&app.session);
     let dialog = BookmarkDialog {
-        initial: Some(opened.clone()),
-        opened,
+        name: bookmark_at_caret(&app.session),
         by_location: false,
         hidden: false,
         names: bookmark_names(&app.session.doc, false, false),

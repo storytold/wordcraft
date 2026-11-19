@@ -796,7 +796,14 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         Some((c.page, top, top + f64::from(c.height) * s))
     });
     app.canvas.viewed_page = Some(viewed_page(caret_span, &state, &out.layout, f64::from(body_rect.height())));
+    // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
+    // without a click; a modal dialog keeps the keyboard until it closes.
+    let first_pass = app.canvas.shown.canvas.is_none();
     app.canvas.shown = ShownPages { rect: body_rect, pages: out.pages.clone(), canvas: Some(out.canvas.response.id) };
+    if first_pass && !app.modal_open() {
+        let ctx = ui.ctx().clone();
+        app.canvas.focus_page(&ctx);
+    }
     app.canvas.resident_pictures = out.resident_pictures();
     app.canvas.view = state;
     if out.toggle_white_space {
