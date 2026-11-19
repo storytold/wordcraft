@@ -398,6 +398,24 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                             let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
                         }
                         ui.add_space(8.0);
+                        // Request signatures: craft-ui's real esign feature
+                        // (storytold/craft-libs#661), not a local placeholder. Independent of any
+                        // cloud storage state on purpose (esign.rs's module doc): an e-sign
+                        // service and a cloud storage account are different things to have
+                        // configured. WordCraft has no cloud feature at all today.
+                        // `request_button` itself returns `None` while esign's own `available()`
+                        // is false, so this draws nothing for that reason alone.
+                        if app.esign.available() {
+                            ui.add_space(4.0);
+                        }
+                        let esign_labels = craft_ui::esign::EsignLabels::default();
+                        if let Some(craft_ui::menu::SplitHit::Primary) = crate::esign::request_button(ui, &esign_labels, app.esign.available(), &[]) {
+                            let title = app.title_stem();
+                            // craft_cloud::Identity (storytold/craft-libs#160), not a redeclared
+                            // copy: a redeclared one would have dropped avatar.
+                            let sender = craft_cloud::Identity { id: String::new(), display: app.session.author.clone(), email: None, avatar: None };
+                            app.esign.open(String::new(), title, None, sender);
+                        }
                         if app.ui.show_discord {
                             let (r, resp) = ui.allocate_exact_size(vec2(if fit.discord_label { 84.0 } else { 22.0 }, 22.0), Sense::click());
                             ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });

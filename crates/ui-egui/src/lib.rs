@@ -39,6 +39,9 @@ pub mod desktop_theme;
 pub mod dialogs;
 pub mod documents;
 pub mod equation_tab;
+/// Request-signatures dialog: craft-ui's real esign feature (storytold/craft-libs#661), not a
+/// local placeholder. See `esign.rs`'s module doc for why nothing connects a backend yet.
+pub mod esign;
 /// The built-in file browser, for desktops without a system file dialog (#576).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file_browser;
@@ -818,6 +821,9 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// Request-signatures dialog: craft-ui's real esign feature (storytold/craft-libs#661), not
+    /// a local placeholder. See `esign.rs`'s module doc for why nothing connects a backend yet.
+    pub esign: esign::EsignDialog,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Whether the current command was entered by an input method's own transaction. The engine
