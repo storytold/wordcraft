@@ -140,7 +140,9 @@ fn text_effects_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
 }
 
 pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
-    let st = app.session.run("format.state", &json!({})).unwrap_or_default();
+    // Read directly, not as a command: every command consumes the engine's pending undo joins, and
+    // the ribbon draws between an input method's deletion and the commit that replaces it.
+    let st = wordcraft_engine::cmd::format::state(&app.session);
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
     row.group(ribbon_group("clipboard", "Clipboard", "paste", Some("edit.clipboardPane")), |ui| {
         let face = Button::new(tl!("Paste").to_string())
