@@ -333,13 +333,23 @@ mod tests {
         h.state_mut().run("ui.tab", json!({"tab": "View"})).unwrap();
         crate::test_harness::frames(&mut h, 2);
         // The ribbon's stacked label breaks the line after "Switch".
-        // The framework's button node wraps an inner node of the same name; click the first.
-        h.query_all_by_label("Switch\nWindows").next().expect("the Switch Windows button").click();
+        // A split button's main part runs its command; its arrow part, the inner node of the same name (the label
+        // and chevron), opens the menu.
+        let at = h.query_all_by_label("Switch\nWindows").last().expect("the Switch Windows arrow").rect().center();
+        // Pressed the way a person does, so the framework opens the menu: the pointer rests a frame over the arrow, and
+        // the press and the release are frames of their own (kittest's `click` sends all three in one).
+        h.event(egui::Event::PointerMoved(at));
         crate::test_harness::frames(&mut h, 2);
-        use egui::accesskit::Role;
-        assert!(h.query_by_role_and_label(Role::Button, "Document1 •").is_some(), "the first document is listed, unsaved");
-        assert!(h.query_by_role_and_label(Role::Button, "Document2").is_some(), "the new one is listed");
-        h.get_by_role_and_label(Role::Button, "Document1 •").click();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            crate::test_harness::frames(&mut h, 1);
+        }
+        crate::test_harness::frames(&mut h, 6);
+        // The rows are radio menu items, the shown document marked.
+        use egui::accesskit::Role::MenuItemRadio as Row;
+        assert!(h.query_by_role_and_label(Row, "Document1 •").is_some(), "the first document is listed, unsaved");
+        assert!(h.query_by_role_and_label(Row, "Document2").is_some(), "the new one is listed");
+        h.get_by_role_and_label(Row, "Document1 •").click();
         crate::test_harness::frames(&mut h, 2);
         let a = h.state();
         assert_eq!(a.session.document_id(), first);

@@ -184,10 +184,9 @@ fn qat_menu(app: &mut WordApp, ui: &mut Ui) {
             Some((*id, label, app.session.ribbon.qat().contains(id)))
         })
         .collect();
-    let mut open = app.chrome.qat_menu;
+    // No `open` binding: with one the framework leaves the opening to the app, without it the opener opens the menu.
     Menu::new(tl!("Customize Quick Access Toolbar").to_string())
         .opened_by(&out.response, Trigger::Click)
-        .open(Bind::bound(&mut open))
         .show(ui, |ui, _| {
             MenuItem::heading(tl!("Customize Quick Access Toolbar").to_string()).show(ui);
             for (id, label, on) in &shown {
@@ -204,7 +203,6 @@ fn qat_menu(app: &mut WordApp, ui: &mut Ui) {
                 .label(tl!("Hide Quick Access Toolbar").to_string())
                 .show(ui);
         });
-    app.chrome.qat_menu = open;
 }
 
 /// Search, the community button and the account, at the end of the bar.

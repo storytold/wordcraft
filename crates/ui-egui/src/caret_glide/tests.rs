@@ -357,6 +357,9 @@ fn the_canvas_caret_glides_after_a_key() {
         },
         a,
     );
+    // kittest zeroes egui's animation time, and the framework runs no animation while it is zero (the motion mode in
+    // `Env` drops to Off): give it the time a real window has, so the setting under test is the only thing off.
+    h.ctx.all_styles_mut(|style| style.animation_time = egui::Style::default().animation_time);
     for _ in 0..3 {
         crate::test_harness::frames(&mut h, 1);
     }
