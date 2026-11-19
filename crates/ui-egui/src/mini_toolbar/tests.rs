@@ -68,9 +68,7 @@ fn bar_over(pick: &str) -> H {
 }
 
 fn steps(h: &mut H) {
-    for _ in 0..6 {
-        h.step();
-    }
+    crate::test_harness::frames(h, 6);
 }
 
 fn click_at(h: &mut H, at: egui::Pos2) {
@@ -158,7 +156,7 @@ fn secondary_click(h: &mut H, at: egui::Pos2) {
     h.event(egui::Event::PointerMoved(at));
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
-        h.step();
+        crate::test_harness::frame(h);
     }
     steps(h);
 }
@@ -296,7 +294,7 @@ fn the_page_holds_its_place_while_a_preview_is_shown() {
     assert!(h.state().canvas.command_previewed.is_some(), "hovering Bold starts a preview");
     for _ in 0..4 {
         h.state_mut().canvas.scroll_to_caret = true;
-        h.step();
+        crate::test_harness::frame(&mut h);
     }
     assert_eq!(h.state().canvas.view.offset, held, "the preview does not move the page");
     hover_at(&mut h, pos2(5.0, 5.0));
@@ -441,9 +439,9 @@ fn a_click_on_the_ribbon_puts_the_bar_away_until_the_selection_changes() {
     };
     h.event(egui::Event::PointerMoved(from));
     h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-    h.step();
+    crate::test_harness::frame(&mut h);
     h.event(egui::Event::PointerMoved(to));
-    h.step();
+    crate::test_harness::frame(&mut h);
     h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
     steps(&mut h);
     assert!(bar_shown(&h), "a press in the document brings the bar back for the same text");

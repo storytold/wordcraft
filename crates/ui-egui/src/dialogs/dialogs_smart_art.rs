@@ -397,7 +397,7 @@ pub fn items_without(g: &SmartArtSpec, i: usize) -> Value {
 
 /// Sets item `i` of the selected graphic to `text`: the one way typing, in the pane or on the canvas, changes an item.
 fn set_item_text(app: &mut WordApp, i: usize, text: &str) -> Result<(), String> {
-    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).ok_or_else(|| "no SmartArt graphic is selected".to_string())?;
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).ok_or_else(|| "no graphic is selected".to_string())?;
     app.run("smartArt.items", items_with(&g, i, text)).map(|_| ())
 }
 

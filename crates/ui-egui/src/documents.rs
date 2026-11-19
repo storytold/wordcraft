@@ -300,9 +300,11 @@ mod tests {
         a.session.doc.plain_text(StoryRef::Body).trim().to_string()
     }
 
-    /// The key of the topmost open dialog.
-    fn prompt(a: &WordApp) -> Option<String> {
-        a.dialog_host.open_dialogs().last().and_then(|d| d.key.clone())
+    /// The Save Changes prompt, when the close operation has one open. The framework's prompt has
+    /// no command key, so it is found by the id `closing` holds, among the open dialogs.
+    fn prompt(a: &WordApp) -> Option<craft::ui::dialog::DialogId> {
+        let id = a.closing.as_ref().and_then(|c| c.prompt)?;
+        a.dialog_host.open_dialogs().into_iter().find(|d| d.id == id).map(|d| d.id)
     }
 
     /// Mod+N with text typed opens a second document beside the first; Switch Windows lists both
@@ -314,22 +316,23 @@ mod tests {
         a.run("text.insert", json!({"text": "First draft"})).unwrap();
         let first = a.session.document_id();
         let mut h = harness(a);
-        h.run_steps(2);
+        // Each frame is given the app's command input, which the Mod+N chord resolves through.
+        crate::test_harness::frames(&mut h, 2);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::N);
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         assert_ne!(h.state().session.document_id(), first, "Mod+N shows a new document");
         assert_eq!(text(h.state()), "");
         assert!(h.state().window_title().starts_with("Document2"), "{}", h.state().window_title());
 
         h.state_mut().run("ui.tab", json!({"tab": "View"})).unwrap();
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         h.get_by_label("Switch Windows").click();
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         use egui::accesskit::Role;
         assert!(h.query_by_role_and_label(Role::Button, "Document1 •").is_some(), "the first document is listed, unsaved");
         assert!(h.query_by_role_and_label(Role::Button, "Document2").is_some(), "the new one is listed");
         h.get_by_role_and_label(Role::Button, "Document1 •").click();
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         let a = h.state();
         assert_eq!(a.session.document_id(), first);
         assert_eq!(text(a), "First draft");

@@ -203,7 +203,8 @@ fn print_settings_are_visible_in_a_narrow_window() {
         .map(|node| node.rect())
         .max_by(|a, b| a.area().total_cmp(&b.area()))
         .expect("the settings panel is shown");
-    let preview = harness.get(By::new().role(egui::accesskit::Role::Image).label("Sheet 1 of 1")).rect();
+    // The framework's preview pane is a group named for the sheet (the page of a picture's own role is not used).
+    let preview = harness.get(By::new().role(egui::accesskit::Role::Group).label("Sheet 1 of 1")).rect();
     assert!(page.contains_rect(panel), "{panel:?} inside {page:?}");
     assert!(!panel.intersects(preview), "{panel:?} beside the preview {preview:?}");
     let discoveries = fake.discoveries.load(Ordering::SeqCst);
@@ -411,14 +412,14 @@ fn print_booklet_choice_updates_sheet_preview() {
     h.state_mut().run("ui.printPage", json!({"pagesPerSheet": "booklet"})).unwrap();
     h.run_steps(4);
     assert_eq!(page_of(h.state_mut())["pagesPerSheet"], "booklet");
-    assert!(h.query(By::new().role(egui::accesskit::Role::Image).label("Sheet 1 of 4")).is_some());
+    assert!(h.query(By::new().role(egui::accesskit::Role::Group).label("Sheet 1 of 4")).is_some());
     h.get_by_label("Next sheet").click();
     h.run_steps(3);
-    assert!(h.query(By::new().role(egui::accesskit::Role::Image).label("Sheet 2 of 4")).is_some());
+    assert!(h.query(By::new().role(egui::accesskit::Role::Group).label("Sheet 2 of 4")).is_some());
     h.state_mut().run("ui.printPage", json!({"pagesPerSheet": 4})).unwrap();
     h.run_steps(4);
     assert_eq!(page_of(h.state_mut())["pagesPerSheet"], "4");
-    assert!(h.query(By::new().role(egui::accesskit::Role::Image).label("Sheet 2 of 2")).is_some());
+    assert!(h.query(By::new().role(egui::accesskit::Role::Group).label("Sheet 2 of 2")).is_some());
 }
 
 /// Changing a late-page range opens its first physical sheet in single-page and N-up previews.
@@ -450,7 +451,7 @@ fn print_range_changes_start_at_the_first_planned_sheet() {
         assert_eq!(page_of(h.state_mut())["range"], range);
         assert_eq!(page_of(h.state_mut())["preview"], 0, "{range}, {per_sheet} pages per sheet");
         let preview_label = format!("Sheet 1 of {sheets}");
-        assert!(h.query(By::new().role(egui::accesskit::Role::Image).label(&preview_label)).is_some());
+        assert!(h.query(By::new().role(egui::accesskit::Role::Group).label(&preview_label)).is_some());
         if range == "custom" {
             h.state_mut().run("ui.printPage", json!({"preview": sheets - 1})).unwrap();
             h.run_steps(2);

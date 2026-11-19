@@ -22,17 +22,6 @@ pub(crate) fn builder<S>() -> HarnessBuilder<S> {
     builder_with(craft::ui::testing::install_spec)
 }
 
-/// `n` frames of `h`, each given the input the app hands the runtime (`WordApp::frame_input`):
-/// the commands the controls fired in one frame run before the next. kittest's own `run_steps`
-/// skips that hand-over, so a clicked button or menu row would never run its command.
-pub(crate) fn frames(h: &mut egui_kittest::Harness<'_, crate::WordApp>, n: usize) {
-    for _ in 0..n {
-        let ctx = h.ctx.clone();
-        craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
-        h.step();
-    }
-}
-
 /// Like [`builder`], with the install spec `spec` makes (called when the context is set up).
 pub(crate) fn builder_with<S>(spec: impl FnOnce() -> InstallSpec + 'static) -> HarnessBuilder<S> {
     egui_kittest::Harness::builder().with_context_setup(move |ctx| {
@@ -43,10 +32,46 @@ pub(crate) fn builder_with<S>(spec: impl FnOnce() -> InstallSpec + 'static) -> H
 /// A bare egui context with the craft runtime installed (the framework's test spec), for a test that
 /// runs frames by hand (`ctx.run_ui`) instead of through a kittest harness. A frame on a context
 /// without the runtime has no command registry, so the canvas's publish of its view commands
-/// asserts. Install before the first frame.
+/// asserts. Install before the first frame; give each frame the app's input with
+/// `embed::before_input(ctx, |out| app.frame_input(out))`.
 pub(crate) fn context() -> egui::Context {
     let ctx = egui::Context::default();
     craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(Lang::EN))
         .expect("the craft runtime installs on a fresh test context");
     ctx
+}
+
+/// One frame of `h` as the app's driver runs it: the runtime is first handed the input the app makes
+/// (`WordApp::frame_input`: the command catalog, each command's state, the fired commands), as
+/// eframe's raw-input hook does (`embed::before_input`). `Harness::step` and `run_steps` skip the
+/// hook, so a command-bound control is named by its command id and a clicked control's command never
+/// runs. A test that finds such a control by its label, or needs its command to run, steps here.
+pub(crate) fn frame(h: &mut egui_kittest::Harness<'_, crate::WordApp>) {
+    let ctx = h.ctx.clone();
+    craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
+    h.step();
+}
+
+/// [`frame`] under the name some tests use.
+pub(crate) fn step(h: &mut egui_kittest::Harness<'_, crate::WordApp>) {
+    frame(h);
+}
+
+/// [`frame`] as a method, for tests that step a harness by `h.app_frame()` where they would `h.step()`.
+pub(crate) trait AppFrames {
+    /// One frame as [`frame`] runs it.
+    fn app_frame(&mut self);
+}
+
+impl AppFrames for egui_kittest::Harness<'_, crate::WordApp> {
+    fn app_frame(&mut self) {
+        frame(self);
+    }
+}
+
+/// `n` frames of `h`, each as [`frame`] runs it.
+pub(crate) fn frames(h: &mut egui_kittest::Harness<'_, crate::WordApp>, n: usize) {
+    for _ in 0..n {
+        frame(h);
+    }
 }
