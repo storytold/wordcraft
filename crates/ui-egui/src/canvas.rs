@@ -81,13 +81,15 @@ pub(crate) struct ShownPages {
     pub pages: Vec<PlacedPage>,
     /// Every page of the view's layout, on screen or not, at its screen position this pass.
     pub laid: Vec<Rect>,
+    /// The area the pages show in: the body inside the rulers while they show.
+    pub view: Rect,
     /// The canvas widget's id; `None` until a pass has shown it.
     pub canvas: Option<egui::Id>,
 }
 
 impl Default for ShownPages {
     fn default() -> Self {
-        ShownPages { rect: Rect::NOTHING, pages: Vec::new(), laid: Vec::new(), canvas: None }
+        ShownPages { rect: Rect::NOTHING, pages: Vec::new(), laid: Vec::new(), view: Rect::NOTHING, canvas: None }
     }
 }
 
@@ -326,6 +328,11 @@ impl CanvasState {
     /// The pages on screen in the last pass: page index and screen rectangle.
     pub fn page_rects(&self) -> impl Iterator<Item = (usize, Rect)> + '_ {
         self.shown.pages.iter().map(|p| (p.page, p.rect))
+    }
+
+    /// The area the pages show in, once a pass has shown them: the canvas body inside the rulers while they show.
+    pub fn view_rect(&self) -> Option<Rect> {
+        self.shown.canvas.map(|_| self.shown.view)
     }
 
     /// Every page's rectangle on screen in the last pass, in page order, including pages scrolled out of view.
@@ -705,7 +712,7 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
         .inner;
     app.canvas.page_keys = source.into_keys();
     app.canvas.reading = state;
-    app.canvas.shown = ShownPages { rect: columns, pages: Vec::new(), laid: Vec::new(), canvas: Some(out.response.id) };
+    app.canvas.shown = ShownPages { rect: columns, pages: Vec::new(), laid: Vec::new(), view: columns, canvas: Some(out.response.id) };
     app.canvas.viewed_page = None;
     app.canvas.read_first_visible = reading_page_start(layout, app.canvas.reading.column);
     app.canvas.scroll_to_caret = false;
@@ -919,7 +926,9 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     app.canvas.viewed_page = Some(viewed_page(caret_span, &state, &out.layout, f64::from(body_rect.height())));
     // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
     // without a click; a modal dialog keeps the keyboard until it closes.
-    app.canvas.shown = ShownPages { rect: body_rect, pages: out.pages.clone(), laid: laid_rects(&out), canvas: Some(out.canvas.response.id) };
+    let view_rect = body_view.map_or(body_rect, |v| v.rect);
+    app.canvas.shown =
+        ShownPages { rect: body_rect, pages: out.pages.clone(), laid: laid_rects(&out), view: view_rect, canvas: Some(out.canvas.response.id) };
     if app.canvas.focus_pending && !app.modal_open() {
         let ctx = ui.ctx().clone();
         app.canvas.focus_page(&ctx);

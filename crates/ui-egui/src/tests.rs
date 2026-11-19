@@ -688,7 +688,8 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
     for _ in 0..3 {
         frame(&mut a, Vec::new());
     }
-    let pointer = a.canvas.canvas_rect().unwrap().center();
+    // The centre of the area the pages show in (inside the rulers), as production's `canvas_rect` was.
+    let pointer = a.canvas.view_rect().unwrap().center();
     frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
     let wheel = |y: f32, modifiers| egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Line,
@@ -720,8 +721,7 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
         // fit the window side by side and there is nothing to scroll sideways.
         // Within a couple of screen pixels.
         let off = (now - at) * page_scale(&a);
-        let across = columns(&page_rects(&a)) > cols || off.x.abs() < 2.0;
-        assert!(across && off.y.abs() < 2.0, "frame {n} at {:.0}%: {now:?} on page {page}, was {at:?}", a.canvas.zoom() * 100.0);
+        let across = columns(&page_rects(&a)) > cols || off.x.abs() < 2.0;        assert!(across && off.y.abs() < 2.0, "frame {n} at {:.0}%: {now:?} on page {page}, was {at:?}", a.canvas.zoom() * 100.0);
     }
     assert!(page_scale(&a) < before * 0.6, "zoomed out: {before} -> {}", page_scale(&a));
     assert!(columns(&page_rects(&a)) > cols, "the pages reflowed into rows on the way");
