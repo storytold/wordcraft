@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use craft::keymap::CommandRef;
 use craft::ui::contract::overlay::Anchor;
-use craft::ui::contract::{Bind, Show as _, ShowContainer as _, Trigger};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuItem};
 use egui::{Pos2, Response, Ui, vec2};
@@ -107,7 +107,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, opener: &Response, ask: Optio
 /// A row labelled `label` that runs command `id` with `params`; its chord, enabled state and
 /// action come from the command, its wording from the menu (one command id serves several rows).
 fn item(ui: &mut Ui, label: &str, id: &str, params: Value) {
-    let _ = MenuItem::command(CommandRef::with_params(id, params)).label(tl!(label).to_string()).show(ui);
+    let _ = MenuItem::new(tl!(label).to_string()).command(CommandRef::with_params(id, params)).show(ui);
 }
 
 fn rule(ui: &mut Ui) {

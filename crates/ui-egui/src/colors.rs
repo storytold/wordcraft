@@ -307,7 +307,7 @@ fn swatch_table(ui: &mut Ui, name: &str, colors: &[Rgb], per_row: usize, current
     let preview = match out.preview {
         Preview::Shows(i) => colors.get(i).map_or(Preview::Unchanged, |c| Preview::Shows(*c)),
         Preview::Ended => Preview::Ended,
-        Preview::Unchanged => Preview::Unchanged,
+        _ => Preview::Unchanged,
     };
     (picked, preview, out.response)
 }
@@ -496,7 +496,7 @@ fn highlight_body(ui: &mut Ui, app: &mut WordApp, cx: &mut BodyCx<'_>) -> ColorP
     let preview = match out.preview {
         craft::behavior::Preview::Shows(i) => shown.get(i).map_or(craft::behavior::Preview::Unchanged, |(_, c)| craft::behavior::Preview::Shows(*c)),
         craft::behavior::Preview::Ended => craft::behavior::Preview::Ended,
-        craft::behavior::Preview::Unchanged => craft::behavior::Preview::Unchanged,
+        _ => craft::behavior::Preview::Unchanged,
     };
     let none = CommandRef::with_params("format.highlight", json!({"color": "none"}));
     if MenuItem::new(tl!("No Color").to_string()).command(none).show(ui).ran {
