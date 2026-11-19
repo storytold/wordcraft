@@ -393,6 +393,10 @@ fn the_canvas_caret_glides_after_a_key() {
             break;
         }
     }
+    assert!(gliding(&h), "the caret sets off");
+    // The frame it sets off in draws it where it set off from (no time has passed); as on main, it is caught in the
+    // frame after, on its way.
+    crate::test_harness::frames(&mut h, 1);
     assert!(gliding(&h), "the caret is on its way");
     let x = drawn(&h).unwrap()[0].x;
     for _ in 0..20 {

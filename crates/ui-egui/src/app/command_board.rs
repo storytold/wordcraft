@@ -57,6 +57,17 @@ fn default_bindings(shortcut: &str) -> impl Iterator<Item = Binding> + '_ {
     shortcut.split(" / ").filter(|piece| !piece.is_empty()).filter_map(|piece| Binding::parse(piece).ok())
 }
 
+/// The page view's canvas zoom chords (Ctrl+=, Ctrl++, Ctrl+-, Ctrl+0, Ctrl+1) are Word's Subscript,
+/// Superscript, optional hyphen and paragraph spacing chords; the page zooms with Ctrl+wheel and the
+/// View tab, as the old app did, so the canvas's defaults are dropped and the app's bindings take the keys.
+fn with_word_chords(catalog: AppCatalog) -> AppCatalog {
+    use craft::ui::canvas::ViewCommands;
+    use craft::ui::runtime::commands::CommandSet as _;
+    [ViewCommands::ZoomIn, ViewCommands::ZoomOut, ViewCommands::FitOnScreen, ViewCommands::ActualPixels]
+        .into_iter()
+        .fold(catalog, |catalog, command| catalog.replace_defaults(command.id(), Vec::new()))
+}
+
 impl WordApp {
     /// The app's commands as the keymap knows them: every engine command with its default
     /// chords, then the interface commands. The interface commands come last because a tie in the
@@ -70,7 +81,11 @@ impl WordApp {
         // The interface chords are per platform: the window's own, which tests set.
         let mac = self.ctx.as_ref().map_or(cfg!(target_os = "macos"), |ctx| craft::ui::runtime::windows::os_of(ctx) == craft::host::target::Os::Mac);
         let os_changed = std::mem::replace(&mut self.command_catalog_mac, mac) != mac;
-        if os_changed || !self.command_catalog.as_ref().is_some_and(|(built_from, _)| Arc::ptr_eq(built_from, &registry)) {
+        // The labels are the interface language's: a button bound to a command without its own label, a menu row and
+        // the command search show them, so the catalog is rebuilt when the language changes.
+        let lang = crate::i18n::current().code();
+        let lang_changed = std::mem::replace(&mut self.command_catalog_lang, lang) != lang;
+        if os_changed || lang_changed || !self.command_catalog.as_ref().is_some_and(|(built_from, _)| Arc::ptr_eq(built_from, &registry)) {
             let generation = self.command_catalog.as_ref().map_or(0, |(_, catalog)| catalog.generation().wrapping_add(1));
             let mut seen = HashSet::new();
             let mut defs = Vec::with_capacity(registry.all().len() + 3);
@@ -78,21 +93,21 @@ impl WordApp {
             // (the engine reserves it, `engine/src/keymap.rs`). A tie in the application scope goes to the first
             // command in catalog order, so this one entry comes first; the other interface commands come last.
             if !mac {
-                let mut def = CommandDef::new(CommandRef::with_params("ui.dialog", json!({"name": "commands"})), "Search Commands", Scope::app());
+                let mut def = CommandDef::new(CommandRef::with_params("ui.dialog", json!({"name": "commands"})), tl!("Search Commands"), Scope::app());
                 if let Ok(binding) = Binding::parse("Alt+Q") {
                     def = def.with_default(binding);
                 }
                 defs.push(def);
             }
             for spec in registry.all().iter().filter(|spec| seen.insert(spec.id)) {
-                let mut def = CommandDef::new(CommandRef::new(spec.id), spec.label, Scope::app());
+                let mut def = CommandDef::new(CommandRef::new(spec.id), tl!(spec.label), Scope::app());
                 for binding in default_bindings(spec.shortcut) {
                     def = def.with_default(binding);
                 }
                 defs.push(def);
             }
             let mut interface = |command: CommandRef, label: &str, chord: &str| {
-                let mut def = CommandDef::new(command, label, Scope::app());
+                let mut def = CommandDef::new(command, tl!(label), Scope::app());
                 if let Ok(binding) = Binding::parse(chord) {
                     def = def.with_default(binding);
                 }
@@ -105,7 +120,7 @@ impl WordApp {
             }
             interface(CommandRef::new("ui.resetInterfaceSize"), "Reset Interface Size", "Mod+Shift+0");
             for (id, label) in GATED_UI_COMMANDS {
-                defs.push(CommandDef::new(CommandRef::new(*id), *label, Scope::app()));
+                defs.push(CommandDef::new(CommandRef::new(*id), tl!(*label), Scope::app()));
             }
             // Word's Alt chords (Alt+Q, Alt+F7, Ctrl+Alt+1…) fire while the person types in the page:
             // plain keys type, and every modified chord is offered to the keymap first.
@@ -117,7 +132,7 @@ impl WordApp {
                         .typing_rule(TypingRule::PlainKeysWait)
                         .replace_defaults(WindowCommand::Move.id(), Vec::new())
                         .replace_defaults(WindowCommand::Size.id(), Vec::new());
-                    self.command_catalog = Some((registry, catalog));
+                    self.command_catalog = Some((registry, with_word_chords(catalog)));
                 }
                 Err(error) => {
                     log::warn!("command catalog: {error:?}");

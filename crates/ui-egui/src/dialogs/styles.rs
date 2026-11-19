@@ -137,6 +137,9 @@ impl ManageStylesDialog {
             .header(false)
             .columns(vec![ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0))])
             .select(SelectMode::Single)
+            // The list scrolls its own rows, as main's 200 pt box did, so the dialog's body (which scrolls when the
+            // window is short) does not scroll it too.
+            .max_rows(10)
             .selection(Bind::bound(&mut selection));
         if let Some(key) = reveal {
             list = list.reveal(key);

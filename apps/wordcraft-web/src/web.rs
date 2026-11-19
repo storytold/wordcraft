@@ -106,7 +106,7 @@ pub fn start() {
                     };
 
                     let host =
-                        Arc::new(Host::builder(wordcraft_ui_egui::APP).files(files).settings(Arc::new(settings.clone())).lang(lang.lang).build());
+                        Arc::new(Host::builder(wordcraft_ui_egui::APP).i18n(wordcraft_ui_egui::i18n::catalogs()).files(files).settings(Arc::new(settings.clone())).lang(lang.lang).build());
 
                     let (intake, sender) = FileIntake::new(Wake::new(waker(&ctx)));
 

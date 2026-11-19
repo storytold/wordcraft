@@ -45,12 +45,19 @@ include!(concat!(env!("OUT_DIR"), "/craft_i18n.rs"));
 
 /// The embedded catalogs, offering exactly the languages in [`LANGUAGES`]. Built on first use;
 /// a locale is parsed on its first lookup.
-static I18N: LazyLock<I18n> = LazyLock::new(|| {
+static I18N: LazyLock<std::sync::Arc<I18n>> = LazyLock::new(|| {
     let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
     let (i18n, problems) = I18n::new(CRAFT_I18N, &offered);
     problems.iter().for_each(|p| log::warn!("interface catalogs: {p}"));
-    i18n
+    std::sync::Arc::new(i18n)
 });
+
+/// The embedded catalogs as the Host carries them: the framework's own words (dialogs, menus, panes) are looked up
+/// in the Host's catalogs, so a Host without them shows every framework word in English whatever the language.
+/// The same catalogs [`Lang`] resolves in, so a language's [`Lang::craft_lang`] names the same language there.
+pub fn catalogs() -> std::sync::Arc<I18n> {
+    std::sync::Arc::clone(&I18N)
+}
 
 /// The `language` setting that follows the system.
 pub const AUTO: &str = "auto";
@@ -170,7 +177,7 @@ impl Lang {
     pub(crate) const PSEUDO: Lang = Lang { lang: craft::i18n::Lang::PSEUDO, catalogs: None };
 
     fn i18n(self) -> &'static I18n {
-        self.catalogs.unwrap_or_else(|| LazyLock::force(&I18N))
+        self.catalogs.unwrap_or_else(|| &**LazyLock::force(&I18N))
     }
 
     fn info(self) -> Option<&'static LangInfo> {
@@ -471,11 +478,7 @@ pub(crate) fn fixture_host(ctx: &egui::Context, code: &'static str, source: &'st
 /// [`Lang::EN`], [`Lang::PSEUDO`] or an embedded language binds its language on.
 #[cfg(test)]
 pub(crate) fn embedded_host(ctx: &egui::Context) {
-    static EMBEDDED: LazyLock<std::sync::Arc<I18n>> = LazyLock::new(|| {
-        let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
-        std::sync::Arc::new(I18n::new(CRAFT_I18N, &offered).0)
-    });
-    install_test_host(ctx, std::sync::Arc::clone(&EMBEDDED), craft::i18n::Lang::EN);
+    install_test_host(ctx, catalogs(), craft::i18n::Lang::EN);
 }
 
 #[cfg(test)]

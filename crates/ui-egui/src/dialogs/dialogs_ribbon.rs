@@ -263,6 +263,8 @@ impl RibbonDialog {
             .rename(true)
             .can_rename(move |item: &TreeItem| renamable.contains(item))
             .rename_draft(|item: &TreeItem| Some(item.group.clone().unwrap_or_else(|| item.tab.clone())))
+            // The tree scrolls its own rows, as main's fixed-height box did, so the dialog's body does not scroll it too.
+            .max_rows(12)
             .selection(Bind::bound(&mut selection))
             .show_items(ui, &source, &mut |item, icx| {
                 let row = rows.iter().find(|row| row.item == *item);
@@ -403,6 +405,8 @@ fn pick(ui: &mut Ui, salt: &'static str, label: &str, rows: &[(String, String)],
     List::new(word(label))
         .id(ui.id().with(salt))
         .select(SelectMode::Single)
+        // The list scrolls its own rows, as main's fixed-height boxes did, so the dialog's body does not scroll it too.
+        .max_rows(12)
         .selection(Bind::bound(&mut selection))
         .show_items(ui, &Rows(rows), &mut |row, _| ListRow::new(rows.get(*row).map(|r| r.1.clone()).unwrap_or_default()));
     let picked = selection.items.first().copied().filter(|picked| Some(*picked) != at)?;

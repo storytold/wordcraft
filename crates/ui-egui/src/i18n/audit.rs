@@ -17,7 +17,10 @@ fn unmarked(text: &str) -> String {
     for c in text.chars() {
         match c {
             '⟦' => depth += 1,
-            '⟧' => depth = depth.saturating_sub(1),
+            // A close with none open ends a mark a wrapped label began on the line before (a stacked button draws
+            // `⟦Data` and `Labels⟧` apart): what came before it on this line is inside that mark.
+            '⟧' if depth == 0 => out.clear(),
+            '⟧' => depth -= 1,
             _ if depth == 0 => out.push(c),
             _ => {}
         }
@@ -193,7 +196,9 @@ impl<'a> Exempt<'a> {
         // About › Language data: the licences' own titles and texts, and the packs' names,
         // licences and sources (File › Options › Language), as their authors wrote them.
         for (title, text) in wordcraft_engine::packs::licence_texts() {
-            names.extend([title, text]);
+            // Drawn texts are compared trimmed, and a licence file ends in a line break.
+            let trimmed = text.trim().to_string();
+            names.extend([title, text, trimmed]);
         }
         for p in wordcraft_engine::packs::available() {
             names.extend([format!("{} · {}", p.name, p.locale), p.source_link().to_string(), p.locale, p.name, p.licence, p.url]);
@@ -234,8 +239,18 @@ impl<'a> Exempt<'a> {
     fn allows(&self, app: &WordApp, text: &str) -> bool {
         let plain = unmarked(text);
         let plain = plain.trim().trim_end_matches(" —").trim();
-        let is_shortcut =
-            || plain.split('+').all(|k| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter") || k.chars().count() <= 3);
+        let chord =
+            |s: &str| s.split('+').all(|k| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter" | "Space") || k.chars().count() <= 3);
+        let is_shortcut = || chord(plain);
+        // A command's hover hint, drawn as one text: its marked label, name and location, so what is left is the
+        // shortcut after the title, `(Ctrl+B)`, and the location's separators.
+        let hint_frame =
+            || plain.split_whitespace().all(|w| matches!(w, "›" | "‹") || chord(w.trim_start_matches('(').trim_end_matches(')')));
+        // Known names as a list (`Aptos, Aptos Display`), or cut short to fit (`Ant…`).
+        let names_listed = || plain.contains(", ") && plain.split(", ").all(|n| self.names.contains(n));
+        let name_cut = || {
+            plain.strip_suffix('…').is_some_and(|start| start.chars().count() >= 2 && self.names.iter().any(|n| n.starts_with(start)))
+        };
         // A command's error message in the status bar: commands answer scripts and MCP too, so
         // their messages stay English for now.
         let status = app.status.iter().map(|s| s.text.as_str()).chain(app.read_aloud_error.iter().map(String::as_str)).any(|m| !m.is_empty() && text.contains(m));
@@ -252,6 +267,9 @@ impl<'a> Exempt<'a> {
             || status
             || theme_fonts
             || is_shortcut()
+            || hint_frame()
+            || names_listed()
+            || name_cut()
             || self.body.contains(plain)
             || self.names.contains(plain)
             || self.math.contains(plain) // the Equation tab's `lim\below(n→∞)`-style placeholders
@@ -756,11 +774,13 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
         frame_at(&ctx, &mut app, 500.0);
     }
     let _ = app.run("ui.backstage", json!({"value": false}));
-    // A dialog's columns start at the right too: Go To's list of targets is right of its input.
+    // A dialog's columns start at the right too. Main's Go To set its list of targets beside its page number box; the
+    // framework's Find and Replace stacks Go to what over the target's field and keeps its buttons (Next, Previous,
+    // Close) in a column at the far side, so here the targets are right of that button column.
     let _ = app.run("ui.dialog", json!({"name": "goto"}));
     let drawn = frame_at(&ctx, &mut app, 1600.0);
-    let (targets, input) = (x_of(&drawn, "Go to what:"), x_of(&drawn, "Enter page number:"));
-    assert!(targets > input, "Go To: targets {targets}, input {input}");
+    let (targets, buttons) = (x_of(&drawn, "Go to what:"), x_of(&drawn, "Next"));
+    assert!(targets > buttons, "Go To: targets {targets}, buttons {buttons}");
     crate::dialogs::host::close_all(&mut app, &ctx);
     let dialogs = [
         "font",
