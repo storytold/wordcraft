@@ -5,9 +5,9 @@
 use craft::behavior::{EditEvent, IconId, Preview};
 use craft::keymap::CommandRef;
 use craft::pages::ui::PageBody;
-use craft::ui::buttons::{Button, ToggleButton};
+use craft::ui::buttons::{IconButton, ToggleButton};
 use craft::ui::canvas_controls::TaskBar;
-use craft::ui::contract::{Bind, Entry, Hover, Show as _};
+use craft::ui::contract::{Bind, Entry, Hover, Props, Show as _};
 use craft::ui::runtime::env::Label;
 use craft::ui::display::Divider;
 use craft::ui::pickers::ComboBox;
@@ -168,8 +168,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
             app.canvas.command_preview = Some(("format.size".to_string(), json!({"size": x})));
         }
         // Only a pick or Enter applies the size: typing alone is an edit of the box's draft.
-        // PLAN: assumed `EditEvent::{Set, Commit}` names from craft_behavior::value
-        let committed = combo.edit.submitted || combo.edit.events.iter().any(|e| matches!(e, EditEvent::Set(_) | EditEvent::Commit(_)));
+        let committed = combo.edit.submitted || combo.edit.events.iter().any(|e| matches!(e, EditEvent::Set { .. } | EditEvent::Commit { .. }));
         if committed
             && text != size
             && let Ok(x) = text.trim().parse::<f64>()
@@ -178,7 +177,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
         }
 
         for (id, icon) in [("format.growFont", "grow"), ("format.shrinkFont", "shrink")] {
-            let b = Button::command(CommandRef::new(id)).icon(IconId::new(icon)).icon_only().show(ui);
+            let b = IconButton::command(IconId::new(icon), CommandRef::new(id)).show(ui);
             preview_on_hover(app, b.hover, b.response.enabled(), id, json!({}), preview);
         }
     });
@@ -236,7 +235,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
 /// An icon toggle running command `id` and drawn `on`; while hovered it previews the command. The
 /// command carries no checked state, so the value is bound here and only draws the button.
 fn toggle(ui: &mut Ui, app: &mut WordApp, id: &str, icon: &str, on: bool, preview: bool) {
-    let r = ToggleButton::new(Label::Empty, Bind::given(on)).command(CommandRef::new(id)).icon(IconId::new(icon)).icon_only().show(ui);
+    let r = <ToggleButton as Props>::command(ToggleButton::new(Label::Empty, Bind::given(on)), CommandRef::new(id)).icon(IconId::new(icon)).icon_only().show(ui);
     preview_on_hover(app, r.hover, r.response.enabled(), id, json!({}), preview);
 }
 

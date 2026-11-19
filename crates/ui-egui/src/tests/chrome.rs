@@ -292,7 +292,7 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     for id in ["file.new", "file.open", "ui.backstage", "ui.tab", "ui.discord", "file.options", "ui.theme", "ui.statusCount"] {
         assert!(enabled(&ctx, id), "{id} works with no document");
     }
-    assert!(!crate::chrome::qat_enabled(a, "file.save"));
+    assert!(!crate::chrome::qat_enabled(&ctx, a, "file.save"));
     // Only the listed interface commands work: the ones that act on the document don't.
     for id in ["ui.contextMenu", "ui.render", "ui.linkTextBox", "ui.zotero.refresh", "ui.unlistedCommand"] {
         assert!(!works_without_document(id), "{id} needs a document");

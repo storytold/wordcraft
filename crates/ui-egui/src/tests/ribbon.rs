@@ -40,7 +40,7 @@ fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
             })
             .drop_without_applying_deltas();
         }
-        a.canvas.scale / canvas::PX_PER_PT
+        a.canvas.zoom() as f32
     };
     let base = frame(&mut a);
     assert!((base - 1.0).abs() < 1e-3);

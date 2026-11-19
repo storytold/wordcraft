@@ -265,7 +265,7 @@ fn remembered(app: &mut WordApp, target: &Target) -> Option<Rgb> {
 // The palette
 
 /// The colours a palette offers.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Palette {
     /// The theme colours, in the document's order.
     pub theme: Vec<Rgb>,
