@@ -265,14 +265,14 @@ impl WordForm for CustomPropertiesForm {
                 self.delete();
             }
         });
-        let typed = TextField::new(Label::from(tl!("Name").to_string()), Bind::given(self.name.clone()))
+        let typed = TextField::new(Label::from(tl!("Name:").to_string()), Bind::given(self.name.clone()))
             .id_salt("name")
             .limit(wordcraft_engine::cmd::file::MAX_CUSTOM_NAME)
             .show(ui);
         if let Some(text) = typed.value().cloned() {
             self.name = text;
         }
-        let typed = TextField::new(Label::from(tl!("Value").to_string()), Bind::given(self.value.clone())).id_salt("value").show(ui);
+        let typed = TextField::new(Label::from(tl!("Value:").to_string()), Bind::given(self.value.clone())).id_salt("value").show(ui);
         if let Some(text) = typed.value().cloned() {
             self.value = text;
         }
