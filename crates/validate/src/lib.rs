@@ -4247,7 +4247,11 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
     // TIFF also supports wider samples and CMYK with alpha.
     let bytes_per_pixel = if format == Format::Tiff { 20 } else { 8 };
     let allocation = pixels.saturating_mul(bytes_per_pixel).max(encoded).max(4096);
-    let decode_charge = allocation.saturating_mul(2).saturating_add(coefficients);
+    // png 0.18.1 uses fdeflate 0.3.7, whose fixed tables alone take
+    // (4096 + 512) × 4 bytes. Include them and the inflater state separately
+    // from the encoded/chunk and decompressed pixel storage above.
+    let fixed_workspace = if format == Format::Png { 20 * 1024 } else { 0 };
+    let decode_charge = allocation.saturating_mul(2).saturating_add(coefficients).saturating_add(fixed_workspace);
     let charge = if format == Format::Tiff { preflight.saturating_add(decode_charge) } else { decode_charge.max(preflight) };
     if charge > budget {
         return Err(over_budget());
@@ -4499,6 +4503,18 @@ mod budget_tests {
             assert!(findings.next().is_none());
             assert_eq!(report.verdict, if severity == Severity::Error { Verdict::Fail } else { Verdict::Pass }, "{report:?}");
         }
+    }
+
+    #[test]
+    fn media_magic_png_charge_includes_fixed_workspace() {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 32, 32);
+        encoder.set_depth(png::BitDepth::One);
+        encoder.write_header().unwrap().write_image_data(&[0; 4 * 32]).unwrap();
+        let budget = 128 * 1024;
+        let mut remaining = budget;
+        decode_alternate_image(Format::Png, &bytes, budget, &mut remaining).unwrap();
+        assert!(budget - remaining >= (4096 + 512) * 4 + (4 + 1) * 32);
     }
 
     #[test]
