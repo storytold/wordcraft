@@ -146,6 +146,9 @@ impl WordApp {
                 Some(self.finish_picks(d.after, paths))
             }
             Picked::Contents(files) => Some(self.finish_contents(d.after, files)),
+            // The page handed the save over as a download: the save finishes under that name, which
+            // the engine answers with `downloaded`, and the document keeps the file it had.
+            Picked::Downloaded(name) => Some(self.finish_pick(d.after, Some(name))),
         }
     }
 
@@ -378,8 +381,7 @@ impl WordApp {
     /// and on the Save As page, whose render loop skips the status bar while Backstage is open.
     fn fail_save_as(&mut self, error: &str) {
         self.status(error.to_string());
-        // PLAN: assumed `BackstageState::save_as_error: String`
-        self.backstage_state.save_as_error = error.to_string();
+        self.backstage_state.save_as_error = Some(error.to_string());
     }
 
     /// An export failed or was refused: say so on the status bar and, for the Export page,

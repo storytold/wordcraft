@@ -207,8 +207,7 @@ mod tests {
         let (mut a, dir) = opened("warning");
         a.run("text.insert", json!({"text": "Formatted edit. "})).unwrap();
         a.run("file.save", json!({})).unwrap();
-        // PLAN: assumed (app-hub sh.A3) `status: Option<Status>` with `text` and `until`
-        let status = a.status.clone().unwrap();
+        let status = a.status.as_ref().unwrap();
         assert!(status.text.contains("writing the Markdown out again"), "{}", status.text);
         let left = status.until - monotonic_ms();
         assert!(left > 15_000.0, "shown for about 20 seconds, {left} ms left");
