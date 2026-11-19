@@ -675,8 +675,7 @@ fn nothing(_: &H) {}
 /// #1500: a shape's Format Shape… row opens a pane, but the pane is closed until it is
 /// picked, and Shape Fill applies to the selected shape.
 fn shape_commands_ready(h: &H) {
-    // PLAN: assumed `craft::runtime::commands::resolve(&Context, id) -> ResolvedCommand` (the framework's `resolve`, `ui-contract/src/runtime/commands/mod.rs:465`)
-    assert!(craft::runtime::commands::resolve(&h.ctx, "shape.fill").enabled, "Shape Fill applies to the selected shape");
+    assert!(craft::ui::runtime::commands::resolve(&h.ctx, craft::keymap::CommandRef::new("shape.fill")).enabled, "Shape Fill applies to the selected shape");
     assert!(!h.state().session.view.format_shape_pane, "the pane starts closed");
 }
 

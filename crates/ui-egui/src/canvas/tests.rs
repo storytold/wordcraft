@@ -1,5 +1,8 @@
 use super::*;
+use super::cursor::caret_color_at;
+use super::pages::view_key;
 use crate::table_resize::tests::{H, screen, steps};
+use std::collections::HashSet;
 
 mod markup;
 mod overlays;
@@ -374,7 +377,7 @@ fn the_status_bar_names_the_page_in_view_not_only_the_caret_page() {
 #[test]
 fn the_page_in_view_follows_the_caret_while_it_is_on_screen() {
     let tops: Vec<f64> = (0..4).map(|i| f64::from(i) * 110.0).collect();
-    let rects: Vec<craft::pages::kurbo::Rect> = tops.iter().map(|&y| craft::pages::kurbo::Rect::new(0.0, y, 80.0, y + 100.0)).collect();
+    let rects: Vec<craft::behavior::kurbo::Rect> = tops.iter().map(|&y| craft::behavior::kurbo::Rect::new(0.0, y, 80.0, y + 100.0)).collect();
     let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 1, bands: vec![(0.0, 100.0); 4] };
     let scrolled = |top: f64| {
         let mut view = craft::pages::ui::PageViewState::from_defaults(&Default::default());
@@ -575,9 +578,8 @@ fn an_armed_format_painter_changes_the_pointer() {
         craft::ui::runtime::cursor::current(&h.ctx)
     };
     // The shell the harness runs with decides whether the I-beam is painted (a native Windows shell) or the system's.
-    // PLAN: assumed `craft::host::target::{Os, Runtime}` and `Env::of_root(ctx).view().shell()` reachable through `craft::`.
     let painted = {
-        let env = craft::ui::runtime::Env::of_root(&h.ctx);
+        let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
         let shell = env.view().shell();
         shell.os == craft::host::target::Os::Windows && shell.runtime == craft::host::target::Runtime::Native
     };

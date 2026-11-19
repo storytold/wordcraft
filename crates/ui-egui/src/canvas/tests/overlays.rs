@@ -1,7 +1,7 @@
 use craft::pages::ui::PlacedPage;
 
 use super::*;
-use crate::canvas::equation_frame::equation_frame;
+use crate::canvas::equation_frame::{FrameSizes, equation_frame};
 use crate::canvas::gridlines::{self, gridline_cells, gridline_segments};
 use crate::table_resize::tests::{H, steps};
 
@@ -76,8 +76,9 @@ fn the_equation_frame_holds_the_equation_and_its_strip() {
     let mut strips = Vec::new();
     for scale in [1.0f32, 2.5] {
         let page = PlacedPage::new(0, rect, f64::from(scale), (0.0, rect.height()));
-        // PLAN: assumed `equation_frame(page: &PlacedPage, bx: &EquationBox) -> EquationFrame` (canvas-w12)
-        let f = equation_frame(&page, &bx);
+        // The sizes are screen points the style takes from the tokens, the same at every zoom.
+        let sizes = FrameSizes { pad: 2.0, strip: 10.0, grip: vec2(6.0, 12.0) };
+        let f = equation_frame(&page, &bx, &sizes);
         let (left, right) = (10.0 + 100.0 * scale, 10.0 + 140.0 * scale);
         assert!(f.outline.min.x < left && f.strip.min.x > right && f.strip.max.x == f.outline.max.x, "{f:?}");
         assert!(f.outline.min.y < 20.0 + 76.0 * scale && f.outline.max.y > 20.0 + 98.0 * scale, "{f:?}");
@@ -267,12 +268,11 @@ fn drawing_grid_starts_at_the_margins_and_stays_inside_them() {
     // Letter page with 1" margins: the text area is 468 x 648 pt from (72, 72).
     let body = wordcraft_geom::Rect::new(72.0, 72.0, 468.0, 648.0);
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-    let all = |minor: &[f64], major: &[f64]| {
-        let mut v: Vec<f64> = minor.iter().chain(major).copied().collect();
-        v.sort_by(f64::total_cmp);
-        v
-    };
-    let pitch = |major: &[f64]| major.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>();
+    app.session.view.gridlines = true;
+    let mut page = app.session.layout().pages[0].clone();
+    page.body = body;
+    // The page hands the framework's `CanvasGrid` its origin, bounds and steps; the grid draws the lines from the
+    // origin inside the bounds, one step apart (its own tests).
     for (h, v, want_x, want_y) in [
         (HALF_CM, HALF_CM, HALF_CM, HALF_CM),
         (9.0, 18.0, 9.0, 18.0),
@@ -280,14 +280,11 @@ fn drawing_grid_starts_at_the_margins_and_stays_inside_them() {
     ] {
         app.session.doc.settings.grid_h = h;
         app.session.doc.settings.grid_v = v;
-        // PLAN: assumed `gridlines::page_grid(app: &WordApp, body: Rect, zoom: f64) -> (GridAxis, GridAxis)` (canvas-w12)
-        let (xs, ys) = gridlines::page_grid(&app, body, 1.0);
-        assert_eq!(xs.major.first().copied(), Some(72.0), "origin at the body's left");
-        assert_eq!(ys.major.first().copied(), Some(72.0), "origin at the body's top");
-        assert!(all(&xs.minor, &xs.major).iter().all(|x| (71.999..=540.001).contains(x)), "{xs:?}");
-        assert!(all(&ys.minor, &ys.major).iter().all(|y| (71.999..=720.001).contains(y)), "{ys:?}");
-        assert!(pitch(&xs.major).iter().all(|d| (d - f64::from(want_x)).abs() < 0.01), "across: {:?}", pitch(&xs.major));
-        assert!(pitch(&ys.major).iter().all(|d| (d - f64::from(want_y)).abs() < 0.01), "down: {:?}", pitch(&ys.major));
+        let grid = gridlines::page_grid(&app, &page).expect("the grid shows in Print Layout");
+        assert_eq!((grid.origin.x, grid.origin.y), (72.0, 72.0), "origin at the body's top left");
+        assert_eq!((grid.bounds.x0, grid.bounds.y0, grid.bounds.x1, grid.bounds.y1), (72.0, 72.0, 540.0, 720.0), "inside the margins");
+        assert!((grid.spacing.x - f64::from(want_x)).abs() < 0.01, "across: {:?}", grid.spacing);
+        assert!((grid.spacing.y - f64::from(want_y)).abs() < 0.01, "down: {:?}", grid.spacing);
     }
 }
 
@@ -367,8 +364,7 @@ fn crop_is_disabled_when_cursor_is_adjacent_without_selection() {
         app,
     );
     steps(&mut h, 6);
-    // PLAN: assumed `craft::ui::commands::resolve(ctx: &egui::Context, command) -> ResolvedCommand` (sh.A5)
-    assert!(!craft::ui::commands::resolve(&h.ctx, "ui.crop").enabled, "the command state of ui.crop is disabled");
+    assert!(!craft::ui::runtime::commands::resolve(&h.ctx, craft::keymap::CommandRef::new("ui.crop")).enabled, "the command state of ui.crop is disabled");
 }
 
 /// A Behind Text header picture: while editing the header a click on it selects it wherever no
