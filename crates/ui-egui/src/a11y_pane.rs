@@ -31,6 +31,9 @@ fn finding(id: usize, issue: &Value) -> Finding {
     }
 }
 
+/// Findings the list shows before it scrolls the rest itself.
+const FINDINGS_SHOWN: u16 = 12;
+
 /// Review › Check Accessibility: the findings for the document as it is now.
 pub fn accessibility(app: &mut WordApp, ui: &mut Ui) {
     // The findings are copied out: the body below calls `app` again.
@@ -45,7 +48,8 @@ pub fn accessibility(app: &mut WordApp, ui: &mut Ui) {
     let mut activated: Option<usize> = None;
     Stack::new().show(ui, |ui, _| {
         FindingsSummary::new(&findings).show(ui);
-        let out = FindingsList::new(tl!("Accessibility findings")).show_items(ui, &source, &mut |key, icx| {
+        // The pane body scrolls and a collection owns its own scroll: the list shows this many findings and scrolls the rest.
+        let out = FindingsList::new(tl!("Accessibility findings")).max_rows(FINDINGS_SHOWN).show_items(ui, &source, &mut |key, icx| {
             let at = *key as usize;
             let words = icx.words::<FindingsWords>();
             let Some(found) = findings.get(at) else { return craft::ui::list::ListRow::new(String::new()) };

@@ -152,13 +152,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
             .checked(track),
     ];
     let ends = [
+        // The strip lays these out start to end, so Share, the old strip's outermost button, comes last.
+        StripEnd::command(tl!("Comments").to_string(), IconSpec::svg(IconId::new("comment")), CommandRef::new("view.commentsPane")),
+        StripEnd::menu(editing_label.to_string(), IconSpec::svg(IconId::new("pencil")), &modes),
         StripEnd::command(
             tl!("Share").to_string(),
             IconSpec::svg(IconId::new("share")),
             CommandRef::with_params("ui.backstage", json!({"value": true, "page": "export"})),
         ),
-        StripEnd::menu(editing_label.to_string(), IconSpec::svg(IconId::new("pencil")), &modes),
-        StripEnd::command(tl!("Comments").to_string(), IconSpec::svg(IconId::new("comment")), CommandRef::new("view.commentsPane")),
     ];
     // The context menu's body captures these, never `app`, which the row body borrows.
     let qat: Vec<String> = app.session.ribbon.qat().into_iter().map(str::to_string).collect();
