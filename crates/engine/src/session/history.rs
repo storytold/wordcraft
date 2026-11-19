@@ -156,6 +156,16 @@ impl Session {
         self.history.truncate(usize::try_from(keep).unwrap_or(usize::MAX));
     }
 
+    /// Takes back every step recorded since `mark` and drops them from redo, so a cancelled gesture leaves no trace.
+    /// Does nothing when `mark` has already left the history (evicted steps cannot be undone).
+    pub fn revert_since(&mut self, mark: u64) {
+        if mark < self.undo_evicted {
+            return;
+        }
+        while self.undo_mark() > mark && self.undo() {}
+        self.redo.clear();
+    }
+
     pub fn undo_labels(&self) -> Vec<String> {
         self.history.iter().rev().map(|u| u.label.clone()).collect()
     }
