@@ -587,7 +587,13 @@ fn sync_view_state(app: &WordApp, state: &mut PageViewState) {
             _ => Fit::None,
         }
     };
-    state.zoom = f64::from(v.zoom.clamp(0.1, 5.0));
+    // A wheel or pinch zoom is the view's own, anchored at the pointer, and reaches the session rounded to a whole
+    // percent (`show_pages`): the view keeps its exact zoom while it rounds to the session's, or the rounding would
+    // move the place under the pointer on the next pass.
+    let session_zoom = f64::from(v.zoom.clamp(0.1, 5.0));
+    if (state.zoom * 100.0).round() != (session_zoom * 100.0).round() {
+        state.zoom = session_zoom;
+    }
     state.display = if web || v.fit == "onePage" || v.fit == "pageWidth" || v.single_column { PageDisplay::Single } else { PageDisplay::Columns };
     state.hide_white_space = v.hide_white_space && v.mode == wordcraft_layout::ViewMode::Print && !editing_part;
 }
@@ -792,7 +798,9 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         });
     let caret = caret_after.or(caret);
     app.canvas.page_keys = source.into_keys();
-    if ran {
+    // A jump to a page that was not placed (`go_to`) puts the caret's line at the view's top edge: the follow stays on
+    // for the next pass, where the page is placed, so the caret ends with the same margin as any other follow.
+    if ran && fix.go_to.is_none() {
         app.canvas.scroll_to_caret = false;
     }
 
