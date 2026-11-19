@@ -1485,3 +1485,68 @@ fn every_dialog_name_opens_its_dialog_or_none() {
     assert!(a.restrict.open, "restrictEditing opens its pane");
     assert!(open_keys(&a).is_empty());
 }
+
+// ---------------------------------------------------------------- Zoom
+
+/// The Zoom dialog opens on the view's zoom in percent: the view keeps 1.0 for 100%, which the dialog showed as 1.
+#[test]
+fn zoom_opens_on_the_view_percent() {
+    let mut a = app_with("x");
+    a.session.view.zoom = 1.0;
+    let id = super::open(&mut a, "zoom", &json!({})).expect("zoom opens");
+    let shown = a.dialog_host.get_by_id::<super::dialogs_view::ZoomDialog>(id).map(super::dialogs_view::ZoomDialog::percent);
+    assert_eq!(shown, Some(100.0));
+}
+
+/// A fit button in the Zoom dialog's body closes it and fits the view, as the old dialog's row of buttons did.
+#[test]
+fn zoom_fit_button_fits_the_view() {
+    let mut a = app_with("x");
+    a.ctx = Some(egui::Context::default());
+    let _ = super::open(&mut a, "zoom", &json!({}));
+    let mut h = app_harness(a);
+    h.run_steps(2);
+    h.get_by_label("Many pages").click();
+    h.run_steps(3);
+    assert!(!is_open(h.state(), "zoom"), "the fit button closes the dialog");
+    assert_eq!(h.state().session.view.fit, "multiplePages");
+}
+
+/// Word Count shows a plain table, each label with its count to its right on its line, over Close and Cancel.
+#[test]
+fn word_count_shows_label_and_count_on_a_line_over_close_and_cancel() {
+    let mut h = app_harness(app_with("Kilns and wheels"));
+    h.run_steps(2);
+    super::open(h.state_mut(), "wordCount", &json!({})).expect("word count opens");
+    h.run_steps(4);
+    // "Kilns and wheels": 16 characters with spaces.
+    let label = h.get_by_label("Characters (with spaces)").rect();
+    let count = h.get_by_label("16").rect();
+    assert!((label.center().y - count.center().y).abs() < 1.0 && label.max.x < count.min.x, "the count stands right of its label");
+    let button = egui::accesskit::Role::Button;
+    let _ = h.get_by_role_and_label(button, "Close");
+    h.get_by_role_and_label(button, "Cancel").click();
+    h.run_steps(3);
+    assert!(!is_open(h.state(), "wordCount"), "Cancel closes Word Count");
+}
+
+// ---------------------------------------------------------------- Font layout
+
+/// The Font dialog stands as the old one did: the Effects check boxes two to a line (Bold beside Italic, Underline
+/// beside Strikethrough), and Kerning for fonts' size on the check box's line with "Points and above" after it.
+#[test]
+fn font_dialog_effects_stand_two_to_a_line_and_kerning_on_one() {
+    let mut h = app_harness(app_with("Kilns"));
+    h.run_steps(2);
+    super::open(h.state_mut(), "font", &json!({})).expect("font opens");
+    h.run_steps(4);
+    let rect = |h: &egui_kittest::Harness<'_, WordApp>, role: egui::accesskit::Role, label: &str| h.get_by_role_and_label(role, label).rect();
+    let check = egui::accesskit::Role::CheckBox;
+    let same_line = |a: egui::Rect, b: egui::Rect| (a.center().y - b.center().y).abs() < 1.0 && a.max.x <= b.min.x;
+    assert!(same_line(rect(&h, check, "Bold"), rect(&h, check, "Italic")), "Italic stands beside Bold");
+    assert!(same_line(rect(&h, check, "Underline"), rect(&h, check, "Strikethrough")), "Strikethrough stands beside Underline");
+    let kern = rect(&h, check, "Kerning for fonts:");
+    // The size field and the text after it share the name; the field comes first.
+    let size = h.query_all_by_label("Points and above").map(|node| node.rect()).min_by(|a, b| a.min.x.total_cmp(&b.min.x)).expect("the kerning size");
+    assert!((kern.center().y - size.center().y).abs() < 4.0 && kern.max.x <= size.min.x, "the kerning size is on the check box's line");
+}
