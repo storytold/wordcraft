@@ -207,8 +207,7 @@ fn ctrl_shift_drag_keeps_its_document_axis_after_a_scroll() {
     h.run_steps(1);
     h.event(Event::PointerMoved(to));
     h.run_steps(1);
-    // PLAN: assumed `CanvasState::view.offset` has an `f32` `y` (canvas-w9)
-    let offset = h.state().canvas.view.offset.y;
+    let offset = h.state().canvas.view.offset.1;
     // A wheel scroll with the primary button held, in points so the distance does not depend on the platform's line size.
     for _ in 0..16 {
         h.event(Event::MouseWheel {
@@ -220,7 +219,7 @@ fn ctrl_shift_drag_keeps_its_document_axis_after_a_scroll() {
         });
         h.run_steps(1);
     }
-    assert!(h.state().canvas.view.offset.y > offset + 500.0, "the wheel scrolls the canvas under the held button");
+    assert!(h.state().canvas.view.offset.1 > offset + 500.0, "the wheel scrolls the canvas under the held button");
     assert!(h.state().canvas.object_gesture().is_some(), "the copy drag survives the scroll");
     h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
     h.run_steps(3);

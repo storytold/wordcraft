@@ -481,72 +481,6 @@ impl Tokens {
     }
 }
 
-/// Install the UI fonts (Inter, JetBrains Mono) and the craft-fonts CJK interface faces if built
-/// in, Japanese first.
-pub fn install_fonts(ctx: &egui::Context) {
-    install_fonts_for(ctx, false);
-}
-
-/// [`install_fonts`] with the Chinese or Japanese CJK fallback order. The new fonts apply from the
-/// next frame.
-pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
-    install_fonts_with(ctx, prefer_hans, false);
-}
-
-/// [`install_fonts_for`] with the CJK fallback order for a Korean interface.
-pub fn install_fonts_language(ctx: &egui::Context, prefer_hans: bool, prefer_korean: bool) {
-    install_fonts_language_with(ctx, prefer_hans, prefer_korean, false, false);
-}
-
-/// [`install_fonts_for`], also adding an installed CJK font after the embedded faces when
-/// `system_cjk` is set and the embedded faces leave CJK characters of the interface text without
-/// a glyph (#241, #486). Reading that font is a large file read, so callers ask for it only when
-/// CJK text is on screen: a CJK interface language, or the language names in Options.
-pub fn install_fonts_with(ctx: &egui::Context, prefer_hans: bool, system_cjk: bool) {
-    install_fonts_extra(ctx, prefer_hans, system_cjk, &[]);
-}
-
-/// [`install_fonts_with`] with the CJK font order selected for the interface language.
-pub fn install_fonts_language_with(ctx: &egui::Context, prefer_hans: bool, prefer_korean: bool, prefer_hant: bool, system_cjk: bool) {
-    install_fonts_language_extra(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, &[]);
-}
-
-/// [`install_fonts_with`], also adding document-font `faces` as last-resort fallbacks (#565): the
-/// faces that cover text the interface fonts cannot draw (an input method's composition, or a
-/// file name in the window caption).
-pub fn install_fonts_extra(ctx: &egui::Context, prefer_hans: bool, system_cjk: bool, faces: &[Arc<wordcraft_fonts::FontFace>]) {
-    install_fonts_language_extra(ctx, prefer_hans, false, false, system_cjk, faces);
-}
-
-/// [`install_fonts_extra`] with the CJK font order selected for the interface language.
-pub fn install_fonts_language_extra(
-    ctx: &egui::Context,
-    prefer_hans: bool,
-    prefer_korean: bool,
-    prefer_hant: bool,
-    system_cjk: bool,
-    faces: &[Arc<wordcraft_fonts::FontFace>],
-) {
-    install_fonts_language_arabic(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, false, faces);
-}
-
-/// [`install_fonts_language_extra`], also adding an installed Arabic font when `system_arabic` is
-/// set and no embedded face has Arabic letters. Asked for by an Arabic interface only, apart from
-/// the installed CJK font: reading either is a font file read the other languages never need.
-pub fn install_fonts_language_arabic(
-    ctx: &egui::Context,
-    prefer_hans: bool,
-    prefer_korean: bool,
-    prefer_hant: bool,
-    system_cjk: bool,
-    system_arabic: bool,
-    faces: &[Arc<wordcraft_fonts::FontFace>],
-) {
-    let mut fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, system_arabic);
-    add_fallback_faces(&mut fonts, faces);
-    ctx.set_fonts(fonts);
-}
-
 /// Add `faces` after every other font of the interface families.
 pub fn add_fallback_faces(fonts: &mut FontDefinitions, faces: &[Arc<wordcraft_fonts::FontFace>]) {
     for f in faces {
@@ -563,7 +497,7 @@ pub fn add_fallback_faces(fonts: &mut FontDefinitions, faces: &[Arc<wordcraft_fo
 }
 
 /// A character the window caption can already draw without a document fallback: the Latin range
-/// the interface faces cover, or CJK, which uses the CJK UI font ([`install_fonts_with`]) rather
+/// the interface faces cover, or CJK, which uses the CJK UI font ([`install_fonts`]) rather
 /// than a document face. System CJK collections are larger than [`faces_for_preedit`] will load.
 pub fn caption_char_covered(c: char) -> bool {
     (c as u32) < 0x250 || wordcraft_fonts::is_cjk(c)
@@ -591,34 +525,22 @@ pub fn faces_for_preedit(
     out
 }
 
-/// The interface fonts; see [`install_fonts_with`].
-pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions {
-    font_definitions_language(prefer_hans, false, false, system_cjk)
+/// Install the UI fonts ([`font_definitions`]). The new fonts apply from the next frame.
+pub fn install_fonts(ctx: &egui::Context) {
+    ctx.set_fonts(font_definitions());
 }
 
-/// The interface fonts, ordered for the preferred CJK writing system.
-pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, prefer_hant: bool, system_cjk: bool) -> FontDefinitions {
-    font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, false)
-}
-
-/// [`font_definitions_language`], also with an installed Arabic font when `system_arabic` is set
-/// and the build embeds none.
-pub fn font_definitions_language_arabic(
-    prefer_hans: bool,
-    prefer_korean: bool,
-    prefer_hant: bool,
-    system_cjk: bool,
-    system_arabic: bool,
-) -> FontDefinitions {
+/// The interface fonts: Inter, Source Sans and JetBrains Mono, behind egui's default fallbacks.
+pub fn font_definitions()-> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
     };
-    add(&mut fonts, "Inter", include_bytes!("../../../assets/fonts/Inter-Regular.ttf"));
-    add(&mut fonts, "InterMedium", include_bytes!("../../../assets/fonts/Inter-Medium.ttf"));
-    add(&mut fonts, "InterSemiBold", include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"));
-    add(&mut fonts, "SourceSans", include_bytes!("../../../assets/fonts/SourceSans3-Regular.ttf"));
-    add(&mut fonts, "Mono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
+    add(&mut fonts, "Inter", include_bytes!("../../../../assets/fonts/Inter-Regular.ttf"));
+    add(&mut fonts, "InterMedium", include_bytes!("../../../../assets/fonts/Inter-Medium.ttf"));
+    add(&mut fonts, "InterSemiBold", include_bytes!("../../../../assets/fonts/Inter-SemiBold.ttf"));
+    add(&mut fonts, "SourceSans", include_bytes!("../../../../assets/fonts/SourceSans3-Regular.ttf"));
+    add(&mut fonts, "Mono", include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf"));
     if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
         prop.insert(0, "Inter".into());
         prop.push("SourceSans".into());
@@ -628,136 +550,8 @@ pub fn font_definitions_language_arabic(
     }
     fonts.families.insert(FontFamily::Name("medium".into()), vec!["InterMedium".into(), "Inter".into(), "SourceSans".into()]);
     fonts.families.insert(FontFamily::Name("semibold".into()), vec!["InterSemiBold".into(), "Inter".into(), "SourceSans".into()]);
-    let add_cjk = |fonts: &mut FontDefinitions, name: String, data: FontData| {
-        fonts.font_data.insert(name.clone(), Arc::new(data));
-        for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
-            if let Some(v) = fonts.families.get_mut(&fam) {
-                v.push(name.clone());
-            }
-        }
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    if prefer_hant
-        && system_cjk
-        && let Some(f) = system_hant_font()
-    {
-        let mut data = FontData::from_static(&f.bytes);
-        data.index = f.index;
-        add_cjk(&mut fonts, format!("system hant {}", f.family), data);
-    }
-    #[cfg(target_arch = "wasm32")]
-    let _ = prefer_hant;
-    let cjk = wordcraft_fonts::ui_cjk_fonts_for(prefer_hans, prefer_korean);
-    for f in &cjk {
-        // The same static bytes the document fonts use: one copy in the binary.
-        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
-    }
-    // Georgian has no glyphs in Inter, Source Sans or the CJK faces: the craft-fonts Geor face.
-    for f in wordcraft_fonts::georgian_fonts() {
-        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
-    }
-    // The embedded faces leave interface characters without a glyph (a build without craft-fonts,
-    // without its Chinese face, #241, or with faces lacking catalog characters, #486): an
-    // installed CJK font after them, so the menus don't show boxes or `?`.
-    #[cfg(not(target_arch = "wasm32"))]
-    if system_cjk && let Some(f) = system_cjk_font(prefer_hans, prefer_korean) {
-        let mut data = FontData::from_static(&f.bytes);
-        data.index = f.index;
-        add_cjk(&mut fonts, format!("system {}", f.family), data);
-    }
-    #[cfg(target_arch = "wasm32")]
-    let _ = system_cjk;
-    // Arabic-script faces last: the Arabic interface, its name in the language list, Arabic file
-    // names. Without an embedded one (a build without craft-fonts), an installed font, read when
-    // `system_arabic` is set: for an Arabic interface.
-    let arabic = wordcraft_fonts::ui_arabic_fonts();
-    for f in &arabic {
-        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    if system_arabic
-        && arabic.is_empty()
-        && let Some(f) = system_arabic_font()
-    {
-        let mut data = FontData::from_static(&f.bytes);
-        data.index = f.index;
-        add_cjk(&mut fonts, format!("system {}", f.family), data);
-    }
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
-}
-
-/// The installed Arabic interface font, read once.
-#[cfg(not(target_arch = "wasm32"))]
-fn system_arabic_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
-    static ARABIC: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
-    ARABIC.get_or_init(wordcraft_fonts::system_arabic_ui_font).as_ref()
-}
-
-/// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once:
-/// `None` when the embedded faces already cover the interface text
-/// ([`cjk_font_text`](crate::i18n::Lang::cjk_font_text)). The font is picked for the catalogs'
-/// missing characters, or for the language names when only those are missing; see
-/// [`system_cjk_needed`].
-#[cfg(not(target_arch = "wasm32"))]
-fn system_cjk_font(hans: bool, korean: bool) -> Option<&'static wordcraft_fonts::SystemUiFont> {
-    static ZH: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
-    static OTHER: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
-    static KO: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
-    (if hans {
-        &ZH
-    } else if korean {
-        &KO
-    } else {
-        &OTHER
-    })
-    .get_or_init(|| {
-        let embedded = wordcraft_fonts::ui_cjk_fonts_for(hans, korean);
-        let (catalogs, names) = crate::i18n::Lang::cjk_font_text_for(hans, korean);
-        let needed = system_cjk_needed(&catalogs, &names, &embedded)?;
-        log::debug!("interface: {} CJK characters lack an embedded glyph", needed.len());
-        let found = wordcraft_fonts::system_cjk_ui_font_for(hans, korean, &needed);
-        if found.is_none() && needed.is_empty() && !hans && !korean {
-            // No Japanese or Chinese font installed: a Korean one (NanumGothic alone on Linux)
-            // still draws Korean document text.
-            return wordcraft_fonts::system_cjk_ui_font_for(false, true, &needed);
-        }
-        found
-    })
-    .as_ref()
-}
-
-/// The CJK characters an installed interface font is picked for: those of the catalogs, or of
-/// the language names, that the embedded faces lack. `None` when the embedded faces draw them all.
-///
-/// The interface asks for this font only when CJK is on screen: the interface language, or CJK
-/// document text drawn as interface text (an input method's composition, a file name in the
-/// caption). A build with neither craft-i18n's CJK catalogs nor craft-fonts' CJK faces has no CJK
-/// text of its own to measure, and that text drew as boxes. It gets the font picked for the
-/// language's own characters (an empty list: [`wordcraft_fonts::system_cjk_ui_font_for`] probes
-/// one, `の` for a Japanese or other interface), or failing that a Korean font.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn system_cjk_needed(catalogs: &[&str], names: &str, embedded: &[&wordcraft_fonts::CraftFont]) -> Option<Vec<char>> {
-    let needed = wordcraft_fonts::ui_uncovered_cjk(catalogs, embedded);
-    if !needed.is_empty() {
-        return Some(needed);
-    }
-    let needed = wordcraft_fonts::ui_uncovered_cjk(&[names], embedded);
-    if !needed.is_empty() {
-        return Some(needed);
-    }
-    embedded.is_empty().then(Vec::new)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn system_hant_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
-    static HANT: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
-    HANT.get_or_init(|| {
-        let f = wordcraft_fonts::system_hant_ui_font(&crate::i18n::Lang::hant_font_chars());
-        log::debug!("interface: Traditional Chinese font {:?}", f.as_ref().map(|f| &f.family));
-        f
-    })
-    .as_ref()
 }
 
 pub fn medium(size: f32) -> FontId {
@@ -980,7 +774,7 @@ mod tests {
             move |ui, set: &mut bool| {
                 if !*set {
                     super::apply(ui.ctx(), appearance);
-                    ui.ctx().set_fonts(super::font_definitions(false, false));
+                    ui.ctx().set_fonts(super::font_definitions());
                     *set = true;
                 }
                 egui::Frame::new().fill(bg).inner_margin(8.0).show(ui, |ui| {
@@ -1118,23 +912,9 @@ mod tests {
     /// explicitly (kittest's own dev-dependencies do not propagate). WordCraft inserts Inter at
     /// the front and SourceSans after egui's complete default fallback block, including the
     /// monochrome emoji faces. Production keeps only `default_fonts` through eframe.
-    /// An installed Arabic font is read for an Arabic interface only (`system_arabic`), and the
-    /// installed CJK font request alone never brings it in: neither read is paid by the other.
-    #[test]
-    fn the_installed_arabic_font_is_asked_for_by_arabic_alone() {
-        let plain = super::font_definitions_language_arabic(false, false, false, false, false).font_data.len();
-        let cjk_only = super::font_definitions_language_arabic(false, false, false, true, false);
-        let arabic = super::font_definitions_language_arabic(false, false, false, false, true).font_data.len();
-        let installed_arabic = wordcraft_fonts::ui_arabic_fonts().is_empty() && wordcraft_fonts::system_arabic_ui_font().is_some();
-        assert_eq!(arabic, plain + usize::from(installed_arabic), "Arabic adds the installed font when nothing is embedded");
-        let arabic_named = |defs: &egui::FontDefinitions| defs.font_data.keys().filter(|k| k.starts_with("system ")).count();
-        let cjk_font = super::system_cjk_font(false, false).is_some();
-        assert_eq!(arabic_named(&cjk_only), usize::from(cjk_font), "the CJK request adds the CJK font and no Arabic one");
-    }
-
     #[test]
     fn interface_font_order_keeps_test_default_fonts_explicit() {
-        let defs = super::font_definitions(false, false);
+        let defs = super::font_definitions();
         let prop = &defs.families[&egui::FontFamily::Proportional];
         assert_eq!(
             prop.iter().take(6).map(String::as_str).collect::<Vec<_>>(),
@@ -1155,7 +935,7 @@ mod tests {
         assert!(super::faces_for_preedit(bangla, &got, |_| false, lookup).is_empty(), "already added");
         assert!(super::faces_for_preedit(bangla, &[], |_| true, lookup).is_empty(), "the interface fonts draw it");
         assert!(super::faces_for_preedit("abc", &[], |_| false, lookup).is_empty(), "ASCII never needs one");
-        let mut defs = super::font_definitions(false, false);
+        let mut defs = super::font_definitions();
         let before = defs.font_data.len();
         super::add_fallback_faces(&mut defs, &got);
         assert_eq!(defs.font_data.len(), before + 1);
@@ -1179,33 +959,10 @@ mod tests {
         assert!(super::faces_for_preedit(hebrew, &got, super::caption_char_covered, lookup).is_empty(), "already added");
         assert!(super::faces_for_preedit("文档", &[], super::caption_char_covered, lookup).is_empty(), "CJK uses the CJK UI font");
         assert!(super::faces_for_preedit("report", &[], super::caption_char_covered, lookup).is_empty(), "Latin needs nothing");
-        let mut defs = super::font_definitions(false, false);
+        let mut defs = super::font_definitions();
         super::add_fallback_faces(&mut defs, &got);
         let semi = &defs.families[&egui::FontFamily::Name("semibold".into())];
         assert!(semi.iter().any(|n| n.starts_with("fallback ")), "the caption is painted with semibold");
-    }
-
-    /// A build without craft-i18n's CJK catalogs and craft-fonts' CJK faces has no CJK interface
-    /// text of its own, so the CJK UI font that CJK document text asks for (a composition, a file
-    /// name, a comment) was never loaded, and that text drew as boxes. It is now picked for the
-    /// language's own characters.
-    #[test]
-    fn cjk_text_gets_an_installed_cjk_font_in_a_build_without_one() {
-        assert_eq!(super::system_cjk_needed(&[], "English", &[]), Some(Vec::new()), "picked for the language's own characters");
-        assert_eq!(super::system_cjk_needed(&["ファイル"], "English", &[]), Some(vec!['ァ', 'イ', 'フ', 'ル']));
-        assert_eq!(super::system_cjk_needed(&[], "English 日本語", &[]), Some(vec!['日', '本', '語']));
-        let embedded = wordcraft_fonts::ui_cjk_fonts_for(false, false);
-        if !embedded.is_empty() {
-            assert_eq!(super::system_cjk_needed(&[], "English", &embedded), None, "the embedded faces draw CJK");
-        } else {
-            // macOS and Windows always have one, and CI runs these tests on both (the Print job).
-            let installed = wordcraft_fonts::system_cjk_ui_font_for(false, false, &[]).is_some();
-            assert!(installed || cfg!(not(any(target_os = "macos", windows))), "macOS and Windows have a CJK font");
-            if installed {
-                let defs = super::font_definitions_language(false, false, false, true);
-                assert!(defs.font_data.keys().any(|n| n.starts_with("system ")), "the installed CJK font follows the interface fonts");
-            }
-        }
     }
 
     /// #656: dialog primary buttons, the Discord pill, the table eraser and the Navigation search
@@ -1254,7 +1011,7 @@ mod tests {
     #[test]
     fn interface_symbols_have_glyphs() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(super::font_definitions(false, false));
+        ctx.set_fonts(super::font_definitions());
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut symbols = BTreeSet::new();

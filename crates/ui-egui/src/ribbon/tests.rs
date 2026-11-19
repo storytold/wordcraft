@@ -120,7 +120,7 @@ fn paragraph_tools_menu_entries_run_their_commands() {
     let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("a  b\n\nc   d")), crate::Services::default());
     let mut h = egui_kittest::Harness::builder()
         .with_size(vec2(900.0, 300.0))
-        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions()))
         .build_ui_state(|ui, app: &mut WordApp| super::home::home(app, ui), a);
     h.run_steps(2);
     // The accessible label is the menu button's tip, "Paragraph Tools".
@@ -274,7 +274,7 @@ fn underline_menu_entries_apply_their_style() {
     // bare test defaults do not.
     let mut h = egui_kittest::Harness::builder()
         .with_size(vec2(400.0, 700.0))
-        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions()))
         .build_ui_state(|ui, app: &mut WordApp| underline_menu(ui, app), a);
     h.run_steps(2);
     let run = |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap().runs[0].props.clone();
