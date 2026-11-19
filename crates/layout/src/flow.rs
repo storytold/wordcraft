@@ -185,6 +185,10 @@ struct Flow<'a> {
     /// The space before it at the top of the piece being placed (a paragraph starting with a page
     /// break has it on the new page): late floats there are positioned from above it.
     space_here: f32,
+    /// Where the column ended before this paragraph: (page count, column), the text bottom, the
+    /// space before laid out below it, and the content bottom. A paragraph that starts with a
+    /// column break takes its space before back from that column.
+    start: Option<((usize, usize), f32, f32, f32)>,
 }
 
 impl<'a> Flow<'a> {
@@ -223,6 +227,7 @@ impl<'a> Flow<'a> {
             rechecked: false,
             forced: Vec::new(),
             space_here: 0.0,
+            start: None,
         }
     }
 
@@ -591,10 +596,15 @@ impl<'a> Flow<'a> {
         let (block, body_top) = (self.block, self.body_top);
         // A paragraph that starts with a page break starts on the new page, its space before
         // there (Word).
-        let starts_with_break = self.l0 == 1
-            && self.pl.lines.first().is_some_and(|l| {
-                self.p.text.get(l.start..l.stop).is_some_and(|t| !t.is_empty() && t.chars().all(|c| c == wordcraft_doc::para::PAGE_BREAK))
-            });
+        let starts_with = |brk: char| {
+            self.l0 == 1
+                && self
+                    .pl
+                    .lines
+                    .first()
+                    .is_some_and(|l| self.p.text.get(l.start..l.stop).is_some_and(|t| !t.is_empty() && t.chars().all(|c| c == brk)))
+        };
+        let starts_with_break = starts_with(wordcraft_doc::para::PAGE_BREAK);
         match forced {
             Some(LineEnd::PageBreak) if mark_with_break => {
                 pb.new_page(block, body_top);
@@ -606,6 +616,26 @@ impl<'a> Flow<'a> {
                 pb.y += self.space_here;
             }
             Some(LineEnd::PageBreak) => pb.new_page(block, body_top),
+            // A paragraph that starts with a column break has its space before in the next column,
+            // not in the column the break ends. There the line holding the break keeps its height
+            // in Word 2013 layout and takes no room in older layouts (Word).
+            Some(LineEnd::ColumnBreak) if starts_with(wordcraft_doc::para::COLUMN_BREAK) && !pb.web => {
+                pb.col_break_page = Some(pb.pages.len().saturating_sub(1));
+                if let Some((at, y, gap, content_bottom)) = self.start
+                    && at == (pb.pages.len(), pb.col)
+                {
+                    if ctx.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT {
+                        pb.y -= gap;
+                        pb.content_bottom = content_bottom.max(pb.y);
+                    } else {
+                        (pb.y, pb.content_bottom) = (y, content_bottom);
+                    }
+                }
+                pb.advance(block, body_top);
+                self.rewidth_after_column_break(ctx, pb);
+                self.space_here = self.pl.rp.space_before.max(0.0);
+                pb.y += self.space_here;
+            }
             Some(LineEnd::ColumnBreak) => {
                 pb.col_break_page = Some(pb.pages.len().saturating_sub(1));
                 pb.advance(block, body_top);
@@ -840,6 +870,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         pb.new_page(block, body_top);
     }
     let before = f.gap_before(ctx, pb, broke_before);
+    f.start = Some((spot(pb), pb.y, before, pb.content_bottom));
     pb.y += before;
     let rooms = Rooms::of(ctx, block, &f.pl);
     let applied_before = f.keep_together(ctx, pb, rooms, before);
