@@ -1025,6 +1025,12 @@ mod tests {
         for pressed in [true, false] {
             frame(a, ctx, vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }]);
         }
+        // The framework reports a control's action a pass after the release that takes it (the runtime hands the
+        // app's input over at the head of the next pass), so the click's effect is read after a few idle frames, as a
+        // person's next moment would be.
+        for _ in 0..3 {
+            frame(a, ctx, Vec::new());
+        }
     }
 
     /// The centre of the first widget whose name starts with `label`.
