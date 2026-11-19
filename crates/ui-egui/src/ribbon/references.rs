@@ -41,7 +41,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     MenuItem::command(CommandRef::with_params("references.addText", json!({"level": 0}))).label(crate::tl!("Do Not Show in TOC")).show(ui);
                     for l in 1..=3u64 {
                         let label = format!("Level {l}");
-                        MenuItem::command(CommandRef::with_params("references.addText", json!({"level": l}))).label(label).show(ui);
+                        MenuItem::command(CommandRef::with_params("references.addText", json!({"level": l}))).label(crate::tl!(&label).to_string()).show(ui);
                     }
                 },
             );
@@ -110,7 +110,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 |ui, _| {
                     for st in &wordcraft_engine::cmd::citations::STYLES {
                         MenuItem::command(CommandRef::with_params("references.citationStyle", json!({"style": st.name})))
-                            .label(st.name)
+                            .label(crate::tl!(st.name))
                             .radio_mark(st.name == current)
                             .show(ui);
                     }
@@ -183,7 +183,7 @@ pub(super) fn zotero(row: &mut RibbonRow<'_>, _app: &mut WordApp) {
             crate::tl!("Citation Provider"),
             Some("ui.citations.provider"),
             |ui, _| {
-                MenuItem::command(CommandRef::with_params("ui.citations.provider", json!({"value": "zotero"}))).label("Zotero").radio_mark(true).show(ui);
+                MenuItem::command(CommandRef::with_params("ui.citations.provider", json!({"value": "zotero"}))).label(crate::tl!("Zotero")).radio_mark(true).show(ui);
             },
         );
     });

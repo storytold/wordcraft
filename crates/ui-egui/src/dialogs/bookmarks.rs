@@ -215,6 +215,27 @@ static ICON_GROUPS: LazyLock<Vec<IconPickerGroup<String>>> = LazyLock::new(|| {
         .collect()
 });
 
+thread_local! {
+    // The groups titled in the interface language they were made for (the library's category names are English).
+    static TRANSLATED_GROUPS: std::cell::RefCell<Option<(&'static str, std::rc::Rc<Vec<IconPickerGroup<String>>>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`ICON_GROUPS`] with each category's name in the interface language, made again when the language changes.
+fn translated_groups() -> std::rc::Rc<Vec<IconPickerGroup<String>>> {
+    let lang = crate::i18n::current().code();
+    TRANSLATED_GROUPS.with_borrow_mut(|cached| match cached {
+        Some((made_for, groups)) if *made_for == lang => std::rc::Rc::clone(groups),
+        _ => {
+            let groups: Vec<IconPickerGroup<String>> =
+                ICON_GROUPS.iter().map(|g| IconPickerGroup::new(tl!(g.name.as_str()).to_string(), g.items.clone())).collect();
+            let groups = std::rc::Rc::new(groups);
+            *cached = Some((lang, std::rc::Rc::clone(&groups)));
+            groups
+        }
+    })
+}
+
 /// Insert › Icons: the library as a searchable grid with a filter row; Insert runs `insert.icon`.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct IconsForm {
@@ -241,7 +262,8 @@ impl WordForm for IconsForm {
     }
 
     fn body(&mut self, ui: &mut Ui, cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
-        let out = IconPicker::new(Label::from(tl!("Icons")), Bind::bound(&mut self.picked), ICON_GROUPS.as_slice())
+        let groups = translated_groups();
+        let out = IconPicker::new(Label::from(tl!("Icons")), Bind::bound(&mut self.picked), groups.as_slice())
             .group_display(IconPickerGroups::Filter)
             .empty(Label::from(tl!("No icons match your search.")))
             .show(ui);

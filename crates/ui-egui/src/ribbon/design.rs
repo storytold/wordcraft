@@ -92,7 +92,7 @@ pub(super) fn design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             Some("design.watermark"),
             |ui, _| {
                 for w in ["DRAFT", "CONFIDENTIAL", "DO NOT COPY", "SAMPLE", "ASAP", "URGENT"] {
-                    MenuItem::command(CommandRef::with_params("design.watermark", json!({"text": w}))).label(w).show(ui);
+                    MenuItem::command(CommandRef::with_params("design.watermark", json!({"text": w}))).label(crate::tl!(w)).show(ui);
                 }
                 Divider::horizontal().show(ui);
                 MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "watermark"}))).label(crate::tl!("Custom Watermark…")).show(ui);

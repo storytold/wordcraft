@@ -129,7 +129,7 @@ impl WordForm for CaptionForm {
             self.text = text;
         }
         let label_title = Label::from(tl!("Label:").to_string());
-        let labels: Vec<Entry<String>> = self.labels.iter().map(|l| Entry::new(l.clone(), Label::from(l.clone()))).collect();
+        let labels: Vec<Entry<String>> = self.labels.iter().map(|l| Entry::new(l.clone(), Label::from(tl!(l).to_string()))).collect();
         if let Some(label) = Field::new(label_title.clone())
             .show(ui, |ui, _| Select::new(label_title.clone(), Bind::given(Mixed::Same(self.label.clone())), &labels).show(ui).value().cloned())
             .inner

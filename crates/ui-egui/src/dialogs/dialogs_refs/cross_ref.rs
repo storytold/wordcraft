@@ -130,7 +130,7 @@ impl WordForm for CrossRefForm {
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let type_title = Label::from(tl!("Reference type:").to_string());
-        let types: Vec<Entry<String>> = self.types.iter().map(|(v, l)| Entry::new(v.clone(), Label::from(l.clone()))).collect();
+        let types: Vec<Entry<String>> = self.types.iter().map(|(v, l)| Entry::new(v.clone(), Label::from(tl!(l).to_string()))).collect();
         let picked = Field::new(type_title.clone())
             .show(ui, |ui, _| Select::new(type_title.clone(), Bind::given(Mixed::Same(self.to.clone())), &types).show(ui).value().cloned())
             .inner
