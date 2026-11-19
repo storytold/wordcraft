@@ -867,7 +867,15 @@ mod smoke {
         let tree = run.frames.tree();
         // The framework words the answer as the platform does: "Don't Save" on macOS, "No" elsewhere.
         let dont_save = if cfg!(target_os = "macos") { "Don't Save" } else { "No" };
-        let button = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some(dont_save)).expect("the prompt has a button for Don't Save");
+        // A button is named by the label inside it (`labelled_by`) as often as by its own name, and the label's own
+        // node is no button: the testing module's `name` and `is_interactive` read it as the fixture's `by_label` does.
+        let button = tree
+            .keys()
+            .into_iter()
+            .find(|key| {
+                craft::ui::testing::access::name(&tree, *key) == Some(dont_save) && craft::ui::testing::access::is_interactive(&tree, *key)
+            })
+            .expect("the prompt has a button for Don't Save");
         let press = egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
             action: egui::accesskit::Action::Click,
             target_tree: egui::accesskit::TreeId::ROOT,
