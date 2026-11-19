@@ -390,6 +390,7 @@ fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn long_fragmented_hidden_headings_export_in_linear_time() {
     // Headings of n chars in one-char runs: all hidden with bold alternating, and hidden and visible
     // alternating. Layout and the bookmark/tag titles once scanned every left-out range for every
@@ -982,6 +983,7 @@ fn inline_chart_is_a_figure_with_its_text_inside_it() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        angle: 0.0,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
     let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: "Sales by quarter".into(), float: Default::default(), graphic: Arc::new(graphic) };
@@ -1916,6 +1918,7 @@ fn comments_print_in_balloons_beside_scaled_pages() {
 /// references) exports in time proportional to its length: each link looked its bookmark up by
 /// walking the whole document, so NIH's 67-page protocol template took 10.6 s (0.9 s now).
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn internal_links_export_in_linear_time() {
     let doc = |n: usize| {
         let mut d = Document::new();
@@ -3120,6 +3123,7 @@ fn only_safe_link_targets_become_annotations() {
 /// without one), found in one pass: a long run of glyphs sharing a cluster used to rescan the rest
 /// of the run for every glyph.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn cluster_ends_match_the_next_larger_cluster_in_linear_time() {
     let brute = |cl: &[usize], len: usize| -> Vec<usize> {
         (0..cl.len()).map(|i| cl.iter().skip(i + 1).copied().find(|n| *n > cl[i]).unwrap_or(len)).collect::<Vec<_>>()
@@ -3150,6 +3154,27 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+/// The exported PDF shows a body page reference's page and Word's error for a missing bookmark,
+/// as Word's export does, where the document stores "9" for both.
+#[test]
+fn exported_page_references_show_the_page_or_words_error() {
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let mut d = Document::from_text("See \nMissing \nTarget");
+    for (i, instr) in [(0, "PAGEREF Target"), (1, "PAGEREF NoSuchMark")] {
+        let p = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(i)).unwrap();
+        let n = p.len();
+        p.insert_object(n, field(instr), &CharProps::default()).unwrap();
+    }
+    let target = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    target.props.page_break_before = Some(true);
+    target.insert_object(0, InlineObject::BookmarkStart { name: "Target".into() }, &CharProps::default()).unwrap();
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap());
+    let first = squash(&text[0]);
+    assert!(first.contains("See 2"), "{first}");
+    assert!(first.contains("Missing Error! Bookmark not defined."), "{first}");
 }
 
 #[test]
@@ -3216,6 +3241,7 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        angle: 0.0,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
     let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
