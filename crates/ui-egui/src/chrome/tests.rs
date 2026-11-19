@@ -364,7 +364,9 @@ fn controls_on_row_of(h: &egui_kittest::Harness<'static, WordApp>, anchor: egui:
     roles
         .into_iter()
         .flat_map(|role| h.query_all_by_role(role).map(|n| (n.accesskit_node().label().unwrap_or_default().to_string(), n.rect())).collect::<Vec<_>>())
-        .filter(|(_, r)| r.width() > 0.0 && r.min.y <= y && y <= r.max.y)
+        // A field's editor is an unnamed text input inside the named field (Search, the combo boxes): a part of the
+        // control, not another control.
+        .filter(|(l, r)| !l.is_empty() && r.width() > 0.0 && r.min.y <= y && y <= r.max.y)
         .collect()
 }
 
@@ -377,8 +379,10 @@ fn title_bar_controls_never_overlap_in_a_narrow_window() {
         for width in [crate::window_geometry::MIN_SIZE.x, 640.0, 683.0, 760.0, 1440.0] {
             let h = narrow_harness(width, percent);
             let right = h.ctx.content_rect().max.x;
-            let title = h.get_by_role_and_label(egui::accesskit::Role::Button, "Document1 \u{2014} Not saved").rect();
-            let nodes = controls_on_row_of(&h, title);
+            // The bar is named by the title it shows (turning Track Changes on edited the document). The title itself
+            // gives way first in a narrow window, so the row is the bar's.
+            let bar = h.get_by_role_and_label(egui::accesskit::Role::Group, "Document1 \u{2014} Edited").rect();
+            let nodes = controls_on_row_of(&h, bar);
             assert!(nodes.iter().any(|(l, _)| l == "Search commands and help"), "{percent}% {width}: {nodes:?}");
             for (i, (la, a)) in nodes.iter().enumerate() {
                 assert!(a.max.x <= right + 0.5, "{percent}% {width}: {la} runs off the window");
@@ -390,22 +394,43 @@ fn title_bar_controls_never_overlap_in_a_narrow_window() {
     }
 }
 
+/// The texts the last frame painted on the row of `anchor` (its vertical middle inside theirs), each with the part of
+/// it its clip lets show.
+fn painted_on_row_of(h: &egui_kittest::Harness<'static, WordApp>, anchor: egui::Rect) -> Vec<(String, egui::Rect)> {
+    let y = anchor.center().y;
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some((t.galley.text().to_string(), c.shape.visual_bounding_rect().intersect(c.clip_rect))),
+            _ => None,
+        })
+        .filter(|(_, r)| r.is_positive() && r.min.y <= y && y <= r.max.y)
+        .collect()
+}
+
 /// #5886: the status bar's texts stop before its controls on the right; in a narrow window the ones that don't fit
 /// are left out or shortened instead of drawn over Focus, the views and the zoom. The page is always shown.
+///
+/// The bar's readouts are members of a framework `Bar`, whose body scrolls under its end region: a member its view
+/// shows only in part is not painted (and takes no click) until a scroll brings it in whole, while it keeps its
+/// accessibility node and stop so Tab reaches and reveals it. So what is drawn is read from the painted texts, not
+/// from the nodes' rects.
 #[test]
 fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
-    let controls = ["Focus", "Read Mode", "Print Layout", "Web Layout", "Zoom Out", "Zoom", "Zoom In"];
     for percent in [100, 150] {
         for width in [crate::window_geometry::MIN_SIZE.x, 640.0, 683.0, 760.0, 1440.0] {
             let h = narrow_harness(width, percent);
             let focus = h.get_by_role_and_label(egui::accesskit::Role::Button, "Focus").rect();
-            let nodes = controls_on_row_of(&h, focus);
-            assert!(nodes.iter().any(|(l, _)| l == "Page 1 of 1"), "{percent}% {width}: the page is always shown: {nodes:?}");
-            for (label, r) in nodes.iter().filter(|(l, _)| !controls.contains(&l.as_str()) && !l.ends_with('%')) {
-                assert!(r.max.x <= focus.min.x + 0.5, "{percent}% {width}: {label} ends at {}, past the controls at {}", r.max.x, focus.min.x);
+            let painted = painted_on_row_of(&h, focus);
+            assert!(painted.iter().any(|(t, _)| t == "Page 1 of 1"), "{percent}% {width}: the page is always shown: {painted:?}");
+            // The controls' own texts: Focus and the zoom percentage (the views and the zoom buttons are icons).
+            for (text, r) in painted.iter().filter(|(t, _)| t != "Focus" && !t.ends_with('%')) {
+                assert!(r.max.x <= focus.min.x + 0.5, "{percent}% {width}: {text:?} is drawn to {}, past the controls at {}", r.max.x, focus.min.x);
             }
         }
     }
     let wide = narrow_harness(1440.0, 100);
-    assert!(wide.query_by_label("Track Changes: On").is_some(), "a wide window shows everything");
+    let focus = wide.get_by_role_and_label(egui::accesskit::Role::Button, "Focus").rect();
+    assert!(painted_on_row_of(&wide, focus).iter().any(|(t, _)| t == "Track Changes: On"), "a wide window shows everything");
 }

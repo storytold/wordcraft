@@ -23,6 +23,9 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
                 let _ = app.run("ui.focusRibbon", json!({}));
             }
         }
-        _ => super::search::show(app, ui),
+        // The slim bar holds the field alone, so it always has its room.
+        _ => {
+            super::search::show(app, ui, false);
+        }
     });
 }

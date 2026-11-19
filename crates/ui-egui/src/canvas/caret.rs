@@ -8,7 +8,8 @@ use craft::behavior::{Input, Metrics};
 use craft::pages::ui::{PageBody, PlacedPage};
 use craft::ui::canvas::ToolPass;
 use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Role, Show as _};
-use craft::ui::primitives::{PaintShape, StrokeWidth, TextRun};
+use craft::ui::fonts::{FaceBytes, MAX_INTERFACE_FACE_BYTES};
+use craft::ui::primitives::{FaceRun, PaintShape, StrokeWidth, TextRun};
 use craft::ui::runtime::env::Label;
 use craft::ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
 use egui::{Color32, Pos2, Rect, Response, Ui, pos2, vec2};
@@ -37,6 +38,20 @@ struct Placement {
     in_equation: bool,
     /// The selection is collapsed, so a caret is drawn.
     collapsed: bool,
+    /// The face, size and baseline on screen text typed at the caret takes, which a composition is drawn in. `None`
+    /// in an equation, in turned text and without a style run.
+    typing: Option<TypingFace>,
+}
+
+/// The face text typed at the caret asks for, its size and its baseline on screen (`DocLayout::typing_style`).
+#[derive(Clone, Copy)]
+struct TypingFace {
+    /// The face the run's font resolves to, not a fallback face that drew the character before the caret.
+    face: wordcraft_fonts::FaceRef,
+    /// The run's size times the page's scale on screen.
+    size: f32,
+    /// The run's baseline on screen.
+    baseline: f32,
 }
 
 /// The one rule for where the caret is, for the candidate window and the painter alike. `None`
@@ -60,6 +75,7 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
             bottom: y1,
             in_equation: true,
             collapsed: true,
+            typing: None,
         });
     }
     let sel = preview_sel(app).unwrap_or(&app.session.sel);
@@ -89,6 +105,15 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
     } else {
         [pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)]
     };
+    // Word draws a composition in the font and size of the text it goes into; not in turned text, whose lines aren't
+    // horizontal.
+    let typing = if c.width > 0.0 {
+        None
+    } else {
+        doc.typing_style(&sel.focus, app.session.page_hint)
+            .filter(|(run, base)| run.size.is_finite() && run.size > 0.0 && base.is_finite())
+            .map(|(run, base)| TypingFace { face: run.requested_face, size: run.size * scale, baseline: pr.rect.min.y + base * scale })
+    };
     Some(Placement {
         bar,
         page: c.page,
@@ -98,6 +123,7 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
         bottom: y1,
         in_equation: false,
         collapsed: sel.is_collapsed(),
+        typing,
     })
 }
 
@@ -165,17 +191,16 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
         // The caret is steady inside the composition, so the glide stands down while it shows.
         app.canvas.glide.reset();
         let text = app.canvas.ime_preedit.clone();
-        let chars = text.chars().count().max(1);
-        let at = preedit_cursor_chars(&text, app.canvas.ime_preedit_range.as_ref());
+        let cursor = preedit_cursor_chars(&text, app.canvas.ime_preedit_range.as_ref());
         composition = Some(Composition {
             left: pl.left,
             bottom: pl.bottom,
             height: pl.height,
             room: (pass.rect.right() - pl.left).max(0.0),
             text,
-            // PLAN: `TextLayout` has no cursor lookup; the caret sits at its share of the composition's width (canvas-w1).
-            cursor: at as f32 / chars as f32,
+            cursor,
             color: ink(app),
+            typing: pl.typing,
         });
     } else {
         let look = step(app, request(pl.bar, shown));
@@ -212,9 +237,11 @@ struct Composition {
     /// The width from `left` to the canvas's right edge.
     room: f32,
     text: String,
-    /// Where the caret stands in the composition, as a share of its width.
-    cursor: f32,
+    /// Where the caret stands in the composition, in characters from its start.
+    cursor: usize,
     color: Color32,
+    /// The face, size and baseline it is drawn in; without them, the interface font from the caret's bottom.
+    typing: Option<TypingFace>,
 }
 
 /// The style of the caret marks: the composition's ink.
@@ -260,6 +287,23 @@ impl Outcome for CaretMarksOutput {
     }
 }
 
+/// The key a document face is drawn under among the context's document faces: one per loaded face, whose id is unique
+/// in the process and stands for its file, index and variation setting.
+pub(crate) fn face_key(face: wordcraft_fonts::FaceRef) -> String {
+    format!("wordcraft-face:{}", face.id())
+}
+
+/// The bytes, index and variation setting of `face`, read the first time it is drawn. A file larger than the framework
+/// draws over the interface fonts is not copied: the composition stays in the interface font (a document's CJK
+/// fallback can be 19 MB).
+fn face_bytes(face: wordcraft_fonts::FaceRef) -> Option<FaceBytes> {
+    let data = face.data();
+    if data.len() > MAX_INTERFACE_FACE_BYTES {
+        return None;
+    }
+    Some(FaceBytes::new(std::sync::Arc::from(data), face.index()).coords(face.coords.iter().copied()))
+}
+
 impl Component for CaretMarks {
     const ROLE: Role = Role::GRAPHICS_OBJECT;
     const ALT_ROLES: &'static [Role] = &[Role::None];
@@ -271,7 +315,8 @@ impl Component for CaretMarks {
     type Output = CaretMarksOutput;
 
     fn style(cx: &StyleCx<'_>, _: CaretMarksStyleKey) -> CaretMarksStyle {
-        // PLAN: a text run takes a theme colour only, so the composition's glyphs use the overlay ink while its underline and caret use the paper contrast (canvas-w1: a data-colour text run). The type role fixes its size.
+        // Without a typing face the composition is an interface text run, which takes a theme colour: its glyphs use the
+        // overlay ink while its underline and caret use the paper contrast.
         CaretMarksStyle { metrics: Metrics::new(), ink: cx.color(cx.tokens.color.overlay.stroke) }
     }
 
@@ -285,14 +330,27 @@ impl Component for CaretMarks {
             draw.stroke(&PaintShape::Path(bar.to_vec()), StrokeWidth::Medium, DataColor::new(*color));
         }
         let Some(c) = &self.composition else { return };
-        let rect = Rect::from_min_size(pos2(c.left, c.bottom - c.height), vec2(c.room, c.height));
-        let layout = draw.text(rect, &TextRun::new(c.text.as_str()).color(cx.style.ink));
         let color = DataColor::new(c.color);
+        let (layout, top, bottom) = match &c.typing {
+            // In the text's own face and size, its first baseline on the line's, as typed text would sit. Characters the
+            // face lacks (CJK in a Latin font) come from the interface fonts; a size past the font atlas is capped.
+            Some(t) => {
+                let key = face_key(t.face);
+                let layout = draw.face_run(pos2(c.left, t.baseline), &FaceRun::new(c.text.as_str(), &key, t.size, color), || face_bytes(t.face));
+                let top = t.baseline - layout.first_baseline;
+                let bottom = top + layout.size().y;
+                (layout, top, bottom)
+            }
+            None => {
+                let rect = Rect::from_min_size(pos2(c.left, c.bottom - c.height), vec2(c.room, c.height));
+                (draw.text(rect, &TextRun::new(c.text.as_str()).color(cx.style.ink)), c.bottom - c.height, c.bottom)
+            }
+        };
         let width = layout.size().x;
-        let underline: Vec<Pos2> = vec![pos2(c.left, c.bottom), pos2(c.left + width, c.bottom)];
+        let underline: Vec<Pos2> = vec![pos2(c.left, bottom), pos2(c.left + width, bottom)];
         draw.stroke(&PaintShape::Path(underline), StrokeWidth::Thin, color);
-        let x = (c.left + width * c.cursor).round() + 0.5;
-        draw.stroke(&PaintShape::Path(vec![pos2(x, c.bottom - c.height), pos2(x, c.bottom)]), StrokeWidth::Medium, color);
+        let x = (c.left + layout.char_x(c.cursor)).round() + 0.5;
+        draw.stroke(&PaintShape::Path(vec![pos2(x, top), pos2(x, bottom)]), StrokeWidth::Medium, color);
         self.composition_caret = Some(x);
     }
 

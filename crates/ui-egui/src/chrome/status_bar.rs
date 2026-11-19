@@ -28,21 +28,37 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     if !app.has_document() {
         return;
     }
+    // The controls give way in a narrow window (#5886): the step that fits the room the page left them in the last
+    // pass.
+    let step = app.chrome.status_fit.step();
     // The bar runs its body and its trailing region one after the other, never one inside the other, so each
     // borrow below succeeds.
     let app = RefCell::new(app);
-    Bar::new(tl!("Status Bar").to_string(), BarKind::Status)
+    let (page, group) = (std::cell::Cell::new(None), std::cell::Cell::new(None));
+    let bar = Bar::new(tl!("Status Bar").to_string(), BarKind::Status)
         .trailing(|ui, _| {
             if let Ok(mut a) = app.try_borrow_mut() {
-                controls(&mut a, ui);
+                group.set(controls(&mut a, ui, step));
             }
         })
         .show(ui, |ui, _| {
             if let Ok(mut a) = app.try_borrow_mut() {
-                readouts(&mut a, ui);
+                page.set(Some(readouts(&mut a, ui)));
             }
         });
+    if let (Some(page), Some(group), Ok(mut a)) = (page.get(), group.get(), app.try_borrow_mut()) {
+        // The texts scroll under the controls, and one shown only in part isn't drawn; the page is always shown, so
+        // the controls have the bar less the page and the bar's pads and gaps.
+        let room = bar.output.response.rect.width() - page.width() - STATUS_FIT_GAP;
+        if a.chrome.status_fit.note(step, group.width(), room) {
+            ui.ctx().request_repaint();
+        }
+    }
 }
+
+/// The room the status bar keeps beside the page and the controls: its pads at both ends and the gaps before and
+/// after its end region.
+const STATUS_FIT_GAP: f32 = 32.0;
 
 /// A status item: a ghost button of `text`, with an optional tooltip.
 fn item(ui: &mut Ui, text: String, tip: Option<String>) -> ButtonOutput {
@@ -67,13 +83,13 @@ fn page_in_view(app: &mut WordApp) -> (usize, usize) {
     (page, l.pages.len())
 }
 
-/// The members before the controls: what the document is and where the caret is.
-fn readouts(app: &mut WordApp, ui: &mut Ui) {
+/// The members before the controls: what the document is and where the caret is. Returns the page item's rect.
+fn readouts(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
     let (page, pages) = page_in_view(app);
     let text = crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &pages.to_string())]);
     // Bound to Go To, which opens its tab: the tooltip ends with Go To's key as this platform writes it
     // ("Go To (Ctrl+Alt+G)", "Go To (⌘⌥G)" on macOS, #3172).
-    Button::command(CommandRef::new("edit.goto")).label(text).variant(Variant::GHOST).tooltip(tl!("Go To").to_string()).show(ui);
+    let page = Button::command(CommandRef::new("edit.goto")).label(text).variant(Variant::GHOST).tooltip(tl!("Go To").to_string()).show(ui);
     count(app, ui);
     if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
         let label = match crate::canvas::part_kind(app, app.session.sel.focus.story) {
@@ -96,6 +112,7 @@ fn readouts(app: &mut WordApp, ui: &mut Ui) {
         let text = message.text.clone();
         message.tooltip(text).show(ui);
     }
+    page.response.rect
 }
 
 /// The live count: words (the default, as Word's status bar counts), characters with spaces, or characters
@@ -185,9 +202,23 @@ fn missing_fonts(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
-/// The view, zoom and Focus controls, which stay at the reading end outside the bar's scroll.
-fn controls(app: &mut WordApp, ui: &mut Ui) {
-    Button::command(CommandRef::new("view.focus")).label(tl!("Focus").to_string()).icon(IconId::new("focus")).variant(Variant::GHOST).show(ui);
+/// The view, zoom and Focus controls, which stay at the reading end outside the bar's scroll; returns the rect they
+/// took. In a narrow window they give way by `fit` (#5886) so the page keeps its room: at 1 the zoom slider is left
+/// out (Zoom Out, Zoom In and the percentage stay), at 2 Focus shows its icon alone as well.
+fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
+    use craft::ui::contract::Outcome as _;
+    let mut rects = Vec::new();
+    let focus = if fit >= 2 {
+        IconButton::command(IconId::new("focus"), CommandRef::new("view.focus")).label(tl!("Focus").to_string()).show(ui).response
+    } else {
+        Button::command(CommandRef::new("view.focus"))
+            .label(tl!("Focus").to_string())
+            .icon(IconId::new("focus"))
+            .variant(Variant::GHOST)
+            .show(ui)
+            .response
+    };
+    rects.push(focus.rect);
     // Icons only, Read Mode first and Web Layout last, each named in its tooltip, the current view on (prod
     // `chrome.rs:925-943`).
     let (mode, read) = (app.session.view.mode, app.session.view.read_mode);
@@ -197,12 +228,13 @@ fn controls(app: &mut WordApp, ui: &mut Ui) {
         ("view.webLayout", "webLayout", tl!("Web Layout"), mode == wordcraft_layout::ViewMode::Web),
     ] {
         // No command carries a checked state, so the view is given at the button (S-L415).
-        ToggleButton::new(name.to_string(), Bind::given(on))
+        let out = ToggleButton::new(name.to_string(), Bind::given(on))
             .command(CommandRef::new(id))
             .icon(IconId::new(icon))
             .icon_only()
             .tooltip(TooltipSpec::new(name.to_string()))
             .show(ui);
+        rects.push(out.response().rect);
     }
     let reading = app.session.view.read_mode;
     // Reading zoom changes only reading presentation, never the normal view zoom.
@@ -216,42 +248,40 @@ fn controls(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run(if plus { "view.zoomIn" } else { "view.zoomOut" }, json!({}));
         }
     };
-    if IconButton::new(IconId::new("minus"))
-        .label(tl!("Zoom Out").to_string())
-        .tooltip(TooltipSpec::new(tl!("Zoom Out").to_string()))
-        .show(ui)
-        .response
-        .clicked()
-    {
+    let out =
+        IconButton::new(IconId::new("minus")).label(tl!("Zoom Out").to_string()).tooltip(TooltipSpec::new(tl!("Zoom Out").to_string())).show(ui);
+    rects.push(out.response.rect);
+    if out.response.clicked() {
         step(app, false);
     }
-    let mut value = current;
-    let range = if reading { 0.75..=1.5 } else { 0.1..=5.0 };
-    let name = if reading { tl!("Text Size") } else { tl!("Zoom") };
-    let slider = Slider::new(Bind::bound(&mut value), range)
-        .scale(if reading { SliderScale::Linear } else { SliderScale::Log })
-        // A plain rail, as the old zoom slider's (prod `chrome.rs:911`): no fill up to the thumb.
-        .fill(false)
-        .label(name.to_string())
-        .show(ui);
-    if let Some(v) = slider.value() {
-        let command = if reading { "view.readTextSize" } else { "view.zoom" };
-        let _ = app.run(command, json!({"value": (*v * 100.0).round()}));
+    if fit < 1 {
+        let mut value = current;
+        let range = if reading { 0.75..=1.5 } else { 0.1..=5.0 };
+        let name = if reading { tl!("Text Size") } else { tl!("Zoom") };
+        let slider = Slider::new(Bind::bound(&mut value), range)
+            .scale(if reading { SliderScale::Linear } else { SliderScale::Log })
+            // A plain rail, as the old zoom slider's (prod `chrome.rs:911`): no fill up to the thumb.
+            .fill(false)
+            .label(name.to_string())
+            .show(ui);
+        rects.push(slider.response().rect);
+        if let Some(v) = slider.value() {
+            let command = if reading { "view.readTextSize" } else { "view.zoom" };
+            let _ = app.run(command, json!({"value": (*v * 100.0).round()}));
+        }
     }
-    if IconButton::new(IconId::new("plus"))
-        .label(tl!("Zoom In").to_string())
-        .tooltip(TooltipSpec::new(tl!("Zoom In").to_string()))
-        .show(ui)
-        .response
-        .clicked()
-    {
+    let out = IconButton::new(IconId::new("plus")).label(tl!("Zoom In").to_string()).tooltip(TooltipSpec::new(tl!("Zoom In").to_string())).show(ui);
+    rects.push(out.response.rect);
+    if out.response.clicked() {
         step(app, true);
     }
     if !reading {
         // PLAN: assumed Button::room_for (ribbon-w2, S-L418)
         let out = Button::new(format!("{percent}%")).variant(Variant::GHOST).room_for(format!("{MOST_ZOOM_PERCENT}%")).show(ui);
+        rects.push(out.response.rect);
         if out.clicked() {
             let _ = app.run("ui.dialog", json!({"name": "zoom"}));
         }
     }
+    super::union(rects)
 }

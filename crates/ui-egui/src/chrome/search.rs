@@ -1,7 +1,9 @@
 //! Command search: a `CommandPalette` in its in-place face, over the registry's commands.
 
+use craft::behavior::IconId;
 use craft::keymap::CommandRef;
-use craft::ui::contract::Bind;
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Bind, Props as _, Show as _, TooltipSpec};
 use craft::ui::menu::HelpEntry;
 use craft::ui::patterns::panels::{CommandPalette, PaletteFace};
 use craft::ui::runtime::env::{Label, WordTemplate};
@@ -46,23 +48,36 @@ pub(crate) fn is_open(app: &WordApp) -> bool {
     app.chrome.search
 }
 
-/// Shows the search field, and its results while it is open, as the inspected region the keytips badge.
-pub(super) fn show(app: &mut WordApp, ui: &mut Ui) {
+/// Shows the search field, and its results while it is open, as the inspected region the keytips badge; returns the
+/// rect it took. `compact` (a narrow window, #5886) shows the magnifier alone, and the search opens as a box over
+/// the window, since the bar has no room for the field.
+pub(super) fn show(app: &mut WordApp, ui: &mut Ui, compact: bool) -> egui::Rect {
     // Built in every pass the field runs: the palette opens inside its own `show`, so the entries are there before
     // it knows. The list lives for the pass only.
     let entries = help_entries(app);
     let suggested: Vec<CommandRef> = crate::dialogs::SEARCH_SUGGESTIONS.iter().map(|id| CommandRef::new(*id)).collect();
     let mut open = app.chrome.search;
-    let (out, _) = inspect::record(ui, crate::keytips::search_region(), |ui| {
-        CommandPalette::new(tl!("Search commands and help").to_string(), &entries, Bind::bound(&mut open))
-            .face(PaletteFace::InPlace)
-            .placeholder(Label::from(tl!("Search commands and help").to_string()))
+    let name = tl!("Search commands and help").to_string();
+    let ((rect, out), _) = inspect::record(ui, crate::keytips::search_region(), |ui| {
+        let mut rect = None;
+        if compact {
+            let button = IconButton::new(IconId::new("search")).label(name.clone()).tooltip(TooltipSpec::new(name.clone())).show(ui);
+            if button.response.clicked() {
+                open = true;
+            }
+            rect = Some(button.response.rect);
+        }
+        let out = CommandPalette::new(name.clone(), &entries, Bind::bound(&mut open))
+            .face(if compact { PaletteFace::Dialog } else { PaletteFace::InPlace })
+            .placeholder(Label::from(name.clone()))
             .suggested((Label::from(tl!("Suggested").to_string()), suggested))
             .fallback(WordTemplate::new(tl!("Find “{text}” in the document")))
-            .show(ui)
+            .show(ui);
+        (rect.unwrap_or(out.response.rect), out)
     });
     app.chrome.search = open;
     if let Some(text) = out.fallback {
         crate::dialogs::find_in_navigation_pane(app, ui.ctx(), &text);
     }
+    rect
 }

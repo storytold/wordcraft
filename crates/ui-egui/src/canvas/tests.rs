@@ -1182,6 +1182,129 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("にほん"));
 }
 
+/// A harness of `app` for the composition tests, past the frames the canvas needs to take focus.
+fn composing_harness(app: WordApp) -> H {
+    let mut h = crate::test_harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.app_frame();
+    }
+    h
+}
+
+/// The composition `text` as this frame drew it.
+fn drawn_composition(h: &H, text: &str) -> Option<egui::epaint::TextShape> {
+    h.output().shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if t.galley.text() == text => Some(t.clone()),
+        _ => None,
+    })
+}
+
+/// The font family and size the first section of `t` is set in.
+fn composition_font(t: &egui::epaint::TextShape) -> Option<egui::FontId> {
+    t.galley.job.sections.first().map(|s| s.format.font_id.clone())
+}
+
+/// A Japanese, Chinese or Korean composition in Latin text is drawn in the text's face, whose
+/// chain goes on with the interface fonts, CJK included: the kana come from there. Production
+/// borrowed a document face for them instead, but only one of 16 MB or less, and on Windows
+/// Japanese falls back to Microsoft YaHei (19 MB): the composition was a box until committed.
+#[test]
+fn a_cjk_composition_uses_the_cjk_ui_font() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "Hello"})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    let mut h = composing_harness(app);
+    assert!(h.state().canvas.focused(&h.ctx.clone()), "the canvas takes focus when the window opens");
+    let layout = h.state_mut().session.layout();
+    let (run, _) = layout.typing_style(&h.state().session.sel.focus, 0).expect("the run text typed here takes");
+    assert!(!run.requested_face.covers('に'), "the document's Latin face has no kana: {:?}", run.requested_face);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほん".into(), active_range_chars: None }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    assert_eq!(h.state().canvas.ime_preedit, "にほん");
+    let drawn = drawn_composition(&h, "にほん").expect("the composition is drawn");
+    let row = drawn.galley.rows.first().expect("a row");
+    assert_eq!(row.glyphs.len(), 3, "one glyph per composed kana");
+    let family = composition_font(&drawn).map(|f| f.family).expect("a font");
+    assert_eq!(family, egui::FontFamily::Name(format!("face+ui:{}", super::caret::face_key(run.requested_face)).into()), "in the text's face");
+    let (chain, interface) = h.ctx.fonts(|f| {
+        let families = &f.definitions().families;
+        (families.get(&family).cloned().unwrap_or_default(), families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default())
+    });
+    assert!(
+        !interface.is_empty() && interface.iter().all(|f| chain.contains(f)),
+        "the face's chain goes on with the interface fonts: {chain:?} {interface:?}"
+    );
+    assert_eq!(chain.len(), interface.len() + 1, "and no other document face is borrowed: {chain:?}");
+}
+
+/// The composition is drawn in the font and size of the text it goes into, as Word draws it, its
+/// first baseline on the line's. It was drawn in the interface font at 0.8 of the line's height,
+/// which made Latin letters look larger and heavier than the same letters once committed.
+#[test]
+fn the_composition_takes_the_documents_font_and_size() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "Hello"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("format.size", json!({"size": 20})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    let mut h = composing_harness(app);
+    let layout = h.state_mut().session.layout();
+    let (run, base) = layout.typing_style(&h.state().session.sel.focus, 0).expect("the run text typed here takes");
+    assert_eq!(run.size, 20.0, "the size of the text before the caret");
+    let caret = layout.caret(&h.state().session.sel.focus).expect("a caret");
+    assert!(base > caret.top && base < caret.top + caret.height, "the baseline lies within the caret: {base} in {caret:?}");
+    // The caret's IME rectangle gives the caret's top and the page's scale on screen, before the composition moves it.
+    let ime = h.output().platform_output.ime.as_ref().map(|i| i.cursor_rect).expect("the caret's IME rectangle");
+    let scale = ime.height() / caret.height;
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "tottori".into(), active_range_chars: None }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    let drawn = drawn_composition(&h, "tottori").expect("the composition is drawn");
+    let font = composition_font(&drawn).expect("a font");
+    assert_eq!(font.family, egui::FontFamily::Name(format!("face+ui:{}", super::caret::face_key(run.requested_face)).into()), "the text's face");
+    assert!((font.size - 20.0 * scale).abs() < 0.01, "{} at scale {scale}", font.size);
+    let row = drawn.galley.rows.first().expect("a row");
+    let baseline = drawn.pos.y + row.pos.y + row.glyphs.first().expect("a glyph").pos.y;
+    let want = ime.min.y + (base - caret.top) * scale;
+    assert!((baseline - want).abs() < 0.5, "drawn baseline {baseline}, the line's {want}");
+    // A composition isn't text until it is committed.
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Hello");
+}
+
+/// The composition's size never fails egui, which draws each glyph into its font atlas and
+/// panics on one wider than the atlas. In 1,638-point text at 500% the text's size is about
+/// 11,000 points, so the composition is drawn smaller.
+#[test]
+fn a_composition_at_the_largest_size_and_zoom_is_drawn_smaller() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "W"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("format.size", json!({"size": 1638})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    app.run("view.zoom", json!({"value": 500})).unwrap();
+    let mut h = composing_harness(app);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "WWW".into(), active_range_chars: None }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    let size = drawn_composition(&h, "WWW").and_then(|t| composition_font(&t)).map(|f| f.size);
+    let most = (h.ctx.input(|i| i.max_texture_side) as f32 / 4.0).min(1024.0) / h.ctx.pixels_per_point();
+    assert!(size.is_some_and(|s| s > 1.0 && s <= most), "{size:?}, at most {most}");
+}
+
 /// The outgoing IME descriptor is built from settled, visible logical text. A pre-edit does
 /// not change the model; an accepted commit alone earns `InputMethod`; ordinary typing earns
 /// `Other`. The commit mixes Korean, Japanese, ASCII and an emoji.

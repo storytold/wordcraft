@@ -39,24 +39,37 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
         // No document open (#1129): the app's name alone.
         Title::new("WordCraft")
     };
+    // The controls at the end give way in a narrow window (#5886): the step that fits the room the leading controls
+    // left in the last pass.
+    let step = app.chrome.title_fit.step();
     // The bar runs the leading closure and then the trailing one, never one inside the other
     // (`TitleBar::show_titled`), so each borrow below succeeds.
     let app = RefCell::new(app);
+    let (lead, trail) = (std::cell::Cell::new(None), std::cell::Cell::new(None));
     // The bar always names the document, under the OS's own title bar too (prod `chrome.rs:425-471`).
     let out = TitleBar::new().title_when_native().show_titled(
         ui,
         title,
         |ui, _| {
             if let Ok(mut a) = app.try_borrow_mut() {
-                leading(&mut a, ui);
+                lead.set(leading(&mut a, ui));
             }
         },
         |ui, _| {
             if let Ok(mut a) = app.try_borrow_mut() {
-                trailing(&mut a, ui);
+                trail.set(trailing(&mut a, ui, step));
             }
         },
     );
+    if let (Some(l), Some(t), Ok(mut a)) = (lead.get(), trail.get(), app.try_borrow_mut()) {
+        // The end region sits at the bar's end edge whatever its width, so its outer edge less the leading controls'
+        // is the room it has, less a gap on either side of the title's place between them.
+        let span = if super::interface_direction().is_rtl() { l.min.x - t.min.x } else { t.max.x - l.max.x };
+        let room = span - TITLE_FIT_GAP;
+        if a.chrome.title_fit.note(step, t.width(), room) {
+            ui.ctx().request_repaint();
+        }
+    }
     if out.title_activated
         && let Ok(mut a) = app.try_borrow_mut()
     {
@@ -70,18 +83,21 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     }
 }
 
-/// AutoSave and the Quick Access Toolbar, at the start of the bar.
-fn leading(app: &mut WordApp, ui: &mut Ui) {
-    autosave(app, ui);
+/// The room kept between the leading controls and the ones at the end, beyond what they take: the bar's gaps on
+/// either side of the title's place.
+const TITLE_FIT_GAP: f32 = 16.0;
+
+/// AutoSave and the Quick Access Toolbar, at the start of the bar; returns the rect they took.
+fn leading(app: &mut WordApp, ui: &mut Ui) -> Option<egui::Rect> {
+    let switch = autosave(app, ui);
     // Hidden (#1945): neither the buttons nor the … menu; the title centres as before.
-    if app.ui.quick_access_toolbar {
-        quick_access(app, ui);
-    }
+    let toolbar = if app.ui.quick_access_toolbar { quick_access(app, ui) } else { None };
+    super::union([Some(switch), toolbar].into_iter().flatten())
 }
 
 /// The AutoSave switch: off and with the reason as its tooltip when AutoSave can't cover the document (#196,
-/// #176); a click then offers Save As where that helps.
-fn autosave(app: &mut WordApp, ui: &mut Ui) {
+/// #176); a click then offers Save As where that helps. Returns the rect it took.
+fn autosave(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
     let block = app.autosave_block();
     let on = app.autosaves() && block.is_none();
     let tip = block.as_ref().map_or_else(|| tl!("AutoSave saves every change to the file (needs a saved document)").to_string(), |b| b.reason());
@@ -98,12 +114,15 @@ fn autosave(app: &mut WordApp, ui: &mut Ui) {
             Some(b) => app.status(b.reason()),
         }
     }
+    out.response.rect
 }
 
-/// The user's Quick Access Toolbar commands, then the menu button that customizes it (#376).
-fn quick_access(app: &mut WordApp, ui: &mut Ui) {
+/// The user's Quick Access Toolbar commands, then the menu button that customizes it (#376); returns the rect they
+/// took.
+fn quick_access(app: &mut WordApp, ui: &mut Ui) -> Option<egui::Rect> {
     let ids: Vec<String> = app.session.ribbon.qat().into_iter().map(str::to_string).collect();
     let ctx = ui.ctx().clone();
+    let mut rects = Vec::new();
     // The buttons are an inspected region, so the keytips badge them.
     inspect::record(ui, crate::keytips::qat_region(), |ui| {
         for id in &ids {
@@ -113,6 +132,7 @@ fn quick_access(app: &mut WordApp, ui: &mut Ui) {
                 button = button.tooltip(TooltipSpec::new(crate::i18n::prefixed("Undo", app.session.undo_label().unwrap_or(""))));
             }
             let out = button.show(ui);
+            rects.push(out.response.rect);
             // The ribbon's command menu: on or off the toolbar, and the customize rows.
             let request =
                 RibbonMenuRequest { command: Some(CommandRef::new(id.as_str())), at: out.response.rect.left_bottom() };
@@ -120,19 +140,20 @@ fn quick_access(app: &mut WordApp, ui: &mut Ui) {
                 .show(ui, |ui, _| crate::ribbon::command_menu(ui, app, &request));
             if id == "edit.undo" {
                 // The list is the document's steps, not the Markdown Source pane's typing.
-                undo_arrow(app, ui, enabled && app.session.md_source.is_none());
+                rects.push(undo_arrow(app, ui, enabled && app.session.md_source.is_none()));
             }
         }
     });
-    qat_menu(app, ui);
+    rects.push(qat_menu(app, ui));
+    super::union(rects)
 }
 
 /// How many steps the undo list shows before it scrolls.
 const UNDO_ROWS_SHOWN: u16 = 8;
 
 /// The small arrow beside Undo: a list of steps to undo several at once, with a footer that names how many a pick
-/// undoes, or Cancel while none is marked (#1903).
-fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) {
+/// undoes, or Cancel while none is marked (#1903). Returns the arrow's rect.
+fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
     let out = IconButton::new(IconId::new("chevron_down")).label(tl!("Undo History").to_string()).enabled(enabled).show(ui);
     let labels = undo_list_rows(app);
     let mut open = app.chrome.undo;
@@ -172,10 +193,11 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) {
     if let Some(count) = picked {
         let _ = app.run("edit.undoTo", json!({"count": count}));
     }
+    out.response.rect
 }
 
-/// The menu button (…): common commands to show or hide, More Commands…, and Hide.
-fn qat_menu(app: &mut WordApp, ui: &mut Ui) {
+/// The menu button (…): common commands to show or hide, More Commands…, and Hide. Returns the button's rect.
+fn qat_menu(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
     let out = IconButton::new(IconId::new("more")).label(tl!("Customize Quick Access Toolbar").to_string()).show(ui);
     let shown: Vec<(&'static str, String, bool)> = QAT_MENU
         .iter()
@@ -203,17 +225,26 @@ fn qat_menu(app: &mut WordApp, ui: &mut Ui) {
                 .label(tl!("Hide Quick Access Toolbar").to_string())
                 .show(ui);
         });
+    out.response.rect
 }
 
-/// Search, the community button and the account, at the end of the bar.
-fn trailing(app: &mut WordApp, ui: &mut Ui) {
-    super::search::show(app, ui);
+/// Search, the community button and the account, at the end of the bar; returns the rect they took. In a narrow
+/// window they give way by `step` (#5886, as the old bar's fit): at 1 the Discord button drops its label, at 2 the
+/// search shows its magnifier alone as well.
+fn trailing(app: &mut WordApp, ui: &mut Ui, step: usize) -> Option<egui::Rect> {
+    let mut rects = vec![super::search::show(app, ui, step >= 2)];
     if app.ui.show_discord {
-        let out = Button::new(tl!("Discord").to_string())
-            .icon(IconId::new("discord"))
-            .tooltip(TooltipSpec::new(tl!("Join the ArtCraft community on Discord").to_string()))
-            .show(ui);
-        if out.clicked() {
+        let tip = TooltipSpec::new(tl!("Join the ArtCraft community on Discord").to_string());
+        let clicked = if step >= 1 {
+            let out = IconButton::new(IconId::new("discord")).label(tl!("Discord").to_string()).tooltip(tip).show(ui);
+            rects.push(out.response.rect);
+            out.response.clicked()
+        } else {
+            let out = Button::new(tl!("Discord").to_string()).icon(IconId::new("discord")).tooltip(tip).show(ui);
+            rects.push(out.response.rect);
+            out.clicked()
+        };
+        if clicked {
             let _ = app.run("ui.discord", json!({}));
         }
     }
@@ -226,4 +257,6 @@ fn trailing(app: &mut WordApp, ui: &mut Ui) {
     if out.clicked {
         let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
     }
+    rects.push(out.response.rect);
+    super::union(rects)
 }

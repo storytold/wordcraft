@@ -10,8 +10,8 @@ pub(crate) mod search;
 pub(crate) mod status_bar;
 pub(crate) mod title_bar;
 
-/// The open state of every popup the title bar and status bar own. Kept on the window state so a popup
-/// stays open across passes; nothing else is kept between passes.
+/// The open state of every popup the title bar and status bar own, and how their controls fit the window. Kept on
+/// the window state so a popup stays open across passes.
 #[derive(Default)]
 pub(crate) struct ChromeOpen {
     /// The Undo drop-down.
@@ -20,6 +20,68 @@ pub(crate) struct ChromeOpen {
     pub(crate) undo_mark: craft::ui::list::UndoMark,
     /// The command search.
     pub(crate) search: bool,
+    /// How the title bar's controls at the end fit the room the leading controls leave them.
+    pub(crate) title_fit: Fit,
+    /// How the status bar's controls fit the room the page leaves them.
+    pub(crate) status_fit: Fit,
+}
+
+/// The steps a bar's group of controls takes in a narrow window, from the fullest to the most compact.
+pub(crate) const FIT_STEPS: usize = 3;
+
+/// How a bar's group of controls fits a narrow window (#5886): the width each of its [`FIT_STEPS`] steps measured
+/// when last shown, and the room the rest of the bar left it in the last pass. A framework bar gives its end region the
+/// width it measures and narrows nothing in it, so the group gives way itself: it shows the fullest step that fits.
+/// A step not measured yet is tried, so a new window settles within a few passes; the widths don't depend on the
+/// room, so a resize picks the step at once.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Fit {
+    widths: [Option<f32>; FIT_STEPS],
+    room: Option<f32>,
+}
+
+impl Fit {
+    /// The step to show: the fullest one whose width fits the room, or one not measured yet before it; the most compact
+    /// when none fits. The fullest while the room isn't known.
+    pub(crate) fn step(&self) -> usize {
+        let Some(room) = self.room else { return 0 };
+        for (step, width) in self.widths.iter().enumerate() {
+            match width {
+                None => return step,
+                Some(w) if *w <= room + 0.5 => return step,
+                Some(_) => {}
+            }
+        }
+        FIT_STEPS - 1
+    }
+
+    /// Notes the width `step` took and the room the group had in this pass; true when either changed, so the next pass
+    /// may pick another step. A step whose width changed (the language, the interface size) forgets the others' widths,
+    /// which are measured again.
+    pub(crate) fn note(&mut self, step: usize, width: f32, room: f32) -> bool {
+        let (width, room) = (width.max(0.0), room.max(0.0));
+        if !width.is_finite() || !room.is_finite() {
+            return false;
+        }
+        let mut changed = self.room.is_none_or(|r| (r - room).abs() > 0.5);
+        self.room = Some(room);
+        let Some(slot) = self.widths.get_mut(step) else { return changed };
+        if slot.is_none_or(|w| (w - width).abs() > 0.5) {
+            if slot.is_some() {
+                self.widths = [None; FIT_STEPS];
+            }
+            if let Some(slot) = self.widths.get_mut(step) {
+                *slot = Some(width);
+            }
+            changed = true;
+        }
+        changed
+    }
+}
+
+/// The smallest rect holding every rect of `rects` that has an area; `None` when none has.
+pub(crate) fn union(rects: impl IntoIterator<Item = egui::Rect>) -> Option<egui::Rect> {
+    rects.into_iter().filter(|r| r.is_positive()).reduce(|a, b| a.union(b))
 }
 
 /// The direction the interface flows in, for the text that carries a file name or path.
