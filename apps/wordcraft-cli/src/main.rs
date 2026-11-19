@@ -327,6 +327,22 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
     Ok(())
 }
 
+/// Check MCP operands before removing root flags can join an option to an unrelated token.
+fn validate_mcp_option_values(command: &str, args: &[String]) -> Result<(), String> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if MCP_OPTIONS.iter().any(|spec| spec.name == arg && spec.takes_value) {
+            if args.next().is_none_or(|value| value.starts_with("--")) {
+                return Err(format!("{command}: {arg} requires a value"));
+            }
+        } else if matches!(arg.as_str(), "--automation-read-root" | "--automation-write-root") {
+            // The root parser checks this operand; an attached --root=DIR is one token.
+            args.next();
+        }
+    }
+    Ok(())
+}
+
 /// Take `--automation-read-root` / `--automation-write-root` (each `--flag DIR` or `--flag=DIR`,
 /// once) out of `args`, and open the roots, which must be existing folders. Returns the arguments
 /// that are left. A malformed root flag is an error, never a root silently left out.
@@ -334,6 +350,7 @@ fn automation_roots(
     command: &str,
     args: &[String],
 ) -> Result<(Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>, Vec<String>), String> {
+    validate_mcp_option_values(command, args)?;
     let mut found = automation_args::AutomationArgs::new(None, None);
     let mut left = Vec::new();
     let mut it = args.iter().cloned();
