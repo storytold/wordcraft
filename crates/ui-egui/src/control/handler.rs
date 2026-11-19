@@ -202,10 +202,14 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Reply {
             }
             let r = app.session.with_document(doc, |s| s.run(id, &params));
             // UI requests the command made carry `document`, so the window can tell they aren't
-            // about the document it shows.
+            // about the document it shows. A command that changes nothing opens the dialog it asks for, as in
+            // `after_command`.
+            let origin = app.user_origin;
+            app.user_origin = origin || app.session.registry.get(id).is_some_and(|spec| !spec.mutates);
             for req in std::mem::take(&mut app.session.ui_requests) {
                 app.handle_request(&req);
             }
+            app.user_origin = origin;
             reply(r)
         }
     }
