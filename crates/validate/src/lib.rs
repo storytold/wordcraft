@@ -46,6 +46,7 @@ mod resolution;
 mod resolution_tests;
 use resolution::Resolution;
 mod scan;
+mod tiff_admission;
 mod xml;
 
 use scan::{DecimalId, HexId, RelId, StyleId};
@@ -4192,8 +4193,6 @@ fn possible_drawing_targets(pkg: &Package, xml: &XmlScan) -> Option<CompleteSet<
     Observed::complete(targets).into_complete_set()
 }
 
-const TIFF_PREFLIGHT_FACTOR: usize = 16;
-
 enum AlternateAssessment {
     Usable,
     Unusable,
@@ -4205,20 +4204,33 @@ enum AlternateAssessment {
 fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining: &mut u64) -> Result<AlternateAssessment, CodecError> {
     let budget = per_part.min(*remaining);
     let over_budget = || CodecError::LimitExceeded("alternate image decode budget".into());
-    let encoded = bytes.len() as u64;
-    // Reserve before inspecting headers. TIFF builds a directory inventory and JPEG's
-    // coefficient scan copies metadata. Keep the reservation even if a header can't be read.
-    let header_factor = match format {
-        Format::Tiff => TIFF_PREFLIGHT_FACTOR as u64,
-        Format::Jpeg => 4,
-        Format::Png | Format::Gif | Format::Bmp | Format::WebP => 2,
-        _ => return Ok(AlternateAssessment::Unassessed),
+    let mut preflight = 0u64;
+    let mut reserve = |cost: u64| {
+        if cost > budget - preflight {
+            return Err(over_budget());
+        }
+        preflight += cost;
+        *remaining -= cost;
+        Ok(())
     };
-    let preflight = encoded.saturating_mul(header_factor).max(8192);
-    if preflight > budget {
-        return Err(over_budget());
-    }
-    *remaining -= preflight;
+    // Reserve before inspecting headers. Keep the debit on any early return.
+    let bytes = if format == Format::Tiff {
+        reserve(8192)?;
+        let Some(payload) = tiff_admission::payload(bytes, reserve)? else {
+            return Ok(AlternateAssessment::IncompleteTiffDirectory);
+        };
+        payload
+    } else {
+        let factor = match format {
+            Format::Jpeg => 4,
+            Format::Png | Format::Gif | Format::Bmp | Format::WebP => 2,
+            _ => return Ok(AlternateAssessment::Unassessed),
+        };
+        let payload = unpadded_alternate(format, bytes);
+        reserve((payload.len() as u64).saturating_mul(factor).max(8192))?;
+        payload
+    };
+    let encoded = bytes.len() as u64;
     let (width, height, coefficients) = match format {
         Format::Png => {
             // Read the pixel model without inflating compressed metadata under default limits.
@@ -4239,7 +4251,7 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
             (width, height, 0)
         }
         Format::Tiff => {
-            let Some((width, height)) = probe_alternate_tiff(bytes, preflight)? else {
+            let Some((width, height)) = probe_alternate_tiff(bytes)? else {
                 return Ok(AlternateAssessment::IncompleteTiffDirectory);
             };
             (width, height, 0)
@@ -4280,35 +4292,37 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
     Ok(AlternateAssessment::Usable)
 }
 
-/// Validate and bound the directory walk before the decoder builds its own page inventory.
-fn probe_alternate_tiff(bytes: &[u8], preflight: u64) -> Result<Option<(u32, u32)>, CodecError> {
-    observation_contract! {
-        rules: "-";
-        collections: "parser.parse_with_status*1";
-        scope: "bounded TIFF directory discovery for the default page's decode estimate";
-        loss: "unreadable or unexamined TIFF directory entries and values, including directory limits";
-        fallback: "retain the signature Error when the default page cannot be established";
-        package_loss: "independent";
-    }
-
-    let metadata_bytes = usize::try_from(preflight).unwrap_or(usize::MAX);
-    let parser_defaults = craft_tiff::ParseOptions::default();
-    let options = craft_tiff::ParseOptions {
-        // Bound directory records and cached copies separately from their entries.
-        max_ifds: parser_defaults.max_ifds.min(metadata_bytes / 512),
-        // Each classic TIFF entry occupies at least 12 encoded bytes. The 16×
-        // reservation admits a packed inventory while still capping overlapping tables.
-        max_entries_total: parser_defaults.max_entries_total.min(metadata_bytes / (TIFF_PREFLIGHT_FACTOR * 12)),
-        // Values can be copied into ancestor directories. Charge aliases as well as their source.
-        value_budget: Some(preflight / 16),
-        ..parser_defaults
+/// Remove zero padding beyond a format-defined payload boundary. An incomplete
+/// image may need trailing zeros as data, so retain all bytes without a boundary.
+fn unpadded_alternate(format: Format, bytes: &[u8]) -> &[u8] {
+    let nonzero_end = || bytes.iter().rposition(|&byte| byte != 0).map_or(0, |i| i + 1);
+    let u32_le = |at: usize| bytes.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+    let end = match format {
+        Format::Png | Format::Jpeg | Format::Gif => {
+            let end = nonzero_end();
+            let content = bytes.get(..end).unwrap_or_default();
+            let framed = match format {
+                Format::Png => content.ends_with(b"\0\0\0\0IEND\xaeB`\x82"),
+                Format::Jpeg => content.ends_with(b"\xff\xd9"),
+                _ => content.ends_with(b";"),
+            };
+            framed.then_some(end)
+        }
+        Format::Bmp => u32_le(2)
+            .filter(|&size| size >= 26 && u32_le(10).is_some_and(|offset| offset < size))
+            .and_then(|size| usize::try_from(size).ok())
+            .map(|size| size.max(nonzero_end())),
+        Format::WebP => u32_le(4)
+            .and_then(|size| usize::try_from(size).ok())
+            .and_then(|size| size.checked_add(8))
+            .filter(|&size| size >= 20)
+            .map(|size| size.max(nonzero_end())),
+        _ => None,
     };
-    match craft_tiff::Tiff::parse_with_status(bytes, &options) {
-        Ok((_, true)) => {}
-        Ok((_, false)) => return Ok(None),
-        Err(craft_tiff::TiffError::Limit(reason)) => return Err(CodecError::LimitExceeded(reason.into())),
-        Err(error) => return Err(CodecError::Malformed { format: Format::Tiff, message: error.to_string() }),
-    }
+    end.and_then(|end| bytes.get(..end)).unwrap_or(bytes)
+}
+
+fn probe_alternate_tiff(bytes: &[u8]) -> Result<Option<(u32, u32)>, CodecError> {
     let directories = codecs::tiff_info(bytes)?;
     Ok(directories
         .default_page()
@@ -4538,26 +4552,46 @@ mod budget_tests {
         }
     }
 
+    fn test_tiff(pages: u32, description: &[u8], sample_format: Option<u32>, compression: u32, strip: &[u8]) -> Vec<u8> {
+        let mut bytes = b"II*\0\x08\0\0\0".to_vec();
+        let entries = 9 + u32::from(!description.is_empty()) + u32::from(sample_format.is_some());
+        let directory_size = 6 + 12 * entries;
+        let values = 8 + directory_size * pages;
+        let pixels = values + description.len() as u32;
+        for page in 0..pages {
+            bytes.extend((entries as u16).to_le_bytes());
+            for (tag, ty, count, value) in [
+                (256u16, 4u16, 1u32, 1u32),
+                (257, 4, 1, 1),
+                (258, 4, 1, 8),
+                (259, 4, 1, compression),
+                (262, 4, 1, 1),
+                (270, 2, description.len() as u32, values),
+                (273, 4, 1, pixels + page * strip.len() as u32),
+                (277, 4, 1, 1),
+                (278, 4, 1, 1),
+                (279, 4, 1, strip.len() as u32),
+                (339, 3, 1, sample_format.unwrap_or(0)),
+            ] {
+                if count == 0 || tag == 339 && sample_format.is_none() {
+                    continue;
+                }
+                bytes.extend(tag.to_le_bytes());
+                bytes.extend(ty.to_le_bytes());
+                bytes.extend(count.to_le_bytes());
+                bytes.extend(value.to_le_bytes());
+            }
+            let next = if page + 1 == pages { 0 } else { 8 + directory_size * (page + 1) };
+            bytes.extend(next.to_le_bytes());
+        }
+        bytes.extend(description);
+        bytes.extend(strip.repeat(pages as usize));
+        bytes
+    }
+
     #[test]
     fn media_magic_tiff_directory_budget_is_explicit() {
-        fn tiff(pages: u32) -> Vec<u8> {
-            let mut bytes = b"II*\0\x08\0\0\0".to_vec();
-            let pixels = 8 + 114 * pages;
-            for page in 0..pages {
-                bytes.extend(9u16.to_le_bytes());
-                for (tag, value) in [(256u16, 1), (257, 1), (258, 8), (259, 1), (262, 1), (273, pixels + page), (277, 1), (278, 1), (279, 1)] {
-                    bytes.extend(tag.to_le_bytes());
-                    bytes.extend(4u16.to_le_bytes());
-                    bytes.extend(1u32.to_le_bytes());
-                    bytes.extend(value.to_le_bytes());
-                }
-                let next = if page + 1 == pages { 0 } else { 8 + 114 * (page + 1) };
-                bytes.extend(next.to_le_bytes());
-            }
-            bytes.resize((pixels + pages) as usize, 128);
-            bytes
-        }
-
+        let tiff = |pages| test_tiff(pages, &[], None, 1, &[128]);
         let validate = |bytes: &[u8]| validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], DRAWN, "png"));
         let compact = tiff(4);
         assert_eq!(compact.len(), 468);
@@ -4574,6 +4608,22 @@ mod budget_tests {
         assert_eq!(report.findings.len(), 1);
         assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Error));
         assert!(report.coverage_notes.iter().any(|note| note.contains("TIFF") && note.contains("limit")), "{report:?}");
+    }
+
+    #[test]
+    fn media_magic_shared_tiff_values_ignore_padding() {
+        let mut description = [b'A'; 256];
+        description[255] = 0;
+        let compact = test_tiff(4, &description, None, 1, &[0]);
+        assert_eq!(compact.len(), 772);
+        let mut padded = compact.clone();
+        padded.extend([0; 512]);
+        let validate = |bytes: &[u8]| validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], DRAWN, "png"));
+        let report = validate(&compact);
+        assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Warning));
+        assert_eq!(serde_json::to_value(report).unwrap(), serde_json::to_value(validate(&padded)).unwrap());
     }
 
     #[test]
