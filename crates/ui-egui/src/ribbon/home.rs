@@ -78,7 +78,6 @@ fn bullet_list_items(ui: &mut Ui, app: &mut WordApp) {
         .show(ui);
 }
 
-<<<<<<< HEAD
 /// The Bullets drop-down: the Bullet Library as tiles, None, and the list-level rows.
 fn bullets_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     MenuItem::heading(tl!("Bullet Library").to_string()).show(ui);
@@ -94,18 +93,6 @@ fn bullets_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .show_items(ui, &source, &mut |c, _| {
             let c: &'static str = c;
             Tile::new(c).thumb(ThumbAspect::SQUARE, move |cx, r| paint_bullet(cx, r, c))
-=======
-pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
-    let st = app.session.run("format.state", &json!({})).unwrap_or_default();
-    let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
-    group(ui, "Clipboard", Some("edit.clipboardPane"), app, |ui, app| {
-        // The hint adds the platform's key ("Paste (Ctrl+V)"); the name screen readers read is "Paste".
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("paste", Some("Paste"), "Paste", true, "edit.paste"), |ui, app| {
-            mi(ui, app, "Paste", "edit.paste", json!({}));
-            mi(ui, app, "Keep Text Only", "edit.pasteText", json!({}));
-            mi(ui, app, "Merge Formatting", "edit.pasteMerge", json!({}));
-            mi(ui, app, "Paste Special…", "edit.pasteSpecial", json!({}));
->>>>>>> up/main
         });
     for event in &out.response.events {
         if let CollectionEvent::Activate(c) = event {
@@ -160,11 +147,14 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let st = wordcraft_engine::cmd::format::state(&app.session);
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
     row.group(ribbon_group("clipboard", "Clipboard", "paste", Some("edit.clipboardPane")), |ui| {
-        let face = Button::new(tl!("Paste").to_string())
-            .icon(IconId::new("paste"))
-            .tooltip(tl!("Paste (⌘V)").to_string())
-            .arrangement(Arrangement::Stacked);
-        menu_button(ui, face, tl!("Paste (⌘V)").to_string(), Some("edit.paste"), |ui, _| {
+        // The face opens the menu and runs no command, so its tooltip adds Paste's key itself, as this
+        // platform writes it ("Paste (Ctrl+V)", "Paste (⌘V)" on macOS). The name screen readers read is "Paste".
+        let paste_tip = match craft::ui::runtime::commands::resolve(ui.ctx(), CommandRef::new("edit.paste")).chord {
+            Some(chord) => craft::ui::contract::tooltip::with_chord(tl!("Paste"), &chord, craft::ui::runtime::windows::os_of(ui.ctx())),
+            None => tl!("Paste").to_string(),
+        };
+        let face = Button::new(tl!("Paste").to_string()).icon(IconId::new("paste")).tooltip(paste_tip).arrangement(Arrangement::Stacked);
+        menu_button(ui, face, tl!("Paste").to_string(), Some("edit.paste"), |ui, _| {
             for (label, id) in
                 [("Paste", "edit.paste"), ("Keep Text Only", "edit.pasteText"), ("Merge Formatting", "edit.pasteMerge"), ("Paste Special…", "edit.pasteSpecial")]
             {
