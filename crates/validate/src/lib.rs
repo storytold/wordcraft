@@ -4116,6 +4116,14 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                         decode_limited_at.get_or_insert(&e.name);
                         false
                     }
+                    // Compare variants without binding the external enum's named fields.
+                    // The observation recognizer only admits patterns that keep those fields opaque.
+                    Err(error)
+                        if std::mem::discriminant(&error) == std::mem::discriminant(&CodecError::Unsupported { format, reason: String::new() }) =>
+                    {
+                        acc.note(format!("MEDIA-MAGIC: pixels in {} were not assessed because the codec declined the layout ({error})", e.name));
+                        false
+                    }
                     Err(_) => false,
                 },
                 None => false,
@@ -4651,6 +4659,21 @@ mod budget_tests {
         assert_eq!(report.findings.len(), 1);
         assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Warning));
         assert_eq!(serde_json::to_value(report).unwrap(), serde_json::to_value(validate(&padded)).unwrap());
+    }
+
+    #[test]
+    fn media_magic_keeps_error_and_explains_codec_declined_layout() {
+        for (sample_format, verdict, severity) in [(1, Verdict::Pass, Severity::Warning), (2, Verdict::Fail, Severity::Error)] {
+            let tiff = test_tiff(1, &[], Some(sample_format), 1, &[0x7f]);
+            let report = validate_bytes(&media_zip(&[("word/media/drawn.png", &tiff)], DRAWN, "png"));
+            assert_eq!(report.verdict, verdict, "{report:?}");
+            assert_eq!(report.findings.len(), 1, "{report:?}");
+            assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", severity));
+            assert_eq!(report.coverage_notes.len(), usize::from(sample_format == 2), "{report:?}");
+            if sample_format == 2 {
+                assert!(report.coverage_notes[0].contains("codec declined") && report.coverage_notes[0].contains("signed"), "{report:?}");
+            }
+        }
     }
 
     #[test]
