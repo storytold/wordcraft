@@ -381,7 +381,8 @@ fn autosave_harness() -> (egui_kittest::Harness<'static, WordApp>, std::path::Pa
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     a.run("text.insert", json!({"text": "Hello"})).unwrap();
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
-    assert!(a.autosaves(), "a saved .docx is covered by AutoSave");
+    a.run("file.autosave", json!({"value": true})).unwrap();
+    assert!(a.autosaves(), "an explicit opt-in covers the saved .docx");
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
