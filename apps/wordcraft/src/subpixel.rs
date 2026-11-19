@@ -23,31 +23,39 @@ use wordcraft_ui_egui::Subpixel;
 
 /// The answer to "which subpixel order does the desktop draw text with?" for the UI: `None` for
 /// greyscale text, or when it doesn't say. `ctx` is asked to redraw when the answer changes.
-pub fn hook(ctx: &egui::Context) -> Box<dyn Fn() -> Option<Subpixel>> {
+/// `on_x`: the window draws through an X server ([`window_on_x`]), so its X resources apply.
+pub fn hook(ctx: &egui::Context, on_x: bool) -> Box<dyn Fn() -> Option<Subpixel>> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Box::new(desktop::watch(ctx.clone()))
+        Box::new(desktop::watch(ctx.clone(), on_x))
     }
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
-        let _ = ctx;
+        let _ = (ctx, on_x);
         Box::new(|| None)
     }
 }
 
+/// Whether the window draws through an X server, so the desktop's X resources apply to it:
+/// X11 forced (`forced_x11`, from `uses_x11` in `main`), or no Wayland for winit to pick.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+pub fn window_on_x(forced_x11: bool, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let set = |name: &str| env(name).is_some_and(|v| !v.is_empty());
+    forced_x11 || set("DISPLAY") && !set("WAYLAND_DISPLAY") && !set("WAYLAND_SOCKET")
+}
+
 /// What X resources (`RESOURCE_MANAGER`'s text, `name:\tvalue` lines) say: `Some(order)`, or
-/// `Some(None)` for greyscale (antialiasing off, `Xft.rgba` `none`, or a vertical order, which
-/// pages don't draw); `None` when they don't say (no `Xft.rgba`).
+/// `Some(None)` for greyscale (antialiasing off, with or without an `Xft.rgba`; `Xft.rgba` `none`,
+/// or a vertical order, which pages don't draw); `None` when they don't say (no `Xft.rgba`).
 #[cfg(any(test, all(unix, not(target_os = "macos"))))]
 pub fn resources_say(resources: &str) -> Option<Option<Subpixel>> {
     let value = |name: &str| {
         resources.lines().filter_map(|line| line.split_once(':')).find(|(k, _)| k.trim() == name).map(|(_, v)| v.trim().to_ascii_lowercase())
     };
-    let rgba = value("Xft.rgba")?;
     if value("Xft.antialias").is_some_and(|a| a == "0" || a == "false") {
         return Some(None);
     }
-    Some(order(&rgba))
+    Some(order(&value("Xft.rgba")?))
 }
 
 /// What the settings portal's GNOME font keys say (`font-antialiasing`, `font-rgba-order`):
@@ -62,14 +70,14 @@ pub fn portal_says(antialiasing: Option<&str>, rgba_order: Option<&str>) -> Opti
 }
 
 /// What KDE Plasma's font settings say through the portal (`XftAntialias`, `XftSubPixel`):
-/// `None` when it doesn't have them (not a KDE desktop).
+/// `None` when it doesn't have them (not a KDE desktop). Antialiasing off is greyscale whether or
+/// not an order is written.
 #[cfg(any(test, all(unix, not(target_os = "macos"))))]
 pub fn kde_says(antialias: Option<&str>, subpixel: Option<&str>) -> Option<Option<Subpixel>> {
-    let subpixel = subpixel?;
     if antialias.is_some_and(|a| matches!(a.trim().to_ascii_lowercase().as_str(), "false" | "0")) {
         return Some(None);
     }
-    Some(order(subpixel))
+    Some(order(subpixel?))
 }
 
 /// A fontconfig `rgba` name: `rgb` and `bgr` draw subpixel text; `none`, the vertical orders
@@ -106,12 +114,10 @@ mod desktop {
     const BGR: u8 = 2;
 
     /// The latest answer, kept up to date on a thread of its own.
-    pub fn watch(ctx: egui::Context) -> impl Fn() -> Option<Subpixel> {
+    pub fn watch(ctx: egui::Context, on_x: bool) -> impl Fn() -> Option<Subpixel> {
         let latest = Arc::new(AtomicU8::new(GREYSCALE));
         let shared = latest.clone();
-        // As the app itself chooses (`main`): XWayland when there's an X server, unless asked for
-        // native Wayland.
-        let native_wayland = std::env::var_os("DISPLAY").is_none() || std::env::var_os("WORDCRAFT_WAYLAND").is_some();
+        let native_wayland = !on_x;
         let spawned = std::thread::Builder::new().name("subpixel-setting".into()).spawn(move || {
             // Both connections are opened when first needed and kept.
             let mut x: Option<(x11rb::rust_connection::RustConnection, usize)> = None;
@@ -228,6 +234,33 @@ mod tests {
         // Not KDE: GNOME's keys are asked.
         assert_eq!(kde_says(None, None), None);
         assert_eq!(kde_says(Some("true"), None), None);
+    }
+
+    #[test]
+    fn antialiasing_turned_off_is_greyscale_even_without_an_order() {
+        // KDE Plasma with antialiasing off, and X resources saying only that: greyscale, not
+        // "doesn't say" (which would ask GNOME's keys or the portal next).
+        assert_eq!(kde_says(Some("false"), None), Some(None));
+        assert_eq!(kde_says(Some("0"), None), Some(None));
+        assert_eq!(resources_say("Xft.antialias:\t0\n"), Some(None));
+        assert_eq!(resources_say("Xft.antialias:\tfalse\nXft.dpi:\t96\n"), Some(None));
+    }
+
+    #[test]
+    fn x_resources_are_asked_whenever_the_window_runs_on_x11() {
+        fn env(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+            move |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).into())
+        }
+        // XWayland asked for with `WORDCRAFT_WAYLAND=0` (or by the setting): its X resources.
+        assert!(window_on_x(true, env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0"), ("WORDCRAFT_WAYLAND", "0")])));
+        // Native Wayland chosen by the setting (or with the X11 libraries missing), an X server
+        // there too: only the portal.
+        assert!(!window_on_x(false, env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")])));
+        // An X session without Wayland: winit runs on X11 unforced.
+        assert!(window_on_x(false, env(&[("DISPLAY", ":0")])));
+        assert!(!window_on_x(false, env(&[("WAYLAND_DISPLAY", "wayland-0")])));
+        assert!(!window_on_x(false, env(&[("DISPLAY", ""), ("WAYLAND_DISPLAY", "wayland-0")])));
+        assert!(!window_on_x(false, env(&[])));
     }
 
     #[test]
