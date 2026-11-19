@@ -182,6 +182,9 @@ fn row_bound_ctrl_f1_runs_the_bound_command() {
     let mut h = canvas_harness();
     // PLAN(shell-w7): sh.A11 `Session::keymap_mut` over `Overrides::insert`.
     h.state_mut().session.keymap_mut().insert("view.focus", vec!["Mod+F1".into()]);
+    // The harness hands the app's input (with the user's bindings) to the runtime one frame behind (`driver_logic`),
+    // so the binding reaches the keymap in the frame after it is made, as in the row for Mod+Shift+0.
+    h.step();
     press_ctrl_f1(&mut h);
     assert!(h.state().session.view.focus_mode, "the bound command ran");
     assert!(!h.state().ui.ribbon_collapsed, "the ribbon is unchanged");

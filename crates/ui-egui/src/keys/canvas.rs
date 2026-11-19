@@ -473,6 +473,15 @@ fn handle_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &Edi
             }
         }
         EditorInput::Move(mv, m) => move_input(app, *mv, *m),
+        // Shift+Delete alone cuts the selection and does nothing without one, as in Word for Windows
+        // (#1669); Shift+Backspace erases (#707).
+        EditorInput::Delete { forward: true, by: Granularity::Unit, shift: true, .. } => {
+            if !app.session.sel.is_collapsed()
+                && let Ok(r) = app.run("edit.cut", json!({}))
+            {
+                crate::system_clipboard::put_result(app, ctx, &r);
+            }
+        }
         EditorInput::Delete { forward, by, .. } => {
             let key = if *forward { Key::Delete } else { Key::Backspace };
             if crate::objects::key(app, key, Modifiers::NONE) {
