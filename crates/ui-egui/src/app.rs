@@ -31,6 +31,8 @@ impl WordApp {
     /// Creates the app: adopts the system locale, then initializes the document session, UI state,
     /// services, printing, canvas, dialogs, previews and font tracking.
     pub fn new(session: Session, services: Services) -> Self {
+        // The app's own icons (ribbon, menus) sit beside the framework's catalog; registering twice is a no-op.
+        crate::icons::register();
         // Numeral › System follows the system locale, found here rather than in layout.
         if let Some(tag) = sys_locale::get_locale() {
             wordcraft_engine::set_system_locale(&tag);
