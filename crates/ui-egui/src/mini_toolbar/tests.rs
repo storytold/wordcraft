@@ -1,4 +1,5 @@
 use egui::accesskit::Role;
+use egui::{Vec2, pos2};
 use egui_kittest::kittest::Queryable;
 
 use super::*;
