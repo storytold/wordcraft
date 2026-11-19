@@ -11,13 +11,14 @@ use craft::behavior::IconId;
 use craft::theme::Variant;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
+use craft::ui::buttons::ControlPlace;
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{BodyCx, CollectionEvent, CommandSet as _, Commands as _, Gap, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked};
+use craft::ui::contract::{BodyCx, CollectionEvent, CommandSet as _, Commands as _, Gap, LeastWidth, Pad,Props as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked};
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::notices::Notice;
 use craft::ui::primitives::{HAlign, IconSpec};
-use craft::ui::runtime::env::Label;
+use craft::ui::runtime::env::{Label, with_env};
 use craft::ui::runtime::inspect;
 use craft::ui::style::{SurfaceKind, TypeRole};
 use egui::Ui;
@@ -234,12 +235,14 @@ fn page_body(ui: &mut Ui, app: &mut WordApp, page: &str) {
 /// the keytips take their rects), then About and the community link unless the user turned the
 /// community button off, as the title bar's pill does.
 fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_discord: bool, choice: &MenuChoice) {
-    // As wide as its widest row and as tall as the window, About at its foot (production's full-height rail).
+    // At least the side menu's width and as tall as the window, About at its foot (production's 200 pt full-height
+    // rail); its rows are the side menu place's (production's 38 pt rows of 14 pt names).
     let _ = Stack::new()
         .sizing(Sizing::FillHeight)
+        .least_width(LeastWidth::SideMenu)
         .surface(SurfaceKind::Brand)
         .label(label("File"))
-        .gap(Gap::Tight)
+        .gap(Gap::None)
         .scroll(Scroll::vertical())
         .header(move |ui, _| {
             ui.add_space(band);
@@ -265,25 +268,37 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
         })
         .show(ui, |ui, _| {
             let _ = inspect::record(ui, egui::Id::new("wordcraft-backstage-pages"), |ui| {
-                for (id, name, icon) in PAGES {
-                    // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
-                    let on = has_document || works_without_document(id);
-                    let row = Button::new(label(name))
-                        .id_salt(("backstage-page", id))
-                        .icon(IconId::new(icon))
-                        .variant(Variant::GHOST)
-                        .sizing(Sizing::FillWidth)
-                        // Icon and name at the reading start of the full-width row, as production's menu.
-                        .align(HAlign::Start)
-                        .selected(current == id)
-                        .enabled(on)
-                        .show(ui);
-                    if clicked(&row) {
-                        *choice.page.borrow_mut() = Some(id);
-                    }
-                }
+                // The rows are the side menu place's: production's 38 pt rows of 14 pt names.
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(ControlPlace::SideMenu);
+                    },
+                    |ui| page_rows(ui, current, has_document, choice),
+                );
             });
         });
+}
+
+/// The side menu's page rows, one full-width button per page.
+fn page_rows(ui: &mut Ui, current: &str, has_document: bool, choice: &MenuChoice) {
+    for (id, name, icon) in PAGES {
+        // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
+        let on = has_document || works_without_document(id);
+        let row = Button::new(label(name))
+            .id_salt(("backstage-page", id))
+            .icon(IconId::new(icon))
+            .variant(Variant::GHOST)
+            .sizing(Sizing::FillWidth)
+            // Icon and name at the reading start of the full-width row, as production's menu.
+            .align(HAlign::Start)
+            .selected(current == id)
+            .enabled(on)
+            .show(ui);
+        if clicked(&row) {
+            *choice.page.borrow_mut() = Some(id);
+        }
+    }
 }
 
 /// Opens a side-menu page, as a click on it (or its keytip) does. Without a document only the
