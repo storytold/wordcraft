@@ -17,7 +17,6 @@ use super::{settled, word};
 use crate::WordApp;
 use crate::dialogs::host::{Asks, DialogHooks, Keyed, Settle, WordForm, open_with};
 use crate::options::lengths;
-// PLAN: assumed `crate::widgets::font_box::{CatalogRef, font_picker}` (ribbon-w11, S-L284, rb.A5).
 use crate::widgets::font_box::{CatalogRef, font_picker};
 
 // ---------------------------------------------------------------------------------------------

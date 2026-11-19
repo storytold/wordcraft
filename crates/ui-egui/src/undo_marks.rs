@@ -1,7 +1,6 @@
 //! The adapter that turns the edit events of a field gesture into undo steps of the session.
 
-use craft::behavior::EditEvents;
-use craft::ui::contract::Value;
+use craft::behavior::{EditEvents, Value};
 use craft::ui::edit::{StepName, UndoMarks};
 
 use crate::WordApp;

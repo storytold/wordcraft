@@ -1,6 +1,6 @@
 //! Ribbon widgets: the font box and the command hint.
 
-mod font_box;
+pub(crate) mod font_box;
 mod hint;
 
 pub(crate) use font_box::{font_box, font_picker};

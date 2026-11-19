@@ -62,8 +62,7 @@ pub(crate) fn balloons(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui::P
     } else {
         (BalloonPlace::Floating, FLOAT_WIDTH * scale)
     };
-    // PLAN: `widgets::enabled` goes to command state (sh.A5); the read-only rule stays the same.
-    let editable = crate::widgets::enabled(app, "review.editComment");
+    let editable = crate::app::command_board::command_enabled(app, "review.editComment");
     let shown = CommentBalloons::new(tl!("Comments"), &out.pages, &items, &mut app.canvas.comments)
         .place(place)
         .width(width)

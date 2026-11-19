@@ -13,7 +13,7 @@ use crate::WordApp;
 
 mod arrange;
 mod charts;
-mod common;
+pub(crate) mod common;
 mod context_menu;
 mod design;
 mod draw;
