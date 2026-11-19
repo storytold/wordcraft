@@ -14,7 +14,7 @@ mod tooltip;
 
 pub use buttons::{
     BIG_ICON_Y, BIG_LABEL_Y, ButtonAction, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, LABEL_PITCH, MenuButtonOptions, big, big_toggle, enabled,
-    label_line, menu_button, menu_enabled, small, split,
+    label_line, menu_button, menu_enabled, small, split, split_labeled,
 };
 pub(crate) use buttons::{bg, run_from_ribbon};
 pub use combo::{
@@ -27,6 +27,7 @@ pub(crate) use combo::{current_pick, note_hover, set_current_pick, swatch, take_
 pub use groups::{command_icon, command_menu, customize_menu_items, group, group_titled, row};
 pub use icon_buttons::{
     dialog_tabs, icon_button, icon_menu_item, icon_only_button, icon_text_button, icon_text_button_width, icon_text_menu_button, primary_button,
+    section,
 };
 #[cfg(test)]
 use tooltip::show_hint;
