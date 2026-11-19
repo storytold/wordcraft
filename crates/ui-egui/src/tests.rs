@@ -2,9 +2,9 @@ use super::*;
 use egui_kittest::kittest::Queryable;
 // PLAN(app-hub): assumed facade paths for the host fakes and the automation channel (S-L103, S-L150).
 use craft::automation::control::{ControlRequest, Reply};
-use craft::host::{PickId, Picked, ScriptedFiles};
+use craft::host::{PickId, PickKind, PickRequest, Picked, ScriptedFiles};
 use craft::platform::clock::monotonic_ms;
-use craft::platform::default_app::DefaultApp;
+use craft::platform::default_app::{DefaultApp, DefaultAppError};
 use craft::platform::open::{DropTarget, DroppedFile, FileIntake};
 use craft::ui::shell::ScreenMode;
 use std::sync::Arc;
@@ -454,13 +454,13 @@ fn the_app_window_shows_for_a_few_frames() {
 }
 
 fn app() -> WordApp {
-    app_with_files(Arc::new(ScriptedFiles::default()))
+    app_with_files(Arc::new(ScriptedFiles::new()))
 }
 
 /// An app over `session` whose host answers file requests from `files`.
 fn app_over(session: Session, files: Arc<ScriptedFiles>) -> WordApp {
-    // PLAN(app-hub): app.H1 `with_host(session, services, host)`; PLAN(shell-w8): `Host::testing().files(files)`.
-    WordApp::with_host(session, Services::default(), craft::host::Host::testing().files(files))
+    let host = craft::host::Host::builder(crate::APP).files(files).build();
+    WordApp::new(session, Services::default()).with_host(Arc::new(host))
 }
 
 /// A new-document app whose host answers file requests from `files`.
@@ -468,15 +468,9 @@ fn app_with_files(files: Arc<ScriptedFiles>) -> WordApp {
     app_over(Session::new(wordcraft_doc::Document::new()), files)
 }
 
-/// The file fake behind `a`'s host.
-fn scripted(a: &WordApp) -> Arc<ScriptedFiles> {
-    // PLAN(app-hub): assumed `WordApp::host()` giving the Host `with_host` was built over.
-    a.host().files_as::<ScriptedFiles>()
-}
-
-/// The next picker answer: the path chosen, or a cancel.
-fn script_pick(a: &WordApp, picked: Option<String>) {
-    scripted(a).queue(match picked {
+/// The next picker answer of `files`: the path chosen, or a cancel.
+fn script_pick(files: &ScriptedFiles, picked: Option<String>) {
+    files.queue(match picked {
         Some(p) => Picked::Paths(vec![std::path::PathBuf::from(p)]),
         None => Picked::Cancelled,
     });
@@ -489,27 +483,28 @@ fn status_text(a: &WordApp) -> Option<&str> {
 
 /// The key and fields of the dialog on top, from the dialog host.
 fn open_dialog(a: &WordApp) -> Option<(String, Value)> {
-    // PLAN(dialogs-w1): dg.A2 assumed `DialogHost::open_dialogs(&self) -> Vec<(String, Value)>`, newest last.
-    a.dialog_host().open_dialogs().into_iter().next_back()
+    a.dialog_host.open_dialogs().into_iter().next_back().map(|d| (d.key.unwrap_or_default(), d.fields.unwrap_or_default()))
 }
 
 /// Closes every open dialog.
-fn close_dialogs(a: &mut WordApp) {
-    // PLAN(dialogs-w1): assumed `DialogHost::close_all(&mut self)`.
-    a.dialog_host_mut().close_all();
+fn close_dialogs(a: &mut WordApp, ctx: &egui::Context) {
+    crate::dialogs::close_all(a, ctx);
 }
 
 /// Offers a picture on the installed clipboard for the next paste.
 fn offer_paste(ctx: &egui::Context, png: Vec<u8>) {
-    // PLAN(shell-w14): sh.A18 assumed `ClipItem::image(Vec<u8>)` over the installed `MemoryClipboard` (pf.C-P10).
-    let _ = craft::ui::runtime::commands::ClipboardHandle::of(ctx).offer(&[craft::ui::runtime::commands::ClipItem::image(png)]);
+    let rgba = image::load_from_memory(&png).unwrap().to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let picture = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    let item = craft::ui::runtime::commands::ClipItem::Image(Arc::new(picture));
+    let _ = craft::ui::runtime::commands::ClipboardHandle::of(ctx).offer(&[item]);
 }
 
 /// Files handed to the app as a drop, through its intake.
 fn drop_files(a: &mut WordApp, files: Vec<DroppedFile>) {
     let (intake, sender) = FileIntake::new(craft::host::Wake::none());
     a.services.intake = Some(intake);
-    sender.dropped(files, DropTarget::Window);
+    sender.dropped(files, DropTarget::Elsewhere);
 }
 
 /// An in-memory dropped file.
@@ -894,7 +889,7 @@ fn a_press_inside_the_selected_comment_keeps_it_selected() {
     assert_eq!(a.session.sel, focus, "the document's caret didn't move");
     assert_eq!(offset(&a), scroll);
     // A press on the page itself still leaves the balloon.
-    let page = a.canvas.page_rects.first().copied().unwrap();
+    let page = first_page(&a).unwrap();
     let body = page.left_top() + egui::vec2(120.0, 160.0);
     frame(&mut a, vec![egui::Event::PointerMoved(body)]);
     frame(&mut a, vec![btn(body, true)]);
@@ -945,7 +940,7 @@ fn selected_comment_floats_and_keeps_its_clicks() {
         }
         assert_eq!(a.canvas.balloon_rects.len(), 1, "width {width}: the comment under the caret shows");
         let (id, card) = a.canvas.balloon_rects[0];
-        let page = a.canvas.page_rects.first().copied().unwrap();
+        let page = first_page(&a).unwrap();
         assert_eq!(
             card.left() < page.right(),
             width < 1100.0,
@@ -1020,7 +1015,7 @@ fn a_press_on_the_ribbon_after_a_header_double_click_does_not_scroll() {
     for _ in 0..30 {
         frame(&mut a, Vec::new());
     }
-    let (Some(vp), Some(page)) = (a.canvas.viewport, a.canvas.page_rects.first().copied()) else { panic!("the canvas laid out") };
+    let (Some(vp), Some(page)) = (a.canvas.canvas_rect(), first_page(&a)) else { panic!("the canvas laid out") };
     let header = egui::pos2(page.left() + 150.0, page.top() + 70.0);
     assert!(vp.contains(header));
     frame(&mut a, vec![egui::Event::PointerMoved(header)]);
@@ -1119,7 +1114,7 @@ fn a_click_in_the_footer_while_editing_the_header_moves_there() {
     assert_eq!(a.session.sel.focus.story, wordcraft_doc::StoryRef::Part(header));
     let (x, foot_y) = (page.body.x + 20.0, (page.body.bottom() + page.h) / 2.0);
     // Scroll down to page 1's footer a wheel notch at a time: page 1's header goes off screen.
-    let vp = a.canvas.viewport.expect("the canvas laid out");
+    let vp = a.canvas.canvas_rect().expect("the canvas laid out");
     for _ in 0..100 {
         let at = canvas::page_to_screen(&mut a, 0, x, foot_y).expect("footer laid out");
         if at.y < vp.center().y {
@@ -1202,7 +1197,7 @@ fn double_clicking_a_later_pages_footer_does_not_scroll_to_the_top() {
     let (x, y) = (page.body.x + page.body.w / 2.0, (page.body.bottom() + page.h) / 2.0);
     // Scroll the reader to the last page's footer, as with the wheel.
     let at = canvas::page_to_screen(&mut a, last, x, y).expect("footer laid out");
-    let vp = a.canvas.viewport.expect("the canvas laid out");
+    let vp = a.canvas.canvas_rect().expect("the canvas laid out");
     let wheel = egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
         delta: egui::vec2(0.0, vp.center().y - at.y),
@@ -1313,15 +1308,15 @@ fn zoomed_out_pages_sit_side_by_side_and_clicks_land_on_them() {
     for _ in 0..3 {
         frame(&mut a);
     }
-    let rects = a.canvas.page_rects.clone();
+    let rects = page_rects(&a);
     assert_eq!(rects.len(), 4);
     assert!(rects[1].top() > rects[0].bottom(), "100%: one page per row");
     a.run("view.zoom", json!({"value": 30})).unwrap();
     for _ in 0..3 {
         frame(&mut a);
     }
-    let rects = a.canvas.page_rects.clone();
-    assert_eq!(a.canvas.cols, 4, "30%: all four pages fit across: {rects:?}");
+    let rects = page_rects(&a);
+    assert_eq!(columns(&rects), 4, "30%: all four pages fit across: {rects:?}");
     assert!((rects[3].top() - rects[0].top()).abs() < 1.0 && rects[3].left() > rects[2].right(), "{rects:?}");
     // A click inside the last page's text puts the caret on that page.
     let p = canvas::page_to_screen(&mut a, 3, 100.0, 80.0).unwrap();
@@ -1335,10 +1330,16 @@ const UNSAVED: &str = "My unsaved novel chapter";
 
 /// An app whose new document has unsaved typing.
 fn typed() -> WordApp {
-    let mut a = app();
+    typed_scripted().0
+}
+
+/// [`typed`], with the file service that answers its picks.
+fn typed_scripted() -> (WordApp, Arc<ScriptedFiles>) {
+    let files = Arc::new(ScriptedFiles::new());
+    let mut a = app_with_files(files.clone());
     a.run("text.insert", json!({"text": UNSAVED})).unwrap();
     assert!(a.session.dirty);
-    a
+    (a, files)
 }
 
 fn body_text(a: &WordApp) -> String {
@@ -1819,8 +1820,8 @@ fn window_close_save_as_that_fails_says_so_and_keeps_the_document() {
     let blocker = dir.join("folder");
     std::fs::write(&blocker, b"not a folder").unwrap();
     let picked = blocker.join("novel.docx").to_string_lossy().to_string();
-    let mut a = typed();
-    script_pick(&a, Some(picked.clone()));
+    let (mut a, files) = typed_scripted();
+    script_pick(&files, Some(picked.clone()));
     assert!(!a.close_requested());
     a.status = None;
     let err = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap_err();
@@ -1840,8 +1841,8 @@ fn save_prompt_shows_why_the_save_failed() {
     let dir = scratch("prompt-reason");
     let blocker = dir.join("folder");
     std::fs::write(&blocker, b"not a folder").unwrap();
-    let mut a = typed();
-    script_pick(&a, Some(blocker.join("draft.docx").to_string_lossy().to_string()));
+    let (mut a, files) = typed_scripted();
+    script_pick(&files, Some(blocker.join("draft.docx").to_string_lossy().to_string()));
     a.run("file.close", json!({})).unwrap();
     let reason = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap_err();
     assert_eq!(prompt_message(&a).as_deref(), Some(reason.as_str()));
@@ -1873,7 +1874,7 @@ fn make_default_app_needs_the_hosts_hook_and_reports_the_outcome() {
     assert_eq!(a.make_default_app().unwrap()["settingsOpened"], true);
     assert!(status_text(&a).is_some_and(|m| m.contains("Default apps")), "{:?}", status_text(&a));
 
-    a.services.make_default_app = Some(Box::new(|| Err("xdg-mime isn't installed".into())));
+    a.services.make_default_app = Some(Box::new(|| Err(DefaultAppError::Failed("xdg-mime isn't installed".into()))));
     let e = a.make_default_app().unwrap_err();
     assert!(e.contains("xdg-mime isn't installed"), "{e}");
     assert!(status_text(&a).is_some_and(|m| m.contains("xdg-mime isn't installed")), "the status bar says why");
@@ -2180,8 +2181,8 @@ fn a_save_that_drops_content_does_not_continue() {
     for ext in ["png", "txt"] {
         let dir = scratch(&format!("lossy-{ext}"));
         let picked = dir.join(format!("novel.{ext}")).to_string_lossy().to_string();
-        let mut a = typed();
-        script_pick(&a, Some(picked.clone()));
+        let (mut a, files) = typed_scripted();
+        script_pick(&files, Some(picked.clone()));
         a.run("file.close", json!({})).unwrap();
         a.status = None;
         let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
@@ -2214,14 +2215,27 @@ fn web_downloads_that_drop_content_leave_the_document_unsaved() {
 /// Web inside a page that keeps the files: the app with `host_save` recording each file it
 /// is handed (name, Save As, size).
 fn host_app(fail: bool) -> (WordApp, HostSaves) {
-    let files = Arc::new(ScriptedFiles::in_browser());
+    let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
     if fail {
-        // PLAN(shell-w8): assumed `ScriptedFiles::fail_saves(&str)` answers every save with that error.
-        files.fail_saves("the page is gone");
+        files.queue(Picked::Failed("the page is gone".into()));
     }
     let mut a = app_with_files(files.clone());
     a.run("text.insert", json!({"text": UNSAVED})).unwrap();
     (a, HostSaves(files))
+}
+
+/// The saves `files` has written, each with the request that asked for it and the bytes written, oldest first.
+fn saved(files: &ScriptedFiles) -> Vec<(PickRequest, Vec<u8>)> {
+    files
+        .requests()
+        .into_iter()
+        .filter(|request| request.kind == PickKind::Save)
+        .filter_map(|request| {
+            let name = std::path::PathBuf::from(request.file_name.clone().unwrap_or_default());
+            let path = request.directory.as_ref().map_or_else(|| name.clone(), |dir| dir.join(&name));
+            files.file(&path).map(|bytes| (request, bytes))
+        })
+        .collect()
 }
 
 /// The files the host page was handed, as (name, Save As, size).
@@ -2230,8 +2244,7 @@ struct HostSaves(Arc<ScriptedFiles>);
 impl HostSaves {
     /// The saves so far.
     fn borrow(&self) -> Vec<(String, bool, usize)> {
-        // PLAN(shell-w8): assumed `ScriptedFiles::saved() -> Vec<(PickRequest, Vec<u8>)>`.
-        self.0.saved().into_iter().map(|(request, bytes)| (request.file_name.unwrap_or_default(), request.save_as, bytes.len())).collect()
+        saved(&self.0).into_iter().map(|(request, bytes)| (request.file_name.unwrap_or_default(), request.save_as, bytes.len())).collect()
     }
 }
 
@@ -2385,7 +2398,7 @@ fn renaming_a_saved_file_keeps_autosave_and_replaces_its_recent_entry() {
 #[test]
 fn a_failed_download_is_not_a_save() {
     let (mut a, saves) = web_picker_app();
-    saves.0.fail_saves("blocked by the browser");
+    saves.0.queue(Picked::Failed("blocked by the browser".into()));
     assert!(a.execute("file.save", json!({})).is_err());
     assert!(a.session.dirty);
 
@@ -2404,7 +2417,7 @@ fn a_failed_download_is_not_a_save() {
 /// later. Returns the app (with unsaved typing) and the saves its download starts, plus the
 /// last ticket started.
 fn web_picker_app() -> (WordApp, WebSaves) {
-    let files = Arc::new(ScriptedFiles::in_browser());
+    let files = Arc::new(ScriptedFiles::held().in_browser());
     let mut a = app_with_files(files.clone());
     a.run("text.insert", json!({"text": UNSAVED})).unwrap();
     assert!(a.session.dirty);
@@ -2425,26 +2438,25 @@ struct WebSaves(Arc<ScriptedFiles>);
 impl WebSaves {
     /// The saves still open in the picker.
     fn pending(&self) -> usize {
-        // PLAN(shell-w8): assumed `ScriptedFiles::held(&self) -> Vec<PickId>`, oldest first, in browser mode.
-        self.0.held().len()
+        self.0.open()
     }
 
-    /// The newest save the picker holds.
+    /// The newest save the picker holds: every ask of the service is held and tickets count the asks.
     fn last(&self) -> PickId {
-        self.0.held().last().copied().unwrap_or(PickId(0))
+        PickId(self.0.requests().len() as u64)
     }
 
     /// Ends save `id`.
     fn finish(&self, id: PickId, ended: Ended) {
-        // PLAN(shell-w8): assumed `ScriptedFiles::end_save(PickId, Result<Option<PathBuf>, String>)`.
-        self.0.end_save(
+        let answered = self.0.answer_to(
             id,
             match ended {
-                Ended::Saved => Ok(Some(std::path::PathBuf::from("novel.docx"))),
-                Ended::Cancelled => Ok(None),
-                Ended::Failed(why) => Err(why),
+                Ended::Saved => Picked::Paths(vec![std::path::PathBuf::from("novel.docx")]),
+                Ended::Cancelled => Picked::Cancelled,
+                Ended::Failed(why) => Picked::Failed(why),
             },
         );
+        assert!(answered, "save {id:?} was open");
     }
 }
 
@@ -2594,8 +2606,8 @@ fn web_picker_save_ending_after_the_document_changed_leaves_the_new_one_alone() 
 /// A new document has no path: Save goes through Save As, and cancelling that cancels the Close.
 #[test]
 fn save_as_cancelled_keeps_the_document() {
-    let mut a = typed();
-    script_pick(&a, None);
+    let (mut a, files) = typed_scripted();
+    script_pick(&files, None);
     a.run("file.close", json!({})).unwrap();
     a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
     assert_eq!(prompt(&a), None);
@@ -2608,8 +2620,8 @@ fn save_as_picked_saves_then_continues() {
     let dir = scratch("saveas");
     let path = dir.join("novel.docx");
     let picked = path.to_string_lossy().to_string();
-    let mut a = typed();
-    script_pick(&a, Some(picked.clone()));
+    let (mut a, files) = typed_scripted();
+    script_pick(&files, Some(picked.clone()));
     a.run("file.close", json!({})).unwrap();
     a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
     assert!(!a.has_document(), "closed once saved");
@@ -2661,7 +2673,7 @@ fn finish_and_print_documents_ask_which_records() {
         assert_eq!(prompt(&a), Some(dialog));
         let fields = open_dialog(&a).map(|d| d.1).unwrap_or_default();
         assert!(fields["from"] == "1" && fields["to"] == "2", "{fields}");
-        close_dialogs(&mut a);
+        close_dialogs(&mut a, &egui::Context::default());
     }
 }
 
@@ -2884,7 +2896,7 @@ fn autosave_is_blocked_with_a_reason_for_files_it_cannot_keep() {
 /// switch is blocked with a reason instead of being on while nothing is saved.
 #[test]
 fn autosave_is_unavailable_in_the_browser() {
-    let mut a = app_with_files(Arc::new(ScriptedFiles::in_browser()));
+    let mut a = app_with_files(Arc::new(ScriptedFiles::new().in_browser()));
     a.run("text.insert", json!({"text": "Hello"})).unwrap();
     a.run("file.save", json!({"path": "draft.docx"})).unwrap();
     assert_eq!(a.autosave_block(), Some(AutoSaveBlock::Browser));
@@ -2898,8 +2910,8 @@ fn autosave_is_unavailable_in_the_browser() {
 fn cancelling_open_keeps_autosave() {
     let dir = scratch("autosave-open");
     let path = dir.join("novel.docx");
-    let mut a = typed();
-    script_pick(&a, None);
+    let (mut a, files) = typed_scripted();
+    script_pick(&files, None);
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
     assert!(a.autosaves());
     a.run("file.open", json!({})).unwrap();
@@ -2946,10 +2958,9 @@ fn web_save_keeps_the_opened_word_format() {
     // The docx reader's list of parts the project relates to (wordcraft_docx VBA_RELATED).
     let related = "http://schemas.microsoft.com/office/2006/relationships/wordVbaData\tword/vbaData.xml\tapplication/vnd.ms-word.vbaData+xml\n";
     doc.passthrough.insert("wordcraft:vbaProject.related".into(), std::sync::Arc::new(related.as_bytes().to_vec()));
-    let files = Arc::new(ScriptedFiles::in_browser());
+    let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
     let mut a = app_over(Session::new(doc), files.clone());
-    // PLAN(shell-w8): assumed `ScriptedFiles::saved()` keeps each save's request and bytes.
-    let last_save = || files.saved().pop().map(|(request, bytes)| (request.file_name.unwrap_or_default(), bytes)).unwrap();
+    let last_save = || saved(&files).pop().map(|(request, bytes)| (request.file_name.unwrap_or_default(), bytes)).unwrap();
     for (opened, expect) in
         [("m.docm", "m.docm"), ("t.DOTM", "t.DOTM"), ("t.dotx", "t.dotx"), ("notes.odt", "notes.docx"), ("readme.txt", "readme.docx")]
     {
@@ -3159,20 +3170,18 @@ fn auto_interface_size_is_capped_to_what_fits_the_screen() {
 }
 
 /// #4030: the zoom is shared, so the smallest screen of all the open windows caps Auto, and a
-/// monitor size made with the zoom before a change still gives the same physical screen.
+/// screen's size in pixels gives the same cap whatever scale its window runs at.
 #[test]
-fn auto_cap_follows_the_smallest_window_screen_and_the_zoom_of_its_points() {
+fn auto_cap_follows_the_smallest_window_screen() {
     use theme::auto_scale_limit_over;
-    let small = auto_scale_limit_over([((1366.0, 768.0), 1.0)], 1.0, 1.0);
-    let large = auto_scale_limit_over([((3840.0, 2160.0), 1.0)], 1.0, 1.0);
+    let small = auto_scale_limit_over([([1366, 768], 1.0)], 1.0);
+    let large = auto_scale_limit_over([([3840, 2160], 1.0)], 1.0);
     assert!(small < large);
-    assert_eq!(auto_scale_limit_over([((3840.0, 2160.0), 1.0), ((1366.0, 768.0), 1.0)], 1.0, 1.0), small);
-    // A 1366x768 panel at native scale 3: the points are 455x256 at zoom 1, 304x171 at zoom 1.5.
-    // The pixels, and so the cap, don't depend on which zoom made the points.
-    let a = auto_scale_limit_over([((1366.0 / 3.0, 768.0 / 3.0), 3.0)], 1.0, 3.0);
-    let b = auto_scale_limit_over([((1366.0 / 4.5, 768.0 / 4.5), 3.0)], 1.5, 3.0);
-    assert!((a - b).abs() < 1e-4 && (a - small).abs() < 1e-4, "{a} {b} {small}");
-    assert_eq!(auto_scale_limit_over([], 1.0, 1.0), f32::INFINITY);
+    assert_eq!(auto_scale_limit_over([([3840, 2160], 1.0), ([1366, 768], 1.0)], 1.0), small);
+    // A 1366x768 panel at native scale 3: the pixels, and so the cap, are the same.
+    let a = auto_scale_limit_over([([1366, 768], 3.0)], 3.0);
+    assert!((a - small).abs() < 1e-4, "{a} {small}");
+    assert_eq!(auto_scale_limit_over([], 1.0), f32::INFINITY);
 }
 
 /// #4030: with a 1x window on a large screen and a 3x window on a 1366x768 panel, the shared zoom
@@ -3181,8 +3190,9 @@ fn auto_cap_follows_the_smallest_window_screen_and_the_zoom_of_its_points() {
 fn auto_cap_keeps_every_window_within_its_own_screen_when_scales_differ() {
     use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit, usable_scale};
     let windows = [((3840.0, 2160.0), 1.0_f32), ((1366.0 / 3.0, 768.0 / 3.0), 3.0)];
+    let monitors = windows.map(|((w, h), own)| ([(w * own).round() as u32, (h * own).round() as u32], own));
     for root in [1.0_f32, 3.0] {
-        let limit = theme::auto_scale_limit_over(windows, 1.0, root);
+        let limit = theme::auto_scale_limit_over(monitors, root);
         let zoom = InterfaceSize::AUTO.zoom_factor_within(root, limit);
         for ((w, h), own) in windows {
             let pixels_per_point = usable_scale(own) * zoom;
@@ -3409,8 +3419,8 @@ fn pasted_picture_inserts_only_when_the_page_is_the_edit_target() {
     assert!(open_dialog(h.state()).is_some());
     paste(&mut h, [1, 2, 3, 255]);
     assert_eq!(object_count(h.state_mut()), 1, "a dialog has the paste");
-    close_dialogs(h.state_mut());
     let ctx = h.ctx.clone();
+    close_dialogs(h.state_mut(), &ctx);
     h.state_mut().canvas.focus_page(&ctx);
     h.run_steps(2);
     // The Backstage is open.
@@ -3463,8 +3473,7 @@ fn change_picture_replaces_instead_of_inserting() {
     let before = a.selected_picture_media().unwrap();
     a.change_picture_target = a.selected_picture_media();
     drop_files(&mut a, vec![dropped_bytes("new.png", png_bytes([30, 200, 30, 255]))]);
-    // PLAN(app-hub): assumed `WordApp::take_intake(&mut self)`, the frame's intake step.
-    a.take_intake();
+    a.drain_inbox();
     assert_eq!(object_count(&mut a), 1);
     assert_ne!(a.selected_picture_media().unwrap(), before);
     assert!(a.change_picture_target.is_none());
@@ -3475,7 +3484,7 @@ fn change_picture_replaces_instead_of_inserting() {
 fn several_dropped_images_are_all_inserted() {
     let mut a = app();
     drop_files(&mut a, vec![dropped_bytes("a.png", png_bytes([200, 30, 30, 255])), dropped_bytes("b.png", png_bytes([30, 200, 30, 255]))]);
-    a.take_intake();
+    a.drain_inbox();
     assert_eq!(object_count(&mut a), 2);
 }
 
@@ -3485,7 +3494,7 @@ fn several_dropped_images_all_join_a_selected_canvas() {
     let mut a = app();
     a.session.run("insert.canvas", &json!({})).unwrap();
     drop_files(&mut a, vec![dropped_bytes("a.png", png_bytes([200, 30, 30, 255])), dropped_bytes("b.png", png_bytes([30, 200, 30, 255]))]);
-    a.take_intake();
+    a.drain_inbox();
     let members = a.session.run("canvas.member", &json!({})).unwrap();
     assert_eq!(members["members"].as_array().map(|m| m.len()), Some(2));
 }
@@ -3497,7 +3506,7 @@ fn insert_without_pending_adds_and_stale_target_clears() {
     insert_picture(&mut a, [200, 30, 30, 255]);
     a.session.run("select.collapse", &json!({"end": true})).unwrap();
     drop_files(&mut a, vec![dropped_bytes("second.png", png_bytes([30, 30, 200, 255]))]);
-    a.take_intake();
+    a.drain_inbox();
     assert_eq!(object_count(&mut a), 2);
     // Stale target (another picture's key) clears instead of replacing the new selection.
     a.change_picture_target = Some("m0000-gone.png".into());
@@ -3542,7 +3551,7 @@ fn a_font_picked_on_the_web_is_added_listed_and_kept() {
             i += at + to.len();
         }
     }
-    let mut a = typed();
+    let (mut a, files) = typed_scripted();
     let kept = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, usize)>::new()));
     let (k1, k2) = (kept.clone(), kept.clone());
     a.services.store_font = Some(Box::new(move |name, bytes| k1.borrow_mut().push((name.to_string(), bytes.len()))));
@@ -3550,16 +3559,16 @@ fn a_font_picked_on_the_web_is_added_listed_and_kept() {
     let ctx = egui::Context::default();
     assert!(!a.previews.families().iter().any(|f| f == FAMILY));
     a.run("font.add", json!({})).unwrap();
-    assert_eq!(scripted(&a).requests().last().map(|r| r.purpose.as_str()), Some("font"), "the host was asked for a font file");
+    assert_eq!(files.requests().last().map(|r| r.purpose.as_str()), Some("font"), "the host was asked for a font file");
     drop_files(&mut a, vec![dropped_bytes("Uifont-Regular.ttf", font.clone())]);
-    a.take_intake();
+    a.drain_inbox();
     a.watch_fonts(&ctx);
     assert!(a.previews.families().iter().any(|f| f == FAMILY), "listed in the font menu at once");
     assert_eq!(*kept.borrow(), vec![("Uifont-Regular.ttf".to_string(), font.len())]);
     assert!(body_text(&a).contains(UNSAVED), "the document stays open");
     // Junk named like a font is refused, and nothing is kept.
     drop_files(&mut a, vec![dropped_bytes("junk.woff2", b"wOF2junk".to_vec())]);
-    a.take_intake();
+    a.drain_inbox();
     assert_eq!(kept.borrow().len(), 1);
     a.run("font.remove", json!({"family": FAMILY})).unwrap();
     a.watch_fonts(&ctx);
@@ -3720,8 +3729,14 @@ fn shift_f10_opens_the_context_menu_at_the_caret() {
     assert!(h.state().canvas.context_menu_open, "Shift+F10 opened the menu");
     assert!(pastes(&h) > before, "the page's context menu, with Paste");
     let caret = canvas::caret_screen(h.state_mut()).unwrap();
-    let at = h.state().canvas.context_menu_at.unwrap();
-    assert!((at.x - caret.0.x).abs() < 1.0 && at.y > caret.0.y, "below the caret: {at:?} vs {caret:?}");
+    // The menu's own item stands below the caret, with its left edge at the caret's x plus the menu's padding.
+    let item = h
+        .query_all_by_label_contains("Paste")
+        .map(|node| node.rect())
+        .filter(|rect| rect.top() > caret.0.y)
+        .min_by(|p, q| p.top().total_cmp(&q.top()))
+        .expect("a menu item below the caret");
+    assert!(item.left() >= caret.0.x - 1.0 && item.left() < caret.0.x + 40.0, "at the caret's x: {item:?} vs {caret:?}");
     assert!(!h.state().keytips_active, "Shift+F10 doesn't show keytips");
     h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
     h.step();
