@@ -19,7 +19,7 @@ pub fn png_size(png: &[u8]) -> Result<(u32, u32), String> {
 /// An ICO file holding `pngs`, which must be square and at most 256 px.
 pub fn pack(pngs: &[Vec<u8>]) -> Result<Vec<u8>, String> {
     if pngs.is_empty() || pngs.len() > u16::MAX as usize {
-        return Err("need at least one PNG".into());
+        return Err("need between 1 and 65535 PNGs".into());
     }
     let mut out = Vec::new();
     out.extend_from_slice(&0u16.to_le_bytes()); // reserved
@@ -29,7 +29,7 @@ pub fn pack(pngs: &[Vec<u8>]) -> Result<Vec<u8>, String> {
     for png in pngs {
         let (w, h) = png_size(png)?;
         if w != h || w == 0 || w > 256 {
-            return Err(format!("icon images must be square and at most 256 px, got {w}x{h}"));
+            return Err(format!("icon images must be square and between 1 and 256 px, got {w}x{h}"));
         }
         let dim = if w == 256 { 0 } else { w as u8 };
         out.extend_from_slice(&[dim, dim, 0, 0]); // width, height, palette size, reserved
@@ -87,10 +87,13 @@ mod tests {
 
     #[test]
     fn rejects_bad_input() {
-        assert!(pack(&[]).is_err());
-        assert!(pack(&[fake_png(512)]).is_err());
+        assert_eq!(pack(&[]).unwrap_err(), "need between 1 and 65535 PNGs");
+        assert_eq!(pack(&vec![Vec::new(); usize::from(u16::MAX) + 1]).unwrap_err(), "need between 1 and 65535 PNGs");
+        assert_eq!(pack(&[fake_png(0)]).unwrap_err(), "icon images must be square and between 1 and 256 px, got 0x0");
+        assert_eq!(pack(&[fake_png(512)]).unwrap_err(), "icon images must be square and between 1 and 256 px, got 512x512");
         assert!(pack(&[b"GIF89a".to_vec()]).is_err());
         assert_eq!(png_size(&fake_png(48)).unwrap(), (48, 48));
+        assert!(pack(&[fake_png(1)]).is_ok());
     }
 
     #[test]
