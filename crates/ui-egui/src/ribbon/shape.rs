@@ -40,7 +40,7 @@ pub(crate) fn gradient_menu(ui: &mut Ui, app: &mut WordApp, fill: Option<&wordcr
         Grid::new(&VARIATION_GRID).show(ui, |ui, _| {
             for (f, name) in tiles.iter() {
                 let (stops, tile) = crate::format_shape::fill_tile(f);
-                if GradientSwatch::new(name.as_str(), &stops).tile(tile).show(ui).clicked {
+                if GradientSwatch::new(name.clone(), &stops).tile(tile).show(ui).clicked {
                     let _ = app.run("shape.fill", shape_fill::params(Some(f)));
                     if let (Some(p), Some(Some(now))) = (pos.clone(), crate::format_shape::current(app)) {
                         crate::format_shape::remember_variation(app, p, now, main);
@@ -107,7 +107,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     for pct in [50, 75, 125, 150, 200] {
                         let label = format!("{pct}%");
                         MenuItem::command(CommandRef::with_params("canvas.scale", json!({"factor": pct as f32 / 100.0})))
-                            .label(tl!(label.as_str()))
+                            .label(tl!(label.as_str()).to_string())
                             .show(ui);
                     }
                 });
@@ -220,7 +220,7 @@ fn shape_effects_menu(ui: &mut Ui, app: &mut WordApp, glow_size: Option<f32>) {
         Divider::horizontal().show(ui);
         for size in [5.0, 8.0, 11.0, 18.0] {
             let label = format!("{size} pt");
-            MenuItem::command(CommandRef::with_params("shape.effects", json!({"glow": size}))).label(tl!(label.as_str())).show(ui);
+            MenuItem::command(CommandRef::with_params("shape.effects", json!({"glow": size}))).label(tl!(label.as_str()).to_string()).show(ui);
         }
         Divider::horizontal().show(ui);
         Menu::submenu_row(ui, tl!("Glow Colors"), |ui, _| {
@@ -233,7 +233,7 @@ fn shape_effects_menu(ui: &mut Ui, app: &mut WordApp, glow_size: Option<f32>) {
         Divider::horizontal().show(ui);
         for r in [1.0, 2.5, 5.0, 10.0, 25.0, 50.0] {
             let label = format!("{r} pt");
-            MenuItem::command(CommandRef::with_params("shape.effects", json!({"softEdge": r}))).label(tl!(label.as_str())).show(ui);
+            MenuItem::command(CommandRef::with_params("shape.effects", json!({"softEdge": r}))).label(tl!(label.as_str()).to_string()).show(ui);
         }
     });
 }

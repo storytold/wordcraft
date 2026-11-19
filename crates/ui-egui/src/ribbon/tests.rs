@@ -407,7 +407,7 @@ fn language_menu_reaches_every_language() {
     let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Bonjour")), crate::Services::default());
     let mut h = tab_harness(app, "Review");
     click_button(&mut h, "Language");
-    let item = |label: &str| By::new().label_contains(label.to_string());
+    let item = |label: &str| By::new().label_contains(label);
     let french = language_name(Some("fr-FR"));
     assert!(h.query(item(french.as_str())).is_none(), "the short list only, on an English document");
     assert!(!h.get(item("Set Proofing Language…")).accesskit_node().is_disabled(), "never greyed out on a fresh document");

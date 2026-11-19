@@ -37,7 +37,7 @@ pub(super) fn margins_items(ui: &mut Ui, app: &mut WordApp) {
         };
         // Mirrored margins come from the document as well as from the preset (#1181).
         let on = current == Some(k) || (k == "mirrored" && app.session.doc.settings.mirror_margins);
-        MenuItem::command(CommandRef::with_params("layout.margins", json!({"preset": k}))).label(tl!(label.as_str())).radio_mark(on).show(ui);
+        MenuItem::command(CommandRef::with_params("layout.margins", json!({"preset": k}))).label(tl!(label.as_str()).to_string()).radio_mark(on).show(ui);
     }
     MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "pageSetup"}))).label(tl!("Custom Margins…")).show(ui);
 }

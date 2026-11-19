@@ -23,7 +23,7 @@ use super::{Ui, WordApp, json};
 use crate::colors::{Remember, Target};
 
 /// A ribbon group titled `title`, with the Dialog Launcher `launcher` when it has one.
-fn ribbon_group(key: &'static str, title: &str, icon: &str, launcher: Option<&str>) -> RibbonGroup<'static> {
+fn ribbon_group(key: &'static str, title: &str, icon: &'static str, launcher: Option<&str>) -> RibbonGroup<'static> {
     let group = RibbonGroup::new(key, tl!(title).to_string(), IconId::new(icon).into());
     match launcher {
         Some(id) => group.launcher(CommandRef::new(id)),

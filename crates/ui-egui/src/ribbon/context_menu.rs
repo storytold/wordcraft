@@ -2,7 +2,7 @@
 
 use craft::keymap::CommandRef;
 use craft::menu::RibbonMenuRequest;
-use craft::ui::contract::Show as _;
+use craft::ui::contract::{Props as _, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::menu::MenuItem;
 use egui::Ui;
