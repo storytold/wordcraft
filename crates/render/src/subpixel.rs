@@ -224,7 +224,7 @@ impl Painter {
         color: Rgb,
         alpha: f32,
     ) -> bool {
-        if self.lcd.as_ref().is_none_or(|lcd| lcd.faded > 0) || !alpha.is_finite() || alpha <= 0.0 || !stroke_px.is_finite() {
+        if self.lcd.as_ref().is_none_or(|lcd| lcd.faded > 0 || lcd.turned_clip()) || !alpha.is_finite() || alpha <= 0.0 || !stroke_px.is_finite() {
             return false;
         }
         // Every mask first: a run is drawn whole one way or the other.
@@ -274,7 +274,7 @@ impl Painter {
         }
         // vello_cpu gives a pixel that a clip's edge cuts through its share of the fill; it is
         // filled here only within whole pixels, so inside such a clip it is left to vello_cpu.
-        if lcd.clips.iter().any(|(_, _, c)| !lcd.on_pixel_edges(*c)) {
+        if lcd.turned_clip() || lcd.clips.iter().any(|(_, _, c)| !lcd.on_pixel_edges(*c)) {
             return false;
         }
         let alpha = u32::from(crate::alpha8(alpha));
@@ -324,6 +324,17 @@ fn flush(ctx: &mut RenderContext, lcd: &mut Lcd) {
 type PixelRect = (i64, i64, i64, i64);
 
 impl Lcd {
+    /// Is an open clip turned off the pixel grid (rotated other than by quarter turns, or skewed)?
+    /// Subpixel text and rectangles are clipped to each clip's bounding rectangle, which then
+    /// holds more than the clip; text turned back inside it can be upright again, so such text is
+    /// left to vello_cpu, which clips it to the clip's own outline.
+    fn turned_clip(&self) -> bool {
+        self.clips.iter().any(|(_, t, _)| {
+            let [a, b, c, d, _, _] = t.as_coeffs();
+            !(b == 0.0 && c == 0.0 || a == 0.0 && d == 0.0)
+        })
+    }
+
     /// Does clip rectangle `c` (device pixels) have every edge inside the raster on a whole pixel?
     fn on_pixel_edges(&self, c: kurbo::Rect) -> bool {
         let (w, h) = (f64::from(self.width), f64::from(self.height));
@@ -779,6 +790,26 @@ mod tests {
             }
             let over = p.rect_over_text(kurbo::Rect::new(2.0, 10.0, 60.0, 12.0), Rgb::BLACK, 1.0);
             assert_eq!(over, waits, "{clip:?}");
+        }
+    }
+
+    #[test]
+    fn rectangles_over_text_in_a_turned_clip_are_drawn_by_vello() {
+        // A turned clip's bounding rectangle holds more than the clip, so a rectangle over text
+        // inside it is left to vello_cpu even when that rectangle's edges are on whole pixels.
+        let (w, h) = (64u16, 32u16);
+        let all = kurbo::Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
+        let turn = |deg: f64| Affine::rotate_about(deg.to_radians(), kurbo::Point::new(32.0, 16.0));
+        for (transform, waits) in [(Affine::IDENTITY, true), (Affine::new([0.0, 1.0, -1.0, 0.0, 48.0, -16.0]), true), (turn(2.1), false)] {
+            let ctx = RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
+            let mut p = Painter::new(ctx, w, h, Some(Subpixel::Rgb));
+            // The device rectangle on whole pixels: only the turn decides.
+            p.push_clip(&all.to_path(0.1), transform, all);
+            if let Some(lcd) = &mut p.lcd {
+                lcd.runs.push(Waiting { placed: Vec::new(), rect: Some(all), rgb: [0; 3], alpha: 255, clip: (0, 0, 64, 32), bounds: all });
+            }
+            let over = p.rect_over_text(kurbo::Rect::new(2.0, 10.0, 60.0, 12.0), Rgb::BLACK, 1.0);
+            assert_eq!(over, waits, "{transform:?}");
         }
     }
 

@@ -337,3 +337,39 @@ fn tiny_glyphs_at_an_extreme_view_scale_never_panic() {
         assert_eq!(img.pixels.len(), 50 * 50 * 4);
     }
 }
+
+/// `items` in a clip over the square (50, 50)–(150, 150), turned by `angle` degrees about its
+/// centre, with the items turned back so they are upright on the raster.
+fn in_a_turned_clip(angle: f32, items: Vec<Draw>) -> Draw {
+    let back = Draw::Rotated { cx: 100.0, cy: 100.0, spin: wordcraft_geom::Spin::new(-angle, false, false), items };
+    let clip = Draw::Clip { rect: wordcraft_geom::Rect::new(50.0, 50.0, 100.0, 100.0), items: vec![back] };
+    Draw::Rotated { cx: 100.0, cy: 100.0, spin: wordcraft_geom::Spin::new(angle, false, false), items: vec![clip] }
+}
+
+#[test]
+fn upright_text_in_a_rotated_clip_stays_inside_the_clip() {
+    let d = Document::new();
+    let (w, h) = (200, 200);
+    // Text outside the turned clip but inside its bounding box: at 45° (a diamond), and at 2.1°,
+    // where turning back leaves the text exactly upright on the raster (as it does for many
+    // angles), so it would otherwise be drawn as subpixel text, clipped to the box.
+    for (angle, x, baseline) in [(45.0, 40.0, 60.0), (2.1, 135.0, 50.5)] {
+        let outside = in_a_turned_clip(angle, vec![run_at(x, baseline, 1, Rgb::BLACK)]);
+        for subpixel in [None, Some(Subpixel::Rgb)] {
+            let img = render_draws(&d, std::slice::from_ref(&outside), w, h, Affine::IDENTITY, &opts(true, subpixel));
+            assert_eq!(ink(&img), 0, "{angle}°, {subpixel:?}: nothing outside the clip");
+        }
+    }
+    // Inside the diamond the text is drawn (greyscale: the clip's edges aren't on the pixel grid).
+    let inside = in_a_turned_clip(45.0, vec![run_at(90.0, 104.0, 2, Rgb::BLACK)]);
+    let img = render_draws(&d, &[inside], w, h, Affine::IDENTITY, &opts(true, Some(Subpixel::Rgb)));
+    assert!(ink(&img) > 1000 && coloured(&img) == 0, "ink {} coloured {}", ink(&img), coloured(&img));
+    // A clip under a quarter turn (vertical text) is still a rectangle on the pixel grid: text
+    // turned back inside it keeps subpixel edges. Down about (100, 100), then Up back.
+    use wordcraft_doc::props::TextDirection;
+    let back = Draw::Turned { x: -100.0, y: 100.0, turn: TextDirection::Up, items: vec![run_at(90.0, 104.0, 2, Rgb::BLACK)] };
+    let clip = Draw::Clip { rect: wordcraft_geom::Rect::new(-40.0, -40.0, 80.0, 80.0), items: vec![back] };
+    let quarter = Draw::Turned { x: 100.0, y: 100.0, turn: TextDirection::Down, items: vec![clip] };
+    let img = render_draws(&d, &[quarter], w, h, Affine::IDENTITY, &opts(true, Some(Subpixel::Rgb)));
+    assert!(ink(&img) > 1000 && coloured(&img) > 0, "quarter turn: ink {} coloured {}", ink(&img), coloured(&img));
+}
