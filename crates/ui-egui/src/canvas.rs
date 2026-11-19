@@ -788,6 +788,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let mut body_view = None;
     let mut ran = false;
     let mut fix = ScrollFix::default();
+    // The caret the follow wants whose page the pass did not place: its page, the page's height and the caret.
+    let mut unplaced = None;
     let out = PageView::new(tl!("Document"), &source, &mut state, paper)
         .options(options)
         .navigation(navigation_options())
@@ -833,6 +835,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                         None => {
                             let h = fresh.pages.get(c.page).map_or(1.0, |p| p.h.max(1.0));
                             fix.go_to = Some((c.page, f64::from(c.top / h)));
+                            unplaced = Some((c.page, h, *c));
                         }
                     }
                 }
@@ -847,14 +850,32 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         });
     let caret = caret_after.or(caret);
     app.canvas.page_keys = source.into_keys();
-    // A jump to a page that was not placed (`go_to`) puts the caret's line at the view's top edge: the follow stays on
-    // for the next pass, where the page is placed, so the caret ends with the same margin as any other follow.
-    if ran && fix.go_to.is_none() {
+    // The caret's page was not placed this pass: the whole layout says where it lies on screen, so the follow moves the
+    // view by the same margin rule as for a placed page, from whichever side the caret is on.
+    if let Some((page, page_h, c)) = unplaced
+        && let Some(rect) = laid_rects(&out).get(page).copied()
+    {
+        let s = rect.height() / page_h;
+        let top_left = rect.min + vec2(c.x * s, c.top * s);
+        let r = Rect::from_min_size(top_left, vec2((c.width * s).max(2.0), c.height * s)).expand2(vec2(40.0, 60.0));
+        fix.delta = (overshoot((r.min.x, r.max.x), (body_rect.min.x, body_rect.max.x)), overshoot((r.min.y, r.max.y), (body_rect.min.y, body_rect.max.y)));
+        fix.go_to = None;
+    }
+    // A jump to a page that was not placed at all (`go_to`) puts the caret's line at the view's top edge: the follow
+    // stays on for the next pass, where the page is placed, so the caret ends with the same margin as any other follow.
+    // While the body's rect is still settling (the chrome around the page is measured over the first passes) the follow
+    // waits, and moves the view once against the rect the page keeps: a move made against a passing rect would leave the
+    // caret where that rect put it.
+    if ran && app.canvas.shown.rect != body_rect {
+        fix = ScrollFix::default();
+        ui.ctx().request_repaint();
+    } else if ran && fix.go_to.is_none() {
         app.canvas.scroll_to_caret = false;
     }
 
     // The scroll position the body asked for takes effect on the state the pass stored.
-    let moved_by_user = state.offset.1 - started_at;    if fix.delta != (0.0, 0.0) {
+    let moved_by_user = state.offset.1 - started_at;
+    if fix.delta != (0.0, 0.0) {
         state.offset.0 += fix.delta.0;
         state.offset.1 += fix.delta.1;
         ui.ctx().request_repaint();
