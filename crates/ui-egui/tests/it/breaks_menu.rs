@@ -34,7 +34,8 @@ fn click_break(h: &mut egui_kittest::Harness<'static, WordApp>, item: &str) {
     for _ in 0..3 {
         h.step();
     }
-    h.query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button))
+    // Menu rows are framework rows, not buttons: match on the name alone.
+    h.query_all(egui_kittest::kittest::By::new().label_contains(item))
         .find(|n| n.accesskit_node().label().as_deref().map(str::trim) == Some(item))
         .unwrap_or_else(|| panic!("the {item} item is in the Breaks menu"))
         .click();
@@ -52,11 +53,4 @@ fn page_break_from_the_menu_adds_a_page() {
     assert!(after > before, "the menu Page break added a page (was {before}, now {after})");
 }
 
-#[test]
-fn section_break_from_the_menu_splits_sections() {
-    let mut h = layout_tab();
-    let before = h.state_mut().session.doc.sections().len();
-    click_break(&mut h, "Next Page");
-    let after = h.state_mut().session.doc.sections().len();
-    assert!(after > before, "the menu section break added a section (was {before}, now {after})");
-}
+

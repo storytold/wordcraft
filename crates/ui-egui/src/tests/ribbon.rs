@@ -61,8 +61,14 @@ fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
         a.run(fit, json!({})).unwrap();
         frame(&mut a);
         a.run("ui.dialog", json!({"name": "zoom"})).unwrap();
-        assert!(matches!(a.dialog, Some(dialogs::Dialog::Zoom { percent }) if (percent - (fitted * 100.0).round()).abs() < 1.0));
-        a.dialog = None;
+        frame(&mut a);
+        let open = a.dialog_host.open_dialogs();
+        let zoom = open.iter().find(|d| d.key.as_deref() == Some("zoom")).expect("the Zoom dialog is open");
+        // Accepting it as it opened applies the percent it opened at: the shown zoom.
+        assert!(a.dialog_host.confirm_by_id(&ctx, zoom.id), "the Zoom dialog accepts as opened");
+        frame(&mut a);
+        assert!((a.session.view.zoom - fitted).abs() < 0.01, "{fit}: the Zoom dialog opens at the shown zoom");
+        assert!(a.dialog_host.open_dialogs().is_empty(), "the Zoom dialog closed");
     }
     a.run("view.zoom100", json!({})).unwrap();
     assert!((frame(&mut a) - 1.0).abs() < 1e-3);
@@ -73,30 +79,25 @@ fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
 /// their command without handing focus back, so the first keystrokes went nowhere.
 #[test]
 fn picking_a_wordart_style_hands_the_keyboard_back_to_the_page() {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
+    use egui_kittest::kittest::{By, Queryable};
+    let mut a = app();
+    a.run("ui.tab", json!({"tab": "Insert"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
-            // The first pass installs the fonts the gallery's cells are drawn in.
-            if ctx.cumulative_pass_nr() > 1 {
-                crate::wordart_menus::style_gallery(ui, app, "insert.wordArt");
-            }
+            app.ui(ui);
         },
-        app(),
+        a,
     );
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "WordArt").click();
     h.run_steps(3);
-    h.state_mut().canvas.want_focus = false;
-    // The first cell, "Solid Accent": a click on its middle (the cells carry no label here).
-    let at = egui::pos2(30.0, 30.0);
-    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-    h.event(egui::Event::PointerMoved(at));
-    h.run_steps(1);
-    h.event(button(true));
-    h.run_steps(1);
-    h.event(button(false));
-    h.run_steps(2);
+    // The first style of the WordArt table (`wordcraft_doc::wordart`) is "Solid Accent".
+    h.query_all(By::new().label_contains("Solid Accent")).next().expect("the first WordArt style tile").click();
+    h.run_steps(3);
     assert!(canvas::in_text_box(h.state()), "the WordArt's text is selected");
-    assert!(h.state().canvas.want_focus, "the page takes the keyboard back");
+    assert!(h.state().canvas.focused(&h.ctx), "the page takes the keyboard back");
 }
 
 /// Word opens on Home every launch, so the tab `ui.json` holds is not restored; the rest of the
