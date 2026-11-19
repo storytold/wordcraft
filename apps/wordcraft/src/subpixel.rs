@@ -52,7 +52,7 @@ pub fn resources_say(resources: &str) -> Option<Option<Subpixel>> {
     let value = |name: &str| {
         resources.lines().filter_map(|line| line.split_once(':')).find(|(k, _)| k.trim() == name).map(|(_, v)| v.trim().to_ascii_lowercase())
     };
-    if value("Xft.antialias").is_some_and(|a| a == "0" || a == "false") {
+    if value("Xft.antialias").is_some_and(|a| says_off(&a)) {
         return Some(None);
     }
     Some(order(&value("Xft.rgba")?))
@@ -74,10 +74,23 @@ pub fn portal_says(antialiasing: Option<&str>, rgba_order: Option<&str>) -> Opti
 /// not an order is written.
 #[cfg(any(test, all(unix, not(target_os = "macos"))))]
 pub fn kde_says(antialias: Option<&str>, subpixel: Option<&str>) -> Option<Option<Subpixel>> {
-    if antialias.is_some_and(|a| matches!(a.trim().to_ascii_lowercase().as_str(), "false" | "0")) {
+    if antialias.is_some_and(says_off) {
         return Some(None);
     }
     Some(order(subpixel?))
+}
+
+/// Whether a boolean setting says off, read the way Xft reads one (`XftDefaultParseBool`): by its
+/// first letter, whatever the case (`f`, `n` or `0`), or `of…`. That covers KDE's `false`, `off`,
+/// `no` and `0` too. Anything else, including `on`, isn't off.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn says_off(value: &str) -> bool {
+    let mut letters = value.trim().chars().map(|c| c.to_ascii_lowercase());
+    match letters.next() {
+        Some('f' | 'n' | '0') => true,
+        Some('o') => letters.next() == Some('f'),
+        _ => false,
+    }
 }
 
 /// A fontconfig `rgba` name: `rgb` and `bgr` draw subpixel text; `none`, the vertical orders
@@ -234,6 +247,20 @@ mod tests {
         // Not KDE: GNOME's keys are asked.
         assert_eq!(kde_says(None, None), None);
         assert_eq!(kde_says(Some("true"), None), None);
+    }
+
+    #[test]
+    fn antialiasing_off_is_read_like_xft_reads_a_boolean() {
+        // Xft's boolean values, whatever the case: off, no and f… are off as well as false and 0.
+        for off in ["off", "Off", "no", "NO", "f", "False"] {
+            assert_eq!(resources_say(&format!("Xft.antialias:\t{off}\nXft.rgba:\trgb\n")), Some(None), "{off}");
+            assert_eq!(kde_says(Some(off), Some("rgb")), Some(None), "{off}");
+        }
+        // On stays on.
+        for on in ["on", "On", "yes", "true", "1", "t"] {
+            assert_eq!(resources_say(&format!("Xft.antialias:\t{on}\nXft.rgba:\trgb\n")), Some(Some(Subpixel::Rgb)), "{on}");
+            assert_eq!(kde_says(Some(on), Some("rgb")), Some(Some(Subpixel::Rgb)), "{on}");
+        }
     }
 
     #[test]
