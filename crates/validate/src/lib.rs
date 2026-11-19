@@ -4214,6 +4214,10 @@ fn decode_alternate_image(bytes: &[u8], per_part: u64, remaining: &mut u64) -> R
     }
     // Decoder allocations can reuse the preflight reservation after header inspection ends.
     *remaining -= charge - preflight;
+    if format == Format::Png {
+        // The encoded-byte reserve covers raw ancillary chunks alongside pixel working space.
+        return decode_png_pixels(bytes, allocation.saturating_add(encoded)).map(|()| true);
+    }
     let side = width.max(height);
     let options = DecodeOptions { limits: CodecLimits::new(side, side, pixels, allocation.saturating_add(coefficients)), keep_orientation: true };
     let image = codecs::decode_as_with(format, bytes, &options)?;
@@ -4225,6 +4229,22 @@ fn decode_alternate_image(bytes: &[u8], per_part: u64, remaining: &mut u64) -> R
         }
     }
     Ok(true)
+}
+
+/// Check the first PNG image's rows, including Adam7 passes, without inflating text or ICC data.
+fn decode_png_pixels(bytes: &[u8], allocation: u64) -> Result<(), CodecError> {
+    let map_error = |error: png::DecodingError| match error {
+        png::DecodingError::LimitsExceeded => CodecError::LimitExceeded("PNG decoder byte limit".into()),
+        error => CodecError::Malformed { format: Format::Png, message: error.to_string() },
+    };
+    let limits = png::Limits { bytes: usize::try_from(allocation).unwrap_or(usize::MAX) };
+    let mut decoder = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), limits);
+    decoder.set_ignore_text_chunk(true);
+    decoder.set_ignore_iccp_chunk(true);
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder.read_info().map_err(map_error)?;
+    while reader.next_row().map_err(map_error)?.is_some() {}
+    Ok(())
 }
 
 /// Collect lowercased target paths for all image relationships in the package.
@@ -4354,15 +4374,15 @@ mod budget_tests {
         ])
     }
 
-    fn media_zip(files: &[(&str, &[u8])], body: &str) -> Vec<u8> {
+    fn media_zip(files: &[(&str, &[u8])], body: &str, kind: &str) -> Vec<u8> {
         let main = package::MAIN_CONTENT_TYPE;
         let types = format!(
-            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="{main}"/></Types>"#
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="{kind}" ContentType="image/{kind}"/><Override PartName="/word/document.xml" ContentType="{main}"/></Types>"#
         );
         let doc = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:wp="{NS_WP}"><w:body>{body}</w:body></w:document>"#);
-        let declarations = rels(
-            r#"<Relationship Id="rImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/drawn.png"/>"#,
-        );
+        let declarations = rels(&format!(
+            r#"<Relationship Id="rImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/drawn.{kind}"/>"#,
+        ));
         let mut entries = vec![
             ("[Content_Types].xml", types.into_bytes()),
             ("_rels/.rels", package_rels()),
@@ -4395,11 +4415,28 @@ mod budget_tests {
             (vml, stub.as_slice(), Severity::Error),
             (&skipped, stub.as_slice(), Severity::Error),
         ] {
-            let report = validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], body));
+            let report = validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], body, "png"));
             let mut findings = report.findings.iter().filter(|f| f.rule == "MEDIA-MAGIC");
             assert_eq!(findings.next().unwrap().severity, severity, "{report:?}");
             assert!(findings.next().is_none());
             assert_eq!(report.verdict, if severity == Severity::Error { Verdict::Fail } else { Verdict::Pass }, "{report:?}");
+        }
+    }
+
+    #[test]
+    fn media_magic_drawn_png_grade_ignores_compressed_description() {
+        for description in [String::new(), "November field notes. ".repeat(650)] {
+            let mut bytes = Vec::new();
+            let mut encoder = png::Encoder::new(&mut bytes, 32, 32);
+            encoder.set_depth(png::BitDepth::One);
+            if !description.is_empty() {
+                encoder.add_ztxt_chunk("Description".into(), description).unwrap();
+            }
+            encoder.write_header().unwrap().write_image_data(&[0; 4 * 32]).unwrap();
+            let report = validate_bytes(&media_zip(&[("word/media/drawn.jpeg", &bytes)], DRAWN, "jpeg"));
+            assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+            assert_eq!(report.findings.len(), 1, "{report:?}");
+            assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Warning));
         }
     }
 
@@ -4409,7 +4446,7 @@ mod budget_tests {
         let unused = ("word/media/unused.png", b"also bad".as_slice());
         let limits = Limits { findings_per_rule: 1, ..Limits::default() };
         for files in [[unused, used], [used, unused]] {
-            let report = validate_bytes_limited(&media_zip(&files, DRAWN), limits);
+            let report = validate_bytes_limited(&media_zip(&files, DRAWN, "png"), limits);
             assert_eq!(report.verdict, Verdict::Fail);
             assert_eq!(report.findings.len(), 1);
             assert_eq!(report.findings[0].rule, "MEDIA-MAGIC");
@@ -4419,12 +4456,12 @@ mod budget_tests {
         }
 
         let mut files = vec![unused, used];
-        let only_warnings = validate_bytes_limited(&media_zip(&files, "<w:p/>"), limits);
+        let only_warnings = validate_bytes_limited(&media_zip(&files, "<w:p/>", "png"), limits);
         assert_eq!(only_warnings.verdict, Verdict::Incomplete);
         assert_eq!(only_warnings.findings.len(), 1);
         assert_eq!(only_warnings.findings[0].severity, Severity::Warning);
         files.push(("word/undeclared.blob", b"independent"));
-        let mixed = validate_bytes_limited(&media_zip(&files, "<w:p/>"), limits);
+        let mixed = validate_bytes_limited(&media_zip(&files, "<w:p/>", "png"), limits);
         assert_eq!(mixed.verdict, Verdict::Fail);
         assert!(mixed.findings.iter().any(|f| f.rule == "CT-UNDECLARED" && f.severity == Severity::Error));
         assert!(mixed.findings.iter().any(|f| f.rule == "MEDIA-MAGIC" && f.severity == Severity::Warning));
@@ -4453,7 +4490,7 @@ mod budget_tests {
     fn media_magic_explains_an_alternate_decode_budget_stop() {
         let jpeg = test_jpeg(128);
         assert!(jpeg.len() < 4096);
-        let zip = media_zip(&[("word/media/drawn.png", &jpeg)], DRAWN);
+        let zip = media_zip(&[("word/media/drawn.png", &jpeg)], DRAWN, "png");
         let report = validate_bytes_limited(&zip, Limits { part_bytes: 4096, ..Limits::default() });
         assert_eq!(report.verdict, Verdict::Fail);
         assert!(report.findings.iter().any(|f| f.rule == "MEDIA-MAGIC" && f.severity == Severity::Error));
