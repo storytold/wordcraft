@@ -10,7 +10,7 @@ use std::sync::Arc;
 use craft::theme::Variant;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, FieldLayout, Gap, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
+use craft::ui::contract::{Bind, Entry, FieldLayout, Gap, Props as _, Show as _, ShowContainer as _, Sizing, WrapWidth, clicked};
 use craft::ui::display::Text;
 use craft::ui::form::Field;
 use craft::ui::layout_components::{Row, Stack};
@@ -219,7 +219,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // The row takes the page, so the preview beside the settings column fills the room left (production: the
         // preview takes the page's height beside a 380 pt column).
         Row::new().fill().gap(Gap::Section).show(ui, |ui, _| {
-            Panel::new(tl!("Print")).sizing(Sizing::Content).show(ui, |ui, _| settings(app, ui, &lay, hide_message, chooses, can_print, ready));
+            // Production's settings column is 380 pt with its paragraphs wrapped inside it: the column's wrap width
+            // keeps the long notes from widening it over the preview.
+            Panel::new(tl!("Print")).sizing(Sizing::Content).show(ui, |ui, _| {
+                Stack::new()
+                    .wrap_width(WrapWidth::Column)
+                    .gap(Gap::Stack)
+                    .show(ui, |ui, _| settings(app, ui, &lay, hide_message, chooses, can_print, ready));
+            });
             preview::show(app, ui, &lay);
         });
     });

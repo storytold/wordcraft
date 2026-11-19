@@ -729,6 +729,19 @@ fn about_stays_at_the_bottom_of_a_side_menu_that_fits() {
     assert!((about.min.x - options.min.x).abs() < 1.0, "in the same column: {about:?} {options:?}");
 }
 
+/// The side menu is production's rail: about 200 pt wide, its page rows about 38 pt tall one after another, each
+/// taller than the plain About link in its footer.
+#[test]
+fn the_side_menu_rows_are_production_s_rail_rows() {
+    let h = file_page(new_app(), "home");
+    let (info, recover) = (h.get_by_label("Info").rect(), h.get_by_label("Recover").rect());
+    let about = h.get_by_label("About").rect();
+    assert!(info.width() >= 190.0, "the menu is the rail's width: {info:?}");
+    assert!((34.0..=44.0).contains(&info.height()), "a page row is a rail row: {info:?}");
+    assert!((recover.min.y - info.max.y).abs() < 1.0, "the rows follow each other without a gap: {info:?} {recover:?}");
+    assert!(info.height() > about.height() + 6.0, "page rows are taller than the footer link: {info:?} {about:?}");
+}
+
 /// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
 /// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
 #[test]
