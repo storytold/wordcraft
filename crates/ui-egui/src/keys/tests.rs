@@ -180,7 +180,13 @@ fn user_assignments_become_overrides() {
         crate::test_harness::frame(&mut h);
         let default = holder_of(&h, "Mod+Shift+Backspace");
         assert!(default.is_some() && default != command("select.all"), "{os:?}: the chord starts with its own command");
-        h.state_mut().session.keymap_mut().insert(CommandRef::new("select.all").key(), vec!["Mod+Shift+Backspace".to_string()]);
+        // The way the Customize Keyboard dialog assigns: the board's keymap takes the chord from its holder
+        // (`Policy::Steal`), and its overrides become the session's. A raw override entry only ties with the
+        // default holder, which the catalog order settles.
+        let mut keymap = craft::ui::runtime::commands::keymap(&h.ctx).map(|board| (*board).clone()).expect("the board has a keymap");
+        let chord = craft::keymap::Binding::parse("Mod+Shift+Backspace").unwrap();
+        keymap.assign(&CommandRef::new("select.all"), chord, craft::keymap::Policy::Steal).unwrap();
+        *h.state_mut().session.keymap_mut() = keymap.overrides().clone();
         crate::test_harness::frame(&mut h);
         assert_eq!(holder_of(&h, "Mod+Shift+Backspace"), command("select.all"), "{os:?}");
     }
