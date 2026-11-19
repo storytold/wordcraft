@@ -1022,19 +1022,25 @@ fn is_main_typed(pkg: &Package, name: &str) -> bool {
 
 /// `CT-DUP-MAIN`: at most one part may carry the main-document content type (ECMA-376 Part 1
 /// §11.3.10). Every main-typed part other than the one the package's `officeDocument` relationship
-/// reaches is reported — including a main-typed part no relationship reaches at all, which the
-/// pairing check (`CT-MISMATCH`) cannot see.
+/// reaches is reported. An untargeted ordinary document beside an established ordinary main is
+/// inert and appears in coverage instead of findings.
 fn check_dup_main(pkg: &Package, acc: &mut Acc) {
     observation_contract! {
         rules: "CT-DUP-MAIN";
-        collections: "field.entries*1,type.Vec*1";
-        scope: "source-local bounded extraction; no implicit document owner";
-        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
-        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        collections: "access.missing*1,field.content_types*2,field.entries*1,type.Vec*1";
+        scope: "main-typed OPC parts; inert classification requires a selected ordinary main and complete internal target discovery";
+        loss: "selection unavailable or ambiguous; incomplete content-type or relationship discovery";
+        fallback: "retain proven cardinality findings when inertness cannot be established";
         package_loss: "independent";
     }
 
-    let main_typed: Vec<&str> = pkg.entries.iter().filter(|e| !e.is_dir && is_main_typed(pkg, &e.name)).map(|e| e.name.as_str()).collect();
+    // The manifest supplies types to parts but is itself package metadata.
+    let main_typed: Vec<&str> = pkg
+        .entries
+        .iter()
+        .filter(|e| !e.is_dir && !e.name.eq_ignore_ascii_case("[Content_Types].xml") && is_main_typed(pkg, &e.name))
+        .map(|e| e.name.as_str())
+        .collect();
     if main_typed.len() <= 1 {
         return;
     }
@@ -1042,16 +1048,30 @@ fn check_dup_main(pkg: &Package, acc: &mut Acc) {
         Resolution::One(name) => Some(name.as_str()),
         Resolution::Absent | Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,
     };
+    let ordinary_main = anchor.filter(|main| {
+        pkg.content_types.of(main) == Some(package::MAIN_CONTENT_TYPE)
+            && main_typed.iter().filter(|candidate| candidate.eq_ignore_ascii_case(main)).count() == 1
+    });
+    let internal_targets = ordinary_main.and_then(|_| complete_internal_targets(pkg));
     for name in main_typed {
         if anchor.is_some_and(|a| a.eq_ignore_ascii_case(name)) {
             continue;
         }
-        let message = if pkg.roots_ambiguous && !matches!(pkg.main, Resolution::One(_)) {
-            format!("{name} carries a main document content type alongside another part; a package may have only one main document")
-        } else {
+        if let (Some(main), Some(targets)) = (ordinary_main, &internal_targets)
+            && pkg.content_types.of(name) == Some(package::MAIN_CONTENT_TYPE)
+            && targets.missing(&name.to_ascii_lowercase())
+        {
+            acc.note(format!(
+                "CT-DUP-MAIN: {name} also carries the main document content type; the package officeDocument relationship selects {main}"
+            ));
+            continue;
+        }
+        let message = if anchor.is_some() {
             format!(
                 "{name} carries the main document content type, but the package's officeDocument relationship reaches a different part; a package may have only one main document"
             )
+        } else {
+            format!("{name} carries a main document content type alongside another part; a package may have only one main document")
         };
         acc.add("CT-DUP-MAIN", Some(name.to_string()), message);
     }
@@ -4269,6 +4289,38 @@ mod budget_tests {
         assert_eq!(capped.findings.len(), 1);
         assert_eq!(capped.findings[0].part.as_deref(), Some("undeclared.bin"));
         assert_eq!(capped.findings[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn dup_main_withholds_inert_classification_when_discovery_is_unknown() {
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types_with_override("word/extra.xml", package::MAIN_CONTENT_TYPE)),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", document()),
+            ("word/_rels/document.xml.rels", doc_rels()),
+            ("word/extra.xml", document()),
+        ]);
+        let mut pkg = package::load(&zip, &mut Acc::default()).unwrap();
+        let mut control = Acc::default();
+        check_dup_main(&pkg, &mut control);
+        assert_eq!(control.coverage.len(), 1);
+        assert!(control.findings.is_empty());
+
+        pkg.rels.iter_mut().find(|r| r.name == "word/_rels/document.xml.rels").unwrap().incomplete = true;
+        let mut partial = Acc::default();
+        check_dup_main(&pkg, &mut partial);
+        assert!(partial.coverage.is_empty());
+        assert_eq!(partial.findings.len(), 1);
+        assert_eq!(partial.findings[0].severity, Severity::Error);
+
+        pkg.identity_incomplete = true;
+        pkg.main = Resolution::Unknown("identity incomplete");
+        let mut unknown = Acc::default();
+        unknown.set_unknown_unreadable();
+        check_dup_main(&pkg, &mut unknown);
+        assert!(unknown.coverage.is_empty());
+        assert_eq!(unknown.findings.len(), 2);
+        assert!(unknown.findings.iter().all(|f| f.severity == Severity::Error && !f.message.contains("relationship reaches")));
     }
 
     #[test]

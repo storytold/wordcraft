@@ -728,16 +728,63 @@ fn ct_mismatch_people_typed_as_xml() {
     assert_eq!(f.evidence, wordcraft_validate::Evidence::Observed, "the people pairing carries the Word-web observation");
 }
 
-/// A second main-typed part that no relationship reaches: CT-DUP-MAIN fires at it, while
-/// CT-MISMATCH cannot see it at all (no fixed-type relationship points at it).
+/// An inert second main-typed part produces coverage under a uniquely selected main.
 #[test]
 fn ct_dup_main_unreferenced_extra_part() {
     let mut d = Doc::minimal();
     d.add_with_override("word/extra.xml", CT_MAIN, format!(r#"<?xml version="1.0"?><w:document xmlns:w="{W_NS}"><w:body/></w:document>"#));
     let report = validate(&d);
-    assert_eq!(report.verdict, Verdict::Fail);
-    assert_finding(&report, "CT-DUP-MAIN", Some("word/extra.xml"));
+    assert_eq!(report.verdict, Verdict::Pass);
+    assert!(!has(&report, "CT-DUP-MAIN"));
+    assert_eq!(
+        report.coverage_notes,
+        [
+            "CT-DUP-MAIN: word/extra.xml also carries the main document content type; the package officeDocument relationship selects word/document.xml"
+        ]
+    );
     assert!(!has(&report, "CT-MISMATCH"), "no relationship reaches the extra part, so the pairing check cannot flag it: {:?}", report.findings);
+}
+
+#[test]
+fn ct_dup_main_default_counts_parts_but_excludes_the_manifest() {
+    let mut d = Doc::minimal();
+    let types = String::from_utf8(content_types_xml(&[], &[])).unwrap().replace("application/xml", CT_MAIN);
+    d.set("[Content_Types].xml", types);
+    let single = validate(&d);
+    assert_eq!(single.verdict, Verdict::Pass);
+    assert!(single.findings.is_empty() && single.coverage_notes.is_empty());
+    d.set("word/extra.xml", document_xml("<w:p/>"));
+    let extra = validate(&d);
+    assert_eq!(extra.verdict, Verdict::Pass);
+    assert!(extra.findings.is_empty());
+    assert_eq!(extra.coverage_notes.len(), 1);
+    assert!(extra.coverage_notes[0].starts_with("CT-DUP-MAIN: word/extra.xml "));
+    assert_eq!(single.checks_run, ALL_CHECKS);
+    assert_eq!(extra.checks_run, ALL_CHECKS);
+}
+
+#[test]
+fn ct_dup_main_competing_roots_keep_errors_in_both_orders() {
+    let mut d = Doc::minimal();
+    d.add_with_override("word/extra.xml", CT_MAIN, document_xml("<w:p/>"));
+    let relationship = |id, target| {
+        format!(
+            r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="{target}"/>"#
+        )
+    };
+    let main = relationship("m", "word/document.xml");
+    let extra = relationship("x", "word/extra.xml");
+    let reports = [format!("{main}{extra}"), format!("{extra}{main}")].map(|rels| {
+        d.set("_rels/.rels", rels_xml(&rels));
+        validate(&d)
+    });
+    assert_eq!(reports[0], reports[1]);
+    assert_eq!(reports[0].verdict, Verdict::Fail);
+    assert_eq!(reports[0].findings.len(), 2);
+    for part in ["word/document.xml", "word/extra.xml"] {
+        assert_eq!(assert_finding(&reports[0], "CT-DUP-MAIN", Some(part)).severity, Severity::Error);
+    }
+    assert!(!reports[0].coverage_notes.iter().any(|n| n.starts_with("CT-DUP-MAIN:")));
 }
 
 /// The broad positive control for the pairing table: every newly covered pairing, correctly typed,
