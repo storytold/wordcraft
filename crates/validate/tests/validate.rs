@@ -3017,6 +3017,21 @@ fn unused_media_magic_warns() {
 }
 
 #[test]
+fn media_magic_keeps_the_error_for_a_hyperlink_to_an_image_relationship() {
+    let mut doc = Doc::minimal();
+    doc.set("[Content_Types].xml", content_types_xml(&[("png", "image/png")], &[]));
+    doc.set_document(r#"<w:p><w:hyperlink r:id="rIdI"><w:r><w:t>Read attachment</w:t></w:r></w:hyperlink></w:p>"#);
+    doc.set("word/media/pic.png", b"not an image".to_vec());
+    doc.set_doc_rels(
+        r#"<Relationship Id="rIdI" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/pic.png"/>"#,
+    );
+    let report = validate(&doc);
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    assert_eq!(report.findings.len(), 1, "{report:?}");
+    assert_eq!(assert_finding(&report, "MEDIA-MAGIC", Some("word/media/pic.png")).severity, Severity::Error);
+}
+
+#[test]
 fn media_magic_calibration_retains_the_picture_error() {
     let report = validate_bytes(include_bytes!("../corpus/calibration/26-media-magic.docx"));
     assert_eq!(report.verdict, Verdict::Fail);
