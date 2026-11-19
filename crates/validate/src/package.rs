@@ -4,9 +4,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{Cursor, Read};
 
+use crate::xml::XmlReader;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
-use quick_xml::reader::NsReader;
 
 use crate::Acc;
 use crate::resolution::Resolution;
@@ -1649,21 +1649,18 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
         rules: "-";
         collections: "parser.parse_opc_children*1,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
-        loss: "source unavailable or malformed; XML event/depth and namespace expansion budgets; category allocation cap";
+        loss: "source unavailable or malformed; XML event/depth and namespace declaration budgets; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut depth = 0usize;
     let mut valid_root = false;
     let mut roots = 0usize;
     let mut well_formed = true;
     let mut at_start = true;
-    // An inherited namespace can be much larger than the element that uses it.
-    // Charge rescanning to a linear bound on input bytes, in addition to the event limit.
-    let mut namespace_work = text.len().saturating_mul(16);
     loop {
         if !guard.tick() {
             return (false, false);
@@ -1676,16 +1673,9 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
                 well_formed &= opc_element_well_formed(&ns, &e);
                 if depth == 0 {
                     roots += 1;
-                    valid_root = match opc_namespace_matches(ns, namespace, &mut namespace_work) {
-                        Some(matches) => matches && e.local_name().as_ref() == container,
-                        None => return (false, false),
-                    };
-                } else if depth == 1 && valid_root {
-                    match opc_namespace_matches(ns, namespace, &mut namespace_work) {
-                        Some(true) => visit(&e),
-                        Some(false) => {}
-                        None => return (false, false),
-                    }
+                    valid_root = matches!(ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace) && e.local_name().as_ref() == container;
+                } else if depth == 1 && valid_root && matches!(ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace) {
+                    visit(&e);
                 }
                 depth += 1;
             }
@@ -1693,16 +1683,9 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
                 well_formed &= opc_element_well_formed(&ns, &e);
                 if depth == 0 {
                     roots += 1;
-                    valid_root = match opc_namespace_matches(ns, namespace, &mut namespace_work) {
-                        Some(matches) => matches && e.local_name().as_ref() == container,
-                        None => return (false, false),
-                    };
-                } else if depth == 1 && valid_root {
-                    match opc_namespace_matches(ns, namespace, &mut namespace_work) {
-                        Some(true) => visit(&e),
-                        Some(false) => {}
-                        None => return (false, false),
-                    }
+                    valid_root = matches!(ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace) && e.local_name().as_ref() == container;
+                } else if depth == 1 && valid_root && matches!(ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace) {
+                    visit(&e);
                 }
             }
             Ok((_, Event::End(_))) => {
@@ -1727,18 +1710,6 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
 fn opc_element_well_formed(namespace: &ResolveResult, element: &BytesStart) -> bool {
     !matches!(namespace, ResolveResult::Unknown(_))
         && element.attributes().all(|attr| attr.is_ok_and(|attr| attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).is_ok()))
-}
-
-/// The namespace resolver borrows the declaration's raw attribute value.
-fn opc_namespace_matches(resolved: ResolveResult<'_>, expected: &[u8], work: &mut usize) -> Option<bool> {
-    let ResolveResult::Bound(namespace) = resolved else { return Some(false) };
-    let raw = namespace.as_ref();
-    if raw.len() <= expected.len() {
-        return Some(raw == expected);
-    }
-    *work = work.checked_sub(raw.len())?;
-    // The OPC URIs have no whitespace. Only a reference can spell the same URI differently.
-    Some(std::str::from_utf8(raw).ok().and_then(|uri| quick_xml::escape::unescape(uri).ok()).is_some_and(|uri| uri.as_bytes() == expected))
 }
 
 /// Extract and record an `Override` or `Default` content type declaration from an XML element.

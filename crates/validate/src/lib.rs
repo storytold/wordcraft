@@ -46,6 +46,7 @@ mod resolution;
 mod resolution_tests;
 use resolution::Resolution;
 mod scan;
+mod xml;
 
 use scan::{DecimalId, HexId, RelId, StyleId};
 
@@ -832,7 +833,7 @@ fn owner_roots_supported(pkg: &Package, acc: &mut Acc) -> bool {
         package_loss: "independent";
     }
 
-    use quick_xml::{NsReader, events::Event, name::ResolveResult};
+    use quick_xml::{events::Event, name::ResolveResult};
     let mut supported = true;
     for owner in owner_scopes(pkg) {
         let (name, expected) = match &owner {
@@ -842,7 +843,7 @@ fn owner_roots_supported(pkg: &Package, acc: &mut Acc) -> bool {
         };
         let Resolution::One(entry) = entry_by_name(pkg, name) else { continue };
         let Some(text) = entry.decoded.as_deref() else { continue };
-        let mut reader = NsReader::from_str(text);
+        let mut reader = xml::XmlReader::new(text);
         let mut buf = Vec::new();
         for _ in 0..acc.limits.events {
             match reader.read_resolved_event_into(&mut buf) {
@@ -4838,6 +4839,28 @@ mod budget_tests {
         assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
         assert_eq!(report.findings.len(), 1, "{report:?}");
         assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Error));
+    }
+
+    #[test]
+    fn escaped_document_namespaces_match_plain_drawing_report() {
+        let doc = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:wp="{NS_WP}"><w:body>{DRAWN}</w:body></w:document>"#);
+        let validate = |document: &str| {
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types_with_override("word/media/drawn.png", "image/png")),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document.as_bytes().to_vec()),
+                ("word/_rels/document.xml.rels", rels(&format!(r#"<Relationship Id="rImg" Type="{NS_R}/image" Target="media/drawn.png"/>"#))),
+                ("word/media/drawn.png", b"text".to_vec()),
+            ]))
+        };
+        let plain = validate(&doc);
+        assert_eq!(plain.verdict, Verdict::Fail);
+        assert_eq!(plain.findings.len(), 1);
+        assert_eq!((plain.findings[0].rule, plain.findings[0].severity), ("MEDIA-MAGIC", Severity::Error));
+        for ns in [NS_W, NS_R, NS_WP, "http://schemas.openxmlformats.org/drawingml/2006/main"] {
+            let escaped = doc.replace(ns, &ns.replace("2006", "2&#48;06"));
+            assert_eq!(serde_json::to_value(validate(&escaped)).unwrap(), serde_json::to_value(&plain).unwrap(), "{ns}");
+        }
     }
 
     #[test]

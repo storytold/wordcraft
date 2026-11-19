@@ -5,10 +5,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use crate::xml::XmlReader;
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, NamespaceResolver, QName, ResolveResult};
-use quick_xml::reader::NsReader;
 
 use crate::observed::{CompleteSet, Completeness, Observed};
 use crate::{Acc, NS_DS, NS_M, NS_MC, NS_R, NS_W, NS_W14, NS_W15, NS_W16CID, NS_WP};
@@ -391,13 +391,13 @@ pub(crate) struct PartScan {
     pub syntax_complete: bool,
 }
 
-struct ElemId {
-    ns: Option<String>,
+struct ElemId<'a> {
+    ns: Option<&'a [u8]>,
     local: String,
     unknown: Option<String>,
 }
 
-impl ElemId {
+impl ElemId<'_> {
     /// Whether this element belongs to the WordprocessingML main namespace (`w:`).
     fn w(&self) -> bool {
         self.local_w(NS_W)
@@ -412,7 +412,7 @@ impl ElemId {
     }
     /// Whether this element's namespace URI matches `uri`.
     fn local_w(&self, uri: &str) -> bool {
-        self.ns.as_deref() == Some(uri)
+        self.ns == Some(uri.as_bytes())
     }
 }
 
@@ -567,7 +567,7 @@ impl AltSuppress {
 
 /// Check whether an element identifier corresponds to `mc:AlternateContent`.
 fn is_alternate_content(id: &ElemId) -> bool {
-    id.ns.as_deref() == Some(NS_MC) && id.local == "AlternateContent"
+    id.ns == Some(NS_MC.as_bytes()) && id.local == "AlternateContent"
 }
 
 /// The last observed direct block child of a table cell.
@@ -846,7 +846,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut state = State { fact_cap: acc.limits.facts, ..State::default() };
     let mut out = PartScan {
@@ -1180,7 +1180,7 @@ fn enter_alt(state: &mut State, id: &ElemId, part: &str, acc: &mut Acc) -> bool 
         package_loss: "independent";
     }
 
-    let is_alt = id.ns.as_deref() == Some(NS_MC) && id.local == "AlternateContent";
+    let is_alt = id.ns == Some(NS_MC.as_bytes()) && id.local == "AlternateContent";
     if is_alt {
         state.alt_depth += 1;
         state.alt_seq += 1;
@@ -1747,7 +1747,7 @@ fn assign_alt_branch(state: &mut State, id: &ElemId) -> Option<u32> {
         package_loss: "independent";
     }
 
-    if id.ns.as_deref() != Some(NS_MC) || (id.local != "Choice" && id.local != "Fallback") {
+    if id.ns != Some(NS_MC.as_bytes()) || (id.local != "Choice" && id.local != "Fallback") {
         return None;
     }
     if !state.frames.last().is_some_and(|f| f.alt) {
@@ -2221,7 +2221,7 @@ fn collect_ink_content_part(id: &ElemId, attrs: &[Attribute], res: &NamespaceRes
         package_loss: "independent";
     }
 
-    if id.ns.as_deref() == Some(NS_W14)
+    if id.ns == Some(NS_W14.as_bytes())
         && id.local == "contentPart"
         && let Some(value) = attr_ns(attrs, res, NS_R, b"id")
     {
@@ -2248,7 +2248,7 @@ fn collect_refs(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: 
     if id.w() && matches!(id.local.as_str(), "headerReference" | "footerReference") {
         return;
     }
-    let image_elem = (id.ns.as_deref() == Some(NS_A) && id.local == "blip") || (id.ns.as_deref() == Some(NS_V) && id.local == "imagedata");
+    let image_elem = (id.ns == Some(NS_A.as_bytes()) && id.local == "blip") || (id.ns == Some(NS_V.as_bytes()) && id.local == "imagedata");
     for a in attrs {
         let key = a.key;
         let local = key.local_name();
@@ -2561,12 +2561,12 @@ fn declarations(attrs: &[Attribute]) -> Vec<String> {
 }
 
 /// Resolve a qualified XML element name against the namespace resolver into an [`ElemId`].
-fn resolve_elem(res: &NamespaceResolver, name: QName) -> ElemId {
+fn resolve_elem<'a>(res: &'a NamespaceResolver, name: QName<'_>) -> ElemId<'a> {
     let (r, local) = res.resolve_element(name);
     let local = lossy(local.as_ref());
     match r {
         ResolveResult::Unknown(p) => ElemId { ns: None, local, unknown: Some(lossy(&p)) },
-        ResolveResult::Bound(Namespace(ns)) => ElemId { ns: Some(lossy(ns)), local, unknown: None },
+        ResolveResult::Bound(Namespace(ns)) => ElemId { ns: Some(ns), local, unknown: None },
         ResolveResult::Unbound => ElemId { ns: None, local, unknown: None },
     }
 }
@@ -3034,14 +3034,20 @@ enum AuxOpen<'a> {
     /// The element crosses the depth limit: stop parsing and do not process it (J1).
     Stop,
     /// The element's resolved identity and attributes.
-    Process(ElemId, Vec<Attribute<'a>>),
+    Process(ElemId<'a>, Vec<Attribute<'a>>),
 }
 
 /// Resolve an open tag for an auxiliary parser: apply the depth bound (H1/J1), the AlternateContent
 /// suppression (H3/J5), and read its attributes. `None` means the attribute list is malformed, which
 /// the caller treats exactly as a parse failure. `Stop` means the element crossed the depth limit;
 /// the caller must stop before reading another event and must not process the element.
-fn aux_open<'a>(guard: &mut ParseGuard, alt: &mut AltSuppress, res: &NamespaceResolver, e: &'a BytesStart<'_>, empty: bool) -> Option<AuxOpen<'a>> {
+fn aux_open<'a>(
+    guard: &mut ParseGuard,
+    alt: &mut AltSuppress,
+    res: &'a NamespaceResolver,
+    e: &'a BytesStart<'_>,
+    empty: bool,
+) -> Option<AuxOpen<'a>> {
     if !empty && !guard.enter() {
         return Some(AuxOpen::Stop);
     }
@@ -3065,7 +3071,7 @@ pub(crate) fn parse_numbering(text: &str, cap: usize, guard: &mut ParseGuard) ->
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut defs = NumberingDefs::default();
     let mut in_num: Option<usize> = None;
@@ -3192,7 +3198,7 @@ pub(crate) fn parse_style_num_ids(text: &str, cap: usize, guard: &mut ParseGuard
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut out = Vec::new();
     let mut capped = false;
@@ -3266,7 +3272,7 @@ pub(crate) fn parse_style_ids(text: &str, cap: usize, guard: &mut ParseGuard) ->
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut defs = HashSet::new();
     let mut capped = false;
@@ -3336,7 +3342,7 @@ pub(crate) fn parse_style_defs(text: &str, cap: usize, guard: &mut ParseGuard) -
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut defs: Vec<StyleDef> = Vec::new();
     let mut capped = false;
@@ -3496,7 +3502,7 @@ fn parse_part_names(text: &str, cap: usize, guard: &mut ParseGuard, ns: &str, el
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut names: Vec<String> = Vec::new();
     let mut capped = false;
@@ -3509,7 +3515,7 @@ fn parse_part_names(text: &str, cap: usize, guard: &mut ParseGuard, ns: &str, el
             break;
         }
         let handle = |id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, names: &mut Vec<String>, capped: &mut bool| {
-            if id.ns.as_deref() == Some(ns) && id.local == elem {
+            if id.ns == Some(ns.as_bytes()) && id.local == elem {
                 let value = if namespaced_attr { attr_ns(attrs, res, NS_W, b"name") } else { attr_plain(attrs, b"name") };
                 if let Some(v) = value {
                     if names.len() >= cap {
@@ -3589,7 +3595,7 @@ pub(crate) fn parse_attached_schemas(text: &str, cap: usize, guard: &mut ParseGu
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut out = Vec::new();
     let mut capped = false;
@@ -3663,7 +3669,7 @@ pub(crate) fn parse_custom_xml_schemas(text: &str, cap: usize, guard: &mut Parse
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut out = Vec::new();
     let mut capped = false;
@@ -3742,7 +3748,7 @@ pub(crate) fn parse_comments_extended(text: &str, cap: usize, guard: &mut ParseG
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut out = CommentEx::default();
     let mut alt = AltSuppress::new();
@@ -3817,7 +3823,7 @@ pub(crate) fn parse_comments_ids(text: &str, cap: usize, guard: &mut ParseGuard)
         package_loss: "independent";
     }
 
-    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut reader = XmlReader::new(text);
     let mut buf = Vec::new();
     let mut out = Vec::new();
     let mut capped = false;
