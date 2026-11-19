@@ -960,3 +960,6 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     });
     context_menu::show(app, ui, &out.canvas.response, ask);
 }
+
+#[cfg(test)]
+mod tests;
