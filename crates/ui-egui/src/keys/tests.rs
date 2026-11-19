@@ -158,7 +158,9 @@ fn user_assignments_become_overrides() {
             // The engine binds Mod+Alt+R to the Registered Sign off macOS (decided when it is built, not by the
             // window's platform), so a build for macOS is the only one where the Mac window's chord is the ribbon's.
             (None, "Mod+Alt+R", if !cfg!(target_os = "macos") { command("text.registered") } else if mac { command("ui.collapseRibbon") } else { None }),
-            (None, "Alt+Q", if mac { None } else { tell_me.clone() }),
+            // Likewise the engine binds Alt+Q to Search off macOS when it is built, so a Mac window on such a build
+            // still finds it held; only a build for macOS leaves the chord free.
+            (None, "Alt+Q", if !mac { tell_me.clone() } else if !cfg!(target_os = "macos") { command("tools.search") } else { None }),
             (Some(("Mod+F1", "view.focus")), "Mod+F1", command("view.focus")),
             (Some(("Alt+Q", "view.focus")), "Alt+Q", if mac { command("view.focus") } else { tell_me.clone() }),
         ];
