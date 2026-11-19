@@ -49,11 +49,17 @@ impl Handle {
     pub fn is_corner(self) -> bool {
         self.x != 0 && self.y != 0
     }
-    pub fn cursor(self) -> CursorIcon {
-        match (self.x, self.y) {
-            (0, _) => CursorIcon::ResizeVertical,
-            (_, 0) => CursorIcon::ResizeHorizontal,
-            (a, b) if a == b => CursorIcon::ResizeNwSe,
+    /// The resize arrow over it on a frame turned `deg`: its way out from the centre, turned with
+    /// the frame, to the nearest of the four arrows.
+    pub fn cursor(self, deg: f32) -> CursorIcon {
+        // Screen y points down, so the angle counts clockwise like `deg`; an arrow points both
+        // ways, so only the angle modulo 180° matters (opposite handles get the same arrow). The
+        // handle's own angle is a whole multiple of 45°: rounding it drops atan2's float error.
+        let a = f32::from(self.y).atan2(f32::from(self.x)).to_degrees().round() + wordcraft_geom::normalize_degrees(deg);
+        match (a.rem_euclid(180.0) / 45.0).round() as u8 % 4 {
+            0 => CursorIcon::ResizeHorizontal,
+            1 => CursorIcon::ResizeNwSe,
+            2 => CursorIcon::ResizeVertical,
             _ => CursorIcon::ResizeNeSw,
         }
     }
@@ -87,10 +93,11 @@ pub enum Grab {
 }
 
 impl Grab {
-    pub fn cursor(self) -> CursorIcon {
+    /// The cursor over (or while dragging) what was grabbed on a frame turned `deg`.
+    pub fn cursor(self, deg: f32) -> CursorIcon {
         match self {
             Grab::Move => CursorIcon::Move,
-            Grab::Resize(h) => h.cursor(),
+            Grab::Resize(h) => h.cursor(deg),
             Grab::Rotate => CursorIcon::Crosshair,
         }
     }
@@ -344,6 +351,34 @@ mod tests {
         // Turned 90° clockwise, the top-left corner is at the top right.
         assert_eq!(handle_at(f, 90.0, pos2(60.0, -40.0)), Some(Handle { x: -1, y: -1 }));
         assert!(rotate_handle_at(f, 0.0, pos2(50.0, -22.0)) && !rotate_handle_at(f, 90.0, pos2(50.0, -22.0)));
+    }
+
+    #[test]
+    fn resize_arrows_turn_with_the_frame() {
+        use CursorIcon::{ResizeHorizontal as H, ResizeNeSw as NeSw, ResizeNwSe as NwSe, ResizeVertical as V};
+        // Unturned, clockwise from the top left.
+        let unturned: Vec<CursorIcon> = Handle::ALL.iter().map(|h| h.cursor(0.0)).collect();
+        assert_eq!(unturned, [NwSe, V, NeSw, H, NwSe, V, NeSw, H]);
+        let (top, right, corner) = (Handle { x: 0, y: -1 }, Handle { x: 1, y: 0 }, Handle { x: 1, y: 1 });
+        // Turned 90°: the top handle sits on the right and resizes left-right.
+        assert_eq!((top.cursor(90.0), right.cursor(90.0), corner.cursor(90.0)), (H, V, NeSw));
+        assert_eq!((top.cursor(-90.0), top.cursor(270.0), top.cursor(180.0)), (H, H, V));
+        // Turned 45°: the middle handles get diagonal arrows, the corners straight ones.
+        assert_eq!((top.cursor(45.0), right.cursor(45.0), corner.cursor(45.0)), (NeSw, NwSe, V));
+        assert_eq!((top.cursor(10.0), top.cursor(30.0), top.cursor(-30.0)), (V, NeSw, NwSe));
+        // Opposite handles share an arrow at any angle, also halfway between two arrows.
+        for deg in [22.5, 67.5, 112.5, -22.5, 350.0, 1000.0, -1e9] {
+            for h in Handle::ALL {
+                assert_eq!(h.cursor(deg), Handle { x: -h.x, y: -h.y }.cursor(deg), "{h:?} at {deg}°");
+            }
+        }
+        // A broken angle counts as unturned.
+        assert_eq!((top.cursor(f32::NAN), top.cursor(f32::INFINITY)), (V, V));
+        // A grabbed handle keeps the frame's arrow while it's dragged.
+        assert_eq!(
+            (Grab::Resize(top).cursor(90.0), Grab::Move.cursor(90.0), Grab::Rotate.cursor(90.0)),
+            (H, CursorIcon::Move, CursorIcon::Crosshair)
+        );
     }
 
     #[test]

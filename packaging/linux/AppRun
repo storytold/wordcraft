@@ -2,5 +2,8 @@
 set -euo pipefail
 # Resolve from the mounted AppDir, without depending on the caller's working directory.
 APPDIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$APPDIR/usr/bin/wordcraft" "$@"
+wordcraft="$APPDIR/usr/bin/wordcraft"
+if [[ -n "${DISPLAY:-}" ]] && "$wordcraft" --appimage-needs-x11-fallback; then
+  wordcraft="$APPDIR/usr/lib/wordcraft-x11/wordcraft"
+fi
+exec "$wordcraft" "$@"

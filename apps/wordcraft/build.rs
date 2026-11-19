@@ -1,16 +1,23 @@
-//! Windows only: embed the app icon and version info (VERSIONINFO) into `wordcraft.exe`, so it
+//! On Windows, embed the app icon and version info (VERSIONINFO) into `wordcraft.exe`, so it
 //! shows in Explorer, the taskbar, the Start menu and Alt-Tab.
 //!
-//! On every other target this does nothing. A missing resource compiler is a warning, so a
+//! A missing Windows resource compiler is a warning, so a
 //! cross-compile from macOS or Linux still links, unless `WORDCRAFT_REQUIRE_WINRES=1` turns it
-//! into an error (for release builds).
+//! into an error (for release builds). On Linux, set the AppImage launcher’s relative library path.
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../assets/app-icon/wordcraft.ico");
     println!("cargo:rerun-if-env-changed=WORDCRAFT_REQUIRE_WINRES");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
-        return;
+    match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("linux") => {
+            // Only AppRun's fallback hardlink has this sibling directory. DT_RPATH lets
+            // the X11 bridge find its matching base library without changing the environment.
+            println!("cargo:rustc-link-arg-bin=wordcraft=-Wl,--disable-new-dtags,-rpath,$ORIGIN/wordcraft-x11-libraries");
+            return;
+        }
+        Ok("windows") => {}
+        _ => return,
     }
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../assets/app-icon/wordcraft.ico")
