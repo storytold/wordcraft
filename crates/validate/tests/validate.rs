@@ -4402,7 +4402,7 @@ fn malformed_styles_part_fails_as_malformed() {
 }
 
 #[test]
-fn font_dup_name_is_an_error() {
+fn font_dup_name_case_variants_warn() {
     let mut d = Doc::minimal();
     d.add_with_override(
         "word/fontTable.xml",
@@ -4415,9 +4415,9 @@ fn font_dup_name_is_an_error() {
         r#"<Relationship Id="rF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>"#,
     );
     let report = validate(&d);
-    assert_eq!(report.verdict, Verdict::Fail, "findings: {:?}", report.findings);
+    assert_eq!(report.verdict, Verdict::Pass, "findings: {:?}", report.findings);
     let f = assert_finding(&report, "FONT-DUP-NAME", Some("word/fontTable.xml"));
-    assert_eq!(f.severity, Severity::Error);
+    assert_eq!(f.severity, Severity::Warning);
     assert_eq!(report.findings.iter().filter(|x| x.rule == "FONT-DUP-NAME").count(), 1);
 }
 

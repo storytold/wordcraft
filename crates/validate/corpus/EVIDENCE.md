@@ -68,6 +68,10 @@ Word for the web was used to open the drawn probes and inspect the picture on 20
 
 The open-only probes `probe-mediamagic-bin` and `probe-mediamagic-text` have image relationships and no consuming drawings. The measured `probe-mediamagic-bin` archive has SHA-256 `02ad532831e4850bd75b7d9e5d3594572f5cc8b4d96022974cd176ea8b4c4942`.
 
+## Corpus probes — duplicate font names
+
+On 2026-11-18, Word for Mac 16.114.4 opened the `Calibri`/`CALIBRI` probe cleanly. Word for the web opened it in Editing mode without a banner, accepted an edit and saved the result. The probe `probe-fontcase` has SHA-256 `21c40c8b9be1d2968a7a467e8f5fd996da49fdea4a472f6005d0ded8132dd934`. Exact-spelling duplicates were also accepted in the measured corpus sample.
+
 ## Oracle probes — extension-part content-type spellings (A/B)
 
 **Consumer:** Word for the web (build/version not exposed). **Date:** 2026-11-06.

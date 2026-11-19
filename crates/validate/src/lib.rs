@@ -362,9 +362,9 @@ pub(crate) const STYLE_ID_LENGTH: RuleSpec = RuleSpec { id: "STYLE-ID-LENGTH", s
 /// `FONT-DUP-NAME`: the same font name twice in one fontTable part,
 /// compared case-insensitively (ECMA-376 §17.8.3.10 makes the name
 /// the join key for the font record; MS-OI29500 §17.8.3.10(b)
-/// documents case-insensitivity). Batch 5: Word for the web showed
-/// the corruption banner — Error grade.
-pub(crate) const FONT_DUP_NAME: RuleSpec = RuleSpec { id: "FONT-DUP-NAME", severity: Severity::Error, evidence: Evidence::Observed };
+/// documents case-insensitivity). Desktop and web Word accepted the measured duplicate
+/// groups, including case variants. Word for the web also saved an edit to the case-variant probe.
+pub(crate) const FONT_DUP_NAME: RuleSpec = RuleSpec { id: "FONT-DUP-NAME", severity: Severity::Warning, evidence: Evidence::Observed };
 /// `PROP-DUP-NAME`: the same custom-property name twice in
 /// docProps/custom.xml, compared case-insensitively (ECMA-376 §22.3
 /// identifies properties by name; MS-OI29500 §22.3.2.2(g) requires a
@@ -3311,7 +3311,7 @@ fn check_styles_vocabulary(entry: &package::Entry, cap: usize, acc: &mut Acc) {
 fn check_name_dups(entry: &package::Entry, cap: usize, acc: &mut Acc, fonts: bool) {
     observation_contract! {
         rules: "FONT-DUP-NAME,PROP-DUP-NAME";
-        collections: "parser.parse_custom_prop_names*1,parser.parse_font_names*1,type.HashMap*2,type.HashSet*2";
+        collections: "parser.parse_custom_prop_names*1,parser.parse_font_names*1,type.HashMap*1,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -3339,26 +3339,25 @@ fn check_name_dups(entry: &package::Entry, cap: usize, acc: &mut Acc, fonts: boo
         acc.note(format!("{part} exceeded the {cap}-entry budget; later names were not recorded"));
         acc.set_incomplete();
     }
-    let mut seen: HashMap<String, String> = HashMap::new();
-    let mut reported: HashSet<String> = HashSet::new();
+    let mut groups = HashMap::new();
+    let mut duplicates = Vec::new();
     for name in &names {
-        let folded = name.to_lowercase();
-        if let Some(first) = seen.get(&folded) {
-            if reported.insert(folded) {
-                let message = if fonts {
-                    format!(
-                        "font name {first} appears more than once in {part} (again as {name}); font names are case-insensitive join keys, and Word shows a corruption notice for this collision"
-                    )
-                } else {
-                    format!(
-                        "custom property name {first} appears more than once in {part} (again as {name}); property names must be case-insensitively unique, and Word shows a corruption notice for this collision"
-                    )
-                };
-                acc.add(rule, Some(part.clone()), message);
-            }
-        } else {
-            seen.insert(folded, name.clone());
+        let (first, count) = groups.entry(name.to_lowercase()).or_insert((name, 0usize));
+        *count = count.saturating_add(1);
+        if *count == 2 {
+            // Retain the first two observed spellings and the order in which groups were proven.
+            duplicates.push((*first, name));
         }
+    }
+    for (first, second) in duplicates {
+        let message = if fonts {
+            format!("font name {first} appears more than once in {part} (again as {second})")
+        } else {
+            format!(
+                "custom property name {first} appears more than once in {part} (again as {second}); property names must be case-insensitively unique, and Word shows a corruption notice for this collision"
+            )
+        };
+        acc.add(rule, Some(part.clone()), message);
     }
 }
 
@@ -4421,6 +4420,38 @@ mod budget_tests {
         assert_eq!(report.verdict, Verdict::Fail);
         assert!(report.findings.iter().any(|f| f.rule == "MEDIA-MAGIC" && f.severity == Severity::Error));
         assert!(report.coverage_notes.iter().any(|n| n.starts_with("MEDIA-MAGIC: alternate image decoding exceeded its byte budget")));
+    }
+
+    #[test]
+    fn font_dup_name_grades_each_folded_group_once_in_either_order_and_in_a_capped_prefix() {
+        for names in [["A", "A", "a"], ["A", "a", "A"]] {
+            let elements = names.map(|name| format!(r#"<w:font w:name="{name}"/>"#)).concat();
+            let fonts = format!(r#"<w:fonts xmlns:w="{NS_W}">{elements}</w:fonts>"#);
+            let part = "word/fontTable.xml";
+            let zip = tiny_zip(&[
+                ("[Content_Types].xml", content_types_with_override(part, package::FONT_TABLE_CONTENT_TYPE)),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document()),
+                (
+                    "word/_rels/document.xml.rels",
+                    rels(
+                        r#"<Relationship Id="rFonts" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>"#,
+                    ),
+                ),
+                (part, fonts.into_bytes()),
+            ]);
+            for (facts, verdict) in [(2, Verdict::Incomplete), (3, Verdict::Pass)] {
+                let report = validate_bytes_limited(&zip, Limits { facts, ..Limits::default() });
+                assert_eq!(report.verdict, verdict, "{report:?}");
+                assert!(report.checks_run.contains(&"FONT-DUP-NAME"));
+                assert_eq!(report.findings.len(), 1);
+                let finding = &report.findings[0];
+                assert_eq!(finding.rule, "FONT-DUP-NAME");
+                assert_eq!(finding.severity, Severity::Warning);
+                assert_eq!(finding.message, format!("font name A appears more than once in {part} (again as {})", names[1]));
+                assert_eq!(report.coverage_notes.iter().any(|note| note.contains("later names were not recorded")), facts == 2);
+            }
+        }
     }
 
     fn test_jpeg(side: u32) -> Vec<u8> {
