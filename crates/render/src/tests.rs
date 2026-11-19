@@ -265,7 +265,7 @@ fn stem_darkening_follows_the_macos_curve() {
     assert_eq!(stem_darkening(f64::NAN), 0.0);
     assert_eq!(stem_darkening(-5.0), 0.0);
     // Small text grows in proportion to its pixel size...
-    assert!((stem_darkening(10.0) - 10.0 * 0.0121 * 2.25 / 2.0).abs() < 1e-9);
+    assert!((stem_darkening(10.0) - 10.0 * 0.0121).abs() < 1e-9);
     // ...body text on a Retina screen hits the 0.3 px cap...
     assert_eq!(stem_darkening(30.0), 0.3);
     assert_eq!(stem_darkening(72.0), 0.3);
@@ -301,6 +301,126 @@ fn ink_columns(img: &Rendered) -> (usize, usize) {
     let w = img.width as usize;
     let inked: Vec<usize> = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[0] < 250).map(|(i, _)| i % w.max(1)).collect();
     (inked.iter().copied().min().unwrap_or(0), inked.iter().copied().max().unwrap_or(0))
+}
+
+/// The first and last pixel rows with any ink.
+fn ink_row_span(img: &Rendered) -> (usize, usize) {
+    let w = img.width as usize;
+    let inked: Vec<usize> = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[0] < 250).map(|(i, _)| i / w.max(1)).collect();
+    (inked.iter().copied().min().unwrap_or(0), inked.iter().copied().max().unwrap_or(0))
+}
+
+/// One line of flat-footed capitals in a bundled face: no letter dips under the baseline.
+fn flat_capitals() -> (Document, wordcraft_layout::DocLayout) {
+    let mut d = Document::from_text("THE FELT HILT FILE LIFT HEFT TILT");
+    let styles = std::sync::Arc::make_mut(&mut d.styles);
+    styles.default_chr.font = Some("Source Sans 3".into());
+    styles.default_chr.size = Some(12.0);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    (d, l)
+}
+
+#[test]
+fn a_snapped_baseline_ends_the_letters_on_a_whole_pixel_row() {
+    let (d, l) = flat_capitals();
+    let snap = RenderOptions { baseline_snap: true, ..Default::default() };
+    // Scales that put the baseline at different places between two pixel rows.
+    let mut sharper = 0;
+    for scale in [1.0, 1.25, 1.45, 96.0 / 72.0 * 1.45, 2.0, 2.3] {
+        let plain = render_page(&d, &l.pages[0], scale, &RenderOptions::default());
+        let snapped = render_page(&d, &l.pages[0], scale, &snap);
+        // The row under the letters' feet: all of it white once the baseline is on a pixel
+        // boundary, where the unsnapped feet leave a grey row or end a row early.
+        let (_, foot) = ink_row_span(&snapped);
+        let w = snapped.width as usize;
+        let foot_row = &snapped.pixels[foot * w * 4..(foot + 1) * w * 4];
+        let darkest = foot_row.as_chunks::<4>().0.iter().map(|p| p[0]).min().unwrap_or(255);
+        assert!(darkest < 16, "scale {scale}: the feet fill their last row (darkest pixel {darkest})");
+        let (g0, g1) = (grey(&plain), grey(&snapped));
+        assert!(g1 <= g0, "scale {scale}: grey pixels: plain {g0}, snapped {g1}");
+        sharper += usize::from(g1 < g0);
+        // The same weight, and nothing moves sideways.
+        let (a, b) = (ink(&plain), ink(&snapped));
+        assert!((b as f64 - a as f64).abs() < a as f64 * 0.02, "scale {scale}: ink: plain {a}, snapped {b}");
+        assert_eq!(ink_columns(&plain), ink_columns(&snapped), "scale {scale}");
+        // No more than half a pixel up or down.
+        let ((t0, b0), (t1, b1)) = (ink_row_span(&plain), ink_row_span(&snapped));
+        assert!(t0.abs_diff(t1) <= 1 && b0.abs_diff(b1) <= 1, "scale {scale}: plain {t0}..{b0}, snapped {t1}..{b1}");
+    }
+    assert!(sharper >= 3, "snapping sharpened {sharper} of 6 scales");
+    // Off by default: exports and thumbnails are untouched.
+    assert!(!RenderOptions::default().baseline_snap);
+}
+
+#[test]
+fn rotated_views_keep_their_baselines() {
+    let (d, l) = flat_capitals();
+    let snap = RenderOptions { baseline_snap: true, ..Default::default() };
+    let view = Affine::translate((300.0, -50.0)) * Affine::rotate(0.3) * Affine::scale(1.9);
+    let plain = render_region(&d, &l.pages[0], 600, 300, view, &RenderOptions::default());
+    assert!(ink(&plain) > 0);
+    assert_eq!(plain.pixels, render_region(&d, &l.pages[0], 600, 300, view, &snap).pixels);
+}
+
+#[test]
+fn darkening_thickens_stems_and_leaves_the_tops_and_feet_of_letters_alone() {
+    let (d, l) = flat_capitals();
+    let snap = RenderOptions { baseline_snap: true, ..Default::default() };
+    let dark = RenderOptions { text_darkening: true, ..snap.clone() };
+    for scale in [1.0, 1.45, 2.0] {
+        let plain = render_page(&d, &l.pages[0], scale, &snap);
+        let darkened = render_page(&d, &l.pages[0], scale, &dark);
+        // More ink, in the same pixel rows: nothing is added above the letters or under them
+        // (the stroke this replaces put a third of a pixel of grey on both).
+        assert!(ink(&darkened) as f64 > ink(&plain) as f64 * 1.05, "scale {scale}");
+        assert_eq!(ink_row_span(&plain), ink_row_span(&darkened), "scale {scale}");
+        // Sideways, less than a pixel each way.
+        let ((l0, r0), (l1, r1)) = (ink_columns(&plain), ink_columns(&darkened));
+        assert!(l1 <= l0 && l0 - l1 <= 1 && r1 >= r0 && r1 - r0 <= 1, "scale {scale}: plain {l0}..{r0}, darkened {l1}..{r1}");
+    }
+}
+
+#[test]
+fn widening_moves_edges_sideways_away_from_the_ink() {
+    // A 10 x 10 square with a 4 x 4 hole, the hole running the other way round.
+    let mut ring = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0).to_path(0.1);
+    ring.move_to((3.0, 3.0));
+    for p in [(3.0, 7.0), (7.0, 7.0), (7.0, 3.0)] {
+        ring.line_to(p);
+    }
+    ring.close_path();
+    for path in [ring.clone(), ring.reverse_subpaths()] {
+        let wide = widened(&path, 0.5);
+        // The square is 1 wider and the hole 1 narrower; neither is any taller.
+        let b = wide.bounding_box();
+        assert_eq!((b.x0, b.x1, b.y0, b.y1), (-0.5, 10.5, 0.0, 10.0));
+        assert!((wide.area().abs() - (11.0 * 10.0 - 3.0 * 4.0)).abs() < 1e-9, "{}", wide.area());
+        assert_eq!(wide.elements().len(), path.elements().len());
+    }
+    // A round shape: wider, no taller, and its top and bottom points stay put.
+    let disc = kurbo::Circle::new((0.0, 0.0), 5.0).to_path(1e-3);
+    let b = widened(&disc, 0.25).bounding_box();
+    assert!((b.width() - 10.5).abs() < 0.02 && (b.height() - 10.0).abs() < 0.02, "{b:?}");
+    // Nothing to widen, or nothing to widen by: the path comes back as it was.
+    let line = BezPath::from_vec(vec![kurbo::PathEl::MoveTo((0.0, 0.0).into()), kurbo::PathEl::LineTo((5.0, 5.0).into())]);
+    for (path, d) in [(&line, 0.5), (&ring, 0.0), (&ring, -1.0), (&ring, f64::NAN), (&ring, f64::INFINITY), (&BezPath::new(), 0.5)] {
+        assert_eq!(widened(path, d).elements(), path.elements(), "{d}");
+    }
+    // Hostile outlines don't panic: points that aren't numbers, and one point repeated.
+    let mut odd = BezPath::new();
+    odd.move_to((f64::NAN, 0.0));
+    odd.line_to((1.0, f64::INFINITY));
+    odd.quad_to((2.0, 2.0), (0.0, 0.0));
+    let _ = widened(&odd, 0.5);
+    let mut same = BezPath::new();
+    same.move_to((1.0, 1.0));
+    for _ in 0..50 {
+        same.line_to((1.0, 1.0));
+    }
+    same.line_to((4.0, 1.0));
+    same.line_to((4.0, 5.0));
+    same.close_path();
+    assert_eq!(widened(&same, 0.5).elements().len(), same.elements().len());
 }
 
 #[test]

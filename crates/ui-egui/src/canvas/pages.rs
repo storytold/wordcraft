@@ -355,10 +355,12 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
 /// platform's other apps (exports never change): on macOS, text is darkened the way the system
 /// draws it; on Linux and the BSDs it is hinted lightly, as FreeType's `hintslight` draws it
 /// there (not darkened: hinted text already has FreeType's weight, and darkening made it
-/// look semi-bold).
+/// look semi-bold) Everywhere, baselines sit on whole device pixels (hinting does that
+/// on Linux and the BSDs; macOS and Windows text is drawn unhinted and is moved there).
 pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
     wordcraft_render::RenderOptions {
         text_darkening: cfg!(target_os = "macos"),
+        baseline_snap: true,
         hinting: cfg!(all(unix, not(target_os = "macos"))),
         ..Default::default()
     }

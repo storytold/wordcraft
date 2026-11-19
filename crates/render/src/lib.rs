@@ -161,6 +161,12 @@ pub struct RenderOptions {
     /// Thicken glyphs slightly the way macOS draws text on screen ("font smoothing"), so pages
     /// look like they do in other Mac apps. For on-screen rasters only: exports stay exact.
     pub text_darkening: bool,
+    /// Put every glyph's baseline on a whole device pixel, for text that is neither rotated nor
+    /// mirrored. A baseline between two pixel rows spreads the feet of the letters (serifs, the
+    /// bottoms of stems) over both rows as two grey rows instead of one solid one, which reads as
+    /// blur. A glyph moves by half a pixel at most and never sideways, so lines break as without
+    /// it. Hinted text already sits like this. For on-screen rasters only: exports stay exact.
+    pub baseline_snap: bool,
     /// Hint text for the screen the way FreeType's `hintslight` does on Linux desktops: glyph
     /// baselines sit on whole pixels and their horizontal edges (x-height, cap height) are moved
     /// onto the pixel grid, so text looks as crisp as in other apps there. Nothing moves
@@ -268,6 +274,7 @@ impl Default for RenderOptions {
             paper: Rgb::WHITE,
             mark_color: Rgb(0x2B, 0x57, 0x9A),
             text_darkening: false,
+            baseline_snap: false,
             hinting: false,
             dark: false,
             dark_paper: DARK_PAPER,
@@ -501,18 +508,21 @@ fn is_upright(view: Affine) -> bool {
 }
 
 /// How far, in device pixels, macOS-style font smoothing pushes each side of a glyph outline out
-/// at `ppem` device pixels per em. Values from Pathfinder (MIT/Apache-2.0), which measured them
-/// against macOS: 1.21% of the pixel size horizontally and 1.25 times that vertically, each
-/// capped at 0.3 px, and no darkening past 72 px per em. We stroke the outline, which grows it
-/// evenly, so this is the mean of the two.
+/// sideways at `ppem` device pixels per em. The value is Pathfinder's (MIT/Apache-2.0), which
+/// measured it against macOS: 1.21% of the pixel size, capped at 0.3 px, and no darkening past
+/// 72 px per em. Pathfinder also grows glyphs up and down (1.25 times as far). We don't: a third
+/// of a pixel of grey above and below every letter is what made page text look out of focus
+/// beside other Mac apps, whose letters end on a clean pixel row. Stems get thicker, which is
+/// the weight the smoothing is for; the tops and feet of the letters stay where the font puts
+/// them.
 pub fn stem_darkening(ppem: f64) -> f64 {
-    const FACTOR: [f64; 2] = [0.0121, 0.0121 * 1.25];
+    const FACTOR: f64 = 0.0121;
     const MAX_PX: f64 = 0.3;
     const MAX_PPEM: f64 = 72.0;
     if !ppem.is_finite() || ppem <= 0.0 || ppem > MAX_PPEM {
         return 0.0;
     }
-    FACTOR.iter().map(|f| (ppem * f).min(MAX_PX)).sum::<f64>() / 2.0
+    (ppem * FACTOR).min(MAX_PX)
 }
 
 /// A wavy line from `(x0, y0)` to `(x1, y1)`; at most 20 000 units long, so a huge extent can't make it endless.
@@ -762,23 +772,24 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     // Scaled letters (`w:w`): each glyph stretched across from its pen position.
     let sx = if x_scale.is_finite() && *x_scale > 0.0 { f64::from(*x_scale) } else { 1.0 };
     let skew = Affine::scale_non_uniform(sx, 1.0) * skew;
-    // Outline strokes, in font units: synthetic bold, then on-screen stem darkening (a
-    // stroke grows the outline by half its width on each side). Darkening is skipped for
-    // translucent text, where the stroke overlapping the fill would show as a darker rim.
+    // Synthetic bold strokes the outline, in font units.
     let px_per_pt = view.determinant().abs().sqrt();
-    let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(*size as f64 * px_per_pt) } else { 0.0 };
-    let darken = if darken_px > 0.0 && k * px_per_pt > 0.0 { 2.0 * darken_px / (k * px_per_pt) } else { 0.0 };
-    let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 } + darken;
-    let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
+    let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 };
     if outline_stroke > 0.0 {
-        ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
+        ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(kurbo::Join::Miter));
     }
     // Emoji and other colour glyphs (#1269) are drawn from the font's colour data.
     let colour = face.has_color_glyphs();
     let ppem = *size as f64 * px_per_pt;
-    // Hinted outlines are in device pixels: only for an upright, unmirrored, evenly scaled
-    // view (not rotated text boxes), where the pixel grid lines up with the glyphs.
-    let hint_ppem = (opts.hinting && !colour && is_upright(view)).then_some(ppem as f32);
+    // On-screen stem darkening: each outline is widened along its own x axis, in one piece (see
+    // [`stem_darkening`] and [`widened`]). Skipped for translucent text, as it always was.
+    let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(ppem) } else { 0.0 };
+    // Hinted outlines are in device pixels, and a snapped baseline is a row of them: only for an
+    // upright, unmirrored, evenly scaled view (not rotated text boxes), where the pixel grid
+    // lines up with the glyphs.
+    let upright = is_upright(view);
+    let hint_ppem = (opts.hinting && !colour && upright).then_some(ppem as f32);
+    let snap = opts.baseline_snap && upright;
     // The outline strokes in device pixels, for the hinted outlines.
     let stroke_px = outline_stroke * k * px_per_pt;
     let mut hinted_stroke = false;
@@ -795,37 +806,119 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
             ctx.set_paint(color(opts.ink(*c), *alpha));
             continue;
         }
-        if let Some(o) = hint_ppem.and_then(|p| db.hinted_outline(face, *gid, p)) {
-            if o.elements().is_empty() {
-                continue;
+        let pen = view * kurbo::Point::new(gx, gy);
+        let hinted = hint_ppem.and_then(|p| db.hinted_outline(face, *gid, p));
+        let hinted_now = hinted.is_some();
+        let (o, at) = if let Some(o) = hinted {
+            if outline_stroke > 0.0 && !hinted_stroke {
+                ctx.set_stroke(kurbo::Stroke::new(stroke_px).with_join(kurbo::Join::Miter));
+                hinted_stroke = true;
             }
             // The baseline on a whole pixel, as the hinting assumes.
-            let at = view * kurbo::Point::new(gx, gy);
-            ctx.set_transform(Affine::translate((at.x, at.y.round())) * skew);
-            ctx.fill_path(&o);
-            if outline_stroke > 0.0 {
-                if !hinted_stroke {
-                    ctx.set_stroke(kurbo::Stroke::new(stroke_px).with_join(join));
-                    hinted_stroke = true;
-                }
-                ctx.stroke_path(&o);
+            (o, Affine::translate((pen.x, pen.y.round())) * skew)
+        } else {
+            if outline_stroke > 0.0 && hinted_stroke {
+                ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(kurbo::Join::Miter));
+                hinted_stroke = false;
             }
-            continue;
-        }
-        let o = db.outline(face, *gid);
+            let at = view * Affine::translate((gx, gy)) * skew * Affine::scale(k);
+            // The same baseline for text drawn from the font's own outlines.
+            let lift = if snap && pen.y.is_finite() { pen.y.round() - pen.y } else { 0.0 };
+            (db.outline(face, *gid), Affine::translate((0.0, lift)) * at)
+        };
         if o.elements().is_empty() {
             continue;
         }
-        ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
-        ctx.fill_path(&o);
+        ctx.set_transform(at);
+        if darken_px > 0.0 {
+            // The widening in the outline's own units: device pixels for a hinted outline,
+            // font units (before any `w:w` stretch) for the font's.
+            let unit = if hinted_now { 1.0 } else { k * px_per_pt * sx };
+            ctx.fill_path(&widened(&o, darken_px / unit));
+        } else {
+            ctx.fill_path(&o);
+        }
         if outline_stroke > 0.0 {
-            if hinted_stroke {
-                ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
-                hinted_stroke = false;
-            }
             ctx.stroke_path(&o);
         }
     }
+}
+
+/// `path` with every edge moved `d` sideways, away from the ink: the shape a glyph makes when it
+/// is smeared `d` to the left and `d` to the right, so stems get `2 d` thicker while nothing
+/// grows up or down. One outline, filled once, so partly covered pixels are counted once (the
+/// outline drawn again beside itself counted them two and three times, which read as bold).
+///
+/// Each point moves with the edges it joins: by `d` where both face the same side, or one of
+/// them is level; not at all at the top or the foot of a curve, where one faces left and the
+/// other right. Curve control points move by the same rule along the control polygon. Which side
+/// of an edge is ink follows from the direction the outline runs in, read off its signed area,
+/// so the holes of letters narrow as their stems widen. An outline with no area, or with
+/// numbers that aren't finite, is returned as it is.
+fn widened(path: &BezPath, d: f64) -> BezPath {
+    use kurbo::PathEl;
+    let els = path.elements();
+    // The control polygon of each contour, as (first point index, point count).
+    let mut pts: Vec<kurbo::Point> = Vec::with_capacity(els.len() * 2);
+    let mut contours: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    for el in els {
+        match el {
+            PathEl::MoveTo(p) => {
+                if pts.len() > start {
+                    contours.push((start, pts.len() - start));
+                }
+                start = pts.len();
+                pts.push(*p);
+            }
+            PathEl::LineTo(p) => pts.push(*p),
+            PathEl::QuadTo(c, p) => pts.extend([*c, *p]),
+            PathEl::CurveTo(c1, c2, p) => pts.extend([*c1, *c2, *p]),
+            PathEl::ClosePath => {}
+        }
+    }
+    if pts.len() > start {
+        contours.push((start, pts.len() - start));
+    }
+    let ring = |first: usize, n: usize, i: usize| pts.get(first + i % n.max(1)).copied().unwrap_or_default();
+    let area: f64 =
+        contours.iter().map(|&(first, n)| (0..n).map(|i| ring(first, n, i).to_vec2().cross(ring(first, n, i + 1).to_vec2())).sum::<f64>()).sum();
+    if !(d.is_finite() && d > 0.0 && area.is_finite() && area != 0.0) {
+        return path.clone();
+    }
+    // Which way the edge from `a` to `b` faces: 1 right, -1 left, 0 for a level edge.
+    let faces = |a: kurbo::Point, b: kurbo::Point| {
+        let (run, rise) = ((b.x - a.x).abs(), b.y - a.y);
+        if rise.abs() <= 1e-6 * (run + rise.abs()) { 0.0 } else { (rise * area).signum() }
+    };
+    let mut moved = pts.clone();
+    for &(first, n) in &contours {
+        for i in 0..n {
+            let at = ring(first, n, i);
+            // The nearest different points before and after: a contour may repeat a point (a
+            // run of more than a few is left where it is).
+            let before = (1..n.min(8)).map(|step| ring(first, n, i + n - step)).find(|p| *p != at);
+            let after = (1..n.min(8)).map(|step| ring(first, n, i + step)).find(|p| *p != at);
+            let (Some(before), Some(after)) = (before, after) else { continue };
+            let push = (faces(before, at) + faces(at, after)).clamp(-1.0, 1.0);
+            if let Some(p) = moved.get_mut(first + i) {
+                p.x += push * d;
+            }
+        }
+    }
+    let mut next = moved.into_iter();
+    let mut take = || next.next().unwrap_or_default();
+    let mut out = BezPath::with_capacity(els.len());
+    for el in els {
+        out.push(match el {
+            PathEl::MoveTo(_) => PathEl::MoveTo(take()),
+            PathEl::LineTo(_) => PathEl::LineTo(take()),
+            PathEl::QuadTo(..) => PathEl::QuadTo(take(), take()),
+            PathEl::CurveTo(..) => PathEl::CurveTo(take(), take(), take()),
+            PathEl::ClosePath => PathEl::ClosePath,
+        });
+    }
+    out
 }
 
 fn draw_mark(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
