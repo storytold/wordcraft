@@ -43,6 +43,7 @@ mod links;
 mod navigation;
 mod pages;
 mod reading;
+mod reading_metrics;
 pub(crate) mod rulers;
 mod source;
 mod story;
@@ -623,9 +624,7 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
 /// Render the document canvas for the current frame: the pages (or Read Mode's columns) and everything over them.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let full = ui.available_rect_before_wrap();
-    // PLAN: assumed `Env::view(&self).reading_metrics() -> ReadingMetrics`: `ReadingMetrics::of` needs the tokens and a
-    // text layout, which the app cannot reach from a `Ui` (framework gap).
-    let metrics = Env::of(ui).reading_metrics();
+    let Some(metrics) = reading_metrics::read(ui) else { return };
     let layout = prepare_layout(app, full, &metrics);
     if app.session.view.read_mode {
         show_reading(app, ui, &layout, full, &metrics);
