@@ -1008,6 +1008,10 @@ mod tests {
                 break;
             }
         }
+        // The control server ends the client's injection session when its connection closes
+        // (`WindowHost::end_injection`); until then the framework keeps the pointer where the agent left it, which
+        // would stand in for the person's own pointer in `user_click`.
+        host.end_injection();
         for _ in 0..3 {
             frame(a, ctx, Vec::new());
         }

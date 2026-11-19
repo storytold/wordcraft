@@ -714,18 +714,20 @@ fn size_dialog_typed_height_applies_on_ok_in_proportion() {
         },
         a,
     );
-    h.run_steps(4);
+    // Frames as the app's driver runs them (`frames` hands the runtime the app's input first): a focus the click
+    // asks for, and so the typing, never lands on a harness stepped with `run_steps`.
+    crate::test_harness::frames(&mut h, 4);
     // The Size section's Height (the Scale section has one too, after it).
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     assert!(!h.state().dialog_host.open_dialogs().is_empty());
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "nothing applies before OK");
     // In the framework's form dialog Enter in a single-line field is the dialog's OK (not only the field's
     // commit), so it files the typed height and closes the dialog as the OK button does.
     h.key_press(egui::Key::Enter);
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
     assert_eq!(selected_size(h.state()), (90.0, 45.0), "60 px = 45 pt high, the width follows");
     h.state_mut().run("edit.undo", json!({})).unwrap();
@@ -775,17 +777,17 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     let mut a = picture_app(40, 20);
     a.run("picture.size", json!({})).unwrap();
     let mut h = harness(a);
-    h.run_steps(4);
+    crate::test_harness::frames(&mut h, 4);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     let ok = h.get_by_role_and_label(Role::Button, "OK").rect().center();
     h.event(egui::Event::PointerMoved(ok));
     h.event(egui::Event::PointerButton { pos: ok, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.event(egui::Event::PointerButton { pos: ok, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
     assert_eq!(selected_size(h.state()), (90.0, 45.0), "the typed height, in proportion");
 
@@ -793,12 +795,12 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     let mut a = picture_app(40, 20);
     a.run("picture.size", json!({})).unwrap();
     let mut h = harness(a);
-    h.run_steps(4);
+    crate::test_harness::frames(&mut h, 4);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
     h.key_press(egui::Key::Escape);
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "Esc cancels the dialog");
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "nothing applied");
 }
