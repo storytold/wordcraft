@@ -75,7 +75,7 @@ fn main() {
     harness.input_mut().max_texture_side = Some(8192);
     // PLAN(app-hub): craft-ui `testing` feature and craft-automation in dev-dependencies
     // PLAN(shell-w11): assumed `wordcraft_ui_egui::ui_fonts` and `i18n::Lang::EN`
-    craft::ui::embed::install(&harness.ctx, craft::ui::testing::install_spec(), &wordcraft_ui_egui::ui_fonts(wordcraft_ui_egui::i18n::Lang::EN));
+    craft::ui::shell::embed::install(&harness.ctx, craft::ui::testing::install_spec(), &wordcraft_ui_egui::ui_fonts(wordcraft_ui_egui::i18n::Lang::EN));
     READY.store(true, std::sync::atomic::Ordering::Relaxed);
     step_n(&mut harness, 6);
     for l in lines {
@@ -117,7 +117,7 @@ fn main() {
 /// Hands the app's frame input to the runtime and advances one UI frame.
 fn step(harness: &mut egui_kittest::Harness<'_, WordApp>) {
     let ctx = harness.ctx.clone();
-    craft::ui::embed::before_input(&ctx, |out| harness.state_mut().frame_input(out));
+    craft::ui::shell::embed::before_input(&ctx, |out| harness.state_mut().frame_input(out));
     harness.step();
 }
 

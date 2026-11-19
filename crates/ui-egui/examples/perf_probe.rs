@@ -36,7 +36,7 @@ fn exec(tx: &Sender<ControlRequest>, command: &str, params: Value) {
 /// duration in milliseconds.
 fn step(h: &mut Harness<'_>) -> f64 {
     let ctx = h.ctx.clone();
-    craft::ui::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
+    craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
     let t = Instant::now();
     h.step();
     t.elapsed().as_secs_f64() * 1000.0
@@ -74,7 +74,7 @@ fn main() {
         );
     // PLAN(app-hub): craft-ui `testing` feature and craft-automation in dev-dependencies
     // PLAN(shell-w11): assumed `wordcraft_ui_egui::ui_fonts` and `i18n::Lang::EN`
-    craft::ui::embed::install(&h.ctx, craft::ui::testing::install_spec(), &wordcraft_ui_egui::ui_fonts(wordcraft_ui_egui::i18n::Lang::EN));
+    craft::ui::shell::embed::install(&h.ctx, craft::ui::testing::install_spec(), &wordcraft_ui_egui::ui_fonts(wordcraft_ui_egui::i18n::Lang::EN));
     READY.store(true, std::sync::atomic::Ordering::Relaxed);
     let first: Vec<f64> = (0..6).map(|_| step(&mut h)).collect();
     let mut out =
