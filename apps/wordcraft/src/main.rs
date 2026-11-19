@@ -130,7 +130,7 @@ fn dropped_files(raw: &egui::RawInput) -> Vec<DroppedFile> {
             let path = Some(file.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty());
             let name = path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             // A file without a path (the web) carries its bytes; one that cannot be read is dropped as empty.
-            let bytes = if path.is_none() { file.bytes().ok() } else { None };
+            let bytes = if path.is_none() { file.bytes().ok().map(std::sync::Arc::from) } else { None };
             DroppedFile { path, name, bytes }
         })
         .collect()
