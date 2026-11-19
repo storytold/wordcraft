@@ -83,7 +83,9 @@ pub(crate) fn pick_tile<'r>(
         .activate(ActivateOn::Click)
         .arrows_select(false)
         .caption(caption)
-        .card_columns(columns);
+        .card_columns(columns)
+        // Shown in a menu whose body is the one scroll (production scrolls the whole menu, not each grid).
+        .natural_height(true);
     let out = grid.show_items(ui, &Indexes(count), &mut |key, _| tile(*key));
     let mut picked = None;
     for event in out.response.events {

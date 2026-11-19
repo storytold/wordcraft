@@ -271,6 +271,8 @@ pub(crate) fn shapes(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .activate(ActivateOn::Click)
         .card_columns(SHAPE_COLUMNS)
         .content_cells()
+        // Every shape shows, as in production; the menu's body is the one scroll.
+        .natural_height(true)
         .caption(CaptionPlace::None)
         .enabled(enabled)
         .show_items(ui, &Indexed(SHAPE_TILES.len()), &mut |at, _| {
@@ -294,6 +296,8 @@ pub(crate) fn wordart(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, comma
         .activate(ActivateOn::Click)
         .card_columns(WORDART_COLUMNS)
         .content_cells()
+        // Every style shows, as in production; the menu's body is the one scroll.
+        .natural_height(true)
         .caption(CaptionPlace::None)
         .show_items(ui, &Indexed(styles.len()), &mut |at, _| {
             let (id, label) = styles.get(*at).copied().unwrap_or(("", ""));
