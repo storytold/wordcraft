@@ -31,6 +31,8 @@ pub use bidi::{bidi_levels, visual_order};
 pub(crate) use builder::left_out;
 #[cfg(test)]
 use chars::{MISSING_ROMAN_FONT, lookup_family};
+#[cfg(test)]
+use chars::{MISSING_SANS_FONT, lookup_script_family};
 pub(crate) use chars::{caps_char, push_caps};
 pub use chars::{draws_something, east_asian_substitute_face, reported_font_name, substitute_face};
 #[cfg(test)]
@@ -475,5 +477,46 @@ mod tests {
             assert_eq!(lookup_family(&d, family), family);
         }
         assert_eq!(lookup_family(&d, "No Such Roman Font"), MISSING_ROMAN_FONT);
+    }
+
+    #[test]
+    fn a_missing_font_not_classed_roman_is_looked_up_as_calibri() {
+        // Measured in Word for Windows 16.0.20625: a run font that isn't installed and has no
+        // alternate it can draw is drawn in Calibri whether the font table classes it as swiss,
+        // modern, auto, decorative or script. The generic sans substitutes don't start with
+        // Calibri (Carlito first, then Arial), so on Windows such a run came out in Arial.
+        crate::test_fonts();
+        let mut d = Document::new();
+        assert_eq!(lookup_family(&d, "No Such Swiss Font"), MISSING_SANS_FONT);
+        d.settings.modern_fonts = vec!["No Such Modern Font".into()];
+        assert_eq!(lookup_family(&d, "No Such Modern Font"), MISSING_SANS_FONT);
+        // An alternate that can't be drawn leaves a font that isn't roman in Calibri too.
+        d.settings.font_alt_names = vec![("No Such Brand Font".into(), "No Such Alternate".into())];
+        assert_eq!(lookup_family(&d, "No Such Brand Font"), MISSING_SANS_FONT);
+        // The other rules still come first, and these fonts keep their name.
+        d.settings.font_alt_names.push(("No Such Mono Brand".into(), "Courier New".into()));
+        assert_eq!(lookup_family(&d, "No Such Mono Brand"), "Courier New");
+        d.settings.roman_fonts = vec!["No Such Roman Font".into()];
+        assert_eq!(lookup_family(&d, "No Such Roman Font"), MISSING_ROMAN_FONT);
+        let installed = wordcraft_fonts::FALLBACK_FAMILY;
+        assert_eq!(lookup_family(&d, installed), installed);
+        for kept in ["Wingdings", "Angsana New", "Times New Roman", "Liberation Sans;Arial"] {
+            assert_eq!(lookup_family(&d, kept), kept, "{kept}");
+        }
+    }
+
+    #[test]
+    fn a_missing_east_asian_or_complex_script_font_keeps_its_name() {
+        // Calibri has no CJK, Arabic or Hebrew: a missing East Asian or complex-script font with no
+        // alternate keeps its name, so the script's own fallback draws it (Word: MS Mincho for
+        // Chinese text in a missing `w:eastAsia` font).
+        crate::test_fonts();
+        let mut d = Document::new();
+        assert_eq!(lookup_script_family(&d, "No Such East Asian Font"), "No Such East Asian Font");
+        // Its alternate and the roman rule still apply.
+        d.settings.font_alt_names = vec![("No Such East Asian Font".into(), "Courier New".into())];
+        assert_eq!(lookup_script_family(&d, "No Such East Asian Font"), "Courier New");
+        d.settings.roman_fonts = vec!["No Such Arabic Font".into()];
+        assert_eq!(lookup_script_family(&d, "No Such Arabic Font"), MISSING_ROMAN_FONT);
     }
 }

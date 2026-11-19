@@ -1435,7 +1435,7 @@ fn a_missing_font_is_drawn_in_its_font_table_alternate() {
     // Measured in Word 2024 and Word for Windows 16.0.20527 (#2702): a font that isn't installed is
     // drawn in the alternate its font table names (`w:altName`), before the roman rule; an
     // alternate that can't be drawn either leaves the family class in charge: Cambria for a roman
-    // or modern font, the generic substitutes (Calibri in Word) for a swiss one.
+    // or modern font, Calibri for a swiss one.
     #[derive(Clone, Copy)]
     enum Family {
         Swiss,
@@ -1462,7 +1462,10 @@ fn a_missing_font_is_drawn_in_its_font_table_alternate() {
     let face = |alt: Option<&str>, roman: bool| face_of(alt, if roman { Family::Roman } else { Family::Swiss });
     let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false).face;
     let (courier, times, calibri, cambria) = (resolve("Courier New"), resolve("Times New Roman"), resolve("Calibri"), resolve("Cambria"));
+    // A missing font that isn't roman is drawn in Calibri (Word for Windows 16.0.20625): here the
+    // bundled face Calibri resolves to, on Windows Calibri itself.
     let generic = face(None, false);
+    assert_eq!(generic, calibri);
     // Serif and sans faces are bundled, so these differ on any machine.
     assert_ne!(times, generic);
     assert_ne!(cambria, generic);
@@ -1474,16 +1477,16 @@ fn a_missing_font_is_drawn_in_its_font_table_alternate() {
     // D: the alternate beats the roman rule.
     assert_eq!(face(Some("Times New Roman"), true), times);
     assert_eq!(face(Some("Courier New"), true), courier);
-    // E: an alternate that is missing too, with no substitutes of its own: the roman rule, or the
-    // generic substitutes for a font that isn't roman.
+    // E: an alternate that is missing too, with no substitutes of its own: the roman rule, or
+    // Calibri for a font that isn't roman.
     assert_eq!(face(Some("No Such Alternate"), true), cambria);
     assert_eq!(face(Some("No Such Alternate"), false), generic);
     // Word reads a value with a comma as one name, not a list (MS-OE376 2.1.264): no font is
-    // called that, so the roman rule or the generic substitutes draw it.
+    // called that, so the roman rule or Calibri draws it.
     assert_eq!(face(Some("No Such Alternate, Times New Roman"), false), generic);
     assert_eq!(face(Some("No Such Alternate, Times New Roman"), true), cambria);
     // A modern font: its installed alternate draws it, a missing alternate leaves it in Cambria,
-    // and with no alternate at all it takes the generic substitutes (Calibri in Word).
+    // and with no alternate at all it is drawn in Calibri.
     assert_eq!(face_of(Some("Courier New"), Family::Modern), courier);
     assert_eq!(face_of(Some("No Such Alternate"), Family::Modern), cambria);
     assert_eq!(face_of(None, Family::Modern), generic);
