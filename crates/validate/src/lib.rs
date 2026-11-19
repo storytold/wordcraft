@@ -4694,6 +4694,54 @@ mod budget_tests {
     }
 
     #[test]
+    fn escaped_opc_namespaces_preserve_ct_inventory() {
+        for (manifest, part, bytes, rule, target) in [
+            (content_types(), "[trash]/00af.dat", vec![0xff; 4], "CT-UNDECLARED", "../[trash]/00af.dat"),
+            (content_types_with_override("word/extra.xml", package::MAIN_CONTENT_TYPE), "word/extra.xml", document(), "CT-DUP-MAIN", "extra.xml"),
+        ] {
+            for (relationships, verdict) in [
+                (
+                    rels(&format!(
+                        r#"<p:Relationship xmlns:p="http://schemas.openxmlformats.org/package/2&#48;06/relationships" Id="rOne" Type="urn:test" Target="{target}"/>"#
+                    )),
+                    Verdict::Fail,
+                ),
+                (String::from_utf8(doc_rels()).unwrap().replace("2006", "2&#48;06").into_bytes(), Verdict::Pass),
+            ] {
+                let report = validate_bytes(&tiny_zip(&[
+                    ("[Content_Types].xml", manifest.clone()),
+                    ("_rels/.rels", package_rels()),
+                    ("word/document.xml", document()),
+                    ("word/_rels/document.xml.rels", relationships),
+                    (part, bytes.clone()),
+                ]));
+                assert_eq!(report.verdict, verdict, "{report:?}");
+                assert_eq!(report.findings.iter().any(|f| f.rule == rule && f.severity == Severity::Error), verdict == Verdict::Fail);
+                assert_eq!(report.coverage_notes.iter().any(|n| n.starts_with(rule)), verdict == Verdict::Pass);
+            }
+        }
+    }
+
+    #[test]
+    fn escaped_opc_namespaces_preserve_drawing_and_manifest_declarations() {
+        let uri = "http://schemas.openxmlformats.org/package/2&#48;06";
+        let types = String::from_utf8(content_types()).unwrap().replace("http://schemas.openxmlformats.org/package/2006", uri);
+        let doc = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:wp="{NS_WP}"><w:body>{DRAWN}</w:body></w:document>"#);
+        let declarations =
+            rels(&format!(r#"<p:Relationship xmlns:p="{uri}/relationships" Id="rImg" Type="{NS_R}/image" Target="media/drawn.png"/>"#));
+        let report = validate_bytes(&tiny_zip(&[
+            ("[Content_Types].xml", types.replace("</Types>", r#"<Default Extension="png" ContentType="image/png"/></Types>"#).into_bytes()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc.into_bytes()),
+            ("word/_rels/document.xml.rels", declarations),
+            ("word/media/drawn.png", b"text".to_vec()),
+        ]));
+        assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+        assert_eq!(report.findings.len(), 1, "{report:?}");
+        assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Error));
+    }
+
+    #[test]
     fn unrecognized_relationship_root_withholds_both_ct_demotions() {
         for (manifest, part, bytes, rule) in [
             (content_types(), "[trash]/00af.dat", vec![0xff; 4], "CT-UNDECLARED"),

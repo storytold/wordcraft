@@ -1668,7 +1668,7 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
                 if !guard.enter() {
                     return (false, false);
                 }
-                let in_namespace = matches!(ns, ResolveResult::Bound(n) if n.as_ref() == namespace);
+                let in_namespace = opc_namespace_matches(ns, namespace);
                 if depth == 0 {
                     roots += 1;
                     valid_root = in_namespace && e.local_name().as_ref() == container;
@@ -1678,7 +1678,7 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
                 depth += 1;
             }
             Ok((ns, Event::Empty(e))) => {
-                let in_namespace = matches!(ns, ResolveResult::Bound(n) if n.as_ref() == namespace);
+                let in_namespace = opc_namespace_matches(ns, namespace);
                 if depth == 0 {
                     roots += 1;
                     valid_root = in_namespace && e.local_name().as_ref() == container;
@@ -1696,6 +1696,13 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
         }
         buf.clear();
     }
+}
+
+/// The namespace resolver borrows the declaration's raw attribute value.
+fn opc_namespace_matches(resolved: ResolveResult<'_>, expected: &[u8]) -> bool {
+    let ResolveResult::Bound(namespace) = resolved else { return false };
+    // The OPC URIs have no whitespace. Only a reference can spell the same URI differently.
+    std::str::from_utf8(namespace.as_ref()).ok().and_then(|uri| quick_xml::escape::unescape(uri).ok()).is_some_and(|uri| uri.as_bytes() == expected)
 }
 
 /// Extract and record an `Override` or `Default` content type declaration from an XML element.
