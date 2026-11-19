@@ -711,6 +711,10 @@ fn print_preview_fills_the_page_beside_the_settings() {
     assert!(pane.height() > 500.0, "the preview takes the page's height: {pane:?}");
     let pdf = h.get_by_label("PDF document (*.pdf)").rect();
     assert!(pane.min.x > pdf.max.x, "the preview is beside the settings: {pane:?} {pdf:?}");
+    // Production's settings column is 380 pt (a dialog's least content width); the column shares the name "Print" with
+    // the side menu's row and the Print heading, and is the tallest of them.
+    let column = h.query_all_by_label("Print").map(|node| node.rect()).max_by(|a, b| a.height().total_cmp(&b.height())).expect("the settings column");
+    assert!((370.0..=420.0).contains(&column.width()), "the settings column is production's 380 pt: {column:?}");
 }
 
 /// #6639: when the whole side menu fits, About sits in its footer, below the last page row.
@@ -729,19 +733,19 @@ fn about_stays_at_the_bottom_of_a_side_menu_that_fits() {
     assert!((about.min.x - options.min.x).abs() < 1.0, "in the same column: {about:?} {options:?}");
 }
 
-/// The side menu is production's rail: about 200 pt wide, its page rows about 38 pt tall one after another, each
-/// taller than the plain About link in its footer.
+/// The side menu is production's rail: 200 pt wide (five rail columns, `LeastWidth::SideMenu`), its page rows about
+/// 38 pt tall one after another. The footer's links are rows of the same place, so they read in the rail's white ink;
+/// production's were a little shorter (32 pt), which the side menu place has no row for.
 #[test]
 fn the_side_menu_rows_are_production_s_rail_rows() {
     let h = file_page(new_app(), "home");
     let (info, recover) = (h.get_by_label("Info").rect(), h.get_by_label("Recover").rect());
     let about = h.get_by_label("About").rect();
-    // The framework's side menu is five rail columns wide (`LeastWidth::SideMenu`, about 140 pt); S-L278 accepts that
-    // small difference from production's 200 pt rail.
-    assert!((130.0..=220.0).contains(&info.width()), "the menu is the rail's width: {info:?}");
+    // The least width holds in the row beside the page: before, the row gave the menu only its widest name (~123 pt).
+    assert!((190.0..=260.0).contains(&info.width()), "the menu is production's 200 pt rail: {info:?}");
     assert!((34.0..=44.0).contains(&info.height()), "a page row is a rail row: {info:?}");
     assert!((recover.min.y - info.max.y).abs() < 1.0, "the rows follow each other without a gap: {info:?} {recover:?}");
-    assert!(info.height() > about.height() + 6.0, "page rows are taller than the footer link: {info:?} {about:?}");
+    assert!(about.height() <= info.height() + 1.0, "the footer link is no taller than a page row: {info:?} {about:?}");
 }
 
 /// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
@@ -819,4 +823,21 @@ fn export_error_belongs_to_its_window() {
     assert!(h.state().ui.backstage, "A is still on the Export page");
     assert_eq!(h.state().export_error, err, "B's frames left A's message alone");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A File page's title is production's 26 pt, well above its section headings: the display role WordCraft's sizes
+/// give it, not the suite's 38 pt brand title.
+#[test]
+fn a_file_pages_title_is_productions_size() {
+    use craft::theme::{Appearance, Contrast, Mode, Size, TextSize, TypeRole};
+    let sizes = new_app().root_env().sizes;
+    let themes = craft::theme::builtins();
+    let theme = themes.iter().find(|theme| theme.id.as_str() == craft::theme::SUITE_DEFAULT).unwrap();
+    for size in [Size::Compact, Size::Comfortable] {
+        let appearance = Appearance { mode: Mode::Light, contrast: Contrast::Standard, size, text_size: TextSize::default(), reduced_motion: false };
+        let type_ = craft::theme::resolve_sized(theme, appearance, None, &sizes).tokens.typography;
+        let (title, section) = (type_.get(TypeRole::Display), type_.get(TypeRole::Heading));
+        assert!((title.size - 26.0).abs() < 0.5, "the page title is 26 pt in {size:?}: {title:?}");
+        assert!(title.size > section.size + 6.0, "the title stands above a section heading: {title:?} over {section:?}");
+    }
 }

@@ -11,7 +11,7 @@ use craft::theme::Variant;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, FieldLayout, Gap, Props as _, Show as _, ShowContainer as _, Sizing, WrapWidth, clicked};
+use craft::ui::contract::{Bind, Entry, FieldLayout, Gap, LeastWidth, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, WrapWidth, clicked};
 use craft::ui::display::{Divider, Shade, Text};
 use craft::ui::form::Field;
 use craft::ui::layout_components::{Row, Stack};
@@ -19,7 +19,7 @@ use craft::ui::patterns::form_dialogs::PreviewView;
 use craft::ui::pickers::Select;
 use craft::ui::primitives::HAlign;
 use craft::ui::runtime::memory::Remember as _;
-use craft::ui::sections::Panel;
+use craft::ui::runtime::env::Label;
 use craft::ui::text::{NumberField, TextField};
 use egui::Ui;
 use serde_json::{Value, json};
@@ -234,14 +234,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // The row takes the page, so the preview beside the settings column fills the room left (production: the
         // preview takes the page's height beside a 380 pt column).
         Row::new().fill().gap(Gap::Section).show(ui, |ui, _| {
-            // Production's settings column is 380 pt with its paragraphs wrapped inside it: the column's wrap width
-            // keeps the long notes from widening it over the preview.
-            Panel::new(tl!("Print")).sizing(Sizing::FillHeight).show(ui, |ui, _| {
-                Stack::new()
-                    .wrap_width(WrapWidth::Column)
-                    .gap(Gap::Stack)
-                    .show(ui, |ui, _| settings(app, ui, &lay, hide_message, chooses, can_print, ready));
-            });
+            // Production's settings column is 380 pt (a dialog's least content width), with no frame of its own on the
+            // page, scrolling down the page's height; its paragraphs wrap inside it: the column's wrap width keeps the
+            // long notes from widening it over the preview.
+            let _ = Stack::new()
+                .sizing(Sizing::FillHeight)
+                .least_width(LeastWidth::Dialog)
+                .wrap_width(WrapWidth::Column)
+                .scroll(Scroll::vertical())
+                .label(Label::from(tl!("Print").to_owned()))
+                .gap(Gap::Stack)
+                .show(ui, |ui, _| settings(app, ui, &lay, hide_message, chooses, can_print, ready));
             preview::show(app, ui, &lay);
         });
     });

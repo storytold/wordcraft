@@ -183,9 +183,11 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
             BackstagePageCommand::Print => {}
         }
     }
-    // The page band lies over the top of the window; the controls start below it.
-    // PLAN: no framework padding by the page band's room was found; the height is cleared by a spacer.
+    // The page band, the window's move band, lies over the top of the window; the controls start below it. The side
+    // menu's back button clears it. The page's own margin (production's 30 pt over its title) already reaches below a
+    // title bar's height, so only what the band takes past that margin is cleared there.
     let band = cx.shell().and_then(|shell| shell.page_band()).map_or(0.0, |band| band.rect.height());
+    let page_band = (band - craft::ui::contract::pad_of(&craft::ui::runtime::env::Env::of(ui).tokens, Pad::Page)).max(0.0);
     let choice = MenuChoice::default();
     let current = app.ui.backstage_page.clone();
     let show_discord = app.ui.show_discord;
@@ -194,14 +196,15 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         side_menu(ui, band, &current, has_document, show_discord, &choice);
         let print = current == "print";
         // Stacked rows' spacing between a page's controls, as production's (Browse… over Browse in WordCraft…).
-        // The page stands on the window's background (production's `t.ribbon`, #f9f9f9 light), not the white panel.
-        let mut body = Stack::new().fill().pad(Pad::Roomy).gap(Gap::Stack).surface(SurfaceKind::Background);
+        // The page stands on the window's background (production's `t.ribbon`, #f9f9f9 light), not the white panel,
+        // a page's margin off the window and the side menu (production's 40 pt sides, 30 pt top).
+        let mut body = Stack::new().fill().pad(Pad::Page).gap(Gap::Stack).surface(SurfaceKind::Background);
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if !print {
             body = body.scroll(Scroll::vertical());
         }
         let _ = body.show(ui, |ui, _| {
-            ui.add_space(band);
+            ui.add_space(page_band);
             page_body(ui, app, &current);
         });
     });
@@ -253,23 +256,16 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
             ui.add_space(band);
             let _ = IconButton::command(IconSpec::svg(IconId::new("chevronLeft")), BackstagePageCommand::Back).show(ui);
         })
-        // The community link above About, both at the reading start, as production's bottom links.
+        // The community link above About, both at the reading start, as production's bottom links: rows of the side
+        // menu place too, so they read in the rail's white ink over the brand colour, not a panel button's dark ink.
         .footer(move |ui, _| {
-            if show_discord
-                && clicked(
-                    &Button::new(label("Discord community"))
-                        .id_salt("backstage-discord")
-                        .variant(Variant::GHOST)
-                        .sizing(Sizing::FillWidth)
-                        .align(HAlign::Start)
-                        .show(ui),
-                )
-            {
-                choice.discord.set(true);
-            }
-            if clicked(&Button::new(label("About")).id_salt("backstage-about").variant(Variant::GHOST).sizing(Sizing::FillWidth).align(HAlign::Start).show(ui)) {
-                choice.about.set(true);
-            }
+            with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(ControlPlace::SideMenu);
+                },
+                |ui| footer_links(ui, show_discord, choice),
+            );
         })
         .show(ui, |ui, _| {
             let _ = inspect::record(ui, egui::Id::new("wordcraft-backstage-pages"), |ui| {
@@ -283,6 +279,25 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
                 );
             });
         });
+}
+
+/// The side menu's foot: the community link (unless the user turned it off) above About.
+fn footer_links(ui: &mut Ui, show_discord: bool, choice: &MenuChoice) {
+    if show_discord
+        && clicked(
+            &Button::new(label("Discord community"))
+                .id_salt("backstage-discord")
+                .variant(Variant::GHOST)
+                .sizing(Sizing::FillWidth)
+                .align(HAlign::Start)
+                .show(ui),
+        )
+    {
+        choice.discord.set(true);
+    }
+    if clicked(&Button::new(label("About")).id_salt("backstage-about").variant(Variant::GHOST).sizing(Sizing::FillWidth).align(HAlign::Start).show(ui)) {
+        choice.about.set(true);
+    }
 }
 
 /// The side menu's page rows, one full-width button per page.

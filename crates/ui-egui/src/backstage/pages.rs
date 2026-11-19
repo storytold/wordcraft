@@ -89,7 +89,11 @@ pub(super) fn info(ui: &mut Ui, app: &mut WordApp) {
     // The row starts at the reading start, so Properties are at the right in a mirrored interface.
     // Two equal columns across the page, as production's `ui.columns(2)`.
     let _ = Row::new().fill_width().gap(Gap::Section).show(ui, |ui, _| {
-        let _ = Stack::new().fill_width().gap(Gap::Tight).show(ui, |ui, _| properties(ui, app, &info));
+        // Protect Document stands a section apart from the properties above it (production's 18 pt).
+        let _ = Stack::new().fill_width().gap(Gap::Section).show(ui, |ui, _| {
+            let _ = Stack::new().fill_width().gap(Gap::Tight).show(ui, |ui, _| properties(ui, app, &info));
+            let _ = Stack::new().fill_width().gap(Gap::Tight).show(ui, |ui, _| protect(ui, app, &info));
+        });
         let _ = Stack::new().fill_width().gap(Gap::Tight).show(ui, |ui, _| statistics(ui, &info));
     });
 }
@@ -145,7 +149,11 @@ fn properties(ui: &mut Ui, app: &mut WordApp, info: &serde_json::Value) {
     ) {
         let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
     }
-    // Protect Document › Encrypt with Password (#55).
+}
+
+/// Protect Document › Encrypt with Password (#55): whether a password guards the document, and the buttons that set
+/// or remove it.
+fn protect(ui: &mut Ui, app: &mut WordApp, info: &serde_json::Value) {
     subheading(ui, "Protect Document");
     let encrypted = info.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
     let _ = Text::new(if encrypted {
