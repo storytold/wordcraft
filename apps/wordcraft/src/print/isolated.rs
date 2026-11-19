@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 const FLAG: &str = "--wordcraft-print-worker";
 const PREFIX: &str = "WORDCRAFT_PRINT:";
 const MAX_MESSAGE: u64 = 64 * 1024;
+/// The job's options, and a driver's settings of up to 1 MiB written as hex.
+const MAX_REQUEST: u64 = MAX_MESSAGE + 2 * 1024 * 1024;
 const MAX_PDF: u64 = 512 * 1024 * 1024;
 const CANCELLED: &str = "the print job was cancelled before anything was sent to the printer";
 
@@ -32,9 +34,12 @@ struct Request {
     collate: bool,
     duplex: Option<Duplex>,
     grayscale: bool,
+    grey_pages: bool,
     shrink: bool,
     title: String,
     options: Vec<(String, String)>,
+    /// The printer the driver's settings were chosen for, and their DEVMODE as hex.
+    driver_settings: Option<(String, String)>,
 }
 
 impl Request {
@@ -50,15 +55,21 @@ impl Request {
                 craft_print::Duplex::ShortEdge => Duplex::ShortEdge,
             }),
             grayscale: job.grayscale,
+            grey_pages: job.grey_pages,
             shrink: job.scaling == craft_print::Scaling::ShrinkToFit,
             title: job.title.clone(),
             options: job.options.clone(),
+            driver_settings: job.driver_settings.as_ref().map(|settings| (settings.printer().to_owned(), settings.dev_mode().to_hex())),
         }
     }
 
     /// Restore the job without substituting printer defaults or changing copy semantics.
-    fn job(self) -> craft_print::Job {
-        craft_print::Job {
+    fn job(self) -> Result<craft_print::Job, String> {
+        let driver_settings = match self.driver_settings {
+            Some((printer, hex)) => Some(craft_print::DriverSettings::new(printer, craft_print::rgb::DevMode::from_hex(&hex).map_err(error)?)),
+            None => None,
+        };
+        Ok(craft_print::Job {
             printer: self.printer,
             copies: self.copies,
             collate: self.collate,
@@ -68,10 +79,12 @@ impl Request {
                 Duplex::ShortEdge => craft_print::Duplex::ShortEdge,
             }),
             grayscale: self.grayscale,
+            grey_pages: self.grey_pages,
             scaling: if self.shrink { craft_print::Scaling::ShrinkToFit } else { craft_print::Scaling::Exact },
             title: self.title,
             options: self.options,
-        }
+            driver_settings,
+        })
     }
 }
 
@@ -166,7 +179,7 @@ impl Submission {
             return Err("the print PDF exceeds the 512 MiB helper limit".into());
         }
         let request = serde_json::to_vec(&Request::from_job(job)).map_err(error)?;
-        if request.len() as u64 > MAX_MESSAGE {
+        if request.len() as u64 > MAX_REQUEST {
             return Err("the print settings exceed the helper message limit".into());
         }
         let directory = tempfile::tempdir().map_err(error)?;
@@ -323,10 +336,10 @@ fn helper(
         })
         .map_err(error)?;
     let request: Request =
-        serde_json::from_slice(&bounded(std::fs::File::open(directory.join("job.json")).map_err(error)?, MAX_MESSAGE)?).map_err(error)?;
+        serde_json::from_slice(&bounded(std::fs::File::open(directory.join("job.json")).map_err(error)?, MAX_REQUEST)?).map_err(error)?;
     let pdf = bounded(std::fs::File::open(directory.join("input.pdf")).map_err(error)?, MAX_PDF)?;
     remove_inputs(directory)?;
-    let result = submit(&pdf, &request.job(), &cancel);
+    let result = submit(&pdf, &request.job()?, &cancel);
     emit(&Event::Done(result))
 }
 
@@ -463,21 +476,40 @@ mod tests {
     }
 
     #[test]
-    /// Job transport preserves every explicit setting, including Unicode and duplex direction.
+    /// Job transport preserves every explicit setting, including Unicode, duplex direction and the
+    /// driver's own settings.
     fn job_options_survive_the_process_boundary() {
+        // A DEVMODEW header of 156 bytes (`dmSize` at 68) and a 4-byte private part (`dmDriverExtra` at 70).
+        let mut dev_mode = vec![0u8; 160];
+        dev_mode[68..70].copy_from_slice(&156u16.to_le_bytes());
+        dev_mode[70..72].copy_from_slice(&4u16.to_le_bytes());
+        dev_mode[156..].copy_from_slice(&[1, 2, 3, 4]);
+        let dev_mode = craft_print::rgb::DevMode::from_bytes(dev_mode).unwrap();
         let expected = craft_print::Job {
             printer: Some("Office λ".into()),
             copies: 3,
             collate: false,
             duplex: Some(craft_print::Duplex::ShortEdge),
             grayscale: true,
+            grey_pages: true,
             scaling: craft_print::Scaling::ShrinkToFit,
             title: "A document".into(),
             options: vec![("media".into(), "iso_a4_210x297mm".into())],
+            driver_settings: Some(craft_print::DriverSettings::new("Office λ", dev_mode)),
         };
         let bytes = serde_json::to_vec(&Request::from_job(&expected)).unwrap();
         let received: Request = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(received.job(), expected);
+        assert_eq!(received.job(), Ok(expected));
+    }
+
+    #[test]
+    /// Damaged driver settings on the wire are an error, not a job printed with other settings.
+    fn damaged_driver_settings_are_refused() {
+        for hex in ["", "0", "zz", "00"] {
+            let mut request = Request::from_job(&job());
+            request.driver_settings = Some(("Office".into(), hex.into()));
+            assert!(request.job().is_err(), "{hex:?}");
+        }
     }
 
     #[test]

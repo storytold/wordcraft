@@ -5,15 +5,19 @@ use std::sync::Arc;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::{Align, Block, CharProps, Document, Paragraph, Table, para_block};
 
-use crate::model::{self, FBlock, Kind};
 use crate::{export, import};
+use craft_flow::{self as model, FBlock, Kind};
 
-/// A small PNG made with the image crate.
+/// A small PNG made with `craft-image-codecs`.
 fn png() -> Vec<u8> {
-    let img = image::RgbaImage::from_fn(8, 4, |x, _| image::Rgba([(x * 30) as u8, 80, 160, 255]));
-    let mut buf = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
-    buf
+    let mut rgba = Vec::with_capacity(8 * 4 * 4);
+    for _y in 0..4 {
+        for x in 0..8 {
+            rgba.extend_from_slice(&[(x * 30) as u8, 80, 160, 255]);
+        }
+    }
+    let img = craft_image_codecs::Image::from_u8(8, 4, craft_image_codecs::ChannelLayout::Rgba, rgba).unwrap();
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
 }
 
 /// Headings, formatted runs, a link, nested lists, a table, a quote, code and a picture.
@@ -85,7 +89,7 @@ fn sample() -> Document {
 }
 
 fn flat(doc: &Document) -> Vec<FBlock> {
-    model::from_doc(doc).blocks
+    model::from_doc(&wordcraft_docx::to_shared_model(doc).unwrap()).blocks
 }
 
 fn para_texts(doc: &Document) -> Vec<String> {
@@ -153,7 +157,7 @@ fn check_round_trip(ext: &str, rich: bool) {
     assert_eq!(find_para(&b, "Second Level").map(|p| p.kind), Some(Kind::Heading(2)), "{ext}");
     assert_eq!(find_para(&b, "A wise quote").map(|p| p.kind), Some(Kind::Quote), "{ext}");
     if ext != "md" {
-        assert_eq!(find_para(&b, "Centered text").and_then(|p| p.align), Some(Align::Center), "{ext}");
+        assert_eq!(find_para(&b, "Centered text").and_then(|p| p.align), Some(craft_wordmodel::Align::Center), "{ext}");
     }
     let fb = find_para(&b, "first bullet").and_then(|p| p.list).expect("list");
     assert!(!fb.ordered && fb.level == 0, "{ext}");
@@ -257,7 +261,17 @@ fn html_ruby_round_trip() {
     let props = CharProps::default();
     let mut p = Paragraph::with_text("I read ", props.clone());
     let n = p.len();
-    p.insert_object(n, model::ruby_object("漢字".into(), "かんじ".into(), 20.0), &props).unwrap();
+    let ruby_obj = |base: &str, ruby: &str, base_size: f32| InlineObject::Ruby {
+        base: base.into(),
+        ruby: ruby.into(),
+        align: Default::default(),
+        size: base_size * 0.5,
+        raise: base_size,
+        base_size,
+        lang: String::new(),
+        props: Box::default(),
+    };
+    p.insert_object(n, ruby_obj("漢字", "かんじ", 20.0), &props).unwrap();
     let n = p.len();
     p.insert_text(n, " daily.", &props).unwrap();
     let mut d = Document::new();
@@ -285,7 +299,21 @@ fn html_ruby_at_the_paragraph_start_keeps_a_leading_space() {
     let props = CharProps { bold: Some(true), ..Default::default() };
     let mut p = Paragraph::with_text("", CharProps::default());
     let n = p.len();
-    p.insert_object(n, model::ruby_object(" 漢字".into(), "かんじ".into(), 20.0), &props).unwrap();
+    p.insert_object(
+        n,
+        InlineObject::Ruby {
+            base: " 漢字".into(),
+            ruby: "かんじ".into(),
+            align: Default::default(),
+            size: 10.0,
+            raise: 20.0,
+            base_size: 20.0,
+            lang: String::new(),
+            props: Box::default(),
+        },
+        &props,
+    )
+    .unwrap();
     let mut d = Document::new();
     d.body = vec![para_block(p)];
 
@@ -460,6 +488,7 @@ fn code_blocks_and_rules() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn deep_nesting_is_bounded() {
     let html = "<div><table><tr><td>".repeat(5000) + "x";
     let d = import("html", html.as_bytes()).unwrap().unwrap();
@@ -538,6 +567,7 @@ fn latex_export_carries_no_commands_from_the_document() {
 /// past them for the last text made a megabyte of labels take tens of seconds), and labels
 /// separated by text are all kept.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn latex_labels_in_a_row_are_read_in_linear_time() {
     let started = std::time::Instant::now();
     for src in ["\\label{a} ".repeat(100_000) + "x", "\\label{a}".repeat(100_000) + "x", "\\hypertarget{a}{} ".repeat(100_000)] {
@@ -579,10 +609,9 @@ fn garbage_never_panics() {
         let _ = import("odt", &odt);
     }
     // A zip that is not an ODF text document.
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    z.start_file("mimetype", zip::write::SimpleFileOptions::default()).unwrap();
-    std::io::Write::write_all(&mut z, b"application/zip").unwrap();
-    let bytes = z.finish().unwrap().into_inner();
+    let mut z = craft_zip::Writer::new();
+    z.add("mimetype", b"application/zip", craft_zip::Compression::Stored).unwrap();
+    let bytes = z.finish().unwrap();
     assert!(import("odt", &bytes).unwrap().is_err());
 }
 
@@ -716,6 +745,7 @@ fn decorative_picture_exports_with_empty_alt_text() {
 /// Hostile Markdown and HTML that rescanned the rest of the text from every `[`, `![`, `<` or `&`
 /// took quadratic time: a few hundred KB froze the importer for tens of seconds.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hostile_importer_input_takes_linear_time() {
     use std::time::{Duration, Instant};
     let cases: [(&str, String); 5] = [
@@ -737,6 +767,7 @@ fn hostile_importer_input_takes_linear_time() {
 /// bracket scan over them looking for a closing run through the rest of the text: superlinear
 /// time on hostile Markdown.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn unmatched_backtick_runs_take_linear_time() {
     use std::time::{Duration, Instant};
     // Runs of 1, 2, … 2000 backticks (2 MB), none of them closed.
@@ -1117,7 +1148,7 @@ fn run_link_and_font_copies_are_budgeted() {
     }
     model::begin_import();
     let (doc, warned) = crate::test_log::warnings(|| model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() }));
-    let paras: Vec<_> = doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p) } else { None }).collect();
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p) } else { None }).collect();
     assert_eq!(paras.iter().map(|p| p.text.len()).sum::<usize>(), 20_000, "all text kept");
     let runs: Vec<_> = paras.iter().flat_map(|p| p.runs.iter()).collect();
     let kept: usize = runs.iter().filter_map(|r| r.props.link.as_ref()).map(String::len).sum();
