@@ -152,6 +152,13 @@ impl WordApp {
             let from_key = fired.source == FireSource::Key;
 
             let (id, params) = if id == "edit.pasteFormat" && from_key { self.paste_format_command(ctx, params) } else { (id, params) };
+            // An Undo or Redo that is not a focused field's own edit (S-L187 sends that one to the
+            // field) first takes back the gesture under way and every running one (S-L364).
+            if matches!(id, "edit.undo" | "edit.redo") {
+                let mut host = std::mem::take(&mut self.edits);
+                host.before_undo(ctx, self);
+                self.edits = host;
+            }
             let result = if fired.source == FireSource::Automation { self.execute(id, params) } else { self.run(id, params) };
             if let Err(error) = result {
                 log::debug!("command {id}: {error}");
@@ -170,5 +177,47 @@ impl WordApp {
         let formatting = self.session.painter.is_some() || self.session.copied_format.is_some();
         let chord = ctx.input(|i| i.modifiers.command && i.modifiers.shift && !i.modifiers.alt);
         if !formatting && chord { ("edit.pasteText", json!({})) } else { ("edit.pasteFormat", params) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use craft::behavior::{EditEvent, EditEvents, GestureId, Mixed};
+    use craft::ui::runtime::commands::{CommandRef, FirePhase, FireSource, Fired};
+    use craft::ui::runtime::frame::FrameOutput;
+    use wordcraft_engine::Session;
+
+    use super::{WordApp, json};
+
+    /// A size-field gesture is live through `apply_edits`; a fired Undo takes the gesture back first
+    /// (`GestureHost::before_undo`), then undoes the step from before it. The gesture's later
+    /// Commit adds no step (S-L364).
+    #[test]
+    fn a_fired_undo_takes_back_the_running_gesture_first() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Hello"})).unwrap();
+        app.run("select.text", json!({"text": "Hello"})).unwrap();
+        let before = app.session.undo_depth();
+
+        let id = GestureId::new(1);
+        let apply = |app: &mut WordApp, size: f32| {
+            let _ = app.run("format.size", json!({"size": size}));
+        };
+        let mut begin = EditEvents::new();
+        begin.push(EditEvent::begin(id, Mixed::Same(11.0_f32), "Font Size".into(), None));
+        begin.push(EditEvent::update(id, 20.0_f32));
+        crate::undo_marks::apply_edits(&mut app, begin, apply);
+
+        let ctx = egui::Context::default();
+        let mut output = FrameOutput::default();
+        output.fired.push(Fired::new(CommandRef::new("edit.undo"), FireSource::Pointer, FirePhase::Press, 0.0));
+        app.run_fired(&ctx, &output);
+        let after_undo = app.session.undo_depth();
+        assert_eq!(after_undo + 1, before, "the gesture left no step, and Undo took the one from before it");
+
+        let mut end = EditEvents::new();
+        end.push(EditEvent::commit(id, Mixed::Same(11.0_f32), 20.0_f32));
+        crate::undo_marks::apply_edits(&mut app, end, apply);
+        assert_eq!(app.session.undo_depth(), after_undo, "the late Commit of the taken-back gesture adds no step");
     }
 }

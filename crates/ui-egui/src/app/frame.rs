@@ -19,7 +19,7 @@ impl WordApp {
     /// whatever handed it over (the command line, a macOS open event, a drop). Returns the message.
     pub fn report_open_failure(&mut self, path: &str, error: &str) -> String {
         log::warn!("{path}: {error}");
-        let dir = if i18n::current().rtl() { craft::i18n::Direction::Rtl } else { craft::i18n::Direction::Ltr };
+        let dir = crate::chrome::interface_direction();
         let msg = i18n::fmt(crate::tl!("Couldn't open {path}: {error}"), &[("path", &craft::i18n::path(path, dir)), ("error", error)]);
         self.post_status(msg.clone(), STATUS_MS, Tone::Bad);
         msg

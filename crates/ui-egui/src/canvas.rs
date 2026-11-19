@@ -738,7 +738,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                 // selection geometry, and to the live selection while a preview moves the text.
                 let anchor_rects =
                     if app.canvas.command_previewed.is_some() { live_selection_screen_rects(app, body.pages) } else { screen_rects(&selected, body.pages) };
-                app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, ui.clip_rect());
+                app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, body.view.rect);
+                // The bar is its own floating layer: shown after the host, it keeps its buttons' presses (S-L410).
                 crate::mini_toolbar::show(app, ui, body);
             }
         });
@@ -799,6 +800,12 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     }
 
     dismiss_balloon_on_canvas_click(app, &out);
+    // A press in the document brings back a mini toolbar a click outside it put away (S-L414).
+    if let craft::behavior::PressPhase::Down { start, .. } = &out.canvas.press.phase
+        && start.button == craft::behavior::PointerButton::Primary
+    {
+        app.canvas.mini_dismissed = None;
+    }
     balloons::balloons(app, ui, &out, layout);
     rulers::page_rulers(app, ui, &out, layout);
     // The one context-menu ask of the pass: Shift+F10 or `ui.contextMenu` (below the caret), a click on the equation
