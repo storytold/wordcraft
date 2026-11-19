@@ -109,7 +109,7 @@ pub(crate) fn cjk_stand_in(ctx: &egui::Context) {
         )
     }
     ctx.add_glyph_rasterizer(egui::GlyphRasterizer::new("wordcraft::test_harness::cjk", |req| {
-        let wanted = *req.family == egui::FontFamily::Proportional && !req.cluster.is_empty() && req.cluster.chars().all(cjk);
+        let wanted = !req.cluster.is_empty() && req.cluster.chars().all(cjk);
         wanted.then(|| egui::RasterizedGlyph {
             bitmap: egui::GlyphBitmap {
                 image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
