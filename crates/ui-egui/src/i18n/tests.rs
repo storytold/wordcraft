@@ -217,6 +217,8 @@ fn the_interface_language_sets_the_language_of_new_documents() {
         assert!(!app.session.dirty, "{pref}");
         app.run("file.new", serde_json::json!({})).unwrap();
         assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some(written), "{pref}: a new document is written in it");
+        // Writing in it makes the document written content; an untouched one would follow the interface back.
+        app.session.run("text.insert", &serde_json::json!({"text": "Written words"})).unwrap();
         if let Some(name) = name {
             // The frames bind the interface language; name the language in English first.
             apply_language(Lang::EN);
@@ -244,6 +246,12 @@ fn the_editing_languages_are_the_ones_wordcraft_can_proof() {
 #[test]
 fn every_shipped_translation_is_drawn_by_the_interface_fonts() {
     needs_catalogs!();
+    // The interface fonts are the craft-fonts faces; with none embedded (no `CRAFT_FONTS_DIR`) the stack is
+    // egui's bundled fallback, which lacks letters the catalogs use (the Spanish `ⁿ`), so there is nothing to check.
+    if crate::app::fonts::CRAFT_FONTS.is_empty() {
+        eprintln!("skipped: no craft-fonts face is embedded (set CRAFT_FONTS_DIR)");
+        return;
+    }
     for l in Lang::all().filter(|l| *l != Lang::EN) {
         let code = l.code();
         // A Han language is drawn by its craft-fonts face alone; a build without that face (no

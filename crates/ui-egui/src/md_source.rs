@@ -40,6 +40,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let max = wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES;
     let mut changed = false;
     let mut refused = false;
+    let mut focus_pending = false;
     {
         let Some(src) = app.session.md_source.as_mut() else { return };
         let mut entering = std::mem::take(&mut src.place_caret);
@@ -87,8 +88,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         } else {
             changed = !out.events.is_empty();
         }
-        if entering {
-            focus::request(&ctx, FocusTarget::Id(out.response.id));
+        // A measuring pass moves no focus (`request` says so): the entry waits for a pass that does.
+        if entering && !focus::request(&ctx, FocusTarget::Id(out.response.id)) {
+            focus_pending = true;
+        }
+    }
+    if focus_pending {
+        if let Some(src) = app.session.md_source.as_mut() {
+            src.place_caret = true;
         }
     }
     if refused {
