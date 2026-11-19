@@ -81,8 +81,34 @@ same output on every machine.
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
 const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero"];
 
+/// A value-taking option can consume `-h`; help is requested only by a standalone flag.
 fn wants_help(cmd: &str, rest: &[String]) -> bool {
-    SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
+    if !SUBCOMMANDS.contains(&cmd) {
+        return false;
+    }
+    let specs = match cmd {
+        "convert" => CONVERT_OPTIONS,
+        "render" => RENDER_OPTIONS,
+        "run" => RUN_OPTIONS,
+        "commands" => COMMANDS_OPTIONS,
+        "parity" => PARITY_OPTIONS,
+        "mcp" => MCP_OPTIONS,
+        "zotero" => ZOTERO_OPTIONS,
+        _ => PASSWORD_OPTIONS,
+    };
+    let mut args = rest.iter().peekable();
+    while let Some(arg) = args.next() {
+        if arg == "--help" || arg == "-h" {
+            return true;
+        }
+        // MCP root flags are extracted after help is checked, before option validation.
+        let takes_value = specs.iter().any(|spec| spec.name == arg && spec.takes_value)
+            || (cmd == "mcp" && matches!(arg.as_str(), "--automation-read-root" | "--automation-write-root"));
+        if takes_value && args.peek().is_some_and(|value| !value.starts_with("--")) {
+            args.next();
+        }
+    }
+    false
 }
 
 /// A failure whose message may carry text from a file or from the engine's reading of one (a
