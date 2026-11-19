@@ -155,6 +155,8 @@ fn settle_bookmark(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Set
                 && let Some(dialog) = app.dialog_host.get_mut_by_id::<BookmarkDialog>(id)
             {
                 dialog.deleted = true;
+                // The deleted name leaves the box, as in Word.
+                dialog.name.clear();
             }
         }
         "goTo" => {

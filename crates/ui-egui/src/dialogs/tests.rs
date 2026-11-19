@@ -196,18 +196,18 @@ fn the_table_grid_previews_the_hovered_table_until_the_click() {
     // The ribbon button is named "Table"; "Add a Table" is its tooltip.
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Table").click();
     h.run_steps(3);
-    // The row 3, column 4 square: the smallest node that names a 4×3 table.
-    // PLAN: assumed the picker's squares are named "<columns>×<rows> …" (ribbon-w16, `TableSizePicker`).
+    // The row 3, column 4 square: the smallest node that names a 3-row, 4-column table. The framework's picker names
+    // its squares "<rows> × <columns>".
     let at = h
-        .query_all(egui_kittest::kittest::By::new().label_contains("4×3"))
+        .query_all(egui_kittest::kittest::By::new().label_contains("3 × 4"))
         .min_by(|a, b| (a.rect().width() * a.rect().height()).total_cmp(&(b.rect().width() * b.rect().height())))
-        .expect("the grid's 4×3 square")
+        .expect("the grid's 3 × 4 square")
         .rect()
         .center();
     h.event(egui::Event::PointerMoved(at));
     h.run_steps(2);
     assert_eq!(h.state().canvas.table_preview, Some((3, 4)), "three rows of four columns");
-    assert!(h.query_all(egui_kittest::kittest::By::new().label_contains("4×3")).next().is_some(), "the label reads columns × rows");
+    assert!(h.query_all(egui_kittest::kittest::By::new().label_contains("3 × 4")).next().is_some(), "the label reads rows × columns");
     assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()) && !h.state().session.can_undo());
     h.event(egui::Event::PointerMoved(egui::pos2(1400.0, 880.0)));
     h.run_steps(3);
@@ -313,17 +313,19 @@ fn the_macros_button_opens_a_dialog_that_runs_deletes_and_records() {
     };
     define_pad(&mut h);
     open_named(&mut h, "macros", json!({}));
-    h.get_by_label(" Pad ").click();
+    // The list shows the name trimmed (its matching trims the typed name); the press still carries the exact name.
+    h.get_by_label("Pad").click();
     h.run_steps(3);
     press(&mut h, "Run");
     assert!(!is_open(h.state(), "macros"));
     assert!(body_of(h.state()).contains("Padded"), "the macro with spaces in its name ran");
     define_pad(&mut h);
     open_named(&mut h, "macros", json!({}));
-    h.get_by_label(" Pad ").click();
+    h.get_by_label("Pad").click();
     h.run_steps(3);
     press(&mut h, "Delete"); // PLAN: assumed Delete acts at once; a confirmation prompt would need its answer here.
-    assert!(h.query_by_label(" Pad ").is_none(), "Delete removed the listed macro");
+    assert!(h.query_by_label("Pad").is_none(), "Delete removed the listed macro");
+    assert!(!h.state().session.macros.contains_key(" Pad "), "the exact name was deleted");
 
     // Record starts a recording under the typed name.
     open_named(&mut h, "macros", json!({}));
@@ -392,7 +394,8 @@ fn screen_paper_color_search_result_opens_general_options() {
     // The palette keeps its query to itself: type it, as a user does.
     h.event(egui::Event::Text("screen paper color".into()));
     h.run_steps(3);
-    h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Screen Paper Color"))
+    // The palette's results are a list of options, not buttons.
+    h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::ListBoxOption).label_contains("Screen Paper Color"))
         .expect("the paper-colour command is a search result")
         .click();
     h.run_steps(3);
@@ -455,7 +458,11 @@ fn boxes_that_keep_focus_do_not_interrupt_ime_every_frame() {
             h.step();
             back += usize::from(reset(&h, &mut on));
         }
-        assert!((1..=2).contains(&back), "{name}: Tab and back reset the input method {back} times");
+        // The framework's palette and picker keep Tab inside their own field (it never leaves, so nothing resets);
+        // a form dialog's box loses the keyboard to the next control and takes it back with one reset.
+        let keeps_tab = matches!(name, "commands" | "icons");
+        let resets = if keeps_tab { 0..=2 } else { 1..=2 };
+        assert!(resets.contains(&back), "{name}: Tab and back reset the input method {back} times");
         for frame in 0..4 {
             h.step();
             assert!(!reset(&h, &mut on), "{name}: frame {frame} after Tab resets the input method");
@@ -1066,8 +1073,9 @@ fn text_pane_tab_demotes_and_shift_tab_promotes_the_focused_item() {
             .query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::TextInput).value(text))
             .next()
             .unwrap_or_else(|| panic!("no text box for {text}"));
-        node.focus();
-        h.run_steps(2);
+        // A click is how a user focuses a row; it focuses through the framework's own focus stops.
+        node.click();
+        h.run_steps(3);
     };
     let tab = |h: &mut egui_kittest::Harness<'static, WordApp>, shift: bool| {
         if shift {
@@ -1109,11 +1117,14 @@ fn set_text_field(h: &mut egui_kittest::Harness<'_, WordApp>, label: &str, text:
     h.run_steps(2);
 }
 
-/// Whether the dialog shows a notice. PLAN: assumed a notice's node role is Alert or Status.
+/// Whether the dialog shows a notice: a bad-tone notice is an Alert node. The framework's one live Status node is
+/// always in the tree (empty when nothing is announced), so it does not count unless it carries text.
 fn notice_shown(h: &egui_kittest::Harness<'_, WordApp>) -> bool {
-    h.query_all(egui_kittest::kittest::By::new().predicate(|n| matches!(n.role(), egui::accesskit::Role::Alert | egui::accesskit::Role::Status)))
-        .next()
-        .is_some()
+    h.query_all(egui_kittest::kittest::By::new().predicate(|n| {
+        n.role() == egui::accesskit::Role::Alert || (n.role() == egui::accesskit::Role::Status && n.label().is_some_and(|l| !l.is_empty()))
+    }))
+    .next()
+    .is_some()
 }
 
 /// A harness with File › Info › Advanced Properties… opened on `app`.
@@ -1336,6 +1347,10 @@ fn modal_dialogs_block_the_window_behind_them() {
     let a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default()).with_host(std::sync::Arc::new(host));
     let mut h = app_harness(a);
     h.run_steps(6);
+    // A new window's page takes the keyboard from the first click or command; here nothing has asked for it yet.
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
+    h.run_steps(2);
     h.event(egui::Event::Text("Kilns".into()));
     h.run_steps(2);
     assert_eq!(body_of(h.state()), "Kilns");
@@ -1464,6 +1479,8 @@ fn every_dialog_name_opens_its_dialog_or_none() {
         let expect = match name {
             "goto" => "find",
             "pageBorders" | "shading" => "borders",
+            // Type a New List is the Recipient List dialog started on an empty list.
+            "newRecipientList" => "recipientList",
             _ => name,
         };
         assert!(keys.iter().any(|k| k == expect), "{name}: open keys are {keys:?}");

@@ -36,7 +36,9 @@ impl MacrosDialog {
 
     /// Copies the session's macros and recording state in; called before every host run.
     fn refresh(&mut self, names: Vec<String>, recording: bool) {
-        self.entries = names.into_iter().map(|name| ListManagerEntry::new(name.clone(), name)).collect();
+        // The list matches the name box's trimmed text against an entry's name, so the name shown is trimmed and the
+        // id keeps the exact name the press runs or deletes.
+        self.entries = names.into_iter().map(|name| ListManagerEntry::new(name.clone(), name.trim().to_string())).collect();
         self.recording = recording;
     }
 }

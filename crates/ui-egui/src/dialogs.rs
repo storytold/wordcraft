@@ -58,6 +58,8 @@ fn route(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>
         }
         "fontDownload" => crate::font_download::open(app, name, params, parent),
         "font" => font::open(app, name, params, parent),
+        // The font colour's More Colors… (the colour picker keeps its own answer route).
+        "colors" => crate::colors::open(app, name, params),
         "phonetic" => phonetic::open(app, name, params, parent),
         "enclose" => enclose::open(app, name, params, parent),
         "defineBullet" => dialogs_bullet::open(app, name, params, parent),
