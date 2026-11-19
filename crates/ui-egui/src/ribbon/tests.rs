@@ -104,6 +104,17 @@ fn double_click_on_format_painter_makes_it_sticky() {
     assert!(matches!(app.session.painter, Some((_, _, true))), "the double-click leaves it sticky");
 }
 
+/// A 1440 pt window shows the Home tab's Paragraph group whole, not collapsed into one button: its font box and
+/// size box are a ribbon's short fields and its buttons sit flat and close.
+#[test]
+fn home_shows_the_paragraph_group_whole_in_a_1440_point_window() {
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let h = app_harness(app, vec2(1440.0, 900.0));
+    let shown = |name: &str| h.query_all(By::new().label(name)).next().is_some();
+    assert!(shown("Bullets"), "the Paragraph group shows its Bullets button");
+    assert!(shown("Borders"), "and its Borders button");
+}
+
 fn png_data() -> String {
     let img = image::RgbaImage::from_fn(20, 10, |x, y| {
         if x > 2 && x < 17 && y > 2 && y < 7 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
