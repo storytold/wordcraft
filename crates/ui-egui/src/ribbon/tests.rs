@@ -415,7 +415,13 @@ fn ribbon_groups_fit_above_their_labels() {
         for tab in super::TABS.iter().filter(|t| **t != "File") {
             h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
             crate::test_harness::frames(&mut h, 3);
-            for group in h.query_all(By::new().role(egui::accesskit::Role::Group)).filter(|g| g.accesskit_node().raw_bounds().is_some()) {
+            // The ribbon's groups: every labelled container is a group node (the document, its page text, the task
+            // pane area), and those below the ribbon are not what this checks.
+            let ribbon_bottom = h.state().canvas.canvas_rect().map_or(f32::INFINITY, |c| c.top());
+            let groups = h
+                .query_all(By::new().role(egui::accesskit::Role::Group))
+                .filter(|g| g.accesskit_node().raw_bounds().is_some() && g.rect().bottom() <= ribbon_bottom + 1.0);
+            for group in groups {
                 let frame = group.rect();
                 let mut inner = Vec::new();
                 rects(&group, &mut inner);

@@ -88,6 +88,8 @@ fn bullets_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .activate(ActivateOn::Click)
         .card_columns(BULLETS.len())
         .content_cells()
+        // One row, all shown; the menu's body is the one scroll.
+        .natural_height(true)
         .show_items(ui, &source, &mut |c, _| {
             let c: &'static str = c;
             Tile::new(c).thumb(ThumbAspect::SQUARE, move |cx, r| paint_bullet(cx, r, c))

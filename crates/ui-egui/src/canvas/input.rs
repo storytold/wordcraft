@@ -193,7 +193,9 @@ impl CanvasTool for PageTextTool<'_> {
         let hf_zone = self.hf_zone(page, y);
         let hf_enter = enters_header_footer(self.app, story, hf_zone);
         handle_primary_press(self.app, &pp, mods, hf_zone, hf_enter);
-        if over_text || self.app.canvas.dragging { ToolAction::Claimed } else { ToolAction::Done }
+        // A press in the header or footer band keeps the gesture: its release decides a double-click there
+        // (`handle_completed_click` enters the header or footer), and a tool that is done gets no release.
+        if over_text || self.app.canvas.dragging || hf_zone.is_some() { ToolAction::Claimed } else { ToolAction::Done }
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {

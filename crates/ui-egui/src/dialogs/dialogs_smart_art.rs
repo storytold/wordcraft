@@ -318,6 +318,9 @@ fn layout_tiles(ui: &mut Ui, theme: &[Rgb], form: &mut SmartArtForm) -> bool {
     let out = TileGrid::<usize>::new(tl!("Layouts").to_string())
         .select(SelectMode::Single)
         .card_columns(3)
+        // Production's picker is three tile rows high and scrolls the rest; the cap also makes the grid the one owner
+        // of its scroll inside the dialog's scrolling body.
+        .max_rows(3)
         .selection(Bind::given(Selection::single(current)))
         .show_items(ui, &keyed(&positions, |i| *i), &mut |key, _| {
             let layout = shown.get(*key).copied().unwrap_or_default();

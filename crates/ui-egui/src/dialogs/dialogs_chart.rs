@@ -272,6 +272,8 @@ fn chart_grid(ui: &mut Ui, colors: [Color32; 3], form: &mut ChartTypeForm) -> bo
     let out = TileGrid::<usize>::new(tl!("Chart types").to_string())
         .select(SelectMode::Single)
         .card_columns(3)
+        // Every type shows, as in production, so the dialog's body is the one scroll.
+        .natural_height(true)
         .selection(Bind::given(Selection::single(current)))
         .show_items(ui, &source, &mut |key, _| {
             let kind = kinds.get(*key).copied().unwrap_or_default();
@@ -348,6 +350,9 @@ impl WordForm for ChartDataForm {
     }
 }
 
+/// The data rows the Edit Data grid shows before it scrolls.
+const DATA_ROWS_SHOWN: u16 = 11;
+
 /// The grid of categories and series, with Add Row and Add Series under it.
 fn data_body(ui: &mut Ui, f: &mut ChartDataForm) {
     Text::new(tl!("Type the categories down the side and a column of values per series.").to_string()).show(ui);
@@ -363,7 +368,9 @@ fn data_body(ui: &mut Ui, f: &mut ChartDataForm) {
     columns.push(ColumnSpec::new(remove_row_column.clone(), "", ColumnWidth::Controls(1.0)));
 
     let edits = RefCell::new(Vec::<Edit>::new());
-    let mut table = Table::<usize>::new(tl!("Chart data").to_string(), columns).select(SelectMode::Single);
+    // Production scrolls the rows in 280 pt (about eleven rows); the cap also makes the table the one owner of its
+    // scroll inside the dialog's scrolling body.
+    let mut table = Table::<usize>::new(tl!("Chart data").to_string(), columns).select(SelectMode::Single).max_rows(DATA_ROWS_SHOWN);
     for (j, name) in f.names.iter().enumerate() {
         let edits = &edits;
         let field = TextField::new(tl!("Series name").to_string(), Bind::given(name.clone())).placeholder(tl!("Series name").to_string());

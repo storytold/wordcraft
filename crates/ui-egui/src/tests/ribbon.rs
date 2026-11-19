@@ -94,7 +94,8 @@ fn picking_a_wordart_style_hands_the_keyboard_back_to_the_page() {
         a,
     );
     h.run_steps(4);
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "WordArt").click();
+    // Insert › Decorative Text is the WordArt gallery's opener, under that name in production too.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Decorative Text").click();
     h.run_steps(3);
     // The first style of the WordArt table (`wordcraft_doc::wordart`) is "Solid Accent".
     h.query_all(By::new().label_contains("Solid Accent")).next().expect("the first WordArt style tile").click();

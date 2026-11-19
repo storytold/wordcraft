@@ -301,6 +301,8 @@ fn symbol_grid(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .caption(CaptionPlace::None)
         .card_columns(6)
         .content_cells()
+        // At most thirty symbols, all shown; the menu's body is the one scroll.
+        .natural_height(true)
         .show_items(ui, &SymbolCells(items.len()), &mut |key, _| {
             let (c, font) = items.get(*key).cloned().unwrap_or_default();
             let glyph = c.clone();

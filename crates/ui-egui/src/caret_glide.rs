@@ -70,9 +70,9 @@ pub struct LookRequest {
     pub pointer: bool,
     /// How much motion the interface shows.
     pub motion: MotionMode,
-    /// The page view reported a changed view this pass (zoom, scroll, resize): a caret that moved
-    /// with it doesn't glide.
-    pub view_changed: bool,
+    /// A fingerprint of the view this pass shows (zoom, scroll, size): a caret that moved with a
+    /// changed view doesn't glide.
+    pub view: u64,
 }
 
 /// What the canvas knows about the caret in one frame.
@@ -371,7 +371,7 @@ fn cause_key(app: &WordApp) -> u64 {
 /// Steps `glide` for this pass: where and how strongly to draw the caret. With the caret
 /// animation off, or any motion mode but the full one, the caret jumps and blinks on and off.
 pub fn look(glide: &mut CaretGlide, app: &WordApp, request: LookRequest) -> Look {
-    let LookRequest { content_origin, target, shown, since_ms, on, now, frame_nr, viewport, keys, pointer, motion, view_changed } = request;
+    let LookRequest { content_origin, target, shown, since_ms, on, now, frame_nr, viewport, keys, pointer, motion, view } = request;
     if !app.ui.caret_animation || !matches!(motion, MotionMode::Full) {
         glide.reset();
         return Look { bar: target, opacity: if on { 1.0 } else { 0.0 }, moving: false };
@@ -380,8 +380,7 @@ pub fn look(glide: &mut CaretGlide, app: &WordApp, request: LookRequest) -> Look
     let frame = Frame {
         target: [target[0] - off, target[1] - off],
         cause: cause_key(app),
-        // The view fingerprint steps whenever the page view reports a change.
-        view: glide.view.wrapping_add(u64::from(view_changed)),
+        view,
         shown,
         viewport: viewport.translate(-off),
         now,

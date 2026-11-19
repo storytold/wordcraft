@@ -188,6 +188,8 @@ pub fn transform_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .select(SelectMode::None)
         .activate(ActivateOn::Click)
         .card_columns(4)
+        // Every warp shows; the menu's body is the one scroll.
+        .natural_height(true)
         .show_items(ui, &source, &mut |id, _| {
             let id: &'static str = id;
             let label = DRAWN_WARPS.iter().find(|(warp, _)| *warp == id).map_or(id, |(_, label)| *label);
