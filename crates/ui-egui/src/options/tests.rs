@@ -20,7 +20,7 @@ fn with_model<R: 'static>(app: &mut WordApp, motion_full: bool, f: impl FnOnce(&
     }
     let job: Box<dyn FnOnce(&mut WordApp, bool) -> R> = Box::new(move |app, full| f(&mut OptionsModel::new(app, 1.0, full)));
     let state = State { app: std::mem::replace(app, self::app()), job: Some(job), out: None };
-    let mut h = egui_kittest::Harness::builder().build_ui_state(
+    let mut h = crate::test_harness::builder().build_ui_state(
         move |_ui, st: &mut State<R>| {
             if let Some(job) = st.job.take() {
                 st.out = Some(job(&mut st.app, motion_full));
@@ -42,7 +42,7 @@ fn row_enabled(model: &OptionsModel<'_>, key: &str) -> bool {
 /// The runtime is installed over `system`, the reader it resolves the system's motion from.
 fn options_harness(mut a: WordApp, system: craft::platform::appearance::SystemReader) -> egui_kittest::Harness<'static, WordApp> {
     a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "accessibility"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().build_ui_state(
+    let mut h = crate::test_harness::builder_with(move || craft::ui::testing::install_spec().system(system)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -50,7 +50,6 @@ fn options_harness(mut a: WordApp, system: craft::platform::appearance::SystemRe
         },
         a,
     );
-    craft::ui::shell::embed::install(&h.ctx, craft::ui::testing::install_spec().system(system), &crate::ui_fonts(crate::i18n::Lang::EN));
     options_frames(&mut h, 3);
     h
 }
@@ -229,7 +228,7 @@ fn length_units_follow_the_interface_language() {
     }
     let mut a = app();
     a.run("ui.language", json!({"value": "ru"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().build_ui_state(
+    let mut h = crate::test_harness::builder().build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

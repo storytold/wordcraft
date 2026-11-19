@@ -770,7 +770,7 @@ mod tests {
     fn interface_text_ink(appearance: super::Appearance) -> u64 {
         let dark = matches!(appearance, super::Appearance::Dark);
         let (fg, bg) = if dark { (egui::Color32::WHITE, egui::Color32::BLACK) } else { (egui::Color32::BLACK, egui::Color32::WHITE) };
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(560.0, 40.0)).with_pixels_per_point(1.45).wgpu().build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(560.0, 40.0)).with_pixels_per_point(1.45).wgpu().build_ui_state(
             move |ui, set: &mut bool| {
                 if !*set {
                     super::apply(ui.ctx(), appearance);

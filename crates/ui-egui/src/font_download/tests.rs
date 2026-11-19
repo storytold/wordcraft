@@ -30,7 +30,7 @@ fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
 }
 
 fn harness_sized(app: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(size).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

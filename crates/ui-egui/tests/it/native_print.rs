@@ -188,7 +188,7 @@ fn print_settings_are_visible_in_a_narrow_window() {
     app.run("text.insert", json!({"text": "A document to print"})).unwrap();
     app.ui.backstage = true;
     app.ui.backstage_page = "print".into();
-    let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 700.0)).build_ui_state(
+    let mut harness = crate::harness::builder().with_size(egui::vec2(800.0, 700.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -399,7 +399,7 @@ fn print_booklet_choice_updates_sheet_preview() {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("1\u{c}2\u{c}3\u{c}4\u{c}5")), Services::default());
     app.ui.language = "en".into();
     app.run("file.print", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1000.0)).with_pixels_per_point(1.0).build_ui_state(
+    let mut h = crate::harness::builder().with_size(egui::vec2(1440.0, 1000.0)).with_pixels_per_point(1.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -437,7 +437,7 @@ fn print_range_changes_start_at_the_first_planned_sheet() {
         assert!(app.session.current_pages(&app.session.export_layout()).0 >= 2);
         app.run("file.print", json!({})).unwrap();
         app.run("ui.printPage", json!({"pages": "2-10", "pagesPerSheet": per_sheet, "preview": 8})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1000.0)).build_ui_state(
+        let mut h = crate::harness::builder().with_size(egui::vec2(1440.0, 1000.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 app.logic(ui.ctx());
                 app.ui(ui);

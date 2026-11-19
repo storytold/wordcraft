@@ -69,7 +69,7 @@ fn table_properties_dialog_sets_every_selected_row() {
     a.run("table.properties", json!({})).unwrap();
 
     // Drawn: one click on the mixed box turns breaking on for every row.
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -297,7 +297,7 @@ fn recipient_grid_edits_the_right_record_through_the_ui() {
     a.run("mailings.recipients", json!({"csv": "Name,City\nAda,London\nAlan,Wilmslow\nGrace,London\nÉmile,Paris"})).unwrap();
     a.run("mailings.filterRecipients", json!({"rules": [{"field": "City", "op": "equal", "value": "London"}]})).unwrap();
     dialogs::open(&mut a, "recipientList", &json!({})).expect("the dialog opens");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut State| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -432,7 +432,7 @@ fn an_existing_list_picked_on_the_web_loads_recipients() {
 /// pane's search box (with the selected text in it), not a dialog.
 #[test]
 fn find_replace_and_go_to_keys_like_word() {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

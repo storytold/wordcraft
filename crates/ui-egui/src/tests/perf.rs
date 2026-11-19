@@ -22,7 +22,7 @@ pub(crate) fn big_table_doc(rows: usize, cols: usize) -> Document {
 
 fn harness(doc: Document) -> egui_kittest::Harness<'static, WordApp> {
     let a = WordApp::new(wordcraft_engine::Session::new(doc), Services::default());
-    egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

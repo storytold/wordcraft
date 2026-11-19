@@ -183,7 +183,7 @@ fn shift_click_beside_a_row_extends_a_selection_from_above() {
     a.run("insert.table", json!({"rows": 3, "cols": 2})).unwrap();
     a.run("caret.set", json!({"pos": serde_json::to_value(wordcraft_doc::Pos::body(0, 0)).unwrap()})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

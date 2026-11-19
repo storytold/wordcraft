@@ -682,7 +682,7 @@ pub(crate) mod testing {
 
     /// A harness that runs the app's logic and UI each frame in a 1440×900 window.
     pub(crate) fn harness(app: WordApp) -> Harness<'static, WordApp> {
-        Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);

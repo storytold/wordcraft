@@ -10,7 +10,7 @@ fn key_event(key: egui::Key, pressed: bool, modifiers: egui::Modifiers) -> egui:
 
 /// The whole app in a harness with the page focused, as a user's window is.
 fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

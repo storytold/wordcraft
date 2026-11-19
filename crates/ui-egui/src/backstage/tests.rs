@@ -19,7 +19,7 @@ fn app_with_files(files: &Arc<ScriptedFiles>) -> WordApp {
 
 /// The app in a window of `size`, run until it settles.
 fn harness(a: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(size).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -107,7 +107,7 @@ fn recovery_app() -> (WordApp, std::path::PathBuf) {
 fn pending_recovery_harness(app: WordApp, root: &std::path::Path) -> (egui_kittest::Harness<'static, WordApp>, std::rc::Rc<std::cell::Cell<bool>>) {
     let poll = std::rc::Rc::new(std::cell::Cell::new(true));
     let gate = poll.clone();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         move |ui, app: &mut WordApp| {
             if gate.get() {
                 app.logic(&ui.ctx().clone());
@@ -125,7 +125,7 @@ fn pending_recovery_harness(app: WordApp, root: &std::path::Path) -> (egui_kitte
 
 #[cfg(not(target_arch = "wasm32"))]
 fn recovery_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

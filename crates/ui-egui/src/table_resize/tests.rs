@@ -13,7 +13,7 @@ pub(crate) fn table_window_stepping(dt: f32) -> H {
     a.run("insert.table", json!({"rows": 2, "cols": 3})).unwrap();
     a.run("text.insert", json!({"text": "Product"})).unwrap();
     a.run("select.text", json!({"text": "Product"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(dt).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(dt).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

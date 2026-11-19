@@ -349,7 +349,7 @@ fn the_canvas_caret_glides_after_a_key() {
     a.run("ui.animations", json!({"value": "off"})).unwrap();
     let drawn = |h: &egui_kittest::Harness<'static, WordApp>| h.state().canvas.glide.drawn();
     let gliding = |h: &egui_kittest::Harness<'static, WordApp>| h.state().canvas.glide.is_gliding();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(DT as f32).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(DT as f32).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

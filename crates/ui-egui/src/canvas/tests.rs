@@ -269,7 +269,7 @@ fn multi_click_drag_extends_by_units() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "Alpha beta gamma delta\rSecond para\rThird para"})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -340,7 +340,7 @@ fn the_status_bar_names_the_page_in_view_not_only_the_caret_page() {
     }
     a.run("view.commentsPane", json!({"value": false})).unwrap();
     a.run("caret.docStart", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -401,7 +401,7 @@ fn selection_bar_clicks_select_lines() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": format!("{}\rSecond para\rThird para", long.trim_end())})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -498,7 +498,7 @@ fn selection_bar_of_a_right_to_left_paragraph_is_on_the_right() {
     a.run("caret.set", json!({"pos": serde_json::to_value(Pos::body(1, 0)).unwrap()})).unwrap();
     a.run("para.rtl", json!({})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -551,7 +551,7 @@ fn an_armed_format_painter_changes_the_pointer() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "Paint this formatting"})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -605,7 +605,7 @@ fn double_clicking_a_word_with_the_format_painter_paints_it() {
     a.run("select.text", json!({"text": "Bold"})).unwrap();
     a.run("format.bold", json!({})).unwrap();
     a.run("edit.formatPainter", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -643,7 +643,7 @@ fn double_clicking_a_word_with_the_format_painter_paints_it() {
 fn a_keystroke_is_painted_in_its_own_frame() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "Some text"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -674,7 +674,7 @@ fn double_click_margin_creates_header_and_footer() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "Body text"})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -747,7 +747,7 @@ fn double_click_reaches_the_first_page_header_from_another_header() {
     a.run("insert.header", json!({"text": "Head"})).unwrap();
     let head = a.session.sel.focus.story;
     a.run("layout.differentFirstPage", json!({"value": true})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -787,7 +787,7 @@ fn double_click_switches_between_header_and_footer() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "Body text"})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -873,7 +873,7 @@ fn a_link_to_a_bookmark_puts_the_caret_at_its_start() {
     a.run("select.text", json!({"text": "here"})).unwrap();
     a.run("insert.link", json!({"url": "#Spot"})).unwrap();
     a.run("caret.docEnd", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -928,7 +928,7 @@ fn ctrl_click_on_a_cross_reference_goes_to_its_target() {
     let caption = a.session.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("Caption"))).unwrap();
     let last = a.session.doc.body.len() - 1;
     assert_ne!(caption, last);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -964,7 +964,7 @@ fn right_clicking_a_link_hides_the_hover_tooltip() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("See here")), Default::default());
     a.run("select.text", json!({"text": "here"})).unwrap();
     a.run("insert.link", json!({"url": "https://example.com/very/long/tracking/url?with=parameters&and=still-more"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1003,7 +1003,7 @@ fn a_handled_press_skips_the_link_tooltip() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("See here")), Default::default());
     a.run("select.text", json!({"text": "here"})).unwrap();
     a.run("insert.link", json!({"url": "https://example.com/"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1041,7 +1041,7 @@ fn hiding_white_space_stacks_page_bands_and_keeps_hit_testing() {
     a.run("text.insert", json!({"text": "Last page"})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
     a.run("view.hideWhiteSpace", json!({"value": true})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 2400.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 2400.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1131,7 +1131,7 @@ fn the_ime_fixture_draws_kana_without_a_japanese_font() {
 fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("document.setText", json!({"text": "The"})).unwrap();
-    let mut h = egui_kittest::Harness::builder()
+    let mut h = crate::test_harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
         .with_context_setup(kana_test_glyphs)
         .with_step_dt(1.0 / 60.0)
@@ -1175,7 +1175,7 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
 fn ime_descriptor_reports_visible_logical_text_and_exact_cause() {
     use egui::ImeChangeCause;
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("ab")), Default::default());
-    let mut h = egui_kittest::Harness::builder()
+    let mut h = crate::test_harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
         .with_context_setup(kana_test_glyphs)
         .with_step_dt(1.0 / 60.0)
@@ -1224,7 +1224,7 @@ fn ime_descriptor_hides_tracked_deletions_and_preserves_reversed_selection() {
     let mut doc = wordcraft_doc::Document::from_text("x");
     doc.body = vec![para_block(p)];
     let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1250,7 +1250,7 @@ fn ime_descriptor_hides_tracked_deletions_and_preserves_reversed_selection() {
 fn ime_byte_deletion_preserves_the_selection_and_earns_input_method() {
     use egui::ImeChangeCause;
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("abcd")), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1281,7 +1281,7 @@ fn ime_byte_deletion_preserves_the_selection_and_earns_input_method() {
 #[test]
 fn ime_descriptor_is_unavailable_for_a_too_wide_selection() {
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&"a".repeat(5000))), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1302,7 +1302,7 @@ fn ime_descriptor_is_unavailable_for_a_too_wide_selection() {
 #[test]
 fn ime_generation_changes_on_document_replacement_but_not_on_caret_motion() {
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("hello")), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1333,7 +1333,7 @@ fn ime_equation_is_unavailable_with_a_stable_session_context() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("insert.equation", json!({"linear": "x+y"})).unwrap();
     assert!(app.session.math.is_some(), "the equation is being edited");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1368,7 +1368,7 @@ fn ime_transformed_equation_commits_are_other() {
     for (typed, latex) in [("a/b ", "\\frac{a}{b}"), ("\\alpha ", "\\alpha")] {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
         app.run("insert.equation", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1398,7 +1398,7 @@ fn ime_literal_commit_after_autoformat_is_input_method() {
         app.run("text.insert", json!({"text": text})).unwrap();
     }
     assert_eq!(app.session.undo_label(), Some("AutoFormat"), "the earlier AutoCorrect left its undo label");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1423,7 +1423,7 @@ fn exhausted_ime_revisions_never_certify_equation_or_wide_body_edits() {
     use egui::ImeChangeCause;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("insert.equation", json!({"linear": "x"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1445,7 +1445,7 @@ fn exhausted_ime_revisions_never_certify_equation_or_wide_body_edits() {
     assert_eq!(ime.change_cause, ImeChangeCause::Other, "without a revision the change cannot be certified");
 
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&"a".repeat(5000))), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1473,7 +1473,7 @@ fn exhausted_ime_revisions_never_certify_equation_or_wide_body_edits() {
 #[test]
 fn ime_generation_changes_on_body_replacement_with_the_same_text() {
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("hello")), Default::default());
-    let mut h = egui_kittest::Harness::builder()
+    let mut h = crate::test_harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
         .with_context_setup(kana_test_glyphs)
         .with_step_dt(1.0 / 60.0)
@@ -1507,7 +1507,7 @@ fn ime_generation_changes_on_undo_and_version_restore() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("one")), Default::default());
     app.run("file.versions", json!({"save": "v1"})).unwrap();
     app.run("document.setText", json!({"text": "two"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1537,7 +1537,7 @@ fn ime_apostrophe_with_smart_quotes_off_is_an_input_method_change() {
     use egui::ImeChangeCause;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("tools.autocorrect", json!({"smartQuotes": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1562,7 +1562,7 @@ fn ime_apostrophe_with_smart_quotes_on_stays_other() {
     use egui::ImeChangeCause;
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     // Smart quotes are on by default.
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1585,7 +1585,7 @@ fn ime_apostrophe_with_smart_quotes_on_stays_other() {
 fn ime_literal_commit_is_input_method() {
     use egui::ImeChangeCause;
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1609,7 +1609,7 @@ fn ime_literal_commit_is_input_method() {
 fn para_alignment_before_ime_commit_is_other() {
     use egui::ImeChangeCause;
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("hello")), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1641,7 +1641,7 @@ fn para_alignment_before_ime_commit_is_other() {
 fn para_alignment_after_ime_commit_is_other() {
     use egui::ImeChangeCause;
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("hello")), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1680,7 +1680,7 @@ fn smart_art_item_ime_commit_is_other_and_does_not_reach_the_body() {
     use egui::ImeChangeCause;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("insert.smartArt", json!({"items": ["A"]})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1717,7 +1717,7 @@ fn empty_smart_art_ime_commit_is_consumed_without_body_insertion() {
     {
         std::sync::Arc::make_mut(spec).items.clear();
     }
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1743,7 +1743,7 @@ fn empty_smart_art_ime_commit_is_consumed_without_body_insertion() {
 fn ime_wide_unavailable_deletion_uses_engine_revisions() {
     use egui::ImeChangeCause;
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&"a".repeat(5000))), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1777,7 +1777,7 @@ fn ime_equation_delete_at_start_is_refused_without_a_receipt() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("insert.equation", json!({"linear": "x+y"})).unwrap();
     app.run("equation.move", json!({"dir": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1806,7 +1806,7 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     use egui::ImeChangeCause;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("insert.equation", json!({"linear": "x+y"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1866,7 +1866,7 @@ fn ime_equation_delete_is_one_input_method_change() {
     use egui::ImeChangeCause;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("insert.equation", json!({"linear": "x+y"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1892,7 +1892,7 @@ fn ime_equation_context_mixes_with_application_changes() {
     use egui::ImeChangeCause;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("insert.equation", json!({"linear": "x"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1927,7 +1927,7 @@ fn ime_equation_context_mixes_with_application_changes() {
 fn ime_equation_replacement_starts_a_new_context() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("insert.equation", json!({"linear": "x+y"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -2076,7 +2076,7 @@ fn a_picture_linked_from_its_context_menu_shows_and_follows_its_link() {
         }
         let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
         a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -2143,7 +2143,7 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let pos = link_box(&mut a, json!({"url": "https://example.com/box"}));
     let link = a.session.doc.para_at(&pos).map(|p| p.props_of_char(pos.off).link.clone());
     assert_eq!(link, Some(Some("https://example.com/box".to_string())), "the link is on the text box");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

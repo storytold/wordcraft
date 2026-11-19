@@ -212,7 +212,7 @@ fn language_dialog_ok_keeps_inherited_proofing() {
     a.run("select.all", json!({})).unwrap();
     let before = a.session.doc.clone();
     a.run("review.language", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -251,7 +251,7 @@ fn language_dialog_default_survives_a_restart() {
         proof_touched: false,
     };
     open_form(&mut a, None, language);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
@@ -293,7 +293,7 @@ fn language_dialog_whole_document_checkbox_sends_scope() {
     let para = wordcraft_doc::Paragraph::with_text("Header", Default::default());
     let header = a.session.doc.add_part(wordcraft_doc::PartKind::Header, vec![Arc::new(wordcraft_doc::Block::Para(para))]);
     open_form(&mut a, None, f);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
@@ -706,7 +706,7 @@ fn size_dialog_typed_height_applies_on_ok_in_proportion() {
     use egui_kittest::kittest::Queryable;
     let mut a = picture_app(40, 20);
     a.run("picture.size", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -739,7 +739,7 @@ fn size_dialog_leaves_out_of_range_values_alone() {
     let mut a = picture_app(1, 1);
     a.run("picture.size", json!({"width": 100.0, "height": 100.0, "lockAspect": false})).unwrap();
     a.run("picture.size", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -762,7 +762,7 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
     let harness = |a: WordApp| {
-        egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);

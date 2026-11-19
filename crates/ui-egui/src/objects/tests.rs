@@ -17,7 +17,7 @@ fn ctrl_shift_drag_copies_along_the_dominant_axis() {
         app.run("arrange.bounds", json!({"page": 0, "x": 200, "y": 300})).unwrap();
         app.session.clipboard_text = "untouched clipboard".into();
         let before = app.session.doc.clone();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1100.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 1100.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -390,7 +390,7 @@ fn dragging_a_shape_snaps_to_the_page_centre_unless_alt() {
     a.run("view.commentsPane", json!({"value": false})).unwrap();
     a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
     a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -456,7 +456,7 @@ fn dropping_a_shape_on_another_page_keeps_the_view_where_it_is() {
     a.run("text.insert", json!({"text": "two"})).unwrap();
     a.run("view.zoom", json!({"value": 30})).unwrap();
     a.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -648,7 +648,7 @@ fn alt_pressed_during_a_drag_unsnaps_and_keeps_keytips_off() {
     a.run("view.commentsPane", json!({"value": false})).unwrap();
     a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
     a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -716,7 +716,7 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     };
     a.session.doc.insert_object(&Pos::body(1, 0), picture, &Default::default()).unwrap();
     a.session.touch();
-    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+    let mut h: H = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -811,7 +811,7 @@ fn a_dragged_shape_leaves_the_text_behind_it() {
         extra: Default::default(),
     };
     a.session.doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
-    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+    let mut h: H = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -937,7 +937,7 @@ fn a_shape_dragged_onto_the_next_page_is_dropped_there() {
     a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
     a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
     assert!(a.session.layout().pages.len() > 1, "a second page to drag onto");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 1800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -974,7 +974,7 @@ fn a_shape_dragged_onto_the_next_page_is_dropped_there() {
 
 /// A settled canvas for the rotation regressions, without taking focus on the desktop.
 fn rotation_window(app: WordApp) -> crate::table_resize::tests::H {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1183,7 +1183,7 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     app.session.touch();
     app.run("view.commentsPane", json!({"value": false})).unwrap();
     app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, OBJ.len_utf8())})).unwrap();
-    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+    let mut h: H = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1270,7 +1270,7 @@ fn typing_after_a_click_in_a_grouped_text_box_edits_its_text() {
         d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
         let mut a = WordApp::new(wordcraft_engine::Session::new(d), crate::Services::default());
         a.run("view.commentsPane", json!({"value": false})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1321,7 +1321,7 @@ fn clicking_and_dragging_inside_a_canvas_works_on_its_members() {
     a.run("insert.textBox", json!({"text": "Label"})).unwrap();
     a.run("select.objects", json!({"index": 0})).unwrap();
     a.run("canvas.member", json!({"index": 1, "x": 200, "y": 100, "width": 150, "height": 80})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

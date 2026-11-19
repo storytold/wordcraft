@@ -241,7 +241,7 @@ mod tests {
         a.run("select.text", json!({"text": "Blue line"})).unwrap();
         a.run("format.textEffects", json!({"outline": {"color": "1F4E79", "width": 3.0}})).unwrap();
         assert_eq!(current_outline(&a), rgb("1F4E79").map(|c| (c, 3.0)), "the selection's outline, not the first paragraph's");
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let current = current_outline(app);
                 Menu::inline("Text Outline").show(ui, |ui, _| outline_menu(ui, app, current));

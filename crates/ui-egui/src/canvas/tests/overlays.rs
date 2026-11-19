@@ -14,7 +14,7 @@ fn ctrl_drag_copies_an_object() {
     a.run("view.commentsPane", json!({"value": false})).unwrap();
     a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
     a.run("arrange.bounds", json!({"width": 100, "height": 60, "page": 0, "x": 200, "y": 300})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -124,7 +124,7 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
     a.run("arrange.bounds", json!({"x": 120, "y": 80})).unwrap();
     a.run("arrange.wrap", json!({"wrap": wrap})).unwrap();
     let before = a.session.layout().object(&pos, 0).unwrap().rect;
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -309,7 +309,7 @@ fn context_menu_crop_item_activates_crop_mode() {
     app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
     let end = Pos::body(0, OBJ.len_utf8());
     app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -358,7 +358,7 @@ fn crop_is_disabled_when_cursor_is_adjacent_without_selection() {
     assert!(app.run("ui.crop", json!({})).is_err(), "ui.crop refuses without a selected picture");
     assert!(crate::crop::active(&app).is_none());
     // The command state every surface reads says the same.
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -498,7 +498,7 @@ fn header_picture_app(footer: bool, x: f32, y: f32, pages: usize) -> (H, Pos, wo
     a.run("arrange.wrap", json!({"wrap": "behindText"})).unwrap();
     let rect = a.session.layout().object(&pos, 0).unwrap().rect;
     a.run("insert.closeHeader", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

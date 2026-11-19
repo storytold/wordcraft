@@ -508,7 +508,7 @@ mod tests {
     /// The Print page's preview shown in a harness at `ppp` pixels per point over the synthetic page.
     fn harness(ppp: f32) -> egui_kittest::Harness<'static, WordApp> {
         let (app, _) = synthetic_app();
-        egui_kittest::Harness::builder()
+        crate::test_harness::builder()
             .with_size(egui::vec2(1000.0, 800.0))
             .with_pixels_per_point(ppp)
             .build_ui_state(|ui, app: &mut WordApp| show(app, ui), app)

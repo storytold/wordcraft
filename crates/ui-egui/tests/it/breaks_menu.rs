@@ -9,7 +9,7 @@ fn layout_tab() -> egui_kittest::Harness<'static, WordApp> {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("one\ntwo")), Services::default());
     // The labels below are English; an integration test otherwise follows the machine's language.
     app.ui.language = "en".into();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

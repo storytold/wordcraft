@@ -622,7 +622,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = app("");
         app.run("tools.autocorrect", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);

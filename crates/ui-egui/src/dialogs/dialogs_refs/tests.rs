@@ -74,7 +74,7 @@ fn caption_dialog_remembers_the_last_label() {
     a.ui.caption_labels.push("Diagram".into());
     a.run("select.text", json!({"text": "A chart"})).unwrap();
     a.run("references.caption", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -173,7 +173,7 @@ fn cross_reference_dialog_inserts_a_reference_to_a_custom_label() {
     assert_eq!(form.targets, vec!["Specimen I: A rock".to_string()]);
     close(&mut a);
     open_form(&mut a, None, form);
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -260,7 +260,7 @@ fn table_of_figures_dialog_picks_the_caption_label() {
     f.leader = "underscore".into();
     close(&mut a);
     open_form(&mut a, None, f);
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -363,7 +363,7 @@ fn create_source_with_a_corporate_author() {
     // Drawn: the checkbox is there under Author, and checking it relabels the box.
     close(&mut a);
     a.run("ui.dialog", json!({"name": "createSource"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -410,7 +410,7 @@ fn the_source_manager_imports_a_word_sources_file() {
     let files = std::sync::Arc::new(ScriptedFiles::answering([Picked::Paths(vec![path.clone()])]));
     let mut a = app("Studios matter ").with_host(std::sync::Arc::new(craft::host::Host::builder(crate::APP).files(files.clone()).build()));
     assert_eq!(a.run("references.sources", json!({})).unwrap(), json!({"pending": "sourceManager"}));
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

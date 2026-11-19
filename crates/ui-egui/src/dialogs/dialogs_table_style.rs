@@ -770,7 +770,7 @@ mod tests {
 
     /// The app, drawn whole, with the dialog host running after its UI.
     fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-        egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);

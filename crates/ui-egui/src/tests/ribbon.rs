@@ -82,7 +82,7 @@ fn picking_a_wordart_style_hands_the_keyboard_back_to_the_page() {
     use egui_kittest::kittest::{By, Queryable};
     let mut a = app();
     a.run("ui.tab", json!({"tab": "Insert"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

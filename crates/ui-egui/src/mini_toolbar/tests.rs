@@ -55,7 +55,7 @@ fn bar_over(pick: &str) -> H {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "The quick brown fox jumps over the lazy dog"})).unwrap();
     a.run("select.text", json!({"text": pick})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -563,11 +563,10 @@ fn the_alignment_buttons_mark_the_paragraph_as_seen_on_the_page() {
         }
         // The bar writes in the interface fonts, which take effect the frame after they are set.
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(500.0, 200.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(Vec2::new(500.0, 200.0)).build_ui_state(
             move |ui, app: &mut WordApp| {
                 if !fonts {
-                    craft::ui::shell::embed::install(ui.ctx(), craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN))
-                        .expect("fonts");
+                    // The runtime and its fonts are installed by the harness; the bar waits a frame.
                     fonts = true;
                     return;
                 }

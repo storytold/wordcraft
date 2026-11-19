@@ -440,7 +440,7 @@ fn a_japanese_file_name_is_drawn_in_the_caption() {
 /// first frame fires that release builds and the components' own trials never reach.
 #[test]
 fn the_app_window_shows_for_a_few_frames() {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -536,7 +536,7 @@ fn display_server_is_a_ui_command_and_survives_a_restart() {
 }
 
 fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1459,7 +1459,7 @@ fn every_cut_entry_point_publishes_to_the_clipboard() {
     assert!(copied(&ctx).contains(&text), "ribbon Cut published {text:?}: {:?}", copied(&ctx));
 
     // A real Cut key event through the app's key handling.
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1914,7 +1914,7 @@ fn the_default_app_button_shows_only_with_the_hosts_hook() {
             }));
         }
         a.run("ui.backstage", json!({"value": true, "page": "options"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1968,7 +1968,7 @@ fn the_host_hears_about_edits_made_while_drawing() {
     let mut a = app();
     let seen = reported.clone();
     a.services.on_dirty = Some(Box::new(move |d| seen.set(Some(d))));
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1991,7 +1991,7 @@ fn the_host_hears_about_edits_made_while_drawing() {
 fn paragraph_alignment_keeps_the_canvas_focused_for_typing() {
     use wordcraft_doc::Align;
 
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -2045,7 +2045,7 @@ fn type_after_click(h: &mut egui_kittest::Harness<'_, WordApp>, what: &str, text
 fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     use egui::accesskit::Role;
 
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -3216,7 +3216,7 @@ fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
     a.run("document.setText", json!({"text": "x"})).unwrap();
     a.run("select.all", json!({})).unwrap();
     a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -3242,7 +3242,7 @@ fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
 #[test]
 fn f11_and_escape_toggle_full_screen() {
     use egui::ViewportCommand::Fullscreen;
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -3293,7 +3293,7 @@ fn f11_and_escape_toggle_full_screen() {
 #[test]
 fn escape_collapses_a_selection_before_leaving_full_screen() {
     use egui::ViewportCommand::Fullscreen;
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -3437,7 +3437,7 @@ fn pasted_picture_inserts_only_when_the_page_is_the_edit_target() {
 }
 
 fn paste_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -3707,7 +3707,7 @@ fn render_without_a_path_replies_with_the_png() {
 #[test]
 fn shift_f10_opens_the_context_menu_at_the_caret() {
     use egui_kittest::kittest::Queryable;
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

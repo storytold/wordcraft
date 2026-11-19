@@ -14,7 +14,7 @@ fn window(a: WordApp) -> H {
 /// [`window`] with a chosen step time (the time one frame adds), for gestures whose outcome
 /// depends on how long frames last.
 fn window_dt(a: WordApp, dt: Option<f32>) -> H {
-    let mut b = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0));
+    let mut b = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0));
     if let Some(dt) = dt {
         b = b.with_step_dt(dt);
     }

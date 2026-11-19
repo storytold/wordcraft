@@ -28,7 +28,7 @@ fn clipboard_delete_returns_focus_to_the_document() {
 }
 
 fn pane_harness(app: crate::WordApp) -> egui_kittest::Harness<'static, crate::WordApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut crate::WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -65,7 +65,7 @@ fn pane_bodies_fit_the_narrowest_pane() {
     let widths = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = widths.clone();
     let mut fonts = false;
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 1200.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(400.0, 1200.0)).build_ui_state(
         move |ui, app: &mut crate::WordApp| {
             // Fonts take effect the frame after they are installed.
             if !fonts {
@@ -206,7 +206,7 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
         app.run("styles.create", serde_json::json!({"name": "Callout"})).unwrap();
         // Fonts take effect the frame after they are set, so the first frame only installs them.
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 1200.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(400.0, 1200.0)).build_ui_state(
             |ui, app: &mut crate::WordApp| {
                 if !fonts {
                     crate::app::fonts::install_ui_fonts(ui.ctx(), crate::i18n::Lang::EN);

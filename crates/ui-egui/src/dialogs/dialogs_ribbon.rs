@@ -828,7 +828,7 @@ mod tests {
 
     /// The app in a harness: its logic and its window each pass, as the shell runs them.
     fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-        egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);

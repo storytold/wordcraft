@@ -326,7 +326,7 @@ mod tests {
     fn harness(text: &str) -> egui_kittest::Harness<'static, WordApp> {
         let mut app = app(text);
         app.run("review.spelling", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(frame, app);
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(frame, app);
         h.run_steps(6);
         h
     }

@@ -12,7 +12,7 @@ type Harness = egui_kittest::Harness<'static, WordApp>;
 /// An English app window of `size`, settled and ready for clicks through the real frame.
 fn app_harness(mut app: WordApp, size: egui::Vec2) -> Harness {
     app.ui.language = "en".into();
-    let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(size).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -368,7 +368,7 @@ fn ribbon_groups_fit_above_their_labels() {
         }
     }
     let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

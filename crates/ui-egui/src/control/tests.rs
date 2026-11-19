@@ -13,7 +13,7 @@ fn installed() -> egui::Context {
 
 /// The app in a headless harness that runs `logic` and `ui` and installs the runtime.
 fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, a: &mut WordApp| {
             let ctx = ui.ctx().clone();
             a.logic(&ctx);
@@ -21,7 +21,6 @@ fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
         },
         app,
     );
-    craft::ui::shell::embed::install(&h.ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN));
     frames(&mut h, 6);
     h
 }
