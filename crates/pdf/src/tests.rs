@@ -3313,3 +3313,18 @@ fn blank_table_cells_keep_their_td_and_th() {
     assert_eq!(count("TH"), 2, "both header cells, including the blank one");
     assert_eq!(count("TD"), 2, "both body cells, including the blank one");
 }
+
+/// A row whose cells are all blank is still a row: its TR and its cells are in the tree.
+#[test]
+fn an_all_blank_row_keeps_its_cells() {
+    use wordcraft_doc::{Cell, Row, Table};
+    let mut d = Document::from_text("A table.");
+    let blank = Row { cells: vec![Cell::with_text(""), Cell::with_text("")], ..Default::default() };
+    let filled = Row { cells: vec![Cell::with_text("A"), Cell::with_text("B")], ..Default::default() };
+    let t = Table { grid: vec![120.0, 120.0], rows: vec![blank, filled], ..Default::default() };
+    d.body.push(Arc::new(wordcraft_doc::Block::Table(t)));
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { tagged: true, compress: false, ..Default::default() }).unwrap()).into_owned();
+    let count = |tag: &str| raw.matches(&format!("/S/{tag}")).count() + raw.matches(&format!("/S /{tag}")).count();
+    assert_eq!(count("TR"), 2, "both rows, including the all-blank one");
+    assert_eq!(count("TD"), 4, "every body cell");
+}
