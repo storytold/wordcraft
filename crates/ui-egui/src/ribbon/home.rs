@@ -4,7 +4,7 @@ use craft::theme::variant::Tone;
 use craft::theme::{Emphasis, Variant};
 use craft::ui::buttons::{Arrangement, Button, IconButton, SplitButton, SplitMenu, ToggleButton};
 use craft::ui::contract::{
-    ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
@@ -166,8 +166,9 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     row.group(ribbon_group("font", "Font", "font", Some("format.fontDialog")), |ui| {
+        // The Font and Paragraph groups' small buttons sit side by side with no gap, as the old ribbon's (1 pt apart).
         Stack::new().show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| {
+            Row::new().gap(Gap::None).show(ui, |ui, _| {
                 let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
                 let out = crate::widgets::font_box(ui, app, tl!("Font").to_string(), &mut family);
                 if let Some(f) = out.picked {
@@ -204,7 +205,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     IconButton::command(IconId::new(icon), CommandRef::new(id)).label(tl!(tip).to_string()).tooltip(tl!(tip).to_string()).show(ui);
                 }
             });
-            Row::new().show(ui, |ui, _| {
+            Row::new().gap(Gap::None).show(ui, |ui, _| {
                 for (icon, tip, id, on) in [
                     ("bold", "Bold", "format.bold", flag("bold")),
                     ("italic", "Italic", "format.italic", flag("italic")),
@@ -247,7 +248,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         let (align, rtl) = rp.as_ref().map_or((Align::Left, false), |r| (r.align.visual(r.bidi), r.bidi));
         let marks = app.session.view.marks;
         Stack::new().show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| {
+            Row::new().gap(Gap::None).show(ui, |ui, _| {
                 SplitButton::<String>::command(
                     CommandRef::with_params("para.bullets", json!({})),
                     SplitMenu::Body(Box::new(|ui, cx| bullets_menu(ui, cx, app))),
@@ -327,7 +328,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     .tooltip(tl!("Show/Hide ¶").to_string())
                     .show(ui);
             });
-            Row::new().show(ui, |ui, _| {
+            Row::new().gap(Gap::None).show(ui, |ui, _| {
                 for (icon, tip, id, on) in [
                     ("alignLeft", "Align Left", "para.alignLeft", align == Align::Left),
                     ("alignCenter", "Center", "para.alignCenter", align == Align::Center),
