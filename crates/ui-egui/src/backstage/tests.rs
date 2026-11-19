@@ -719,6 +719,11 @@ fn about_stays_at_the_bottom_of_a_side_menu_that_fits() {
     let options = h.get_by_label("Options").rect();
     assert!(about.min.y >= options.max.y, "About is below Options: {about:?} {options:?}");
     assert!(about.max.y <= 900.0, "About is inside the window: {about:?}");
+    // The menu is as tall as the window, so its footer is at the window's foot, not under Options.
+    assert!(about.max.y > 820.0, "About is at the foot of the window: {about:?}");
+    let discord = h.get_by_label("Discord community").rect();
+    assert!(discord.max.y <= about.min.y + 1.0, "the community link is above About: {discord:?} {about:?}");
+    assert!((about.min.x - options.min.x).abs() < 1.0 && about.width() > 80.0, "About spans the menu: {about:?}");
     assert!((about.min.x - options.min.x).abs() < 1.0, "in the same column: {about:?} {options:?}");
 }
 

@@ -233,8 +233,9 @@ fn page_body(ui: &mut Ui, app: &mut WordApp, page: &str) {
 /// the keytips take their rects), then About and the community link unless the user turned the
 /// community button off, as the title bar's pill does.
 fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_discord: bool, choice: &MenuChoice) {
+    // As wide as its widest row and as tall as the window, About at its foot (production's full-height rail).
     let _ = Stack::new()
-        .sizing(Sizing::Content)
+        .sizing(Sizing::FillHeight)
         .surface(SurfaceKind::Brand)
         .label(label("File"))
         .gap(Gap::Tight)
