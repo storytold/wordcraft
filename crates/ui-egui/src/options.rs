@@ -846,7 +846,8 @@ fn default_app_row(app: &mut WordApp, ui: &mut Ui) {
 
 /// The Options page.
 pub fn page(app: &mut WordApp, ui: &mut Ui) {
-    Text::new(tl!("Options")).role(TypeRole::Title).show(ui);
+    // The page title, as the other File pages' (production's 26 pt semibold).
+    Text::new(tl!("Options")).role(TypeRole::Display).show(ui);
     let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
     // The page says what the system answered, so it reads the resolved choice: the env's own

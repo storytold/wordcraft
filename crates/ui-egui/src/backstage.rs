@@ -128,12 +128,14 @@ fn label(text: &str) -> Label {
 /// A page's heading: the page's largest text, in the role the framework's start screen gives the Home page's
 /// greeting, so every File page's title has one size (production: 26 pt semibold over 15 pt sections).
 fn heading(ui: &mut Ui, text: &str) {
-    let _ = Text::new(label(text)).role(TypeRole::Heading).show(ui);
+    // Production's page title is large (26 pt semibold), well above its 15 pt section headings: the one role above
+    // the section headings' is the display role.
+    let _ = Text::new(label(text)).role(TypeRole::Display).show(ui);
 }
 
-/// A section heading inside a page, a step under the page's title.
+/// A section heading inside a page, a step under the page's title: production's 15 pt semibold, the heading role.
 fn subheading(ui: &mut Ui, text: &str) {
-    let _ = Text::new(label(text)).role(TypeRole::Title).show(ui);
+    let _ = Text::new(label(text)).role(TypeRole::Heading).show(ui);
 }
 
 /// An error message on a page.
