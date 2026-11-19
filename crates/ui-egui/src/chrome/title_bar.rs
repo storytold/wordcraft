@@ -42,7 +42,8 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     // The bar runs the leading closure and then the trailing one, never one inside the other
     // (`TitleBar::show_titled`), so each borrow below succeeds.
     let app = RefCell::new(app);
-    let out = TitleBar::new().show_titled(
+    // The bar always names the document, under the OS's own title bar too (prod `chrome.rs:425-471`).
+    let out = TitleBar::new().title_when_native().show_titled(
         ui,
         title,
         |ui, _| {

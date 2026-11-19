@@ -122,6 +122,23 @@ fn status_bar_controls_hold_still_across_zoom_levels() {
     }
 }
 
+/// The status bar's view buttons are icons, as the old app's (Read Mode, Print Layout, Web Layout in that order),
+/// each named by its view and the current view pressed.
+#[test]
+fn status_bar_view_buttons_are_icons_with_the_view_pressed() {
+    use egui::accesskit::{Role, Toggled};
+    let h = harness(new_app());
+    let names = ["Read Mode", "Print Layout", "Web Layout"];
+    let rects: Vec<egui::Rect> = names.iter().map(|name| h.get_by_role_and_label(Role::Button, name).rect()).collect();
+    for (name, r) in names.iter().zip(&rects) {
+        assert!(r.width() <= r.height() + 4.0, "{name} shows its icon only: {r:?}");
+    }
+    assert!(rects.windows(2).all(|w| w[0].min.x < w[1].min.x), "Read Mode, Print Layout, Web Layout from the start: {rects:?}");
+    let pressed: Vec<bool> =
+        names.iter().map(|name| h.get_by_role_and_label(Role::Button, name).accesskit_node().toggled() == Some(Toggled::True)).collect();
+    assert_eq!(pressed, [false, true, false], "Print Layout, the view, alone is pressed");
+}
+
 /// #2797: the status bar's totals are the Word Count dialog's numbers (words, characters with
 /// spaces, characters without spaces), and its selection line counts the selection the same way.
 #[test]
@@ -217,6 +234,23 @@ fn the_integrated_title_bar_moves_and_closes_the_window() {
     let sent = commands_over(&mut h, 3);
     assert!(sent.iter().any(|c| matches!(c, egui::ViewportCommand::Close)), "Close asks the OS to close the window");
     assert!(h.state().has_document(), "and closes nothing by itself");
+}
+
+/// Under the OS's own title bar (a native frame) the app's bar still names the document in its middle, as the old
+/// bar did: the title is drawn as its Rename Document button, not only given as the bar's accessible name.
+#[test]
+fn the_title_shows_in_a_native_frame() {
+    use craft::ui::shell::Frame;
+    use craft::window::policy::{Decision, Desktop, DesktopKind};
+    use egui::accesskit::Role;
+    let spec = || {
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        craft::ui::testing::install_spec().frame(Decision { frame: Frame::Native, overridden: None, desktop })
+    };
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(app_frame, new_app());
+    crate::test_harness::frames(&mut h, 6);
+    let shown = h.query_all_by_label_contains("Not saved").any(|n| n.accesskit_node().role() == Role::Button);
+    assert!(shown, "the document title is drawn in the bar");
 }
 
 /// #1945: Hide Quick Access Toolbar, the last item of the toolbar's menu, takes the toolbar's

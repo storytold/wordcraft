@@ -160,7 +160,12 @@ fn missing_fonts(app: &mut WordApp, ui: &mut Ui) {
     // A hostile file can name thousands of fonts: list the first few.
     const SHOWN: usize = 20;
     let label = crate::i18n::tn(count as u64, "{n} font not installed", "{n} fonts not installed");
-    let out = item(ui, label, Some(tl!("Shown in substitute fonts. Click for details.").to_string()));
+    // The warning sign before the count, as the old bar's (prod `chrome.rs:843`).
+    let out = Button::new(label)
+        .icon(IconId::new("fontMissing"))
+        .variant(Variant::GHOST)
+        .tooltip(TooltipSpec::new(tl!("Shown in substitute fonts. Click for details.").to_string()))
+        .show(ui);
     let mut open = app.chrome.fonts;
     Menu::new(tl!("Missing fonts").to_string()).opened_by(&out.response, Trigger::Click).open(Bind::bound(&mut open)).show(ui, |ui, _| {
         MenuItem::heading(tl!("Not installed — shown as").to_string()).show(ui);
@@ -184,8 +189,20 @@ fn missing_fonts(app: &mut WordApp, ui: &mut Ui) {
 /// The view, zoom and Focus controls, which stay at the reading end outside the bar's scroll.
 fn controls(app: &mut WordApp, ui: &mut Ui) {
     Button::command(CommandRef::new("view.focus")).label(tl!("Focus").to_string()).icon(IconId::new("focus")).variant(Variant::GHOST).show(ui);
-    for id in ["view.webLayout", "view.printLayout", "view.readMode"] {
-        ToggleButton::command(CommandRef::new(id)).show(ui);
+    // Icons only, Read Mode first and Web Layout last, each named in its tooltip, the current view on (prod
+    // `chrome.rs:925-943`).
+    let (mode, read) = (app.session.view.mode, app.session.view.read_mode);
+    for (id, icon, name, on) in [
+        ("view.readMode", "readMode", tl!("Read Mode"), read),
+        ("view.printLayout", "printLayout", tl!("Print Layout"), mode == wordcraft_layout::ViewMode::Print && !read),
+        ("view.webLayout", "webLayout", tl!("Web Layout"), mode == wordcraft_layout::ViewMode::Web),
+    ] {
+        ToggleButton::command(CommandRef::new(id))
+            .icon(IconId::new(icon))
+            .icon_only()
+            .selected(on)
+            .tooltip(TooltipSpec::new(name.to_string()))
+            .show(ui);
     }
     let reading = app.session.view.read_mode;
     // Reading zoom changes only reading presentation, never the normal view zoom.
@@ -213,6 +230,8 @@ fn controls(app: &mut WordApp, ui: &mut Ui) {
     let name = if reading { tl!("Text Size") } else { tl!("Zoom") };
     let slider = Slider::new(Bind::bound(&mut value), range)
         .scale(if reading { SliderScale::Linear } else { SliderScale::Log })
+        // A plain rail, as the old zoom slider's (prod `chrome.rs:911`): no fill up to the thumb.
+        .fill(false)
         .label(name.to_string())
         .show(ui);
     if let Some(v) = slider.value() {
