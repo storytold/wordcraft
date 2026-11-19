@@ -1,4 +1,9 @@
-use super::{Ui, Value, WordApp, json, vec2};
+use craft::keymap::CommandRef;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::display::Divider;
+use craft::ui::menu::MenuItem;
+
+use super::{Ui, Value, WordApp, json};
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
 pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
@@ -387,17 +392,18 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
     let no_proof = st.get("noProof").and_then(Value::as_bool).unwrap_or(false);
     let entries = short_languages();
     let checks = language_checks(&current, &entries);
+    let row = |id: &str, params: Value, label: String| MenuItem::command(CommandRef::with_params(id, params)).label(label);
     if checks.extra.is_some() {
-        mi_check(ui, app, &display_name(Some(&current)), true, "review.language", json!({"lang": current}));
+        row("review.language", json!({"lang": current}), display_name(Some(&current))).radio_mark(true).show(ui);
     }
     for ((tag, name), on) in entries.iter().zip(checks.listed) {
-        mi_check(ui, app, &display_of(tag, name), on, "review.language", json!({"lang": tag}));
+        row("review.language", json!({"lang": tag}), display_of(tag, name)).radio_mark(on).show(ui);
     }
-    ui.separator();
-    mi_check(ui, app, "Do Not Check Spelling or Grammar", no_proof, "review.language", json!({"noProof": !no_proof}));
-    ui.separator();
-    mi_check(ui, app, "Set Proofing Language…", false, "review.language", json!({}));
-    mi_check(ui, app, "Language Preferences…", false, "file.options", json!({"pane": "language"}));
+    Divider::horizontal().show(ui);
+    row("review.language", json!({"noProof": !no_proof}), tl!("Do Not Check Spelling or Grammar").to_string()).check(no_proof).show(ui);
+    Divider::horizontal().show(ui);
+    row("review.language", json!({}), tl!("Set Proofing Language…").to_string()).show(ui);
+    row("file.options", json!({"pane": "language"}), tl!("Language Preferences…").to_string()).show(ui);
 }
 
 /// The Language menu's check marks for the `current` tag: which `entries` (tag, English name) are
@@ -555,20 +561,4 @@ fn same_proofing(a: &str, b: &str) -> bool {
     }
 }
 
-/// A menu item with a check mark when `checked` (the current choice of several).
-pub(super) fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str, params: Value) {
-    // A vector mark needs no font glyph; the empty atom keeps labels aligned.
-    let mark = egui::Atom::paint(vec2(14.0, 14.0), move |ui, args| {
-        if checked {
-            let r = args.rect;
-            let points = vec![r.min + r.size() * vec2(0.15, 0.5), r.min + r.size() * vec2(0.4, 0.75), r.min + r.size() * vec2(0.85, 0.2)];
-            ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.5, args.fallback_text_color)));
-        }
-    });
-    let enabled = crate::widgets::enabled(app, id);
-    let resp = ui.add_enabled(enabled, egui::Button::new((mark, tl!(label))).selected(checked).min_size(vec2(200.0, 0.0)));
-    if resp.clicked() {
-        crate::widgets::run_from_ribbon(app, id, params);
-        ui.close();
-    }
-}
+
