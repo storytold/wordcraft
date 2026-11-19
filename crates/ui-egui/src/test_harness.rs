@@ -52,6 +52,40 @@ pub(crate) fn frame(h: &mut egui_kittest::Harness<'_, crate::WordApp>) {
     h.step();
 }
 
+/// Draws a one-pixel stand-in for CJK characters on `ctx`. Kittest's missing-glyph policy panics, which is right for
+/// the characters the interface's own fonts must carry; but craft-fonts is optional and a CI Linux runner has no CJK
+/// system font, while the language menu and the ribbon name languages in their own script (日本語, 中文…). Only
+/// Han, kana, Hangul and CJK punctuation are stood in for; any other missing glyph still panics.
+pub(crate) fn cjk_stand_in(ctx: &egui::Context) {
+    fn cjk(c: char) -> bool {
+        matches!(
+            u32::from(c),
+            0x1100..=0x11FF
+                | 0x2E80..=0x2FDF
+                | 0x3000..=0x30FF
+                | 0x3130..=0x318F
+                | 0x3400..=0x4DBF
+                | 0x4E00..=0x9FFF
+                | 0xA960..=0xA97F
+                | 0xAC00..=0xD7FF
+                | 0xF900..=0xFAFF
+                | 0xFF00..=0xFFEF
+                | 0x20000..=0x2FA1F
+        )
+    }
+    ctx.add_glyph_rasterizer(egui::GlyphRasterizer::new("wordcraft::test_harness::cjk", |req| {
+        let wanted = *req.family == egui::FontFamily::Proportional && !req.cluster.is_empty() && req.cluster.chars().all(cjk);
+        wanted.then(|| egui::RasterizedGlyph {
+            bitmap: egui::GlyphBitmap {
+                image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+                offset_px: egui::vec2(0.0, 0.0),
+                is_color: false,
+            },
+            advance_px: req.font_size_px.max(1.0),
+        })
+    }));
+}
+
 /// [`frame`] under the name some tests use.
 pub(crate) fn step(h: &mut egui_kittest::Harness<'_, crate::WordApp>) {
     frame(h);

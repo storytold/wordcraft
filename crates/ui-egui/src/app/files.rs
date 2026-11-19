@@ -353,7 +353,10 @@ impl WordApp {
                     }
                 }
             } else if save.marked_saved && save.document == current {
-                self.session.dirty = true;
+                // The undone stamp already put `dirty` back as it was before the save (a clean document stays clean).
+                if !undone {
+                    self.session.dirty = true;
+                }
             } else if save.marked_saved {
                 // Another document is shown: the one saved is unsaved again where it waits.
                 let _ = self.session.with_document(save.document, |s| s.dirty = true);

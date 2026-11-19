@@ -100,7 +100,10 @@ fn ctrl_shift_drag_keeps_its_axis_with_guides_and_live_modifiers() {
             h.run_steps(1);
         }
         if cancel {
-            h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: mods });
+            // The framework reads Escape with Ctrl/Cmd held as a chord, not as Escape: the modifiers go up first
+            // (the pointer stays down), as a person lets go of them to reach for the key.
+            h.event(Event::ModifiersChanged(Modifiers::NONE));
+            h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
             h.run_steps(1);
             assert!(h.state().canvas.object_gesture().is_none(), "Escape ends the drag");
         }
@@ -760,7 +763,8 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     let ctx = h.ctx.clone();
     h.state_mut().canvas.focus_page(&ctx);
     for _ in 0..8 {
-        h.step();
+        // As the app's driver steps: the focus request is the runtime's, taken at the frame's start.
+        crate::test_harness::frame(&mut h);
         for s in &h.output().shapes {
             for (a, b, width) in vertical_bars(&s.shape) {
                 if a.distance(caret_top) < 1.5 && b.distance(caret_bottom) < 1.5 {
@@ -1089,7 +1093,8 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
         h.event(egui::Event::PointerMoved(end));
         steps(&mut h, 2);
         // PLAN: the rotate handle's distance from the box (`radius`) is assumed to reach `RotateZone::Handle` (cv.K37, canvas-w4)
-        assert!(h.state().canvas.object_gesture().is_some(), "rotating");
+        // The turn handle is the frame's (the framework's transform box), not the page tool's move gesture.
+        assert!(h.state().canvas.frame_gesture(), "rotating");
         assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), original, "dragging must not edit the document");
         assert_eq!(h.state().session.undo_depth(), depth);
         let rendered = h.render().unwrap();
@@ -1137,7 +1142,7 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
         h.step();
         h.event(egui::Event::PointerMoved(end));
         steps(&mut h, 2);
-        assert!(h.state().canvas.object_gesture().is_some(), "rotating again");
+        assert!(h.state().canvas.frame_gesture(), "rotating again");
         h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
         h.step();
         button(&h, end, false);
@@ -1173,7 +1178,7 @@ fn rotation_drag_keeps_text_boxes_outline_only_until_their_text_can_rotate() {
     h.step();
     h.event(egui::Event::PointerMoved(end));
     steps(&mut h, 2);
-    assert!(h.state().canvas.object_gesture().is_some(), "turning the text box frame");
+    assert!(h.state().canvas.frame_gesture(), "turning the text box frame");
     assert_eq!(meshes(&h), at_rest, "do not preview rotated text that would snap upright on release");
     assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), original);
     assert_eq!(h.state().session.undo_depth(), depth);
