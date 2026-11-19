@@ -45,7 +45,11 @@
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the WordCraft authors. MIT OR Apache-2.0.</string>
 
-  <!-- Documents WordCraft opens (system type declarations). -->
+  <!-- Documents WordCraft opens (system type declarations). Each type names the app icon
+       (CFBundleIconFile), so Finder draws WordCraft's icon on these files once WordCraft is
+       their default app instead of the system's generic one, as PdfCraft does for PDFs.
+       CFBundleTypeIconSystemGenerated alone had no effect on PDFs there (storytold/pdfcraft#910),
+       a type with its own system icon like .docx. -->
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
@@ -55,6 +59,8 @@
       <string>Editor</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>WordCraft</string>
       <key>LSItemContentTypes</key>
       <array>
         <string>org.openxmlformats.wordprocessingml.document</string>
