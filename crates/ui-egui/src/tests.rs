@@ -396,6 +396,14 @@ fn input_dialog_opens_for_users_and_never_for_scripts() {
             applies_with: None,
         },
     ];
+    // What a script gets from `row`'s command, on the same setup.
+    let script_reply = |row: &InputRow| {
+        let mut script = app();
+        for (command, params) in &row.setup {
+            script.run(command, params.clone()).unwrap();
+        }
+        script.execute(row.command, row.params.clone()).unwrap()
+    };
     for row in rows {
         let setup = |a: &mut WordApp| {
             for (command, params) in &row.setup {
@@ -405,7 +413,17 @@ fn input_dialog_opens_for_users_and_never_for_scripts() {
         let mut user = app();
         setup(&mut user);
         let reply = user.run(row.command, row.params.clone()).unwrap();
-        assert_eq!(pending_of(&reply), Some(row.dialog), "{}: a user is asked", row.command);
+        // Match Fields and Check for Errors ask nothing: they report what they found, so the user's reply is the
+        // command's data, as a script's is, and the dialog shows it (production's `Dialog::report`).
+        if matches!(row.command, "mailings.matchFields" | "mailings.checkErrors") {
+            assert_eq!(pending_of(&reply), None, "{}: a report asks nothing", row.command);
+            assert_eq!(reply, script_reply(&row), "{}: the user gets the data a script gets", row.command);
+            if row.dialog == "matchFields" {
+                assert!(user.dialog_host.open_dialogs().into_iter().any(|d| d.key.as_deref() == Some(row.dialog)), "{}: its report shows", row.command);
+            }
+        } else {
+            assert_eq!(pending_of(&reply), Some(row.dialog), "{}: a user is asked", row.command);
+        }
         // PLAN(dialogs-w1): the app's `dialog_host` field is the window's `DialogHost`; `is_empty` is dg.F3's sibling.
         assert!(!user.dialog_host.is_empty(), "{}: the dialog is open", row.command);
         if let Some(params) = &row.applies_with {
@@ -1434,7 +1452,7 @@ fn copying_a_picture_replaces_the_clipboards_old_text() {
     };
     // The default test spec has no readable clipboard: install a memory one.
     use craft::platform::clipboard::{Clipboard, MemoryClipboard};
-    let ctx = crate::test_harness::context_with(|| craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default())));
+    let ctx = crate::test_harness::context_with(|| crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default())));
     let mut a = typed();
     a.ctx = Some(ctx.clone());
     a.run("select.all", json!({})).unwrap();
@@ -1461,7 +1479,7 @@ fn copying_a_picture_replaces_the_clipboards_old_text() {
 fn every_cut_entry_point_publishes_to_the_clipboard() {
     // The sink is the runtime's clipboard (a memory one here), not egui's `CopyText` output.
     use craft::platform::clipboard::{Clipboard, MemoryClipboard};
-    let spec = || craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
+    let spec = || crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
     let copied =
         |ctx: &egui::Context| -> Vec<String> { craft::ui::runtime::commands::ClipboardHandle::of(ctx).read_text().ok().flatten().into_iter().collect() };
 
@@ -3498,7 +3516,7 @@ fn pasted_picture_inserts_only_when_the_page_is_the_edit_target() {
 
 fn paste_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     use craft::platform::clipboard::Clipboard;
-    let spec = || craft::ui::testing::install_spec().clipboard(Clipboard::new(LatePaste::default()));
+    let spec = || crate::test_harness::install_spec().clipboard(Clipboard::new(LatePaste::default()));
     let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();

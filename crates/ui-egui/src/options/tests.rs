@@ -42,7 +42,7 @@ fn row_enabled(model: &OptionsModel<'_>, key: &str) -> bool {
 /// The runtime is installed over `system`, the reader it resolves the system's motion from.
 fn options_harness(mut a: WordApp, system: craft::platform::appearance::SystemReader) -> egui_kittest::Harness<'static, WordApp> {
     a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "accessibility"})).unwrap();
-    let mut h = crate::test_harness::builder_with(move || craft::ui::testing::install_spec().system(system)).build_ui_state(
+    let mut h = crate::test_harness::builder_with(move || crate::test_harness::install_spec().system(system)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

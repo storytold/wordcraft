@@ -46,7 +46,9 @@ fn search(app: &mut WordApp, ui: &mut Ui, ctx: &egui::Context) {
     let qid = app.window_id("nav_query");
     let field = app.window_id("nav_query_field");
     let stored = ui.data(|d| d.get_temp::<String>(qid)).unwrap_or_default();
-    let focus = std::mem::take(&mut app.nav_search_focus);
+    // Kept until a pass takes the focus request: a measuring run moves no focus (`focus::request` is `false` there),
+    // and the pane's first drawing after Ctrl+F opened it may be one.
+    let focus = app.nav_search_focus;
     let picked = focus.then(|| app.session.selected_text()).filter(|t| !t.is_empty() && !t.contains(['\n', '\r']) && t.chars().count() <= 255);
     let shown = picked.clone().unwrap_or_else(|| stored.clone());
     let mut text_field = TextField::search(tl!("Search document").to_owned(), Bind::given(shown.clone())).id(field);
@@ -54,8 +56,8 @@ fn search(app: &mut WordApp, ui: &mut Ui, ctx: &egui::Context) {
         text_field = text_field.select_on_focus();
     }
     let out = text_field.show(ui);
-    if focus {
-        focus::request(ctx, FocusTarget::Id(field));
+    if focus && focus::request(ctx, FocusTarget::Id(field)) {
+        app.nav_search_focus = false;
     }
     let mut q = shown;
     for event in out.events.iter() {

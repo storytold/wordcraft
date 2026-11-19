@@ -65,7 +65,7 @@ fn ime_receipt_gate_rejects_exhausted_unavailable_stamps() {
 /// the engine's owner rule keeps the IME events of the tests that follow.
 fn app_harness(app: WordApp) -> H {
     // Every test isolates through an in-memory clipboard, installed before the first frame.
-    let spec = || craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
+    let spec = || crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
     let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();

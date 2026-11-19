@@ -16,10 +16,18 @@ use egui_kittest::HarnessBuilder;
 
 use crate::i18n::Lang;
 
-/// A harness builder whose context has the craft runtime installed with the framework's test
-/// spec. Generic over the harness state, which `build_ui_state` fixes.
+/// The install spec the app's tests run on: the framework's test spec (the running build's shell, no OS windows or
+/// services) without the gallery stories' command sets. `craft::ui::testing::install_spec` loads those sets
+/// (`InstallSpec::stories`), and their default chords then hold app chords in every test window: the palette story's
+/// Search takes Mod+F from Find. The app installs no stories, so neither do its tests.
+pub(crate) fn install_spec() -> InstallSpec {
+    InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::ui::testing::windows::NoWindows))
+}
+
+/// A harness builder whose context has the craft runtime installed with the app's test spec
+/// ([`install_spec`]). Generic over the harness state, which `build_ui_state` fixes.
 pub(crate) fn builder<S>() -> HarnessBuilder<S> {
-    builder_with(craft::ui::testing::install_spec)
+    builder_with(install_spec)
 }
 
 /// Like [`builder`], with the install spec `spec` makes (called when the context is set up).
@@ -63,7 +71,7 @@ impl egui::Plugin for HandOver {
 /// `embed::before_input(ctx, |out| app.frame_input(out))`.
 pub(crate) fn context() -> egui::Context {
     let ctx = egui::Context::default();
-    craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(Lang::EN))
+    craft::ui::shell::embed::install(&ctx, install_spec(), &crate::ui_fonts(Lang::EN))
         .expect("the craft runtime installs on a fresh test context");
     ctx
 }

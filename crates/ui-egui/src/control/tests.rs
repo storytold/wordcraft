@@ -251,7 +251,7 @@ fn ui_closewindow_asks_the_close_guard_like_the_os_button() {
 fn ui_clipboard_sets_each_flavour_it_is_given() {
     use craft::platform::clipboard::{Clipboard, MemoryClipboard};
     use craft::ui::runtime::commands::ClipboardHandle;
-    let ctx = crate::test_harness::context_with(|| craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default())));
+    let ctx = crate::test_harness::context_with(|| crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default())));
     let mut a = app();
     let r = call(&mut a, &ctx, "ui.clipboard", json!({"text": "plain", "html": "<b>rich</b>"}));
     assert_eq!(r["ok"], true, "{r}");

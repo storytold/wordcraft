@@ -14,9 +14,11 @@ use super::host::{DialogHooks, Settle, open_with};
 use crate::WordApp;
 
 /// Opens the dialog `name` when it is one of this file's. An unavailable dialog (Edit Field Code without a field, Cell
-/// Margins outside a table) opens nothing, and so does any dialog while the window's context is not yet known.
+/// Margins outside a table) opens nothing. The context only recalls a dialog's remembered values
+/// (`HostedParamDialog::new`); before the window's first frame there is none, and a bare context recalls nothing, so
+/// the dialog still opens for the user who asked (as production's did).
 pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
-    let ctx = app.ctx.clone()?;
+    let ctx = app.ctx.clone().unwrap_or_default();
     match name {
         "renameDocument" => Some(open_rename(app, &ctx, parent)),
         "insertTable" => Some(open_insert_table(app, &ctx, parent)),

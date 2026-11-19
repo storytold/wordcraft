@@ -217,7 +217,7 @@ mod tests {
             app.set_startup_update_check(true);
             // The dialog host and its Escape need the framework runtime, installed before the first frame.
             let ctx = egui::Context::default();
-            craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN)).unwrap();
+            craft::ui::shell::embed::install(&ctx, crate::test_harness::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN)).unwrap();
             ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
             let frame = |app: &mut crate::WordApp, events: Vec<egui::Event>| {
                 let time = ctx.input(|i| i.time) + 0.05;

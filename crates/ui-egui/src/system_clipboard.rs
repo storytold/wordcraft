@@ -296,7 +296,7 @@ pub(crate) mod testing {
         }
         let ctx = egui::Context::default();
         // PLAN: assumed craft::ui::install(&Context, InstallSpec) and craft::ui::testing::install_spec() from craft-ui-contract
-        craft::ui::install(&ctx, craft::ui::testing::install_spec().clipboard(clipboard));
+        craft::ui::install(&ctx, crate::test_harness::install_spec().clipboard(clipboard));
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
         a.ctx = Some(ctx);
         a

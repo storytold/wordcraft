@@ -18,7 +18,7 @@ fn integrated_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
         let layout = craft::window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
         let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
         let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
-        craft::ui::testing::install_spec().frame(Decision { frame, overridden: None, desktop })
+        crate::test_harness::install_spec().frame(Decision { frame, overridden: None, desktop })
     };
     let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(app_frame, a);
     crate::test_harness::frames(&mut h, 6);
@@ -246,7 +246,7 @@ fn the_title_shows_in_a_native_frame() {
     use egui::accesskit::Role;
     let spec = || {
         let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
-        craft::ui::testing::install_spec().frame(Decision { frame: Frame::Native, overridden: None, desktop })
+        crate::test_harness::install_spec().frame(Decision { frame: Frame::Native, overridden: None, desktop })
     };
     let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(app_frame, new_app());
     crate::test_harness::frames(&mut h, 6);
