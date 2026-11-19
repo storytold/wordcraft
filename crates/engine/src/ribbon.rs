@@ -443,7 +443,8 @@ mod tests {
     fn citations_tab_is_not_named_after_a_brand() {
         assert!(TABS.contains(&"Citations"));
         assert!(!TABS.contains(&"Zotero"));
-        let tabs = RibbonLayout::default().tabs();
+        let layout = RibbonLayout::default();
+        let tabs = layout.tabs();
         assert!(tabs.iter().any(|t| t.name == "Citations" && !t.custom));
         assert!(!tabs.iter().any(|t| t.name == "Zotero"));
     }

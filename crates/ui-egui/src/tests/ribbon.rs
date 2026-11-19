@@ -141,7 +141,7 @@ fn ribbon_tab_click_does_not_follow_the_caret() {
 /// marked as chosen.
 #[test]
 fn citations_provider_menu_has_zotero_checked() {
-    use egui_kittest::kittest::{By, Queryable};
+    use egui_kittest::kittest::{By, NodeT, Queryable};
     let mut a = app();
     let depth = a.session.undo_depth();
     assert_eq!(a.run("ui.citations.provider", json!({"value": "zotero"})).unwrap(), json!({"provider": "zotero"}));
