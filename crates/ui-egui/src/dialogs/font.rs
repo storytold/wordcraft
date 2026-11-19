@@ -2,15 +2,18 @@
 //! New Bullet's bullet. The form is a [`WordForm`]; OK runs one `format.set` with only what the user
 //! changed, or hands the form back to Define New Bullet when it was opened from there.
 
+use craft::behavior::ColumnWidth;
 use craft::font_manager::picker::FontPickerSettings;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Pad, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::DialogId;
-use craft::ui::display::{Picture, Text};
-use craft::ui::form::{Field, FieldGroup};
+use craft::ui::display::{Picture, PictureSize, Text};
+use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::list::ThumbAspect;
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::runtime::env::{Label, UnitKind};
+use craft::ui::sections::GroupBox;
+use craft::ui::style::SurfaceKind;
 use craft::ui::text::NumberField;
 use egui::Ui;
 use serde::{Deserialize, Serialize};
@@ -294,7 +297,14 @@ fn sample_key(props: &CharProps, mark: Option<VertAlign>, paper: Rgb, dark: bool
     h.finish()
 }
 
-/// One font box over `family`; the action rows (Add Font…, Load System Installed Fonts…) file a run.
+/// The columns of the font rows: the labels, then the controls filling the rest.
+const FONT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
+
+/// The Effects check boxes, two to a line.
+const EFFECT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content; 2];
+
+/// One font box over `family` as two grid cells, its label and the box; the action rows (Add Font…, Load System
+/// Installed Fonts…) file a run.
 fn font_row(
     ui: &mut Ui,
     label: Label,
@@ -304,16 +314,19 @@ fn font_row(
     shown_as: Option<&str>,
     asks: &mut Vec<Asks>,
 ) {
-    let Some(catalog) = catalog.get() else { return };
+    // Before the catalog check, so the grid's columns stay in step without one.
+    Text::new(label.clone()).show(ui);
+    let Some(catalog) = catalog.get() else {
+        Text::new(Label::from(family.clone())).show(ui);
+        return;
+    };
     let actions = [Label::from(tl!("Add Font…")), Label::from(tl!("Load System Installed Fonts…"))];
-    Field::new(label.clone()).show(ui, |ui, _| {
-        let out = font_picker(label.clone(), Bind::bound(family), catalog, Bind::bound(settings), &actions, shown_as).show(ui);
-        match out.action {
-            Some(0) => asks.push(Asks::Run("font.add".into(), json!({}))),
-            Some(1) => asks.push(Asks::Run("font.loadSystem".into(), json!({}))),
-            _ => {}
-        }
-    });
+    let out = font_picker(label, Bind::bound(family), catalog, Bind::bound(settings), &actions, shown_as).show(ui);
+    match out.action {
+        Some(0) => asks.push(Asks::Run("font.add".into(), json!({}))),
+        Some(1) => asks.push(Asks::Run("font.loadSystem".into(), json!({}))),
+        _ => {}
+    }
 }
 
 /// A check box over `value`; true when this pass ticked or cleared it.
@@ -337,25 +350,27 @@ impl WordForm for FontForm {
     }
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
-        FieldGroup::new(Label::from(tl!("Font"))).show(ui, |ui, _| {
-            // Word's two font boxes when East Asian text is in use: the Asian text font, then the Latin one.
-            if self.asian {
-                font_row(
-                    ui,
-                    Label::from(tl!("Asian text font:")),
-                    &mut self.font_ea,
-                    &self.catalog,
-                    &mut self.settings,
-                    self.shown_as_ea.as_deref(),
-                    asks,
-                );
-            }
-            let latin = if self.asian { tl!("Latin text font:") } else { tl!("Font:") };
-            font_row(ui, Label::from(latin), &mut self.font, &self.catalog, &mut self.settings, self.shown_as.as_deref(), asks);
-            Field::new(Label::from(tl!("Size:"))).show(ui, |ui, _| {
+        // The old dialog's three framed boxes: an untitled one of label and control rows (labels at the start, controls
+        // in the second column), Effects as two columns of check boxes, and Preview.
+        Stack::new().surface(SurfaceKind::Frame).pad(Pad::Regular).fill_width().show(ui, |ui, _| {
+            Grid::new(&FONT_COLUMNS).fill_width().show(ui, |ui, _| {
+                // Word's two font boxes when East Asian text is in use: the Asian text font, then the Latin one.
+                if self.asian {
+                    font_row(
+                        ui,
+                        Label::from(tl!("Asian text font:")),
+                        &mut self.font_ea,
+                        &self.catalog,
+                        &mut self.settings,
+                        self.shown_as_ea.as_deref(),
+                        asks,
+                    );
+                }
+                let latin = if self.asian { tl!("Latin text font:") } else { tl!("Font:") };
+                font_row(ui, Label::from(latin), &mut self.font, &self.catalog, &mut self.settings, self.shown_as.as_deref(), asks);
+                Text::new(Label::from(tl!("Size:"))).show(ui);
                 NumberField::new(Label::from(tl!("Size:")), Bind::bound(&mut self.size)).unit_kind(UnitKind::Points).range(1.0..=1638.0).show(ui);
-            });
-            Field::new(Label::from(tl!("Font color:"))).show(ui, |ui, _| {
+                Text::new(Label::from(tl!("Font color:"))).show(ui);
                 let face = if dark_paper(self.paper.unwrap_or(Rgb(255, 255, 255))) {
                     craft::theme::Srgba::rgb(1.0, 1.0, 1.0)
                 } else {
@@ -366,43 +381,46 @@ impl WordForm for FontForm {
                 if out.more_colors {
                     asks.push(Asks::Color { field: "color", current: Rgb::parse(&self.color), tab: craft::color_ui::ui::ColorPickerTab::Standard });
                 }
-            });
-            Field::new(Label::from(tl!("Spacing (pt):"))).show(ui, |ui, _| {
+                Text::new(Label::from(tl!("Spacing (pt):"))).show(ui);
                 NumberField::new(Label::from(tl!("Spacing (pt):")), Bind::bound(&mut self.spacing))
                     .unit_kind(UnitKind::Points)
                     .range(-20.0..=20.0)
                     .show(ui);
-            });
-            Field::new(Label::from(tl!("Kerning for fonts:"))).show(ui, |ui, _| {
+                // The check box takes the label column; its size and "Points and above" share the control column.
                 // Text that differs shows the box off until it is ticked; OK then sets kerning for every run.
                 let on = self.kern == Some(true);
                 if let Some(now) = Checkbox::new(Bind::given(on)).label(Label::from(tl!("Kerning for fonts:"))).show(ui).value().cloned() {
                     self.kern = Some(now);
                 }
-                NumberField::new(Label::from(tl!("Points and above")), Bind::bound(&mut self.kern_at))
-                    .unit_kind(UnitKind::Points)
-                    .range(1.0..=1638.0)
-                    .enabled(on)
-                    .show(ui);
+                Row::new().show(ui, |ui, _| {
+                    NumberField::new(Label::from(tl!("Points and above")), Bind::bound(&mut self.kern_at))
+                        .unit_kind(UnitKind::Points)
+                        .range(1.0..=1638.0)
+                        .enabled(on)
+                        .show(ui);
+                    Text::new(Label::from(tl!("Points and above"))).enabled(on).show(ui);
+                });
             });
         });
-        FieldGroup::new(Label::from(tl!("Effects"))).show(ui, |ui, _| {
-            tick(ui, &mut self.bold, tl!("Bold"));
-            tick(ui, &mut self.italic, tl!("Italic"));
-            tick(ui, &mut self.underline, tl!("Underline"));
-            tick(ui, &mut self.strike, tl!("Strikethrough"));
-            // Superscript and Subscript exclude each other: the one just ticked wins.
-            if tick(ui, &mut self.sup, tl!("Superscript")) && self.sup {
-                self.sub = false;
-            }
-            if tick(ui, &mut self.sub, tl!("Subscript")) && self.sub {
-                self.sup = false;
-            }
-            tick(ui, &mut self.small_caps, tl!("Small caps"));
-            tick(ui, &mut self.caps, tl!("All caps"));
-            tick(ui, &mut self.hidden, tl!("Hidden"));
+        GroupBox::new(Label::from(tl!("Effects")), None).show(ui, |ui, _| {
+            Grid::new(&EFFECT_COLUMNS).show(ui, |ui, _| {
+                tick(ui, &mut self.bold, tl!("Bold"));
+                tick(ui, &mut self.italic, tl!("Italic"));
+                tick(ui, &mut self.underline, tl!("Underline"));
+                tick(ui, &mut self.strike, tl!("Strikethrough"));
+                // Superscript and Subscript exclude each other: the one just ticked wins.
+                if tick(ui, &mut self.sup, tl!("Superscript")) && self.sup {
+                    self.sub = false;
+                }
+                if tick(ui, &mut self.sub, tl!("Subscript")) && self.sub {
+                    self.sup = false;
+                }
+                tick(ui, &mut self.small_caps, tl!("Small caps"));
+                tick(ui, &mut self.caps, tl!("All caps"));
+                tick(ui, &mut self.hidden, tl!("Hidden"));
+            });
         });
-        FieldGroup::new(Label::from(tl!("Preview"))).show(ui, |ui, _| {
+        GroupBox::new(Label::from(tl!("Preview")), None).show(ui, |ui, _| {
             let paper = self.paper.unwrap_or(Rgb(255, 255, 255));
             let props = font_sample_props(self, paper);
             // A raised or lowered "2" follows the text when Superscript or Subscript is on.
@@ -420,7 +438,13 @@ impl WordForm for FontForm {
                 crate::previews::font_sample(tl!("AaBbYyZz"), &props, mark, (SAMPLE_WIDTH, SAMPLE_HEIGHT, ppp), paper, dark)
                     .unwrap_or_else(|| egui::ColorImage::new([1, 1], vec![egui::Color32::TRANSPARENT]))
             };
-            Picture::new(Label::from(tl!("Preview")), key, &maker).aspect(ThumbAspect::new(SAMPLE_WIDTH as u16, SAMPLE_HEIGHT as u16)).show(ui);
+            // The sample at its own size (rendered for the screen's density), in a frame, as the old dialog's page box.
+            Stack::new().surface(SurfaceKind::Frame).pad(Pad::None).show(ui, |ui, _| {
+                Picture::new(Label::from(tl!("Preview")), key, &maker)
+                    .aspect(ThumbAspect::new(SAMPLE_WIDTH as u16, SAMPLE_HEIGHT as u16))
+                    .extent(PictureSize::DevicePixels)
+                    .show(ui);
+            });
             if self.hidden {
                 Text::new(Label::from(tl!("Hidden text is not shown unless you display it."))).show(ui);
             }
