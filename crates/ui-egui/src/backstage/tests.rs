@@ -480,6 +480,7 @@ fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
 #[test]
 fn info_fields_keep_typed_properties_through_a_web_save() {
     use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
     // A browser host: the save is a download, answered with the suggested name.
     let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
     let mut a = app_with_files(&files);
@@ -679,6 +680,7 @@ fn backstage_save_browse_write_failure_shows_on_the_save_as_page() {
 #[test]
 fn info_properties_show_their_names_beside_the_fields() {
     use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
     let mut a = new_app();
     a.run("text.insert", json!({"text": "Some text"})).unwrap();
     let h = file_page(a, "info");
