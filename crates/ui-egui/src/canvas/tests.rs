@@ -389,19 +389,16 @@ fn the_page_in_view_follows_the_caret_while_it_is_on_screen() {
     let tops: Vec<f64> = (0..4).map(|i| f64::from(i) * 110.0).collect();
     let rects: Vec<craft::behavior::kurbo::Rect> = tops.iter().map(|&y| craft::behavior::kurbo::Rect::new(0.0, y, 80.0, y + 100.0)).collect();
     let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 1, bands: vec![(0.0, 100.0); 4] };
-    let scrolled = |top: f64| {
-        let mut view = craft::pages::ui::PageViewState::from_defaults(&Default::default());
-        view.offset = (0.0, top);
-        view
-    };
+    // The window's top edge in the layout's coordinates.
+    let scrolled = |top: f64| top;
     let caret = |page: usize, y: f64| Some((page, tops[page] + y, tops[page] + y + 10.0));
     // Window 0..150 shows page 0 and the top of page 1.
-    assert_eq!(viewed_page(caret(1, 5.0), &scrolled(0.0), &layout, 150.0), 1, "the caret is on screen, on page 1");
-    assert_eq!(viewed_page(caret(0, 5.0), &scrolled(0.0), &layout, 150.0), 0);
+    assert_eq!(viewed_page(caret(1, 5.0), scrolled(0.0), &layout, 150.0), 1, "the caret is on screen, on page 1");
+    assert_eq!(viewed_page(caret(0, 5.0), scrolled(0.0), &layout, 150.0), 0);
     // Scrolled to page 3: the caret on page 0 is off screen.
-    assert_eq!(viewed_page(caret(0, 5.0), &scrolled(330.0), &layout, 100.0), 3);
-    assert_eq!(viewed_page(None, &scrolled(220.0), &layout, 100.0), 2, "no caret: the top page");
-    assert_eq!(viewed_page(caret(2, 90.0), &scrolled(330.0), &layout, 100.0), 3, "a caret just above the window is not in view");
+    assert_eq!(viewed_page(caret(0, 5.0), scrolled(330.0), &layout, 100.0), 3);
+    assert_eq!(viewed_page(None, scrolled(220.0), &layout, 100.0), 2, "no caret: the top page");
+    assert_eq!(viewed_page(caret(2, 90.0), scrolled(330.0), &layout, 100.0), 3, "a caret just above the window is not in view");
 }
 
 /// #856: the left margin beside body text is Word's selection bar. A click selects the line,

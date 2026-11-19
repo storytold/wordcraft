@@ -830,7 +830,13 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
             crate::dialogs_smart_art::frame_button(app, ui, body.pages, layout);
             if let Some(pass) = body.pass {
                 ran = true;
-                tool_response = Some(run_page_tool(app, ui, layout, body, pass));
+                let response = run_page_tool(app, ui, layout, body, pass);
+                // A right click the page tool left asks for the menu: what it clicked becomes the selection first, so
+                // the menu acts on it (the page tool takes the primary button only).
+                if let Some(request) = response.context.filter(|r| !matches!(r.source, ContextSource::Key)) {
+                    input::handle_secondary_selection(app, body, layout, request.at);
+                }
+                tool_response = Some(response);
                 caret::paint_caret(app, ui, pass, body, Env::of(ui).motion.mode);
                 // This pass's keys and press have moved the caret: follow it, not the one from before the pass.
                 let fresh = app.session.layout();
@@ -935,7 +941,15 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         let top = r.y0 + f64::from(c.top) * s;
         Some((c.page, top, top + f64::from(c.height) * s))
     });
-    app.canvas.viewed_page = Some(viewed_page(caret_span, &state, &out.layout, f64::from(body_rect.height())));
+    // The layout's y at the top edge of the area the pages show in (inside the rulers), from where a placed page lands:
+    // the view's offset is not that edge, and a page whose last points lie above it is out of view.
+    let view_area = body_view.map_or(body_rect, |v| v.rect);
+    let top = out
+        .pages
+        .first()
+        .and_then(|p| Some(out.layout.rects.get(p.page)?.y0 - f64::from(p.rect.min.y - view_area.min.y)))
+        .unwrap_or(state.offset.1);
+    app.canvas.viewed_page = Some(viewed_page(caret_span, top, &out.layout, f64::from(view_area.height())));
     // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
     // without a click; a modal dialog keeps the keyboard until it closes.
     let view_rect = body_view.map_or(body_rect, |v| v.rect);

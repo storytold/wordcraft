@@ -1,15 +1,13 @@
 use craft::behavior::kurbo::Point;
 use craft::pages::layout::PagedLayout;
-use craft::pages::ui::PageViewState;
 
 use super::{Pos2, WordApp};
 
 /// The page being looked at (#3880): the page of `caret` (page, top, bottom in content
-/// coordinates) while any of it is inside the window (`top` .. `top + height`), else the page at
-/// the window's top: the first whose shown band ends below it (with Hide White Space the rects overlap in
-/// the hidden margins, and the next page's text already shows there), the last page past the end.
-pub(super) fn viewed_page(caret: Option<(usize, f64, f64)>, view: &PageViewState, layout: &PagedLayout, height: f64) -> usize {
-    let top = view.offset.1;
+/// coordinates) while any of it is inside the window (`top` .. `top + height`, `top` the layout's y at the window's
+/// top edge), else the page at the window's top: the first whose shown band ends below it (with Hide White Space the
+/// rects overlap in the hidden margins, and the next page's text already shows there), the last page past the end.
+pub(super) fn viewed_page(caret: Option<(usize, f64, f64)>, top: f64, layout: &PagedLayout, height: f64) -> usize {
     match caret {
         Some((page, from, to)) if to >= top && from <= top + height => page,
         _ => layout

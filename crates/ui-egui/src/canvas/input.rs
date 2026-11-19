@@ -81,8 +81,14 @@ struct PagePointer<'a> {
 }
 
 
+/// The page under `p` and the point on it. With Hide White Space the pages' rects overlap in the margins it hides: a
+/// point there belongs to the page whose shown band is nearest, so a click just past one page's text is still on it.
 fn page_of(pages: &[PlacedPage], p: Pos2) -> Option<(usize, f32, f32)> {
-    let placed = pages.iter().find(|pl| pl.rect.contains(p))?;
+    let away = |pl: &PlacedPage| {
+        let y = p.y - pl.rect.min.y;
+        (pl.band.0 - y).max(0.0).max(y - pl.band.1)
+    };
+    let placed = pages.iter().filter(|pl| pl.rect.contains(p)).min_by(|a, b| away(a).total_cmp(&away(b)))?;
     let at = placed.to_page(p);
     Some((placed.page, at.x as f32, at.y as f32))
 }
@@ -282,21 +288,44 @@ impl CanvasTool for PageTextTool<'_> {
     }
 }
 
-/// A right press on the page: a selection it lands in stays, a table cell selection it misses
-/// drops, and otherwise the caret goes there, so the context menu acts on what was clicked.
-pub(crate) fn handle_secondary_selection(app: &mut WordApp, pages: &[PlacedPage], layout: &DocLayout, at: Pos2) {
-    let Some((page, x, y)) = page_of(pages, at) else { return };
+/// A right click on the page, before its menu opens, so the menu acts on what was clicked: a table cell selection it
+/// misses drops; in an equation the caret goes there and the equation is edited (off it, an equation being edited is
+/// left); a picture, shape or text box under it is selected; otherwise a selection it lands in stays and the caret
+/// goes there.
+pub(crate) fn handle_secondary_selection(app: &mut WordApp, body: &PageBody<'_>, layout: &DocLayout, at: Pos2) {
+    let Some((page, x, y)) = page_of(body.pages, at) else { return };
     let point = wordcraft_geom::Point::new(x, y);
-    let story = app.session.sel.focus.story;
     // Selected table cells: a right-click off them drops them, even between the selection's ends
     // (beside a selected column), so the menu acts on the cell clicked.
     if let Some(range) = app.session.cell_range() {
         let on_cells =
             wordcraft_engine::cmd::table_mouse::cell_rects(layout, &app.session.doc, range).iter().any(|(pi, r)| *pi == page && r.contains(point));
-        if !on_cells && let Some(pos) = layout.hit(page, x, y, story) {
+        // On a selected cell the cells stay selected for the menu.
+        if on_cells {
+            return;
+        }
+        if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
             app.session.sel = wordcraft_engine::Selection::caret(pos);
             app.session.page_hint = page;
         }
+    }
+    match layout.equation_hit(page, x, y, app.session.sel.focus.story) {
+        Some((pos, inner)) => {
+            app.session.sel = wordcraft_engine::Selection::caret(pos);
+            let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
+            return;
+        }
+        None if app.session.math.is_some() => {
+            let _ = app.run("equation.exit", json!({}));
+        }
+        None => {}
+    }
+    if app.session.math.is_some() {
+        return;
+    }
+    if crate::objects::select_at(app, layout, body, at) {
+        app.canvas.context_issue = None;
+        app.canvas.context_synonyms = None;
         return;
     }
     if !app.session.sel.is_collapsed() {
@@ -305,7 +334,7 @@ pub(crate) fn handle_secondary_selection(app: &mut WordApp, pages: &[PlacedPage]
             return;
         }
     }
-    if let Some(pos) = layout.hit(page, x, y, story) {
+    if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
         app.session.sel = wordcraft_engine::Selection::caret(pos);
         app.session.page_hint = page;
     }
