@@ -109,12 +109,18 @@ pub(crate) fn count_field(ui: &mut Ui, label: &str, value: &mut u32, range: Rang
     }
 }
 
+/// The value a number field's events leave, `None` when they carry none.
+fn edited(events: &craft::behavior::EditEvents<Option<f64>>) -> Option<f64> {
+    events.iter().filter_map(|e| e.value().copied().flatten()).next_back()
+}
+
 /// A field over a length in points, shown in the user's unit; true when the user changed it.
 pub(crate) fn length_field(ui: &mut Ui, label: &str, value: &mut f32, lengths: LengthUnits, range: RangeInclusive<f64>, enabled: bool) -> bool {
     let was = f64::from(*value);
-    let mut shown = Some(was);
-    NumberField::length(label.to_string(), Bind::bound(&mut shown), lengths).range(range).enabled(enabled).show(ui);
-    match shown {
+    // The form takes the field's edit events, not a write into a copy that lives one pass: an edit that commits as the
+    // dialog files its OK (Enter, or a click on OK) reaches the form in the pass that files it.
+    let out = NumberField::length(label.to_string(), Bind::given(Some(was)), lengths).range(range).enabled(enabled).show(ui);
+    match edited(&out.edit.events) {
         Some(n) if n != was => {
             *value = n as f32;
             true
@@ -126,9 +132,8 @@ pub(crate) fn length_field(ui: &mut Ui, label: &str, value: &mut f32, lengths: L
 /// A percentage field over `value`; true when the user changed it.
 pub(crate) fn percent_field(ui: &mut Ui, label: &str, value: &mut f32, range: RangeInclusive<f64>) -> bool {
     let was = f64::from(*value);
-    let mut shown = Some(was);
-    NumberField::new(label.to_string(), Bind::bound(&mut shown)).range(range).unit("%").show(ui);
-    match shown {
+    let out = NumberField::new(label.to_string(), Bind::given(Some(was))).range(range).unit("%").show(ui);
+    match edited(&out.edit.events) {
         Some(n) if n != was => {
             *value = n as f32;
             true

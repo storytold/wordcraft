@@ -87,6 +87,9 @@ fn hover_at(h: &mut H, at: egui::Pos2) {
 fn press_key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
     h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
     steps(h);
+    // A real key goes up again: a key never released reads as held, and a second press of it as its repeat.
+    h.event(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+    steps(h);
 }
 
 fn format_state(h: &mut H) -> Value {
@@ -246,7 +249,9 @@ fn hovering_a_bar_member_previews_its_command() {
             }
             Member::Font => {
                 let b = font_box(&h);
-                open_list_of(&mut h, b);
+                // The font picker's chevron is an adornment inside the field and a click on the name opens the list
+                // too, so click the field itself (the size box's chevron lies beside it).
+                click_at(&mut h, b.center());
                 // The framework's font list is a tree of families (depth rows), so its rows are tree items.
                 h.query_all_by_role(Role::TreeItem)
                     .filter(|n| (n.rect().min.y >= b.max.y || n.rect().max.y <= b.min.y) && n.accesskit_node().label().as_deref() != Some(font.as_str()))
