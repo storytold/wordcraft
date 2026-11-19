@@ -11506,6 +11506,80 @@ fn keep_with_next_run_ignores_contextual_space_before_between_matching_styles() 
     assert_eq!([page(22), page(23), page(24)], [1, 1, 1]);
 }
 
+fn kept_run_start_pages(mut doc: Document, fillers: usize, run: &[(&str, ParaProps)]) -> Vec<usize> {
+    let para = |text: &str, props: &ParaProps| {
+        let mut paragraph = Paragraph::with_text(text, Default::default());
+        paragraph.props = ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+            widow_control: Some(true),
+            ..Default::default()
+        };
+        paragraph.props.overlay(props);
+        wordcraft_doc::para_block(paragraph)
+    };
+    doc.body = (0..fillers).map(|_| para("Filler", &ParaProps::default())).collect();
+    doc.body.extend(run.iter().map(|(text, props)| para(text, props)));
+    let layout = lay(&doc);
+    (fillers..doc.body.len()).map(|block| layout.caret(&Pos::body(block, 0)).unwrap().page).collect()
+}
+
+#[test]
+fn keep_with_next_run_respects_collapsed_and_additive_spacing() {
+    crate::test_fonts();
+    let kept = ParaProps { keep_next: Some(true), ..Default::default() };
+    let run = [
+        ("A", ParaProps { space_after: Some(40.0), ..kept.clone() }),
+        ("B1\nB2\nB3\nB4\nB5\nB6\nB7\nB8\nB9", ParaProps { space_before: Some(40.0), ..kept }),
+        ("C1\nC2\nC3\nC4\nC5", ParaProps::default()),
+    ];
+    let mut doc = Document::new();
+    doc.settings.sum_paragraph_spacing = false;
+    // 268 pt left: A and B fit with a single 40 pt gap, but C cannot start below them.
+    assert_eq!(kept_run_start_pages(doc.clone(), 19, &run), [1, 1, 1]);
+    // With an 80 pt gap B splits, so the start of the run stays on the first page.
+    doc.settings.sum_paragraph_spacing = true;
+    assert_eq!(kept_run_start_pages(doc, 19, &run), [0, 0, 1]);
+}
+
+#[test]
+fn keep_with_next_run_ignores_contextual_space_after_between_matching_styles() {
+    crate::test_fonts();
+    let kept = ParaProps { keep_next: Some(true), ..Default::default() };
+    let mut run = [
+        ("A", kept.clone()),
+        ("B1\nB2\nB3\nB4\nB5\nB6\nB7\nB8\nB9", ParaProps { space_after: Some(80.0), contextual_spacing: Some(true), ..kept.clone() }),
+        ("C1\nC2\nC3\nC4\nC5\nC6\nC7\nC8\nC9", kept),
+        ("D1\nD2\nD3\nD4\nD5", ParaProps::default()),
+    ];
+    // 408 pt left: with B's trailing space suppressed, A, B and C fit and D cannot start.
+    assert_eq!(kept_run_start_pages(Document::new(), 12, &run), [1, 1, 1, 1]);
+    // With actual trailing space, C splits and the start of the run stays.
+    run[1].1.contextual_spacing = Some(false);
+    assert_eq!(kept_run_start_pages(Document::new(), 12, &run), [0, 0, 0, 1]);
+}
+
+#[test]
+fn keep_with_next_run_ignores_automatic_space_after_between_list_items() {
+    crate::test_fonts();
+    let mut doc = Document::new();
+    let num = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    let numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    let kept = ParaProps { keep_next: Some(true), ..Default::default() };
+    let mut run = [
+        ("A", kept.clone()),
+        ("B1\nB2\nB3\nB4\nB5\nB6\nB7\nB8\nB9", ParaProps { numbering, space_after_auto: Some(true), ..kept.clone() }),
+        ("C1\nC2\nC3\nC4\nC5\nC6\nC7\nC8\nC9", ParaProps { numbering, ..kept }),
+        ("D1\nD2\nD3\nD4\nD5", ParaProps::default()),
+    ];
+    // 388 pt left: removing B's 14 pt after-space lets C fit but leaves no room to start D.
+    assert_eq!(kept_run_start_pages(doc.clone(), 13, &run), [1, 1, 1, 1]);
+    // An unlisted C keeps the automatic gap, so C splits.
+    run[2].1.numbering = None;
+    assert_eq!(kept_run_start_pages(doc, 13, &run), [0, 0, 0, 1]);
+}
+
 /// A kept paragraph that also keeps its lines together and has a bottom border needs the border
 /// room to be placed whole; the paragraph before it must count that room (the same placement
 /// check), or it stays while the kept paragraph moves alone. A is one line, B nine lines with a

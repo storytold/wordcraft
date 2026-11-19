@@ -14,6 +14,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::WRAP_RELAYS;
+use wordcraft_doc::resolve::ResolvedPara;
 
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
@@ -273,10 +274,18 @@ impl<'a> Flow<'a> {
             // off the space before here (Word: 24 pt before after 10 pt after leaves 14 pt).
             before = (before - after.max(0.0)).max(0.0);
         }
-        if let Some(prev) = pb.prev.take()
+        if let Some((style, contextual, after, after_auto, listed)) = pb.prev.take()
             && !pb.at_top()
         {
-            before = self.merge_gap(ctx, pb, before, prev);
+            let (kept_after, kept_before) = paragraph_gap(
+                &self.pl.rp,
+                self.label.is_some(),
+                before,
+                (&style, contextual, after, after_auto, listed),
+                ctx.doc.settings.sum_paragraph_spacing,
+            );
+            pb.y -= after - kept_after;
+            before = kept_before;
         }
         // Automatic spacing: none at the top of the document.
         if self.pl.rp.before_auto && self.block == 0 {
@@ -292,40 +301,6 @@ impl<'a> Flow<'a> {
             && only_markers(self.p, 0..self.p.text.len())
         {
             before = 0.0;
-        }
-        before
-    }
-
-    /// `before`, the space before the paragraph, with the previous paragraph (`prev`) taken into account.
-    fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, mut before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
-        let (style, ctxl, mut after, after_auto, listed) = prev;
-        let rp = &self.pl.rp;
-        // Contextual spacing suppresses each paragraph's own side of the gap.
-        if style == rp.style {
-            if ctxl {
-                pb.y -= after;
-                before = (before - after).max(0.0);
-                after = 0.0;
-            }
-            if rp.contextual_spacing {
-                before = 0.0;
-            }
-        }
-        // Automatic spacing: none between two list items (as in an HTML list; measured in Word:
-        // any two items, of one list or two, at any level).
-        if listed && self.label.is_some() {
-            if after_auto {
-                pb.y -= after;
-                after = 0.0;
-            }
-            if rp.before_auto {
-                before = 0.0;
-            }
-        }
-        // The space between two paragraphs is the larger of the first's space after and the
-        // second's space before, not their sum.
-        if before > 0.0 && after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
-            before = (before - after).max(0.0);
         }
         before
     }
@@ -349,24 +324,19 @@ impl<'a> Flow<'a> {
         // The room left on the page below this paragraph (with the 0.01 pt of slack below).
         // Unlimited where this paragraph does not fit here itself: it moves anyway, and the run
         // is counted whole as before.
-        let after = if rp.keep_next { space_after_kept(ctx, self.block, rp, self.label.is_some()) } else { 0.0 };
-        let room = pb.bottom + 0.01 - pb.y - height - after;
+        let room = pb.bottom + 0.01 - pb.y - height;
         // During balancing, a trial column that cuts a kept run must grow until the run fits.
         let balancing = pb.balance.is_some_and(|(page, _)| pb.pages.len() == page + 1);
         let room = if room < 0.0 || balancing { f32::INFINITY } else { room };
-        let need = height
-            + after
-            + if rp.keep_next { next_first_line(ctx, self.block, &rp.style, self.width, 0, room, &mut ctx.counters.clone()) } else { 0.0 };
+        let following =
+            |ctx: &mut Ctx, room| next_first_line(ctx, self.block, (rp, self.label.is_some()), self.width, 0, room, &mut ctx.counters.clone());
+        let need = height + if rp.keep_next { following(ctx, room) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         let next_room = pb.next_room(self.body_top);
         // Evaluated last: the room-limited count must not move a run that Word gives up on. When
         // the whole run is longer than a page, moving it fits nowhere and it stays where it is.
-        let whole_run_fits = |ctx: &mut Ctx| {
-            !rp.keep_next
-                || room.is_infinite()
-                || height + after + next_first_line(ctx, self.block, &rp.style, self.width, 0, f32::INFINITY, &mut ctx.counters.clone()) <= next_room
-        };
+        let whole_run_fits = |ctx: &mut Ctx| !rp.keep_next || room.is_infinite() || height + following(ctx, f32::INFINITY) <= next_room;
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= next_room && whole_run_fits(ctx) {
             pb.advance(self.block, self.body_top);
             pb.y += rp.space_before.min(0.0);
@@ -995,24 +965,55 @@ fn mirror_shift(rp: &wordcraft_doc::resolve::ResolvedPara, number: u32, web: boo
     right - left
 }
 
+/// The space after the preceding paragraph and before the following one on the same page.
+fn paragraph_gap(next: &ResolvedPara, next_listed: bool, mut before: f32, previous: (&str, bool, f32, bool, bool), sum_spacing: bool) -> (f32, f32) {
+    let (style, contextual, mut after, after_auto, listed) = previous;
+    // Contextual spacing suppresses each paragraph's own side of the gap.
+    if style == next.style {
+        if contextual {
+            before = (before - after).max(0.0);
+            after = 0.0;
+        }
+        if next.contextual_spacing {
+            before = 0.0;
+        }
+    }
+    // Automatic spacing is suppressed between two list items, including at different levels.
+    if listed && next_listed {
+        if after_auto {
+            after = 0.0;
+        }
+        if next.before_auto {
+            before = 0.0;
+        }
+    }
+    // Unless spacing is additive, use the larger of the two spaces.
+    if before > 0.0 && after > 0.0 && !sum_spacing {
+        before = (before - after).max(0.0);
+    }
+    (after, before)
+}
+
 /// The space after body paragraph `block` (resolved as `rp`) that is really left below it: none
 /// when contextual spacing or automatic spacing between list items drops it before the next
 /// paragraph. Same tests as the spacing between paragraphs in `place_para_in_flow`: contextual
 /// spacing removes this paragraph's space after only when this one asks for it, and the next
 /// counts as a list item when it gets a label.
-fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::ResolvedPara, listed: bool) -> f32 {
+fn space_after_kept(ctx: &Ctx, block: usize, rp: &ResolvedPara, listed: bool) -> f32 {
     let after = rp.space_after.max(0.0);
     if after <= 0.0 {
         return 0.0;
     }
     if let Some(Block::Para(next)) = ctx.doc.body.get(block + 1).map(|b| &**b) {
         let nrp = ctx.doc.styles.resolve_para(&next.props);
-        if nrp.style == rp.style && rp.contextual_spacing {
-            return 0.0;
-        }
-        if listed && rp.after_auto && ctx.has_label(next) {
-            return 0.0;
-        }
+        return paragraph_gap(
+            &nrp,
+            listed && rp.after_auto && ctx.has_label(next),
+            nrp.space_before,
+            (&rp.style, rp.contextual_spacing, after, rp.after_auto, listed),
+            ctx.doc.settings.sum_paragraph_spacing,
+        )
+        .0;
     }
     after
 }
@@ -1026,14 +1027,25 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// when the paragraph after it cannot start on the page (#966). A kept paragraph that does not
 /// fit in the `room` left on the page after the paragraphs before it breaks as usual, like a
 /// single kept paragraph that does not fit (measured in Word for Windows): the chain ends there
-/// and only its first lines count, so the paragraphs before it stay on the page.
-fn next_first_line(ctx: &mut Ctx, block: usize, previous_style: &str, width: f32, depth: usize, room: f32, counters: &mut Counters) -> f32 {
+/// and only its first lines count, so the paragraphs before it stay on the page. Count each
+/// gap when looking at the paragraph below it, once both sides can be resolved.
+fn next_first_line(
+    ctx: &mut Ctx,
+    block: usize,
+    previous: (&ResolvedPara, bool),
+    width: f32,
+    depth: usize,
+    room: f32,
+    counters: &mut Counters,
+) -> f32 {
+    let (prev, prev_listed) = previous;
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
             let rp = ctx.doc.styles.resolve_para(&p.props);
             let label =
                 p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
+            let listed = label.is_some();
             let pl = match ctx.para_ahead(p, width, label.clone()) {
                 Some(pl) => pl,
                 None => {
@@ -1063,13 +1075,19 @@ fn next_first_line(ctx: &mut Ctx, block: usize, previous_style: &str, width: f32
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
             let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-            let before = if pl.rp.contextual_spacing && pl.rp.style == previous_style { 0.0 } else { pl.rp.space_before };
-            let paragraph = before + top + pl.height + bottom;
-            let whole = paragraph + pl.rp.space_after;
+            let (after, before) = paragraph_gap(
+                &pl.rp,
+                listed,
+                pl.rp.space_before,
+                (&prev.style, prev.contextual_spacing, prev.space_after, prev.after_auto, prev_listed),
+                ctx.doc.settings.sum_paragraph_spacing,
+            );
+            let gap = after + before;
+            let paragraph = gap + top + pl.height + bottom;
             // It fits when it does, without its space after: placement measures a paragraph's
             // own fit without trailing spacing too. The spacing still counts for what follows.
             if pl.rp.keep_next && depth < 8 && paragraph <= room {
-                whole + next_first_line(ctx, block + 1, &pl.rp.style, width, depth + 1, room - whole, counters)
+                paragraph + next_first_line(ctx, block + 1, (&pl.rp, listed), width, depth + 1, room - paragraph, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
@@ -1077,8 +1095,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, previous_style: &str, width: f32
                     (Some(first), Some(last)) => last.top + last.height - first.top,
                     _ => 0.0,
                 };
-                before
-                    + top
+                gap + top
                     + if pl.rp.keep_lines {
                         // Placed whole, with its bottom border room.
                         pl.height + bottom
@@ -1090,7 +1107,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, previous_style: &str, width: f32
                     }
             }
         }
-        Some(Block::Table(_)) => 24.0,
-        None => 0.0,
+        Some(Block::Table(_)) => prev.space_after + 24.0,
+        None => prev.space_after,
     }
 }
