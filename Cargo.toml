@@ -126,7 +126,8 @@ rfd = "0.17"
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`, so the one exception AGENTS.md names can allow it.
+unsafe_code = "deny"
 # cargo llvm-cov sets `--cfg coverage`; timing tests skip themselves under its instrumentation.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
 

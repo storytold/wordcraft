@@ -407,6 +407,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-11-19 | trivial | Progress log: on macOS the Paragraph dialog opens as a utility panel in a window of its own, tied to the document window |
 | 2026-11-17 | trivial | Progress log: file formats, codecs and protocols come from craft-libs (#778) |
 | 2026-11-15 | trivial | Progress log: Get the Missing Fonts (download pages for missing fonts their publisher gives away) |
 | 2026-11-07 | Narrow windows (#5886): the window can be made 600 pt wide (was 760 pt), enabling split-window layout and edge tiling on Wayland/GNOME and 1280 pt screens; the title bar's search box and Discord button condense, and status-bar texts (page, word count, language, Track Changes, Overtype) stop before the right controls or shorten ("…" for language) instead of overlapping Focus, views and zoom |

@@ -7168,6 +7168,25 @@ fn a_paste_with_the_find_dialog_open_is_ignored() {
     assert!(q.lock().unwrap().is_empty());
 }
 
+/// The Paragraph dialog in a window of its own (`Services::paragraph_window`) stays open while
+/// the user works and closes on Escape, as the built-in one does. (Without a windowing backend
+/// egui draws the window inside this one, so the frames below reach its contents.)
+#[test]
+fn paragraph_in_its_own_window_stays_open_and_closes_on_escape() {
+    let mut a = typed();
+    a.services.paragraph_window = true;
+    let mut d = FrameDriver { ctx: egui::Context::default(), t: 0.0 };
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    a.run("ui.dialog", json!({"name": "paragraph"})).unwrap();
+    for _ in 0..4 {
+        d.frame(&mut a, vec![], screen);
+    }
+    assert_eq!(prompt(&a), Some("paragraph"));
+    let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    d.frame(&mut a, vec![escape], screen);
+    assert_eq!(prompt(&a), None, "Escape closed it");
+}
+
 /// A text field outside any dialog (the Navigation pane's search) with focus takes the input:
 /// the page is not focused, and the picture is dropped (#1349).
 #[test]

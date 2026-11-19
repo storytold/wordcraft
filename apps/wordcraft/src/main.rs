@@ -23,6 +23,8 @@ mod graphics;
 #[cfg(any(target_os = "linux", test))]
 mod linux_gpu;
 mod logging;
+#[cfg(target_os = "macos")]
+mod panels;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod portal_save;
 mod prefs_merge;
@@ -59,6 +61,10 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         apple_events::poll(&self.5, &mut self.0, ctx);
+        #[cfg(target_os = "macos")]
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            panels::tie(mtm);
+        }
         self.0.logic(ctx);
         self.3.show(frame);
         let mut window = self.4;
@@ -713,6 +719,10 @@ fn main() -> eframe::Result {
             let mut session = Session::new(doc);
             session.system_region = region;
             let mut app = WordApp::new(session, services(file_dialog, cancel_file_dialog, &cc.egui_ctx));
+            #[cfg(target_os = "macos")]
+            {
+                app.services.paragraph_window = true;
+            }
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             // After the preferences, so the reason it gives is in the interface language.

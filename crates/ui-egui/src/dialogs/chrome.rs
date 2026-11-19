@@ -152,6 +152,46 @@ pub(crate) fn release_keyboard(app: &WordApp, ctx: &egui::Context) {
     }
 }
 
+/// The Paragraph dialog in a window of its own (`Services::paragraph_window`), placed at the top
+/// right of the document's window the first time and sized to what it shows; closing the window
+/// closes the dialog.
+fn paragraph_window(app: &mut WordApp, ctx: &egui::Context, mut d: Dialog, title: &str) {
+    let id = egui::ViewportId::from_hash_of(("paragraph window", ctx.viewport_id()));
+    let size = ctx.data(|m| m.get_temp::<egui::Vec2>(id.0)).unwrap_or(egui::vec2(460.0, 480.0));
+    let parent = ctx.input(|i| i.viewport().outer_rect);
+    let at =
+        ctx.data_mut(|m| *m.get_temp_mut_or_insert_with(id.0.with("at"), || parent.map(|r| egui::pos2(r.right() - size.x - 40.0, r.top() + 90.0))));
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title(tl!(title))
+        .with_inner_size(size)
+        .with_resizable(false)
+        .with_minimize_button(false)
+        .with_maximize_button(false);
+    if let Some(at) = at {
+        builder = builder.with_position(at);
+    }
+    let close = ctx.show_viewport_immediate(id, builder, |ui, _| {
+        let mut close = ui.input(|i| i.viewport().close_requested());
+        egui::CentralPanel::default().show(ui, |ui| {
+            let shown = ui.vertical(|ui| crate::rtl::root(ui, |ui| body(app, ui, &mut d)));
+            close |= shown.inner;
+            // The content's size plus the panel's margins; it never asks for more than it has, so it settles.
+            let want = (shown.response.rect.size() + egui::vec2(16.0, 16.0)).round();
+            if want != size {
+                ui.data_mut(|m| m.insert_temp(id.0, want));
+                ui.ctx().request_repaint();
+            }
+        });
+        close
+    });
+    if close {
+        ctx.data_mut(|m| m.remove::<Option<egui::Pos2>>(id.0.with("at")));
+        app.canvas.want_focus = true;
+    } else {
+        app.dialog = Some(d);
+    }
+}
+
 /// Takes the active dialog, resolves its translated title, hosts it as a non-resizable window, draws
 /// its body, keeps it open when it stays, and gives the Save Changes prompt the AccessKit
 /// alert-dialog role.
@@ -219,6 +259,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::CustomProperties { .. } => "Custom Document Properties",
         Dialog::Layout(d) => d.title(),
     };
+    if app.services.paragraph_window && matches!(d, Dialog::Paragraph { .. }) {
+        return paragraph_window(app, ctx, d, title);
+    }
     let id = egui::Id::unique(("dialog", title));
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
     // A file browser or Colors dialog it opened is above it and takes the keys: Escape or Enter

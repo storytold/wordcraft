@@ -25,6 +25,9 @@ pub struct Services {
     /// that never answers). The app calls it when it gives the dialog up (File › Open › Browse in
     /// WordCraft…), so the host closes the request and answers as cancelled.
     pub cancel_file_dialog: Option<Box<dyn Fn()>>,
+    /// Desktop: show the Paragraph dialog in a window of its own, which the host keeps above the
+    /// document's window as a utility panel (macOS), instead of inside the document's window.
+    pub paragraph_window: bool,
     /// Web: open a file picker; the file arrives later through `inbox`.
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
