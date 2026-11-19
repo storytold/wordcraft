@@ -97,12 +97,11 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
         }
         handle_input(app, ctx, pass, e, &mut batch);
     }
-    // A request refused during this pass leaves the platform's surrounding snapshot stale. The framework
-    // interrupts only a composition it saw (the pre-edit this page reports); every other case is resynchronised
-    // through the frame's change cause, which names this pass's edits as the application's, not the input
-    // method's.
+    // A request refused during this pass leaves the platform's surrounding snapshot stale: the page asks the
+    // framework for the interrupt itself, in the pass of the commit's receipt, so the commit keeps its input-method
+    // cause (the old canvas set the interrupt directly).
     if std::mem::take(&mut app.canvas.ime_interrupt_now) {
-        pass.ime_application_change(ctx);
+        pass.ime_interrupt(ctx);
     }
 }
 
