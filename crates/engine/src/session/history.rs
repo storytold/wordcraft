@@ -72,6 +72,12 @@ impl Session {
         self.ime_text_join = Some(self.sel.clone());
     }
 
+    /// Whether a body `DeleteSurrounding`'s replacement join is still promised: no command has
+    /// consumed it since. The page keeps the erased text's formatting only while this holds.
+    pub fn ime_text_join_pending(&self) -> bool {
+        self.ime_text_join.is_some()
+    }
+
     /// Discard a body replacement join that received no replacement (an empty or refused
     /// commit, a new request or a refusal), so it cannot join a later composition.
     pub fn clear_ime_text_join(&mut self) {

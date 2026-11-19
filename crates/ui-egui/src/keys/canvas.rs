@@ -54,7 +54,12 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
     // frames until its matching `text.insert` or any other command, key or new request consumes or
     // clears it, so a platform that delivers the commit in a later pass still shares the deletion's
     // Undo checkpoint.
-    app.canvas.ime_join_text = None;
+    // The erased text's formatting survives into a later pass only while the engine still promises the join:
+    // the framework hands over the input method's edits and the typed text as it receives them, and a text
+    // that arrives in the pass after its deletion is still that deletion's replacement.
+    if !app.session.ime_text_join_pending() {
+        app.canvas.ime_join_text = None;
+    }
     let mut batch = Batch {
         drop_equation_replacement: ReplacementDrop::None,
         interrupted_preedit: std::mem::take(&mut app.canvas.ime_interrupted_preedit),
@@ -91,6 +96,13 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
             continue;
         }
         handle_input(app, ctx, pass, e, &mut batch);
+    }
+    // A request refused during this pass leaves the platform's surrounding snapshot stale. The framework
+    // interrupts only a composition it saw (the pre-edit this page reports); every other case is resynchronised
+    // through the frame's change cause, which names this pass's edits as the application's, not the input
+    // method's.
+    if std::mem::take(&mut app.canvas.ime_interrupt_now) {
+        pass.ime_application_change(ctx);
     }
 }
 

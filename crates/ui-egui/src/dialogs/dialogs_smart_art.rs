@@ -529,7 +529,7 @@ pub(crate) fn end_typing_run(app: &mut WordApp, canvas_focused: bool) {
 }
 
 /// Ends the open typing run now, committing the item's text as one undo step.
-fn close_typing_run(app: &mut WordApp) {
+pub(crate) fn close_typing_run(app: &mut WordApp) {
     let Some(run) = app.canvas.smart_art_run.take() else { return };
     let item = run.item;
     let now = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).and_then(|g| g.items.get(item).map(|it| it.text.clone()));
