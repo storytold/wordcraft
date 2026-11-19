@@ -650,7 +650,7 @@ fn double_clicking_a_word_with_the_format_painter_paints_it() {
 }
 
 /// A typed character is laid out and painted in the frame that delivers the key, not the next
-/// one: the caret drawn after that single frame already sits right of where it was.
+/// one: the pages that frame drew are the layout with the typed character.
 #[test]
 fn a_keystroke_is_painted_in_its_own_frame() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -663,21 +663,18 @@ fn a_keystroke_is_painted_in_its_own_frame() {
         },
         a,
     );
-    // kittest zeroes egui's animation time and the framework then runs no motion, so the caret's glide (whose drawn
-    // bar this reads) stands down: give it the time a real window has (as `caret_glide::tests` does).
-    h.ctx.all_styles_mut(|style| style.animation_time = egui::Style::default().animation_time);
     let ctx = h.ctx.clone();
     h.state_mut().canvas.focus_page(&ctx);
     for _ in 0..6 {
         h.app_frame();
     }
     assert!(h.state().canvas.focused(&ctx), "the canvas has the keyboard focus");
-    let before = h.state().canvas.glide.drawn().expect("the caret is drawn")[0].x;
     h.event(egui::Event::Text("x".into()));
     h.app_frame();
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Some textx");
-    let after = h.state().canvas.glide.drawn().expect("the caret is drawn")[0].x;
-    assert!(after > before, "the frame painted the caret after the typed character: {before} -> {after}");
+    let latest = h.state_mut().session.layout();
+    let painted = h.state().canvas.page_keys.layout.clone();
+    assert!(painted.is_some_and(|l| std::sync::Arc::ptr_eq(&l, &latest)), "the frame painted the layout with the typed character");
 }
 
 /// #960: double-clicking the top margin of a document without a header creates one and

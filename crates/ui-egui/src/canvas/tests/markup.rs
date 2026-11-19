@@ -263,6 +263,17 @@ fn click_balloon(h: &mut H, id: u32) {
     let card = h.state().canvas.balloon_rects.iter().find(|(i, _)| *i == id).map(|(_, r)| *r).expect("the comment has a balloon");
     click_at(h, card.left_top() + vec2(30.0, 8.0));
     assert_eq!(h.state().canvas.selected_balloon(), Some(id), "the click selected the balloon");
+    // The selected card opens its own edit, a framework text field, which takes the keyboard by a click in it
+    // (none opens where comments can't change).
+    use egui::accesskit::Role;
+    let field = h
+        .query_by_role_and_label(Role::MultilineTextInput, "Edit")
+        .or_else(|| h.query_by_role_and_label(Role::TextInput, "Edit"))
+        .map(|n| n.rect().center());
+    if let Some(at) = field {
+        click_at(h, at);
+        assert_eq!(h.state().canvas.selected_balloon(), Some(id), "the card stays selected");
+    }
 }
 
 /// Types `text` into the field that has the keyboard.

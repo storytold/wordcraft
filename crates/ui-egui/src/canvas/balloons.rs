@@ -257,7 +257,9 @@ fn focus_balloon(app: &mut WordApp, id: u32) {
     if let Some(before) = before {
         write_back(app, before);
     }
-    let text = app.session.doc.comments.get(&id).map(|c| app.session.doc.plain_text(StoryRef::Part(c.part)));
+    // Where comments can't change (a read-only document) the card is selected with no edit open: nothing is typed.
+    let editable = crate::app::command_board::command_enabled(app, "review.editComment");
+    let text = app.session.doc.comments.get(&id).filter(|_| editable).map(|c| app.session.doc.plain_text(StoryRef::Part(c.part)));
     let thread = thread_id(id);
     let comments = &mut app.canvas.comments;
     comments.selected = Some(thread);

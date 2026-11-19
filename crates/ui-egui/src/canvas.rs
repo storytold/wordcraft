@@ -746,6 +746,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 
 /// The page view and everything shown over it.
 fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect) {
+    // The document's layout the pages are drawn from: the pass's keys and press run inside the page view, after the
+    // pages took it.
+    let laid_before = app.session.layout();
     let mut state = std::mem::take(&mut app.canvas.view);
     sync_view_state(app, &mut state);
     let before = (state.zoom, state.fit);
@@ -861,6 +864,11 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         });
     let caret = caret_after.or(caret);
     app.canvas.page_keys = source.into_keys();
+    // This pass's own input changed the document under the pages it drew: run the pass again, so the frame that
+    // delivers a key paints its text (production laid out and painted in the one pass) rather than the next frame.
+    if ran && !Arc::ptr_eq(&laid_before, &app.session.layout()) {
+        ui.ctx().request_discard("the page's input changed the document");
+    }
     // The caret's page was not placed this pass: the whole layout says where it lies on screen, so the follow moves the
     // view by the same margin rule as for a placed page, from whichever side the caret is on.
     if let Some((page, page_h, c)) = unplaced
