@@ -1,4 +1,7 @@
 use super::*;
+// Frames go through the app's own input hook (`embed::before_input`), as in the app: the runtime's hit sizes and
+// the command catalog come from it, and without them the thin border parts are never hit.
+use crate::test_harness::AppFrames as _;
 
 pub(crate) type H = egui_kittest::Harness<'static, WordApp>;
 
@@ -22,7 +25,7 @@ pub(crate) fn table_window_stepping(dt: f32) -> H {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     h
 }
@@ -49,7 +52,7 @@ pub(crate) fn button(h: &H, at: Pos2, pressed: bool) {
 
 pub(crate) fn steps(h: &mut H, n: usize) {
     for _ in 0..n {
-        h.step();
+        h.app_frame();
     }
 }
 
@@ -82,12 +85,12 @@ fn dragging_a_column_border_with_the_mouse_is_one_undo_step() {
     steps(&mut h, 2);
     assert_eq!(resize_cursor_now(&h), Some(CursorIcon::ResizeColumn), "the resize arrow over the border");
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     // 30 page points to the right, in a few moves.
     let end = screen(&mut h, a.right() + 30.0, a.y + a.h / 2.0);
     for k in 1..=5 {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
-        h.step();
+        h.app_frame();
     }
     assert!(h.state().canvas.table_resize.is_some(), "a drag is in progress");
     assert_eq!(h.state().session.undo_depth(), depth, "nothing is written while dragging");
@@ -115,13 +118,13 @@ fn dragging_a_column_border_keeps_the_view_where_it_is() {
     h.event(egui::Event::PointerMoved(start));
     steps(&mut h, 2);
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     h.event(egui::Event::PointerMoved(end));
     steps(&mut h, 2);
     h.state_mut().canvas.scroll_to_caret = false;
     let depth = h.state().session.undo_depth();
     button(&h, end, false);
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.undo_depth(), depth + 1, "the drag was applied");
     assert!(!h.state().canvas.scroll_to_caret, "the resize scrolled to the caret");
     h.state_mut().run("text.insert", json!({"text": "x"})).unwrap();
@@ -138,12 +141,12 @@ fn ruler_marker(h: &H, label: &str, near: Pos2) -> Rect {
 /// A real mouse drag from `from` to `to` (screen points), in a few moves.
 fn drag(h: &mut H, from: Pos2, to: Pos2) {
     h.event(egui::Event::PointerMoved(from));
-    h.step();
+    h.app_frame();
     button(h, from, true);
-    h.step();
+    h.app_frame();
     for k in 1..=5 {
         h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 5.0)));
-        h.step();
+        h.app_frame();
     }
     button(h, to, false);
     steps(h, 3);
@@ -162,12 +165,12 @@ fn a_column_marker_on_the_ruler_moves_the_columns_right_of_it() {
     assert!((start.x - near.x).abs() < 0.5, "a marker over the first column border");
     let end = start + egui::vec2(screen(&mut h, a.right() + 30.0, a.y).x - near.x, 0.0);
     h.event(egui::Event::PointerMoved(start));
-    h.step();
+    h.app_frame();
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     for k in 1..=5 {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
-        h.step();
+        h.app_frame();
     }
     assert!((ruler_marker(&h, "Table Column Width", end).center().x - end.x).abs() < 1.0, "the marker follows the pointer");
     assert_eq!(h.state().session.undo_depth(), depth, "nothing is written while dragging");
@@ -225,9 +228,9 @@ fn in_a_cell_the_ruler_measures_indents_from_its_text() {
     // Into the second cell: its text starts far from the page's left margin.
     let inside = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
     h.event(egui::Event::PointerMoved(inside));
-    h.step();
+    h.app_frame();
     button(&h, inside, true);
-    h.step();
+    h.app_frame();
     button(&h, inside, false);
     steps(&mut h, 3);
     assert_eq!(h.state().session.sel.focus.path.cell().map(|(_, r, cl)| (r, cl)), Some((0, 1)));
@@ -295,9 +298,9 @@ fn a_selected_cells_border_drags_in_its_row_only() {
     let y = b.y + b.h / 2.0;
     let at = screen(&mut h, b.x + 4.5, y);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     button(&h, at, true);
-    h.step();
+    h.app_frame();
     button(&h, at, false);
     steps(&mut h, 2);
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((1, 1), (1, 1))), "the cell is selected");
@@ -316,9 +319,9 @@ fn clicks_in_cells_still_move_the_caret_and_esc_cancels_a_drag() {
     let c = cell(&mut h, 1, 1);
     let at = screen(&mut h, c.x + c.w / 2.0, c.y + c.h / 2.0);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     button(&h, at, true);
-    h.step();
+    h.app_frame();
     button(&h, at, false);
     steps(&mut h, 3);
     let focus = &h.state().session.sel.focus;
@@ -328,15 +331,15 @@ fn clicks_in_cells_still_move_the_caret_and_esc_cancels_a_drag() {
     let a = cell(&mut h, 0, 0);
     let start = screen(&mut h, a.x + a.w / 2.0, a.bottom());
     h.event(egui::Event::PointerMoved(start));
-    h.step();
+    h.app_frame();
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     let end = start + egui::vec2(0.0, 40.0);
     h.event(egui::Event::PointerMoved(end));
-    h.step();
+    h.app_frame();
     assert!(h.state().canvas.table_resize.is_some(), "the row border is being dragged");
     h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
-    h.step();
+    h.app_frame();
     button(&h, end, false);
     steps(&mut h, 3);
     assert_eq!(h.state().session.undo_depth(), depth, "Esc cancelled it");
@@ -353,12 +356,12 @@ fn double_clicking_a_column_border_fits_the_column() {
     let depth = h.state().session.undo_depth();
     let at = screen(&mut h, a.right(), a.y + a.h / 2.0);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     for _ in 0..2 {
         button(&h, at, true);
-        h.step();
+        h.app_frame();
         button(&h, at, false);
-        h.step();
+        h.app_frame();
     }
     steps(&mut h, 2);
     let (a1, b1) = (cell(&mut h, 0, 0), cell(&mut h, 0, 1));

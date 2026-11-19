@@ -70,7 +70,8 @@ fn an_opened_document_missing_a_downloadable_font_is_told_about_once() {
     // The headline counts what can be downloaded, not every font the document is missing.
     assert!(h.query_by_label("1 missing font can be downloaded").is_some());
     assert!(h.query_by_label_contains("isn't installed").is_none(), "other fonts may be missing too");
-    assert!(h.query_by_label("Aptos").is_some());
+    // The row names the font: its text and the row that holds it both carry the name, so any number of nodes is fine.
+    assert!(h.query_all_by_label("Aptos").next().is_some());
     assert!(h.query_by_label(format!("Shown as {} · Microsoft", fonts[0].shown_as.join(", ")).as_str()).is_some());
     assert!(h.query_by_label_contains("following them is up to you").is_some(), "whose part the licence is");
     assert!(h.query_by_label_contains("limits who may use it").is_none(), "Aptos has no such limit");

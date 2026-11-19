@@ -54,7 +54,7 @@ pub(crate) use cursor::{caret_color_on, caret_contrast};
 pub use cursor::{caret_screen, pos_from_screen};
 pub use geometry::{markup_width, sync_fit_zoom};
 use input::UnitDrag;
-pub(crate) use input::hold_document_selection;
+pub(crate) use input::{hold_document_selection, release_document_selection};
 pub(crate) use links::follow_link;
 #[cfg(test)]
 use links::{field_link, is_followable_link, is_generated_bookmark_link};

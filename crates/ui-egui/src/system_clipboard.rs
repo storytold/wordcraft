@@ -243,14 +243,54 @@ pub(crate) fn explain(app: &mut WordApp, id: &str, r: Result<Value, String>) -> 
 /// An app over an installed in-memory clipboard, for the paste and picture tests.
 #[cfg(test)]
 pub(crate) mod testing {
-    use craft::platform::clipboard::{Clipboard, Flavor, MemoryClipboard, RGBA8};
+    use std::path::PathBuf;
+
+    use craft::platform::clipboard::{Clipboard, ClipboardBackend, ClipboardError, ClipboardImage, Flavor, MemoryClipboard, RGBA8, URI_LIST};
     use wordcraft_engine::Session;
 
     use crate::{Services, WordApp};
 
+    /// [`MemoryClipboard`] that also answers `read_files` from a held `text/uri-list`, as the system and event
+    /// clipboards do (the framework's memory clipboard answers none, so a test of copied files would find the
+    /// clipboard holding only the list's text).
+    #[derive(Default)]
+    struct FilesClipboard(MemoryClipboard);
+
+    impl ClipboardBackend for FilesClipboard {
+        fn write(&mut self, flavors: &[Flavor]) -> Result<usize, ClipboardError> {
+            self.0.write(flavors)
+        }
+
+        fn read(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Flavor>, ClipboardError> {
+            self.0.read(mimes, limit)
+        }
+
+        fn read_image(&mut self, limit: u64) -> Result<Option<ClipboardImage>, ClipboardError> {
+            self.0.read_image(limit)
+        }
+
+        fn read_files(&mut self, limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+            let Some(list) = self.0.read(&[URI_LIST], u64::MAX)? else { return Ok(None) };
+            let files: Vec<PathBuf> = String::from_utf8_lossy(&list.data)
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("file://").filter(|path| path.starts_with('/')).map(PathBuf::from))
+                .take(limit.saturating_add(1))
+                .collect();
+            Ok((!files.is_empty()).then_some(files))
+        }
+
+        fn has(&mut self, mimes: &[&str]) -> bool {
+            self.0.has(mimes)
+        }
+
+        fn formats(&mut self) -> Vec<String> {
+            self.0.formats()
+        }
+    }
+
     /// An empty document whose window's clipboard holds `flavors`.
     pub(crate) fn app_holding(flavors: &[Flavor]) -> WordApp {
-        let mut clipboard = Clipboard::new(MemoryClipboard::default());
+        let mut clipboard = Clipboard::new(FilesClipboard::default());
         if !flavors.is_empty() {
             clipboard.write(flavors).unwrap();
         }

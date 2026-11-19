@@ -297,7 +297,11 @@ impl<'a> TableMouse<'a> {
     /// moved (one undo step) and selects it otherwise; a selection area ends its selection, and a double-click
     /// along a cell's left edge selects its row, as in Word.
     fn release(&mut self, cx: &mut Cx<'_, Self>, clicks: u32, pos: Pos2) {
-        let Some(mut d) = cx.press_slot::<TableDrag>().take() else { return };
+        let Some(mut d) = cx.press_slot::<TableDrag>().take() else {
+            // No table drag: the press may have selected the whole document (`press`), which holds until now.
+            crate::canvas::release_document_selection(self.app);
+            return;
+        };
         self.app.canvas.table_dragging = false;
         if let Some(placed) = self.pages.iter().find(|placed| placed.page == d.page) {
             d.to = page_point(placed, pos);
