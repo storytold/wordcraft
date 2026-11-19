@@ -762,6 +762,9 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     // The framework draws the caret as a stroked path and focus decides whether it shows at all.
     let ctx = h.ctx.clone();
     h.state_mut().canvas.focus_page(&ctx);
+    // The blink runs on the wall clock and a scripted move does not restart it: restart it, so the caret is on
+    // for its first half second however the clock stands when the test runs.
+    h.state_mut().canvas.glide.restart(craft::platform::clock::monotonic_ms());
     for _ in 0..8 {
         // As the app's driver steps: the focus request is the runtime's, taken at the frame's start.
         crate::test_harness::frame(&mut h);

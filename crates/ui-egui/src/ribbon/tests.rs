@@ -404,6 +404,8 @@ fn ribbon_groups_fit_above_their_labels() {
         },
         app,
     );
+    // The ribbon names languages in their own script; a CI runner has no CJK font.
+    crate::test_harness::cjk_stand_in(&h.ctx);
     let mut outside = Vec::new();
     for lang in crate::i18n::Lang::all() {
         h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
