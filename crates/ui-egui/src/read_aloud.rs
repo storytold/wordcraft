@@ -143,10 +143,11 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui) {
         // Speed: sent when the drag is committed, so dragging doesn't restart the sentence.
         let mut rate = f64::from(app.session.read_aloud.rate());
         Row::new().show(ui, |ui, _| {
+            let value_text = format!("{rate:.2}×");
             let slider = Slider::new(Bind::bound(&mut rate), f64::from(MIN_RATE)..=f64::from(MAX_RATE))
                 .label(tl!("Speed"))
                 .step(0.05)
-                .value_text(format!("{rate:.2}×"))
+                .value_text(value_text)
                 .show(ui);
             if let Some(value) = slider.events.committed() {
                 run = Some(("readAloud.speed", json!({"value": *value})));

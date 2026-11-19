@@ -2,11 +2,8 @@
 //! control in Design Mode), check boxes that tick on click, and the list or calendar of a
 //! drop-down, combo box or date picker. Everything ends in a `developer.*` command.
 
-// PLAN: assumed `DateFormat: Default`, `Calendar::today(PickedDate)` and `Overlay::opener_anchor` reached through
-// `Popover::overlay`, as the sheet names them; `CanvasState::control_popup: Option<ControlPopup>` is canvas-w9's field.
 use craft::behavior::kurbo::Point;
 use craft::behavior::{CursorIcon, HitLevel, HitPriority, HitShape, Metrics, PartKey, PartRef, PointerButton, PressPhase, Sense};
-use craft::i18n::DateFormat;
 use craft::pages::ui::PageBody;
 use craft::ui::buttons::Button;
 use craft::ui::contract::overlay::Anchor;
@@ -18,7 +15,7 @@ use craft::ui::menu::Menu;
 use craft::ui::pickers::{Calendar, CalendarView, DatePrecision, PickedDate};
 use craft::ui::popover::Popover;
 use craft::ui::primitives::{PaintShape, StrokeWidth, TextRun};
-use craft::ui::runtime::env::Label;
+use craft::ui::runtime::env::{Env, Label};
 use craft::ui::style::{ComponentStyle, StyleColor, StyleCx, TypeRole};
 use egui::{CornerRadius, Rect, Response, Ui, Vec2, pos2, vec2};
 use serde_json::json;
@@ -170,7 +167,7 @@ impl Component for ContentControls<'_> {
             margin: t.space.gap.tight,
             tab_height: t.size.control.sm,
             pad: t.space.pad.chip,
-            radius: t.radius.sm,
+            radius: t.shape.radius.sm,
             arrow_width: t.size.icon.sm,
             arrow_height: t.size.handle.sm,
             line: cx.color(t.color.overlay.line),
@@ -230,7 +227,7 @@ impl Component for ContentControls<'_> {
                 continue;
             }
             let (fill, ink) = if f.current { (style.strong, style.on_strong) } else { (style.soft, style.accent) };
-            let run = TextRun { role: TypeRole::Caption, color: Some(ink), ..TextRun::new(f.title.as_str()) };
+            let run = TextRun::new(f.title.as_str()).role(TypeRole::Caption).color(ink);
             let width = (draw.layout(&run, f32::INFINITY).galley.size().x + 2.0 * style.pad).min(cx.rect.width());
             let tab = Rect::from_min_size(pos2(first.min.x, first.min.y - style.tab_height), vec2(width, style.tab_height));
             draw.fill(&PaintShape::Rect(tab, corner), fill);
@@ -337,7 +334,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
             let (y, m, d) = today();
             let now = PickedDate::day(y as i32, m as u8, d as u8);
             let value = date_of(app, &popup.at).map(|(y, m, d)| PickedDate::day(y as i32, m as u8, d as u8));
-            let dates = DateFormat::default();
+            let dates = Env::of(ui).dates();
             let mut view = popup.view.unwrap_or_else(|| CalendarView::open(value, Some(now), &[DatePrecision::Day], &dates));
             let mut picked = None;
             Popover::new(tl!("Choose date").to_string(), Bind::bound(&mut open))

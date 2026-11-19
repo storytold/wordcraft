@@ -16,7 +16,7 @@ use wordcraft_zotero::{Bridge, Call, Command, Host};
 use craft::ui::dialog::{DialogId, PromptChoice, StandardPrompt, dialog_id};
 
 use crate::WordApp;
-use crate::dialogs::host::{DialogHooks, Keyed, open_with};
+use crate::dialogs::host::{DialogHooks, Keyed, Settle, open_with};
 
 /// A call from Zotero waiting for its answer.
 struct Pending {
@@ -108,8 +108,7 @@ fn start(app: &mut WordApp, cmd: Command, ctx: Option<egui::Context>) -> Result<
     let (done_tx, done_rx) = channel();
     let wake = ctx.clone();
     let opts = app.zotero.options.clone();
-    // PLAN: assumed `WordApp::host() -> &Host` (app-hub) with `Host::jobs()`.
-    app.host().jobs().spawn(
+    app.host.jobs().spawn(
         "zotero",
         Box::new(move || {
             let r = wordcraft_zotero::client::run_command(&opts, cmd, &mut |call| {
@@ -192,8 +191,7 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     }
     if changed {
         app.canvas.scroll_to_caret = true;
-        // PLAN: assumed `CaretGlide::restart` (cv.A11, canvas-w10).
-        app.canvas.glide.restart();
+        app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
     }
     let done = app.zotero.done.as_ref().and_then(|rx| rx.try_recv().ok());
     if let Some(r) = done {
@@ -268,14 +266,14 @@ pub(crate) fn show_question(app: &mut WordApp) {
 /// The key of Zotero's question on the dialog host.
 const QUESTION_KEY: &str = "zotero";
 
-fn settle_question(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
+fn settle_question(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     let Some(result) = app.dialog_host.take_by_id::<Keyed<StandardPrompt>>(id) else {
-        return false;
+        return Settle::Keep;
     };
     let buttons = app.zotero.alert.as_ref().map_or(0, |a| a.buttons);
     let value = result.ok().map_or(0, |a| answer_value(buttons, a.choice));
     let _ = answer(app, value);
-    true
+    Settle::Done
 }
 
 #[cfg(test)]

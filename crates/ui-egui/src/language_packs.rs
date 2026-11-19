@@ -32,7 +32,7 @@ use serde_json::json;
 use wordcraft_engine::packs::{self, LanguageRow, Pack, Proofing};
 
 use crate::WordApp;
-use crate::dialogs::host::{DialogHooks, open_with};
+use crate::dialogs::host::{DialogHooks, Settle, open_with};
 
 /// How long the bar keeps what it worked out while the document is being typed in.
 const MISSING_REFRESH_SECS: f64 = 1.0;
@@ -622,8 +622,6 @@ fn status_text(row: &LanguageRow, running: Option<(u64, u64)>) -> String {
 /// File › Options › Language › Your languages: the languages in use and installed, each with
 /// where its proofing comes from and what can be done, and Add a language….
 pub(crate) fn your_languages(app: &mut WordApp, ui: &mut Ui) {
-    // Language names include Arabic and other scripts; ask for a system Arabic face when none is embedded.
-    app.want_system_arabic = true;
     let env = Env::of(ui);
     let format = env.format().clone();
     let ctx = ui.ctx().clone();
@@ -837,9 +835,9 @@ impl StackDialog for AddLanguage {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
-        // Pack names include Arabic and other scripts: the app asks for a system face where it draws (`settle_picker`).
         let injected = injected(ui.ctx());
-        let format = Env::of(ui).format().clone();
+        let env = Env::of(ui);
+        let format = env.format();
         let index = packs::available();
         let installed = packs::installed();
         let list = picker_packs(&index, &installed, &self.search);
@@ -921,13 +919,11 @@ fn prepare_picker(app: &mut WordApp, id: DialogId) {
 
 /// Applies what the Add a language dialog recorded in the pass that just ran. Never opens the dialog: a click on
 /// Add a language… does ([`open_picker`]).
-fn settle_picker(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool {
+fn settle_picker(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     // The dialog answers `()`: taking it keeps the host's results from piling up.
     let _ = app.dialog_host.take_by_id::<AddLanguage>(id);
-    let Some(dialog) = app.dialog_host.get_mut_by_id::<AddLanguage>(id) else { return false };
+    let Some(dialog) = app.dialog_host.get_mut_by_id::<AddLanguage>(id) else { return Settle::Done };
     let asks = std::mem::take(&mut dialog.asks);
-    // Pack names include Arabic and other scripts; ask for a system Arabic face when none is embedded.
-    app.want_system_arabic = true;
     for ask in asks {
         match ask {
             Want::Install(pack, injected) => start_install_with(app, injected, &pack),
@@ -935,8 +931,7 @@ fn settle_picker(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> bool 
             Want::Refresh(injected) => start_fetch(app, injected),
         }
     }
-    // PLAN: assumed the bool is "close the dialog now" (dg.A1 `DialogHooks::settle`); the picker closes by its own result
-    false
+    Settle::Keep
 }
 
 /// The licence texts About shows, read again only when the dictionaries change (they can run to
@@ -1004,8 +999,7 @@ mod tests {
     /// A request as a control client (or MCP's `click`) sends it, with frames until its input
     /// has gone in.
     fn as_agent(a: &mut WordApp, ctx: &egui::Context, method: &str, params: Value) {
-        let (req, _reply) = craft::control::ControlRequest::new(method, params);
-        // PLAN: assumed `crate::control::handle(app, ctx, &ControlRequest) -> _` injects through the window host (shell-w10)
+        let (req, _reply) = craft::automation::control::ControlRequest::new(method, params);
         let _ = crate::control::handle(a, ctx, &req);
         let host = craft::ui::runtime::windows::WindowHost::of(ctx);
         for _ in 0..200 {

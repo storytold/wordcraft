@@ -109,8 +109,8 @@ pub(crate) fn print_page(app: &mut crate::WordApp, params: &Value) -> Result<Val
     if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
         return Err("unknown print page setting; use range, pages, parity, orientation, pagesPerSheet, paper, preview or zoom".into());
     }
-    let mut next = app.ui.print.settings.clone();
-    let mut view = app.ui.print.view.clone();
+    let mut next = app.print.settings.clone();
+    let mut view = app.print.view.clone();
     if let Some(range) = one_of(object, "range", RANGES.iter().map(|(id, _)| *id))? {
         next.range = range;
     }
@@ -137,7 +137,7 @@ pub(crate) fn print_page(app: &mut crate::WordApp, params: &Value) -> Result<Val
         let pages = value.as_str().filter(|pages| pages.chars().count() <= wordcraft_engine::print::MAX_SPEC_CHARS);
         next.pages = pages.ok_or("pages must be a page list of at most 500 characters")?.to_owned();
     }
-    let restarts = next.range != app.ui.print.settings.range || next.pages != app.ui.print.settings.pages || next.parity != app.ui.print.settings.parity;
+    let restarts = next.range != app.print.settings.range || next.pages != app.print.settings.pages || next.parity != app.print.settings.parity;
     if restarts {
         // As on the page: a new range starts at its first sheet.
         next.preview = 0;
@@ -152,13 +152,13 @@ pub(crate) fn print_page(app: &mut crate::WordApp, params: &Value) -> Result<Val
             _ => return Err("zoom must be a number from 0.1 to 5, or null to fit".into()),
         };
     }
-    app.ui.print.settings = next;
-    app.ui.print.view = view;
-    let settings = &app.ui.print.settings;
+    app.print.settings = next;
+    app.print.view = view;
+    let settings = &app.print.settings;
     Ok(json!({
         "range": settings.range, "pages": settings.pages, "parity": settings.parity, "orientation": settings.orientation,
         "pagesPerSheet": settings.pages_per_sheet, "paper": settings.paper, "preview": settings.preview,
-        "zoom": if app.ui.print.view.fit { Value::Null } else { json!(app.ui.print.view.transform.scale) },
+        "zoom": if app.print.view.fit { Value::Null } else { json!(app.print.view.transform.scale) },
     }))
 }
 
@@ -263,7 +263,7 @@ pub fn submit(app: &mut crate::WordApp, params: &Value) -> Result<Value, String>
     }
     let mut pdf_params = params.clone();
     let mut settings = app.printing.settings.clone();
-    let collate = params.get("collate").map(|value| value.as_bool().ok_or("collate must be a boolean")).transpose()?.unwrap_or(app.ui.print.settings.collate);
+    let collate = params.get("collate").map(|value| value.as_bool().ok_or("collate must be a boolean")).transpose()?.unwrap_or(app.print.settings.collate);
     if chooses {
         let object = pdf_params.as_object_mut().ok_or("print settings must be an object")?;
         if let Some(copies) = object.get("copies") {
@@ -293,7 +293,7 @@ pub fn submit(app: &mut crate::WordApp, params: &Value) -> Result<Value, String>
         }
         let len = bytes.len();
         let mut print_options = Vec::new();
-        let orientation = params.get("orientation").and_then(|v| v.as_str()).unwrap_or(&app.ui.print.settings.orientation);
+        let orientation = params.get("orientation").and_then(|v| v.as_str()).unwrap_or(&app.print.settings.orientation);
         let mode = wordcraft_engine::print::imposition(params).map_err(|e| e.to_string())?;
         let is_landscape = if mode != wordcraft_engine::print::Imposition::Single {
             let markup = wordcraft_engine::cmd::file::export_options(&app.session, &pdf_params).markup;
