@@ -3,7 +3,9 @@ use craft::ui::contract::{Props as _, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::menu::MenuItem;
 
-use super::{Ui, Value, WordApp, json};
+use serde_json::Value;
+
+use super::{Ui, WordApp, json};
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
 pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [

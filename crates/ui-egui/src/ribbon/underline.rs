@@ -4,7 +4,10 @@ use craft::ui::contract::{Props as _, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuItem};
 
-use super::{Rect, Stroke, Target, Ui, WordApp, json, pos2};
+use egui::{Rect, Stroke, pos2};
+
+use super::{Ui, WordApp, json};
+use crate::colors::Target;
 
 /// The underline styles Home › Underline offers as line samples: (`format.underline` style, name).
 pub(super) const UNDERLINE_STYLES: [(&str, &str); 8] = [

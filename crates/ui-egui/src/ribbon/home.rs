@@ -16,7 +16,10 @@ use wordcraft_doc::props::Align;
 
 use super::common::menu_button;
 use super::underline::underline_menu;
-use super::{Ui, Value, WordApp, json, vec2};
+use egui::vec2;
+use serde_json::Value;
+
+use super::{Ui, WordApp, json};
 use crate::colors::{Remember, Target};
 
 /// A ribbon group titled `title`, with the Dialog Launcher `launcher` when it has one.

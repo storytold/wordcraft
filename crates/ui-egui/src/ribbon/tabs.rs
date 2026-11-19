@@ -3,8 +3,8 @@ use craft::ui::bars::{Bar, BarKind};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Entry, Show as _, ShowContainer as _, Trigger, clicked};
 use craft::ui::display::{Divider, Text};
-use craft::ui::theme::TypeRole;
 use craft::ui::menu::Menu;
+use craft::ui::style::TypeRole;
 use egui::Ui;
 use serde_json::{Value, json};
 
