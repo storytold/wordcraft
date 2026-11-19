@@ -23,7 +23,7 @@ fn ctrl_drag_copies_an_object() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let objects = |h: &mut H| {
         let doc = &h.state().session.doc;
@@ -44,17 +44,17 @@ fn ctrl_drag_copies_an_object() {
         h.event(Event::ModifiersChanged(mods));
         h.event(Event::PointerMoved(from));
         h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: mods });
-        h.step();
+        h.app_frame();
         for k in 1..=4 {
             h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
-            h.step();
+            h.app_frame();
         }
         h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
         for _ in 0..3 {
-            h.step();
+            h.app_frame();
         }
         h.event(Event::ModifiersChanged(Modifiers::NONE));
-        h.step();
+        h.app_frame();
     };
     assert_eq!((objects(&mut h), xs(&mut h)), (1, vec![200]));
     drag(&mut h, Modifiers::COMMAND);
@@ -134,7 +134,7 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     // The top edge crosses the document's first text line, so Behind Text must still be
     // draggable where its pixels overlap body text. Stay away from resize handles.
@@ -145,10 +145,10 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
         // A click without drag threshold still reaches the text above the picture.
         h.event(Event::PointerMoved(from));
         h.event(button(from, true));
-        h.step();
+        h.app_frame();
         h.event(button(from, false));
         for _ in 0..3 {
-            h.step();
+            h.app_frame();
         }
         // In the header the picture lies over the body area, clear of the header's own text, so a
         // click on it selects it (Word); in the body a click still reaches the text behind it.
@@ -159,20 +159,20 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
             h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
         }
         for _ in 0..40 {
-            h.step();
+            h.app_frame();
         }
     }
     h.event(Event::PointerMoved(from));
     h.event(button(from, true));
-    h.step();
+    h.app_frame();
     assert!(h.state().canvas.object_gesture().is_some(), "{wrap}: pressing the image starts a frame drag");
     for k in 1..=4 {
         h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
-        h.step();
+        h.app_frame();
     }
     h.event(button(to, false));
     for _ in 0..3 {
-        h.step();
+        h.app_frame();
     }
     let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p);
     let moved = picked.and_then(|p| h.state_mut().session.layout().object(&p, 0)).map(|o| o.rect);
@@ -315,20 +315,20 @@ fn context_menu_crop_item_activates_crop_mode() {
         app,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let (page, rect) = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).map(|o| (o.page, o.rect)).expect("laid out");
     let at = page_to_screen(h.state_mut(), page, rect.x + rect.w / 2.0, rect.y + rect.h / 2.0).expect("on screen");
     h.event(egui::Event::PointerMoved(at));
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
     }
-    h.step();
+    h.app_frame();
     assert!(h.state().canvas.context_menu_open, "context menu is open on image");
     h.get_by_label("Crop ").click();
     for _ in 0..3 {
-        h.step();
+        h.app_frame();
     }
     assert!(crate::crop::active(h.state()).is_some(), "crop mode is active after clicking Crop in context menu");
 }
@@ -395,11 +395,11 @@ fn dragging_a_header_picture_clear_of_header_text_moves_it() {
     let at = picture_point(&mut h, 0, rect);
     h.event(egui::Event::PointerMoved(at));
     h.event(pointer_button(at, egui::PointerButton::Primary, true));
-    h.step();
+    h.app_frame();
     let to = at + egui::vec2(60.0, 30.0);
     for p in [at + egui::vec2(20.0, 10.0), to] {
         h.event(egui::Event::PointerMoved(p));
-        h.step();
+        h.app_frame();
     }
     h.event(pointer_button(to, egui::PointerButton::Primary, false));
     steps(&mut h, 3);
@@ -446,7 +446,7 @@ fn pointer_button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -
 fn press(h: &mut H, at: egui::Pos2, button: egui::PointerButton) {
     h.event(egui::Event::PointerMoved(at));
     h.event(pointer_button(at, button, true));
-    h.step();
+    h.app_frame();
     h.event(pointer_button(at, button, false));
     steps(h, 3);
 }
@@ -465,7 +465,7 @@ fn edit_story(h: &mut H, footer: bool, page: usize) {
     let first = |h: &H| h.state().canvas.page_rects().next();
     let (mut last, mut still) = (first(h), 0);
     for _ in 0..600 {
-        h.step();
+        h.app_frame();
         let now = first(h);
         still = if now == last { still + 1 } else { 0 };
         last = now;
@@ -534,5 +534,5 @@ fn header_picture_click(footer: bool, x: f32, y: f32, band: Option<(f32, f32)>, 
     press(&mut h, at, egui::PointerButton::Secondary);
     assert_eq!(picked(&h), selects.then(|| pos.clone()), "a right-click picks the picture only where a click does ({x}, {y})");
     h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
-    h.step();
+    h.app_frame();
 }

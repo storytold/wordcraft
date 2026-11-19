@@ -64,7 +64,21 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
     }
     let sel = preview_sel(app).unwrap_or(&app.session.sel);
     let c = doc.caret_on(&sel.focus, app.session.page_hint)?;
-    let pr = pages.iter().find(|p| p.page == c.page)?;
+    // A caret whose page is scrolled out of view still has a place: the input method keeps its context and
+    // surroundings there (production placed it from every laid page), from the page's rect in the whole layout.
+    let unplaced;
+    let pr = match pages.iter().find(|p| p.page == c.page) {
+        Some(pr) => pr,
+        None => {
+            let rect = *app.canvas.shown.laid.get(c.page)?;
+            let scale = match pages.first() {
+                Some(p) => p.scale,
+                None => f64::from(rect.width() / doc.pages.get(c.page)?.w.max(1.0)),
+            };
+            unplaced = PlacedPage::new(c.page, rect, scale, (0.0, rect.height()));
+            &unplaced
+        }
+    };
     let scale = pr.scale as f32;
     let x = pr.rect.min.x + c.x * scale;
     let y0 = pr.rect.min.y + c.top * scale;

@@ -2,7 +2,17 @@ use super::*;
 use super::cursor::caret_color_at;
 use super::pages::view_key;
 use crate::table_resize::tests::{H, screen, steps};
+// Frames go through the app's input hook (`embed::before_input`) as in the app: command states, fired commands and
+// focus requests reach the runtime only that way (`test_harness::frame`).
+use crate::test_harness::AppFrames as _;
 use std::collections::HashSet;
+
+/// Rests the pointer for as long as the framework's tooltip waits before it shows a tool's tip
+/// (`tooltip::DELAY`, the framework's look), at the harness's default step of a quarter second.
+fn rest_for_tip(h: &mut H) {
+    let frames = (craft::ui::contract::tooltip::DELAY / 0.25).ceil() as usize + 1;
+    steps(h, frames);
+}
 
 mod markup;
 mod overlays;
@@ -281,7 +291,7 @@ fn multi_click_drag_extends_by_units() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let screen = |h: &mut H, pos: Pos| {
         let c = h.state_mut().session.layout().caret(&pos).expect("caret");
@@ -292,19 +302,19 @@ fn multi_click_drag_extends_by_units() {
         h.event(Event::PointerMoved(from));
         for i in 0..clicks {
             h.event(button(from, true));
-            h.step();
+            h.app_frame();
             if i + 1 < clicks {
                 h.event(button(from, false));
-                h.step();
+                h.app_frame();
             }
         }
         for k in 1..=4 {
             h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
-            h.step();
+            h.app_frame();
         }
         h.event(button(to, false));
         for _ in 0..3 {
-            h.step();
+            h.app_frame();
         }
     };
     // Double-click inside "beta", drag into "gamma": "beta gamma " is selected.
@@ -314,7 +324,7 @@ fn multi_click_drag_extends_by_units() {
     assert_eq!((s, e), (Pos::body(0, 6), Pos::body(0, 17)), "whole words");
     // Let the double-click time pass, then triple-click the second paragraph and drag into the third.
     for _ in 0..40 {
-        h.step();
+        h.app_frame();
     }
     let (from, to) = (screen(&mut h, Pos::body(1, 3)), screen(&mut h, Pos::body(2, 2)));
     multi_drag(&mut h, from, to, 3);
@@ -323,7 +333,7 @@ fn multi_click_drag_extends_by_units() {
     // A plain double-click (no drag) still selects just the word.
     h.state_mut().run("select.collapse", json!({})).unwrap();
     for _ in 0..40 {
-        h.step();
+        h.app_frame();
     }
     let at = screen(&mut h, Pos::body(0, 1));
     multi_drag(&mut h, at, at, 2);
@@ -352,7 +362,7 @@ fn the_status_bar_names_the_page_in_view_not_only_the_caret_page() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     assert_eq!(h.state_mut().session.layout().pages.len(), 12);
     let caret_page_label = "Page 1 of 12";
@@ -362,7 +372,7 @@ fn the_status_bar_names_the_page_in_view_not_only_the_caret_page() {
     let (rev, sel) = (h.state().session.rev(), h.state().session.sel.clone());
     h.state_mut().canvas.view.go_to(8);
     for _ in 0..4 {
-        h.step();
+        h.app_frame();
     }
     assert!(h.state().canvas.view.offset.1 > 0.0, "the view scrolled down");
     // The page the window shows at its top is the one the status bar names, whatever the caret's page is.
@@ -413,7 +423,7 @@ fn selection_bar_clicks_select_lines() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     // A point in the left margin beside the line `li` lines below the one holding `pos`.
     let margin = |h: &mut H, pos: Pos, li: f32| {
@@ -432,24 +442,24 @@ fn selection_bar_clicks_select_lines() {
         h.event(Event::PointerMoved(from));
         for i in 0..clicks {
             h.event(button(from, true));
-            h.step();
+            h.app_frame();
             if i + 1 < clicks {
                 h.event(button(from, false));
-                h.step();
+                h.app_frame();
             }
         }
         for k in 1..=4 {
             h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
-            h.step();
+            h.app_frame();
         }
         h.event(button(to, false));
         for _ in 0..3 {
-            h.step();
+            h.app_frame();
         }
     };
     let pause = |h: &mut H| {
         for _ in 0..40 {
-            h.step();
+            h.app_frame();
         }
     };
     // Click beside the second line: that whole line is selected, not a caret at its start.
@@ -479,15 +489,15 @@ fn selection_bar_clicks_select_lines() {
     pause(&mut h);
     let second = margin(&mut h, Pos::body(1, 0), 0.0);
     h.event(Event::ModifiersChanged(Modifiers::SHIFT));
-    h.step();
+    h.app_frame();
     clicks_drag(&mut h, second, second, 1);
     h.event(Event::ModifiersChanged(Modifiers::default()));
-    h.step();
+    h.app_frame();
     let sel = h.state().session.sel.clone();
     assert_eq!((sel.anchor, sel.focus), (Pos::body(0, 0), Pos::body(2, 0)), "extended by lines");
     // Hovering the bar shows the arrow, not the I-beam.
     h.event(Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
 }
 
@@ -510,7 +520,7 @@ fn selection_bar_of_a_right_to_left_paragraph_is_on_the_right() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let c = h.state_mut().session.layout().caret(&Pos::body(1, 0)).expect("caret");
     let (body_x, page_w) = {
@@ -522,16 +532,16 @@ fn selection_bar_of_a_right_to_left_paragraph_is_on_the_right() {
     let left = page_to_screen(h.state_mut(), c.page, 30.0, y).expect("on screen");
     let click = |h: &mut H, at: Pos2| {
         h.event(Event::PointerMoved(at));
-        h.step();
+        h.app_frame();
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
         for _ in 0..3 {
-            h.step();
+            h.app_frame();
         }
     };
     h.event(Event::PointerMoved(right));
-    h.step();
+    h.app_frame();
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "the bar's arrow on the right");
     click(&mut h, right);
     let (s, e) = h.state().session.sel.ordered();
@@ -540,7 +550,7 @@ fn selection_bar_of_a_right_to_left_paragraph_is_on_the_right() {
     // Beside it on the left: no bar (not the bar's arrow, and a caret, not a line selection).
     // The cursor there is the text cursor, or none at all on some platforms' test windows.
     h.event(Event::PointerMoved(left));
-    h.step();
+    h.app_frame();
     assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
     click(&mut h, left);
     assert!(h.state().session.sel.is_collapsed(), "a click in the left margin beside it is a caret, not a line");
@@ -563,7 +573,7 @@ fn an_armed_format_painter_changes_the_pointer() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let c = h.state_mut().session.layout().caret(&Pos::body(0, 6)).expect("caret");
     let over_text = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
@@ -574,7 +584,7 @@ fn an_armed_format_painter_changes_the_pointer() {
             h.state_mut().run(cmd, json!({})).unwrap();
         }
         h.event(egui::Event::PointerMoved(at));
-        h.step();
+        h.app_frame();
         craft::ui::runtime::cursor::current(&h.ctx)
     };
     // The shell the harness runs with decides whether the I-beam is painted (a native Windows shell) or the system's.
@@ -616,7 +626,7 @@ fn double_clicking_a_word_with_the_format_painter_paints_it() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     assert!(h.state().session.painter.is_some(), "armed");
     let word_off = "Bold source then ".len() + 2;
@@ -625,12 +635,12 @@ fn double_clicking_a_word_with_the_format_painter_paints_it() {
     h.event(Event::PointerMoved(at));
     for _ in 0..2 {
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
     }
     for _ in 0..3 {
-        h.step();
+        h.app_frame();
     }
     let s = &h.state().session;
     let para = s.doc.para_at(&Pos::body(0, 0)).expect("paragraph");
@@ -656,12 +666,12 @@ fn a_keystroke_is_painted_in_its_own_frame() {
     let ctx = h.ctx.clone();
     h.state_mut().canvas.focus_page(&ctx);
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     assert!(h.state().canvas.focused(&ctx), "the canvas has the keyboard focus");
     let before = h.state().canvas.glide.drawn().expect("the caret is drawn")[0].x;
     h.event(egui::Event::Text("x".into()));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Some textx");
     let after = h.state().canvas.glide.drawn().expect("the caret is drawn")[0].x;
     assert!(after > before, "the frame painted the caret after the typed character: {before} -> {after}");
@@ -685,19 +695,19 @@ fn double_click_margin_creates_header_and_footer() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let double_click = |h: &mut H, at: Pos2| {
         h.event(Event::PointerMoved(at));
         for _ in 0..2 {
             h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
-            h.step();
+            h.app_frame();
             h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
-            h.step();
+            h.app_frame();
         }
         // Let the double-click time pass before the next one.
         for _ in 0..40 {
-            h.step();
+            h.app_frame();
         }
     };
     let kind = |h: &H| part_kind(h.state(), h.state().session.sel.focus.story);
@@ -712,7 +722,7 @@ fn double_click_margin_creates_header_and_footer() {
     let header = h.state().session.sel.focus.story;
     h.event(Event::Text("Running head".into()));
     for _ in 0..3 {
-        h.step();
+        h.app_frame();
     }
     assert_eq!(h.state().session.doc.plain_text(header), "Running head");
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Body text");
@@ -732,7 +742,7 @@ fn double_click_margin_creates_header_and_footer() {
     let footer = h.state().session.sel.focus.story;
     assert_eq!(kind(&h), Some(PartKind::Footer));
     h.event(Event::Text("Page foot".into()));
-    h.step();
+    h.app_frame();
     double_click(&mut h, body);
     assert_eq!(h.state().session.sel.focus.story, StoryRef::Body);
     assert_eq!(h.state().session.doc.plain_text(footer), "Page foot");
@@ -758,7 +768,7 @@ fn double_click_reaches_the_first_page_header_from_another_header() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let page = h.state_mut().session.layout().pages[0].clone();
     assert!(page.header_story.is_none());
@@ -766,16 +776,16 @@ fn double_click_reaches_the_first_page_header_from_another_header() {
     h.event(Event::PointerMoved(at));
     for _ in 0..2 {
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
     }
     let first = h.state().session.sel.focus.story;
     assert_eq!(part_kind(h.state(), first), Some(PartKind::Header));
     assert_ne!(first, head, "page 1's own header, not the default one");
     h.event(Event::Text("Cover".into()));
     for _ in 0..3 {
-        h.step();
+        h.app_frame();
     }
     assert_eq!(h.state().session.doc.plain_text(first), "Cover");
     assert_eq!(h.state_mut().session.layout().pages[0].header_story.map(StoryRef::Part), Some(first));
@@ -798,18 +808,18 @@ fn double_click_switches_between_header_and_footer() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let double_click = |h: &mut H, at: Pos2| {
         h.event(Event::PointerMoved(at));
         for _ in 0..2 {
             h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
-            h.step();
+            h.app_frame();
             h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
-            h.step();
+            h.app_frame();
         }
         for _ in 0..40 {
-            h.step();
+            h.app_frame();
         }
     };
     let kind = |h: &H| part_kind(h.state(), h.state().session.sel.focus.story);
@@ -822,7 +832,7 @@ fn double_click_switches_between_header_and_footer() {
     let header = h.state().session.sel.focus.story;
     h.event(Event::Text("Head".into()));
     for _ in 0..3 {
-        h.step();
+        h.app_frame();
     }
     // Header -> footer.
     double_click(&mut h, foot_at);
@@ -831,7 +841,7 @@ fn double_click_switches_between_header_and_footer() {
     assert_eq!(h.state().session.doc.plain_text(header), "Head");
     h.event(Event::Text("Foot".into()));
     for _ in 0..3 {
-        h.step();
+        h.app_frame();
     }
     let footer = h.state().session.sel.focus.story;
     // Footer -> header.
@@ -888,7 +898,7 @@ fn a_link_to_a_bookmark_puts_the_caret_at_its_start() {
     let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(1), off: 5 }).unwrap();
     let at = screen(&mut h, c.x, c.top + c.height / 2.0);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     let press = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND };
     h.event_modifiers(press, egui::Modifiers::COMMAND);
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
@@ -948,7 +958,7 @@ fn ctrl_click_on_a_cross_reference_goes_to_its_target() {
     };
     let at = screen(&mut h, (before.x + after.x) / 2.0, before.top + before.height / 2.0);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     let press = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND };
     h.event_modifiers(press, egui::Modifiers::COMMAND);
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
@@ -979,14 +989,14 @@ fn right_clicking_a_link_hides_the_hover_tooltip() {
     let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 5 }).unwrap();
     let at = screen(&mut h, c.x, c.top + c.height / 2.0);
     h.event(egui::Event::PointerMoved(at));
-    steps(&mut h, 2);
+    rest_for_tip(&mut h);
     let tips = |h: &H| h.query_all_by_label_contains("Click to follow link").count();
     let rows = |h: &H, label: &str| h.query_all_by_label_contains(label).count();
     assert!(tips(&h) > 0, "hovering the link shows its target");
     let (cut, copy, paste) = (rows(&h, "Cut"), rows(&h, "Copy"), rows(&h, "Paste"));
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
     }
     steps(&mut h, 2);
     assert!(
@@ -1017,16 +1027,16 @@ fn a_handled_press_skips_the_link_tooltip() {
     let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 5 }).unwrap();
     let at = screen(&mut h, c.x, c.top + c.height / 2.0);
     h.event(Event::PointerMoved(at));
-    steps(&mut h, 2);
+    rest_for_tip(&mut h);
     let tips = |h: &H| h.query_all_by_label_contains("Click to follow link").count();
     assert!(tips(&h) > 0, "hovering the link shows its target");
     h.event(Event::ModifiersChanged(Modifiers::COMMAND));
     h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::COMMAND });
-    h.step();
+    h.app_frame();
     assert_eq!(tips(&h), 0, "the Ctrl+click was handled: no tooltip that frame");
     h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND });
     h.event(Event::ModifiersChanged(Modifiers::NONE));
-    steps(&mut h, 2);
+    rest_for_tip(&mut h);
     assert!(tips(&h) > 0, "hovering again shows the tooltip");
 }
 
@@ -1052,7 +1062,7 @@ fn hiding_white_space_stacks_page_bands_and_keeps_hit_testing() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let layout = h.state_mut().session.layout();
     assert_eq!(layout.pages.len(), 3);
@@ -1063,16 +1073,16 @@ fn hiding_white_space_stacks_page_bands_and_keeps_hit_testing() {
         .expect("a line on page 2");
     let click = |h: &mut H, at: Pos2| {
         h.event(Event::PointerMoved(at));
-        h.step();
+        h.app_frame();
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
         for _ in 0..3 {
-            h.step();
+            h.app_frame();
         }
         // Let the double-click time pass before the next click.
         for _ in 0..40 {
-            h.step();
+            h.app_frame();
         }
         let focus = h.state().session.sel.focus.clone();
         h.state_mut().session.layout().caret(&focus).map(|c| c.page)
@@ -1135,7 +1145,6 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     app.run("document.setText", json!({"text": "The"})).unwrap();
     let mut h = crate::test_harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
-        .with_context_setup(kana_test_glyphs)
         .with_step_dt(1.0 / 60.0)
         .build_ui_state(
             |ui, app: &mut WordApp| {
@@ -1145,15 +1154,18 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
             },
             app,
         );
+    // Added to the harness's context, not as the builder's context setup, which would replace the one that installs
+    // the craft runtime.
+    kana_test_glyphs(&h.ctx);
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     let ime_x = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.cursor_rect.min.x);
     let start = ime_x(&h).expect("the canvas places the candidate window");
     let mut compose = |range: Option<std::ops::Range<usize>>| {
         h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほん".into(), active_range_chars: range }));
-        h.step();
-        h.step();
+        h.app_frame();
+        h.app_frame();
         ime_x(&h).expect("the canvas places the candidate window")
     };
     let before = compose(Some(0..0));
@@ -1165,7 +1177,7 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     assert_eq!(compose(Some(std::ops::Range { start: 5, end: 1 })), mid, "a reversed range uses its end");
     assert_eq!(compose(Some(usize::MAX..usize::MAX)), end);
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().canvas.ime_preedit_range, None, "the commit clears the range");
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("にほん"));
 }
@@ -1179,7 +1191,6 @@ fn ime_descriptor_reports_visible_logical_text_and_exact_cause() {
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("ab")), Default::default());
     let mut h = crate::test_harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
-        .with_context_setup(kana_test_glyphs)
         .with_step_dt(1.0 / 60.0)
         .build_ui_state(
             |ui, app: &mut WordApp| {
@@ -1189,24 +1200,27 @@ fn ime_descriptor_reports_visible_logical_text_and_exact_cause() {
             },
             app,
         );
+    // Added to the harness's context, not as the builder's context setup, which would replace the one that installs
+    // the craft runtime.
+    kana_test_glyphs(&h.ctx);
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.state_mut().session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 2));
-    h.step();
+    h.app_frame();
     let text = |h: &H| h.output().platform_output.ime.as_ref().and_then(|i| i.surrounding_text.available()).map(|p| p.text.clone());
     let cause = |h: &H| h.output().platform_output.ime.as_ref().map(|i| i.change_cause);
     assert_eq!(text(&h), Some("ab".into()), "the committed text is available");
     h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None }));
-    h.step();
+    h.app_frame();
     assert_eq!(text(&h), Some("ab".into()), "the pre-edit never enters the committed model");
     assert_eq!(cause(&h), Some(ImeChangeCause::Other), "a pre-edit is no mutation");
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("한日本A😀".into())));
-    h.step();
+    h.app_frame();
     assert!(text(&h).unwrap_or_default().contains("한日本A😀"), "the commit is in the visible text");
     assert_eq!(cause(&h), Some(ImeChangeCause::InputMethod), "an accepted commit is the IME's change");
     h.event(egui::Event::Text("x".into()));
-    h.step();
+    h.app_frame();
     assert_eq!(cause(&h), Some(ImeChangeCause::Other), "ordinary typing is an application change");
 }
 
@@ -1235,10 +1249,10 @@ fn ime_descriptor_hides_tracked_deletions_and_preserves_reversed_selection() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 2), focus: wordcraft_doc::Pos::body(0, 7) };
-    h.step();
+    h.app_frame();
     let payload = |h: &H| h.output().platform_output.ime.as_ref().and_then(|i| i.surrounding_text.available()).cloned();
     let p = payload(&h).expect("the visible text is available");
     assert_eq!(p.text, "abcd");
@@ -1261,20 +1275,20 @@ fn ime_byte_deletion_preserves_the_selection_and_earns_input_method() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 3), focus: wordcraft_doc::Pos::body(0, 1) };
-    h.step();
+    h.app_frame();
     let cause = |h: &H| h.output().platform_output.ime.as_ref().map(|i| i.change_cause);
     h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 1 }));
-    h.step();
+    h.app_frame();
     let body = |h: &H| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end().to_string();
     assert_eq!(body(&h), "bc", "the selected text is preserved");
     assert_eq!(h.state().session.sel.anchor.off, 2, "the selection anchor moved with the erased prefix");
     assert_eq!(h.state().session.sel.focus.off, 0);
     assert_eq!(cause(&h), Some(ImeChangeCause::InputMethod), "an accepted deletion is the IME's change");
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("X".into())));
-    h.step();
+    h.app_frame();
     assert_eq!(body(&h), "X", "the commit replaces the preserved selection");
     assert_eq!(cause(&h), Some(ImeChangeCause::InputMethod), "delete plus commit chain into one IME change");
 }
@@ -1292,10 +1306,10 @@ fn ime_descriptor_is_unavailable_for_a_too_wide_selection() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(0, 5000) };
-    h.step();
+    h.app_frame();
     let ime = h.output().platform_output.ime.clone().expect("the canvas owns the IME context");
     assert!(ime.surrounding_text.available().is_none(), "a 5000-byte selection is unavailable");
 }
@@ -1313,15 +1327,15 @@ fn ime_generation_changes_on_document_replacement_but_not_on_caret_motion() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     let generation = |h: &H| h.output().platform_output.ime.as_ref().map(|i| i.context_generation);
     let first = generation(&h).expect("an IME context");
     h.state_mut().run("caret.right", json!({})).unwrap();
-    h.step();
+    h.app_frame();
     assert_eq!(generation(&h), Some(first), "caret motion keeps the context");
     h.state_mut().session.set_document(wordcraft_doc::Document::from_text("new"));
-    h.step();
+    h.app_frame();
     assert!(generation(&h) > Some(first), "a replaced document starts a new context");
 }
 
@@ -1344,18 +1358,18 @@ fn ime_equation_is_unavailable_with_a_stable_session_context() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     let ime = h.output().platform_output.ime.clone().expect("the equation places its candidate window");
     assert!(ime.surrounding_text.available().is_none(), "no fabricated equation surroundings");
     let generation = ime.context_generation;
     h.state_mut().run("equation.move", json!({"dir": "left"})).unwrap();
-    h.step();
+    h.app_frame();
     let moved = h.output().platform_output.ime.clone().expect("still editing");
     assert_eq!(moved.context_generation, generation, "caret motion keeps the equation's IME context");
     assert!(moved.surrounding_text.available().is_none());
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("z".into())));
-    h.step();
+    h.app_frame();
     let committed = h.output().platform_output.ime.clone().expect("still editing");
     assert_eq!(committed.change_cause, ImeChangeCause::InputMethod, "the engine revision proves the content commit");
     assert!(committed.surrounding_text.available().is_none());
@@ -1379,10 +1393,10 @@ fn ime_transformed_equation_commits_are_other() {
             app,
         );
         for _ in 0..8 {
-            h.step();
+            h.app_frame();
         }
         h.event(egui::Event::Ime(egui::ImeEvent::Commit(typed.into())));
-        h.step();
+        h.app_frame();
         let info = h.state_mut().run("equation.get", json!({})).unwrap();
         assert_eq!(info["latex"].as_str(), Some(latex), "the commit was transformed: {typed:?}");
         let ime = h.output().platform_output.ime.clone().expect("still editing the equation");
@@ -1409,10 +1423,10 @@ fn ime_literal_commit_after_autoformat_is_input_method() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("x".into())));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "Word \u{a9} x");
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
     assert_eq!(ime.change_cause, ImeChangeCause::InputMethod, "the literal commit is not the earlier AutoFormat");
@@ -1434,13 +1448,13 @@ fn exhausted_ime_revisions_never_certify_equation_or_wide_body_edits() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.state_mut().session.exhaust_ime_state_revision();
-    h.step();
+    h.app_frame();
     assert_eq!(h.state_mut().session.ime_state_revision(), None, "the allocator is exhausted");
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("y".into())));
-    h.step();
+    h.app_frame();
     let linear = h.state_mut().run("equation.get", json!({})).unwrap()["linear"].as_str().unwrap_or_default().to_string();
     assert_eq!(linear, "xy", "the real commit still happened");
     let ime = h.output().platform_output.ime.clone().expect("still editing the equation");
@@ -1456,14 +1470,14 @@ fn exhausted_ime_revisions_never_certify_equation_or_wide_body_edits() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(0, 5000) };
-    h.step();
+    h.app_frame();
     h.state_mut().session.exhaust_ime_state_revision();
-    h.step();
+    h.app_frame();
     h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 }));
-    h.step();
+    h.app_frame();
     let body = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
     assert_eq!(body.matches('a').count(), 4999, "the wide body delete still happened");
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
@@ -1477,7 +1491,6 @@ fn ime_generation_changes_on_body_replacement_with_the_same_text() {
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("hello")), Default::default());
     let mut h = crate::test_harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
-        .with_context_setup(kana_test_glyphs)
         .with_step_dt(1.0 / 60.0)
         .build_ui_state(
             |ui, app: &mut WordApp| {
@@ -1487,15 +1500,18 @@ fn ime_generation_changes_on_body_replacement_with_the_same_text() {
             },
             app,
         );
+    // Added to the harness's context, not as the builder's context setup, which would replace the one that installs
+    // the craft runtime.
+    kana_test_glyphs(&h.ctx);
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None }));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().canvas.ime_preedit.as_str(), "に");
     let first = h.output().platform_output.ime.as_ref().map(|i| i.context_generation).expect("an IME context");
     h.state_mut().run("document.setText", json!({"text": "hello"})).unwrap();
-    h.step();
+    h.app_frame();
     let ime = h.output().platform_output.ime.clone().expect("the canvas still owns the IME context");
     assert!(ime.context_generation > first, "a replaced body starts a new context");
     assert!(ime.should_interrupt_composition, "the old composition is interrupted");
@@ -1518,16 +1534,16 @@ fn ime_generation_changes_on_undo_and_version_restore() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     let generation = |h: &H| h.output().platform_output.ime.as_ref().map(|i| i.context_generation);
     let first = generation(&h).expect("an IME context");
     h.state_mut().run("edit.undo", json!({})).unwrap();
-    h.step();
+    h.app_frame();
     assert!(generation(&h) > Some(first), "Undo swaps the body back");
     let after_undo = generation(&h);
     h.state_mut().run("file.versions", json!({"restore": 0})).unwrap();
-    h.step();
+    h.app_frame();
     assert!(generation(&h) > after_undo, "a version restore replaces the body");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "one");
 }
@@ -1548,10 +1564,10 @@ fn ime_apostrophe_with_smart_quotes_off_is_an_input_method_change() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("'".into())));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "'", "the quote is not curled");
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
     assert_eq!(ime.change_cause, ImeChangeCause::InputMethod, "the engine inserted it unchanged");
@@ -1573,10 +1589,10 @@ fn ime_apostrophe_with_smart_quotes_on_stays_other() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("'".into())));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "\u{2018}", "curled");
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
     assert_eq!(ime.change_cause, ImeChangeCause::Other, "AutoFormat changed the text");
@@ -1596,10 +1612,10 @@ fn ime_literal_commit_is_input_method() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("literal".into())));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "literal");
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
     assert_eq!(ime.change_cause, ImeChangeCause::InputMethod);
@@ -1620,13 +1636,13 @@ fn para_alignment_before_ime_commit_is_other() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.state_mut().session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 5));
-    h.step();
+    h.app_frame();
     h.state_mut().run("para.alignCenter", json!({})).unwrap();
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("x".into())));
-    h.step();
+    h.app_frame();
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
     assert_eq!(ime.change_cause, ImeChangeCause::Other, "an application change before the receipt poisons the frame");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "hellox");
@@ -1652,10 +1668,10 @@ fn para_alignment_after_ime_commit_is_other() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.state_mut().session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 5));
-    h.step();
+    h.app_frame();
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("x".into())));
     h.event(egui::Event::Key {
         key: egui::Key::E,
@@ -1664,7 +1680,7 @@ fn para_alignment_after_ime_commit_is_other() {
         repeat: false,
         modifiers: egui::Modifiers::COMMAND,
     });
-    h.step();
+    h.app_frame();
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
     assert_eq!(ime.change_cause, ImeChangeCause::Other, "an application change after the receipt poisons the frame");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "hellox");
@@ -1691,10 +1707,10 @@ fn smart_art_item_ime_commit_is_other_and_does_not_reach_the_body() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("x".into())));
-    h.step();
+    h.app_frame();
     let body = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end().to_string();
     assert_eq!(body, "", "the commit must not fall through into the body");
     let item = wordcraft_engine::cmd::smart_art::selected_smart_art(&h.state().session).and_then(|g| g.items.first().map(|i| i.text.clone()));
@@ -1728,11 +1744,11 @@ fn empty_smart_art_ime_commit_is_consumed_without_body_insertion() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     let depth = h.state().session.undo_depth();
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("x".into())));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "", "no body insertion");
     assert_eq!(h.state().session.undo_depth(), depth, "consuming an empty graphic changes no document");
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
@@ -1754,16 +1770,16 @@ fn ime_wide_unavailable_deletion_uses_engine_revisions() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     // A wide selection with one character before it: the counted deletion is outside the
     // selection, so the selection stays wide (unavailable) after it.
     h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(0, 5000) };
-    h.step();
+    h.app_frame();
     let before = h.output().platform_output.ime.clone().expect("an IME context");
     assert!(before.surrounding_text.available().is_none(), "the wide selection is unavailable");
     h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 }));
-    h.step();
+    h.app_frame();
     let body = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
     assert_eq!(body.matches('a').count(), 4999);
     let after = h.output().platform_output.ime.clone().expect("an IME context");
@@ -1788,10 +1804,10 @@ fn ime_equation_delete_at_start_is_refused_without_a_receipt() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }));
-    h.step();
+    h.app_frame();
     let linear = h.state_mut().run("equation.get", json!({})).unwrap()["linear"].as_str().unwrap_or_default().to_string();
     assert_eq!(linear, "x+y", "nothing is deleted");
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
@@ -1817,7 +1833,7 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     let linear = |h: &mut H| h.state_mut().run("equation.get", json!({})).unwrap()["linear"].as_str().unwrap_or_default().to_string();
     // Harness::event steps each queued event in a separate frame. Insert the complete
@@ -1827,7 +1843,7 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
         egui::Event::Ime(egui::ImeEvent::Commit("Z".into())),
         egui::Event::Ime(egui::ImeEvent::Commit("W".into())),
     ]);
-    h.step();
+    h.app_frame();
     assert_eq!(linear(&mut h), "x+yW", "the adjacent stale commit is dropped and the next direct commit applies");
     let ime = h.output().platform_output.ime.clone().expect("still editing the equation");
     assert_eq!(ime.change_cause, ImeChangeCause::InputMethod, "the fresh direct commit is the input method's change");
@@ -1841,7 +1857,7 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
         egui::Event::Ime(egui::ImeEvent::Commit("Q2".into())),
         egui::Event::Ime(egui::ImeEvent::Commit("R".into())),
     ]);
-    h.step();
+    h.app_frame();
     assert_eq!(linear(&mut h), format!("{base}R"), "the adjacent pair is dropped, not every later commit");
     let ime = h.output().platform_output.ime.clone().expect("still editing the equation");
     assert_eq!(ime.change_cause, ImeChangeCause::InputMethod);
@@ -1850,11 +1866,11 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     // A refused deletion with no replacement in its batch must not swallow a later direct
     // commit, even with no pre-edit before it.
     h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 }));
-    h.step();
+    h.app_frame();
     let base = linear(&mut h);
     assert_eq!(linear(&mut h), "x+yWR", "the refused deletion alone changed nothing");
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("Y".into())));
-    h.step();
+    h.app_frame();
     assert_eq!(linear(&mut h), format!("{base}Y"), "a later direct commit applies without a pre-edit");
     let ime = h.output().platform_output.ime.clone().expect("still editing the equation");
     assert_eq!(ime.change_cause, ImeChangeCause::InputMethod, "the fresh commit is the input method's change");
@@ -1877,10 +1893,10 @@ fn ime_equation_delete_is_one_input_method_change() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }));
-    h.step();
+    h.app_frame();
     let linear = h.state_mut().run("equation.get", json!({})).unwrap()["linear"].as_str().unwrap_or_default().to_string();
     assert_eq!(linear, "x+");
     let ime = h.output().platform_output.ime.clone().expect("still editing the equation");
@@ -1903,22 +1919,22 @@ fn ime_equation_context_mixes_with_application_changes() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     h.state_mut().run("equation.justify", json!({"jc": "left"})).unwrap();
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("y".into())));
-    h.step();
+    h.app_frame();
     let before = h.output().platform_output.ime.clone().expect("still editing");
     assert_eq!(before.change_cause, ImeChangeCause::Other, "an application change before the receipt poisons the frame");
     let linear = h.state_mut().run("equation.get", json!({})).unwrap()["linear"].as_str().unwrap_or_default().to_string();
     assert_eq!(linear, "xy");
 
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("z".into())));
-    h.step();
+    h.app_frame();
     let accepted = h.output().platform_output.ime.clone().expect("still editing");
     assert_eq!(accepted.change_cause, ImeChangeCause::InputMethod);
     h.state_mut().run("equation.justify", json!({"jc": "right"})).unwrap();
-    h.step();
+    h.app_frame();
     let after = h.output().platform_output.ime.clone().expect("still editing");
     assert_eq!(after.change_cause, ImeChangeCause::Other, "an application change after the receipt poisons the frame");
 }
@@ -1938,11 +1954,11 @@ fn ime_equation_replacement_starts_a_new_context() {
         app,
     );
     for _ in 0..8 {
-        h.step();
+        h.app_frame();
     }
     let first = h.output().platform_output.ime.as_ref().map(|i| i.context_generation).expect("an IME context");
     h.state_mut().run("insert.equation", json!({"linear": "z"})).unwrap();
-    h.step();
+    h.app_frame();
     let ime = h.output().platform_output.ime.clone().expect("the new equation owns the context");
     assert!(ime.context_generation > first, "a new equation editing session is a new context");
     assert!(ime.should_interrupt_composition, "the old equation composition is interrupted");
@@ -2092,9 +2108,9 @@ fn a_picture_linked_from_its_context_menu_shows_and_follows_its_link() {
         h.event(egui::Event::PointerMoved(at));
         for pressed in [true, false] {
             h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
-            h.step();
+            h.app_frame();
         }
-        h.step();
+        h.app_frame();
         h.get_by_label_contains("Link…").click();
         steps(&mut h, 4);
         h.event(egui::Event::Text("https://example.com/picture".into()));
@@ -2106,7 +2122,7 @@ fn a_picture_linked_from_its_context_menu_shows_and_follows_its_link() {
         assert_eq!(link, Some(Some("https://example.com/picture".to_string())), "floating {floating}: the link is on the picture");
         // Hovering the picture shows where it goes.
         h.event(egui::Event::PointerMoved(at + egui::vec2(1.0, 0.0)));
-        steps(&mut h, 3);
+        rest_for_tip(&mut h);
         assert!(h.query_by_label_contains("https://example.com/picture").is_some(), "floating {floating}: the hover tip names the link");
         // Ctrl/⌘+click follows it, instead of picking the picture for a copy: here a link to a
         // place in the document, which moves the caret (a web address goes to the browser).
@@ -2157,7 +2173,7 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let rect = h.state_mut().session.layout().find_object(0, |o| o.text_box.is_some()).expect("the box is laid out").rect;
     let at = page_to_screen(h.state_mut(), 0, rect.x + rect.w / 2.0, rect.y + rect.h / 2.0).expect("the box is on screen");
     h.event(egui::Event::PointerMoved(at));
-    steps(&mut h, 3);
+    rest_for_tip(&mut h);
     assert!(h.query_by_label_contains("https://example.com/box").is_some(), "the hover tip names the box's link");
     // Ctrl/⌘+click inside the box follows it: here a place in the document, which moves the caret.
     link_box(h.state_mut(), json!({"bookmark": "Spot"}));

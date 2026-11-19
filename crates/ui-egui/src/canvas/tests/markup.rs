@@ -27,7 +27,7 @@ fn window_dt(a: WordApp, dt: Option<f32>) -> H {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     h
 }
@@ -41,7 +41,7 @@ fn button(at: Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
 fn click_at(h: &mut H, at: Pos2) {
     h.event(egui::Event::PointerMoved(at));
     h.event(button(at, egui::PointerButton::Primary, true));
-    h.step();
+    h.app_frame();
     h.event(button(at, egui::PointerButton::Primary, false));
     steps(h, 3);
 }
@@ -49,12 +49,12 @@ fn click_at(h: &mut H, at: Pos2) {
 /// A primary drag from `from` to `to` in six moves.
 fn drag_between(h: &mut H, from: Pos2, to: Pos2) {
     h.event(egui::Event::PointerMoved(from));
-    h.step();
+    h.app_frame();
     h.event(button(from, egui::PointerButton::Primary, true));
-    h.step();
+    h.app_frame();
     for k in 1..=6 {
         h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 6.0)));
-        h.step();
+        h.app_frame();
     }
     h.event(button(to, egui::PointerButton::Primary, false));
     steps(h, 3);
@@ -108,10 +108,10 @@ fn dragging_the_bottom_margin_on_the_ruler_keeps_the_view_and_follows_the_pointe
     h.event(egui::Event::PointerMoved(start));
     h.run_steps(2);
     h.event(button(start, egui::PointerButton::Primary, true));
-    h.step();
+    h.app_frame();
     for k in 1..=5 {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
-        h.step();
+        h.app_frame();
         assert!(h.state().canvas.view.offset == offset, "the view moved during the drag (step {k})");
     }
     h.event(button(end, egui::PointerButton::Primary, false));
@@ -268,7 +268,7 @@ fn click_balloon(h: &mut H, id: u32) {
 /// Types `text` into the field that has the keyboard.
 fn type_in(h: &mut H, text: &str) {
     h.event(egui::Event::Text(text.into()));
-    h.step();
+    h.app_frame();
 }
 
 /// Leave the comment field by clicking on the page (which also leaves the balloon).
@@ -277,7 +277,7 @@ fn leave_field(h: &mut H) {
     h.event(egui::Event::PointerMoved(at));
     for pressed in [true, false] {
         h.event(button(at, egui::PointerButton::Primary, pressed));
-        h.step();
+        h.app_frame();
     }
     steps(h, 3);
 }
@@ -500,7 +500,7 @@ fn saving_with_a_refused_comment_draft_saves_the_document() {
 fn comment_fields_are_read_only_where_comments_cant_change() {
     let (mut h, id) = comment_harness();
     h.state_mut().session.doc.settings.protection = Some("readOnly".into());
-    h.step();
+    h.app_frame();
     click_balloon(&mut h, id);
     type_in(&mut h, "Typed ");
     assert_eq!(draft_text(h.state()), None, "nothing was typed");
@@ -515,10 +515,10 @@ fn comment_fields_are_read_only_where_comments_cant_change() {
 /// A right-click at `at`, the button pressed and released a frame apart.
 fn right_click(h: &mut H, at: Pos2) {
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     for pressed in [true, false] {
         h.event(button(at, egui::PointerButton::Secondary, pressed));
-        h.step();
+        h.app_frame();
     }
     steps(h, 2);
 }
@@ -541,10 +541,10 @@ fn pick(h: &mut H, path: &[&str]) {
     }
     let at = menu_entry(h, last).expect(last);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     for pressed in [true, false] {
         h.event(button(at, egui::PointerButton::Primary, pressed));
-        h.step();
+        h.app_frame();
     }
     steps(h, 2);
 }
