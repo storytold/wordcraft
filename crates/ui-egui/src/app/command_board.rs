@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use craft::keymap::Overrides;
-use craft::ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, FireSource, Scope};
+use craft::ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, CommandState, FireSource, Scope, TypingRule, WindowCommand};
 use craft::ui::runtime::frame::FrameOutput;
 
 use super::{Value, WordApp, json};
@@ -105,8 +105,18 @@ impl WordApp {
             for (id, label) in GATED_UI_COMMANDS {
                 defs.push(CommandDef::new(CommandRef::new(*id), *label, Scope::app()));
             }
+            // Word's Alt chords (Alt+Q, Alt+F7, Ctrl+Alt+1…) fire while the person types in the page:
+            // plain keys type, and every modified chord is offered to the keymap first.
+            // Alt+F7 and Alt+F8 are Word's Next Misspelling and Macros; the framework's floating-window Move and Size
+            // keep their title-row menu items without a chord, as on macOS.
             match AppCatalog::new(defs, generation) {
-                Ok(catalog) => self.command_catalog = Some((registry, catalog)),
+                Ok(catalog) => {
+                    let catalog = catalog
+                        .typing_rule(TypingRule::PlainKeysWait)
+                        .replace_defaults(WindowCommand::Move.id(), Vec::new())
+                        .replace_defaults(WindowCommand::Size.id(), Vec::new());
+                    self.command_catalog = Some((registry, catalog));
+                }
                 Err(error) => {
                     log::warn!("command catalog: {error:?}");
                     self.command_catalog = None;

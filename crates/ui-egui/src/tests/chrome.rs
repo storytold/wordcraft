@@ -263,22 +263,21 @@ fn focus_esc_collapses_the_selection_first_then_leaves() {
 
 /// The Options toggle hides the community pill in the title bar; the backstage menu's
 /// Discord link hides with it — one setting, everywhere the link shows.
+///
+/// The File page fills the window in place of the title bar (`AppShell::page`, ch.C5), so the title bar's button is
+/// read in the editor window and the link on the File page.
 #[test]
 fn the_community_button_off_hides_the_backstage_discord_link_too() {
-    let mut a = app();
-    a.run("ui.backstage", json!({"value": true})).unwrap();
-    let mut h = harness(a);
-    h.run_steps(2);
-    assert!(h.query_by_label(DISCORD_TITLE_NAME).is_some(), "the title bar's community button shows by default");
-    assert!(h.query_by_label(DISCORD_LINK_NAME).is_some(), "and the community link shows by default");
-
-    let mut a = app();
-    a.ui.show_discord = false;
-    a.run("ui.backstage", json!({"value": true})).unwrap();
-    let mut h = harness(a);
-    h.run_steps(2);
-    assert!(h.query_by_label(DISCORD_TITLE_NAME).is_none(), "the setting hides the title bar's button");
-    assert!(h.query_by_label(DISCORD_LINK_NAME).is_none(), "the backstage link honors the same setting");
+    for show in [true, false] {
+        let mut a = app();
+        a.ui.show_discord = show;
+        let mut h = harness(a);
+        h.run_steps(2);
+        assert_eq!(h.query_by_label(DISCORD_TITLE_NAME).is_some(), show, "show {show}: the title bar's community button follows the setting");
+        h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.query_by_label(DISCORD_LINK_NAME).is_some(), show, "show {show}: the File page's link honors the same setting");
+    }
 }
 
 /// #766: started with nothing to open, the app shows File › Home (the Start screen) as Word
@@ -610,7 +609,16 @@ fn return_on_the_print_page_prints() {
     assert_eq!(rec.sent_count(), 2, "a held Return prints once");
     // The fallback file chooser over the page takes Return for itself, even with nothing in it
     // focused: Return there saves or opens, and prints nothing.
-    let _ = h.state_mut().run("ui.fileBrowser", json!({"purpose": "document"}));
+    // The chooser is the desktop file service's (S-L2): the binary's `FilePanels::pump_with` opens it on the app's
+    // dialog host for a `ui.fileBrowser` request, and this crate has no window to pump it with. It is opened on the
+    // host here as that pump does, over a fake folder.
+    let folders = craft::browse::places::FolderCache::new(
+        Arc::new(craft::browse::places::FakeDirectories::new().folder("/d/drafts").file("/d/report.docx")),
+        Arc::new(craft::host::ManualJobs::new()),
+        craft::host::Wake::none(),
+    );
+    let request = craft::host::PickRequest::open("document").directory("/d").fallback(true);
+    h.state_mut().dialog_host.open(craft::dialogs::ui::FileChooser::new(request, None, folders));
     h.run_steps(4);
     assert!(h.state().dialog_host.is_open::<craft::dialogs::ui::FileChooser>(), "the chooser opened");
     h.key_press(egui::Key::Enter);

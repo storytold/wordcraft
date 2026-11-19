@@ -146,6 +146,15 @@ fn settle(app: &mut WordApp, _ctx: &Context, id: DialogId) -> Settle {
 /// Opens the dialog (`macros`, dg.A2); `params.name` fills the name box.
 pub(crate) fn open(app: &mut WordApp, _name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or_default().to_owned();
+    // Opened again while it shows (Delete leaves it open): the open one takes the name and stays. A second dialog under
+    // the same id would cancel the first, whose settle then drops the hooks the id shares, so the new one's Record or
+    // Run would never run.
+    let open = dialog_id(KEY);
+    if let Some(dialog) = app.dialog_host.get_mut_by_id::<MacrosDialog>(open) {
+        dialog.name = name;
+        prepare(app, open);
+        return Some(open);
+    }
     let id = open_with(app, parent, MacrosDialog::new(name), DialogHooks { prepare: Some(prepare), settle });
     // The first pass shows the session's macros, not an empty list.
     prepare(app, id);

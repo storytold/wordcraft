@@ -21,9 +21,10 @@ fn err(e: impl std::fmt::Display) -> Reply {
 /// The screen point a point of `page` (page points from its top-left) is shown at; `None` when the
 /// page is not on screen. One rule for `ui.click` in document coordinates and `ui.clickText`.
 fn page_point_on_screen(canvas: &crate::canvas::CanvasState, page: usize, p: egui::Pos2) -> Option<egui::Pos2> {
-    let (_, rect) = canvas.page_rects().find(|(i, _)| *i == page)?;
-    // PLAN: assumed page points scale by `zoom()` from the page rect's top-left (cv.A10)
-    Some(rect.min + p.to_vec2() * canvas.zoom() as f32)
+    // The placed page's own scale: the page view draws a point at 96/72 screen points per point at 100%, so the
+    // zoom alone put a page point short of where it shows.
+    let placed = canvas.shown.pages.iter().find(|placed| placed.page == page)?;
+    Some(placed.to_screen(craft::behavior::kurbo::Point::new(f64::from(p.x), f64::from(p.y))))
 }
 
 impl WordApp {

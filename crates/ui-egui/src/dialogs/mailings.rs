@@ -377,7 +377,10 @@ fn recipient_body(ui: &mut egui::Ui, d: &mut RecipientDraft, editing: &mut bool,
     TextField::search(tl!("Find in list"), Bind::bound(&mut filter.find)).show(ui);
     // The rows the grid shows, by real index: edits and removes go to the right record.
     let fresh = visible_recipients(rows, order.as_deref(), &filter.find, filter.only_merged);
-    let visible = hold_rows(fresh, &mut filter.held, *editing, rows.len());
+    // A press that ends a cell's edit (one on the row's Remove part) completes its click on release, a pass later: the
+    // rows stay held until then, so the row the press landed on is still there for it.
+    let gesture = filter.held.is_some() && ui.input(|i| i.pointer.any_down() || i.pointer.any_released());
+    let visible = hold_rows(fresh, &mut filter.held, *editing || gesture, rows.len());
     if !filter.find.trim().is_empty() {
         let count = visible.len().to_string();
         Text::new(crate::i18n::fmt(tl!("Matches: {count}"), &[("count", &count)])).show(ui);
