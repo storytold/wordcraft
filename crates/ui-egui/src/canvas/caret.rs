@@ -178,7 +178,9 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
         }
     }
     if !bars.is_empty() || composition.is_some() {
-        CaretMarks::new(tl!("Text cursor").to_string(), bars, composition).show(ui);
+        // Over the whole view, as the other marks on the page: the marks measure nothing, so a flow placement would give
+        // them an empty rect that clips their strokes away.
+        CaretMarks::new(tl!("Text cursor").to_string(), bars, composition).show_at(ui, pass.rect);
     }
 }
 
