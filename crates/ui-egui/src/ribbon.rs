@@ -212,7 +212,7 @@ fn tab_body(row: &mut RibbonRow<'_>, app: &mut WordApp, tab: &str) {
         "Review" => review(row, app),
         "View" => view(row, app),
         "Developer" => developer(row, app),
-        "Zotero" => zotero(row, app),
+        "Citations" => zotero(row, app),
         "Help" => help(row, app),
         "Table Design" => table_design(row, app),
         "Table Layout" => table_layout(row, app),

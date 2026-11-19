@@ -41,6 +41,7 @@ pub(crate) fn command_enabled(app: &WordApp, id: &str) -> bool {
 const GATED_UI_COMMANDS: &[(&str, &str)] = &[
     ("ui.crop", "Crop"),
     ("ui.linkTextBox", "Link Text Box"),
+    ("ui.citations.provider", "Zotero"),
     ("ui.zotero.addEditCitation", "Add/Edit Citation"),
     ("ui.zotero.addNote", "Add Note"),
     ("ui.zotero.addEditBibliography", "Add/Edit Bibliography"),

@@ -176,6 +176,17 @@ pub(super) fn zotero(row: &mut RibbonRow<'_>, _app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
     };
+    row.group(RibbonGroup::new("Provider", crate::tl!("Provider"), IconId::new("citation").into()), |ui| {
+        menu_button(
+            ui,
+            Button::new(crate::tl!("Provider")).icon(IconId::new("citation")).tooltip(crate::tl!("Citation Provider")),
+            crate::tl!("Citation Provider"),
+            Some("ui.citations.provider"),
+            |ui, _| {
+                MenuItem::command(CommandRef::with_params("ui.citations.provider", json!({"value": "zotero"}))).label("Zotero").radio_mark(true).show(ui);
+            },
+        );
+    });
     row.group(RibbonGroup::new("Citations", crate::tl!("Citations"), IconId::new("citation").into()), |ui| {
         big(ui, "citation", "Add/Edit\nCitation", "ui.zotero.addEditCitation");
         big(ui, "addNote", "Add\nNote", "ui.zotero.addNote");
