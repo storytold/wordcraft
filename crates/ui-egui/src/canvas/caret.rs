@@ -7,7 +7,7 @@ use craft::behavior::motion::MotionMode;
 use craft::behavior::{Input, Metrics};
 use craft::pages::ui::{PageBody, PlacedPage};
 use craft::ui::canvas::ToolPass;
-use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
+use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Role, Show as _};
 use craft::ui::primitives::{PaintShape, StrokeWidth, TextRun};
 use craft::ui::runtime::env::Label;
 use craft::ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
@@ -122,7 +122,6 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     crate::dialogs_smart_art::end_typing_run(app, focused);
     let doc = app.session.layout();
     let Some(pl) = place(app, &doc, body.pages) else { return };
-    crate::keys::report_editor(app, pass, &ctx, report_rect(pl.bar));
 
     let zoom_key = body.view.zoom.to_bits();
     // The glide runs in content space: where the document's origin lands on screen.
@@ -191,11 +190,18 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
             ctx.request_repaint_after(std::time::Duration::from_millis(530 - (since_ms as u64 % 530)));
         }
     }
+    let mut report = report_rect(pl.bar);
     if !bars.is_empty() || composition.is_some() {
         // Over the whole view, as the other marks on the page: the marks measure nothing, so a flow placement would give
         // them an empty rect that clips their strokes away.
-        CaretMarks::new(tl!("Text cursor").to_string(), bars, composition).show_at(ui, pass.rect);
+        let out = CaretMarks::new(tl!("Text cursor").to_string(), bars, composition).show_at(ui, pass.rect);
+        // The candidate window sits at the input method's cursor inside the composition, as production placed it.
+        if let Some(x) = out.composition_caret {
+            report = Rect::from_min_max(pos2(x, report.min.y), pos2(x + 1.0, report.max.y));
+        }
     }
+    // Reported after the marks, which lay the composition out: this pass's final caret for the input method.
+    crate::keys::report_editor(app, pass, &ctx, report);
 }
 
 /// An input method's composition drawn from the caret.
@@ -229,12 +235,28 @@ pub(crate) struct CaretMarks {
     common: Common,
     bars: Vec<(Bar, Color32)>,
     composition: Option<Composition>,
+    /// Where the paint put the caret inside the composition (screen x), measured from the laid-out text.
+    composition_caret: Option<f32>,
 }
 
 impl CaretMarks {
     /// The marks named `label`: caret bars in screen points with their colours, and a composition.
     fn new(label: impl Into<Label>, bars: Vec<(Bar, Color32)>, composition: Option<Composition>) -> Self {
-        CaretMarks { common: Common::new(), bars, composition }.label(label)
+        CaretMarks { common: Common::new(), bars, composition, composition_caret: None }.label(label)
+    }
+}
+
+/// What the marks report: the caret's place inside the composition they drew, for the candidate window.
+pub(crate) struct CaretMarksOutput {
+    response: Response,
+    composition_caret: Option<f32>,
+}
+
+impl Outcome for CaretMarksOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
     }
 }
 
@@ -246,7 +268,7 @@ impl Component for CaretMarks {
     const STOPS: bool = false;
     const OVERLAYS: bool = false;
     type Style = CaretMarksStyle;
-    type Output = Response;
+    type Output = CaretMarksOutput;
 
     fn style(cx: &StyleCx<'_>, _: CaretMarksStyleKey) -> CaretMarksStyle {
         // PLAN: a text run takes a theme colour only, so the composition's glyphs use the overlay ink while its underline and caret use the paper contrast (canvas-w1: a data-colour text run). The type role fixes its size.
@@ -271,13 +293,14 @@ impl Component for CaretMarks {
         draw.stroke(&PaintShape::Path(underline), StrokeWidth::Thin, color);
         let x = (c.left + width * c.cursor).round() + 0.5;
         draw.stroke(&PaintShape::Path(vec![pos2(x, c.bottom - c.height), pos2(x, c.bottom)]), StrokeWidth::Medium, color);
+        self.composition_caret = Some(x);
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
         access.role(Role::None);
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> Response {
-        cx.response.clone()
+    fn finish(self, cx: Cx<'_, Self>) -> CaretMarksOutput {
+        CaretMarksOutput { response: cx.response.clone(), composition_caret: self.composition_caret }
     }
 }

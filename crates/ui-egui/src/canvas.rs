@@ -268,6 +268,10 @@ impl CanvasState {
             last_font_color: old.last_font_color,
             last_shading: old.last_shading,
             tab_kind: old.tab_kind,
+            // The window's page is the same widget, and keeps the keyboard it had: without its id the page would
+            // count as unfocused for the pass that shows the new document, and report no editor to the input method.
+            // The pages it placed were the old document's.
+            shown: ShownPages { pages: Vec::new(), laid: Vec::new(), ..old.shown },
             scroll_to_caret: !seen,
             ime_reset,
             ..CanvasState::default()

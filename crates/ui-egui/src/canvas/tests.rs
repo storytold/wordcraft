@@ -10,7 +10,7 @@ use std::collections::HashSet;
 /// Rests the pointer for as long as the framework's tooltip waits before it shows a tool's tip
 /// (`tooltip::DELAY`, the framework's look), at the harness's default step of a quarter second.
 fn rest_for_tip(h: &mut H) {
-    let frames = (craft::ui::contract::tooltip::DELAY / 0.25).ceil() as usize + 1;
+    let frames = (craft::ui::contract::tooltip::DELAY / 0.25).ceil() as usize + 3;
     steps(h, frames);
 }
 
@@ -663,6 +663,9 @@ fn a_keystroke_is_painted_in_its_own_frame() {
         },
         a,
     );
+    // kittest zeroes egui's animation time and the framework then runs no motion, so the caret's glide (whose drawn
+    // bar this reads) stands down: give it the time a real window has (as `caret_glide::tests` does).
+    h.ctx.all_styles_mut(|style| style.animation_time = egui::Style::default().animation_time);
     let ctx = h.ctx.clone();
     h.state_mut().canvas.focus_page(&ctx);
     for _ in 0..6 {
@@ -1067,10 +1070,9 @@ fn hiding_white_space_stacks_page_bands_and_keeps_hit_testing() {
     let layout = h.state_mut().session.layout();
     assert_eq!(layout.pages.len(), 3);
     let (body0, body1) = (layout.pages[0].body, layout.pages[1].body);
-    // A line that starts page 2.
-    let second = (0..layout.index.len().max(8) as u32)
-        .find_map(|b| layout.caret(&Pos::body(b as usize, 0)).filter(|c| c.page == 1))
-        .expect("a line on page 2");
+    // A line on page 2. The page breaks are characters of the one paragraph, so its offsets reach every page.
+    let len = h.state().session.doc.para_at(&Pos::body(0, 0)).map_or(0, |p| p.text.len());
+    let second = (0..=len).find_map(|off| layout.caret(&Pos::body(0, off)).filter(|c| c.page == 1)).expect("a line on page 2");
     let click = |h: &mut H, at: Pos2| {
         h.event(Event::PointerMoved(at));
         h.app_frame();
@@ -1681,6 +1683,8 @@ fn para_alignment_after_ime_commit_is_other() {
         modifiers: egui::Modifiers::COMMAND,
     });
     h.app_frame();
+    // The chord fires its command in that pass; the app runs fired commands when the next pass begins.
+    h.app_frame();
     let ime = h.output().platform_output.ime.clone().expect("an IME context");
     assert_eq!(ime.change_cause, ImeChangeCause::Other, "an application change after the receipt poisons the frame");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "hellox");
@@ -1806,6 +1810,10 @@ fn ime_equation_delete_at_start_is_refused_without_a_receipt() {
     for _ in 0..8 {
         h.app_frame();
     }
+    // A composition is under way: the framework interrupts a composition it has seen (a pre-edit the page shows).
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "z".into(), active_range_chars: None }));
+    h.app_frame();
+    assert_eq!(h.state().canvas.ime_preedit.as_str(), "z");
     h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }));
     h.app_frame();
     let linear = h.state_mut().run("equation.get", json!({})).unwrap()["linear"].as_str().unwrap_or_default().to_string();
@@ -1956,6 +1964,10 @@ fn ime_equation_replacement_starts_a_new_context() {
     for _ in 0..8 {
         h.app_frame();
     }
+    // A composition is under way in the old equation: the framework interrupts a composition it has seen.
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "w".into(), active_range_chars: None }));
+    h.app_frame();
+    assert_eq!(h.state().canvas.ime_preedit.as_str(), "w");
     let first = h.output().platform_output.ime.as_ref().map(|i| i.context_generation).expect("an IME context");
     h.state_mut().run("insert.equation", json!({"linear": "z"})).unwrap();
     h.app_frame();
