@@ -3,10 +3,10 @@
 
 use craft::behavior::{Input, Metrics, Sense};
 use craft::pages::ui::reading::ReadingMetrics;
-use craft::ui::contract::{Common, Component, Cx, MeasureCx, Props, Role, Show as _};
+use craft::ui::contract::{Common, Component, Cx, MeasureCx, NoValue, Outcome, Props, Role, Show as _};
 use craft::ui::primitives::ReadingMeasure;
 use craft::ui::style::{ComponentStyle, StyleCx, TypeRole};
-use egui::Ui;
+use egui::{Response, Ui};
 
 /// Measures the body text's reading widths; shows nothing.
 #[derive(Component, Props)]
@@ -15,6 +15,20 @@ struct ReadingProbe {
     #[common]
     common: Common,
     measured: Option<ReadingMetrics>,
+}
+
+/// What the probe measured this pass.
+struct ReadingProbeOutput {
+    response: Response,
+    metrics: Option<ReadingMetrics>,
+}
+
+impl Outcome for ReadingProbeOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
 }
 
 /// The gaps the metrics take from the tokens.
@@ -34,7 +48,7 @@ impl Component for ReadingProbe {
     const SHOWS_LABEL: bool = false;
     const OVERLAYS: bool = false;
     type Style = ReadingProbeStyle;
-    type Output = Option<ReadingMetrics>;
+    type Output = ReadingProbeOutput;
 
     fn style(cx: &StyleCx<'_>, _: ReadingProbeStyleKey) -> ReadingProbeStyle {
         ReadingProbeStyle { metrics: Metrics::new(), column_gap: cx.tokens.space.gap.section, nav_bar: cx.tokens.size.panel_header }
@@ -50,12 +64,12 @@ impl Component for ReadingProbe {
         Sense::empty()
     }
 
-    fn finish(self, _: Cx<'_, Self>) -> Option<ReadingMetrics> {
-        self.measured
+    fn finish(self, cx: Cx<'_, Self>) -> ReadingProbeOutput {
+        ReadingProbeOutput { response: cx.response.clone(), metrics: self.measured }
     }
 }
 
 /// The reading metrics under the current theme, or `None` when the probe did not measure this pass.
 pub(super) fn read(ui: &mut Ui) -> Option<ReadingMetrics> {
-    ReadingProbe { common: Common::new(), measured: None }.label("Reading metrics").show(ui)
+    ReadingProbe { common: Common::new(), measured: None }.label("Reading metrics").show(ui).metrics
 }

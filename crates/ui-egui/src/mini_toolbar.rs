@@ -234,7 +234,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
 
 /// An icon toggle running command `id` and drawn `on`; while hovered it previews the command. The
 /// command carries no checked state, so the value is bound here and only draws the button.
-fn toggle(ui: &mut Ui, app: &mut WordApp, id: &str, icon: &str, on: bool, preview: bool) {
+fn toggle(ui: &mut Ui, app: &mut WordApp, id: &str, icon: &'static str, on: bool, preview: bool) {
     let r = <ToggleButton as Props>::command(ToggleButton::new(Label::Empty, Bind::given(on)), CommandRef::new(id)).icon(IconId::new(icon)).icon_only().show(ui);
     preview_on_hover(app, r.hover, r.response.enabled(), id, json!({}), preview);
 }
