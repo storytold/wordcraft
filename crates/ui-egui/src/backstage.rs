@@ -188,7 +188,8 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     let _ = Row::new().fill().show(ui, |ui, _| {
         side_menu(ui, band, &current, has_document, show_discord, &choice);
         let print = current == "print";
-        let mut body = Stack::new().fill().pad(Pad::Roomy).gap(Gap::Section).surface(SurfaceKind::Panel);
+        // Stacked rows' spacing between a page's controls, as production's (Browse… over Browse in WordCraft…).
+        let mut body = Stack::new().fill().pad(Pad::Roomy).gap(Gap::Stack).surface(SurfaceKind::Panel);
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if !print {
             body = body.scroll(Scroll::vertical());
