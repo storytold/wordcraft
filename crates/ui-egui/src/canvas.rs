@@ -64,8 +64,8 @@ use navigation::{scrollbar_page_tip, viewed_page};
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
 pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{
-    drawing_grid, drawing_grid_step, gridline_segments, page_image, page_key, page_render_options, page_shows, shown_layout, texel_aligned_rect,
-    view_key, visible_tiles,
+    drawing_grid, drawing_grid_step, gridline_segments, lcd_view_key, page_image, page_key, page_lcd, page_render_options, page_shows, shown_layout,
+    texel_aligned_rect, view_key, visible_tiles,
 };
 pub(crate) use reading::turn_read_page;
 #[cfg(test)]
@@ -1038,6 +1038,8 @@ struct PagePaint<'a> {
     shown_view: u64,
     zooming: bool,
     hinted: bool,
+    /// Subpixel text for this frame's page rasters ([`page_lcd`]).
+    lcd: Option<wordcraft_render::LcdOrder>,
     content_origin: Pos2,
     ppp: f32,
     max_tex: f32,
@@ -1129,6 +1131,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         shown_view,
         zooming,
         hinted,
+        lcd,
         content_origin,
         ppp,
         max_tex,
@@ -1172,6 +1175,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         if visible && !tiled && !fresh && !stretched && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
             let mut opts = page_render_options(app, dim_body);
             opts.hinting &= hinted;
+            opts.lcd = lcd;
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
             let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
@@ -1228,6 +1232,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                 if !fresh && rendered < 4 {
                     let mut opts = page_render_options(app, dim_body);
                     opts.hinting &= hinted;
+                    opts.lcd = lcd;
                     // Only on the page it is on: the `Pos` can't match an object of another page.
                     opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                     // The tiny subtraction avoids a 1px overshoot from round-tripping f32
@@ -1675,7 +1680,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
         let content_origin = ui.min_rect().min;
         let hidden = app.canvas.dragged_off_page();
-        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), hinted);
+        // Subpixel text costs three rasters a page: like hinting, not for the in-between sizes of a
+        // pointer zoom. The first frame at rest draws it (it is in the page's key).
+        let lcd = page_lcd(app, ppp).filter(|_| !zooming);
+        let page_view = lcd_view_key(view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), hinted), lcd);
         // The view without the hinting, which a stretched raster may differ in (see `stretched`).
         let shown_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), true);
         let t0 = crate::now_ms();
@@ -1693,6 +1701,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             shown_view,
             zooming,
             hinted,
+            lcd,
             content_origin,
             ppp,
             max_tex,

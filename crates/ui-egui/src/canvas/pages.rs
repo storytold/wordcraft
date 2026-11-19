@@ -353,6 +353,46 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     opts
 }
 
+/// Subpixel (LCD) text for the page rasters of a screen with `ppp` device pixels per point, as
+/// File › Options › General › Screen text smoothing says. "Use system setting" draws it where
+/// the system asks for it ([`crate::screen_text`]) and the screen is below two device pixels per
+/// point: on a denser screen the stripes are too fine to gain from, and a page has four times
+/// the pixels to rasterise three times. "Subpixel (LCD)" draws it on any screen, in the
+/// system's stripe order, RGB when it names none (macOS never does).
+pub(super) fn page_lcd(app: &WordApp, ppp: f32) -> Option<wordcraft_render::LcdOrder> {
+    lcd_for(app.session.prefs.text_smoothing, crate::screen_text::current().subpixel, ppp)
+}
+
+/// [`page_lcd`] for the user's choice, the system's stripe order (`None`: it asks for greyscale,
+/// or says nothing) and the screen's density.
+pub(super) fn lcd_for(
+    choice: wordcraft_engine::cmd::view::TextSmoothing,
+    system: Option<crate::screen_text::SubpixelOrder>,
+    ppp: f32,
+) -> Option<wordcraft_render::LcdOrder> {
+    use crate::screen_text::SubpixelOrder;
+    use wordcraft_engine::cmd::view::TextSmoothing;
+    use wordcraft_render::LcdOrder;
+    let system = system.map(|stripes| match stripes {
+        SubpixelOrder::Rgb => LcdOrder::Rgb,
+        SubpixelOrder::Bgr => LcdOrder::Bgr,
+    });
+    match choice {
+        TextSmoothing::Grayscale => None,
+        TextSmoothing::Subpixel => Some(system.unwrap_or(LcdOrder::Rgb)),
+        // Written so a density that isn't a number is greyscale too.
+        TextSmoothing::System => system.filter(|_| ppp < 2.0),
+    }
+}
+
+/// `view` ([`view_key`]) for pages drawn with subpixel text in `lcd` order: a page drawn in
+/// greyscale (mid-zoom, or before the setting changed) must not pass for one drawn with it.
+pub(super) fn lcd_view_key(view: u64, lcd: Option<wordcraft_render::LcdOrder>) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (view, lcd).hash(&mut h);
+    h.finish()
+}
+
 /// Render options for page rasters shown on screen, so a page looks as text does in the
 /// platform's other apps (exports never change). How follows the system's own text settings
 /// once the app has asked for them ([`crate::screen_text`]), and until then what each platform

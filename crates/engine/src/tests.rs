@@ -13407,6 +13407,37 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
 }
 
 #[test]
+fn screen_text_smoothing_is_a_persistent_preference_not_document_formatting() {
+    use crate::cmd::view::TextSmoothing;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Screen text test", "raw": true}));
+    let before = serde_json::to_value(&s.doc).unwrap();
+    let docx_before = wordcraft_docx::write(&s.doc).unwrap();
+    s.dirty = false;
+    assert_eq!(s.prefs.text_smoothing, TextSmoothing::System, "follows the system until the user chooses");
+    for (value, expected) in [("subpixel", TextSmoothing::Subpixel), ("grayscale", TextSmoothing::Grayscale), ("system", TextSmoothing::System)] {
+        let r = run(&mut s, "view.textSmoothing", json!({"value": value}));
+        assert_eq!(r["textSmoothing"], value);
+        assert_eq!(s.prefs.text_smoothing, expected);
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
+        assert!(!s.dirty);
+        assert_eq!(wordcraft_docx::write(&s.doc).unwrap(), docx_before);
+        let restored: crate::Prefs = serde_json::from_value(serde_json::to_value(&s.prefs).unwrap()).unwrap();
+        assert_eq!(restored.text_smoothing, expected);
+    }
+    run(&mut s, "view.textSmoothing", json!({"value": "subpixel"}));
+    for v in [json!({}), json!({"value": "lcd"}), json!({"value": 42}), json!({"value": null}), json!({"value": ["subpixel"]})] {
+        assert!(s.run("view.textSmoothing", &v).is_err(), "{v}");
+        assert_eq!(s.prefs.text_smoothing, TextSmoothing::Subpixel, "a refused value changes nothing");
+    }
+    let legacy: crate::Prefs = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(legacy.text_smoothing, TextSmoothing::System);
+    let future: crate::Prefs = serde_json::from_value(json!({"textSmoothing":"future", "countNotes":false})).unwrap();
+    assert_eq!(future.text_smoothing, TextSmoothing::System);
+    assert!(!future.count_notes);
+}
+
+#[test]
 fn screen_paper_color_is_a_persistent_preference_not_document_formatting() {
     use crate::cmd::view::PaperColor;
     let mut s = s();

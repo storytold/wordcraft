@@ -175,6 +175,13 @@ pub struct RenderOptions {
     /// onto the pixel grid, so text looks as crisp as in other apps there. Nothing moves
     /// sideways, so lines break as without it. For on-screen rasters only: exports stay exact.
     pub hinting: bool,
+    /// Subpixel (LCD) antialiasing for text, for a screen whose colour stripes run in this order
+    /// (see [`LcdOrder`]); `None` is greyscale antialiasing. Text gets three times the detail
+    /// sideways, where slanted and round strokes need it most, at the price of faint colour at
+    /// its edges, and the page is rasterised three times. Everything but text is drawn as
+    /// without it. For on-screen rasters only, and only where the raster's pixels are the
+    /// screen's own: exports stay exact.
+    pub lcd: Option<LcdOrder>,
     /// Dark page (View › Switch Modes): every colour but pictures has its lightness inverted, so
     /// white paper turns black and black text white while hues stay the same. Screen only.
     pub dark: bool,
@@ -183,6 +190,20 @@ pub struct RenderOptions {
     /// Read Mode's Page Color: paper drawn instead of the document's page color and page
     /// picture. `None` shows the document's page background. Screen only.
     pub read_paper: Option<Rgb>,
+}
+
+/// The order of a screen's red, green and blue stripes, left to right, within each pixel.
+///
+/// With [`RenderOptions::lcd`] set, each colour channel of a pixel takes the text's coverage
+/// around its own stripe, a third of a pixel to one side of the pixel's middle or the other,
+/// instead of all three taking the coverage of the whole pixel. A pixel's stripes are a pixel
+/// wide in all, so each channel still averages over one pixel's width: this is the result of
+/// rasterising text at three times the width and averaging three neighbours (the box filter
+/// FreeType calls its light LCD filter), with no sharper filter and no fringe reduction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LcdOrder {
+    Rgb,
+    Bgr,
 }
 
 /// Default grey for a dark page's paper.
@@ -279,6 +300,7 @@ impl Default for RenderOptions {
             text_darkening: 0.0,
             baseline_snap: false,
             hinting: false,
+            lcd: None,
             dark: false,
             dark_paper: DARK_PAPER,
             read_paper: None,
@@ -306,6 +328,52 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
     // Over the cap the whole picture is drawn smaller, not cropped.
     let view = if (cw, ch) == (w, h) { view } else { Affine::scale_non_uniform(cw as f64 / w as f64, ch as f64 / h as f64) * view };
     let (w16, h16) = (cw as u16, ch as u16);
+    let drew_text = std::cell::Cell::new(false);
+    let mut pixels = raster_page(doc, page, (w16, h16), view, opts, Pass { shift: 0.0, drew_text: &drew_text });
+    // Subpixel text: the page twice more, its text a third of a pixel to each side, for the
+    // channels whose stripes sit there. A page without text is the same all three times.
+    if let Some(order) = opts.lcd
+        && drew_text.get()
+    {
+        let side = |shift: f64| raster_page(doc, page, (w16, h16), view, opts, Pass { shift, drew_text: &drew_text });
+        let (text_right, text_left) = (side(LCD_SHIFT), side(-LCD_SHIFT));
+        let (red, blue) = match order {
+            LcdOrder::Rgb => (&text_right, &text_left),
+            LcdOrder::Bgr => (&text_left, &text_right),
+        };
+        take_lcd_channels(&mut pixels, red, blue);
+    }
+    Rendered { width: w16 as u32, height: h16 as u32, pixels }
+}
+
+/// How far, in device pixels, the middle of a pixel's first or last colour stripe is from the
+/// middle of the pixel.
+const LCD_SHIFT: f64 = 1.0 / 3.0;
+
+/// One rasterisation of a page among the one or three that make its raster.
+#[derive(Clone, Copy)]
+struct Pass<'a> {
+    /// How far to the right text is drawn from its place, in device pixels (see
+    /// [`RenderOptions::lcd`]). Nothing else moves.
+    shift: f64,
+    /// Set once the pass has drawn text that `shift` moves.
+    drew_text: &'a std::cell::Cell<bool>,
+}
+
+/// The red of `pixels` from `red` and its blue from `blue`, two rasters of the same size
+/// (premultiplied RGBA8). Text shifted right puts under each pixel's middle what lay a third of a
+/// pixel to its left, where an RGB screen's red stripe is, and so on. The alpha stays, and
+/// no channel is left above it.
+fn take_lcd_channels(pixels: &mut [u8], red: &[u8], blue: &[u8]) {
+    for ((px, r), b) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(red.as_chunks::<4>().0).zip(blue.as_chunks::<4>().0) {
+        px[0] = r[0].min(px[3]);
+        px[2] = b[2].min(px[3]);
+    }
+}
+
+/// Rasterise a page into `size` pixels (premultiplied RGBA8) with `view` (page points → pixels).
+fn raster_page(doc: &Document, page: &Page, size: (u16, u16), view: Affine, opts: &RenderOptions, pass: Pass) -> Vec<u8> {
+    let (w16, h16) = size;
     let mut ctx = context_pool::CONTEXTS.take(w16, h16);
     ctx.set_transform(Affine::IDENTITY);
     ctx.set_paint(color(opts.paper_of(doc), 1.0));
@@ -324,7 +392,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
             ctx.push_opacity_layer(alpha);
         }
         for it in &items {
-            draw(&mut ctx, doc, it, view, &visible, opts);
+            draw(&mut ctx, doc, it, view, &visible, opts, pass);
         }
         if faded {
             ctx.pop_layer();
@@ -337,7 +405,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
         ctx.render(pm, &mut res);
     }
     context_pool::CONTEXTS.give_back(ctx);
-    Rendered { width: w16 as u32, height: h16 as u32, pixels }
+    pixels
 }
 
 /// The on-screen colour behind page point (`x`, `y`): the paper (page colour), then any
@@ -609,6 +677,7 @@ struct Frame<'a> {
     opts: &'a RenderOptions,
     view: Affine,
     visible: &'a kurbo::Rect,
+    pass: Pass<'a>,
 }
 
 /// The rectangle in kurbo's terms.
@@ -620,12 +689,12 @@ fn kurbo_rect(rect: &wordcraft_geom::Rect) -> kurbo::Rect {
 /// `visible` is a culling area in those point coordinates; nested clips intersect it and turns
 /// transform it into the child's coordinates. Shape and path strokes apply their stored caps,
 /// while ink uses its tool's round ends and joins.
-fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
-    let fr = Frame { doc, opts, view, visible };
+fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions, pass: Pass) {
+    let fr = Frame { doc, opts, view, visible, pass };
     match it {
         Draw::Figure { draws, .. } => {
             for d in draws {
-                draw(ctx, doc, d, view, visible, opts);
+                draw(ctx, doc, d, view, visible, opts, pass);
             }
         }
         Draw::Fill { .. } => draw_fill(ctx, &fr, it),
@@ -647,7 +716,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.push_clip_layer(&r.to_path(0.1));
             let local = r.intersect(*visible);
             for it in items {
-                draw(ctx, doc, it, view, &local, opts);
+                draw(ctx, doc, it, view, &local, opts, pass);
             }
             ctx.pop_layer();
         }
@@ -655,14 +724,14 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let m = Affine::new(Draw::turn_matrix(*turn, *x, *y).map(f64::from));
             let local = m.inverse().transform_rect_bbox(*visible);
             for it in items {
-                draw(ctx, doc, it, view * m, &local, opts);
+                draw(ctx, doc, it, view * m, &local, opts, pass);
             }
         }
         Draw::Rotated { cx, cy, spin, items } => {
             let m = Affine::new(spin.matrix(*cx, *cy).map(f64::from));
             let local = m.inverse().transform_rect_bbox(*visible);
             for it in items {
-                draw(ctx, doc, it, view * m, &local, opts);
+                draw(ctx, doc, it, view * m, &local, opts, pass);
             }
         }
     }
@@ -833,7 +902,9 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         if o.elements().is_empty() {
             continue;
         }
-        ctx.set_transform(at);
+        // This pass's sideways shift, across the screen whichever way the text is turned.
+        fr.pass.drew_text.set(true);
+        ctx.set_transform(Affine::translate((fr.pass.shift, 0.0)) * at);
         if darken_px > 0.0 {
             // The widening in the outline's own units: device pixels for a hinted outline,
             // font units (before any `w:w` stretch) for the font's.
@@ -1375,8 +1446,10 @@ pub fn render_items(doc: &Document, items: &[Draw], area: wordcraft_geom::Rect, 
         * Affine::translate((-x as f64, -y as f64));
     let mut ctx = RenderContext::new_with(w16, h16, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
+    // One pass, text in its place: an area raster (a preview, a dragged object) is greyscale.
+    let drew_text = std::cell::Cell::new(false);
     for it in items {
-        draw(&mut ctx, doc, it, view, &visible, opts);
+        draw(&mut ctx, doc, it, view, &visible, opts, Pass { shift: 0.0, drew_text: &drew_text });
     }
     ctx.flush();
     let mut pixels = vec![0u8; w16 as usize * h16 as usize * 4];

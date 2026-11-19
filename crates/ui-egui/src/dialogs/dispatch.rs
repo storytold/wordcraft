@@ -1135,7 +1135,7 @@ pub(crate) fn search_results(app: &mut WordApp, ui: &mut Ui, query: &str, enter:
         find = ui.add(egui::Button::new(label).min_size(vec2(width, 0.0))).clicked() || (enter && hits.is_empty());
     }
     if let Some(id) = run {
-        if id == "view.paperColor" {
+        if id == "view.paperColor" || id == "view.textSmoothing" {
             // Command Search is an interactive UI entry point: open the selector instead of
             // sending the engine command an empty value. Programmatic callers still get the
             // command's normal parameter validation.

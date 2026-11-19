@@ -5487,6 +5487,37 @@ fn a_raster_is_stretched_at_most_half_again_during_a_zoom() {
 }
 
 #[test]
+fn subpixel_text_follows_the_choice_the_system_and_the_screen() {
+    use super::pages::{lcd_for, lcd_view_key, page_lcd};
+    use crate::screen_text::SubpixelOrder;
+    use wordcraft_engine::cmd::view::TextSmoothing::{Grayscale, Subpixel, System};
+    use wordcraft_render::LcdOrder;
+    // Use system setting: where the system asks for it, in its order, below 2x only.
+    assert_eq!(lcd_for(System, Some(SubpixelOrder::Rgb), 1.0), Some(LcdOrder::Rgb));
+    assert_eq!(lcd_for(System, Some(SubpixelOrder::Bgr), 1.5), Some(LcdOrder::Bgr));
+    assert_eq!(lcd_for(System, Some(SubpixelOrder::Rgb), 2.0), None, "a high-density screen");
+    assert_eq!(lcd_for(System, Some(SubpixelOrder::Rgb), f32::NAN), None);
+    assert_eq!(lcd_for(System, None, 1.0), None, "the system asks for greyscale, or says nothing");
+    // The user's own choice wins on any screen; RGB when the system names no order.
+    assert_eq!(lcd_for(Subpixel, None, 2.0), Some(LcdOrder::Rgb));
+    assert_eq!(lcd_for(Subpixel, Some(SubpixelOrder::Bgr), 3.0), Some(LcdOrder::Bgr));
+    for system in [None, Some(SubpixelOrder::Rgb), Some(SubpixelOrder::Bgr)] {
+        assert_eq!(lcd_for(Grayscale, system, 1.0), None);
+    }
+    // In the app: greyscale until chosen (tests never ask the system), and the choice is a
+    // command. A page drawn the other way is another raster.
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    assert_eq!(page_lcd(&a, 1.0), None);
+    a.run("view.textSmoothing", json!({"value": "subpixel"})).unwrap();
+    assert_eq!(page_lcd(&a, 2.0), Some(LcdOrder::Rgb));
+    a.run("view.textSmoothing", json!({"value": "grayscale"})).unwrap();
+    assert_eq!(page_lcd(&a, 1.0), None);
+    let view = view_key(&a, false, None, true);
+    let keys = [None, Some(LcdOrder::Rgb), Some(LcdOrder::Bgr)].map(|lcd| lcd_view_key(view, lcd));
+    assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
+}
+
+#[test]
 fn screen_paper_color_changes_raster_and_cache_without_changing_export_paper() {
     use wordcraft_doc::props::Rgb;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());

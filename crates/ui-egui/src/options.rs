@@ -240,6 +240,21 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
             "Screen only. Document backgrounds, printing and exports keep their colours. Dark page and explicit Read Mode colours take precedence."
         ));
     });
+    ui.horizontal(|ui| {
+        use wordcraft_engine::cmd::view::TextSmoothing;
+        let label = ui.label(tl!("Screen text smoothing:"));
+        let selected = app.session.prefs.text_smoothing;
+        let combo = craft_ui::ComboBox::from_id_salt("screen_text_smoothing").selected_text(tl!(selected.label())).width(220.0).show_ui(ui, |ui| {
+            for smoothing in TextSmoothing::ALL {
+                if ui.selectable_label(selected == smoothing, tl!(smoothing.label())).clicked() {
+                    let _ = app.run("view.textSmoothing", json!({"value": smoothing}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id).on_hover_text(tl!(
+            "Screen only. Subpixel smoothing makes the edges of page text finer sideways, with faint colour in them, and takes longer to draw. Printing and exports are unchanged."
+        ));
+    });
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
     let mut dark_page = app.session.view.dark_mode;
     if ui

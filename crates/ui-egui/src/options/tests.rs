@@ -496,6 +496,33 @@ fn length_units_follow_the_interface_language() {
 }
 
 #[test]
+fn screen_text_smoothing_options_round_trip_and_work_without_a_document() {
+    use wordcraft_engine::cmd::view::TextSmoothing;
+    let mut a = app();
+    a.start_screen();
+    a.run("view.textSmoothing", json!({"value":"grayscale"})).unwrap();
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(UiState::from_json(&saved).unwrap());
+    assert_eq!(b.session.prefs.text_smoothing, TextSmoothing::Grayscale);
+    b.run("file.options", json!({"pane":"general"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        b,
+    );
+    h.run_steps(6);
+    h.get_by_label("Screen text smoothing:").click();
+    h.run_steps(2);
+    h.get_by_label("Subpixel (LCD)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.prefs.text_smoothing, TextSmoothing::Subpixel);
+}
+
+#[test]
 fn screen_paper_color_options_round_trip_and_work_without_a_document() {
     use wordcraft_engine::cmd::view::PaperColor;
     let mut a = app();

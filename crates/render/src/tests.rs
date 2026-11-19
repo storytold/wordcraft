@@ -440,6 +440,86 @@ fn widening_moves_edges_sideways_away_from_the_ink() {
     assert_eq!(widened(&same, 0.5).elements().len(), same.elements().len());
 }
 
+/// The sum of one colour channel's distance from white.
+fn channel_ink(img: &Rendered, channel: usize) -> u64 {
+    img.pixels.as_chunks::<4>().0.iter().map(|p| 255 - p[channel] as u64).sum()
+}
+
+#[test]
+fn lcd_text_takes_each_channel_from_around_its_own_stripe() {
+    let d = Document::from_text("Nobody has assembled this board yet. Italic and round strokes gain the most.");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (w, h) = (700, 200);
+    let view = Affine::scale(1.25);
+    let lcd = |order| RenderOptions { lcd: Some(order), ..Default::default() };
+    let grey = render_region(&d, &l.pages[0], w, h, view, &RenderOptions::default());
+    let rgb = render_region(&d, &l.pages[0], w, h, view, &lcd(LcdOrder::Rgb));
+    let bgr = render_region(&d, &l.pages[0], w, h, view, &lcd(LcdOrder::Bgr));
+    assert!(ink(&grey) > 0);
+    // The page a third of a pixel to the right and to the left, in greyscale.
+    let moved = |dx: f64| render_region(&d, &l.pages[0], w, h, Affine::translate((dx, 0.0)) * view, &RenderOptions::default());
+    let (right, left) = (moved(1.0 / 3.0), moved(-1.0 / 3.0));
+    let mut coloured = 0;
+    let rasters = [&grey, &rgb, &bgr, &right, &left].map(|r| r.pixels.as_chunks::<4>().0);
+    for i in 0..rasters[0].len() {
+        let [g, c, m, r, l] = rasters.map(|px| px[i]);
+        // Green sits in the middle of the pixel: it and the alpha are the greyscale raster's.
+        assert_eq!((c[1], c[3]), (g[1], g[3]));
+        // Red is what a pixel a third to the left would see, blue a third to the right.
+        assert_eq!((c[0], c[2]), (r[0], l[2]), "pixel {i}");
+        // BGR stripes are the mirror image.
+        assert_eq!((m[0], m[1], m[2], m[3]), (c[2], c[1], c[0], c[3]));
+        coloured += usize::from(c[0] != c[2]);
+    }
+    assert!(coloured > 200, "{coloured} pixels have red and blue apart");
+    // No colour cast: each channel carries the same ink, to within a hundredth.
+    let [r, g, b] = [0, 1, 2].map(|c| channel_ink(&rgb, c) as f64);
+    assert!((r - g).abs() < g * 0.01 && (b - g).abs() < g * 0.01, "{r} {g} {b}");
+    // Off by default: exports and thumbnails are untouched.
+    assert_eq!(RenderOptions::default().lcd, None);
+}
+
+#[test]
+fn lcd_changes_nothing_but_text() {
+    let lcd = RenderOptions { lcd: Some(LcdOrder::Rgb), ..Default::default() };
+    // A page with no text: the same raster, from one pass.
+    let mut blank = Document::from_text("");
+    blank.settings.page_color = Some(Rgb(0x20, 0x60, 0xA0));
+    let l = layout(&blank, &mut LayoutCache::new(), &LayoutOptions::default());
+    assert_eq!(render_page(&blank, &l.pages[0], 0.5, &lcd).pixels, render_page(&blank, &l.pages[0], 0.5, &RenderOptions::default()).pixels);
+    // A page with text on a page colour: pixels differ only where the text is.
+    let mut d = Document::from_text("Coloured paper under one line of text.");
+    d.settings.page_color = Some(Rgb(0xFF, 0xF0, 0xC0));
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (grey, sub) = (render_page(&d, &l.pages[0], 1.25, &RenderOptions::default()), render_page(&d, &l.pages[0], 1.25, &lcd));
+    let w = grey.width as usize;
+    let paper = grey.pixels[..4].to_vec();
+    let inked: Vec<usize> = grey.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[..] != paper[..]).map(|(i, _)| i).collect();
+    let (top, bottom) = (inked.iter().map(|i| i / w).min().unwrap(), inked.iter().map(|i| i / w).max().unwrap());
+    let (first, last) = (inked.iter().map(|i| i % w).min().unwrap(), inked.iter().map(|i| i % w).max().unwrap());
+    let mut changed = 0;
+    for (i, (a, b)) in grey.pixels.as_chunks::<4>().0.iter().zip(sub.pixels.as_chunks::<4>().0).enumerate() {
+        if a != b {
+            changed += 1;
+            let (x, y) = (i % w, i / w);
+            assert!((top..=bottom).contains(&y) && x + 1 >= first && x <= last + 1, "pixel {x},{y} is outside the text");
+        }
+    }
+    assert!(changed > 50, "{changed}");
+}
+
+#[test]
+fn lcd_channels_never_exceed_the_alpha() {
+    // Premultiplied pixels: a colour above its alpha would be brighter than white.
+    let mut px = vec![10, 20, 30, 40, 200, 200, 200, 255];
+    take_lcd_channels(&mut px, &[90, 0, 0, 255, 7, 0, 0, 255], &[0, 0, 80, 255, 0, 0, 9, 255]);
+    assert_eq!(px, [40, 20, 40, 40, 7, 200, 9, 255]);
+    // Rasters of other sizes leave the rest alone and don't panic.
+    let mut px = vec![1, 2, 3, 255, 4, 5, 6, 255, 9];
+    take_lcd_channels(&mut px, &[50, 0, 0, 255], &[]);
+    assert_eq!(px, [1, 2, 3, 255, 4, 5, 6, 255, 9]);
+}
+
 #[test]
 fn hinting_sharpens_screen_text_without_making_it_bolder_or_moving_it() {
     let mut d =
