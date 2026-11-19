@@ -13037,11 +13037,16 @@ fn a_space_in_small_caps_is_as_wide_as_at_the_small_caps_size() {
         let x = |start: usize| (line.c0..line.c1).find(|&k| pl.clusters[k].start == start).and_then(|k| line.cl_left(k)).unwrap();
         x(text.len() - 1) - x(1)
     };
-    let plain: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| c.bold = Some(false);
-    let small: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| c.small_caps = Some(true);
+    // At 10 pt the small-caps size is exactly 8 pt (80%, no rounding to the half point).
+    let plain: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| c.size = Some(10.0);
+    let small: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| {
+        c.small_caps = Some(true);
+        c.size = Some(10.0);
+    };
     let both: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| {
         c.caps = Some(true);
         c.small_caps = Some(true);
+        c.size = Some(10.0);
     };
     let spaces = format!("a{}a", " ".repeat(10));
     let ratio = gap(&spaces, small) / gap(&spaces, plain);
@@ -13049,6 +13054,36 @@ fn a_space_in_small_caps_is_as_wide_as_at_the_small_caps_size() {
     assert!((gap(&spaces, both) - gap(&spaces, plain)).abs() < 0.01, "All Caps wins: full-width spaces");
     let nbsp = format!("a{}a", "\u{a0}".repeat(10));
     assert!((gap(&nbsp, small) - gap(&nbsp, plain)).abs() < 0.01, "a no-break space keeps its width");
+}
+
+/// Word sets small capitals at 80% of the size rounded to the half point, a size the format can
+/// store, like superscript (measured in Word for Microsoft 365, Times New Roman: 10 pt → 8,
+/// 11 → 9, 12 → 9.5, 14 → 11, 16 → 13); a Small Caps space takes that size too (#7062).
+#[test]
+fn small_caps_take_eighty_percent_of_the_size_rounded_to_the_half_point() {
+    crate::test_fonts();
+    let width = |text: &str, f: &dyn Fn(&mut wordcraft_doc::props::CharProps)| {
+        let pl = para_with(text, f);
+        let line = &pl.lines[0];
+        (line.c0..line.c1).map(|k| pl.clusters[k].adv).sum::<f32>()
+    };
+    for (size, small) in [(16.0_f32, 13.0_f32), (14.0, 11.0), (12.0, 9.5)] {
+        let small_caps = width("xxxxxxxxxx", &|c| {
+            c.small_caps = Some(true);
+            c.size = Some(size);
+        });
+        let capitals = width("XXXXXXXXXX", &|c| c.size = Some(small));
+        assert!((small_caps - capitals).abs() < 0.01, "{size} pt Small Caps draws capitals at {small} pt: {small_caps} vs {capitals}");
+        let spaces = width("x          x", &|c| {
+            c.small_caps = Some(true);
+            c.size = Some(size);
+        }) - width("xx", &|c| {
+            c.small_caps = Some(true);
+            c.size = Some(size);
+        });
+        let plain = width("x          x", &|c| c.size = Some(small)) - width("xx", &|c| c.size = Some(small));
+        assert!((spaces - plain).abs() < 0.01, "{size} pt Small Caps spaces are {small} pt spaces: {spaces} vs {plain}");
+    }
 }
 
 /// A Small Caps line of lowercase letters is as tall as the same line without Small Caps: the

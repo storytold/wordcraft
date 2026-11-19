@@ -138,7 +138,9 @@ impl<'a> Builder<'a> {
                 return i;
             }
         }
-        let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
+        // Small capitals are set at 80% of the size rounded to the half point, as Word does
+        // (16 pt → 13, 14 → 11, 12 → 9.5, #7062).
+        let size = if small { (rc.draw_size() * 0.8 * 2.0).round() / 2.0 } else { rc.draw_size() };
         // A symbol font that isn't installed, or is installed one em tall (Apple's Symbol), takes
         // the height Word gives it.
         let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r) {
