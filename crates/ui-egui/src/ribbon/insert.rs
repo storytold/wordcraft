@@ -230,7 +230,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     let glossary = app.session.doc.glossary.iter().filter(|e| e.gallery == wordcraft_doc::QUICK_PARTS_GALLERY);
                     parts.extend(glossary.filter(|e| seen.insert(e.name.clone())).map(|e| e.name.clone()));
                     for name in parts {
-                        MenuItem::command(CommandRef::with_params("insert.quickParts", json!({"insert": name}))).label(name.as_str()).show(ui);
+                        MenuItem::command(CommandRef::with_params("insert.quickParts", json!({"insert": name}))).label(name).show(ui);
                     }
                     MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "field"}))).label(crate::tl!("Field…")).show(ui);
                 },

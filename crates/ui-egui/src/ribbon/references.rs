@@ -41,7 +41,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     MenuItem::command(CommandRef::with_params("references.addText", json!({"level": 0}))).label(crate::tl!("Do Not Show in TOC")).show(ui);
                     for l in 1..=3u64 {
                         let label = format!("Level {l}");
-                        MenuItem::command(CommandRef::with_params("references.addText", json!({"level": l}))).label(label.as_str()).show(ui);
+                        MenuItem::command(CommandRef::with_params("references.addText", json!({"level": l}))).label(label).show(ui);
                     }
                 },
             );
@@ -87,7 +87,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             |ui, _| {
                 for s in &app.session.doc.sources {
                     let label = format!("{} — {}", s.author, s.title);
-                    MenuItem::command(CommandRef::with_params("references.citation", json!({"tag": s.tag}))).label(label.as_str()).show(ui);
+                    MenuItem::command(CommandRef::with_params("references.citation", json!({"tag": s.tag}))).label(label).show(ui);
                 }
                 if !app.session.doc.sources.is_empty() {
                     Divider::horizontal().show(ui);
@@ -104,7 +104,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             let label = crate::i18n::fmt(crate::tl!("Style: {style}"), &[("style", &current)]);
             menu_button(
                 ui,
-                Button::new(label.as_str()).icon(IconId::new("styles")).tooltip(crate::tl!("Citation Style")),
+                Button::new(label).icon(IconId::new("styles")).tooltip(crate::tl!("Citation Style")),
                 crate::tl!("Citation Style"),
                 Some("references.citationStyle"),
                 |ui, _| {

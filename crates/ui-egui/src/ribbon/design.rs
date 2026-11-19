@@ -46,7 +46,7 @@ pub(super) fn design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 |ui, _| {
                     for (name, h, b, _) in wordcraft_engine::cmd::design::THEMES {
                         let label = format!("{}: {h} / {b}", crate::tl!(name));
-                        MenuItem::command(CommandRef::with_params("design.themeFonts", json!({"heading": h, "body": b}))).label(label.as_str()).show(ui);
+                        MenuItem::command(CommandRef::with_params("design.themeFonts", json!({"heading": h, "body": b}))).label(label).show(ui);
                     }
                 },
             );
