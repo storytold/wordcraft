@@ -411,8 +411,9 @@ fn only_one_commit_is_quarantined_after_a_press() {
     assert!(text.contains('あ'), "the following commit is fresh input: {text:?}");
 }
 
-/// #6916 review: ordinary input after a dismissal ends the quarantine. Otherwise a later,
-/// genuinely fresh `Commit` with no preceding pre-edit is lost.
+/// #6916 review: ordinary typing after a dismissal ends the quarantine. egui sends a pressed
+/// `Key` before the `Text` of every real keystroke, so the key releases the quarantine and the
+/// fresh `Text` reaches the document. A later genuine `Commit` must then reach `ime_commit` too.
 #[test]
 fn fresh_input_after_a_dismissal_releases_the_commit_quarantine() {
     let (mut h, at) = composing_harness();
@@ -420,14 +421,39 @@ fn fresh_input_after_a_dismissal_releases_the_commit_quarantine() {
     h.step();
     h.event(primary_button(at, false));
     h.step();
-    h.event(egui::Event::Text("X".into()));
+    // A real keystroke is Key { pressed: true } followed by Text in the same batch.
+    h.input_mut().events.push(egui::Event::Key { key: egui::Key::X, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    h.input_mut().events.push(egui::Event::Text("X".into()));
     h.step();
-    assert!(h.state().canvas.ime_dismissed_preedit.is_none(), "ordinary input ends the quarantine");
+    assert!(h.state().canvas.ime_dismissed_preedit.is_none(), "typing ends the quarantine");
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("あ".into())));
     h.step();
     h.step();
     let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains('X'), "the fresh text reaches the document: {text:?}");
     assert!(text.contains('あ'), "a fresh commit reaches the document: {text:?}");
+}
+
+/// #6916 review (CodeRabbit r4611363553): some platforms replace a canceled composition with a
+/// bare `Text` followed by `Commit`, with no `DeleteSurrounding` first. Neither may be written at
+/// the caret the press moved to. A bare `Text` is distinguishable from typing because egui always
+/// puts a pressed `Key` before typing's `Text`; a quarantined bare `Text` is replacement residue.
+#[test]
+fn a_bare_text_commit_pair_after_a_dismissal_is_not_written() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    h.step();
+    // Same batch: no Key, so this Text is the canceled composition's replacement, not typing.
+    h.input_mut().events.push(egui::Event::Text("にほん".into()));
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text, "甲乙丙丁", "neither the replacement Text nor its Commit enters the body: {text:?}");
+    assert_eq!(shown_text(&h), "甲乙丙丁", "nor is either painted");
 }
 
 /// #6916 review: Windows can emit an empty pre-edit immediately before the canceled

@@ -173,7 +173,13 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
                 app.canvas.ime_join_text = None;
                 return true;
             }
-            egui::Event::Text(_) if app.canvas.ime_dismissed_replacement == DismissedReplacement::Awaiting => {
+            egui::Event::Text(_) => {
+                // A canceled composition can be replaced by a bare `Text` followed by a
+                // `Commit`, with no `DeleteSurrounding` first. Real typing never arrives here:
+                // egui-winit sends `Key { pressed: true }` before `Text`, and that arm below
+                // ends the quarantine first. An isolated `Text` while quarantined is therefore
+                // replacement residue; drop it and keep the quarantine for its `Commit` so
+                // neither lands at the caret the press moved to (#6916).
                 app.canvas.ime_dismissed_replacement = DismissedReplacement::TextDropped;
                 app.session.clear_ime_joins();
                 app.canvas.ime_join_text = None;
@@ -190,9 +196,12 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
                 app.canvas.ime_join_text = None;
                 return true;
             }
-            // Ordinary input after the dismissal is fresh, so end the quarantine: a later
-            // commit must reach `ime_commit` at the caret.
-            egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Key { pressed: true, .. } => {
+            // Fresh ordinary input after the dismissal ends the quarantine, so a later commit
+            // reaches `ime_commit` at the caret. `Text` is deliberately absent: egui sends a
+            // pressed `Key` before typing's `Text`, so that key has already ended the quarantine
+            // by the time its text arrives. A `Text` still inside the quarantine is replacement
+            // residue from the canceled composition and was dropped above.
+            egui::Event::Paste(_) | egui::Event::Key { pressed: true, .. } => {
                 app.canvas.ime_dismissed_preedit = None;
                 app.canvas.ime_dismissed_replacement = DismissedReplacement::None;
             }
@@ -210,7 +219,12 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
                 *interrupted_replacement = EquationReplacementDrop::None;
                 true
             }
-            egui::Event::Text(_) if matches!(*interrupted_replacement, EquationReplacementDrop::Awaiting) => {
+            egui::Event::Text(_) => {
+                // An interrupted composition can be replaced by a bare `Text` + `Commit` with no
+                // `DeleteSurrounding` first. egui sends a pressed `Key` before ordinary typing's
+                // `Text`, and that key has already ended this batch quarantine; a `Text` still
+                // here is replacement residue. Drop it and keep the quarantine for its `Commit`
+                // so neither is written at the caret the press moved to (#6916).
                 *interrupted_replacement = EquationReplacementDrop::TextDropped;
                 true
             }
@@ -218,7 +232,6 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
             // A new marked composition or ordinary input is not the old target's queued
             // replacement. Commit-only input without an interrupted preedit is never gated.
             egui::Event::Ime(egui::ImeEvent::Preedit { .. })
-            | egui::Event::Text(_)
             | egui::Event::Paste(_)
             | egui::Event::Key { pressed: true, .. } => {
                 *interrupted_preedit = false;
