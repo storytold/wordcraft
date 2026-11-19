@@ -630,18 +630,31 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
         egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) => {
             if text.len() <= MAX_IME_PREEDIT_BYTES {
                 // On Windows egui-winit replaces a `0..0` cursor range with `None` (a workaround
-                // for the Korean IME reporting the cursor at the start by mistake). With the
-                // pre-edit unchanged and a cursor we were already tracking, that `None` means
-                // the caret reached the *start* of the composition: `preedit_cursor_chars`
-                // would otherwise fall back to its end, jumping from before the first letter to
-                // after the last one, then sticking there until a right press reports a range
-                // again (#6916). A composition that never reported a cursor keeps that fallback:
-                // winit says no range means no caret hint, and the end is the usual position.
+                // for the Korean IME reporting the cursor at the start by mistake). While we are
+                // tracking this composition's cursor, such a `None` means the caret is at its
+                // *start*: `preedit_cursor_chars` would otherwise fall back to its end, jumping
+                // from before the first letter to after the last one, then sticking there until
+                // a right press reports a range again (#6916).
+                //
+                // This is not only a Left press with unchanged text. Delete/Backspace at the
+                // start changes the text but leaves the cursor at 0, and deleting the letters
+                // before the cursor moves it to 0; Windows reports both as `0..0` -> `None` too.
+                // A composition that never reported a cursor keeps the end fallback: winit says
+                // no range means no caret hint, and the end is the usual position.
                 let range = match active_range_chars {
                     Some(r) => Some(r),
                     None if !text.is_empty()
-                        && app.canvas.ime_preedit.as_str() == text.as_str()
-                        && app.canvas.ime_preedit_range.is_some() =>
+                        && app.canvas.ime_preedit_range.as_ref().is_some_and(|old_range| {
+                            let old = app.canvas.ime_preedit.as_str();
+                            if old == text.as_str() {
+                                return true;
+                            }
+                            if !cfg!(target_os = "windows") {
+                                return false;
+                            }
+                            old_range.end == 0
+                                || old.chars().skip(old_range.end).collect::<String>() == text
+                        }) =>
                     {
                         Some(0..0)
                     }

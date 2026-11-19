@@ -5084,6 +5084,53 @@ fn moving_left_inside_a_composition_stops_at_its_start() {
     assert_eq!(h.state().canvas.ime_preedit_range, None);
 }
 
+/// #6916: deleting inside a composition changes its text but can leave the IME cursor at 0,
+/// which Windows reports as `0..0` -> `None`. A bare `None` must not fall back to the end: the
+/// caret would jump after the last letter, ignore Left, and jump back to the first on Right.
+#[test]
+fn deleting_at_the_start_of_a_composition_keeps_its_caret_at_the_start() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "The"})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(kana_test_glyphs)
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    let ime_x = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.cursor_rect.min.x);
+    let start = ime_x(&h).expect("the canvas places the candidate window");
+    let mut compose = |text: &str, range: Option<std::ops::Range<usize>>| {
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: range }));
+        h.step();
+        h.step();
+        ime_x(&h).expect("the canvas places the candidate window")
+    };
+
+    // Backspace-like edit: the cursor was after the first letter, the letter before it is gone,
+    // so the new pre-edit is the tail of the old one and the caret is now at its start.
+    let x1 = compose("abcd", Some(1..1));
+    assert!(x1 > start);
+    assert_eq!(compose("bcd", None), start, "deleting before the cursor moves it to the pre-edit's start");
+    assert_eq!(compose("bcd", None), start, "Left at the start still stays there");
+    assert!(compose("bcd", Some(1..1)) > start, "Right moves to the first remaining letter");
+
+    // Delete at an already-start cursor: the text changes, the cursor stays at 0, and Windows
+    // sends no range again.
+    compose("bcd", None);
+    assert_eq!(compose("cd", None), start, "deleting the first letter keeps the caret at the start");
+    assert_eq!(compose("cd", None), start, "and Left cannot move past it");
+    assert!(compose("cd", Some(1..1)) > start, "Right still walks into the remaining text");
+}
+
 /// The outgoing IME descriptor is built from settled, visible logical text. A pre-edit does
 /// not change the model; an accepted commit alone earns `InputMethod`; ordinary typing earns
 /// `Other`. The commit mixes Korean, Japanese, ASCII and an emoji.
