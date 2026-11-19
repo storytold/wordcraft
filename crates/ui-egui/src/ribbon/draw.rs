@@ -82,7 +82,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     for w in widths {
                         let label = crate::i18n::fmt(crate::tl!("{n} pt"), &[("n", &w.to_string())]);
                         MenuItem::command(CommandRef::with_params(pen_command(tool), json!({"width": w})))
-                            .label(label.as_str())
+                            .label(label)
                             .radio_mark((set.width - w).abs() < 0.01)
                             .show(ui);
                     }

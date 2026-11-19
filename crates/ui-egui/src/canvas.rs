@@ -97,6 +97,8 @@ pub struct CanvasState {
     pub(crate) reading: ReadingState,
     /// What the last pass showed.
     pub(crate) shown: ShownPages,
+    /// How many page pictures the page view kept resident after the last pass (S-L352).
+    pub(crate) resident_pictures: usize,
     /// The caret's glide and blink.
     pub(crate) glide: crate::caret_glide::CaretGlide,
     /// The comment selection and drafts, shared by the Comments pane and the balloons.
@@ -312,6 +314,7 @@ impl Default for CanvasState {
             view: PageViewState::default(),
             reading: ReadingState::default(),
             shown: ShownPages::default(),
+            resident_pictures: 0,
             glide: crate::caret_glide::CaretGlide::default(),
             comments: Default::default(),
             context_request: None,
@@ -794,6 +797,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     });
     app.canvas.viewed_page = Some(viewed_page(caret_span, &state, &out.layout, f64::from(body_rect.height())));
     app.canvas.shown = ShownPages { rect: body_rect, pages: out.pages.clone(), canvas: Some(out.canvas.response.id) };
+    app.canvas.resident_pictures = out.resident_pictures();
     app.canvas.view = state;
     if out.toggle_white_space {
         let _ = app.run("view.hideWhiteSpace", json!({"value": !app.session.view.hide_white_space}));

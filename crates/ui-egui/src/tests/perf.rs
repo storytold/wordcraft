@@ -66,7 +66,7 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     for _ in 0..60 {
         wheel(&mut h, -400.0);
         h.step();
-        max_textures = max_textures.max(h.state().canvas.texture_count());
+        max_textures = max_textures.max(h.state().canvas.resident_pictures);
     }
     let offset = h.state().canvas.view.offset.1;
     assert!(offset > 20_000.0, "scrolled through many pages: {offset}");
@@ -77,5 +77,5 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     assert!(hashed < pages && hashed <= first + 30, "pages fingerprinted: {hashed} of {pages}");
     // Textures stay bounded to the pages near the view.
     assert!(max_textures <= 12, "textures kept while scrolling: {max_textures}");
-    assert!(h.state().canvas.texture_count() >= 1, "the pages in view stay rendered");
+    assert!(h.state().canvas.resident_pictures >= 1, "the pages in view stay rendered");
 }
