@@ -424,6 +424,31 @@ impl StackDialog for SymbolDialog {
         self.held.state()
     }
 
+    fn json_fields(&self) -> Option<Value> {
+        serde_json::to_value(&self.form).ok()
+    }
+
+    /// Automation sets the form's own fields (`selected`, `font`, `tab`, `code`, `special`).
+    fn set_json_field(&mut self, _ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        let mut fields = serde_json::to_value(&self.form).map_err(|e| e.to_string())?;
+        let map = fields.as_object_mut().ok_or_else(|| "the dialog has no fields".to_string())?;
+        if !map.contains_key(field) {
+            return Err(format!("no field `{field}` in this dialog"));
+        }
+        map.insert(field.to_string(), value);
+        let mut form: SymbolForm = serde_json::from_value(fields).map_err(|e| e.to_string())?;
+        // The skipped (derived) state is the dialog's own: keep it across the round trip.
+        form.chars = std::mem::take(&mut self.form.chars);
+        form.chars_of = self.form.chars_of.take();
+        form.reveal = self.form.reveal.take();
+        form.recent = std::mem::take(&mut self.form.recent);
+        self.form = form;
+        if field == "selected" {
+            self.form.sync_code();
+        }
+        Ok(())
+    }
+
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Option<SymbolPick>>> {
         let picking = self.request.is_some();
         let SymbolDialog { form, catalog, settings, settings_changed, held, .. } = self;

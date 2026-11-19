@@ -799,7 +799,8 @@ mod tests {
         h.get_by_label("Even Banded Rows").click();
         steps(&mut h);
         for label in ["Bold", "Italic", "Underline"] {
-            assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::False));
+            // An off toggle button reports no toggled state; only an on one says `True`.
+            assert_ne!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True), "{label} starts off");
             h.get_by_label(label).click();
             steps(&mut h);
             assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True));
@@ -877,7 +878,8 @@ mod tests {
         steps(&mut h);
         h.get_by_label("Header Row").click();
         steps(&mut h);
-        h.get_by_label("Borders").click();
+        // The Borders: field names its button by the field's label.
+        h.get_by_label("Borders:").click();
         steps(&mut h);
         h.get_by_label("No Border").click();
         steps(&mut h);

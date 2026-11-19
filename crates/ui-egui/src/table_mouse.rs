@@ -58,6 +58,10 @@ struct TableDrag {
     anchor: Option<usize>,
     /// The index of the part the press began on, so the held press is declared under the same part reference.
     index: u64,
+    /// The press selected the whole document (a triple-click or Ctrl/Cmd+click beside a row): the press is held
+    /// only so its part is still declared when the button goes up, which ends the document hold. While the hold
+    /// is on, the page counts as dragging and no part is declared otherwise, so the release would never arrive.
+    document: bool,
 }
 
 impl Default for TableDrag {
@@ -83,6 +87,7 @@ impl Default for TableDrag {
             extend: false,
             anchor: None,
             index: 0,
+            document: false,
         }
     }
 }
@@ -243,6 +248,19 @@ impl<'a> TableMouse<'a> {
                 self.app.status(e);
             }
             crate::canvas::hold_document_selection(self.app, u8::try_from(clicks).unwrap_or(3));
+            // Held, so the release reaches this part and ends the hold (`release`).
+            *cx.press_slot::<TableDrag>() = Some(TableDrag {
+                page: placed.page,
+                from: (x, y),
+                to: (x, y),
+                sent: (x, y),
+                reach,
+                target,
+                extend: false,
+                anchor: None,
+                index,
+                document: true,
+            });
             return;
         }
         let extend = matches!(target.spot, Spot::Row(_)) && mods.shift;
@@ -265,7 +283,7 @@ impl<'a> TableMouse<'a> {
                     self.app.status(e);
                 }
                 *cx.press_slot::<TableDrag>() =
-                    Some(TableDrag { page: placed.page, from: (x, y), to: (x, y), sent: (x, y), reach, target, extend, anchor, index });
+                    Some(TableDrag { page: placed.page, from: (x, y), to: (x, y), sent: (x, y), reach, target, extend, anchor, index, document: false });
             }
         }
     }
@@ -282,6 +300,9 @@ impl<'a> TableMouse<'a> {
     /// first move of a held press is the start of a table drag.
     fn drag(&mut self, cx: &mut Cx<'_, Self>, pos: Pos2) {
         let Some(mut d) = cx.press_slot::<TableDrag>().clone() else { return };
+        if d.document {
+            return;
+        }
         self.app.canvas.table_dragging = true;
         if let Some(placed) = self.pages.iter().find(|placed| placed.page == d.page) {
             d.to = page_point(placed, pos);
@@ -302,6 +323,10 @@ impl<'a> TableMouse<'a> {
             crate::canvas::release_document_selection(self.app);
             return;
         };
+        if d.document {
+            crate::canvas::release_document_selection(self.app);
+            return;
+        }
         self.app.canvas.table_dragging = false;
         if let Some(placed) = self.pages.iter().find(|placed| placed.page == d.page) {
             d.to = page_point(placed, pos);
@@ -326,7 +351,9 @@ impl<'a> TableMouse<'a> {
 
     /// Escape (or another end without a release) ends the press with no command.
     fn cancel(&mut self, cx: &mut Cx<'_, Self>) {
-        *cx.press_slot::<TableDrag>() = None;
+        if cx.press_slot::<TableDrag>().take().is_some_and(|d| d.document) {
+            crate::canvas::release_document_selection(self.app);
+        }
         self.app.canvas.table_dragging = false;
     }
 }

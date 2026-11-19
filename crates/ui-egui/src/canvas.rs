@@ -125,6 +125,10 @@ pub struct CanvasState {
     /// The object gesture the page tool holds.
     // PLAN: written by canvas-w10's page tool; `ObjectGesture` is canvas-w11's.
     pub(crate) object_gesture: Option<crate::objects::ObjectGesture>,
+    /// A press on a part of the selected object's frame (a handle to size it, the one to turn it) is open: the
+    /// frame is the framework's `TransformBox`, not the page tool's [`ObjectGesture`], so it is recorded here, each
+    /// pass, from the box's output.
+    pub(crate) frame_held: bool,
     /// Page content fingerprints of the current layout, for the page revision.
     pub(crate) page_keys: PageKeys,
     /// The caret colour last worked out and the key of the place it was worked out for, so a blink doesn't rebuild the
@@ -309,6 +313,11 @@ impl CanvasState {
         self.object_gesture.as_ref()
     }
 
+    /// Whether a press on a part of the selected object's frame (size or turn handle) is open.
+    pub fn frame_gesture(&self) -> bool {
+        self.frame_held
+    }
+
     /// The comment whose balloon is selected, as the document's comment id.
     pub fn selected_balloon(&self) -> Option<u32> {
         self.comments.selected.and_then(|id| u32::try_from(id.0).ok())
@@ -334,6 +343,7 @@ impl Default for CanvasState {
             table_resize: None,
             smart_art_run: None,
             object_gesture: None,
+            frame_held: false,
             page_keys: PageKeys::default(),
             caret_bg: None,
             markup_facts: Cell::new(None),

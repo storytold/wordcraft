@@ -98,6 +98,10 @@ pub(crate) struct ObjectGesture {
     pending_behind: bool,
     /// Ctrl/⌘ is held: dropping leaves the original and puts a copy at the new place.
     copy: bool,
+    /// The (Shift, Ctrl/⌘) state at the last move: a change by the release re-places the object (an aligned
+    /// copy's axis lock). Alt is not part of it: letting Alt go just before the release must not snap an
+    /// object that was placed freely while Alt was held.
+    last_mods: (bool, bool),
     /// Moving an In Line with Text object: where it lands.
     drop_at: Option<Drop>,
     preview: Option<Preview>,
@@ -371,6 +375,7 @@ impl ObjectGesture {
             moved: false,
             pending_behind: false,
             copy: false,
+            last_mods: (false, false),
             drop_at: None,
             preview: None,
         }
@@ -505,6 +510,7 @@ impl ObjectGesture {
             self.pending_behind = false;
         }
         self.moved = true;
+        self.last_mods = (p.mods.shift, p.mods.cmd);
         self.copy = p.mods.cmd && object.member.is_none();
         // Ctrl+Shift moves a copy along the dominant axis only.
         let lock = (self.copy && p.mods.shift && object.floating()).then(|| {
@@ -569,7 +575,7 @@ impl ObjectGesture {
         // The canvas calls `drag` only when the pointer moves, so a modifier changed since then (Shift up
         // frees an aligned copy's axis, Shift down locks it) is not yet in the placement. The release carries
         // the modifiers live at that moment: the object is placed once more with them.
-        if self.moved {
+        if self.moved && self.last_mods != (p.mods.shift, p.mods.cmd) {
             self.drag(app, layout, body, p, cx);
         }
         drop(app, &self);
@@ -951,6 +957,8 @@ fn outline_path(pp: &PlacedPage, view: &CanvasView, o: &ObjectHit) -> BezPath {
 /// shows the connection sites it would glue to. The frame of a text box being edited is dashed, that
 /// of a fixed graphic solid without handles, and the other objects picked for Group are outlined.
 pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &PageBody) {
+    // Set again below while the frame's box has a press open.
+    app.canvas.frame_held = false;
     let active = active(app, layout);
     let others: Vec<BezPath> = wordcraft_engine::cmd::objects::picked_objects(&app.session)
         .iter()
@@ -1005,6 +1013,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
         tbox = tbox.line(LineLook::new(pp.to_doc(view, pt(a.0, a.1)), pp.to_doc(view, pt(b.0, b.1))).ends(LineEnds::Free));
     }
     let out = tbox.show_at(ui, body.rect);
+    app.canvas.frame_held = out.held.is_some();
     if let Some(after) = out.edit.events.committed() {
         commit_box(app, &o, pp, view, after);
     }

@@ -20,6 +20,8 @@ fn app_harness(mut app: WordApp, size: egui::Vec2) -> Harness {
         },
         app,
     );
+    // The language menu names languages in their own script; the CI runner has no CJK font.
+    crate::test_harness::cjk_stand_in(&h.ctx);
     crate::test_harness::frames(&mut h, 4);
     h
 }
@@ -678,14 +680,15 @@ fn table_shading_split_keeps_palette_and_apply_separate() {
     app.canvas.last_shading = "0070C0".into();
     let mut h = tab_harness(app, "Table Design");
     let palette_open = |h: &Harness| h.query_by_label_contains("No Color").is_some();
-    let red = wordcraft_doc::Rgb(255, 0, 0);
+    // A swatch of the document theme's palette (the Craft theme has no pure red); swatches are named by their hex.
+    let red = wordcraft_doc::Rgb(0xE9, 0x71, 0x32);
     let original = first_cell_shading(h.state());
     click_button(&mut h, &shading_options());
     assert_eq!(first_cell_shading(h.state()), original, "opening the palette must not apply the last colour");
     assert!(palette_open(&h), "the arrow opens the shading palette");
-    click_row(&mut h, "#FF0000");
+    click_row(&mut h, "E97132");
     assert_eq!(first_cell_shading(h.state()), Some(red));
-    assert_eq!(h.state().canvas.last_shading, "FF0000");
+    assert_eq!(h.state().canvas.last_shading, "E97132");
     assert!(!palette_open(&h), "a colour pick closes the palette");
     h.state_mut().run("edit.undo", json!({})).unwrap();
     crate::test_harness::frames(&mut h, 2);
