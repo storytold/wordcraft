@@ -7182,9 +7182,12 @@ fn paragraph_in_its_own_window_stays_open_and_closes_on_escape() {
         d.frame(&mut a, vec![], screen);
     }
     assert_eq!(prompt(&a), Some("paragraph"));
+    assert!(d.ctx.memory(|m| m.top_modal_layer().is_some()), "the document is blocked behind the panel");
     let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
     d.frame(&mut a, vec![escape], screen);
     assert_eq!(prompt(&a), None, "Escape closed it");
+    d.frame(&mut a, vec![], screen);
+    assert!(d.ctx.memory(|m| m.top_modal_layer().is_none()), "the block lifts when the panel closes");
 }
 
 /// A text field outside any dialog (the Navigation pane's search) with focus takes the input:

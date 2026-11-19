@@ -188,6 +188,18 @@ fn paragraph_window(app: &mut WordApp, ctx: &egui::Context, mut d: Dialog, title
         ctx.data_mut(|m| m.remove::<Option<egui::Pos2>>(id.0.with("at")));
         app.canvas.want_focus = true;
     } else {
+        // The panel hosts a modal dialog, so the document behind it stays blocked, as the
+        // in-window dialog's `block_behind` does: the canvas must take no clicks and the
+        // selection must not change while the panel is open.
+        let screen = ctx.content_rect();
+        let backdrop = egui::Area::new(id.0.with("modal_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| ui.allocate_rect(screen, Sense::CLICK | Sense::DRAG))
+            .inner;
+        ctx.move_to_top(backdrop.layer_id);
+        ctx.memory_mut(|m| m.set_modal_layer(backdrop.layer_id));
+        release_keyboard(app, ctx);
         app.dialog = Some(d);
     }
 }
