@@ -824,8 +824,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     }
 
     // The scroll position the body asked for takes effect on the state the pass stored.
-    let moved_by_user = state.offset.1 - started_at;
-    if fix.delta != (0.0, 0.0) {
+    let moved_by_user = state.offset.1 - started_at;    if fix.delta != (0.0, 0.0) {
         state.offset.0 += fix.delta.0;
         state.offset.1 += fix.delta.1;
         ui.ctx().request_repaint();
