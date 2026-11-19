@@ -511,6 +511,12 @@ impl WordApp {
                 }
                 "pasteSpecial" => self.dialog = Some(dialogs::Dialog::paste_special(self, req)),
                 "newWindow" => self.new_window(),
+                // With the system's font panel (macOS) every Font entry point — the ribbon
+                // launcher, the context menu, the menu — opens it, as in Pages and TextEdit;
+                // there is no second, built-in Font dialog.
+                "font" if self.services.show_fonts.is_some() => {
+                    let _ = self.run("ui.showFonts", json!({}));
+                }
                 other => self.dialog = dialogs::Dialog::open(other, self),
             }
         }
@@ -588,12 +594,18 @@ impl WordApp {
                 json!({"dialog": "colors"})
             }
             "ui.dialog" => {
-                self.dialog = dialogs::Dialog::open(s("name").unwrap_or(""), self);
-                // New / Modify Table Style can open on a part (`"part": "firstRow"`…).
-                if let Some(dialogs::Dialog::TableStyle { region, .. }) = &mut self.dialog
-                    && let Some(part) = s("part").and_then(wordcraft_engine::cmd::table_style::part_named)
-                {
-                    *region = dialogs_table_style::part_index(part);
+                let name = s("name").unwrap_or("");
+                if name == "font" && self.services.show_fonts.is_some() {
+                    // The system font panel takes the Font dialog's place everywhere (macOS).
+                    let _ = self.run("ui.showFonts", json!({}));
+                } else {
+                    self.dialog = dialogs::Dialog::open(name, self);
+                    // New / Modify Table Style can open on a part (`"part": "firstRow"`…).
+                    if let Some(dialogs::Dialog::TableStyle { region, .. }) = &mut self.dialog
+                        && let Some(part) = s("part").and_then(wordcraft_engine::cmd::table_style::part_named)
+                    {
+                        *region = dialogs_table_style::part_index(part);
+                    }
                 }
                 json!({"dialog": self.dialog.as_ref().map(|d| d.name())})
             }

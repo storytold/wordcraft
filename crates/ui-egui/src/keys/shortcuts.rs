@@ -156,7 +156,8 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
             if !formatting && chord { "edit.pasteText" } else { spec.id }
         } else if spec.id == "format.fontDialog" && app.services.show_fonts.is_some() {
             // With the system's font panel (macOS) the Font key opens it, as in Pages and
-            // TextEdit; the ribbon's Font launcher keeps the Font dialog.
+            // TextEdit; the ribbon's Font launcher reaches the same panel through the
+            // `ui.dialog`/`open` interception in `app/commands.rs`.
             "ui.showFonts"
         } else {
             spec.id
