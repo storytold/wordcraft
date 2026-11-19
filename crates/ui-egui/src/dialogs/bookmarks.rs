@@ -235,6 +235,11 @@ impl WordForm for IconsForm {
         Some(Label::from(tl!("Insert")))
     }
 
+    fn collection_body(&self) -> bool {
+        // The picker's grid owns the scroll; a scrolling dialog body under it would be a second owner.
+        true
+    }
+
     fn body(&mut self, ui: &mut Ui, cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let out = IconPicker::new(Label::from(tl!("Icons")), Bind::bound(&mut self.picked), ICON_GROUPS.as_slice())
             .group_display(IconPickerGroups::Filter)

@@ -26,12 +26,14 @@ pub(crate) struct MacrosDialog {
     name: String,
     /// Presses that keep the dialog open (Delete), run by `settle`.
     requests: Vec<ListManagerChoice>,
+    /// The last press filed in `requests`, so the pass that closes the dialog does not run it a second time.
+    filed: Option<ListManagerChoice>,
 }
 
 impl MacrosDialog {
     /// A dialog whose name box opens on `name`.
     pub(crate) fn new(name: String) -> Self {
-        MacrosDialog { entries: Vec::new(), recording: false, name, requests: Vec::new() }
+        MacrosDialog { entries: Vec::new(), recording: false, name, requests: Vec::new(), filed: None }
     }
 
     /// Copies the session's macros and recording state in; called before every host run.
@@ -72,8 +74,11 @@ impl StackDialog for MacrosDialog {
             .name_box(Bind::bound(&mut self.name));
         let out = dialog.show(ui);
         match (out.closed, out.choice) {
-            (Some(_), choice) => Some(DialogResult::Ok(choice)),
+            // A press already filed in an earlier pass is not run again when the closing pass repeats it (Record
+            // would start and then stop).
+            (Some(_), choice) => Some(DialogResult::Ok(choice.filter(|choice| self.filed.as_ref() != Some(choice)))),
             (None, Some(choice)) => {
+                self.filed = Some(choice.clone());
                 self.requests.push(choice);
                 None
             }

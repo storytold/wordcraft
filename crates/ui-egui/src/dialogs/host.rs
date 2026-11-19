@@ -210,6 +210,10 @@ pub(crate) trait WordForm: Clone + Default + PartialEq + Serialize + Deserialize
     fn cancel_label(&self) -> Option<Label> {
         None
     }
+    /// Whether the body is one collection (a picker) that owns the scroll, so the dialog's own body scroll is off.
+    fn collection_body(&self) -> bool {
+        false
+    }
     /// Whether the rest of the window stays usable beside the dialog.
     fn modeless(&self) -> bool {
         false
@@ -330,9 +334,10 @@ impl<F: WordForm> StackDialog for FormHost<F> {
         let cancel_label = self.form.cancel_label();
         let buttons_kind = self.form.buttons();
         let buttons = self.form.extra_buttons();
+        let collection = self.form.collection_body();
         let waiting = self.held.is_waiting();
         let FormHost { form, held, parent, accepts, pending, asks, .. } = self;
-        let mut dialog = FormDialog::new(title, Bind::bound(&mut *form)).held(held).buttons(buttons_kind);
+        let mut dialog = FormDialog::new(title, Bind::bound(&mut *form)).held(held).buttons(buttons_kind).collection_body(collection);
         if let Some(label) = ok_label {
             dialog = dialog.ok_label(label);
         }
