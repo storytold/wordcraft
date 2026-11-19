@@ -376,7 +376,8 @@ fn shortcut_text_is_swallowed_once() {
     h.event(key(egui::Key::Q, true));
     h.event(egui::Event::Text("q".into()));
     frames(&mut h, 3);
-    assert!(is_open(h.state(), "commands"), "Alt+Q opens the palette");
+    // The title bar shows the Search box, so the palette opens there in place; the dialog is only for Focus (#5398).
+    assert!(crate::chrome::search::is_open(h.state()), "Alt+Q opens the palette");
     assert_eq!(query(&h), "", "Alt+Q's q, same frame");
     // The text a frame late; then typing.
     let mut h = fresh();
@@ -1578,7 +1579,9 @@ fn word_count_shows_label_and_count_on_a_line_over_close_and_cancel() {
     let count = h.get_by_label("16").rect();
     assert!((label.center().y - count.center().y).abs() < 1.0 && label.max.x < count.min.x, "the count stands right of its label");
     let button = egui::accesskit::Role::Button;
-    let _ = h.get_by_role_and_label(button, "Close");
+    // The title bar's × carries the name Close too; the footer's is the lower of the two.
+    let closes: Vec<_> = h.query_all_by_role_and_label(button, "Close").filter(|n| !n.accesskit_node().is_hidden()).collect();
+    assert!(!closes.is_empty(), "a Close button");
     h.get_by_role_and_label(button, "Cancel").click();
     h.run_steps(3);
     assert!(!is_open(h.state(), "wordCount"), "Cancel closes Word Count");

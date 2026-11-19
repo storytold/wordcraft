@@ -301,7 +301,7 @@ fn sample_key(props: &CharProps, mark: Option<VertAlign>, paper: Rgb, dark: bool
 const FONT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
 /// The Effects check boxes, two to a line.
-const EFFECT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content; 2];
+const EFFECT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
 
 /// One font box over `family` as two grid cells, its label and the box; the action rows (Add Font…, Load System
 /// Installed Fonts…) file a run.
@@ -403,7 +403,7 @@ impl WordForm for FontForm {
             });
         });
         GroupBox::new(Label::from(tl!("Effects")), None).show(ui, |ui, _| {
-            Grid::new(&EFFECT_COLUMNS).show(ui, |ui, _| {
+            Grid::new(&EFFECT_COLUMNS).fill_width().show(ui, |ui, _| {
                 tick(ui, &mut self.bold, tl!("Bold"));
                 tick(ui, &mut self.italic, tl!("Italic"));
                 tick(ui, &mut self.underline, tl!("Underline"));
