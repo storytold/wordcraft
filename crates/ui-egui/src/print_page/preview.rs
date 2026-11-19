@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::patterns::form_dialogs::{PreviewPane, PreviewState, PreviewZoom};
@@ -116,7 +116,9 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>) {
     let label = crate::i18n::fmt(tl!("Sheet {page} of {pages}"), &[("page", &(page + 1).to_string()), ("pages", &total.to_string())]);
     let mut view = app.print.view.clone();
     let mut step = None;
-    Stack::new().show(ui, |ui, _| {
+    // The pane takes the room the settings column leaves, the bar under it (production: the sheet at the page's
+    // height, the bar at its foot).
+    Stack::new().fill().show(ui, |ui, _| {
         let shown = match state.shown() {
             Some(texture) => PreviewState::Ready(texture.sized()),
             None => match state {
@@ -124,7 +126,7 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>) {
                 _ => PreviewState::Pending(None),
             },
         };
-        let pane = PreviewPane::state(label.clone(), shown, &view).show(ui);
+        let pane = PreviewPane::state(label.clone(), shown, &view).sizing(Sizing::Fill).show(ui);
         view = pane.view.unwrap_or(pane.shown);
         Row::new().show(ui, |ui, _| {
             if clicked(&Button::new(tl!("Previous sheet")).enabled(page > 0).id_salt("previous").show(ui)) {

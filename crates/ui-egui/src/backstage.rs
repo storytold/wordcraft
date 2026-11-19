@@ -16,7 +16,7 @@ use craft::ui::contract::{BodyCx, CollectionEvent, CommandSet as _, Commands as 
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::notices::Notice;
-use craft::ui::primitives::IconSpec;
+use craft::ui::primitives::{HAlign, IconSpec};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::inspect;
 use craft::ui::style::{SurfaceKind, TypeRole};
@@ -122,14 +122,15 @@ fn label(text: &str) -> Label {
     Label::from(tl!(text).to_owned())
 }
 
-/// A page's heading.
+/// A page's heading: the page's largest text, in the role the framework's start screen gives the Home page's
+/// greeting, so every File page's title has one size (production: 26 pt semibold over 15 pt sections).
 fn heading(ui: &mut Ui, text: &str) {
-    let _ = Text::new(label(text)).role(TypeRole::Title).show(ui);
+    let _ = Text::new(label(text)).role(TypeRole::Heading).show(ui);
 }
 
-/// A section heading inside a page.
+/// A section heading inside a page, a step under the page's title.
 fn subheading(ui: &mut Ui, text: &str) {
-    let _ = Text::new(label(text)).role(TypeRole::Heading).show(ui);
+    let _ = Text::new(label(text)).role(TypeRole::Title).show(ui);
 }
 
 /// An error message on a page.
@@ -187,7 +188,7 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     let _ = Row::new().fill().show(ui, |ui, _| {
         side_menu(ui, band, &current, has_document, show_discord, &choice);
         let print = current == "print";
-        let mut body = Stack::new().fill().pad(Pad::Regular).gap(Gap::Section).surface(SurfaceKind::Panel);
+        let mut body = Stack::new().fill().pad(Pad::Roomy).gap(Gap::Section).surface(SurfaceKind::Panel);
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if !print {
             body = body.scroll(Scroll::vertical());
@@ -242,12 +243,22 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
             ui.add_space(band);
             let _ = IconButton::command(IconSpec::svg(IconId::new("chevronLeft")), BackstagePageCommand::Back).show(ui);
         })
+        // The community link above About, both at the reading start, as production's bottom links.
         .footer(move |ui, _| {
-            if clicked(&Button::new(label("About")).id_salt("backstage-about").variant(Variant::GHOST).sizing(Sizing::FillWidth).show(ui)) {
-                choice.about.set(true);
-            }
-            if show_discord && clicked(&Button::new(label("Discord community")).id_salt("backstage-discord").variant(Variant::GHOST).sizing(Sizing::FillWidth).show(ui)) {
+            if show_discord
+                && clicked(
+                    &Button::new(label("Discord community"))
+                        .id_salt("backstage-discord")
+                        .variant(Variant::GHOST)
+                        .sizing(Sizing::FillWidth)
+                        .align(HAlign::Start)
+                        .show(ui),
+                )
+            {
                 choice.discord.set(true);
+            }
+            if clicked(&Button::new(label("About")).id_salt("backstage-about").variant(Variant::GHOST).sizing(Sizing::FillWidth).align(HAlign::Start).show(ui)) {
+                choice.about.set(true);
             }
         })
         .show(ui, |ui, _| {
@@ -260,6 +271,8 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
                         .icon(IconId::new(icon))
                         .variant(Variant::GHOST)
                         .sizing(Sizing::FillWidth)
+                        // Icon and name at the reading start of the full-width row, as production's menu.
+                        .align(HAlign::Start)
                         .selected(current == id)
                         .enabled(on)
                         .show(ui);

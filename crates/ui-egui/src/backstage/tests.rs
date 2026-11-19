@@ -674,6 +674,43 @@ fn backstage_save_browse_write_failure_shows_on_the_save_as_page() {
     h.get_by_label(msg.as_str());
 }
 
+/// Info shows each property's name beside its field, the names in one column at the fields' start, as production's
+/// table did; the port once named the fields for assistive technology only, so the page showed five bare boxes.
+#[test]
+fn info_properties_show_their_names_beside_the_fields() {
+    use egui::accesskit::Role;
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Some text"})).unwrap();
+    let h = file_page(a, "info");
+    let mut fields = Vec::new();
+    for name in ["Title", "Subject", "Author", "Keywords", "Category"] {
+        let field = h.get_by_role_and_label(Role::TextInput, name).rect();
+        let shown = h.query_all_by_label(name).find(|node| node.accesskit_node().role() != Role::TextInput);
+        let shown = shown.unwrap_or_else(|| panic!("{name} is shown beside its field"));
+        let label = shown.rect();
+        assert!(label.max.x <= field.min.x + 1.0, "{name}'s label is before its field: {label:?} {field:?}");
+        assert!(label.center().y > field.min.y && label.center().y < field.max.y, "{name}'s label is on its field's line");
+        fields.push(field);
+    }
+    let first = fields.first().map(|f| f.min.x).unwrap_or_default();
+    assert!(fields.iter().all(|f| (f.min.x - first).abs() < 1.0), "the fields line up: {fields:?}");
+}
+
+/// The Print page's preview takes the room beside the settings, as production's: the port once showed it as a
+/// thumbnail in a content-sized row at the top of the page.
+#[test]
+fn print_preview_fills_the_page_beside_the_settings() {
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Some text"})).unwrap();
+    let mut h = file_page(a, "print");
+    h.run_steps(6);
+    let pane = h.query_all_by_label("Sheet 1 of 1").map(|node| node.rect()).max_by(|a, b| a.height().total_cmp(&b.height()));
+    let pane = pane.expect("the preview shows the first sheet");
+    assert!(pane.height() > 500.0, "the preview takes the page's height: {pane:?}");
+    let pdf = h.get_by_label("PDF document (*.pdf)").rect();
+    assert!(pane.min.x > pdf.max.x, "the preview is beside the settings: {pane:?} {pdf:?}");
+}
+
 /// #6639: when the whole side menu fits, About sits in its footer, below the last page row.
 #[test]
 fn about_stays_at_the_bottom_of_a_side_menu_that_fits() {

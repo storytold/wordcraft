@@ -3,7 +3,9 @@
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::Sizing;
 use craft::ui::display::Text;
+use craft::ui::form::{Field, FieldGroup};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::text::TextField;
 use craft::i18n::Direction;
@@ -86,9 +88,10 @@ pub(super) fn info(ui: &mut Ui, app: &mut WordApp) {
     heading(ui, "Info");
     let info = app.session.run("file.info", &json!({})).unwrap_or_default();
     // The row starts at the reading start, so Properties are at the right in a mirrored interface.
-    let _ = Row::new().gap(Gap::Section).show(ui, |ui, _| {
-        let _ = Stack::new().gap(Gap::Tight).show(ui, |ui, _| properties(ui, app, &info));
-        let _ = Stack::new().gap(Gap::Tight).show(ui, |ui, _| statistics(ui, &info));
+    // Two equal columns across the page, as production's `ui.columns(2)`.
+    let _ = Row::new().fill_width().gap(Gap::Section).show(ui, |ui, _| {
+        let _ = Stack::new().fill_width().gap(Gap::Tight).show(ui, |ui, _| properties(ui, app, &info));
+        let _ = Stack::new().fill_width().gap(Gap::Tight).show(ui, |ui, _| statistics(ui, &info));
     });
 }
 
@@ -105,19 +108,24 @@ fn properties(ui: &mut Ui, app: &mut WordApp, info: &serde_json::Value) {
     // after it join that step. A value that arrives whole (`Set`) is a step of its own.
     let mut join = false;
     // PLAN: the `info_editing` field of `WordApp`/`WindowUi` (lib.rs, window_ui.rs, app.rs; app-hub) is unused now and goes.
-    for (name, value) in [
-        ("Title", &mut props.title),
-        ("Subject", &mut props.subject),
-        ("Author", &mut props.creator),
-        ("Keywords", &mut props.keywords),
-        ("Category", &mut props.category),
-    ] {
-        let out = TextField::new(label(name), Bind::bound(value)).id_salt(("info-prop", name)).show(ui);
-        if out.value().is_some() {
-            edited = true;
-            join = !out.events.began() && out.events.ended().is_none();
+    // Each field shows its name beside it, the names in one column so the fields line up (production's two-column table).
+    let _ = FieldGroup::new(label("Properties")).show(ui, |ui, _| {
+        for (name, value) in [
+            ("Title", &mut props.title),
+            ("Subject", &mut props.subject),
+            ("Author", &mut props.creator),
+            ("Keywords", &mut props.keywords),
+            ("Category", &mut props.category),
+        ] {
+            let _ = Field::new(label(name)).show(ui, |ui, _| {
+                let out = TextField::new(label(name), Bind::bound(&mut *value)).id_salt(("info-prop", name)).show(ui);
+                if out.value().is_some() {
+                    edited = true;
+                    join = !out.events.began() && out.events.ended().is_none();
+                }
+            });
         }
-    }
+    });
     if edited {
         if join {
             app.session.join_next_undo();
@@ -131,6 +139,8 @@ fn properties(ui: &mut Ui, app: &mut WordApp, info: &serde_json::Value) {
     if clicked(
         &Button::new(label("Advanced Properties…"))
             .id_salt("info-advanced")
+            // Across the column, as production's button in its justified column.
+            .sizing(Sizing::FillWidth)
             .tooltip(tl!("View and edit the document's custom properties.").to_owned())
             .show(ui),
     ) {
