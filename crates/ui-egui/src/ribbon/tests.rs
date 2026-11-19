@@ -20,7 +20,7 @@ fn app_harness(mut app: WordApp, size: egui::Vec2) -> Harness {
         },
         app,
     );
-    h.run_steps(4);
+    crate::test_harness::frames(&mut h, 4);
     h
 }
 
@@ -39,18 +39,28 @@ fn click_button(h: &mut Harness, name: &str) {
         .or_else(|| h.query_all(By::new().role(egui::accesskit::Role::Button).label_contains(name)).next())
         .unwrap_or_else(|| panic!("a button named {name}"));
     node.click();
-    h.run_steps(3);
+    crate::test_harness::frames(h, 3);
+}
+
+/// The menu rows (plain, radio or check) whose label contains `label`: the same words also name
+/// controls outside the menu, e.g. the status bar's language button.
+fn menu_row(label: &str) -> By<'_> {
+    use egui::accesskit::Role;
+    By::new().predicate(move |n| {
+        matches!(n.role(), Role::MenuItem | Role::MenuItemRadio | Role::MenuItemCheckBox) && n.label().is_some_and(|l| l.contains(label))
+    })
 }
 
 /// Click the menu row or gallery tile named `name`: framework menu rows are not buttons, so no role filter.
 fn click_row(h: &mut Harness, name: &str) {
     let node = h
-        .query_all(By::new().label(name))
+        .query_all(menu_row(name))
         .next()
+        .or_else(|| h.query_all(By::new().label(name)).next())
         .or_else(|| h.query_all(By::new().label_contains(name)).next())
         .unwrap_or_else(|| panic!("a row named {name}"));
     node.click();
-    h.run_steps(3);
+    crate::test_harness::frames(h, 3);
 }
 
 /// The names of the checked rows and buttons now shown.
@@ -132,11 +142,12 @@ fn the_group_menu_stays_on_for_a_selected_group() {
     a.run("select.addObject", json!({"index": 0})).unwrap();
     assert_eq!(group_menu_command(&a), "arrange.group");
     assert!(a.session.why_disabled(group_menu_command(&a)).is_none(), "two objects to group");
-    let mut h = tab_harness(a, "Shape Format");
+    // Layout › Arrange holds the Group button; Shape Format's Arrange group has none.
+    let mut h = tab_harness(a, "Layout");
     let group_button_off = |h: &Harness| h.get_by_role_and_label(egui::accesskit::Role::Button, "Group").accesskit_node().is_disabled();
     assert!(!group_button_off(&h), "two objects: the Group button is on");
     h.state_mut().run("arrange.group", json!({})).unwrap();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     let a = h.state();
     assert!(a.session.why_disabled("arrange.group").is_some(), "one group: nothing to group");
     assert_eq!(group_menu_command(a), "arrange.ungroup");
@@ -160,7 +171,7 @@ fn page_setup_menus_mark_the_current_setting() {
         let first_words: Vec<&str> = rows.iter().filter_map(|l| l.trim_start_matches('✓').split_whitespace().next()).collect();
         assert_eq!(first_words.iter().filter(|w| **w == want).count(), 1, "{button}: {want} is the checked row: {rows:?}");
         h.key_press(egui::Key::Escape);
-        h.run_steps(3);
+        crate::test_harness::frames(&mut h, 3);
     }
 }
 
@@ -363,7 +374,11 @@ fn contextual_tabs_follow_the_selection() {
 fn ribbon_groups_fit_above_their_labels() {
     fn rects(node: &egui_kittest::Node<'_>, out: &mut Vec<egui::Rect>) {
         for child in node.children() {
-            out.push(child.rect());
+            // The framework's parts (a split button's arrow, a field's adornments) can be nodes with no
+            // bounds of their own; they have no place to lie outside of, so only their children count.
+            if child.accesskit_node().raw_bounds().is_some() {
+                out.push(child.rect());
+            }
             rects(&child, out);
         }
     }
@@ -381,8 +396,8 @@ fn ribbon_groups_fit_above_their_labels() {
         h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
         for tab in super::TABS.iter().filter(|t| **t != "File") {
             h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
-            h.run_steps(3);
-            for group in h.query_all(By::new().role(egui::accesskit::Role::Group)) {
+            crate::test_harness::frames(&mut h, 3);
+            for group in h.query_all(By::new().role(egui::accesskit::Role::Group)).filter(|g| g.accesskit_node().raw_bounds().is_some()) {
                 let frame = group.rect();
                 let mut inner = Vec::new();
                 rects(&group, &mut inner);
@@ -408,7 +423,7 @@ fn language_menu_reaches_every_language() {
     let mut h = tab_harness(app, "Review");
     click_button(&mut h, "Language");
     fn item(label: &str) -> By<'_> {
-        By::new().label_contains(label)
+        menu_row(label)
     }
     let french = language_name(Some("fr-FR"));
     assert!(h.query(item(french.as_str())).is_none(), "the short list only, on an English document");
@@ -421,10 +436,10 @@ fn language_menu_reaches_every_language() {
     for d in open {
         h.state_mut().dialog_host.cancel_by_id(&ctx, d.id);
     }
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     // French for the whole document: the menu and the status bar name it.
     h.state_mut().run("review.language", json!({"lang": "fr-FR", "default": true})).unwrap();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert_eq!(caret_language(h.state()), french);
     click_button(&mut h, "Language");
     assert!(h.query(item(french.as_str())).is_some(), "the current language is listed (only while it is the current one)");
@@ -447,11 +462,11 @@ fn every_proofing_language_is_picked_from_the_language_menu() {
         assert_eq!(st.get("lang").and_then(Value::as_str), Some(tag), "{name}");
         click_button(&mut h, "Language");
         for (_, other) in PROOFING_LANGUAGES {
-            let ticked = h.get(By::new().label_contains(other)).accesskit_node().toggled();
+            let ticked = h.get(menu_row(other)).accesskit_node().toggled();
             assert_eq!(ticked == Some(egui::accesskit::Toggled::True), other == name, "{name}: {other} ticked {ticked:?}");
         }
         h.key_press(egui::Key::Escape);
-        h.run_steps(3);
+        crate::test_harness::frames(&mut h, 3);
     }
 }
 
@@ -467,14 +482,15 @@ fn picture_width_typed_in_pixels_keeps_the_proportions() {
     assert_eq!(object_size(&a), Some((15.0, 7.5)), "20×10 px at 96 ppi");
     let mut h = tab_harness(a, "Picture Format");
     let undo = h.state().session.undo_depth();
-    let shown = h.get_by_role_and_label(Role::SpinButton, "W:").value().unwrap_or_default();
-    assert!(shown.ends_with(" cm"), "the interface unit: {shown:?}");
+    // The unit is the field's own adornment, so it shows in the number: 15 pt is 0.53 cm.
+    let shown = h.get_by_role_and_label(Role::SpinButton, "W:").accesskit_node().numeric_value().unwrap_or(f64::NAN);
+    assert!((shown - 15.0 * 2.54 / 72.0).abs() < 0.01, "the interface unit: {shown:?}");
     h.get_by_role_and_label(Role::SpinButton, "W:").click();
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.get_by_role_and_label(Role::SpinButton, "W:").type_text("300 px");
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.key_press(egui::Key::Enter);
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     let (w, ht) = object_size(h.state()).unwrap();
     assert!((w - 225.0).abs() < 0.01 && (ht - 112.5).abs() < 0.01, "300 px = 225 pt, the height follows: {w}×{ht}");
     h.state_mut().run("edit.undo", json!({})).unwrap();
@@ -482,10 +498,10 @@ fn picture_width_typed_in_pixels_keeps_the_proportions() {
     // Esc throws a typed size away.
     let undo_before = h.state().session.undo_depth();
     h.get_by_role_and_label(Role::SpinButton, "W:").click();
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.get_by_role_and_label(Role::SpinButton, "W:").type_text("500 px");
     h.key_press(egui::Key::Escape);
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert_eq!(object_size(h.state()), Some((15.0, 7.5)), "Esc cancels the typing");
     assert_eq!(h.state().session.undo_depth(), undo_before, "and leaves no undo step");
     assert!(undo_before <= undo + 1);
@@ -511,11 +527,15 @@ fn shape_size_fields_use_the_interface_unit() {
         }
         tab_harness(a, if picture.is_some() { "Picture Format" } else { "Shape Format" })
     };
-    for (units, suffix) in [("centimeters", " cm"), ("inches", "\""), ("millimeters", " mm"), ("points", " pt"), ("picas", " pi")] {
+    // The unit is the field's own adornment (drawn after the number, not part of its text), so it
+    // shows in the number the field holds: the size in points scaled to the interface unit.
+    for (units, per_pt) in [("centimeters", 2.54 / 72.0), ("inches", 1.0 / 72.0), ("millimeters", 25.4 / 72.0), ("points", 1.0), ("picas", 1.0 / 12.0)] {
         let h = harness(units, None, None);
-        for side in ["W:", "H:"] {
-            let shown = h.get_by_role_and_label(Role::SpinButton, side).value().unwrap_or_default();
-            assert!(shown.ends_with(suffix), "{units}, {side} {shown:?}");
+        let (w, ht) = object_size(h.state()).unwrap();
+        for (side, pt) in [("W:", w), ("H:", ht)] {
+            let shown = h.get_by_role_and_label(Role::SpinButton, side).accesskit_node().numeric_value().unwrap_or(f64::NAN);
+            let want = f64::from(pt) * per_pt;
+            assert!((shown - want).abs() <= want * 0.01 + 0.005, "{units}, {side} {shown:?}, want about {want}");
         }
     }
     // Sizes the fields show rounded: 100×50 pt is 1.39"×0.69", a 3000×1 pt line's height
@@ -527,9 +547,9 @@ fn shape_size_fields_use_the_interface_unit() {
             assert!(wh.is_none() || before == wh, "showing the tab changes nothing: {before:?}");
             for (side, key) in [("W:", egui::Key::Enter), ("H:", egui::Key::Tab)] {
                 h.get_by_role_and_label(Role::SpinButton, side).click();
-                h.run_steps(2);
+                crate::test_harness::frames(&mut h, 2);
                 h.key_press(key);
-                h.run_steps(3);
+                crate::test_harness::frames(&mut h, 3);
             }
             let after = (object_size(h.state()), h.state().session.undo_depth());
             assert_eq!(after, (before, undo), "{units}, picture {picture}, {wh:?}: left without typing");
@@ -540,11 +560,11 @@ fn shape_size_fields_use_the_interface_unit() {
     let undo = h.state().session.undo_depth();
     for (side, typed, key, want) in [("W:", "3 cm", egui::Key::Enter, (85.04, h0)), ("H:", "300 px", egui::Key::Tab, (85.04, 225.0))] {
         h.get_by_role_and_label(Role::SpinButton, side).click();
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         h.get_by_role_and_label(Role::SpinButton, side).type_text(typed);
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         h.key_press(key);
-        h.run_steps(3);
+        crate::test_harness::frames(&mut h, 3);
         let (w, ht) = object_size(h.state()).unwrap();
         assert!((w - want.0).abs() < 0.01 && (ht - want.1).abs() < 0.01, "{side} {typed}: {w}×{ht}, want {want:?}");
     }
@@ -552,12 +572,12 @@ fn shape_size_fields_use_the_interface_unit() {
     h.state_mut().run("edit.undo", json!({})).unwrap();
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(object_size(h.state()), Some((w0, h0)));
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.get_by_role_and_label(Role::SpinButton, "W:").click();
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.get_by_role_and_label(Role::SpinButton, "W:").type_text("10 cm");
     h.key_press(egui::Key::Escape);
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert_eq!(object_size(h.state()), Some((w0, h0)), "Esc cancels the typing");
     // A size typed at the range's bound applies although the field shows that bound: a 1×1 px
     // picture (0.75 pt, below the fields' 1 pt) typed to 1 pt.
@@ -566,10 +586,10 @@ fn shape_size_fields_use_the_interface_unit() {
     let mut h = harness("points", Some(&wordcraft_engine::cmd::insert::base64_encode(&png)), None);
     assert_eq!(object_size(h.state()), Some((0.75, 0.75)));
     h.get_by_role_and_label(Role::SpinButton, "W:").click();
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h.get_by_role_and_label(Role::SpinButton, "W:").type_text("1");
     h.key_press(egui::Key::Enter);
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert_eq!(object_size(h.state()), Some((1.0, 1.0)), "1 pt typed at the bound");
 }
 
@@ -584,7 +604,7 @@ fn picture_format_leaves_a_tiny_picture_alone() {
     assert_eq!(object_size(&a), Some((0.75, 0.75)));
     let undo = a.session.undo_depth();
     let mut h = tab_harness(a, "Picture Format");
-    h.run_steps(6);
+    crate::test_harness::frames(&mut h, 6);
     assert_eq!(object_size(h.state()), Some((0.75, 0.75)), "shown, not resized");
     assert_eq!(h.state().session.undo_depth(), undo, "no undo step");
 }
@@ -621,7 +641,7 @@ fn align_menu_reaches_left_and_right_not_just_center() {
 fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     let shown = |a: crate::WordApp, tab: &str| {
         let mut h = tab_harness(a, tab);
-        h.run_steps(6);
+        crate::test_harness::frames(&mut h, 6);
         let a = h.state();
         (object_size(a), a.session.undo_depth())
     };
@@ -668,7 +688,7 @@ fn table_shading_split_keeps_palette_and_apply_separate() {
     assert_eq!(h.state().canvas.last_shading, "FF0000");
     assert!(!palette_open(&h), "a colour pick closes the palette");
     h.state_mut().run("edit.undo", json!({})).unwrap();
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     assert_eq!(first_cell_shading(h.state()), original);
     click_button(&mut h, "Shading");
     assert_eq!(first_cell_shading(h.state()), Some(red));

@@ -236,11 +236,12 @@ fn length_units_follow_the_interface_language() {
         },
         a,
     );
-    h.run_steps(2);
+    // The frames bind the interface language through the input the app hands the runtime.
+    crate::test_harness::frames(&mut h, 2);
     assert_eq!(unit_suffix(Unit::Centimeters), " см");
     assert_eq!(length(72.0, Unit::Centimeters, &craft::i18n::Format::from_tag("ru-RU")), "2,54 см");
     h.state_mut().run("ui.language", json!({"value": "en"})).unwrap();
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     assert_eq!(unit_suffix(Unit::Millimeters), " mm", "English keeps the English names");
 }
 

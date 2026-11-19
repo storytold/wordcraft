@@ -393,6 +393,8 @@ fn split_with(
     mut body: impl FnMut(&mut Ui, &mut WordApp, &mut BodyCx<'_>) -> ColorPick,
 ) -> ColorPick {
     let mut inner: Option<(Option<Rgb>, craft::behavior::Preview<Rgb>)> = None;
+    // The arrow is its own button, named "<label> options" so it is told from the main part (#3172).
+    let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", label.as_str())]);
     let out = SplitButton::<NoValue>::command(
         main,
         SplitMenu::Body(Box::new(|ui: &mut Ui, cx: &mut BodyCx<'_>| {
@@ -401,6 +403,7 @@ fn split_with(
         })),
     )
     .label(label)
+    .arrow_label(arrow_name)
     .icon(icon)
     .show(ui);
     let (picked, preview) = inner.unwrap_or((None, craft::behavior::Preview::Unchanged));

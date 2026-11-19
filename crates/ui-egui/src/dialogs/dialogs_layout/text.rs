@@ -449,6 +449,8 @@ impl WordForm for LanguageForm {
         let shown = List::<usize>::new(Label::from(heading.to_string()))
             .select(SelectMode::Single)
             .selection(Bind::given(selection))
+            // The dialog body scrolls, and a collection owns its own scroll: the long language list is capped to rows.
+            .max_rows(10)
             .show_items(ui, &source, &mut |i, _| ListRow::new(Label::from(list.get(*i).map(|(_, n)| n.clone()).unwrap_or_default())));
         // A language is always chosen: a Clear leaves it, and a Toggle of the chosen row picks it again.
         let picked = shown.events.into_iter().find_map(|event| match event {

@@ -123,6 +123,8 @@ pub(super) fn group_menu(ui: &mut Ui, app: &mut WordApp) {
         })),
     )
     .label(tl!("Group"))
+    // The arrow is a button of its own, so it is named apart from the main part.
+    .arrow_label(crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Group"))]))
     .icon(IconId::new("group"))
     .show(ui);
 }

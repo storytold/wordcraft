@@ -704,6 +704,7 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    use craft::ui::contract::Show as _;
     use craft::ui::sections::DialogRole;
     use egui_kittest::kittest::Queryable;
     use serde::Deserialize;
@@ -724,7 +725,9 @@ mod tests {
             Label::from("Closing".to_string())
         }
         fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
-            ui.label("Body");
+            // The dialog body runs more than once a frame (measure, then draw): a framework component
+            // keeps its identity across the passes, where a bare egui label clashes with itself.
+            craft::ui::display::Text::new("Body").show(ui);
             true
         }
         fn commands(&self) -> Vec<(String, Value)> {
