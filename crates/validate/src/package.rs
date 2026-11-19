@@ -1719,7 +1719,9 @@ fn parse_opc_children(
             Event::Comment(e) => inventory_complete &= !e.ends_with(b"-") && !e.windows(2).any(|bytes| bytes == b"--"),
             Event::PI(e) => {
                 let target = e.target();
-                inventory_complete &= !target.eq_ignore_ascii_case(b"xml") && std::str::from_utf8(target).is_ok_and(craft_xml::is_name);
+                inventory_complete &= !target.eq_ignore_ascii_case(b"xml")
+                    && target.iter().all(|&b| b != b':')
+                    && std::str::from_utf8(target).is_ok_and(craft_xml::is_name);
             }
             Event::Decl(e) => inventory_complete &= at_start && opc_xml_decl_valid(&e),
             // An unevaluated DTD can change declarations or present replacement markup
@@ -1735,9 +1737,29 @@ fn parse_opc_children(
 /// Validate the lexical QName as well as its in-scope prefix, which the resolver checks separately.
 fn valid_qname(raw: &[u8]) -> bool {
     std::str::from_utf8(raw).is_ok_and(|name| {
-        let mut parts = name.splitn(2, ':');
-        parts.next().is_some_and(craft_xml::is_name) && parts.next().is_none_or(|local| !local.chars().any(|c| c == ':') && craft_xml::is_name(local))
+        let mut parts = name.split(':');
+        parts.next().is_some_and(craft_xml::is_name) && parts.next().is_none_or(craft_xml::is_name) && parts.next().is_none()
     })
+}
+
+/// quick-xml reports malformed attributes but accepts adjacent quoted attributes.
+/// Consume the corresponding XML grammar from the original bytes as well, so
+/// even the ignored attributes of foreign elements count towards inventory loss.
+fn opc_attribute_tail<'a>(raw: &'a [u8], attr: &quick_xml::events::attributes::Attribute<'_>) -> Option<&'a [u8]> {
+    let trim = |bytes: &'a [u8]| bytes.get(bytes.iter().position(|byte| !xml_space(byte)).unwrap_or(bytes.len())..);
+    if !matches!(raw, [b' ' | b'\t' | b'\r' | b'\n', ..]) {
+        return None;
+    }
+    let rest = trim(trim(raw)?.strip_prefix(attr.key.as_ref())?)?.strip_prefix(b"=")?;
+    let (&quote, rest) = trim(rest)?.split_first()?;
+    if !matches!(quote, b'\'' | b'"') {
+        return None;
+    }
+    rest.strip_prefix(attr.value.as_ref())?.strip_prefix(&[quote])
+}
+
+fn xml_space(byte: &u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\r' | b'\n')
 }
 
 /// Ensure raw, unqualified and expanded names are unique and all values are observable.
@@ -1752,8 +1774,11 @@ fn opc_attributes_valid(res: &NamespaceResolver, element: &BytesStart, work: &mu
     }
 
     let mut names = HashSet::new();
+    let mut raw = element.attributes_raw();
     for attr in element.attributes().with_checks(false) {
         let Ok(attr) = attr else { return false };
+        let Some(tail) = opc_attribute_tail(raw, &attr) else { return false };
+        raw = tail;
         let key = attr.key.into_inner();
         if !valid_qname(key) || attr.value.split(|&byte| byte == b'<').nth(1).is_some() {
             return false;
@@ -1786,12 +1811,21 @@ fn opc_attributes_valid(res: &NamespaceResolver, element: &BytesStart, work: &mu
             return false;
         }
     }
-    true
+    raw.iter().all(xml_space)
 }
 
 fn opc_xml_decl_valid(decl: &BytesDecl) -> bool {
     let Ok(raw) = std::str::from_utf8(decl.as_ref()) else { return false };
     let declaration = BytesStart::from_content(raw, 3);
+    let mut tail = declaration.attributes_raw();
+    for attr in declaration.attributes().take(3) {
+        let Ok(attr) = attr else { return false };
+        let Some(rest) = opc_attribute_tail(tail, &attr) else { return false };
+        tail = rest;
+    }
+    if !tail.iter().all(xml_space) {
+        return false;
+    }
     let mut attrs = declaration.attributes();
     let Some(Ok(version)) = attrs.next() else { return false };
     if version.key.as_ref() != b"version" || version.value.as_ref() != b"1.0" {

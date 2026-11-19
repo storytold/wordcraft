@@ -5013,6 +5013,35 @@ mod budget_tests {
     }
 
     #[test]
+    fn relationship_inventory_requires_separators_in_every_source() {
+        for (manifest, part, data, rule) in [
+            (content_types(), "[trash]/00af.dat", vec![0xff; 4], "CT-UNDECLARED"),
+            (content_types_with_override("word/extra.xml", package::MAIN_CONTENT_TYPE), "word/extra.xml", document(), "CT-DUP-MAIN"),
+        ] {
+            for source in ["word/_rels/document.xml.rels", "word/_rels/impostor.xml.rels"] {
+                for (bytes, clean) in [
+                    (rels("<vendor a='1'b='2'/>"), false),
+                    (rels("<vendor><nested a = '1'b = \"2\"/></vendor>"), false),
+                    (rels("<?x:y z?><vendor/>"), false),
+                    (rels("<?xy z?><vendor/>"), true),
+                    (rels("<vendor><nested a = '1'\r\nb = \"2\"/></vendor>"), true),
+                    (String::from_utf8(rels("")).unwrap().replace("?>", "encoding='UTF-8'?>").into_bytes(), false),
+                ] {
+                    let report = validate_bytes(&tiny_zip(&[
+                        ("[Content_Types].xml", manifest.clone()),
+                        ("_rels/.rels", package_rels()),
+                        ("word/document.xml", document()),
+                        (source, bytes),
+                        (part, data.clone()),
+                    ]));
+                    assert_eq!(report.findings.iter().any(|f| f.rule == rule && f.severity == Severity::Error), !clean, "{source}: {report:?}");
+                    assert_eq!(report.coverage_notes.iter().any(|note| note.starts_with(rule)), clean, "{source}: {report:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn unrecognized_relationship_root_withholds_both_ct_demotions() {
         for (manifest, part, bytes, rule) in [
             (content_types(), "[trash]/00af.dat", vec![0xff; 4], "CT-UNDECLARED"),
