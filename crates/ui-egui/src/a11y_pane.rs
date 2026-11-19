@@ -215,6 +215,9 @@ mod tests {
     #[test]
     fn object_description_is_dropped_when_the_selection_moved_before_it_landed() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        // Text before the shape: a caret at the start of an empty paragraph sits on the shape, which
+        // the engine counts as selecting it, so the move off it needs somewhere else to go.
+        app.run("text.insert", json!({"text": "Before the shape "})).unwrap();
         app.run("insert.shape", json!({"kind": "ellipse"})).unwrap();
         let (pos, _) = wordcraft_engine::cmd::objects::selected(&app.session).unwrap();
         let mut h = harness(app);

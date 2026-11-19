@@ -667,6 +667,12 @@ mod tests {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
     }
 
+    /// The id of the open dialog `key`: the one the command opened (a command that answers `pending` has
+    /// handled its request, so the dialog is already open and a second `open` would stack another on it).
+    fn opened(app: &WordApp, key: &str) -> craft::ui::dialog::DialogId {
+        app.dialog_host.open_dialogs().into_iter().find(|d| d.key.as_deref() == Some(key)).map(|d| d.id).expect("the command opened the dialog")
+    }
+
     /// #328: the ribbon opens Define New Multilevel List; OK defines the list and numbers the
     /// paragraph. Scripts without levels get an error, never the dialog.
     #[test]
@@ -674,7 +680,7 @@ mod tests {
         let mut h = harness(app());
         h.state_mut().run("text.insert", json!({"text": "Intro"})).unwrap();
         assert_eq!(h.state_mut().run("list.define", json!({})).unwrap(), json!({"pending": "defineList"}));
-        let id = crate::dialogs::open(h.state_mut(), "defineList", &json!({})).expect("the dialog opens");
+        let id = opened(h.state(), "defineList");
         h.run_steps(2);
         let form = h.state_mut().dialog_host.get_mut_by_id::<FormHost<ListForm>>(id).expect("the form is hosted").form_mut();
         assert_eq!((form.levels.len(), form.sample(0), form.sample(1)), (9, "1.".to_string(), "a.".to_string()));
@@ -687,7 +693,8 @@ mod tests {
         let got = h.state_mut().session.run("list.get", &json!({})).unwrap();
         assert_eq!((got["levels"][0]["text"].as_str(), got["levels"][0]["format"].as_str()), (Some("Part %1:"), Some("upperRoman")));
         // Opening it again starts from the caret's list.
-        let id = crate::dialogs::open(h.state_mut(), "defineList", &json!({})).expect("the dialog opens again");
+        assert_eq!(h.state_mut().run("list.define", json!({})).unwrap(), json!({"pending": "defineList"}));
+        let id = opened(h.state(), "defineList");
         h.run_steps(2);
         assert_eq!(h.state_mut().dialog_host.get_mut_by_id::<FormHost<ListForm>>(id).expect("the form is hosted").form().sample(0), "Part I:");
         let mut b = app();
@@ -701,7 +708,7 @@ mod tests {
     fn track_changes_options_open_from_the_launcher_and_persist() {
         let mut h = harness(app());
         assert_eq!(h.state_mut().run("review.trackingOptions", json!({})).unwrap(), json!({"pending": "trackChangesOptions"}));
-        let id = crate::dialogs::open(h.state_mut(), "trackChangesOptions", &json!({})).expect("the dialog opens");
+        let id = opened(h.state(), "trackChangesOptions");
         h.run_steps(2);
         let form = h.state_mut().dialog_host.get_mut_by_id::<FormHost<TrackForm>>(id).expect("the form is hosted").form_mut();
         assert_eq!((form.insert_mark.as_str(), form.balloons.as_str(), form.insert_color.as_str()), ("underline", "commentsAndFormatting", ""));

@@ -63,6 +63,9 @@ fn columns_dialog_applies_unequal_columns_in_one_step() {
         let k = h.state_mut().dialog_host.get_mut_by_id::<crate::dialogs::host::Keyed<TextColumnsDialog>>(id).expect("columns dialog");
         let d = k.inner_mut();
         d.set_count(2);
+        // Equal widths give a width change to the spacing, so the columns are made unequal first, as the
+        // Left preset or unticking Equal column width does.
+        d.apply_preset(craft::text::ui::columns::ColumnsPreset::Left);
         d.set_width(0, 300.0);
     }
     let undo_before = h.state().session.undo_depth();

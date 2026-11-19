@@ -664,7 +664,7 @@ pub(crate) fn your_languages(app: &mut WordApp, ui: &mut Ui) {
     let busy = busy();
     let order: Vec<usize> = (0..view.len()).collect();
     let source = keyed(&order[..], |at: &usize| *at).with_text(|at| Cow::Owned(view[*at].0.clone()));
-    let _ = Table::<usize>::new(tl!("Your languages").to_string(), language_columns()).select(SelectMode::None).show_items(
+    let _ = Table::<usize>::new(tl!("Your languages").to_string(), language_columns()).select(SelectMode::None).natural_height(true).show_items(
         ui,
         &source,
         &mut |key, icx| {
@@ -1372,6 +1372,12 @@ mod tests {
         assert!(!backend.network.load(Ordering::Relaxed), "a faked click leaves downloading off");
         assert!(packs::installing().is_empty() && !packs::is_installed("pl"));
         assert!(a.packs_rt.errors.get("pl").is_some_and(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
+        // The reason now sits in the notice, which moves the button: find it again.
+        let mut tree = frame(&mut a, &ctx, Vec::new());
+        for _ in 0..4 {
+            tree = frame(&mut a, &ctx, Vec::new());
+        }
+        let install = spot(&tree, "Install (").expect("the bar still offers Polish");
         user_click(&mut a, &ctx, install);
         assert!(backend.network.load(Ordering::Relaxed), "the person's click turns it on");
         for _ in 0..500 {
@@ -1709,6 +1715,12 @@ mod tests {
         assert!(!backend.0.network.load(Ordering::Relaxed), "a faked click leaves downloading off");
         assert!(!packs::fetched() && !packs::is_installed("kl"));
         assert!(a.packs_rt.errors.get("").is_some_and(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
+        // The reason now sits in the notice, which moves the button: find it again.
+        let mut tree = frame(&mut a, &ctx, Vec::new());
+        for _ in 0..4 {
+            tree = frame(&mut a, &ctx, Vec::new());
+        }
+        let install = spot(&tree, "Install").expect("the bar still offers Greenlandic");
         user_click(&mut a, &ctx, install);
         assert!(backend.0.network.load(Ordering::Relaxed), "the person's click turns it on");
         for _ in 0..500 {

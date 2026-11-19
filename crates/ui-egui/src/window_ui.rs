@@ -39,7 +39,6 @@ pub(crate) struct WindowUi {
     pub(crate) smart_art_item: Option<usize>,
     pub(crate) outline_prev_tab: Option<String>,
     pub(crate) read_aloud_at: Option<wordcraft_engine::doc::Pos>,
-    pub(crate) closing: Option<crate::app::Closing>,
     pub(crate) file_dialog: Option<file_dialogs::PendingDialog>,
     pub(crate) info_editing: Option<(&'static str, u64)>,
     pub(crate) shown_document: u64,
@@ -89,7 +88,6 @@ impl WindowUi {
             smart_art_item: None,
             outline_prev_tab: None,
             read_aloud_at: None,
-            closing: None,
             file_dialog: None,
             info_editing: None,
             shown_document: document,
@@ -133,6 +131,8 @@ impl WordApp {
     pub(crate) fn swap_window(&mut self, w: &mut WindowUi) {
         let WordApp {
             // App-wide.
+            // A close operation walks every window's documents, so it outlives a window swap.
+            closing: _,
             session: _,
             services: _,
             host: _,
@@ -194,7 +194,6 @@ impl WordApp {
             smart_art_item,
             outline_prev_tab,
             read_aloud_at,
-            closing,
             file_dialog,
             info_editing,
             shown_document,
@@ -292,7 +291,6 @@ impl WordApp {
             smart_art_item,
             outline_prev_tab,
             read_aloud_at,
-            closing,
             file_dialog,
             info_editing,
             shown_document,

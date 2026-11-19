@@ -132,6 +132,9 @@ struct SaveInFlight {
     marked_saved: bool,
     /// The session revision when the save started: a later edit isn't in that save.
     rev: u64,
+    /// Puts back what a Save stamped (zoom, author, dates, revision) and the dirty flag, when the
+    /// save doesn't reach its destination and nothing was edited since. `None` for an export.
+    undo_stamp: Option<Box<dyn FnOnce(&mut wordcraft_engine::Session)>>,
 }
 
 /// File › Options › Advanced › Linux display server (#2184, `ui.displayServer`): how the desktop

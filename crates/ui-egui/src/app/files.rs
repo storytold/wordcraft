@@ -207,7 +207,14 @@ impl WordApp {
     /// Whether the window may close now, for the platform's close request: `Hold` while a close
     /// operation runs or only one window of several closes, else as [`Self::close_requested`].
     pub fn close_decision(&mut self) -> CloseDecision {
-        if self.closes_a_window() || self.closing.is_some() {
+        if self.closing.is_none() && self.closes_a_window() {
+            // The root window's close button closes that window alone (File › Close in it, which asks
+            // about unsaved changes first); the framework leaves the root's window open on `Hold`, and
+            // the root entry moves to the window that stays.
+            let root = self.windows.root_key();
+            self.close_window(root);
+            CloseDecision::Hold
+        } else if self.closing.is_some() {
             CloseDecision::Hold
         } else if self.close_requested() {
             CloseDecision::Close
@@ -317,11 +324,24 @@ impl WordApp {
         for ticket in tickets {
             let Some(picked) = self.host.files().take_answer(ticket) else { continue };
             let Some(i) = self.saves_in_flight.iter().position(|s| s.ticket == ticket) else { continue };
-            let save = self.saves_in_flight.swap_remove(i);
+            let mut save = self.saves_in_flight.swap_remove(i);
             let current = self.session.document_id();
+            // A save that never reached its destination leaves no stamp of it, when the document is as
+            // the save left it (an edit since keeps its own marks and stays unsaved).
+            let mut undone = false;
+            if !matches!(picked, Picked::Paths(_) | Picked::Downloaded(_))
+                && save.document == current
+                && save.rev == self.session.rev()
+                && let Some(undo) = save.undo_stamp.take()
+            {
+                undo(&mut self.session);
+                undone = true;
+            }
             // A download the browser accepted is a finished save too: the page holds no file of it.
             if matches!(picked, Picked::Paths(_) | Picked::Downloaded(_)) {
                 log::info!("saved {} through the save picker", save.name);
+            } else if undone {
+                // The document is as it was before the save, dirty flag included.
             } else if save.marked_saved && save.document == current {
                 self.session.dirty = true;
             } else if save.marked_saved {
