@@ -7662,6 +7662,7 @@ dependencies = [
  "craft-xml",
  "png",
  "quick-xml 0.41.0",
+ "rayon",
  "serde",
  "serde_json",
  "zip 3.0.0",

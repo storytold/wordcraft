@@ -123,6 +123,12 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
             *held = (*held).max(value.len);
             self.end = self.end.max(value.start.saturating_add(value.len));
         }
+        if let Some(extra) = tags.get(&tags::EXTRA_SAMPLES) {
+            // The codec describes each page separately and materializes its ExtraSamples.
+            // Charge those vectors per page when several pages alias the same value bytes.
+            let samples = tags.get(&tags::SAMPLES_PER_PIXEL).and_then(|span| self.uint(*span, 0)).unwrap_or(1).min(u64::from(u16::MAX));
+            (self.reserve)(16 * extra.count.min(samples))?;
+        }
         let table = if self.big { 8 + 20 * dir.declared() } else { 2 + 12 * dir.declared() };
         let Some(next_at) = offset.checked_add(table) else { return Ok(None) };
         let Some(next) = usize::try_from(next_at).ok().and_then(|at| self.offset(at)) else { return Ok(None) };
@@ -191,20 +197,44 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
     fn uint(&self, span: EntrySpan, index: u64) -> Option<u64> {
         observation_contract! {
             rules: "-";
-            collections: "field.bytes*4";
+            collections: "field.bytes*1";
             scope: "one checked unsigned value from a TIFF tag span";
             loss: "unreadable value or incompatible TIFF field type";
             fallback: "return no value";
             package_loss: "independent";
         }
 
-        let at = usize::try_from(span.start.checked_add(index.checked_mul(span.field_type.size() as u64)?)?).ok()?;
-        match span.field_type {
-            FieldType::Byte => self.bytes.get(at).copied().map(u64::from),
-            FieldType::Short => self.order.read_u16(self.bytes, at).map(u64::from),
-            FieldType::Long | FieldType::Ifd => self.order.read_u32(self.bytes, at).map(u64::from),
-            FieldType::Long8 | FieldType::Ifd8 => self.order.read_u64(self.bytes, at),
-            _ => None,
+        span_uint(self.bytes, self.order, span, index)
+    }
+}
+
+fn span_uint(bytes: &[u8], order: ByteOrder, span: EntrySpan, index: u64) -> Option<u64> {
+    let at = usize::try_from(span.start.checked_add(index.checked_mul(span.field_type.size() as u64)?)?).ok()?;
+    match span.field_type {
+        FieldType::Byte => bytes.get(at).copied().map(u64::from),
+        FieldType::Short => order.read_u16(bytes, at).map(u64::from),
+        FieldType::Long | FieldType::Ifd => order.read_u32(bytes, at).map(u64::from),
+        FieldType::Long8 | FieldType::Ifd8 => order.read_u64(bytes, at),
+        _ => None,
+    }
+}
+
+/// Stored strip or tile dimensions of the selected decode page, including edge tile padding.
+pub(crate) fn chunk_dimensions(bytes: &[u8], page: &craft_image_codecs::TiffPage) -> (u64, u64) {
+    let w = u64::from(page.width);
+    let h = u64::from(page.height);
+    let Some((order, big)) = Tiff::sniff(bytes) else { return (w, h) };
+    let Ok(dir) = directory_entries(bytes, page.ifd_offset, order, big, ParseOptions::default().max_entries) else { return (w, h) };
+    let mut width = w;
+    let mut height = h;
+    for pos in dir.positions() {
+        let Some(span) = entry_span(bytes, pos, order, big, 0) else { continue };
+        match span.tag {
+            tags::TILE_WIDTH if page.tiled => width = span_uint(bytes, order, span, 0).unwrap_or(w),
+            tags::TILE_LENGTH if page.tiled => height = span_uint(bytes, order, span, 0).unwrap_or(h),
+            tags::ROWS_PER_STRIP if !page.tiled => height = span_uint(bytes, order, span, 0).unwrap_or(h).min(h),
+            _ => {}
         }
     }
+    (width, height)
 }

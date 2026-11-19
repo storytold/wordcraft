@@ -17,6 +17,9 @@ craft-tiff = { workspace = true }
 craft-xml = { workspace = true }
 png = "0.18"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
 [dev-dependencies]
 serde_json = { workspace = true }
 zip = { workspace = true }

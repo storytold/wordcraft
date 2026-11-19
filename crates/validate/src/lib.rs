@@ -45,6 +45,7 @@ mod resolution;
 #[cfg(test)]
 mod resolution_tests;
 use resolution::Resolution;
+mod media_workspace;
 mod scan;
 mod tiff_admission;
 mod xml;
@@ -4231,6 +4232,7 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
         payload
     };
     let encoded = bytes.len() as u64;
+    let mut tiff_page = None;
     let (width, height, coefficients) = match format {
         Format::Png => {
             // Read the pixel model without inflating compressed metadata under default limits.
@@ -4251,10 +4253,12 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
             (width, height, 0)
         }
         Format::Tiff => {
-            let Some((width, height)) = probe_alternate_tiff(bytes)? else {
+            let Some(page) = probe_alternate_tiff(bytes)? else {
                 return Ok(AlternateAssessment::IncompleteTiffDirectory);
             };
-            (width, height, 0)
+            let dimensions = (page.width, page.height, 0);
+            tiff_page = Some(page);
+            dimensions
         }
         _ => return Ok(AlternateAssessment::Unassessed),
     };
@@ -4263,11 +4267,8 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
     // TIFF also supports wider samples and CMYK with alpha.
     let bytes_per_pixel = if format == Format::Tiff { 20 } else { 8 };
     let allocation = pixels.saturating_mul(bytes_per_pixel).max(encoded).max(4096);
-    // png 0.18.1 uses fdeflate 0.3.7, whose fixed tables alone take
-    // (4096 + 512) × 4 bytes. Include them and the inflater state separately
-    // from the encoded/chunk and decompressed pixel storage above.
-    let fixed_workspace = if format == Format::Png { 20 * 1024 } else { 0 };
-    let decode_charge = allocation.saturating_mul(2).saturating_add(coefficients).saturating_add(fixed_workspace);
+    let workspace = media_workspace::decode(format, bytes, width, height, tiff_page.as_ref());
+    let decode_charge = allocation.saturating_mul(2).saturating_add(encoded).saturating_add(coefficients).saturating_add(workspace);
     let charge = if format == Format::Tiff { preflight.saturating_add(decode_charge) } else { decode_charge.max(preflight) };
     if charge > budget {
         return Err(over_budget());
@@ -4322,13 +4323,10 @@ fn unpadded_alternate(format: Format, bytes: &[u8]) -> &[u8] {
     end.and_then(|end| bytes.get(..end)).unwrap_or(bytes)
 }
 
-fn probe_alternate_tiff(bytes: &[u8]) -> Result<Option<(u32, u32)>, CodecError> {
+fn probe_alternate_tiff(bytes: &[u8]) -> Result<Option<codecs::TiffPage>, CodecError> {
     let directories = codecs::tiff_info(bytes)?;
-    Ok(directories
-        .default_page()
-        .filter(|_| directories.complete)
-        .and_then(|index| directories.pages.get(index))
-        .map(|page| (page.width, page.height)))
+    let index = directories.default_page().filter(|_| directories.complete);
+    Ok(index.and_then(|index| directories.pages.into_iter().nth(index)))
 }
 
 /// Check the first PNG image's rows, including Adam7 passes, without inflating text or ICC data.
@@ -4536,6 +4534,35 @@ mod budget_tests {
     }
 
     #[test]
+    fn media_magic_apng_debits_overlapping_inflater_state() {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+        encoder.set_animated(1, 0).unwrap();
+        encoder.write_header().unwrap().write_image_data(&[128]).unwrap();
+        assert_decode_charge(Format::Png, &bytes, 2 * (4096 + 512) * 4 + 2);
+    }
+
+    #[test]
+    fn media_magic_tiff_debits_deflate_buffer_and_window() {
+        let bytes = test_tiff(1, &[], None, 8, b"\x78\x9c\xab\x07\0\0\x80\0\x80");
+        assert_decode_charge(Format::Tiff, &bytes, 2 * 32_768 + 1);
+    }
+
+    #[test]
+    fn media_magic_webp_debits_rounded_vp8_planes() {
+        // A single black 1×512 VP8 keyframe in a WebP container.
+        let bytes = b"RIFF:\0\0\0WEBPVP8 -\0\0\0\xd0\x03\0\x9d\x01*\x01\0\0\x02\0G\x08\x85\x85\x88\x85\x84\x88\x02\x02\0\x06@\x1e\x19U\xf2\xc0=\xe4\xffF\xd4U|\xb0\x0f@\0\xfe\xff\xabP\x80\0";
+        assert_decode_charge(Format::WebP, bytes, 16 * 512 + 2 * 8 * 256 + 3 * 512);
+    }
+
+    fn assert_decode_charge(format: Format, bytes: &[u8], minimum: u64) {
+        let budget = 1024 * 1024;
+        let mut remaining = budget;
+        assert!(matches!(decode_alternate_image(format, bytes, budget, &mut remaining), Ok(AlternateAssessment::Usable)));
+        assert!(budget - remaining >= minimum, "{format:?} charged {} bytes, expected at least {minimum}", budget - remaining);
+    }
+
+    #[test]
     fn media_magic_drawn_png_grade_ignores_compressed_description() {
         for description in [String::new(), "November field notes. ".repeat(650)] {
             let mut bytes = Vec::new();
@@ -4698,12 +4725,16 @@ mod budget_tests {
 
         let image = codecs::Image::from_u8(2, 2, codecs::ChannelLayout::Rgb, vec![42; 12]).unwrap();
         let webp = codecs::encode(&image, Format::WebP, &codecs::EncodeOptions::default()).unwrap();
-        let mut remaining = 16 * 1024;
-        assert!(decode_alternate_image(Format::WebP, malformed, 16 * 1024, &mut remaining).is_err());
-        assert!(remaining < 16 * 1024, "an admitted failed probe consumes budget");
-        assert!(matches!(decode_alternate_image(Format::WebP, &webp, 16 * 1024, &mut remaining), Ok(AlternateAssessment::Usable)));
+        let budget = 1024 * 1024;
+        let mut fresh = budget;
+        assert!(matches!(decode_alternate_image(Format::WebP, &webp, budget, &mut fresh), Ok(AlternateAssessment::Usable)));
+        let cost = budget - fresh;
+        let mut remaining = cost + 8192;
+        assert!(decode_alternate_image(Format::WebP, malformed, budget, &mut remaining).is_err());
+        assert_eq!(remaining, cost, "an admitted failed probe consumes its reservation");
+        assert!(matches!(decode_alternate_image(Format::WebP, &webp, budget, &mut remaining), Ok(AlternateAssessment::Usable)));
         assert_eq!(remaining, 0);
-        assert!(matches!(decode_alternate_image(Format::WebP, &webp, 16 * 1024, &mut remaining), Err(CodecError::LimitExceeded(_))));
+        assert!(matches!(decode_alternate_image(Format::WebP, &webp, budget, &mut remaining), Err(CodecError::LimitExceeded(_))));
     }
 
     #[test]
