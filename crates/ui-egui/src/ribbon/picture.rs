@@ -50,7 +50,7 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         menu_button(ui, stacked("Transparency", "Picture transparency"), tl!("Transparency"), Some("picture.transparency"), |ui, _| {
             for v in [0.0, 15.0, 30.0, 50.0, 65.0, 80.0, 95.0] {
                 let label = format!("{v:.0}%");
-                MenuItem::command(CommandRef::with_params("picture.transparency", json!({"percent": v}))).label(tl!(label.as_str())).show(ui);
+                MenuItem::command(CommandRef::with_params("picture.transparency", json!({"percent": v}))).label(tl!(label.as_str()).to_string()).show(ui);
             }
             Divider::horizontal().show(ui);
             // The engine has no transparency read, so the exact field starts empty each time the menu opens.

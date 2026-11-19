@@ -65,7 +65,7 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     .show(ui);
                 MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({}))).label(tl!("Delete Table Style").to_string()).enabled(can_delete).show(ui);
             });
-            let _ = crate::colors::shading_split(ui, app, &tl!("Shading").to_string(), Target::cmd("table.shading").remember(Remember::Shading));
+            let _ = crate::colors::shading_split(ui, app, tl!("Shading").to_string(), Target::cmd("table.shading").remember(Remember::Shading));
         });
     });
     row.group(RibbonGroup::new("borders", tl!("Borders").to_string(), IconId::new("borders").into()), |ui| {

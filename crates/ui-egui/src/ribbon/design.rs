@@ -5,7 +5,7 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button};
-use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
 use craft::ui::menu::MenuItem;

@@ -36,7 +36,7 @@ pub(super) fn custom_groups(row: &mut RibbonRow<'_>, app: &mut WordApp, groups: 
     for g in groups {
         let ids: Vec<&'static str> = g.commands.iter().filter_map(|id| app.session.registry.get(id).map(|s| s.id)).collect();
         let Some(first) = ids.first() else { continue };
-        let group = RibbonGroup::new(&g.name, g.name.as_str(), icons::for_command(first));
+        let group = RibbonGroup::new(&g.name, g.name.clone(), icons::for_command(first));
         row.group(group, |ui| {
             if ids.len() <= 3 {
                 Stack::new().show(ui, |ui, _| {

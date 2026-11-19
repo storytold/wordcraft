@@ -291,7 +291,7 @@ pub(crate) fn wordart(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, comma
         .show_items(ui, &Indexed(styles.len()), &mut |at, _| {
             let (id, label) = styles.get(*at).copied().unwrap_or(("", ""));
             let theme = &theme;
-            Tile::new(crate::tl!(label)).thumb(ThumbAspect::new(10, 9), move |cx, r| crate::wordart_menus::paint_style(&cx.painter, r, id, theme))
+            Tile::new(crate::tl!(label)).thumb(ThumbAspect::new(10, 9), move |cx, r| crate::wordart_menus::paint_style(cx, r, id, theme))
         });
     if let Some((id, _)) = picked(&out.response.events).and_then(|at| styles.get(at)) {
         if app.run(command, json!({"style": id})).is_ok() {
