@@ -358,7 +358,8 @@ fn input_dialog_opens_for_users_and_never_for_scripts() {
             params: json!({}),
             setup: vec![("text.insert", json!({"text": "a 字 b"})), ("select.text", json!({"text": "字"}))],
             dialog: "enclose",
-            scripts: ForScripts::Data,
+            // `format.enclose` needs its `shape` (`engine/src/cmd/format.rs`, as in production): no data to list.
+            scripts: ForScripts::Errors,
             applies_with: Some(json!({"shape": "square", "style": "enlarge", "text": "字"})),
         },
         InputRow { command: "insert.field", params: json!({}), setup: vec![], dialog: "field", scripts: ForScripts::Errors, applies_with: Some(json!({"instr": "PAGE"})) },
