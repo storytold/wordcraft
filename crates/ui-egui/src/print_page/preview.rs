@@ -3,7 +3,8 @@
 
 use std::sync::Arc;
 
-use craft::ui::buttons::Button;
+use craft::behavior::IconId;
+use craft::ui::buttons::{Button, IconButton};
 use craft::ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
@@ -129,11 +130,24 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>) {
         let pane = PreviewPane::state(label.clone(), shown, &view).sizing(Sizing::Fill).show(ui);
         view = pane.view.unwrap_or(pane.shown);
         Row::new().show(ui, |ui, _| {
-            if clicked(&Button::new(tl!("Previous sheet")).enabled(page > 0).id_salt("previous").show(ui)) {
+            // Production's sheet count between a back and a forward chevron, each named for the sheet it goes to.
+            let previous = IconButton::new(IconId::new("chevronLeft"))
+                .label(tl!("Previous sheet"))
+                .tooltip(tl!("Previous sheet"))
+                .enabled(page > 0)
+                .id_salt("previous")
+                .show(ui);
+            if previous.clicked() {
                 step = Some(page.saturating_sub(1));
             }
             Text::new(label.clone()).show(ui);
-            if clicked(&Button::new(tl!("Next sheet")).enabled(page + 1 < total).id_salt("next").show(ui)) {
+            let next = IconButton::new(IconId::new("chevronRight"))
+                .label(tl!("Next sheet"))
+                .tooltip(tl!("Next sheet"))
+                .enabled(page + 1 < total)
+                .id_salt("next")
+                .show(ui);
+            if next.clicked() {
                 step = Some(page + 1);
             }
             if clicked(&Button::new(tl!("One Page")).id_salt("one-page").show(ui)) {

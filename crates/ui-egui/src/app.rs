@@ -27,6 +27,18 @@ mod prefs;
 pub(crate) use commands::works_without_document;
 pub(crate) use frame::STATUS_MS;
 
+/// WordCraft's own sizes over the size set. The display role is the File pages' titles (Info, Open, Print,
+/// Options…), production's 26 pt semibold over its 15 pt section headings; the suite's display size (38 pt) is a
+/// start screen's brand title, which WordCraft does not show.
+static APP_SIZES: std::sync::LazyLock<std::sync::Arc<craft::theme::AppSizes>> = std::sync::LazyLock::new(|| {
+    use craft::theme::SizeValue;
+    let all = [("typography.display.size", 26.0), ("typography.display.line_height", 32.0)]
+        .into_iter()
+        .map(|(path, value)| (path.to_owned(), SizeValue::Number(value)))
+        .collect();
+    std::sync::Arc::new(craft::theme::AppSizes { all, ..Default::default() })
+});
+
 impl WordApp {
     /// Creates the app: adopts the system locale, then initializes the document session, UI state,
     /// services, printing, canvas, dialogs, previews and font tracking.
@@ -193,6 +205,7 @@ impl WordApp {
             .wheel_speed(WheelSpeed { line, point })
             .alt_code_pages(AltCodePages { ansi, oem });
         env.motion = self.ui.animations.motion();
+        env.sizes = std::sync::Arc::clone(&APP_SIZES);
         env
     }
 
