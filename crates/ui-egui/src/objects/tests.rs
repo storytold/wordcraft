@@ -765,8 +765,19 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     // The blink runs on the wall clock and a scripted move does not restart it: restart it, so the caret is on
     // for its first half second however the clock stands when the test runs.
     h.state_mut().canvas.glide.restart(craft::platform::clock::monotonic_ms());
-    for _ in 0..8 {
-        // As the app's driver steps: the focus request is the runtime's, taken at the frame's start.
+    // The framework gives the keyboard to no canvas by itself: step as the app's driver does until the page has the
+    // keyboard it asked for (the request is the runtime's, taken at a frame's start), and only then look for the caret.
+    for _ in 0..12 {
+        crate::test_harness::frame(&mut h);
+        if h.state().canvas.focused(&ctx) {
+            break;
+        }
+        h.state_mut().canvas.focus_page(&ctx);
+    }
+    assert!(h.state().canvas.focused(&ctx), "the page takes the keyboard it asked for");
+    // The caret fades in and may glide to the target: give it frames, and keep the blink in its on half.
+    for _ in 0..30 {
+        h.state_mut().canvas.glide.restart(craft::platform::clock::monotonic_ms());
         crate::test_harness::frame(&mut h);
         for s in &h.output().shapes {
             for (a, b, width) in vertical_bars(&s.shape) {

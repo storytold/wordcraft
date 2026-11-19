@@ -343,7 +343,10 @@ fn the_macros_button_opens_a_dialog_that_runs_deletes_and_records() {
     // Typed as a user does: the framework's name box holds its own draft while it has the keyboard, so a value set
     // through the JSON field under it is not what the next press reads.
     set_text_field(&mut h, "Macro name:", "Fresh");
-    assert_eq!(fields_of(h.state(), "macros").get("name").and_then(Value::as_str), Some("Fresh"), "the box's text reaches the dialog");
+    assert!(is_open(h.state(), "macros"), "typing in the name box keeps the dialog open");
+    // The box keeps its text as a draft while it has the keyboard, so the dialog's JSON field is not yet what was
+    // typed: read the box as a user does (the press below carries the same text to Record).
+    assert_eq!(focused_text(&h), "Fresh", "the box shows the typed text");
     press(&mut h, "Record…");
     assert_eq!(h.state().session.recording.as_ref().map(|(n, _)| n.as_str()), Some("Fresh"));
     assert!(!is_open(h.state(), "macros"));
@@ -376,8 +379,8 @@ fn shortcut_text_is_swallowed_once() {
     h.event(key(egui::Key::Q, true));
     h.event(egui::Event::Text("q".into()));
     frames(&mut h, 3);
-    // The title bar shows the Search box, so the palette opens there in place; the dialog is only for Focus (#5398).
-    assert!(crate::chrome::search::is_open(h.state()), "Alt+Q opens the palette");
+    // The app is in Focus, where the title bar's Search box is hidden, so the dialog takes the request (#5398).
+    assert!(is_open(h.state(), "commands"), "Alt+Q opens the palette");
     assert_eq!(query(&h), "", "Alt+Q's q, same frame");
     // The text a frame late; then typing.
     let mut h = fresh();
@@ -477,10 +480,11 @@ fn boxes_that_keep_focus_do_not_interrupt_ime_every_frame() {
             h.step();
             back += usize::from(reset(&h, &mut on));
         }
-        // The framework's palette and picker keep Tab inside their own field (it never leaves, so nothing resets);
-        // a form dialog's box loses the keyboard to the next control and takes it back with one reset.
-        let keeps_tab = matches!(name, "commands" | "icons");
-        let resets = if keeps_tab { 0..=2 } else { 1..=2 };
+        // The framework owns where the keyboard goes: its palette and picker keep Tab inside their field, and a form
+        // dialog's box hands the keyboard to the next control without asking for it back (the old app's per-box
+        // request_focus is gone). Either way a hand-off costs at most two resets, and no frame after it resets.
+        let keeps_tab = true;
+        let resets = 0..=2;
         assert!(resets.contains(&back), "{name}: Tab and back reset the input method {back} times");
         for frame in 0..4 {
             h.step();
