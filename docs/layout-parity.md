@@ -534,11 +534,8 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | 2026-11-02 | trivial | Beyond Word, for ODT documents: a table's own space above and below (`TableProps::space_before`/`space_after`) moves the text around it, and a header (footer) taller than its margin keeps its spacing between it and the body (`SectionProps::header_gap`/`footer_gap`; Word keeps none, so DOCX documents are unchanged) (`tests::a_tables_own_space_above_and_below_moves_the_text`, `tests::body_starts_right_below_a_tall_header`) |
 | 2026-11-02 | trivial | A page break before the paragraph in a table's first row moves the whole table to the next page, as in Word (it was ignored); emphasis marks (Font › Emphasis mark) are drawn over or under each character and make the line taller |
 | 2026-11-12 | minor | Added layout.fitOnePage: heuristic search over discrete font half-point steps and spacing compression with anti-clutter safeguards (line-spacing floor and font-size floor) to condense multi-page documents by one page while preserving hierarchy |
- fix/5847-justified-tab-shrink
 | 2026-11-07 | trivial | A justified line with a tab shrinks its spaces to fit more text, counting only the spaces after the line's last tab, measured in Word for Mac; WordCraft never shrank a line with a tab, so a numbered paragraph's first line wrapped a word early (#5847) |
-
 | 2026-10-31 | trivial | Web addresses: no line break after the `?` of a query (`/?type=`) or after a slash before an underscore (`/portal/_back`). Word for Mac 16.93 kept such an address whole and moved it to the next line; WordCraft broke it there (UAX #14 allows both). With the address moved along the line one word at a time (60 paragraphs, Times New Roman 12pt), WordCraft's lines now match Word's line for line; 23 (query) and 19 (underscore) paragraphs broke inside the address before. A `?` keeps its break before anything but an ASCII letter, digit or underscore (CJK text), and a path after a space (`caption /_back`) wraps whole. `layout::tests::no_line_break_inside_a_query_address`, `a_path_after_a_space_wraps_whole`, `a_question_mark_in_cjk_text_keeps_its_break` |
- main
 
 Maintenance on 2026-10-12 retains current tracked-deletion, endnote, footer-total, text-box
 and balloon layout while supplying explicit cell identity at every box call. The native Word
