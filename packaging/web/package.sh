@@ -32,6 +32,10 @@ cp -R "$SITE/." "$WORK/$NAME/"
 # Sample server configs (MIME type, caching, compression); harmless where unused.
 cp "$HERE/_headers" "$HERE/.htaccess" "$WORK/$NAME/"
 cp "$HERE/README.md" "$WORK/$NAME/HOSTING.md"
+# Sample server-fonts folder: the admin adds font files and edits manifest.json (HOSTING.md).
+mkdir -p "$WORK/$NAME/fonts"
+cp "$HERE/fonts/README.txt" "$WORK/$NAME/fonts/README.txt"
+[[ -e "$WORK/$NAME/fonts/manifest.json" ]] || cp "$HERE/fonts/manifest.json" "$WORK/$NAME/fonts/manifest.json"
 copy_docs "$WORK/$NAME"
 rm -f "$DIST/$NAME.zip"
 (cd "$WORK" && zip -qr9 "$DIST/$NAME.zip" "$NAME")

@@ -58,6 +58,8 @@ pub fn start() {
                     }
                     // Fonts the user added on an earlier visit (#582); the app notices them arrive.
                     font_store::load_all(cc.egui_ctx.clone());
+                    // Fonts the site's admin published next to the app (`fonts/manifest.json`).
+                    crate::server_fonts::load_all(cc.egui_ctx.clone());
                     let inbox: Inbox = Inbox::default();
                     let pasted: Inbox = Inbox::default();
                     if let Err(e) = listen_for_pasted_pictures(pasted.clone(), cc.egui_ctx.clone()) {
