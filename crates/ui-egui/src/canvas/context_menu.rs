@@ -71,6 +71,9 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run(id, params);
             if !id.starts_with("ui.") {
                 app.canvas.want_focus = true;
+                // The page was drawn before the menu, so it only sees `want_focus` next pass:
+                // ask for that pass now, as a click on the chrome does (#6715).
+                ui.ctx().request_repaint();
             }
             ui.close();
         }
@@ -89,6 +92,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             if ui.button(egui::RichText::new(&sgt).strong()).clicked() {
                 let _ = app.run("review.applySuggestion", json!({"text": sgt}));
                 app.canvas.want_focus = true;
+                ui.ctx().request_repaint();
                 ui.close();
             }
         }
@@ -119,6 +123,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
                         app.session.sel = wordcraft_engine::Selection { anchor: a, focus: end };
                         let _ = app.run("text.insert", json!({"text": w, "raw": true}));
                         app.canvas.want_focus = true;
+                        ui.ctx().request_repaint();
                         ui.close();
                     }
                 }
