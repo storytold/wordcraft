@@ -362,6 +362,10 @@ fn the_canvas_caret_glides_after_a_key() {
     }
     assert!(drawn(&h).is_none(), "no animations: the glide stands down");
     h.state_mut().run("ui.animations", json!({"value": "on"})).unwrap();
+    // The caret shows and glides in the canvas that has the keyboard: the framework gives it to no canvas by itself,
+    // as a click on the page does.
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
     for _ in 0..30 {
         crate::test_harness::frames(&mut h, 1);
     }

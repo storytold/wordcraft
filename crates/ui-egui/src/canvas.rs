@@ -709,8 +709,10 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
             strip_click = equation_frame::show(app, ui, layout, body);
             crate::crop::show(app, ui, layout, body);
             crate::objects::show(app, ui, layout, body);
-            crate::table_resize::show(app, ui, layout, body);
+            // Shown after the selection areas: across controls the later one is on top of a press, and a border
+            // beats the area it lies in (the engine's `target_at` answers none where a border is).
             crate::table_mouse::show(app, ui, layout, body);
+            crate::table_resize::show(app, ui, layout, body);
             crate::ink::show(app, ui, layout, body);
             crate::dialogs_smart_art::frame_button(app, ui, body.pages, layout);
             if let Some(pass) = body.pass {

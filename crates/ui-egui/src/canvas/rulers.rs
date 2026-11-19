@@ -63,7 +63,14 @@ pub(crate) fn page_rulers(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui
     let row_cells = caret_row(app, layout, pi);
     let borders_page: Vec<f32> =
         row_cells.first().map(|f| std::iter::once(f.x).chain(row_cells.iter().map(|b| b.right())).collect()).unwrap_or_default();
-    let borders: Vec<f32> = borders_page.iter().map(|&x| to_start(x)).collect();
+    // While a column marker is dragged the markers show where the preview puts their borders (the ruler draws them
+    // where it is told), so the grabbed marker follows the pointer and the ones right of it move along.
+    let mods = crate::table_resize::mods_now(ui.ctx());
+    let borders: Vec<f32> = borders_page
+        .iter()
+        .enumerate()
+        .map(|(line, &x)| to_start(app.canvas.table_resize.as_ref().and_then(|d| d.ruler_line_x(mods, line)).unwrap_or(x)))
+        .collect();
     let row_y = row_cells.first().map_or(0.0, |b| b.y + b.h / 2.0);
     let bottoms = row_bottoms(app, layout, pi);
     let rows: Vec<f32> = bottoms.iter().map(|(_, b)| b.bottom()).collect();
