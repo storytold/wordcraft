@@ -55,6 +55,17 @@ fn back_chevron_c(band_min_x: f32, center_y: f32, fullscreen: bool, content_left
     pos2(band_min_x + x, center_y)
 }
 
+/// The bottom of the backstage menu: About, and the community link unless the user turned the
+/// community button off — the title bar pill honors the same setting, so the menu hides the
+/// link with it.
+fn bottom_links(app: &WordApp) -> Vec<(&'static str, &'static str)> {
+    let mut links = vec![("About", "about")];
+    if app.ui.show_discord {
+        links.push(("Discord community", "discord"));
+    }
+    links
+}
+
 /// Draws the Backstage side menu and the active page. Without a document only the Home, New, Open
 /// and Options pages work, and it handles Back, Escape, Save, Save As and Close routing.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
@@ -81,6 +92,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
+                crate::chrome::note_title_drag(ui.ctx(), band);
                 // The chevron's stroke starts at the content edge.
                 let c = if rtl {
                     pos2(band.max.x - 26.0, band.center().y)
@@ -118,78 +130,103 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 app.canvas.want_focus = true;
             }
             ui.add_space(if mac { 12.0 } else { 6.0 });
-            for (id, label, icon) in PAGES {
-                // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
-                let on = has_document || works_without_document(id);
-                let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tl!(label)));
-                let active = app.ui.backstage_page == id;
-                if active {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
-                } else if on && resp.hovered() {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
-                }
-                let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
-                icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 31.0), r.center().y), vec2(18.0, 18.0)),
-                    icon,
-                    ink,
-                    ink,
-                );
-                ui.painter().text(
-                    pos2(crate::rtl::lead_x(rtl, r, 52.0), r.center().y),
-                    crate::rtl::lead_center(rtl),
-                    tl!(label),
-                    if active { semibold(14.0) } else { medium(14.0) },
-                    ink,
-                );
-                if on
-                    && app.ui.keytips == crate::keytips::Phase::Backstage
-                    && let Some(letter) = keytip_letter(id)
-                {
-                    crate::keytips::badge(ui, Rect::from_min_size(pos2(r.min.x + 16.0, r.min.y), vec2(20.0, 16.0)), letter);
-                }
-                if resp.clicked() {
-                    go_to_page(app, id);
-                }
-            }
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in [("About", "about"), ("Discord community", "discord")] {
-                    let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
-                    if resp.hovered() {
+            // A window too short for the whole menu scrolls it below the back button (#6639).
+            // When the menu fits, About and the community link stay at the bottom.
+            let links = bottom_links(app);
+            let spacing = ui.spacing().item_spacing.y;
+            let links_h = (32.0 + spacing) * links.len() as f32 - spacing;
+            let fits = ui.available_height();
+            egui::ScrollArea::vertical().id_salt("backstage_nav_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                let top = ui.cursor().top();
+                for (id, label, icon) in PAGES {
+                    // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
+                    let on = has_document || works_without_document(id);
+                    let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tl!(label)));
+                    // A row reached with Tab scrolls into view.
+                    if resp.gained_focus() {
+                        resp.scroll_to_me(None);
+                    }
+                    let active = app.ui.backstage_page == id;
+                    if active {
+                        ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
+                    } else if on && resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                     }
-                    let at = pos2(crate::rtl::lead_x(rtl, r, 22.0), r.center().y);
-                    ui.painter().text(at, crate::rtl::lead_center(rtl), tl!(label), regular(13.0), egui::Color32::WHITE);
+                    let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 31.0), r.center().y), vec2(18.0, 18.0)),
+                        icon,
+                        ink,
+                        ink,
+                    );
+                    ui.painter().text(
+                        pos2(crate::rtl::lead_x(rtl, r, 52.0), r.center().y),
+                        crate::rtl::lead_center(rtl),
+                        tl!(label),
+                        if active { semibold(14.0) } else { medium(14.0) },
+                        ink,
+                    );
+                    if on
+                        && app.ui.keytips == crate::keytips::Phase::Backstage
+                        && let Some(letter) = keytip_letter(id)
+                    {
+                        crate::keytips::badge(ui, Rect::from_min_size(pos2(r.min.x + 16.0, r.min.y), vec2(20.0, 16.0)), letter);
+                    }
                     if resp.clicked() {
-                        if id == "discord" {
-                            let _ = app.run("ui.discord", json!({}));
-                        } else {
-                            app.dialog = crate::dialogs::Dialog::open("about", app);
-                        }
+                        go_to_page(app, id);
                     }
                 }
+                let gap = top + fits - ui.cursor().top() - links_h;
+                if gap > 0.0 {
+                    ui.add_space(gap);
+                }
+                ui.allocate_ui_with_layout(vec2(200.0, links_h), egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    for (label, id) in links {
+                        let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
+                        if resp.gained_focus() {
+                            resp.scroll_to_me(None);
+                        }
+                        if resp.hovered() {
+                            ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
+                        }
+                        let at = pos2(crate::rtl::lead_x(rtl, r, 22.0), r.center().y);
+                        ui.painter().text(at, crate::rtl::lead_center(rtl), tl!(label), regular(13.0), egui::Color32::WHITE);
+                        if resp.clicked() {
+                            if id == "discord" {
+                                let _ = app.run("ui.discord", json!({}));
+                            } else {
+                                app.dialog = crate::dialogs::Dialog::open("about", app);
+                            }
+                        }
+                    }
+                });
             });
         });
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(0, 30))).show(ui, |ui| {
+        // The side padding sits inside the pages, so the scroll area reaches the window's edge.
+        let pad = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 0));
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if app.ui.backstage_page == "print" {
-            crate::rtl::root(ui, |ui| export_page(app, ui));
+            pad.show(ui, |ui| crate::rtl::root(ui, |ui| export_page(app, ui)));
             return;
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
-                "home" => home_page(app, ui),
-                "new" => new_page(app, ui),
-                "open" => open_page(app, ui),
-                "saveAs" => save_as_page(app, ui),
-                "info" => info_page(app, ui),
-                "recover" => recovery_page(app, ui),
-                "print" | "export" => export_page(app, ui),
-                "options" => crate::options::page(app, ui),
-                _ => home_page(app, ui),
+        // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
+        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+            pad.show(ui, |ui| {
+                crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
+                    "home" => home_page(app, ui),
+                    "new" => new_page(app, ui),
+                    "open" => open_page(app, ui),
+                    "saveAs" => save_as_page(app, ui),
+                    "info" => info_page(app, ui),
+                    "recover" => recovery_page(app, ui),
+                    "print" | "export" => export_page(app, ui),
+                    "options" => crate::options::page(app, ui),
+                    _ => home_page(app, ui),
+                })
             })
         });
     });
@@ -304,7 +341,9 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         let galley = ui.painter().layout_no_wrap(caption.to_string(), regular(12.5), ui.visuals().text_color());
         let (tile, resp) = ui.allocate_exact_size(vec2(galley.size().x.max(150.0), 194.0 + galley.size().y), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), caption));
-        let r = Rect::from_min_size(tile.min, vec2(150.0, 194.0));
+        let flows = crate::rtl::flows(ui);
+        let r_min_x = if flows { tile.max.x - 150.0 } else { tile.min.x };
+        let r = Rect::from_min_size(pos2(r_min_x, tile.min.y), vec2(150.0, 194.0));
         ui.painter().rect(
             r,
             2.0,
@@ -335,7 +374,8 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         if let Some(h) = tex {
             ui.painter().image(h.id(), r.shrink(1.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
-        ui.painter().galley(pos2(r.min.x, r.max.y), galley, ui.visuals().text_color());
+        let x = if flows { r.max.x - galley.size().x } else { r.min.x };
+        ui.painter().galley(pos2(x, r.max.y), galley, ui.visuals().text_color());
         if resp.clicked() {
             let _ = app.run("file.new", json!({"template": template}));
             app.ui.backstage = false;
@@ -366,7 +406,7 @@ fn matching_templates(query: &str) -> Vec<(&'static str, &'static str)> {
 /// Home: a greeting, Blank plus a short row of templates with a link to New, then Recent.
 fn home_page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let hour = wordcraft_engine::cmd::now_iso().get(11..13).and_then(|h| h.parse::<u32>().ok()).unwrap_or(9);
+    let hour = wordcraft_engine::cmd::local_now().3.0;
     heading(
         ui,
         if hour < 12 {
@@ -576,6 +616,28 @@ fn personal_error_id() -> egui::Id {
     egui::Id::unique("backstage_personal_error")
 }
 
+/// How the × of a recent row is drawn (#2716): not at all while nothing is hovered, dimmed while
+/// the row is, and with the stronger fill only when the pointer is on the × itself.
+#[derive(Debug, PartialEq, Eq)]
+enum RemoveCue {
+    Hidden,
+    Dim,
+    Strong,
+}
+
+fn remove_cue(row_active: bool, x_active: bool) -> RemoveCue {
+    if x_active {
+        RemoveCue::Strong
+    } else if row_active {
+        RemoveCue::Dim
+    } else {
+        RemoveCue::Hidden
+    }
+}
+
+/// Width of the × that sits at the trailing end of a recent row (#2716).
+const REMOVE_W: f32 = 28.0;
+
 /// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
 /// stores an open failure in this page's temporary state.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
@@ -593,14 +655,27 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let shown = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>();
     let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
     let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
+    let (mut focused, mut hovered) = (None, None);
+    use egui::epaint::text::TextDirection;
     for (p, name) in shown.iter().zip(&names) {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
-        // The row shows a name and a path that may not fit: the path in full is its tooltip.
-        let resp = resp.on_hover_text(crate::i18n::isolate_path(p));
+        // #2716: each row carries its own Remove, as Word's context menu does. The × is a button
+        // of its own at the trailing end, so it never opens the document; clicking the rest of the
+        // row opens it as before.
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0) - REMOVE_W, 40.0), Sense::click());
         // Two documents with the same file name are told apart by their path, as on screen.
-        let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
+        let twin = names.iter().filter(|n| *n == name).count() > 1;
+        let spoken = if twin { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
+        // Only one row shows its path as a tooltip, so every row gives a screen reader the path
+        // itself, unless its label already says it.
+        if !twin {
+            ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(crate::i18n::isolate_path(p)));
+        }
+        if resp.has_focus() {
+            focused = Some((resp.clone(), p));
+        }
         if resp.hovered() {
+            hovered = Some((resp.clone(), p));
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
         // Names and paths are set apart (a right-to-left line would scramble their marks and
@@ -614,12 +689,89 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
             t.accent,
         );
         let side = crate::rtl::lead_center(rtl);
-        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 13.0), side, crate::i18n::isolate(name), medium(13.0), t.text);
-        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, crate::i18n::isolate_path(p), regular(11.0), t.text_dim);
+        // A wide row on Home can push the row past the visible area at small window sizes, so the
+        // text stops at the visible edge and its ellipsis stays in view. Only its far end does: it
+        // starts at the row's start, in view or not.
+        let clip = ui.clip_rect();
+        let room = if rtl { r.max.x - r.min.x.max(clip.min.x) } else { r.max.x.min(clip.max.x) - r.min.x };
+        let text_w = (room - 48.0).max(0.0);
+        let fit = |text: String, direction: TextDirection, font: egui::FontId, color: egui::Color32, y: f32| {
+            let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+            job.direction = direction;
+            job.wrap = egui::text::TextWrapping::truncate_at_width(text_w);
+            let g = ui.painter().layout_job(job);
+            let at = side.anchor_size(pos2(crate::rtl::lead_x(rtl, r, 40.0), y), g.size()).min;
+            ui.painter().galley(at, g, color);
+        };
+        // An isolate hides a right-to-left name's direction from its line, which would put the
+        // ellipsis beside the name's first letters.
+        let direction = if wordcraft_doc::bidi::first_strong_is_rtl(name) { TextDirection::RightToLeft } else { TextDirection::Auto };
+        fit(crate::i18n::isolate(name), direction, medium(13.0), t.text, r.min.y + 13.0);
+        fit(crate::i18n::isolate_path(p), TextDirection::Auto, regular(11.0), t.text_dim, r.min.y + 29.0);
+        let xr = Rect::from_min_max(pos2(r.max.x + 2.0, r.min.y + 4.0), pos2(r.max.x + REMOVE_W, r.max.y - 4.0));
+        // Right-to-left: the × sits on the left, past the row's trailing edge.
+        let xr = if rtl { xr.translate(vec2(-(r.width() + REMOVE_W + 2.0), 0.0)) } else { xr };
+        let xresp = ui.interact(xr, ui.scope_id().with(("recent-remove", &p)), Sense::click());
+        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Remove from list")));
+        // The × shows (dimmed) as soon as the row or the × is hovered or focused, so the Remove can
+        // be found; only the × itself gets the stronger fill and full-strength glyph.
+        match remove_cue(resp.hovered() || resp.has_focus(), xresp.hovered() || xresp.has_focus()) {
+            RemoveCue::Hidden => {}
+            RemoveCue::Dim => {
+                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text_dim);
+            }
+            RemoveCue::Strong => {
+                ui.painter().rect_filled(xr, 4.0, t.hover);
+                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text);
+            }
+        }
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
         }
+        if xresp.clicked() {
+            let _ = app.run("ui.recentRemove", json!({"path": p}));
+        }
+    }
+    if app.ui.recent.iter().take(app.ui.recent_shown()).next().is_some()
+        && ui.add(egui::Button::new(egui::RichText::new(tl!("Clear all")).font(medium(13.0)))).clicked()
+    {
+        let _ = app.run("ui.recentClear", json!({}));
+    }
+    // A row shows a name and a path that may not fit: the path in full is its tooltip, for the
+    // hovered row or, after a key press, the focused one. egui shows one tooltip per layer, so
+    // only one of them is drawn, and the focus tooltip lets the pointer through to the rows below.
+    let keyboard = recent_keyboard_last(ui);
+    match (focused, hovered) {
+        (Some((resp, p)), hovered) if keyboard || hovered.is_none() => {
+            egui::Tooltip::for_widget(&resp).show(|ui| ui.label(crate::i18n::isolate_path(p)));
+        }
+        (_, Some((resp, p))) => {
+            resp.on_hover_text(crate::i18n::isolate_path(p));
+        }
+        _ => {}
+    }
+}
+
+/// Was a key pressed more recently than the pointer moved? Kept across passes, so a focused
+/// Recent row keeps its tooltip while the pointer rests on another row.
+fn recent_keyboard_last(ui: &Ui) -> bool {
+    let id = egui::Id::unique("backstage_recent_keyboard_last");
+    let now = ui.input(|i| {
+        if i.pointer.delta() != egui::Vec2::ZERO {
+            Some(false)
+        } else if i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })) {
+            Some(true)
+        } else {
+            None
+        }
+    });
+    match now {
+        Some(keyboard) => {
+            ui.ctx().data_mut(|d| d.insert_temp(id, keyboard));
+            keyboard
+        }
+        None => ui.ctx().data(|d| d.get_temp(id)).unwrap_or(false),
     }
 }
 
@@ -688,6 +840,11 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
     }
     if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
         app.save_as_dialog();
+    }
+    // Linux and the BSDs (#3535): WordCraft's own browser when the system dialog doesn't appear.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    if ui.button(egui::RichText::new(tl!("Browse in WordCraft…")).font(medium(14.0))).clicked() {
+        let _ = app.run("ui.fileBrowser", json!({"purpose": "save"}));
     }
     // A Word template in the user templates folder, which File › New lists under Personal (#2852).
     ui.add_space(8.0);

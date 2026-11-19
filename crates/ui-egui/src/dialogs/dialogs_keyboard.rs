@@ -234,8 +234,9 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
             }
         });
         crate::rtl::vertical(ui, |ui| {
-            ui.label(tl!("New shortcut:"));
-            close = capture(ui, f);
+            let label = tl!("New shortcut:");
+            ui.label(label);
+            close = capture(ui, f, label);
             ui.add_space(4.0);
             if !f.pressed.is_empty() {
                 let owner = match app.session.keymap.resolve(&reg, &f.pressed) {
@@ -291,7 +292,7 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
 
 /// The "New shortcut" box: takes keyboard focus and records the combination pressed.
 /// True when plain Escape asks to close the dialog.
-fn capture(ui: &mut Ui, f: &mut KeyboardForm) -> bool {
+fn capture(ui: &mut Ui, f: &mut KeyboardForm, label: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(300.0, 26.0), Sense::click());
     // Keys belong to the box whenever nothing else in the dialog has focus, so a shortcut pressed
@@ -312,6 +313,8 @@ fn capture(ui: &mut Ui, f: &mut KeyboardForm) -> bool {
             f.pressed = k;
         }
     }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), label));
+    ui.ctx().accesskit_node_builder(resp.id, |node| node.set_value(key_text(&f.pressed)));
     let stroke = egui::Stroke::new(if focused { 1.5 } else { 1.0 }, if focused { t.accent } else { t.input_border });
     ui.painter().rect(rect, 2.0, t.input, stroke, egui::StrokeKind::Inside);
     let (text, color) = if f.pressed.is_empty() { (tl!("Press a key combination").to_string(), t.text_dim) } else { (key_text(&f.pressed), t.text) };
@@ -414,6 +417,22 @@ mod tests {
             h.step();
         }
         h
+    }
+
+    /// The shortcut capture field has a name and reports the combination it records.
+    #[test]
+    fn shortcut_capture_exposes_its_name_and_current_value() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness("", Some("format.bold"));
+        let input = h.get_by_role_and_label(Role::TextInput, "New shortcut:");
+        assert_eq!(input.value().as_deref(), Some(""));
+        input.focus();
+        h.run_steps(2);
+        h.key_press(egui::Key::F6);
+        h.run_steps(2);
+        assert_eq!(h.state().1.pressed, "F6");
+        assert_eq!(h.get_by_role_and_label(Role::TextInput, "New shortcut:").value().as_deref(), Some("F6"));
     }
 
     type KbHarness<'a> = egui_kittest::Harness<'a, (WordApp, super::KeyboardForm)>;

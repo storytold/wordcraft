@@ -91,6 +91,113 @@ fn status_bar_controls_hold_still_across_zoom_levels() {
     }
 }
 
+/// #2797: the count line's wording per unit — words (the default), characters with spaces,
+/// characters without spaces — whole document or "selected of total".
+#[test]
+fn the_count_line_words_each_unit() {
+    for (unit, total, selected, expected) in [
+        (StatusCount::Words, 12, None, "12 words"),
+        (StatusCount::Words, 12, Some(3), "3 of 12 words"),
+        (StatusCount::Characters, 23, None, "23 characters"),
+        (StatusCount::Characters, 23, Some(6), "6 of 23 characters"),
+        (StatusCount::CharactersNoSpaces, 21, None, "21 characters (no spaces)"),
+        (StatusCount::CharactersNoSpaces, 21, Some(6), "6 of 21 characters (no spaces)"),
+    ] {
+        assert_eq!(status_count_text(unit, total, selected), expected, "{unit:?} with {selected:?} selected");
+    }
+}
+
+/// #2797: the status bar's totals are the Word Count dialog's numbers (words, characters with
+/// spaces, characters without spaces), and its selection line counts the selection the same way.
+#[test]
+fn the_status_bar_totals_are_the_word_count_dialogs_numbers() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Hello world.\nSecond line"})).unwrap();
+    // Straight from the engine: `a.run` would only open the Word Count dialog (#240).
+    let stats = a.session.run("review.wordCount", &json!({})).unwrap();
+    let counts = a.cached_status_counts();
+    assert_eq!(counts.words, stats["words"].as_u64().unwrap_or_default() as usize, "words, as the dialog counts them");
+    assert_eq!(counts.chars, stats["charactersWithSpaces"].as_u64().unwrap_or_default() as usize, "characters with spaces");
+    assert_eq!(counts.chars_no_spaces, stats["characters"].as_u64().unwrap_or_default() as usize, "characters without spaces");
+    // "world." selected: its own count of the chosen unit over the document's total.
+    a.run("select.text", json!({"text": "world."})).unwrap();
+    let line = |unit: StatusCount| {
+        let selected = crate::count_in_unit(&a.session.selected_text(), unit);
+        status_count_text(unit, counts.in_unit(unit), Some(selected))
+    };
+    assert_eq!(line(StatusCount::Words), "1 of 4 words");
+    assert_eq!(line(StatusCount::Characters), "6 of 23 characters");
+    assert_eq!(line(StatusCount::CharactersNoSpaces), "6 of 21 characters (no spaces)");
+}
+
+/// #2797: the status bar draws the unit the person chose, and right-clicking the count offers
+/// the three units, the choice taking effect at once and kept between runs.
+#[test]
+fn the_status_bar_count_is_chosen_from_its_context_menu() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Hello world.\nSecond line"})).unwrap();
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let mut n = 0;
+    // What the status bar drew last frame: each widget's label and where it sits.
+    let drawn = |a: &mut WordApp, n: &mut u32, events: Vec<egui::Event>| -> Vec<(String, egui::Rect)> {
+        *n += 1;
+        let input = egui::RawInput {
+            time: Some(f64::from(*n) / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| status_bar(a, ui));
+        out.textures_delta.clear();
+        let update = out.platform_output.accesskit_update.take().unwrap();
+        update
+            .nodes
+            .into_iter()
+            .filter_map(|(_, node)| {
+                let b = node.bounds()?;
+                Some((node.label()?.to_string(), egui::Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32))))
+            })
+            .collect()
+    };
+    let at =
+        |seen: &[(String, egui::Rect)], label: &str| seen.iter().find(|(l, _)| l == label).unwrap_or_else(|| panic!("{label} is drawn")).1.center();
+    let button = |at: egui::Pos2, button: egui::PointerButton, pressed: bool| egui::Event::PointerButton {
+        pos: at,
+        button,
+        pressed,
+        modifiers: Default::default(),
+    };
+    // Words are counted: the default unit.
+    let mut seen = drawn(&mut a, &mut n, vec![]);
+    assert!(seen.iter().any(|(l, _)| l == "4 words"), "{seen:?}");
+    // Right-click the count: the menu lists the three units.
+    let count = at(&seen, "4 words");
+    drawn(&mut a, &mut n, vec![egui::Event::PointerMoved(count), button(count, egui::PointerButton::Secondary, true)]);
+    drawn(&mut a, &mut n, vec![button(count, egui::PointerButton::Secondary, false)]);
+    seen = drawn(&mut a, &mut n, vec![]);
+    for label in ["Words", "Characters (with spaces)", "Characters (no spaces)"] {
+        assert!(seen.iter().any(|(l, _)| l == label), "the menu lists {label}: {seen:?}");
+    }
+    // Pick characters with spaces: the count changes at once, with no document change.
+    let pick = at(&seen, "Characters (with spaces)");
+    drawn(&mut a, &mut n, vec![egui::Event::PointerMoved(pick), button(pick, egui::PointerButton::Primary, true)]);
+    drawn(&mut a, &mut n, vec![button(pick, egui::PointerButton::Primary, false)]);
+    assert_eq!(a.ui.status_count, StatusCount::Characters, "the menu's choice is taken");
+    assert_eq!(a.run("ui.statusCount", json!({})).unwrap()["statusCount"], "characters", "and answered to scripts");
+    seen = drawn(&mut a, &mut n, vec![]);
+    assert!(seen.iter().any(|(l, _)| l == "23 characters"), "{seen:?}");
+    // With a selection: "selected of total".
+    a.run("select.text", json!({"text": "world."})).unwrap();
+    seen = drawn(&mut a, &mut n, vec![]);
+    assert!(seen.iter().any(|(l, _)| l == "6 of 23 characters"), "{seen:?}");
+    // The choice comes back after a restart.
+    let mut b = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    b.apply_prefs(crate::UiState::from_json(&saved).unwrap());
+    assert_eq!(b.ui.status_count, StatusCount::Characters, "kept between runs");
+}
+
 /// #2402: a long message (the path of a file that isn't there) is shortened so that it stops
 /// before the controls on the right, instead of being drawn over the Focus button.
 #[test]
@@ -308,6 +415,98 @@ fn clicking_the_autosave_label_toggles_autosave() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn the_font_box_warns_where_the_status_bar_does_and_before_typing() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let missing = "Wordcraft Nowhere Face";
+    // An empty paragraph in a missing font: no letters show it yet, still worth a warning.
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": missing})).unwrap();
+    assert!(a.font_box_warning(missing).is_some(), "an empty paragraph warns");
+    // Text in it: the status bar's list decides.
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    let l = a.session.layout();
+    let (list, _) = a.cached_missing_fonts(&l);
+    assert!(list.iter().any(|f| f.font == missing), "{list:?}");
+    assert!(a.font_box_warning(missing).is_some());
+    // A missing font just picked at the end of text in an installed one: the next letter will be
+    // drawn in a substitute, so the box warns before it is typed.
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "JetBrains Mono"})).unwrap();
+    a.session.run("caret.docEnd", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "Wordcraft Just Picked"})).unwrap();
+    assert!(a.font_box_warning("Wordcraft Just Picked").is_some(), "picked at the caret");
+    // Over a selection the box shows the selected text's font, which the list decides.
+    a.session.run("select.all", &json!({})).unwrap();
+    assert!(a.font_box_warning("Wordcraft Half Typed").is_none());
+}
+
+#[test]
+fn the_east_asian_font_box_names_the_face_its_text_is_drawn_in() {
+    // MS Mincho is roman in many font tables; the run's font is drawn in Cambria then, but CJK
+    // text never is: it goes to the run's font or a fallback face.
+    let mincho = "Wordcraft Mincho Gone";
+    let mut doc = wordcraft_doc::Document::new();
+    doc.settings.roman_fonts = vec![mincho.into()];
+    let mut a = WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
+    let want = wordcraft_engine::cmd::font::east_asian_shown_as(&a.session.doc, mincho, "JetBrains Mono");
+    assert!(want.is_some(), "not installed");
+    assert_eq!(a.east_asian_font_box_warning(mincho, "JetBrains Mono"), want, "an empty paragraph warns");
+}
+
+#[test]
+fn a_screen_reader_hears_the_font_box_warning() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "Wordcraft Nowhere Face"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let described = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .filter_map(|n| n.accesskit_node().description())
+        .any(|d| d.contains("Wordcraft Nowhere Face") && d.contains("isn't installed"));
+    assert!(described, "the font box describes its warning");
+}
+
+#[test]
+fn the_font_dialog_warns_for_a_missing_font_over_a_selection() {
+    // Selected Latin text: no East Asian text shows the Asian font, and none shows a font just
+    // typed into the dialog, so the list has neither; OK would apply them all the same.
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "JetBrains Mono"})).unwrap();
+    assert!(a.east_asian_font_box_warning("Wordcraft Mincho Gone", "JetBrains Mono").is_some(), "the Asian box");
+    assert!(a.font_dialog_warning("Wordcraft Dialog Gone").is_some(), "the Latin box");
+    assert!(a.font_dialog_warning("JetBrains Mono").is_none(), "an installed font");
+    // The ribbon's box over the selection shows the selected text's font: the list decides.
+    assert!(a.font_box_warning("Wordcraft Dialog Gone").is_none());
+}
+
+#[test]
+fn the_asian_box_names_the_face_cjk_text_gets_even_for_a_font_latin_text_uses() {
+    // The status bar lists the font with the face its Latin text is drawn in; Chinese, Japanese
+    // and Korean text in it would go to the Latin text font or a fallback face instead.
+    let gone = "Wordcraft Both Ways Gone";
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": gone})).unwrap();
+    assert!(a.font_box_warning(gone).is_some(), "listed for its Latin text");
+    let want = wordcraft_engine::cmd::font::east_asian_shown_as(&a.session.doc, gone, "JetBrains Mono");
+    assert!(want.is_some());
+    assert_eq!(a.east_asian_font_box_warning(gone, "JetBrains Mono"), want);
+}
+
 /// The AutoSave knob is at the right when the switch is on and at the left when it is off; a
 /// right-to-left interface mirrors that.
 #[test]
@@ -317,4 +516,333 @@ fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
     assert_eq!(autosave_knob_x(false, false, track), 108.0, "left to right, off: left");
     assert_eq!(autosave_knob_x(true, true, track), 108.0, "right to left, on: left");
     assert_eq!(autosave_knob_x(true, false, track), 122.0, "right to left, off: right");
+}
+
+/// #5886: in a narrow window the title bar's search box gives up width first, then Discord its
+/// label, then the search box its text; a wide window keeps them as they were.
+#[test]
+fn the_title_bar_controls_fit_a_narrow_window() {
+    let fit = |room| TitleBarFit::new(room, true, 26.0);
+    assert_eq!(fit(1000.0), TitleBarFit { search: 260.0, discord_label: true });
+    assert_eq!(fit(300.0), TitleBarFit { search: 208.0, discord_label: true });
+    assert_eq!(fit(200.0), TitleBarFit { search: 170.0, discord_label: false });
+    assert_eq!(fit(120.0), TitleBarFit { search: 26.0, discord_label: false });
+    assert_eq!(TitleBarFit::new(200.0, false, 26.0).search, 200.0, "without Discord the search box has its room");
+}
+
+/// The labelled controls drawn by `draw` in a window `width` wide at `scale`: (label, left, right).
+fn labelled_scaled(a: &mut WordApp, width: f32, scale: f32, draw: fn(&mut WordApp, &mut Ui)) -> Vec<(String, f64, f64)> {
+    let ctx = ctx();
+    if (scale - 1.0).abs() > 0.001 {
+        ctx.set_zoom_factor(scale);
+    }
+    ctx.enable_accesskit();
+    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 700.0))), ..Default::default() };
+    let mut out1 = ctx.run_ui(input.clone(), |ui| draw(a, ui));
+    out1.textures_delta.clear();
+    let mut out = ctx.run_ui(input, |ui| draw(a, ui));
+    out.textures_delta.clear();
+    let update = out.platform_output.accesskit_update.take().unwrap();
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| Some((node.label()?.to_string(), node.bounds()?)))
+        .filter(|(_, b)| b.width() > 0.0)
+        .map(|(l, b)| (l, b.x0, b.x1))
+        .collect()
+}
+
+/// The text strings painted by `draw` in a window `width` wide after settling controls width.
+fn painted_texts(a: &mut WordApp, width: f32, draw: fn(&mut WordApp, &mut Ui)) -> Vec<String> {
+    /// Recursively collects painted text strings from egui shapes.
+    fn extract(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => {
+                for s in v {
+                    extract(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let ctx = ctx();
+    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 700.0))), ..Default::default() };
+    let mut out1 = ctx.run_ui(input.clone(), |ui| draw(a, ui));
+    out1.textures_delta.clear();
+    let mut out = ctx.run_ui(input, |ui| draw(a, ui));
+    out.textures_delta.clear();
+    let mut texts = Vec::new();
+    for clipped in &out.shapes {
+        extract(&clipped.shape, &mut texts);
+    }
+    texts
+}
+
+/// #5886: down to the new minimum width the title bar's controls don't overlap: the search box
+/// narrows instead of covering the Quick Access Toolbar. Parametrized at the exact 600 pt minimum,
+/// half-screen split widths (640 pt at 150% scale, 683 pt), and across 1.0x and 1.5x scale factors.
+#[test]
+fn title_bar_controls_never_overlap_in_a_narrow_window() {
+    for scale in [1.0, 1.5] {
+        for width in [crate::window_geometry::MIN_SIZE.x, 640.0, 680.0, 760.0, 1440.0] {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            a.ui.show_discord = true;
+            let nodes = labelled_scaled(&mut a, width, scale, title_bar);
+            assert!(nodes.iter().any(|(l, ..)| l == "Search commands and help"), "{scale}x {width}: {nodes:?}");
+            for (i, (la, a0, a1)) in nodes.iter().enumerate() {
+                assert!(*a1 <= f64::from(width) + 0.5, "{scale}x {width}: {la} runs off the window");
+                for (lb, b0, b1) in nodes.iter().skip(i + 1) {
+                    assert!(a1 <= b0 || b1 <= a0, "{scale}x {width}: {la} ({a0}–{a1}) overlaps {lb} ({b0}–{b1})");
+                }
+            }
+        }
+    }
+}
+
+/// #5886 (review): when search is active in the title bar at narrow widths down to the minimum
+/// width (and at icon-only search widths), the active text editor stays within the fitted width
+/// without expanding or overlapping surrounding controls (Quick Access Toolbar or Discord).
+#[test]
+fn title_bar_controls_never_overlap_when_search_is_active_in_a_narrow_window() {
+    for scale in [1.0f32, 1.5f32] {
+        // Test narrow icon-only widths (e.g. 400 pt where TitleBarFit returns control_h) as well
+        // as the 600 pt split minimum and wider split widths.
+        for width in [400.0, 450.0, crate::window_geometry::MIN_SIZE.x, 640.0, 680.0, 760.0, 1440.0] {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            a.ui.show_discord = true;
+            let ctx = ctx();
+            if (scale - 1.0).abs() > 0.001 {
+                ctx.set_zoom_factor(scale);
+            }
+            ctx.enable_accesskit();
+            a.ctx = Some(ctx.clone());
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 700.0))), ..Default::default() };
+            // Frame 1: draw title bar to record search box presence.
+            let mut out1 = ctx.run_ui(input.clone(), |ui| title_bar(&mut a, ui));
+            out1.textures_delta.clear();
+            assert!(open_title_search(&mut a), "search opens in the title bar box");
+            // Frame 2: draw title bar with search active.
+            let mut out = ctx.run_ui(input, |ui| title_bar(&mut a, ui));
+            out.textures_delta.clear();
+            assert!(title_search_open(&a, &ctx), "search is active in frame 2");
+            let update = out.platform_output.accesskit_update.take().unwrap();
+            let nodes: Vec<(String, f64, f64)> = update
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| Some((node.label()?.to_string(), node.bounds()?)))
+                .filter(|(_, b)| b.width() > 0.0)
+                .map(|(l, b)| (l, b.x0, b.x1))
+                .collect();
+            assert!(nodes.iter().any(|(l, ..)| l == "Search commands and help"), "{scale}x {width}: {nodes:?}");
+            for (i, (la, a0, a1)) in nodes.iter().enumerate() {
+                assert!(*a1 <= f64::from(width) + 0.5, "{scale}x {width}: {la} runs off the window");
+                for (lb, b0, b1) in nodes.iter().skip(i + 1) {
+                    assert!(a1 <= b0 || b1 <= a0, "{scale}x {width}: active search {la} ({a0}–{a1}) overlaps {lb} ({b0}–{b1})");
+                }
+            }
+        }
+    }
+}
+
+/// #5886: the status bar's texts stop before its controls on the right; in a narrow window the
+/// ones that don't fit are left out or shortened instead of being drawn over Focus, the views and the zoom.
+/// Parametrized across exact 600 pt minimum, split widths, and 1.0x and 1.5x scale factors.
+#[test]
+fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
+    let controls = ["Focus", "Read Mode", "Print Layout", "Web Layout", "Zoom Out", "Zoom", "Zoom In"];
+    for scale in [1.0, 1.5] {
+        for width in [crate::window_geometry::MIN_SIZE.x, 640.0, 680.0, 760.0, 1440.0] {
+            let mut a =
+                WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Several words here")), crate::Services::default());
+            a.run("review.trackChanges", json!({"value": true})).unwrap();
+            a.run("select.all", json!({})).unwrap();
+            let nodes = labelled_scaled(&mut a, width, scale, status_bar);
+            let focus = nodes.iter().find(|(l, ..)| l == "Focus").unwrap_or_else(|| panic!("{scale}x {width}: Focus is drawn")).1;
+            assert!(nodes.iter().any(|(l, ..)| l == "Page 1 of 1"), "{scale}x {width}: the page is always shown: {nodes:?}");
+            for (label, _, right) in nodes.iter().filter(|(l, ..)| !controls.contains(&l.as_str()) && !l.ends_with('%')) {
+                assert!(*right <= focus, "{scale}x {width}: {label} ends at {right}, past the controls at {focus}");
+            }
+            if width >= 1000.0 && scale <= 1.0 {
+                assert!(nodes.iter().any(|(l, ..)| l == "Track Changes: On"), "a wide window shows everything: {nodes:?}");
+            }
+        }
+    }
+}
+
+/// #5886: when a language label is too long to fit before the status bar controls in a narrow
+/// window, it falls back to "…" while preserving clickability to open the language menu,
+/// and its tooltip and accessibility label retain the full language name.
+#[test]
+fn status_bar_language_falls_back_to_ellipsis_in_a_narrow_window() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Several words here")), crate::Services::default());
+    a.run("review.trackChanges", json!({"value": true})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    std::sync::Arc::make_mut(&mut a.session.doc.styles).default_chr.lang = Some("en-US".into());
+
+    let narrow = painted_texts(&mut a, crate::window_geometry::MIN_SIZE.x, status_bar);
+    assert!(narrow.iter().any(|t| t == "…"), "narrow window paints ellipsis for language: {narrow:?}");
+    assert!(!narrow.iter().any(|t| t == "English (United States)"), "narrow window does not paint full language name: {narrow:?}");
+
+    let wide = painted_texts(&mut a, 1440.0, status_bar);
+    assert!(wide.iter().any(|t| t == "English (United States)"), "wide window paints full language name: {wide:?}");
+    assert!(!wide.iter().any(|t| t == "…"), "wide window does not paint ellipsis: {wide:?}");
+
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let mut n = 0;
+    let mut drawn = |a: &mut WordApp, events: Vec<egui::Event>| -> Vec<(String, egui::Rect)> {
+        n += 1;
+        let input = egui::RawInput {
+            time: Some(f64::from(n) / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(crate::window_geometry::MIN_SIZE.x, 700.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| status_bar(a, ui));
+        out.textures_delta.clear();
+        let update = out.platform_output.accesskit_update.take().unwrap();
+        update
+            .nodes
+            .into_iter()
+            .filter_map(|(_, node)| {
+                let b = node.bounds()?;
+                Some((node.label()?.to_string(), egui::Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32))))
+            })
+            .collect()
+    };
+
+    // Frame 1: Accessibility label retains the full language name.
+    let seen = drawn(&mut a, vec![]);
+    let lang_node = seen.iter().find(|(l, _)| l == "English (United States)");
+    assert!(lang_node.is_some(), "narrow window maintains full language name in accessibility label: {seen:?}");
+    let lang_at = lang_node.unwrap().1.center();
+
+    // Hover over the button: tooltip contains the full language name.
+    let hovered = drawn(&mut a, vec![egui::Event::PointerMoved(lang_at)]);
+    assert!(
+        hovered.iter().any(|(l, _)| l.contains("English (United States)")),
+        "hovering the ellipsized language button shows tooltip with the full language name: {hovered:?}"
+    );
+
+    // Click the button: the menu opens with proofing options.
+    let click_down = egui::Event::PointerButton { pos: lang_at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() };
+    let click_up = egui::Event::PointerButton { pos: lang_at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() };
+    drawn(&mut a, vec![click_down]);
+    drawn(&mut a, vec![click_up]);
+    let clicked = drawn(&mut a, vec![]);
+    assert!(
+        clicked.iter().any(|(l, _)| l == "Set Proofing Language…"),
+        "clicking the ellipsized language button opens the language menu: {clicked:?}"
+    );
+}
+
+/// #5886: each native window has its own cached status bar controls width in egui's temporary data,
+/// so drawing multiple windows with different widths does not overwrite each other or trigger
+/// `request_discard` redraw loops.
+#[test]
+fn status_bar_controls_width_cache_is_per_window_and_avoids_discard_loops() {
+    let ctx = ctx();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+
+    let win1 = a.windows.shown();
+    a.new_window();
+    let win2 = a.windows.shown();
+    assert_ne!(win1, win2, "two distinct windows open");
+
+    let id2 = a.window_id("status_controls_width");
+    assert!(a.enter_window(win1));
+    let id1 = a.window_id("status_controls_width");
+    assert_ne!(id1, id2, "per-window cache keys are distinct");
+
+    // Frame 1: Window 1 at 600 pt (narrow), Window 2 at 1200 pt (wide).
+    // The first pass populates each window's cache.
+    assert!(a.enter_window(win1));
+    ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 700.0))), ..Default::default() }, |ui| {
+        status_bar(&mut a, ui);
+    })
+    .drop_without_applying_deltas();
+
+    assert!(a.enter_window(win2));
+    ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 700.0))), ..Default::default() }, |ui| {
+        status_bar(&mut a, ui);
+    })
+    .drop_without_applying_deltas();
+
+    let cached1: Option<f32> = ctx.data(|d| d.get_temp(id1));
+    let cached2: Option<f32> = ctx.data(|d| d.get_temp(id2));
+    assert!(cached1.is_some(), "window 1 controls width is cached");
+    assert!(cached2.is_some(), "window 2 controls width is cached");
+
+    // Frame 2 and subsequent frames: rendering both windows alternating does NOT trigger discard loops.
+    // Each run_ui must complete in exactly 1 pass (0 discards requested).
+    for frame in 2..=4 {
+        assert!(a.enter_window(win1));
+        let mut passes1 = 0;
+        ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 700.0))), ..Default::default() },
+            |ui| {
+                status_bar(&mut a, ui);
+                passes1 += 1;
+            },
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(passes1, 1, "frame {frame} window 1 settled without discard loop");
+
+        assert!(a.enter_window(win2));
+        let mut passes2 = 0;
+        ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 700.0))), ..Default::default() },
+            |ui| {
+                status_bar(&mut a, ui);
+                passes2 += 1;
+            },
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(passes2, 1, "frame {frame} window 2 settled without discard loop");
+    }
+
+    // Both window caches remain intact and separate.
+    assert_eq!(ctx.data(|d| d.get_temp(id1)), cached1);
+    assert_eq!(ctx.data(|d| d.get_temp(id2)), cached2);
+}
+
+/// #5886: when rendering the first pass with an empty cache and max_passes = 1 (where egui declines
+/// request_discard), status bar texts never overlap the right-hand controls across narrow window widths.
+#[test]
+fn status_bar_texts_never_overlap_controls_on_cache_miss_with_single_pass() {
+    let controls = ["Focus", "Read Mode", "Print Layout", "Web Layout", "Zoom Out", "Zoom", "Zoom In"];
+    for scale in [1.0f32, 1.5f32] {
+        for width in [crate::window_geometry::MIN_SIZE.x, 640.0, 680.0, 760.0, 1440.0] {
+            let mut a =
+                WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Several words here")), crate::Services::default());
+            a.run("review.trackChanges", json!({"value": true})).unwrap();
+            a.run("select.all", json!({})).unwrap();
+
+            let ctx = ctx();
+            if (scale - 1.0f32).abs() > 0.001 {
+                ctx.set_zoom_factor(scale);
+            }
+            ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::new(1).unwrap());
+            ctx.enable_accesskit();
+
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 700.0))), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| status_bar(&mut a, ui));
+            out.textures_delta.clear();
+            let update = out.platform_output.accesskit_update.take().unwrap();
+            let nodes: Vec<(String, f64, f64)> = update
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| Some((node.label()?.to_string(), node.bounds()?)))
+                .filter(|(_, b)| b.width() > 0.0)
+                .map(|(l, b)| (l, b.x0, b.x1))
+                .collect();
+
+            let focus = nodes.iter().find(|(l, ..)| l == "Focus").unwrap_or_else(|| panic!("{scale}x {width}: Focus is drawn")).1;
+            assert!(nodes.iter().any(|(l, ..)| l == "Page 1 of 1"), "{scale}x {width}: the page is always shown: {nodes:?}");
+            for (label, _, right) in nodes.iter().filter(|(l, ..)| !controls.contains(&l.as_str()) && !l.ends_with('%')) {
+                assert!(*right <= focus, "{scale}x {width} (pass 1): {label} ends at {right}, past the controls at {focus}");
+            }
+        }
+    }
 }
