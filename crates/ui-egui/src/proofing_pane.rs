@@ -199,6 +199,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
         let source = Suggestions(&suggestions);
         let listed = List::<usize>::new(tl!("Suggestions"))
             .row_menu()
+            // The pane scrolls, so the list takes its few rows' full height instead of owning a second scroll.
+            .natural_height(true)
             .show_items(ui, &source, &mut |key, _| ListRow::new(suggestions.get(*key).cloned().unwrap_or_default()));
         for event in &listed.events {
             match event {
@@ -422,7 +424,9 @@ mod tests {
     fn spelling_review_dialog_shows_completion_without_issues_and_close_returns_to_document() {
         let mut h = harness("The quick brown fox.");
         assert!(form(h.state()).done());
-        assert!(h.query_by_label("The spelling and grammar check is complete.").is_some(), "the completion notice shows");
+        // A notice is named by its text on more than one node (the notice and its message), so ask for any.
+        let notice = egui_kittest::kittest::By::new().label("The spelling and grammar check is complete.");
+        assert!(h.query_all(notice).next().is_some(), "the completion notice shows");
         h.get_by_label("Close").click();
         h.run_steps(2);
         assert!(h.state().spelling_review.is_none());

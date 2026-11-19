@@ -12,7 +12,7 @@ use craft::ui::display::{Elide, Shade, Text};
 use craft::ui::layout_components::Row;
 use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, PreferencesState, RowKind, RowSpec};
-use craft::ui::runtime::env::{Env, LengthUnits, UnitKind, Units};
+use craft::ui::runtime::env::{LengthUnits, UnitKind, Units};
 use craft::ui::runtime::memory::Remember;
 use craft::ui::runtime::windows::WindowHost;
 use craft::ui::style::TypeRole;
@@ -845,7 +845,9 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
     Text::new(tl!("Options")).role(TypeRole::Title).show(ui);
     let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-    let motion_full = Env::of(ui).motion.mode == MotionMode::Full;
+    // The page says what the system answered, so it reads the resolved choice: the env's own
+    // motion still holds `System` while that is followed.
+    let motion_full = app.resolved_root().motion == MotionMode::Full;
     // The page list is the state's; a command that set `options_pane` since the last pass wins.
     // PLAN: assumed field `options_state: PreferencesState` on WordApp (app-hub)
     let mut state = std::mem::take(&mut app.options_state);

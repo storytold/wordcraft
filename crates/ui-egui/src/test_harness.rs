@@ -22,6 +22,17 @@ pub(crate) fn builder<S>() -> HarnessBuilder<S> {
     builder_with(craft::ui::testing::install_spec)
 }
 
+/// `n` frames of `h`, each given the input the app hands the runtime (`WordApp::frame_input`):
+/// the commands the controls fired in one frame run before the next. kittest's own `run_steps`
+/// skips that hand-over, so a clicked button or menu row would never run its command.
+pub(crate) fn frames(h: &mut egui_kittest::Harness<'_, crate::WordApp>, n: usize) {
+    for _ in 0..n {
+        let ctx = h.ctx.clone();
+        craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
+        h.step();
+    }
+}
+
 /// Like [`builder`], with the install spec `spec` makes (called when the context is set up).
 pub(crate) fn builder_with<S>(spec: impl FnOnce() -> InstallSpec + 'static) -> HarnessBuilder<S> {
     egui_kittest::Harness::builder().with_context_setup(move |ctx| {

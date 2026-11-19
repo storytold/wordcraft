@@ -358,12 +358,12 @@ fn the_canvas_caret_glides_after_a_key() {
         a,
     );
     for _ in 0..3 {
-        h.step();
+        crate::test_harness::frames(&mut h, 1);
     }
     assert!(drawn(&h).is_none(), "no animations: the glide stands down");
     h.state_mut().run("ui.animations", json!({"value": "on"})).unwrap();
     for _ in 0..30 {
-        h.step();
+        crate::test_harness::frames(&mut h, 1);
     }
     let near = |a: Bar, b: Bar| distance(a, b) < 0.01;
     let end = drawn(&h).expect("the focused canvas draws a caret");
@@ -372,12 +372,12 @@ fn the_canvas_caret_glides_after_a_key() {
     // (The canvas reads the key at the end of its frame; the caret sets off in the next.)
     h.event(key(egui::Key::Home));
     for _ in 0..3 {
-        h.step();
+        crate::test_harness::frames(&mut h, 1);
     }
     assert!(gliding(&h), "the caret is on its way");
     let x = drawn(&h).unwrap()[0].x;
     for _ in 0..20 {
-        h.step();
+        crate::test_harness::frames(&mut h, 1);
     }
     let start = drawn(&h).unwrap();
     assert!(!gliding(&h), "and comes to rest");
@@ -386,28 +386,28 @@ fn the_canvas_caret_glides_after_a_key() {
     assert!(x > start[0].x && x < end[0].x, "on the way it was drawn in between: {x}");
     // A command run by a script puts it there at once.
     h.state_mut().run("caret.docEnd", json!({})).unwrap();
-    h.step();
+    crate::test_harness::frames(&mut h, 1);
     assert!(!gliding(&h));
     assert!(near(drawn(&h).unwrap(), end), "back at the end of the text");
     // Zooming moves the caret on screen but doesn't glide it.
     h.state_mut().run("view.zoom", json!({"value": 150})).unwrap();
     for _ in 0..3 {
-        h.step();
+        crate::test_harness::frames(&mut h, 1);
         assert!(!gliding(&h));
     }
     assert!(!near(drawn(&h).unwrap(), end));
     // Turned off in Options: the caret jumps.
     h.state_mut().run("ui.caretAnimation", json!({"value": false})).unwrap();
-    h.step();
+    crate::test_harness::frames(&mut h, 1);
     assert!(drawn(&h).is_none(), "the animation stands down");
     h.event(key(egui::Key::Home));
     for _ in 0..3 {
-        h.step();
+        crate::test_harness::frames(&mut h, 1);
         assert!(!gliding(&h));
     }
     assert_eq!(h.state().session.sel.focus.off, 0, "Home still moved the caret");
     // And on again.
     h.state_mut().run("ui.caretAnimation", json!({"value": true})).unwrap();
-    h.step();
+    crate::test_harness::frames(&mut h, 1);
     assert!(drawn(&h).is_some());
 }

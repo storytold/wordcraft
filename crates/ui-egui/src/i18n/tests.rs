@@ -27,7 +27,10 @@ fn new_app(doc: wordcraft_doc::Document) -> crate::WordApp {
     crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default())
 }
 
+/// One frame as the shell gives it: the input the app hands the runtime first (it binds the
+/// interface language, `WordApp::frame_input`), then the frame's logic.
 fn frame(ctx: &egui::Context, app: &mut crate::WordApp) {
+    let _ = app.frame_input(craft::ui::runtime::frame::FrameOutput::default());
     ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
 }
 
@@ -243,6 +246,19 @@ fn every_shipped_translation_is_drawn_by_the_interface_fonts() {
     needs_catalogs!();
     for l in Lang::all().filter(|l| *l != Lang::EN) {
         let code = l.code();
+        // A Han language is drawn by its craft-fonts face alone; a build without that face (no
+        // `CRAFT_FONTS_DIR`, or a directory lacking it) has nothing to check, as in the caption test.
+        let face = match code {
+            "zh-hans" => Some("Hans"),
+            "zh-hant" => Some("Hant"),
+            "ja" => Some("Jpan"),
+            "ko" => Some("Kore"),
+            _ => None,
+        };
+        if let Some(script) = face.filter(|s| !crate::app::fonts::CRAFT_FONTS.iter().any(|f| f.has_script(s))) {
+            eprintln!("skipped {code}: no embedded {script} face (set CRAFT_FONTS_DIR)");
+            continue;
+        }
         let samples: Vec<Sample<'static>> = CRAFT_I18N
             .iter()
             .filter(|(c, ..)| *c == code)
