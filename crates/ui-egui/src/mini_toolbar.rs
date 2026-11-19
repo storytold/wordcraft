@@ -91,6 +91,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, body: &PageBody<'_>) {
         app.canvas.mini_dismissed = None;
     }
     if !app.ui.mini_toolbar || !visible(app) {
+        app.canvas.list_preview = None;
         if app.canvas.command_previewed.is_some() {
             ui.ctx().request_repaint();
         }
@@ -144,14 +145,14 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
         })
         .unwrap_or_default();
 
+    // A list's preview, started in an earlier frame, holds until its list ends it.
+    if preview && let Some(held) = app.canvas.list_preview.clone() {
+        app.canvas.command_preview = Some(held);
+    }
     ui.horizontal(|ui| {
         let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
         let picked = crate::widgets::font_box::font_box(ui, app, tl!("Font").to_string(), &mut family);
-        if let Preview::Shows(f) = &picked.preview
-            && preview
-        {
-            app.canvas.command_preview = Some(("format.font".to_string(), json!({"name": f})));
-        }
+        follow_list(app, preview, &picked.preview, |f| Some(("format.font".to_string(), json!({"name": f}))));
         if let Some(f) = &picked.picked {
             let _ = app.run("format.font", json!({"name": f}));
         }
@@ -161,12 +162,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
             wordcraft_engine::cmd::format::SIZES.iter().map(|s| Entry::new(number_text(f64::from(*s)), number_text(f64::from(*s)))).collect();
         let mut text = size.clone();
         let combo = ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut text), &sizes).show(ui);
-        if let Preview::Shows(v) = &combo.preview
-            && preview
-            && let Ok(x) = v.trim().parse::<f64>()
-        {
-            app.canvas.command_preview = Some(("format.size".to_string(), json!({"size": x})));
-        }
+        follow_list(app, preview, &combo.preview, |v| v.trim().parse::<f64>().ok().map(|x| ("format.size".to_string(), json!({"size": x}))));
         // Only a pick or Enter applies the size: typing alone is an edit of the box's draft.
         let committed = combo.edit.submitted || combo.edit.events.iter().any(|e| matches!(e, EditEvent::Set { .. } | EditEvent::Commit { .. }));
         if committed
@@ -194,12 +190,12 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
         let _ = Divider::vertical().show(ui);
 
         let hl = crate::colors::highlight_split(ui, app, tl!("Text Highlight Color").to_string());
-        if let Preview::Shows(c) = &hl.preview
-            && preview
-            && let Some(h) = wordcraft_doc::props::Highlight::ALL.iter().find(|h| h.rgb().as_ref() == Some(c))
-        {
-            app.canvas.command_preview = Some(("format.highlight".to_string(), json!({"color": h.ooxml()})));
-        }
+        follow_list(app, preview, &hl.preview, |c| {
+            wordcraft_doc::props::Highlight::ALL
+                .iter()
+                .find(|h| h.rgb().as_ref() == Some(c))
+                .map(|h| ("format.highlight".to_string(), json!({"color": h.ooxml()})))
+        });
         // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
         let color = app.canvas.last_highlight.clone();
         preview_on_hover(app, hl.hover, hl.response.enabled(), "format.highlight", json!({"color": color}), preview);
@@ -207,11 +203,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
             app.canvas.focus_page(ui.ctx());
         }
         let fc = crate::colors::font_color_split(ui, app, tl!("Font Color").to_string(), Target::cmd("format.color").remember(Remember::FontColor));
-        if let Preview::Shows(c) = &fc.preview
-            && preview
-        {
-            app.canvas.command_preview = Some(("format.color".to_string(), json!({"color": c.hex()})));
-        }
+        follow_list(app, preview, &fc.preview, |c| Some(("format.color".to_string(), json!({"color": c.hex()}))));
         // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
         let color = app.canvas.last_font_color.clone();
         preview_on_hover(app, fc.hover, fc.response.enabled(), "format.color", json!({"color": color}), preview);
@@ -230,6 +222,17 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
             toggle(ui, app, id, icon, align == a, preview);
         }
     });
+}
+
+/// Keeps a bar list's preview: the framework reports `Shows` once, when the pointer reaches an
+/// option, and `Ended` once, when it leaves the rows, the list closes or a row is picked. The page
+/// shows the command `command` makes of the option until then (`CanvasState::list_preview`).
+fn follow_list<T>(app: &mut WordApp, preview: bool, event: &Preview<T>, command: impl FnOnce(&T) -> Option<(String, Value)>) {
+    match event {
+        Preview::Shows(v) if preview => app.canvas.list_preview = command(v),
+        Preview::Ended => app.canvas.list_preview = None,
+        _ => {}
+    }
 }
 
 /// An icon toggle running command `id` and drawn `on`; while hovered it previews the command. The

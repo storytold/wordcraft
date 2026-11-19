@@ -80,6 +80,13 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
         if matches!(e, EditorInput::Cancel) && crate::ink::stop_replay(app) {
             continue;
         }
+        // Enter and Escape leave crop mode keeping the crop (`crop` docs). The canvas takes the page's
+        // keys as editor input before the crop overlay's own pass reads its Submit and Cancel, so they
+        // end it here, and neither types a paragraph over the selected picture.
+        if matches!(e, EditorInput::Newline | EditorInput::Cancel) && crate::crop::active(app).is_some() {
+            crate::crop::leave(app);
+            continue;
+        }
         if drop_refused_replacement(app, e, &mut batch) || equation_input(app, ctx, pass, e, &mut batch) {
             continue;
         }
