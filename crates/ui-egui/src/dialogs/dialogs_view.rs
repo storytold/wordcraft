@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use craft::behavior::ColumnWidth;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::Text;
 use craft::ui::form::{SliderField, SliderFieldLayout};
@@ -98,8 +98,9 @@ impl StackDialog for WordCountDialog {
             // The old dialog's pair: Close as the default button, and Cancel; both only close it.
             .buttons([FooterButton::new(tl!("Close").to_string(), DialogRole::Accept), FooterButton::new(tl!("Cancel").to_string(), DialogRole::Cancel)])
             .show(ui, |ui, _| {
-                // A plain two-column table, the label and its count, both at the start, as the old dialog showed them.
-                Grid::new(&COUNT_COLUMNS).show(ui, |ui, _| {
+                // A plain two-column table, the label and its count, both at the start, as the old dialog showed them:
+                // its rows a control's height apart and the counts well clear of the labels.
+                Grid::new(&COUNT_COLUMNS).gap(Gap::Section).show(ui, |ui, _| {
                     for (label, key) in ROWS {
                         let text = stats.get(key).map(Value::to_string).unwrap_or_default();
                         Text::new(Label::from(tl!(label).to_string())).show(ui);

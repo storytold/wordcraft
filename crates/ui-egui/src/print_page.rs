@@ -8,10 +8,11 @@ mod preview;
 use std::sync::Arc;
 
 use craft::theme::Variant;
+use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, FieldLayout, Gap, Props as _, Show as _, ShowContainer as _, Sizing, WrapWidth, clicked};
-use craft::ui::display::Text;
+use craft::ui::display::{Divider, Shade, Text};
 use craft::ui::form::Field;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::patterns::form_dialogs::PreviewView;
@@ -168,19 +169,26 @@ fn layout_of(app: &WordApp, cache: &mut Option<(LayoutKey, Arc<DocLayout>)>) -> 
 
 /// One choice list over `(id, label)` pairs, named `label`; true when the choice changed.
 fn choice(ui: &mut Ui, label: &str, salt: &str, current: &mut String, items: &[(&str, &str)]) -> bool {
-    let entries: Vec<Entry<String>> = items.iter().map(|(id, name)| Entry::new((*id).to_owned(), tl!(name).to_owned())).collect();
     let mut changed = false;
     // The name above its list, as production's settings column.
     Field::new(label.to_owned()).id_salt(salt).layout(FieldLayout::Above).show(ui, |ui, _| {
-        let picked = Select::new(label.to_owned(), Bind::given(current.clone()), &entries).id_salt(salt).show(ui);
-        if let Some(value) = picked.value()
-            && value != current
-        {
-            *current = value.clone();
-            changed = true;
-        }
+        changed = unlabelled_choice(ui, label, salt, current, items);
     });
     changed
+}
+
+/// The list of `choice` with no name above it, `label` only its accessible name: production's second Pages list
+/// (Pages in the range) sits under the first, which the one "Pages" heads.
+fn unlabelled_choice(ui: &mut Ui, label: &str, salt: &str, current: &mut String, items: &[(&str, &str)]) -> bool {
+    let entries: Vec<Entry<String>> = items.iter().map(|(id, name)| Entry::new((*id).to_owned(), tl!(name).to_owned())).collect();
+    let picked = Select::new(label.to_owned(), Bind::given(current.clone()), &entries).id_salt(salt).show(ui);
+    match picked.value() {
+        Some(value) if value != current => {
+            *current = value.clone();
+            true
+        }
+        _ => false,
+    }
 }
 
 /// The Print page: settings on the left, the preview on the right.
@@ -304,7 +312,7 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
             restart = true;
         }
     }
-    restart |= choice(ui, tl!("Pages in the range"), "print_parity", &mut print.settings.parity, &PARITIES);
+    restart |= unlabelled_choice(ui, tl!("Pages in the range"), "print_parity", &mut print.settings.parity, &PARITIES);
     if restart {
         // Show the first page that will print.
         print.settings.preview = 0;
@@ -329,12 +337,15 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
     match wordcraft_engine::print::plan(&app.print.settings.params(), total, current) {
         Ok(plan) => {
             let msg = crate::i18n::fmt(tl!("{count} of {total} pages will print"), &[("count", &plan.chosen.to_string()), ("total", &total.to_string())]);
-            Text::new(msg).show(ui);
+            // Production's count is dim, a note under the choices rather than one of them.
+            Text::new(msg).shade(Shade::Muted).show(ui);
         }
         Err(e) => {
-            Text::new(e.to_string()).show(ui);
+            Text::new(e.to_string()).tone(Tone::Bad).show(ui);
         }
     }
+    // A rule sets the export formats apart from the print settings, as production's.
+    Divider::horizontal().show(ui);
     if can_print {
         Text::new(tl!("Or save a copy in another format:")).show(ui);
     }
