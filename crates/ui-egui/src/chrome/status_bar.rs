@@ -71,9 +71,9 @@ fn page_in_view(app: &mut WordApp) -> (usize, usize) {
 fn readouts(app: &mut WordApp, ui: &mut Ui) {
     let (page, pages) = page_in_view(app);
     let text = crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &pages.to_string())]);
-    if item(ui, text, Some(tl!("Go To (⌘⌥G)").to_string())).clicked() {
-        let _ = app.run("ui.dialog", json!({"name": "goto"}));
-    }
+    // Bound to Go To, which opens its tab: the tooltip ends with Go To's key as this platform writes it
+    // ("Go To (Ctrl+Alt+G)", "Go To (⌘⌥G)" on macOS, #3172).
+    Button::command(CommandRef::new("edit.goto")).label(text).variant(Variant::GHOST).tooltip(tl!("Go To").to_string()).show(ui);
     count(app, ui);
     if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
         let label = match crate::canvas::part_kind(app, app.session.sel.focus.story) {
@@ -137,7 +137,8 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     } else {
         lang.clone()
     };
-    let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
+    // The tooltip names the language in full: in a narrow window the item's text is shortened (#5886).
+    let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| shown.clone());
     let out = item(ui, shown, Some(tip));
     let menu = Menu::new(tl!("Language").to_string()).opened_by(&out.response, Trigger::Click).show(ui, |ui, _| crate::ribbon::language_menu(ui, app));
     // Dismissed, the menu hands focus back to this item; the page takes the keyboard back, so typing goes on in the

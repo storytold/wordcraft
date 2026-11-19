@@ -33,12 +33,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 pub use io::Password;
-<<<<<<< HEAD
-pub use locale::system_locale;
-=======
-pub use keymap::KeyMap;
-pub use locale::{set_bookmark_error, set_reference_error};
->>>>>>> up/main
+pub use locale::{set_bookmark_error, set_reference_error, system_locale};
 pub use ribbon::RibbonLayout;
 pub use session::{
     CellRange, ColumnBlock, DocInfo, DocState, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, StylesPaneDock, UNDO_LIST_MAX,

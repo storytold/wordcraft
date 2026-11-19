@@ -193,7 +193,6 @@ impl<'a, 'o> Walk<'a, 'o> {
         let parent = self.container(&path.0)?;
         let heading = para.rp.outline_level.filter(|l| *l < 9);
         let list = para.rp.numbering.filter(|n| n.num != 0 && para.label.is_some());
-<<<<<<< HEAD
         let role = match (heading, list) {
             (Some(l), _) => BlockRole::Heading(u8::try_from(l as usize + 1).unwrap_or(9)),
             (None, Some(num)) => {
@@ -206,20 +205,6 @@ impl<'a, 'o> Walk<'a, 'o> {
                     })
                     .unwrap_or_default();
                 BlockRole::list_item(u8::try_from(num.level as usize).unwrap_or(8).min(8), marker)
-=======
-        let node = match (heading, list) {
-            (Some(l), _) => {
-                let mut n = Node::new(Role::Heading);
-                // AccessKit counts levels from zero, as the outline level does: a Heading 1 is
-                // level 0, which the Windows adapter reports to UIA as level 1.
-                n.set_level(l as usize);
-                n
-            }
-            (None, Some(num)) => {
-                let mut n = Node::new(Role::ListItem);
-                n.set_level(num.level as usize);
-                n
->>>>>>> up/main
             }
             (None, None) => BlockRole::Paragraph,
         };
@@ -537,19 +522,19 @@ mod tests {
         let f = shown(&app, None);
         let tree = f.tree();
 
-<<<<<<< HEAD
+        // AccessKit's levels are zero-based (#3173): Heading 1 is level 0, Heading 2 level 1, which the Windows
+        // adapter reports to UI Automation as levels 1 and 2.
         let headings = tree.with_role(role(accesskit::Role::Heading));
-        assert_eq!(headings.len(), 1);
         // PLAN: assumed `AccessTree::level_of(&self, NodeKey) -> Option<usize>` and `url_of(&self, NodeKey) -> Option<&str>` (chrome-w7)
-        assert_eq!(tree.level_of(headings[0]), Some(1), "Heading 1 is level 1");
-        assert_eq!(texts(tree, accesskit::Role::Heading), ["Title here\n"]);
+        assert_eq!(headings.iter().map(|h| tree.level_of(*h)).collect::<Vec<_>>(), [Some(0), Some(1)]);
+        assert_eq!(texts(tree, accesskit::Role::Heading), ["Title here\n", "Section here\n"]);
         assert!(texts(tree, accesskit::Role::Paragraph).contains(&"Read this link\n".to_string()), "{:?}", texts(tree, accesskit::Role::Paragraph));
         assert_eq!(texts(tree, accesskit::Role::Link), ["link"]);
         let links = tree.with_role(role(accesskit::Role::Link));
         assert_eq!(tree.url_of(links[0]), Some("https://example.com"));
         assert_eq!(tree.with_role(role(accesskit::Role::List)).len(), 1, "one list");
         let items = tree.with_role(role(accesskit::Role::ListItem));
-        assert_eq!(tree.level_of(items[0]), Some(1), "a first-level list item");
+        assert_eq!(tree.level_of(items[0]), Some(0), "a first-level list item");
         assert_eq!(texts(tree, accesskit::Role::ListItem), ["First item\n"]);
         assert_eq!(tree.with_role(role(accesskit::Role::ListMarker)).len(), 1, "the bullet");
         assert_eq!(tree.with_role(role(accesskit::Role::Table)).len(), 1);
@@ -560,74 +545,6 @@ mod tests {
         assert!(texts(tree, accesskit::Role::Cell).contains(&"Cell A\n".to_string()), "{:?}", texts(tree, accesskit::Role::Cell));
         for run in tree.with_role(role(accesskit::Role::TextRun)) {
             assert!(tree.bounds_of(run).is_some(), "{:?}", tree.value_of(run));
-=======
-        // A tree: every node has at most one parent.
-        let mut parents: HashMap<NodeId, usize> = HashMap::new();
-        for n in nodes.values() {
-            for c in n.children() {
-                *parents.entry(*c).or_default() += 1;
-            }
-        }
-        assert!(parents.values().all(|n| *n == 1), "a node with two parents");
-
-        let (doc_id, doc) = nodes.iter().find(|(_, n)| n.role() == Role::Document).expect("a document node");
-        // Text of a node's runs, depth first.
-        fn text(nodes: &HashMap<NodeId, &Node>, id: NodeId, out: &mut String) {
-            let Some(n) = nodes.get(&id) else { return };
-            if n.role() == Role::TextRun {
-                out.push_str(n.value().unwrap_or(""));
-            }
-            for c in n.children() {
-                text(nodes, *c, out);
-            }
-        }
-        let mut all = Vec::new();
-        fn walk(nodes: &HashMap<NodeId, &Node>, id: NodeId, depth: usize, out: &mut Vec<(NodeId, Role, usize)>) {
-            let Some(n) = nodes.get(&id) else { return };
-            out.push((id, n.role(), depth));
-            for c in n.children() {
-                walk(nodes, *c, depth + 1, out);
-            }
-        }
-        walk(&nodes, *doc_id, 0, &mut all);
-        let of = |role: Role| all.iter().filter(|(_, r, _)| *r == role).map(|(id, _, _)| *id).collect::<Vec<_>>();
-        let texts = |role: Role| {
-            of(role)
-                .into_iter()
-                .map(|id| {
-                    let mut s = String::new();
-                    text(&nodes, id, &mut s);
-                    s
-                })
-                .collect::<Vec<_>>()
-        };
-
-        // AccessKit's levels are zero-based: Heading 1 is level 0, Heading 2 level 1.
-        let headings = of(Role::Heading);
-        assert_eq!(headings.iter().map(|h| nodes[h].level()).collect::<Vec<_>>(), [Some(0), Some(1)]);
-        assert_eq!(texts(Role::Heading), ["Title here\n", "Section here\n"]);
-        assert!(texts(Role::Paragraph).contains(&"Read this link\n".to_string()), "{:?}", texts(Role::Paragraph));
-        assert_eq!(texts(Role::Link), ["link"]);
-        assert_eq!(nodes[&of(Role::Link)[0]].url(), Some("https://example.com"));
-        assert_eq!(of(Role::List).len(), 1, "one list");
-        assert_eq!(texts(Role::ListItem), ["First item\n"]);
-        assert_eq!(nodes[&of(Role::ListItem)[0]].level(), Some(0), "a first-level list item");
-        assert_eq!(of(Role::ListMarker).len(), 1, "the bullet");
-        assert_eq!(of(Role::Table).len(), 1);
-        assert_eq!(of(Role::Row).len(), 2);
-        assert_eq!(of(Role::Cell).len(), 4);
-        assert_eq!(texts(Role::Cell)[0], "Cell A\n");
-
-        // Text runs carry one length and one position per character.
-        for id in of(Role::TextRun) {
-            let n = nodes[&id];
-            let v = n.value().unwrap_or("");
-            assert_eq!(n.character_lengths().iter().map(|l| usize::from(*l)).sum::<usize>(), v.len(), "{v:?}");
-            if let Some(p) = n.character_positions() {
-                assert_eq!(p.len(), n.character_lengths().len());
-            }
-            assert!(n.bounds().is_some());
->>>>>>> up/main
         }
     }
 
