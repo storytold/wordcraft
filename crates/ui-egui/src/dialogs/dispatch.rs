@@ -5,7 +5,7 @@ use super::font::{apply_font, font_box, font_sample_box, font_sample_props, samp
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
 use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
-use super::paragraph::{ParaNumber, apply_paragraph, para_check, para_number};
+use super::paragraph::{ParaNumber, apply_paragraph, para_check, para_number, para_special};
 use super::styles::manage_styles;
 use super::{Dialog, MeasureExt, Tokens, Ui, Value, WordApp, json, semibold, vec2};
 
@@ -40,6 +40,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Icons { query, category, selected } => icons_body(app, ui, query, category, selected),
         Dialog::PasteSpecial { .. } => paste_special_dialog(app, ui, d),
         Dialog::About { .. } => about_dialog(ui, d),
+        Dialog::FontDownload { fonts, dont_show } => crate::font_download::body(app, ui, fonts, dont_show),
         Dialog::DiscardRecovery { .. } => discard_recovery_dialog(app, ui, d),
         Dialog::SaveChanges { .. } => save_changes_dialog(app, ui, d),
         Dialog::RecipientList { fields, rows, message, filter } => recipient_list(app, ui, fields, rows, message, filter),
@@ -247,6 +248,9 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         font_sample_box(app, ui, sample_paper(app), &sample_props, (*sup, *sub), *hidden);
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
+    if (ok || cancel) && super::font::hand_back_bullet(app, d, ok) {
+        return true;
+    }
     if ok {
         apply_font(app, d);
     }
@@ -320,10 +324,7 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                         let right_label = r.cell(|ui| ui.label(tl!(r_label)));
                         r.cell(|ui| para_number(ui, right, ParaNumber::Length, "right", mixed, &right_label));
                     });
-                    t.row(|r| {
-                        let first_label = r.cell(|ui| ui.label(tl!("First line:")));
-                        r.cell(|ui| para_number(ui, first, ParaNumber::Length, "indentFirst", mixed, &first_label));
-                    });
+                    t.row(|r| para_special(r, first, mixed));
                 });
                 para_check(ui, &mut opts[0], tl!("Mirror indents"), "mirrorIndents", mixed);
             });
@@ -1047,7 +1048,22 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        let mut chr = json!({"font": font, "size": *size, "bold": *bold, "italic": *italic});
+        let was = app.session.doc.styles.get(id).map(|st| {
+            app.session.doc.styles.resolve_char(
+                if st.kind == wordcraft_doc::StyleKind::Paragraph { Some(id) } else { None },
+                &wordcraft_doc::CharProps {
+                    style: if st.kind == wordcraft_doc::StyleKind::Character { Some(id.clone()) } else { None },
+                    ..Default::default()
+                },
+            )
+        });
+        let mut chr = json!({"font": font, "size": *size});
+        if was.as_ref().map(|rc| rc.bold) != Some(*bold) {
+            chr["bold"] = json!(*bold);
+        }
+        if was.as_ref().map(|rc| rc.italic) != Some(*italic) {
+            chr["italic"] = json!(*italic);
+        }
         if let Some(c) = wordcraft_doc::Rgb::parse(color) {
             chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
         }
