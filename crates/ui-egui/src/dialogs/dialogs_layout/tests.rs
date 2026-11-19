@@ -697,6 +697,19 @@ fn size_dialog_follows_the_selection() {
     assert!(!f.follow(&a), "nothing to size");
 }
 
+/// Types `text` over the Size section's Height (the Scale section has one too, after it) as a user does: a click
+/// puts the caret in the field where it lands, as in a text box (egui's drag value selected all of it on the click,
+/// the framework's number field does not), so the field's text is selected first and the typing replaces it.
+fn type_height(h: &mut egui_kittest::Harness<'_, WordApp>, text: &str) {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
+    crate::test_harness::frames(h, 2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    crate::test_harness::frames(h, 1);
+    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text(text);
+}
+
 /// #2573 review: the Size dialog end to end. Its launcher (`picture.size` without a size)
 /// opens it; a height typed in pixels changes nothing until OK, which sizes the picture in
 /// proportion as one undo step and closes the dialog.
@@ -718,9 +731,7 @@ fn size_dialog_typed_height_applies_on_ok_in_proportion() {
     // asks for, and so the typing, never lands on a harness stepped with `run_steps`.
     crate::test_harness::frames(&mut h, 4);
     // The Size section's Height (the Scale section has one too, after it).
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
-    crate::test_harness::frames(&mut h, 2);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
+    type_height(&mut h, "60 px");
     crate::test_harness::frames(&mut h, 2);
     assert!(!h.state().dialog_host.open_dialogs().is_empty());
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "nothing applies before OK");
@@ -778,9 +789,7 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     a.run("picture.size", json!({})).unwrap();
     let mut h = harness(a);
     crate::test_harness::frames(&mut h, 4);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
-    crate::test_harness::frames(&mut h, 2);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
+    type_height(&mut h, "60 px");
     crate::test_harness::frames(&mut h, 2);
     let ok = h.get_by_role_and_label(Role::Button, "OK").rect().center();
     h.event(egui::Event::PointerMoved(ok));
@@ -796,9 +805,11 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     a.run("picture.size", json!({})).unwrap();
     let mut h = harness(a);
     crate::test_harness::frames(&mut h, 4);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
+    type_height(&mut h, "60 px");
+    // The framework gives Escape to the component that holds a draft first (`overlay/dismissal.rs`): the first
+    // throws the field's typing away, the next is the dialog's Cancel.
+    h.key_press(egui::Key::Escape);
     crate::test_harness::frames(&mut h, 2);
-    h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
     h.key_press(egui::Key::Escape);
     crate::test_harness::frames(&mut h, 2);
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "Esc cancels the dialog");

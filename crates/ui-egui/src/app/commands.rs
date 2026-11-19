@@ -76,7 +76,9 @@ impl WordApp {
             return r;
         }
         let applied = applied_font(id, &params);
+        let previous = std::mem::replace(&mut self.user_origin, true);
         let r = self.execute_user(id, params);
+        self.user_origin = previous;
         // A save error already on the status line is the reason to see; the refusal shows otherwise.
         if let (Some(e), true) = (refused, r.is_ok()) {
             self.status(e);
@@ -491,13 +493,17 @@ impl WordApp {
                         self.ui.options_pane = pane.into();
                     }
                 }
-                "pasteSpecial" => {
+                // Programmatic calls never open dialogs: a script or an agent gets the command's data (a command
+                // with no input lists what it would ask for) and no dialog is left open behind it.
+                "pasteSpecial" if self.user_origin => {
                     let _ = dialogs::open(self, "pasteSpecial", req);
                 }
                 "newWindow" => self.new_window(),
-                other => {
+                "pasteSpecial" => {}
+                other if self.user_origin => {
                     let _ = dialogs::open(self, other, &json!({}));
                 }
+                _ => {}
             }
         }
         if req.get("close").is_some() {

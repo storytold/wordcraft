@@ -156,6 +156,7 @@ impl WordApp {
             fallback_chooser: _,
             // The current command's origin, set and cleared around it.
             ime_origin: _,
+            user_origin: _,
             native_scale: _,
             auto_scale_limit: _,
             legacy_interface_size: _,

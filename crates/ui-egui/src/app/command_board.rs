@@ -72,6 +72,16 @@ impl WordApp {
             let generation = self.command_catalog.as_ref().map_or(0, |(_, catalog)| catalog.generation().wrapping_add(1));
             let mut seen = HashSet::new();
             let mut defs = Vec::with_capacity(registry.all().len() + 3);
+            // Off macOS Alt+Q is the interface's command search, and no engine command or user binding takes it
+            // (the engine reserves it, `engine/src/keymap.rs`). A tie in the application scope goes to the first
+            // command in catalog order, so this one entry comes first; the other interface commands come last.
+            if !mac {
+                let mut def = CommandDef::new(CommandRef::with_params("ui.dialog", json!({"name": "commands"})), "Search Commands", Scope::app());
+                if let Ok(binding) = Binding::parse("Alt+Q") {
+                    def = def.with_default(binding);
+                }
+                defs.push(def);
+            }
             for spec in registry.all().iter().filter(|spec| seen.insert(spec.id)) {
                 let mut def = CommandDef::new(CommandRef::new(spec.id), spec.label, Scope::app());
                 for binding in default_bindings(spec.shortcut) {
@@ -87,7 +97,6 @@ impl WordApp {
                 defs.push(def);
             };
             if !mac {
-                interface(CommandRef::with_params("ui.dialog", json!({"name": "commands"})), "Search Commands", "Alt+Q");
                 interface(CommandRef::new("ui.collapseRibbon"), "Collapse the Ribbon", "Ctrl+F1");
             } else {
                 interface(CommandRef::new("ui.collapseRibbon"), "Collapse the Ribbon", "Mod+Alt+R");
@@ -134,7 +143,9 @@ impl WordApp {
             }
             input = input.state(CommandRef::new(spec.id), state);
         }
-        let ids = ["ui.collapseRibbon", "ui.resetInterfaceSize"].into_iter().chain(GATED_UI_COMMANDS.iter().map(|(id, _)| *id));
+        // Print acts on the document, so with none open it is off like the engine's commands (#1129); a command with
+        // no state here resolves as enabled.
+        let ids = ["ui.collapseRibbon", "ui.resetInterfaceSize", "ui.print", "ui.printSubmit"].into_iter().chain(GATED_UI_COMMANDS.iter().map(|(id, _)| *id));
         for id in ids {
             input = input.state(CommandRef::new(id), CommandState::new().enabled(command_enabled(self, id)));
         }

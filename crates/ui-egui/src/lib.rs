@@ -475,6 +475,9 @@ pub struct WordApp {
     /// Whether the current command was entered by an input method's own transaction. The engine
     /// uses it to keep IME commits from setting the application-change signal.
     pub(crate) ime_origin: bool,
+    /// Whether the current command is a user's ([`WordApp::run`]), not a script's or an agent's
+    /// ([`WordApp::execute`]): only a user's command opens the dialog an engine request asks for.
+    pub(crate) user_origin: bool,
     /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
     pub(crate) read_aloud_at: Option<wordcraft_engine::doc::Pos>,
     pub(crate) read_aloud_error: Option<String>,

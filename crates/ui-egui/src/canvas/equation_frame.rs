@@ -237,7 +237,8 @@ pub(crate) fn equation_menu_rows(app: &mut WordApp) -> Vec<Entry<EquationAct>> {
     if last_level.is_some() {
         rows.push(Entry::separator());
     }
-    let display = app.session.run("equation.get", &json!({})).ok().and_then(|v| v.get("display").and_then(|d| d.as_bool())).unwrap_or(false);
+    // Read, not run: a command would consume an input method's pending replacement join.
+    let display = wordcraft_engine::cmd::equation::at_caret(&app.session).is_some_and(|(display, _)| display);
     let items = [
         (if display { "Change to Inline" } else { "Change to Display" }, EquationAct::Display(!display)),
         ("Professional", EquationAct::Convert("professional")),

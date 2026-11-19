@@ -269,9 +269,10 @@ fn symbol_tooltip(c: char, display: &str) -> String {
 /// The Equation tab.
 pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     // The equation under the caret: its display mode and linear text give the Display, Inline and Number states.
-    let info = app.session.run("equation.get", &json!({})).ok();
-    let display = info.as_ref().and_then(|v| v.get("display")).and_then(|d| d.as_bool()).unwrap_or(false);
-    let numbered = info.as_ref().and_then(|v| v.get("linear")).and_then(|l| l.as_str()).is_some_and(|l| l.contains('#'));
+    // Read, not run: a command in every frame would consume an input method's pending replacement join.
+    let info = wordcraft_engine::cmd::equation::at_caret(&app.session);
+    let display = info.is_some_and(|(display, _)| display);
+    let numbered = info.is_some_and(|(_, linear)| linear.contains('#'));
     let latex = app.session.math_latex;
     let normal_text = app.session.math_normal_text;
     row.group(RibbonGroup::new("tools", tl!("Tools").to_string(), IconId::new("equation").into()), |ui| {

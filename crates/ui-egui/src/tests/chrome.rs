@@ -710,8 +710,10 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.step();
     // Some platforms send the key's text with an Alt shortcut; it isn't typed.
     // The chord the keymap gives Search on this platform; macOS has none (Option+Q types a character).
-    // PLAN: assumed the search command is `tools.search` (chrome-w8)
-    let Some(chord) = craft::ui::runtime::commands::chord(&h.ctx, &"tools.search".into()) else {
+    // Off macOS the chord is the interface's Search Commands (`app/command_board.rs`), which the engine's own
+    // `tools.search` binding gives way to: it opens Search in the title bar's box where the window shows one.
+    let search = craft::ui::runtime::commands::CommandRef::with_params("ui.dialog", json!({"name": "commands"}));
+    let Some(chord) = craft::ui::runtime::commands::chord(&h.ctx, &search) else {
         assert!(cfg!(target_os = "macos"), "Search has a chord off macOS");
         return;
     };

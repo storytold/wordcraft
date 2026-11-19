@@ -440,7 +440,8 @@ fn boxes_that_keep_focus_do_not_interrupt_ime_every_frame() {
         let (key, field) = match name {
             "commands" | "icons" => return focused_text(h),
             "goto" => ("find", "goToTarget"),
-            _ => (name, "newLabel"),
+            // Caption › New Label is its own form now (`NewLabelForm`), whose one field is the label's `name`.
+            _ => (name, "name"),
         };
         fields_of(h.state(), key).get(field).and_then(Value::as_str).unwrap_or_default().to_string()
     };
