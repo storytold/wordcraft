@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::Rgb;
 
 use crate::WordApp;
+use crate::dialogs::host::{DialogHooks, Settle};
 
 /// How many colours Recent Colors keeps.
 pub const RECENT_MAX: usize = 10;
@@ -535,13 +536,7 @@ pub fn more_colors(current: Option<Rgb>, key: String, tab: ColorPickerTab) -> Co
 /// Opens the Colors dialog for `target`, remembering where its answer goes.
 fn open_for(app: &mut WordApp, target: &Target, current: Option<Rgb>, tab: ColorPickerTab) -> DialogId {
     app.more_colors.insert(MORE_KEY.to_string(), target.clone());
-    // PLAN: assumed `dialogs::host::open_with(app, parent, dialog, DialogHooks { prepare, settle }) -> DialogId` (dialogs-w13, dg.A1).
-    crate::dialogs::host::open_with(
-        app,
-        None,
-        more_colors(current, MORE_KEY.to_string(), tab),
-        crate::dialogs::host::DialogHooks { prepare: None, settle: settle_more },
-    )
+    crate::dialogs::host::open_with(app, None, more_colors(current, MORE_KEY.to_string(), tab), DialogHooks { prepare: None, settle: settle_more })
 }
 
 /// The `ui.dialog colors` route: the font colour's More Colors…; `params.tab` is `standard` or
@@ -556,18 +551,18 @@ pub fn open(app: &mut WordApp, name: &str, params: &Value) -> Option<DialogId> {
     Some(open_for(app, &target, current, tab))
 }
 
-/// The settle hook of a More Colors dialog: true once it finished.
-fn settle_more(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> bool {
+/// The settle hook of a More Colors dialog: `Done` once it took the finished result.
+fn settle_more(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> Settle {
     match app.dialog_host.take_by_id::<ColorPickerDialog>(id) {
         Some(DialogResult::Ok(result)) => {
             picked(app, ctx, result);
-            true
+            Settle::Done
         }
         Some(DialogResult::Cancel) => {
             app.more_colors.remove(MORE_KEY);
-            true
+            Settle::Done
         }
-        Some(_) | None => false,
+        Some(_) | None => Settle::Keep,
     }
 }
 

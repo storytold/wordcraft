@@ -43,6 +43,7 @@ mod links;
 mod navigation;
 mod pages;
 mod reading;
+mod reading_metrics;
 pub(crate) mod rulers;
 mod source;
 mod story;
@@ -162,6 +163,8 @@ pub struct CanvasState {
     pub context_synonyms: Option<serde_json::Value>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
     pub context_menu_open: bool,
+    /// Where the open context menu is anchored: the framework keeps an anchor only for a context opening, and this menu opens by the app's one ask.
+    pub(crate) context_menu_at: Option<Pos2>,
     /// Screen rect of the selection's first line, for the floating mini toolbar.
     pub mini_anchor: Option<Rect>,
     /// The selection the mini toolbar was put away for by a click outside the document (the
@@ -340,6 +343,7 @@ impl Default for CanvasState {
             context_issue: None,
             context_synonyms: None,
             context_menu_open: false,
+            context_menu_at: None,
             mini_anchor: None,
             mini_dismissed: None,
             crop: None,
@@ -620,9 +624,7 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
 /// Render the document canvas for the current frame: the pages (or Read Mode's columns) and everything over them.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let full = ui.available_rect_before_wrap();
-    // PLAN: assumed `Env::view(&self).reading_metrics() -> ReadingMetrics`: `ReadingMetrics::of` needs the tokens and a
-    // text layout, which the app cannot reach from a `Ui` (framework gap).
-    let metrics = Env::of(ui).reading_metrics();
+    let Some(metrics) = reading_metrics::read(ui) else { return };
     let layout = prepare_layout(app, full, &metrics);
     if app.session.view.read_mode {
         show_reading(app, ui, &layout, full, &metrics);
@@ -737,6 +739,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                 let anchor_rects =
                     if app.canvas.command_previewed.is_some() { live_selection_screen_rects(app, body.pages) } else { screen_rects(&selected, body.pages) };
                 app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, ui.clip_rect());
+                crate::mini_toolbar::show(app, ui, body);
             }
         });
     let caret = caret_after.or(caret);
@@ -798,7 +801,6 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     dismiss_balloon_on_canvas_click(app, &out);
     balloons::balloons(app, ui, &out, layout);
     rulers::page_rulers(app, ui, &out, layout);
-    crate::mini_toolbar::show(app, ui, &out);
     // The one context-menu ask of the pass: Shift+F10 or `ui.contextMenu` (below the caret), a click on the equation
     // frame's options strip, then the tool host's own request by how it was asked for.
     let ask = app.canvas.context_request.take().or_else(|| strip_click.map(ContextAsk::AtPointer));

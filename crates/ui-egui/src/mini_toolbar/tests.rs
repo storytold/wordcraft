@@ -1,6 +1,6 @@
 use egui::accesskit::Role;
 use egui::{Vec2, pos2};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 use super::*;
 
@@ -197,7 +197,7 @@ fn every_control_fits_inside_the_bar() {
     rects.push(("size box".into(), size_box(&h)));
     let bar = h
         .query_all_by_role(Role::Toolbar)
-        .filter(|n| n.label().as_deref() == Some("Formatting"))
+        .filter(|n| n.accesskit_node().label() == Some("Formatting"))
         .map(|n| n.rect())
         .find(|r| c.contains_rect(*r))
         .expect("the selection bar lies inside the document area");
@@ -245,7 +245,7 @@ fn hovering_a_bar_member_previews_its_command() {
                 let b = font_box(&h);
                 open_list_of(&mut h, b);
                 h.query_all_by_role(Role::ListBoxOption)
-                    .filter(|n| n.rect().min.y > b.max.y && n.label().as_deref() != Some(font.as_str()))
+                    .filter(|n| n.rect().min.y > b.max.y && n.accesskit_node().label() != Some(font.as_str()))
                     .map(|n| n.rect().center())
                     .next()
                     .expect("the list shows another family")

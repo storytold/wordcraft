@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use craft::theme::Mode;
 use craft::ui::display::Picture;
+use craft::ui::list::ThumbAspect;
 use craft::ui::primitives::textures::{LoadedPicture, Revision, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails};
 use craft::ui::runtime::env::Label;
 use egui::{Color32, ColorImage, Vec2};
@@ -160,26 +161,39 @@ pub(crate) struct MathSource {
     nodes: Arc<wordcraft_doc::math::Arg>,
     display: bool,
     pt: f32,
-    size: Vec2,
+    aspect: [u16; 2],
     ink: Color32,
 }
 
 impl MathSource {
-    /// An equation of `nodes` (`display` style, font size `pt`) for a tile of `size` points, inked `ink`.
-    /// The picture is an ink mask baked in `ink`, so the theme's text colour is part of its revision.
-    pub(crate) fn new(nodes: wordcraft_doc::math::Arg, display: bool, pt: f32, size: Vec2, ink: Color32) -> Self {
-        MathSource { nodes: Arc::new(nodes), display, pt, size, ink }
+    /// An equation of `nodes` (`display` style, font size `pt`) for a picture `aspect[0]` wide to `aspect[1]` high,
+    /// inked `ink`. The picture is an ink mask baked in `ink`, so the theme's text colour is part of its revision.
+    pub(crate) fn new(nodes: wordcraft_doc::math::Arg, display: bool, pt: f32, aspect: [u16; 2], ink: Color32) -> Self {
+        MathSource { nodes: Arc::new(nodes), display, pt, aspect, ink }
+    }
+
+    /// The shape the tile or button shows the picture in.
+    pub(crate) fn thumb_aspect(&self) -> ThumbAspect {
+        ThumbAspect::new(self.aspect[0], self.aspect[1])
+    }
+
+    /// The layout box in points for `request`: the long side is the request's side at its pixel density, the other
+    /// follows the aspect.
+    fn size_for(&self, request: &ThumbRequest) -> Vec2 {
+        let long = request.side as f32 / request.pixels_per_point.max(f32::EPSILON);
+        let (wide, high) = (f32::from(self.aspect[0].max(1)), f32::from(self.aspect[1].max(1)));
+        if wide >= high { Vec2::new(long, long * high / wide) } else { Vec2::new(long * wide / high, long) }
     }
 }
 
 impl ThumbSource<u64> for MathSource {
     fn revision(&self, key: &u64, request: &ThumbRequest) -> Revision {
         // The key names the equation; the rest is what draws it differently.
-        Revision::of(&(*key, self.display, self.pt.to_bits(), self.size.x.to_bits(), self.size.y.to_bits(), self.ink.to_array(), request.pixels_per_point.to_bits()))
+        Revision::of(&(*key, self.display, self.pt.to_bits(), self.aspect, self.ink.to_array(), request.side, request.pixels_per_point.to_bits()))
     }
 
     fn render(&self, _key: &u64, request: &ThumbRequest) -> ThumbRender {
-        let (nodes, display, pt, size, ink, ppp) = (Arc::clone(&self.nodes), self.display, self.pt, self.size, self.ink, request.pixels_per_point);
+        let (nodes, display, pt, size, ink, ppp) = (Arc::clone(&self.nodes), self.display, self.pt, self.size_for(request), self.ink, request.pixels_per_point);
         ThumbRender::Later(Box::new(move |_| {
             Ok(match math_image(&nodes, display, pt, size.x, size.y, ppp) {
                 Some(mut img) => {

@@ -12,8 +12,15 @@ use serde_json::json;
 use crate::WordApp;
 
 /// A catalog a dialog form holds; forms compare equal when they hold the same catalog.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct CatalogRef(pub Option<Arc<Catalog>>);
+
+impl std::fmt::Debug for CatalogRef {
+    /// The catalog itself is large and has no `Debug`: forms only need to say whether they hold one.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("CatalogRef").field(&self.0.is_some()).finish()
+    }
+}
 
 impl PartialEq for CatalogRef {
     fn eq(&self, other: &Self) -> bool {
