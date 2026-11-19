@@ -741,7 +741,7 @@ mod tests {
         }
     }
 
-    /// An extra footer button that closes the dialog still runs its commands, and it answers no parent.
+    /// An extra footer button runs its commands, and it answers no parent.
     #[test]
     fn a_closing_extra_button_runs_its_commands() {
         let app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
@@ -752,7 +752,9 @@ mod tests {
         h.run_steps(4);
         let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
         assert!(text.contains("gone"), "the button's command ran: {text:?}");
-        assert!(h.state().dialog_host.is_empty(), "the button closed the dialog");
+        // The framework's form dialog keeps the dialog open on every extra button (`FormDialog::extra_buttons`):
+        // only OK or Cancel closes it.
+        assert!(!h.state().dialog_host.is_empty(), "an extra button leaves the dialog open");
         assert!(h.state().dialog_answers.is_empty(), "no parent was answered");
     }
 }

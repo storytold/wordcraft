@@ -3,7 +3,7 @@
 use craft::behavior::{DisplayOrder, ItemSource};
 use craft::behavior::IconId;
 use craft::ui::buttons::{Button, IconButton};
-use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow};
@@ -199,6 +199,9 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
         let source = Suggestions(&suggestions);
         let listed = List::<usize>::new(tl!("Suggestions"))
             .row_menu()
+            // One click applies a suggestion; a collection activates on a double-click or Enter unless told.
+            .select(SelectMode::None)
+            .activate(ActivateOn::Click)
             // The pane scrolls, so the list takes its few rows' full height instead of owning a second scroll.
             .natural_height(true)
             .show_items(ui, &source, &mut |key, _| ListRow::new(suggestions.get(*key).cloned().unwrap_or_default()));

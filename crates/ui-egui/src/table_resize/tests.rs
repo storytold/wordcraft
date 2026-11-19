@@ -209,7 +209,7 @@ fn a_row_marker_on_the_ruler_sets_the_row_height() {
     let a = cell(&mut h, 0, 0);
     let depth = h.state().session.undo_depth();
     let near = screen(&mut h, a.x, a.bottom());
-    let start = ruler_marker(&h, "Table Row Height", near).center();
+    let start = ruler_marker(&h, "Table Row Border", near).center();
     assert!((start.y - near.y).abs() < 0.5, "a marker at the first row's bottom");
     let end = start + egui::vec2(0.0, screen(&mut h, a.x, a.bottom() + 20.0).y - near.y);
     drag(&mut h, start, end);

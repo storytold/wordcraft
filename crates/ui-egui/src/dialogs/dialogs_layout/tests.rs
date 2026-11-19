@@ -719,12 +719,13 @@ fn size_dialog_typed_height_applies_on_ok_in_proportion() {
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
     h.run_steps(2);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
-    h.key_press(egui::Key::Enter);
     h.run_steps(2);
     assert!(!h.state().dialog_host.open_dialogs().is_empty());
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "nothing applies before OK");
-    h.get_by_role_and_label(Role::Button, "OK").click();
-    h.run_steps(2);
+    // In the framework's form dialog Enter in a single-line field is the dialog's OK (not only the field's
+    // commit), so it files the typed height and closes the dialog as the OK button does.
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
     assert_eq!(selected_size(h.state()), (90.0, 45.0), "60 px = 45 pt high, the width follows");
     h.state_mut().run("edit.undo", json!({})).unwrap();

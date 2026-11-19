@@ -78,6 +78,17 @@ impl ResizeDrag {
         }
     }
 
+    /// Where grid line `line` (the table's left edge is 0) stands on the page while a ruler drag of a column border is
+    /// in progress, with the keys `mods` held; `None` when no such drag runs. The ruler's markers follow it: the
+    /// framework ruler draws each marker where the app says its border is.
+    pub(crate) fn ruler_line_x(&self, mods: Mods, line: usize) -> Option<f32> {
+        if !self.ruler || !matches!(self.target.edge, Edge::Column(_)) {
+            return None;
+        }
+        let plan = self.plan(mods);
+        Some(self.target.planned_x(&plan, plan.cells.first().map(|(r, _)| *r), line))
+    }
+
     /// Whether the pointer has moved from where it went down.
     fn moved(&self) -> bool {
         (self.to.0 - self.from.0).abs() >= 0.5 || (self.to.1 - self.from.1).abs() >= 0.5
