@@ -25,7 +25,7 @@ wordcraft-pdf = { path = "crates/pdf" }
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
 # Temporary exact pin for the shared Romanian extension in craft-libs#554.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/ro-legal-docx/craft-libs", rev = "76b5d076b2c217575c7352e15b74ade4db955f85", version = "=0.1.0" }
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/ro-legal-docx/craft-libs", rev = "a49395f31f070d9efa8115e1f9a99433542bd275", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
 craft-ssip = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", version = "=0.1.0" }
