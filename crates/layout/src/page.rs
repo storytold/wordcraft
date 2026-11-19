@@ -1,4 +1,4 @@
-use super::boxes::{BoxInput, layout_box};
+use super::boxes::{BoxInput, box_rules, layout_box};
 use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
@@ -9,6 +9,8 @@ use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, Sto
 pub(crate) struct PageBuilder<'a> {
     pub(crate) pages: Vec<Page>,
     pub(crate) sect: &'a SectionProps,
+    /// The current document section's numbering format, even when reflow uses first-section page geometry.
+    pub(crate) page_format: wordcraft_doc::section::NumFormat,
     pub(crate) sect_idx: usize,
     pub(crate) col: usize,
     pub(crate) cols: Vec<(f32, f32)>,
@@ -110,11 +112,7 @@ pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
     if let Some(b) = &s.page_borders {
         let sp = |e: &Option<Border>| e.map(|x| x.space).unwrap_or(24.0);
         let (x0, x1, y0, y1) = (sp(&b.left), s.page_w - sp(&b.right), sp(&b.top), s.page_h - sp(&b.bottom));
-        for (e, a, bb) in [(b.top, (x0, y0), (x1, y0)), (b.bottom, (x0, y1), (x1, y1)), (b.left, (x0, y0), (x0, y1)), (b.right, (x1, y0), (x1, y1))] {
-            if let Some(e) = e.filter(Border::is_visible) {
-                v.push(Placed::Rule { x0: a.0, y0: a.1, x1: bb.0, y1: bb.1, border: e });
-            }
-        }
+        box_rules(&mut v, (x0, y0, x1, y1), [b.top, b.bottom, b.left, b.right], [false; 2]);
     }
     v
 }
@@ -296,10 +294,18 @@ impl PageBuilder<'_> {
         self.page_items_start = self.pages.last().map_or(0, |p| p.items.len());
         true
     }
-    pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+    /// Finish the current page: the lines between its columns, its vertical alignment and its
+    /// footnotes, placed with the section state in effect (margins, gutter, separators).
+    /// `new_page` starts with this; after it has run, `new_page` finds nothing left to finish.
+    pub(crate) fn finish_page(&mut self) {
         self.close_column_lines();
         self.apply_valign();
+        // The page is aligned once: finishing it again before it is left moves nothing twice.
+        self.page_valign = wordcraft_doc::section::PageVAlign::Top;
         self.flush_notes();
+    }
+    pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+        self.finish_page();
         self.beneath = self.sect_beneath;
         self.excl.clear();
         // Floats placed above their anchors further down this page are known from its start.
