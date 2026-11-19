@@ -1,12 +1,13 @@
 use craft::behavior::{Mixed, Selection, SelectionChange, keyed};
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
 use craft::ui::dialog::DialogId;
 use craft::ui::display::Text;
 use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::text::NumberField;
+use craft::ui::layout_components::Row;
 use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::runtime::env::Label;
@@ -154,15 +155,38 @@ impl WordForm for TocForm {
             self.leader = leader;
         }
         Checkbox::new(Bind::bound(&mut self.hyperlinks)).label(Label::from(tl!("Link entries to their headings").to_string())).show(ui);
-        let levels = NumberField::new(Label::from(tl!("Levels:").to_string()), Bind::given(Some(f64::from(self.levels)))).range(1.0..=9.0).show(ui);
-        if let Some(Some(n)) = levels.edit.value().cloned() {
+        // "Levels:" beside a field as wide as its number, as the old dialog's label and spin box.
+        let title = Label::from(tl!("Levels:").to_string());
+        let levels = Field::new(title.clone())
+            .sizing(Sizing::Content)
+            .show(ui, |ui, _| {
+                NumberField::new(title.clone(), Bind::given(Some(f64::from(self.levels))))
+                    .range(1.0..=9.0)
+                    .sizing(Sizing::Content)
+                    .show(ui)
+                    .edit
+                    .value()
+                    .cloned()
+            })
+            .inner
+            .flatten();
+        if let Some(Some(n)) = levels {
             self.levels = n.round().clamp(1.0, 9.0) as u8;
         }
-        if Button::new(Label::from(tl!("Options…").to_string())).show(ui).clicked() {
+        // Options… and Modify… side by side, as in the old dialog.
+        let (options, modify) = Row::new()
+            .show(ui, |ui, _| {
+                let options = Button::new(Label::from(tl!("Options…").to_string())).show(ui).clicked();
+                let modify = Button::new(Label::from(tl!("Modify…").to_string())).show(ui).clicked();
+                (options, modify)
+            })
+            .inner
+            .unwrap_or_default();
+        if options {
             let options = serde_json::to_value(TocOptionsForm::of(self)).unwrap_or(Value::Null);
             asks.push(Asks::Open("tocOptions".to_string(), options));
         }
-        if Button::new(Label::from(tl!("Modify…").to_string())).show(ui).clicked() {
+        if modify {
             asks.push(Asks::Open("tocStyles".to_string(), Value::Null));
         }
         true

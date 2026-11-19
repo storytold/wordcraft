@@ -5,7 +5,7 @@
 
 use std::borrow::Cow;
 
-use craft::ui::patterns::form_dialogs::{AboutInfo, AboutLink, AboutTab, Contributor as ContributorCredit, Credits, HostedAbout, ModelCredit};
+use craft::ui::patterns::form_dialogs::{AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor as ContributorCredit, Credits, HostedAbout, ModelCredit};
 
 use crate::language_packs::language_data_tab;
 
@@ -63,18 +63,20 @@ pub fn credits() -> Credits {
     Credits::new(contributors, models, TOTAL_COMMITS)
 }
 
-/// The About tab's contents: name, blurb, version and build, the community button and the project links.
+/// The About tab's contents: name, blurb, version and build, and the project links in the old About's order (site,
+/// Discord, source), one to a line.
 pub fn about_info() -> AboutInfo {
     let build = option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or(tl!("development build"));
-    let version = crate::i18n::fmt(tl!("Version {version} ({build})"), &[("version", env!("CARGO_PKG_VERSION")), ("build", build)]);
+    // The dialog's own "Version {version}" words the line, so this is the number and the build only.
+    let version = crate::i18n::fmt(tl!("{version} ({build})"), &[("version", env!("CARGO_PKG_VERSION")), ("build", build)]);
     AboutInfo::new(
         tl!("WordCraft").to_string(),
         tl!("A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.").to_string(),
         version.to_string(),
     )
-    .community(AboutLink::new(tl!("Join us on Discord: discord.gg/artcraft").to_string(), "https://discord.gg/artcraft"))
     .links([
         AboutLink::new(tl!("getartcraft.com/apps/wordcraft").to_string(), "https://getartcraft.com/apps/wordcraft"),
+        AboutLink::new(tl!("Join us on Discord: discord.gg/artcraft").to_string(), "https://discord.gg/artcraft"),
         AboutLink::new(tl!("Source code: github.com/storytold/wordcraft").to_string(), "https://github.com/storytold/wordcraft"),
     ])
     .built_with(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.").to_string())
@@ -83,5 +85,6 @@ pub fn about_info() -> AboutInfo {
 /// The About dialog opened on `tab`, with the Language data tab after Models (`AboutTab::App(0)`). The name
 /// table of the dialogs opens it for `about`, `contributors`, `models` and `languageData`.
 pub(crate) fn about(tab: AboutTab) -> HostedAbout {
-    HostedAbout::new(about_info(), credits()).app_tab(language_data_tab()).tab(tab)
+    // PLAN: assumed `HostedAbout::layout(self, AboutLayout) -> Self` (look-dialogs-b framework fix)
+    HostedAbout::new(about_info(), credits()).app_tab(language_data_tab()).tab(tab).layout(AboutLayout::Listed)
 }
