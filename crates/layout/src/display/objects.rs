@@ -35,6 +35,18 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                     cap: Default::default(),
                 })
             }
+            GraphicItem::Text { rect: r, angle, .. } if angle.is_finite() && angle.rem_euclid(360.0) != 0.0 => {
+                // Turned text is laid out level in its box turned the same way, then turned about
+                // the box's center.
+                let at = inside(r);
+                let (cx, cy) = (at.x + at.w / 2.0, at.y + at.h / 2.0);
+                let quarter = ((angle / 90.0).round() as i64).rem_euclid(2) == 1;
+                let level = if quarter { Rect::new(cx - at.h / 2.0, cy - at.w / 2.0, at.h, at.w) } else { at };
+                let items = text_glyphs(doc, level, it, alpha, k);
+                if !items.is_empty() {
+                    out.push(Draw::Rotated { cx, cy, spin: Spin::new(*angle, false, false), items });
+                }
+            }
             GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
             GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
                 rect: inside(r),
@@ -280,7 +292,7 @@ pub fn seg_path(segs: &[PathSeg]) -> BezPath {
 /// or the item's rectangle or size isn't a finite number (a degenerate scale: `r` itself is always
 /// finite, as [`Rect::new`] makes it).
 fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Vec<Draw> {
-    let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return Vec::new() };
+    let GraphicItem::Text { rect, text, size, color, bold, align, font, .. } = it else { return Vec::new() };
     let size = *size * k;
     if !rect.iter().chain([&size]).all(|v| v.is_finite()) {
         return Vec::new();
@@ -307,6 +319,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     let mut out = Vec::with_capacity(runs.len());
     for (face, s, shaped) in runs {
         let k = scale(face);
+        let ranges = crate::missing::cluster_ranges(s, &shaped);
         let mut glyphs = Vec::with_capacity(shaped.len());
         for g in &shaped {
             glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
@@ -324,7 +337,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
             synth_italic: false,
             text: s.to_string(),
             link: None,
-            ranges: Vec::new(),
+            ranges,
             text_bg: None,
             x_scale: 1.0,
         });
@@ -487,11 +500,13 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
 /// `obj_h` above the baseline and `obj_d` below it): inside the room kept for its effects.
 /// A rotated one's unrotated frame, centred in that room.
 ///
-/// `line` is the room a horizontal rule is placed in, from `cx`.
-pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, (obj_h, obj_d): (f32, f32), line: f32) -> Rect {
+/// `line` is the room a horizontal rule is placed in, from `cx`; `modern`: Word 2013+ layout
+/// (see [`wordcraft_doc::para::Float::line_pad`]).
+pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, (obj_h, obj_d): (f32, f32), line: f32, modern: bool) -> Rect {
     let frame = obj.and_then(InlineObject::frame);
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
-    let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h + obj_d - t - b).max(0.0));
+    // Lowered further than its height, it is drawn with its top on the baseline (Word).
+    let room = Rect::new(cx + l, base - obj_h.max(0.0) + t, (adv - l - r).max(0.0), (obj_h + obj_d - t - b).max(0.0));
     // A horizontal rule is as wide as its share of the paragraph's width, whatever narrows its
     // line, and is placed by its alignment in what the line has left: it runs past the margin
     // beside a float or a first-line indent, as in Word (see `ParaLayout::rule_room`).
@@ -502,9 +517,9 @@ pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f
         return Rect::new(hr.left(room.x, line, rw), room.y, rw, room.h);
     }
     let Some((w, h, float)) = frame.filter(|(_, _, f)| f.rot != 0.0) else { return room };
-    // The room is the rotated bounds of the frame: undo the rotation.
+    // The room is what the line kept for the turned frame: undo that.
     let (w, h) = (wordcraft_geom::finite(w).clamp(1.0, 4000.0), wordcraft_geom::finite(h).clamp(1.0, 4000.0));
-    let (bw, _) = float.spin().extent(w, h);
+    let bw = w + 2.0 * float.line_pad(w, h, modern).0;
     let k = if bw > 0.0 { room.w / bw } else { 1.0 };
     let (fw, fh) = (w * k, h * k);
     Rect::new(room.x + (room.w - fw) / 2.0, room.y + (room.h - fh) / 2.0, fw, fh)

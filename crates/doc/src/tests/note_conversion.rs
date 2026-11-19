@@ -102,18 +102,6 @@ fn dense(n: usize) -> Document {
     d
 }
 
-// Thread CPU excludes scheduler delays. Missing or nonadvancing counters provide no timing
-// evidence; the semantic assertions still run on those platforms.
-fn cpu_cost(f: impl FnOnce()) -> Option<f64> {
-    let ran = || std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse::<u64>().ok();
-    let before = ran();
-    f();
-    match (before, ran()) {
-        (Some(a), Some(b)) if b > a => Some((b - a) as f64 * 1e-9),
-        _ => None,
-    }
-}
-
 #[test]
 fn conversion_work_scales_with_reference_and_formatting_runs() {
     let (small, big) = (dense(2_000), dense(16_000));
@@ -128,18 +116,13 @@ fn conversion_work_scales_with_reference_and_formatting_runs() {
     };
     convert(&small);
     convert(&big);
-    let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
-    for _ in 0..3 {
-        let a = cpu_cost(|| (0..8).for_each(|_| convert(&small)));
-        let b = cpu_cost(|| convert(&big));
-        if let (Some(a), Some(b)) = (a, b) {
-            t1 = t1.min(a / 8.0);
-            t8 = t8.min(b);
-        }
-    }
-    if t1.is_finite() && t8.is_finite() {
-        let ratio = t8 / t1;
-        eprintln!("note conversion CPU: small={t1:.6}s big={t8:.6}s ratio={ratio:.2}");
-        assert!(ratio < 24.0, "8x the references and runs cost {ratio:.2}x CPU");
-    }
+    // The characters and runs the conversion walks (`crate::work`), not a timing: about 8x for 8x
+    // the references and runs when they are walked together, about 64x when each run rescans the
+    // references.
+    let s1 = crate::work::count(|| convert(&small));
+    let s8 = crate::work::count(|| convert(&big));
+    let ratio = s8 as f64 / s1.max(1) as f64;
+    eprintln!("note conversion steps: {s1} -> {s8}, {ratio:.1}x for 8x references and runs");
+    assert!(s1 > 0, "no steps counted, so the walk this test watches no longer counts them (crate::work)");
+    assert!(ratio <= 12.0, "8x the references and runs cost {ratio:.1}x the steps ({s1} -> {s8})");
 }

@@ -58,6 +58,7 @@ pub fn notes(doc: &Document) -> Vec<Note> {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         let mut objects = p.objects.iter();
         for c in p.text.chars() {
+            wordcraft_doc::work::steps(1);
             if c == OBJ {
                 match objects.next() {
                     Some(InlineObject::CommentStart { id }) => {
