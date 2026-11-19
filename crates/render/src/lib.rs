@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
+use craft_metafile::{Item, Picture, PlacedItem, Seg};
 use vello_cpu::kurbo::{self, Affine, BezPath, Shape};
 use vello_cpu::peniko;
 use vello_cpu::{Pixmap, RenderContext, Resources};
@@ -14,7 +15,6 @@ use wordcraft_fonts::FontDb;
 use wordcraft_layout::Page;
 use wordcraft_layout::display::Paint;
 use wordcraft_layout::display::{DisplayOptions, Draw, Stroke, page_layers};
-use wordcraft_metafile::{Item, Picture, PlacedItem, Seg};
 
 mod media;
 
@@ -82,12 +82,13 @@ impl Rendered {
             log::error!("PNG encode: bad size {}×{}", self.width, self.height);
             return Vec::new();
         };
-        let mut buf = Vec::new();
-        if let Err(e) = img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png) {
-            log::error!("PNG encode: {e}");
-            return Vec::new();
+        match wordcraft_geom::picture::encode_png(&image::DynamicImage::ImageRgba8(img)) {
+            Ok(buf) => buf,
+            Err(e) => {
+                log::error!("PNG encode: {e}");
+                Vec::new()
+            }
         }
-        buf
     }
     /// JPEG bytes on white (empty on failure, logged).
     pub fn to_jpeg(&self, quality: u8) -> Vec<u8> {
@@ -106,10 +107,7 @@ impl Rendered {
                 [mix(p[0]), mix(p[1]), mix(p[2])]
             })
             .collect();
-        let mut buf = Vec::new();
-        let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality.clamp(1, 100));
-        let _ = image::ImageEncoder::write_image(enc, &rgb, self.width, self.height, image::ExtendedColorType::Rgb8);
-        buf
+        wordcraft_geom::picture::encode_jpeg(&rgb, self.width, self.height, quality).unwrap_or_default()
     }
     /// Straight RGBA at (x, y) (transparent outside).
     pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
@@ -705,10 +703,41 @@ fn draw_line(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
             stroke_segment(ctx, (x0, y0, x1, y1), (-nx, -ny));
         }
         _ => {
+            let (st, off) = match snap_rule(fr.view, (x0, y0, x1, y1), w) {
+                Some((w_px, off)) => (kurbo::Stroke { width: w_px / fr.view.as_coeffs()[0], ..st }, off),
+                None => (st, (0.0, 0.0)),
+            };
             ctx.set_stroke(st);
-            stroke_segment(ctx, (x0, y0, x1, y1), (0.0, 0.0));
+            stroke_segment(ctx, (x0, y0, x1, y1), off);
         }
     }
+}
+
+/// Snap a horizontal or vertical rule to the device pixel grid so every border of one nominal
+/// width covers the same number of pixels at any zoom (#5967). Returns the stroke width in device
+/// pixels and the offset, in points, that moves the line onto the snapped spot; `None` for slanted
+/// lines or a view that rotates or skews.
+fn snap_rule(view: Affine, (x0, y0, x1, y1): (f64, f64, f64, f64), width: f64) -> Option<(f64, (f64, f64))> {
+    if !is_upright(view) {
+        return None;
+    }
+    let [k, _, _, _, tx, ty] = view.as_coeffs();
+    if y0 == y1 && x0 != x1 {
+        let (w_px, c) = snap_hairline(y0 * k + ty, width * k);
+        Some((w_px, (0.0, (c - ty) / k - y0)))
+    } else if x0 == x1 && y0 != y1 {
+        let (w_px, c) = snap_hairline(x0 * k + tx, width * k);
+        Some((w_px, ((c - tx) / k - x0, 0.0)))
+    } else {
+        None
+    }
+}
+
+/// A line `width_px` wide centred at device coordinate `centre`, moved so both edges fall on whole
+/// pixels. Returns the width, made a whole number of pixels (at least one), and the new centre.
+fn snap_hairline(centre: f64, width_px: f64) -> (f64, f64) {
+    let w = width_px.round().max(1.0);
+    (w, (centre - w / 2.0).round() + w / 2.0)
 }
 
 /// Stroke the line from (`x0`, `y0`) to (`x1`, `y1`), moved by (`ox`, `oy`).
@@ -851,14 +880,21 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         draw_vector(ctx, &v, &r, crop, *alpha, view);
         return;
     }
-    let Some(pm) = pixmap_for(doc, media, *fx) else {
-        ctx.set_transform(view);
-        ctx.set_paint(color(fr.opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
-        ctx.fill_rect(&r);
-        return;
+    let pm = match pixmap_for(doc, media, *fx) {
+        Ok(pm) => pm,
+        Err(refusal) => {
+            ctx.set_transform(view);
+            ctx.set_paint(color(fr.opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
+            ctx.fill_rect(&r);
+            // Say why when the picture is fine but too large to decode (#5637).
+            if let wordcraft_geom::picture::Refusal::TooLarge { width, height } = refusal {
+                draw_box_label(ctx, fr, view, &r, &too_large_label(width, height));
+            }
+            return;
+        }
     };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
-    let [cl, ct, vis_w, vis_h] = wordcraft_metafile::crop_window(*crop);
+    let [cl, ct, vis_w, vis_h] = wordcraft_layout::crop_window(*crop);
     let sx = r.width() / (pw * vis_w);
     let sy = r.height() / (ph * vis_h);
     ctx.set_transform(view);
@@ -890,6 +926,82 @@ const MAX_PATH_PIXELS: f64 = 1_048_576.0;
 fn path_extent_ok(view: Affine, path: &kurbo::BezPath) -> bool {
     let b = view.transform_rect_bbox(path.bounding_box());
     path.is_finite() && [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= MAX_PATH_PIXELS)
+}
+
+/// A label's lines, shaped once: each glyph with its face, and each line's width at 1 pt.
+struct BoxLabel {
+    lines: Vec<(Vec<(wordcraft_fonts::FaceRef, u32)>, f64)>,
+    widest: f64,
+}
+
+/// Shapes `lines` in the UI face (with fallbacks).
+fn shape_box_label(lines: &[&str]) -> BoxLabel {
+    let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+    let db = FontDb::global();
+    let lines: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            let glyphs: Vec<_> = line
+                .chars()
+                .map(|ch| {
+                    let f = if face.glyph_for(ch) == 0 {
+                        db.fallback_for(ch, face.id()).map_or(face, |f| wordcraft_fonts::FaceRef::of(&f))
+                    } else {
+                        face
+                    };
+                    (f, f.glyph_for(ch))
+                })
+                .collect();
+            let width = glyphs.iter().map(|(f, gid)| f.advance(*gid) / f.upem.max(1.0)).sum();
+            (glyphs, width)
+        })
+        .collect();
+    let widest = lines.iter().map(|(_, w)| *w).fold(0.0, f64::max);
+    BoxLabel { lines, widest }
+}
+
+/// The message in the box of a picture too large to decode, shaped once per picture size (pages
+/// are redrawn often).
+fn too_large_label(width: u32, height: u32) -> Arc<BoxLabel> {
+    static C: std::sync::OnceLock<Mutex<HashMap<(u32, u32), Arc<BoxLabel>>>> = std::sync::OnceLock::new();
+    let cache = C.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(l) = lock(cache).get(&(width, height)) {
+        return l.clone();
+    }
+    let size = format!("{width} × {height} pixels");
+    let label = Arc::new(shape_box_label(&["Picture too large to display", &size, "Resize it to show it"]));
+    let mut c = lock(cache);
+    // A handful of refused pictures at most; start over rather than grow without bound.
+    if c.len() >= 64 {
+        c.clear();
+    }
+    c.insert((width, height), label.clone());
+    label
+}
+
+/// Writes `label` centred in the box `r` (drawn under `view`), at most 10 pt and shrunk to fit;
+/// nothing when even 3 pt text wouldn't fit.
+fn draw_box_label(ctx: &mut RenderContext, fr: &Frame, view: Affine, r: &kurbo::Rect, label: &BoxLabel) {
+    let db = FontDb::global();
+    let pad = 4.0;
+    let n = label.lines.len() as f64;
+    let size = 10.0f64.min((r.width() - 2.0 * pad) / label.widest.max(1e-9)).min((r.height() - 2.0 * pad) / (1.2 * n).max(1e-9));
+    if !(size.is_finite() && size >= 3.0) {
+        return;
+    }
+    ctx.set_paint(color(fr.opts.ink(Rgb(0x50, 0x50, 0x50)), 1.0));
+    let top = r.center().y - 1.2 * size * n / 2.0;
+    for (i, (glyphs, w)) in label.lines.iter().enumerate() {
+        let baseline = top + 1.2 * size * (i as f64 + 0.8);
+        let mut x = r.center().x - w * size / 2.0;
+        for (f, gid) in glyphs {
+            let k = size / f.upem.max(1.0);
+            ctx.set_transform(view * Affine::translate((x, baseline)) * Affine::scale(k));
+            ctx.fill_path(&db.outline(f, *gid));
+            x += f.advance(*gid) * k;
+        }
+    }
+    ctx.set_transform(view);
 }
 
 fn draw_path(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
