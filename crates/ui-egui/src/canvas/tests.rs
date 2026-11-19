@@ -5985,8 +5985,15 @@ fn context_menu_spelling_suggestion_opens_with_shift_f10_and_keeps_focus() {
         h.event(egui::Event::PointerButton { pos: btn, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
         h.step();
     }
-    steps(&mut h, 3);
+    // The very next pass is the one that has to keep the keyboard: the page was drawn before the
+    // menu, so it only takes focus back then, and a character typed before that used to be lost.
+    h.event(egui::Event::Text("x".into()));
+    h.step();
     assert!(!h.state().canvas.context_menu_open, "applying a suggestion closes the context menu");
-    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), suggestion);
+    assert_eq!(
+        h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body),
+        format!("{suggestion}x"),
+        "a character typed in the frame after the click lands in the document"
+    );
     assert!(h.state().canvas.focused, "canvas keeps focus after applying a spelling suggestion so the caret remains visible");
 }

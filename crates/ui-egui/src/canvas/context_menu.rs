@@ -7,6 +7,18 @@ pub(super) fn context_suggestions(app: &mut WordApp) {
     app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
 }
 
+/// Hands the keyboard back to the page from a menu item, in this same pass. The page is drawn
+/// before the menu, so it only recomputes `focused` (which gates the keys) on the next pass, and a
+/// character typed in the frame after the click would reach no widget and be lost. The click took
+/// focus from the page, so claim it now, as a click on the chrome does (#6715). `want_focus` stays
+/// for the later frames, and a dialog keeps the keyboard until it closes.
+fn refocus_canvas(app: &mut WordApp, ui: &Ui) {
+    app.canvas.want_focus = true;
+    app.canvas.focused = true;
+    // The page has already been drawn: ask for the pass that hands focus back now.
+    ui.ctx().request_repaint();
+}
+
 /// Right-click inside an equation: its structures' actions, display and conversion.
 fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
     ui.set_min_width(260.0);
@@ -70,10 +82,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         if ui.add_enabled(on, crate::rtl::menu_item(ui, tl!(label), &sc, 0.0)).clicked() {
             let _ = app.run(id, params);
             if !id.starts_with("ui.") {
-                app.canvas.want_focus = true;
-                // The page was drawn before the menu, so it only sees `want_focus` next pass:
-                // ask for that pass now, as a click on the chrome does (#6715).
-                ui.ctx().request_repaint();
+                refocus_canvas(app, ui);
             }
             ui.close();
         }
@@ -91,8 +100,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         for sgt in sugg {
             if ui.button(egui::RichText::new(&sgt).strong()).clicked() {
                 let _ = app.run("review.applySuggestion", json!({"text": sgt}));
-                app.canvas.want_focus = true;
-                ui.ctx().request_repaint();
+                refocus_canvas(app, ui);
                 ui.close();
             }
         }
@@ -122,8 +130,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
                         let end = wordcraft_doc::Pos { off: a.off + trimmed, ..b };
                         app.session.sel = wordcraft_engine::Selection { anchor: a, focus: end };
                         let _ = app.run("text.insert", json!({"text": w, "raw": true}));
-                        app.canvas.want_focus = true;
-                        ui.ctx().request_repaint();
+                        refocus_canvas(app, ui);
                         ui.close();
                     }
                 }
