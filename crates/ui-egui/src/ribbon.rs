@@ -3,6 +3,7 @@
 use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::{Ribbon, RibbonOutput, RibbonRow, RibbonTab};
+use craft::theme::Variant;
 use craft::ui::contract::{Bind, Entry};
 use craft::ui::primitives::IconSpec;
 use craft::ui::tabs::StripEnd;
@@ -152,14 +153,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
             .checked(track),
     ];
     let ends = [
-        // The strip lays these out start to end, so Share, the old strip's outermost button, comes last.
-        StripEnd::command(tl!("Comments").to_string(), IconSpec::svg(IconId::new("comment")), CommandRef::new("view.commentsPane")),
-        StripEnd::menu(editing_label.to_string(), IconSpec::svg(IconId::new("pencil")), &modes),
+        // The strip lays these out start to end, so Share, the old strip's outermost button, comes last. As the old
+        // strip drew them: Comments and Editing outlined, Share a filled accent button.
+        StripEnd::command(tl!("Comments").to_string(), IconSpec::svg(IconId::new("comment")), CommandRef::new("view.commentsPane"))
+            .variant(Variant::SECONDARY),
+        StripEnd::menu(editing_label.to_string(), IconSpec::svg(IconId::new("pencil")), &modes).variant(Variant::SECONDARY),
         StripEnd::command(
             tl!("Share").to_string(),
             IconSpec::svg(IconId::new("share")),
             CommandRef::with_params("ui.backstage", json!({"value": true, "page": "export"})),
-        ),
+        )
+        .variant(Variant::PRIMARY),
     ];
     // The context menu's body captures these, never `app`, which the row body borrows.
     let qat: Vec<String> = app.session.ribbon.qat().into_iter().map(str::to_string).collect();
