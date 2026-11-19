@@ -219,6 +219,18 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
             app,
         );
         h.run_steps(4);
+        // The list owns its scroll and shows 18 rows (`max_rows`), so a row below them is not in the tree
+        // until the list is scrolled to it: wheel over the list, as a person does.
+        let over_list = h.get_by_label("Manage Styles…").rect().center() + egui::vec2(0.0, 120.0);
+        h.event(egui::Event::PointerMoved(over_list));
+        h.run_steps(1);
+        for _ in 0..40 {
+            if h.query_by_label(style).is_some() {
+                break;
+            }
+            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -120.0), phase: egui::TouchPhase::Move, modifiers: Default::default() });
+            h.run_steps(2);
+        }
         h.get_by_label(style).click_secondary();
         h.run_steps(3);
         h.get_by_label("Delete").accesskit_node().is_disabled()
