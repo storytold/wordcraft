@@ -13,7 +13,9 @@ use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::buttons::ControlPlace;
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{BodyCx, CollectionEvent, CommandSet as _, Commands as _, Gap, LeastWidth, Pad,Props as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked};
+use craft::ui::contract::{
+    BodyCx, CollectionEvent, CommandSet as _, Commands as _, Gap, LeastWidth, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked,
+};
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::notices::Notice;
