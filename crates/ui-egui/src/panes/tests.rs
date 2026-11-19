@@ -228,7 +228,7 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
             if h.query_by_label(style).is_some() {
                 break;
             }
-            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -120.0), phase: egui::TouchPhase::Move, modifiers: Default::default() });
+            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -120.0), phase: egui::TouchPhase::Move, modifiers: Default::default(), source: egui::MouseWheelSource::Unknown });
             h.run_steps(2);
         }
         h.get_by_label(style).click_secondary();
