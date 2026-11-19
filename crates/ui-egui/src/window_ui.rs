@@ -216,7 +216,6 @@ impl WordApp {
             md_source_visit,
             more_colors,
         } = self;
-        // PLAN: the `Prefs` field list is the old `UiState`'s without `keyboard`, `window`, `print` and the keytip fields, and with `font_picker` for `recent_fonts` (shell-w13).
         let Prefs {
             // App-wide: preferences, recent lists, and the settings the session owns while
             // running.
@@ -247,9 +246,17 @@ impl WordApp {
             read_aloud_rate: _,
             read_aloud_skip_citations: _,
             keytips_enabled: _,
+            keytip_prefix: _,
+            keytips: _,
+            alt_pressed: _,
+            alt_chord_used: _,
+            alt_key_down: _,
+            alt_modifier_seen: _,
             dark_page: _,
             check_spelling: _,
             caret_animation: _,
+            keyboard: _,
+            print: _,
             ribbon: _,
             caption_labels: _,
             last_caption_label: _,

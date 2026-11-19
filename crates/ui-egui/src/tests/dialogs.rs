@@ -23,15 +23,9 @@ fn app_over(files: &Arc<ScriptedFiles>, document: wordcraft_doc::Document) -> Wo
 
 /// A file dropped on the window, as the platform delivers it.
 #[cfg(not(target_arch = "wasm32"))]
-fn drop_file(a: &mut WordApp, ctx: &egui::Context, path: &std::path::Path) {
-    let mut raw = shot_raw(egui::vec2(640.0, 480.0), false);
-    raw.dropped_files.push(Arc::new(DroppedText(path.to_path_buf())));
-    a.raw_input_hook(ctx, &mut raw);
-    ctx.run_ui(raw, |ui| {
-        a.logic(ui.ctx());
-        a.ui(ui);
-    })
-    .drop_without_applying_deltas();
+fn drop_file(a: &mut WordApp, path: &std::path::Path) {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    drop_files(a, vec![craft::platform::open::DroppedFile { path: Some(path.to_path_buf()), name, bytes: None }]);
 }
 
 /// The key of the dialog the host has open, if any.
@@ -55,8 +49,9 @@ fn table_properties_dialog_sets_every_selected_row() {
     a.run("table.properties", json!({})).unwrap();
     let ctx = egui::Context::default();
     pump(&mut a, &ctx);
-    let Some(host) = a.dialog_host.get::<FormHost<dialogs::TableForm>>() else { panic!("no table dialog: {:?}", open_key(&a)) };
-    assert!(host.form().mixed.contains("allowBreak") && !host.form().mixed.contains("headerRow"), "{:?}", host.form().mixed);
+    let Some(host) = a.dialog_host.get::<FormHost<dialogs::TableProperties>>() else { panic!("no table dialog: {:?}", open_key(&a)) };
+    let mixed = &host.form().form.mixed;
+    assert!(mixed.contains("allowBreak") && !mixed.contains("headerRow"), "{mixed:?}");
     // OK with the mixed box left alone changes no row.
     let rows_breaking = |a: &WordApp| {
         let (tp, _, _) = a.session.sel.focus.path.cell().unwrap();
@@ -318,9 +313,14 @@ fn recipient_grid_edits_the_right_record_through_the_ui() {
     // The records the grid shows: one Remove part per row on screen.
     let cells = |h: &egui_kittest::Harness<'_, State>| h.query_all_by_label("Remove recipient").count();
     // A record's cell field, found by the text it holds.
-    let cell_of = |h: &egui_kittest::Harness<'_, State>, text: &str| {
-        h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.value().as_deref() == Some(text)).expect("the record's cell is shown")
-    };
+    // A macro, as the node it finds borrows the harness for as long as the caller keeps it.
+    macro_rules! cell_of {
+        ($h:expr, $text:expr) => {
+            $h.query_all_by_role(egui::accesskit::Role::TextInput)
+                .find(|n| n.value().as_deref() == Some($text))
+                .expect("the record's cell is shown")
+        };
+    }
     let names = |h: &egui_kittest::Harness<'_, State>| dlg(h).0.iter().map(|r| r[0].clone()).collect::<Vec<_>>();
     // Find in list: the first text box. Grace is the only match.
     let find = h.query_all_by_role(egui::accesskit::Role::TextInput).next().unwrap();
@@ -336,7 +336,7 @@ fn recipient_grid_edits_the_right_record_through_the_ui() {
     assert!(dlg(&h).1.only_merged && cells(&h) == 1);
     // Edit Grace's cell to something the search no longer matches: the row stays, and the
     // edit lands on record 2, not on the first visible row's index.
-    cell_of(&h, "Grace").click();
+    cell_of!(h, "Grace").click();
     h.run_steps(2);
     h.event(egui::Event::Key {
         key: egui::Key::A,
@@ -345,7 +345,7 @@ fn recipient_grid_edits_the_right_record_through_the_ui() {
         repeat: false,
         modifiers: egui::Modifiers { command: true, ..Default::default() },
     });
-    cell_of(&h, "Grace").type_text("Zed");
+    cell_of!(h, "Grace").type_text("Zed");
     h.run_steps(3);
     assert_eq!(names(&h), ["Ada", "Alan", "Zed", "Émile"]);
     assert_eq!(dlg(&h).1.held, Some(vec![2]), "rows are held while the cell has the keyboard");
@@ -413,7 +413,7 @@ fn an_existing_list_picked_on_the_web_loads_recipients() {
     let dir = scratch("recipients-web");
     let notes = dir.join("notes.txt");
     std::fs::write(&notes, "A plain text document.\nAnother line.\n").unwrap();
-    drop_file(&mut a, &ctx, &notes);
+    drop_file(&mut a, &notes);
     pump(&mut a, &ctx);
     assert_eq!(prompt(&a), None, "the TXT opens like any document, beside the first");
     assert!(body_text(&a).contains("A plain text document."), "the TXT opened as a document");
@@ -473,7 +473,8 @@ fn find_replace_and_go_to_keys_like_word() {
     // With text selected, Ctrl+F searches for it.
     h.state_mut().ui.nav_tab = "pages".into();
     h.state_mut().run("select.text", json!({"text": "Kilns"})).unwrap();
-    h.state_mut().canvas.want_focus = true;
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
     h.step();
     h.event(key(egui::Key::F, egui::Modifiers::COMMAND));
     h.step();

@@ -672,9 +672,8 @@ pub(crate) fn snap(app: &WordApp, layout: &DocLayout) -> Option<PageSnap> {
     options.suspend = SnapSuspend::Alt;
     options.grid = false;
     options.layers = false;
-    // PLAN: assumed `PageSnap::new(pages: Vec<Vec<SnapTarget>>, options: SnapOptions) -> PageSnap` in craft-pages (S-L236):
-    // each page's targets in its own page points, which the page view maps to document space.
-    Some(PageSnap::new(pages, options))
+    // Each page's targets in its own page points, which the page view maps to document space.
+    Some(pages.into_iter().enumerate().fold(PageSnap::new(options), |snap, (page, targets)| snap.page(page, targets)))
 }
 
 /// The snap targets of `pg` in its own page points, each spanning the page's own range:
