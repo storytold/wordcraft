@@ -9,7 +9,7 @@ static site in `wordcraft-web-<version>/`:
 | `wordcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `wordcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
-| `fonts/manifest.json` | Sample list of server fonts (see [Server fonts](#server-fonts)) |
+| `fonts/manifest.sample.json` | Sample list of server fonts. It isn't read; copy it to `fonts/manifest.json` to use it (see [Server fonts](#server-fonts)) |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
@@ -55,11 +55,13 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
 
 A browser can't read the server's disk, and visitors' own fonts (Add Font) stay in their browser. To
 give everyone the same extra fonts, such as Khmer fonts the app doesn't bundle, upload them
-next to the app:
+next to the app. The release ships only `fonts/manifest.sample.json`, which the app ignores, so
+unzipping a newer release over your site never replaces your own manifest. On first setup, copy
+the sample to `fonts/manifest.json` and edit it:
 
 ```
 index.html
-fonts/manifest.json        <- the list
+fonts/manifest.json        <- the list (copied from manifest.sample.json)
 fonts/NotoSansKhmer-Regular.ttf
 fonts/my-fonts/Moul.woff2
 ```
@@ -76,7 +78,7 @@ fonts/my-fonts/Moul.woff2
 
 - At start-up the app fetches `fonts/manifest.json` (relative to the page, so any path works),
   then each listed file, and adds the fonts the way Add Font does. They show in the font list and
-  documents that name their family use them. No manifest means no server fonts.
+  documents that name their family use them. No `fonts/manifest.json` means no server fonts.
 - Files: TTF, OTF, TTC, OTC, WOFF or WOFF2, at most 50 MB each, 200 fonts and 256 MB in all.
   Paths are relative to `fonts/`; `..`, absolute paths and URLs are skipped. Names with spaces
   are fine.
