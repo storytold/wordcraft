@@ -16276,6 +16276,57 @@ fn keep_with_next_chain_before_a_tall_picture_keeps_its_list_on_the_page() {
     assert_eq!(pages(5), expect(5), "the list stays below its heading; the picture goes over");
 }
 
+/// A keep-with-next chain that fits on a fresh page once paragraph spacing collapses (merged
+/// before/after gaps, contextual spacing, and dropped fresh-page space before) moves together
+/// instead of being misclassified as overflowing (#6593). When spacing is additive and the chain
+/// genuinely exceeds a page, it still breaks at the page bottom.
+#[test]
+fn keep_with_next_chain_that_fits_with_collapsed_spacing_moves_together() {
+    use wordcraft_doc::props::LineSpacing;
+    crate::test_fonts();
+    let pages = |room: f32, filler_h: f32, contextual: bool, sum_spacing: bool| -> Vec<usize> {
+        let mut d = Document::new();
+        d.last_section.margin_top = 50.0;
+        d.last_section.margin_bottom = 50.0;
+        d.last_section.page_h = room + 100.0;
+        d.settings.sum_paragraph_spacing = sum_spacing;
+        let para = |text: &str, props: ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = props;
+            wordcraft_doc::para_block(x)
+        };
+        let filler = ParaProps {
+            style: Some("Heading 1".into()),
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(LineSpacing::Exactly(filler_h)),
+            ..Default::default()
+        };
+        let item = ParaProps {
+            style: Some("Normal".into()),
+            space_before: Some(10.0),
+            space_after: Some(10.0),
+            contextual_spacing: Some(contextual),
+            line_spacing: Some(LineSpacing::Exactly(20.0)),
+            ..Default::default()
+        };
+        let kept = ParaProps { keep_next: Some(true), ..item.clone() };
+        d.body = vec![para("Filler", filler), para("A", kept.clone()), para("B", kept), para("C", item)];
+        let l = lay(&d);
+        (0..d.body.len()).map(|k| l.caret(&Pos::body(k, 0)).unwrap().page).collect()
+    };
+    // Merged spacing: A/B/C need 20 + 10 + 20 + 10 + 20 = 80 pt on a fresh page (110 pt if both
+    // sides of each gap and A's space before were summed).
+    assert_eq!(pages(100.0, 30.0, false, false), vec![0, 1, 1, 1], "merged gaps fit in 100 pt");
+    // Fresh-page spacing drops A's 10 pt space before, so 80 pt fits in 85 pt (90 pt would not).
+    assert_eq!(pages(85.0, 30.0, false, false), vec![0, 1, 1, 1], "fresh-page spacing drops leading space before");
+    // Contextual spacing drops both sides of A-B and B-C, so A/B/C need 60 pt and fit in 70 pt.
+    assert_eq!(pages(70.0, 20.0, true, false), vec![0, 1, 1, 1], "contextual spacing collapses same-style gaps");
+    // Additive spacing: 20 + 20 + 20 + 20 + 20 = 100 pt genuinely overflows 95 pt, so A and B stay
+    // on page 1 and only C goes over.
+    assert_eq!(pages(95.0, 20.0, false, true), vec![0, 0, 0, 1], "additive spacing still breaks an overlong chain");
+}
+
 /// A header paragraph beside a Square float on its last lines only: those lines are shorter than
 /// the first. A click on the first line past the short last line's end is still on the header's
 /// text, so a Behind Text picture under it is not grabbed there (#5601 review).

@@ -297,35 +297,17 @@ impl<'a> Flow<'a> {
     }
 
     /// `before`, the space before the paragraph, with the previous paragraph (`prev`) taken into account.
-    fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, mut before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
-        let (style, ctxl, mut after, after_auto, listed) = prev;
-        let rp = &self.pl.rp;
-        // Contextual spacing suppresses each paragraph's own side of the gap.
-        if style == rp.style {
-            if ctxl {
-                pb.y -= after;
-                before = (before - after).max(0.0);
-                after = 0.0;
-            }
-            if rp.contextual_spacing {
-                before = 0.0;
-            }
-        }
-        // Automatic spacing: none between two list items (as in an HTML list; measured in Word:
-        // any two items, of one list or two, at any level).
-        if listed && self.label.is_some() {
-            if after_auto {
-                pb.y -= after;
-                after = 0.0;
-            }
-            if rp.before_auto {
-                before = 0.0;
-            }
-        }
-        // The space between two paragraphs is the larger of the first's space after and the
-        // second's space before, not their sum.
-        if before > 0.0 && after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
-            before = (before - after).max(0.0);
+    fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
+        let (style, contextual, after, after_auto, listed) = prev;
+        let (after_kept, before) = settle_gap(
+            &PrevGap { style, contextual, after, after_auto, listed },
+            before,
+            &self.pl.rp,
+            self.label.is_some(),
+            ctx.doc.settings.sum_paragraph_spacing,
+        );
+        if after_kept == 0.0 && after != 0.0 {
+            pb.y -= after;
         }
         before
     }
@@ -346,7 +328,19 @@ impl<'a> Flow<'a> {
         if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }
-        let mut need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, &mut ctx.counters.clone()) } else { 0.0 };
+        let mut need = height
+            + if rp.keep_next {
+                let prev = PrevGap {
+                    style: rp.style.clone(),
+                    contextual: rp.contextual_spacing,
+                    after: if break_mark { 0.0 } else { rp.space_after },
+                    after_auto: rp.after_auto,
+                    listed: self.label.is_some(),
+                };
+                next_first_line(ctx, self.block, self.width, prev, &mut ctx.counters.clone())
+            } else {
+                0.0
+            };
         // (Against the whole column: balanced columns grow to hold it.)
         let room = pb.next_room(self.body_top);
         // A chain too long for any page is not carried over: it breaks at the page bottom, and
@@ -1008,6 +1002,49 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
     after
 }
 
+/// A paragraph's spacing state carried into the gap before the next paragraph (same fields as
+/// `PageBuilder::prev`).
+struct PrevGap {
+    style: String,
+    contextual: bool,
+    after: f32,
+    after_auto: bool,
+    listed: bool,
+}
+
+/// Settle the vertical spacing between `prev` and a following paragraph (`rp`, `listed`): returns
+/// `(after_kept, before_kept)` — how much of `prev.after` stays below the previous paragraph and
+/// how much of `before` is added before the next one.
+fn settle_gap(prev: &PrevGap, mut before: f32, rp: &wordcraft_doc::resolve::ResolvedPara, listed: bool, sum_spacing: bool) -> (f32, f32) {
+    let mut after = prev.after;
+    // Contextual spacing suppresses each paragraph's own side of the gap.
+    if prev.style == rp.style {
+        if prev.contextual {
+            before = (before - after).max(0.0);
+            after = 0.0;
+        }
+        if rp.contextual_spacing {
+            before = 0.0;
+        }
+    }
+    // Automatic spacing: none between two list items (as in an HTML list; measured in Word:
+    // any two items, of one list or two, at any level).
+    if prev.listed && listed {
+        if prev.after_auto {
+            after = 0.0;
+        }
+        if rp.before_auto {
+            before = 0.0;
+        }
+    }
+    // The space between two paragraphs is the larger of the first's space after and the
+    // second's space before, not their sum.
+    if before > 0.0 && after > 0.0 && !sum_spacing {
+        before = (before - after).max(0.0);
+    }
+    (after, before)
+}
+
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the
 /// next one to start there — its first line, two of its lines with widow/orphan control (it
 /// doesn't leave a single line at the bottom of a page; it moves over whole instead), all three
@@ -1017,10 +1054,10 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// when the paragraph after it cannot start on the page (#966).
 /// The chain stops at a paragraph that starts a new page anyway: nothing after it needs room
 /// here (#6593).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, counters: &mut Counters) -> f32 {
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, prev: PrevGap, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) if ctx.doc.styles.resolve_para(&p.props).page_break_before => 0.0,
-        _ => chain_room(ctx, block + 1, width, counters, MAX_KEPT_AHEAD, f32::INFINITY).unwrap_or(0.0),
+        _ => chain_room(ctx, block + 1, width, Some(prev), counters, (MAX_KEPT_AHEAD, f32::INFINITY)).unwrap_or(0.0),
     }
 }
 
@@ -1033,10 +1070,19 @@ const MAX_CHAIN: usize = 512;
 
 /// The room the paragraphs from `first` on need on the page: each kept with the next in full
 /// (the first `full` of them; after that one counts as not kept), then enough of the paragraph
-/// ending the chain to start there (see [`next_first_line`]). The chain ends early at a paragraph
-/// that starts a new page. Stops adding once past `limit`. `None` when `full` kept paragraphs
-/// were not enough to reach the chain's end and `full` is [`MAX_CHAIN`].
-fn chain_room(ctx: &mut Ctx, first: usize, width: f32, counters: &mut Counters, full: usize, limit: f32) -> Option<f32> {
+/// ending the chain to start there (see [`next_first_line`]). Uses placement-equivalent spacing:
+/// `prev` settles the gap into `first`, or `None` measures `first` at the top of a fresh page
+/// (dropping positive `space_before`, matching [`Flow::keep_together`]). The chain ends early at a
+/// paragraph that starts a new page. Stops adding once past `limit`. `None` when `full` kept
+/// paragraphs were not enough to reach the chain's end and `full` is [`MAX_CHAIN`].
+fn chain_room(
+    ctx: &mut Ctx,
+    first: usize,
+    width: f32,
+    mut prev: Option<PrevGap>,
+    counters: &mut Counters,
+    (full, limit): (usize, f32),
+) -> Option<f32> {
     let mut total = 0.0;
     let mut block = first;
     for n in 0..=full {
@@ -1049,16 +1095,31 @@ fn chain_room(ctx: &mut Ctx, first: usize, width: f32, counters: &mut Counters, 
                 }
                 let label =
                     p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
+                let listed = label.is_some();
                 let pl = para_ahead_or_lay(ctx, p, width, label);
+                let gap = match &prev {
+                    Some(prev) => {
+                        let (after, before) = settle_gap(prev, pl.rp.space_before, &pl.rp, listed, ctx.doc.settings.sum_paragraph_spacing);
+                        after + before
+                    }
+                    None => pl.rp.space_before.min(0.0),
+                };
                 // Its border room, unless it joins the paragraph before (or after) in one box.
                 let own = Edges::own(&pl, 0, pl.lines.len());
                 let top = if joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None) { 0.0 } else { own.top };
                 if pl.rp.keep_next && n < full {
                     let bottom = if joined(ctx.doc, &ctx.doc.body, block, Some(block + 1), None) { 0.0 } else { own.bottom };
-                    total += pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after;
+                    total += gap + top + pl.height + bottom;
                     if total > limit {
                         return Some(total);
                     }
+                    prev = Some(PrevGap {
+                        style: pl.rp.style.clone(),
+                        contextual: pl.rp.contextual_spacing,
+                        after: pl.rp.space_after,
+                        after_auto: pl.rp.after_auto,
+                        listed,
+                    });
                     block += 1;
                     continue;
                 }
@@ -1073,7 +1134,7 @@ fn chain_room(ctx: &mut Ctx, first: usize, width: f32, counters: &mut Counters, 
                 };
                 return Some(
                     total
-                        + pl.rp.space_before
+                        + gap
                         + top
                         + if pl.rp.keep_lines {
                             pl.height
@@ -1085,7 +1146,7 @@ fn chain_room(ctx: &mut Ctx, first: usize, width: f32, counters: &mut Counters, 
                         },
                 );
             }
-            Some(Block::Table(_)) => return Some(total + 24.0),
+            Some(Block::Table(_)) => return Some(total + prev.map_or(0.0, |p| p.after) + 24.0),
             None => return Some(total),
         }
     }
@@ -1106,7 +1167,7 @@ fn chain_overflows(ctx: &mut Ctx, block: usize, width: f32, room: f32) -> bool {
             .is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).keep_next);
         if starts_page || !kept_before {
             let mut counters = ctx.counters.clone();
-            return chain_room(ctx, start, width, &mut counters, MAX_CHAIN, room).is_none_or(|h| h > room + 0.01);
+            return chain_room(ctx, start, width, None, &mut counters, (MAX_CHAIN, room + 0.01)).is_none_or(|h| h > room + 0.01);
         }
         start -= 1;
     }
