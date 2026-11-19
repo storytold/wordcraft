@@ -704,7 +704,7 @@ fn settle_more_colors(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> S
             crate::colors::picked(app, ctx, result);
             Settle::Done
         }
-        Some(DialogResult::Cancel) => Settle::Done,
+        Some(_) => Settle::Done,
         None if app.dialog_host.get_by_id::<craft::color_ui::ui::ColorPickerDialog>(id).is_none() => Settle::Done,
         None => Settle::Keep,
     }

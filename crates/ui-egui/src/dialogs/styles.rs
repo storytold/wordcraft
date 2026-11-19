@@ -12,7 +12,8 @@ use craft::ui::form::Field;
 use craft::ui::list::{List, ListRow};
 use craft::ui::pickers::Select;
 use craft::ui::primitives::textures::Revision;
-use craft::ui::runtime::env::Label;
+use craft::theme::Mode;
+use craft::ui::runtime::env::{Env, Label};
 use craft::ui::sections::{DialogRole, FooterButton};
 use egui::{ColorImage, Context, Ui, Vec2, vec2};
 use serde_json::{Value, json};
@@ -72,8 +73,8 @@ pub(crate) struct ManageStylesDialog {
     preview: Option<(PreviewKey, ColorImage)>,
     /// How many preview images were made: the picture's key, so a new image is a new texture.
     made: u64,
-    /// The room the body gave the preview in its last pass; `settle` renders the image for it.
-    room: Option<Vec2>,
+    /// The room and interface mode the body saw in its last pass; `settle` renders the image for them.
+    room: Option<(Vec2, Mode)>,
     requests: Vec<Request>,
     /// The selection the list last scrolled to.
     revealed: String,
@@ -168,7 +169,8 @@ impl ManageStylesDialog {
         let Some(cur) = self.current().cloned() else { return };
         let ty = text_of(&cur, "type");
         let lines = if ty == "table" { 3.0 } else { 2.0 };
-        self.room = Some(vec2(ui.available_width(), lines * ui.text_style_height(&egui::TextStyle::Body)));
+        let room = vec2(ui.available_width(), lines * ui.text_style_height(&egui::TextStyle::Body));
+        self.room = Some((room, Env::of(ui).view().mode()));
         if let Some((key, image)) = &self.preview {
             let image = image.clone();
             let make = move || image.clone();
@@ -275,17 +277,16 @@ fn settle(app: &mut WordApp, ctx: &Context, id: DialogId) -> Settle {
 /// Makes the preview of the selected style when the one held was made for something else.
 fn refresh_preview(app: &mut WordApp, ctx: &Context, id: DialogId) {
     let Some(d) = app.dialog_host.get_by_id::<ManageStylesDialog>(id) else { return };
-    let (Some(cur), Some(room)) = (d.current(), d.room) else { return };
+    let (Some(cur), Some((room, mode))) = (d.current(), d.room) else { return };
     let (selected, ty) = (d.selected.clone(), text_of(cur, "type"));
     let held = d.preview.as_ref().map(|(key, _)| key.clone());
     let ppp = ctx.pixels_per_point();
-    // PLAN: assumed previews::style_revision(app: &mut WordApp) -> Revision (ribbon-w12)
-    let styles = crate::previews::style_revision(app);
+    let styles = crate::previews::style_revision(app, mode);
     let key = PreviewKey { selected, ty, styles, room: [room.x.to_bits(), room.y.to_bits()], ppp: ppp.to_bits() };
     if held.as_ref() == Some(&key) {
         return;
     }
-    let image = crate::previews::style_preview_image(app, &key.selected, &key.ty, room, ppp);
+    let image = crate::previews::style_preview_image(app, &key.selected, &key.ty, room, ppp, mode);
     if let Some(d) = app.dialog_host.get_mut_by_id::<ManageStylesDialog>(id) {
         d.made += 1;
         d.preview = image.map(|image| (key, image));

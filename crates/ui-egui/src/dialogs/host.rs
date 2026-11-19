@@ -543,8 +543,7 @@ fn form_settle<F: WordForm>(app: &mut WordApp, ctx: &Context, id: DialogId) -> S
                 children.push(Child::Symbol(child));
             }
             Asks::Color { field, current, tab } => {
-                // PLAN: assumed `colors::more_colors(Option<Rgb>, &'static str, ColorPickerTab) -> ColorPickerDialog` (ribbon-w11, rb.A4)
-                let picker = crate::colors::more_colors(current, field, tab);
+                let picker = crate::colors::more_colors(current, field.to_string(), tab);
                 let child = open_with(app, Some(id), picker, SPENT);
                 children.push(Child::Color(child, field));
             }
