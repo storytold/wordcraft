@@ -295,6 +295,9 @@ pub struct UiState {
     /// Toolbar takes it away; Show Quick Access Toolbar (the ribbon's right-click menu, Customize
     /// Ribbon › Quick Access Toolbar) brings it back. Kept between runs.
     pub quick_access_toolbar: bool,
+    /// AutoSave opt-in, kept between runs. The app owns the live choice; `prefs` copies it back.
+    #[serde(rename = "autoSave")]
+    pub autosave: bool,
     pub recent: Vec<String>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
@@ -491,6 +494,7 @@ impl Default for UiState {
             print: print_page::PrintSettings::default(),
             ribbon_collapsed: false,
             quick_access_toolbar: true,
+            autosave: false,
             recent: Vec::new(),
             recent_symbols: Vec::new(),
             date_time_format: String::new(),
