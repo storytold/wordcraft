@@ -23,6 +23,10 @@ pub struct RawWindowState {
     pub maximized: Option<bool>,
     pub minimized: Option<bool>,
     pub fullscreen: Option<bool>,
+    /// The host's [`reachable`] answer: `None` where it can't list the monitors (Wayland).
+    pub on_a_monitor: Option<bool>,
+    /// The primary monitor's bounds in egui points, when the host can identify it.
+    pub primary_monitor_rect: Option<egui::Rect>,
 }
 
 impl RawWindowState {
@@ -41,6 +45,8 @@ impl RawWindowState {
             maximized: viewport.and_then(|v| v.maximized),
             minimized: viewport.and_then(|v| v.minimized),
             fullscreen: viewport.and_then(|v| v.fullscreen),
+            on_a_monitor: None,
+            primary_monitor_rect: None,
         }
     }
 
@@ -56,15 +62,31 @@ impl RawWindowState {
     }
 }
 
-/// The smallest window restored: the desktop app's minimum inner size.
-pub const MIN_SIZE: egui::Vec2 = egui::vec2(760.0, 480.0);
+/// The desktop app's minimum inner size, and the smallest window restored. 600 pt wide (#5886):
+/// allows half-screen split window tiling on standard displays (e.g. 1280 pt or 1366 pt, such as
+/// under GNOME Wayland), and the widest dialogs that fitted 760 pt (Organizer, Define New
+/// Multilevel List) still fit.
+pub const MIN_SIZE: egui::Vec2 = egui::vec2(600.0, 480.0);
 /// Larger saved sizes are corrupt. eframe also shrinks the start size to the largest monitor.
 const MAX_SIZE: egui::Vec2 = egui::vec2(16384.0, 16384.0);
 /// Saved positions farther from the origin than this are corrupt.
 const MAX_COORD: f32 = 32768.0;
 /// Room a window leaves on each side of its monitor for the taskbar, the Dock or a desktop panel,
 /// which the monitor size (all egui reports) includes.
-const SYSTEM_BAR: egui::Vec2 = egui::vec2(48.0, 48.0);
+pub const SYSTEM_BAR: egui::Vec2 = egui::vec2(48.0, 48.0);
+/// How much of a window's top edge must be on one monitor for the pointer to drag it back.
+const GRIP: egui::Vec2 = egui::vec2(96.0, 16.0);
+
+/// Whether a [`GRIP`] of `window`'s top edge lies on one of `monitors`, in one shared unit.
+/// Monitor sizes alone can't tell: a monitor that went away can leave one of the same size.
+pub fn reachable(window: egui::Rect, monitors: &[egui::Rect]) -> bool {
+    let top = egui::Rect::from_min_size(window.min, egui::vec2(window.width(), window.height().min(GRIP.y)));
+    let need = GRIP.min(top.size());
+    monitors.iter().any(|m| {
+        let on = top.intersect(*m);
+        on.is_positive() && on.width() >= need.x && on.height() >= need.y
+    })
+}
 
 /// The window as it was when the app last closed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -144,22 +166,22 @@ impl WindowGeometry {
         }
     }
 
-    /// After a restore: where to move the window when the monitor it now reports differs from the
-    /// one it was saved on (an external monitor was unplugged, say), so a window restored to a
-    /// position no monitor covers any more doesn't open off screen. Centred on the primary
-    /// monitor, whose top-left corner is the origin. A maximized window fills whichever monitor
-    /// the system picks, so it stays put.
+    /// After a restore: where to move the window when it opened on no monitor, or when the monitor
+    /// it now reports differs from the one it was saved on (an external monitor was unplugged,
+    /// say). Centred on the primary monitor, whose top-left corner is the origin. A maximized
+    /// window fills whichever monitor the system picks, so it stays put.
     pub fn rescue_position(&self, window: &RawWindowState) -> Option<egui::Pos2> {
         if self.maximized || self.position.is_none() {
             return None;
         }
-        let saved = egui::Vec2::from(self.monitor?);
         let now = window.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
-        if (now - saved).length() <= 1.0 {
+        let other_monitor = self.monitor.is_some_and(|saved| (now - egui::Vec2::from(saved)).length() > 1.0);
+        if !other_monitor && window.on_a_monitor != Some(false) {
             return None;
         }
-        let free = now - egui::vec2(self.width, self.height);
-        Some(egui::pos2((free.x / 2.0).max(0.0), (free.y / 2.0).max(0.0)))
+        let monitor = window.primary_monitor_rect.unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, now));
+        let free = monitor.size() - egui::vec2(self.width, self.height);
+        Some(monitor.min + (free / 2.0).max(egui::Vec2::ZERO))
     }
 
     /// Once the monitor size is known: a smaller size and a centred position for a window that
@@ -213,6 +235,30 @@ pub fn requested_size(size: egui::Vec2, max_side: f32) -> Option<egui::Vec2> {
         return None;
     }
     Some(size.max(MIN_SIZE).min(max))
+}
+
+/// Clamps an inner window size so that the window (including decoration `frame`) fits on `monitor_size`
+/// leaving room on each side for system bars ([`SYSTEM_BAR`]), bounded below by [`MIN_SIZE`] (#5871).
+pub fn fit_inner_size(inner: egui::Vec2, monitor_size: egui::Vec2, frame: egui::Vec2) -> egui::Vec2 {
+    if !inner.is_finite() || inner.x <= 0.0 || inner.y <= 0.0 {
+        return MIN_SIZE;
+    }
+    if !monitor_size.is_finite() || monitor_size.x <= 0.0 || monitor_size.y <= 0.0 {
+        return inner.max(MIN_SIZE);
+    }
+    let frame = if frame.is_finite() { frame.max(egui::Vec2::ZERO) } else { egui::Vec2::ZERO };
+    let room = (monitor_size - 2.0 * SYSTEM_BAR).max(MIN_SIZE);
+    let max = (room - frame).max(MIN_SIZE);
+    inner.min(max).max(MIN_SIZE)
+}
+
+/// Returns a copy of `builder` whose requested inner size is clamped to fit within `monitor_size`
+/// (including decoration `frame`) with room for system bars ([`SYSTEM_BAR`]) (#5871).
+pub fn fit_builder_to_monitor(builder: egui::ViewportBuilder, monitor_size: egui::Vec2, frame: egui::Vec2) -> egui::ViewportBuilder {
+    match builder.inner_size {
+        Some(inner) => builder.with_inner_size(fit_inner_size(inner, monitor_size, frame)),
+        None => builder,
+    }
 }
 
 #[cfg(test)]
@@ -396,6 +442,48 @@ mod tests {
         assert_eq!(saved().rescue_position(&RawWindowState::default()), None);
     }
 
+    #[test]
+    fn a_window_on_no_monitor_is_moved_on_screen_when_a_same_size_monitor_replaced_its_own() {
+        let off = egui::Rect::from_min_size(egui::pos2(-1920.0, -1080.0), egui::vec2(1200.0, 800.0));
+        let lost = RawWindowState { on_a_monitor: Some(false), ..raw(off, egui::vec2(1920.0, 1080.0)) };
+        assert_eq!(saved().rescue_position(&lost), Some(egui::pos2(360.0, 140.0)));
+        assert_eq!(WindowGeometry { monitor: None, ..saved() }.rescue_position(&lost), Some(egui::pos2(360.0, 140.0)));
+        assert_eq!(WindowGeometry { maximized: true, ..saved() }.rescue_position(&lost), None);
+        let found = RawWindowState { on_a_monitor: Some(true), ..lost };
+        assert_eq!(saved().rescue_position(&found), None);
+    }
+
+    #[test]
+    fn only_a_grippable_top_edge_on_a_monitor_is_reachable() {
+        let left = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0));
+        let right = egui::Rect::from_min_size(egui::pos2(1920.0, 0.0), egui::vec2(1920.0, 1080.0));
+        let monitors = [left, right];
+        let at = |x: f32, y: f32| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(1440.0, 920.0));
+        assert!(reachable(at(100.0, 50.0), &monitors));
+        assert!(reachable(at(1000.0, 50.0), &monitors), "across both monitors");
+        assert!(reachable(at(3840.0 - 96.0, 50.0), &monitors), "just enough of the right edge");
+        assert!(!reachable(at(3840.0 - 95.0, 50.0), &monitors));
+        assert!(!reachable(at(-1920.0, -1080.0), &monitors), "the gone monitor above-left");
+        assert!(!reachable(at(100.0, -900.0), &monitors), "the top edge above every monitor");
+        assert!(!reachable(at(100.0, 50.0), &[]));
+        assert!(
+            reachable(egui::Rect::from_min_size(egui::pos2(10.0, 1072.0), egui::vec2(40.0, 8.0)), &monitors),
+            "smaller than the grip at the monitor edge"
+        );
+    }
+
+    #[test]
+    fn an_unreachable_window_is_centered_on_the_primary_monitor_when_monitor_sizes_differ() {
+        let primary = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 1080.0));
+        let off = egui::Rect::from_min_size(egui::pos2(-3840.0, 0.0), egui::vec2(1200.0, 800.0));
+        let window = RawWindowState { on_a_monitor: Some(false), primary_monitor_rect: Some(primary), ..raw(off, egui::vec2(3840.0, 2160.0)) };
+        assert_eq!(saved().rescue_position(&window), Some(egui::pos2(40.0, 140.0)));
+
+        let primary_left = egui::Rect::from_min_size(egui::pos2(-1280.0, 120.0), egui::vec2(1280.0, 1024.0));
+        let window = RawWindowState { primary_monitor_rect: Some(primary_left), ..window };
+        assert_eq!(saved().rescue_position(&window), Some(egui::pos2(-1240.0, 232.0)));
+    }
+
     /// The rescue waits for a known monitor size, then runs once (moving when needed) and clears the
     /// pending geometry.
     #[test]
@@ -459,6 +547,34 @@ mod tests {
         assert_eq!(requested_size(egui::vec2(1200.0, 800.0), 0.0), None);
     }
 
+    /// #5886: window can be resized to half-screen split widths on standard screens (1280 pt, 1366 pt, etc.)
+    /// down to the exact 600 pt minimum, including 1080p displays with 125% and 150% scaling.
+    /// Clamping at 760 prevented Wayland and GNOME window managers from tiling the window side-by-side.
+    #[test]
+    fn requested_size_allows_split_window_narrow_widths() {
+        // Exact 600 pt minimum width.
+        assert_eq!(requested_size(MIN_SIZE, 8192.0), Some(MIN_SIZE));
+        assert_eq!(requested_size(egui::vec2(600.0, 480.0), 8192.0), Some(egui::vec2(600.0, 480.0)));
+
+        // 1080p display at 150% scaling (1920 / 1.5 = 1280 pt total width -> 640 pt half-screen split).
+        // Also 1280x720 / 1280x800 at 100% scaling (1280 / 2 = 640 pt).
+        assert_eq!(requested_size(egui::vec2(640.0, 480.0), 8192.0), Some(egui::vec2(640.0, 480.0)));
+        assert_eq!(requested_size(egui::vec2(640.0, 540.0), 8192.0), Some(egui::vec2(640.0, 540.0)));
+
+        // 1366x768 display at 100% scaling (1366 / 2 = 683 pt half-screen split).
+        assert_eq!(requested_size(egui::vec2(683.0, 480.0), 8192.0), Some(egui::vec2(683.0, 480.0)));
+
+        // 1080p display at 125% scaling (1920 / 1.25 = 1536 pt total width -> 768 pt half-screen split).
+        assert_eq!(requested_size(egui::vec2(768.0, 480.0), 8192.0), Some(egui::vec2(768.0, 480.0)));
+
+        // Scales above 150% (e.g. 175% where half width is ~548.5 pt) clamp up to the 600 pt minimum width.
+        assert_eq!(requested_size(egui::vec2(548.0, 480.0), 8192.0), Some(egui::vec2(600.0, 480.0)));
+
+        // Sanitized geometry preserves these split-window sizes.
+        let geom = WindowGeometry { position: Some([0.0, 0.0]), width: 640.0, height: 480.0, maximized: false, monitor: None };
+        assert_eq!(geom.sanitized().map(|g| (g.width, g.height)), Some((640.0, 480.0)));
+    }
+
     /// An oversized default window shrinks and is centred to fit, while a restored window keeps its
     /// place; maximized, full-screen, minimized and unknown-monitor frames, and frames without
     /// rectangles, are left alone.
@@ -487,7 +603,7 @@ mod tests {
         let again = WindowGeometry { position: Some([48.0, 48.0]), width: 1424.0, height: 729.0, ..saved() };
         assert_eq!(again.fit_on_monitor(&opened(egui::pos2(48.0, 48.0), egui::vec2(1424.0, 729.0), laptop)), None);
         // Never smaller than the minimum size, and never off the top-left corner.
-        let tiny = egui::vec2(800.0, 600.0);
+        let tiny = egui::vec2(MIN_SIZE.x + 40.0, 600.0);
         assert_eq!(system.fit_on_monitor(&opened(at, start, tiny)), Some((egui::pos2(12.0, 40.5), MIN_SIZE)));
         // Maximized, full screen or minimized, or the monitor not known yet: nothing to do.
         let mut i = opened(at, egui::vec2(1440.0, 864.0), laptop);
@@ -505,5 +621,39 @@ mod tests {
         assert_eq!(system.fit_on_monitor(&i), None);
         // Wayland reports no rects.
         assert_eq!(system.fit_on_monitor(&RawWindowState { monitor_size: Some(laptop), ..Default::default() }), None);
+    }
+
+    /// On displays with smaller dimensions or high DPI scaling (e.g. 2560x1440 at 200% scale,
+    /// yielding a 1280x720 pt screen), the requested inner size shrinks to fit the screen
+    /// rather than extending past the boundaries (#5871).
+    #[test]
+    fn fit_inner_size_constrains_window_to_available_screen_dimensions() {
+        let default_inner = egui::vec2(1440.0, 920.0);
+        let frame = egui::vec2(16.0, 39.0);
+
+        // 2560x1440 display with 200% scaling: 1280x720 pt.
+        let scaled_1440p = egui::vec2(1280.0, 720.0);
+        let fitted = fit_inner_size(default_inner, scaled_1440p, frame);
+        assert_eq!(fitted, egui::vec2(1168.0, 585.0));
+        assert!(fitted.x + frame.x <= scaled_1440p.x);
+        assert!(fitted.y + frame.y <= scaled_1440p.y);
+
+        // Standard 2560x1440 at 100% scaling: ample room, size remains untouched.
+        let large_monitor = egui::vec2(2560.0, 1440.0);
+        assert_eq!(fit_inner_size(default_inner, large_monitor, frame), default_inner);
+
+        // Tiny display: clamps to minimum inner size.
+        let tiny = egui::vec2(600.0, 400.0);
+        assert_eq!(fit_inner_size(default_inner, tiny, frame), MIN_SIZE);
+
+        // Hostile / non-finite inputs never panic and fall back safely.
+        assert_eq!(fit_inner_size(egui::vec2(f32::NAN, 100.0), scaled_1440p, frame), MIN_SIZE);
+        assert_eq!(fit_inner_size(default_inner, egui::vec2(f32::INFINITY, f32::NAN), frame), default_inner.max(MIN_SIZE));
+
+        // Viewport builder adaptation preserves other builder properties while clamping inner size.
+        let builder = egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_title("Test");
+        let adapted = fit_builder_to_monitor(builder, scaled_1440p, frame);
+        assert_eq!(adapted.inner_size, Some(egui::vec2(1168.0, 585.0)));
+        assert_eq!(adapted.title, Some("Test".into()));
     }
 }

@@ -71,22 +71,7 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-pub fn base64_encode(b: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
-    for ch in b.chunks(3) {
-        let n =
-            (ch.first().copied().unwrap_or(0) as u32) << 16 | (ch.get(1).copied().unwrap_or(0) as u32) << 8 | ch.get(2).copied().unwrap_or(0) as u32;
-        for i in 0..4 {
-            if i <= ch.len() {
-                out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
+pub use craft_mime::transfer::base64 as base64_encode;
 
 pub(crate) fn picture(s: &mut Session, v: &Value) -> CmdResult {
     let bytes = if let Some(d) = p::str(v, "data") {
@@ -146,7 +131,16 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
         h *= max_w / w;
         w = max_w;
     }
-    let obj = InlineObject::Image { media: key.clone(), w, h, alt: alt.to_string(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let obj = InlineObject::Image {
+        media: key.clone(),
+        w,
+        h,
+        alt: alt.to_string(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     // A selected Drawing Canvas takes it in.
     if let Some(i) = crate::cmd::canvas::add_member(s, obj.clone())? {
         return Ok(json!({"media": key, "canvasMember": i}));
