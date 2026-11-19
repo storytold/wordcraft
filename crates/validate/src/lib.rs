@@ -994,12 +994,12 @@ fn complete_internal_targets(pkg: &Package) -> Option<CompleteSet<String>> {
         rules: "-";
         collections: "access.into_complete_set*1,field.collapsed_names*1,field.rels*3,type.CompleteSet*1,type.Observed*1";
         scope: "all package relationship declarations; conservative superset of explicit and implicit consumers";
-        loss: "entry discovery incomplete, collapsed relationship records, or an unrecognized or incomplete relationship source";
+        loss: "entry discovery incomplete, collapsed relationship records, or a malformed, unrecognized or incomplete relationship source";
         fallback: "withhold all non-consumption conclusions";
         package_loss: "independent";
     }
 
-    if !ownership_discovery_complete(pkg) || !pkg.collapsed_names.is_empty() || pkg.rels.iter().any(|rp| !rp.recognized_root) {
+    if !ownership_discovery_complete(pkg) || !pkg.collapsed_names.is_empty() || pkg.rels.iter().any(|rp| !rp.inventory_complete) {
         return None;
     }
     let targets = pkg.rels.iter().flat_map(|rp| &rp.rels).filter_map(|rel| rel.target_abs.as_deref().map(str::to_ascii_lowercase));
@@ -4739,6 +4739,32 @@ mod budget_tests {
         assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
         assert_eq!(report.findings.len(), 1, "{report:?}");
         assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Error));
+    }
+
+    #[test]
+    fn malformed_relationship_sources_withhold_both_ct_demotions() {
+        for (manifest, part, bytes, rule, target) in [
+            (content_types(), "[trash]/00af.dat", vec![0xff; 4], "CT-UNDECLARED", "../[trash]/00af.dat"),
+            (content_types_with_override("word/extra.xml", package::MAIN_CONTENT_TYPE), "word/extra.xml", document(), "CT-DUP-MAIN", "extra.xml"),
+        ] {
+            let root = String::from_utf8(doc_rels()).unwrap();
+            for (relationships, xml_warning) in [
+                (format!("x{}", root.split_once("?>").unwrap().1).into_bytes(), true),
+                (rels(&format!(r#"<Relationship Type="urn:test" Target="{target}"/>"#)), false),
+            ] {
+                let report = validate_bytes(&tiny_zip(&[
+                    ("[Content_Types].xml", manifest.clone()),
+                    ("_rels/.rels", package_rels()),
+                    ("word/document.xml", document()),
+                    ("word/_rels/document.xml.rels", relationships),
+                    (part, bytes.clone()),
+                ]));
+                assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+                assert!(report.findings.iter().any(|f| f.rule == rule && f.part.as_deref() == Some(part) && f.severity == Severity::Error));
+                assert!(!report.coverage_notes.iter().any(|note| note.starts_with(rule)));
+                assert_eq!(report.findings.iter().any(|f| f.rule == "XML-MALFORMED" && f.severity == Severity::Warning), xml_warning);
+            }
+        }
     }
 
     #[test]

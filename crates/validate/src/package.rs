@@ -225,8 +225,8 @@ pub(crate) struct RelsPart {
     pub rels: Vec<Rel>,
     /// Later relationships were not examined, so missing IDs/kinds are unknown.
     pub incomplete: bool,
-    /// A complete empty consumer inventory requires an actual OPC Relationships container.
-    pub recognized_root: bool,
+    /// A negative package-wide target lookup requires a well-formed OPC container with no lost declarations.
+    pub inventory_complete: bool,
 }
 
 /// Everything loaded from a package once.
@@ -1286,11 +1286,11 @@ fn load_rels(entries: &[Entry], acc: &mut Acc) -> Vec<RelsPart> {
             // An unreadable declaration source disables relationship-dependent joins too.
             acc.note(format!("{} declarations could not be read; dependent absence checks were skipped", e.name));
             acc.set_incomplete();
-            rels.push(RelsPart { name: e.name.clone(), rels: Vec::new(), incomplete: true, recognized_root: false });
+            rels.push(RelsPart { name: e.name.clone(), rels: Vec::new(), incomplete: true, inventory_complete: false });
             continue;
         };
         let mut guard = ParseGuard::new(limits.events, limits.depth);
-        let (parsed, c, complete, recognized_root) = parse_rels(&dir, text, cap, &mut guard);
+        let (parsed, c, complete, inventory_complete) = parse_rels(&dir, text, cap, &mut guard);
         if c {
             acc.note(format!("{} declares more than {cap} relationships; later ones were not recorded", e.name));
             acc.set_incomplete();
@@ -1304,7 +1304,7 @@ fn load_rels(entries: &[Entry], acc: &mut Acc) -> Vec<RelsPart> {
             acc.note(format!("{} declarations were not fully examined; dependent absence checks were skipped", e.name));
             acc.set_incomplete();
         }
-        rels.push(RelsPart { name: e.name.clone(), rels: parsed, incomplete: !complete, recognized_root });
+        rels.push(RelsPart { name: e.name.clone(), rels: parsed, incomplete: !complete, inventory_complete });
     }
     rels
 }
@@ -1642,14 +1642,14 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
 
 /// Visit only namespace-qualified direct children of the expected OPC root container.
 /// All XML events still consume the guard, including ignored foreign or nested elements.
-/// Returns whether traversal reached EOF at depth zero and whether it saw one recognized root.
-/// These are distinct so a foreign root can still be diagnosed as lacking OPC declarations.
+/// Returns traversal completeness and whether the traversal can certify an OPC inventory.
+/// Other checks can still diagnose the declarations obtained from a source with inventory loss.
 fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mut ParseGuard, mut visit: impl FnMut(&BytesStart)) -> (bool, bool) {
     observation_contract! {
         rules: "-";
         collections: "parser.parse_opc_children*1,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
-        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        loss: "source unavailable or malformed; XML event/depth and namespace expansion budgets; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
         package_loss: "independent";
     }
@@ -1659,6 +1659,11 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
     let mut depth = 0usize;
     let mut valid_root = false;
     let mut roots = 0usize;
+    let mut well_formed = true;
+    let mut at_start = true;
+    // An inherited namespace can be much larger than the element that uses it.
+    // Charge rescanning to a linear bound on input bytes, in addition to the event limit.
+    let mut namespace_work = text.len().saturating_mul(16);
     loop {
         if !guard.tick() {
             return (false, false);
@@ -1668,41 +1673,72 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
                 if !guard.enter() {
                     return (false, false);
                 }
-                let in_namespace = opc_namespace_matches(ns, namespace);
+                well_formed &= opc_element_well_formed(&ns, &e);
                 if depth == 0 {
                     roots += 1;
-                    valid_root = in_namespace && e.local_name().as_ref() == container;
-                } else if depth == 1 && valid_root && in_namespace {
-                    visit(&e);
+                    valid_root = match opc_namespace_matches(ns, namespace, &mut namespace_work) {
+                        Some(matches) => matches && e.local_name().as_ref() == container,
+                        None => return (false, false),
+                    };
+                } else if depth == 1 && valid_root {
+                    match opc_namespace_matches(ns, namespace, &mut namespace_work) {
+                        Some(true) => visit(&e),
+                        Some(false) => {}
+                        None => return (false, false),
+                    }
                 }
                 depth += 1;
             }
             Ok((ns, Event::Empty(e))) => {
-                let in_namespace = opc_namespace_matches(ns, namespace);
+                well_formed &= opc_element_well_formed(&ns, &e);
                 if depth == 0 {
                     roots += 1;
-                    valid_root = in_namespace && e.local_name().as_ref() == container;
-                } else if depth == 1 && valid_root && in_namespace {
-                    visit(&e);
+                    valid_root = match opc_namespace_matches(ns, namespace, &mut namespace_work) {
+                        Some(matches) => matches && e.local_name().as_ref() == container,
+                        None => return (false, false),
+                    };
+                } else if depth == 1 && valid_root {
+                    match opc_namespace_matches(ns, namespace, &mut namespace_work) {
+                        Some(true) => visit(&e),
+                        Some(false) => {}
+                        None => return (false, false),
+                    }
                 }
             }
             Ok((_, Event::End(_))) => {
                 guard.leave();
                 depth = depth.saturating_sub(1);
             }
-            Ok((_, Event::Eof)) => return (depth == 0, roots == 1 && valid_root),
+            Ok((_, Event::Text(e))) if depth == 0 => well_formed &= crate::scan::is_whitespace(&e),
+            Ok((_, Event::CData(_) | Event::GeneralRef(_))) if depth == 0 => well_formed = false,
+            Ok((_, Event::Decl(_))) if !at_start => well_formed = false,
+            // OPC declarations do not need a DTD. Without evaluating it we cannot certify
+            // namespace values or the absence of declarations supplied by entity expansion.
+            Ok((_, Event::DocType(_))) => well_formed = false,
+            Ok((_, Event::Eof)) => return (depth == 0, depth == 0 && roots == 1 && valid_root && well_formed),
             Err(_) => return (false, false),
             _ => {}
         }
+        at_start = false;
         buf.clear();
     }
 }
 
+fn opc_element_well_formed(namespace: &ResolveResult, element: &BytesStart) -> bool {
+    !matches!(namespace, ResolveResult::Unknown(_))
+        && element.attributes().all(|attr| attr.is_ok_and(|attr| attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).is_ok()))
+}
+
 /// The namespace resolver borrows the declaration's raw attribute value.
-fn opc_namespace_matches(resolved: ResolveResult<'_>, expected: &[u8]) -> bool {
-    let ResolveResult::Bound(namespace) = resolved else { return false };
+fn opc_namespace_matches(resolved: ResolveResult<'_>, expected: &[u8], work: &mut usize) -> Option<bool> {
+    let ResolveResult::Bound(namespace) = resolved else { return Some(false) };
+    let raw = namespace.as_ref();
+    if raw.len() <= expected.len() {
+        return Some(raw == expected);
+    }
+    *work = work.checked_sub(raw.len())?;
     // The OPC URIs have no whitespace. Only a reference can spell the same URI differently.
-    std::str::from_utf8(namespace.as_ref()).ok().and_then(|uri| quick_xml::escape::unescape(uri).ok()).is_some_and(|uri| uri.as_bytes() == expected)
+    Some(std::str::from_utf8(raw).ok().and_then(|uri| quick_xml::escape::unescape(uri).ok()).is_some_and(|uri| uri.as_bytes() == expected))
 }
 
 /// Extract and record an `Override` or `Default` content type declaration from an XML element.
@@ -1731,7 +1767,7 @@ fn record_content_type(e: &BytesStart, ct: &mut ContentTypes) {
     }
 }
 
-/// Parse a `.rels` part. Returns `(relationships, capped, complete, recognized_root)` where `capped` is set when the budget
+/// Parse a `.rels` part. Returns `(relationships, capped, complete, inventory_complete)` where `capped` is set when the budget
 /// stopped further relationships from being recorded. The depth bound is tracked like every other
 /// parser (J1), so a deeply nested relationships part stops before a later (possibly dangling)
 /// relationship is read.
@@ -1747,15 +1783,16 @@ fn parse_rels(dir: &str, text: &str, cap: usize, guard: &mut ParseGuard) -> (Vec
 
     let mut rels = Vec::new();
     let mut capped = false;
-    let (complete, recognized_root) =
+    let mut declarations_complete = true;
+    let (complete, source_complete) =
         parse_opc_children(text, b"Relationships", b"http://schemas.openxmlformats.org/package/2006/relationships", guard, |e| {
-            push_rel(dir, e, &mut rels, cap, &mut capped);
+            declarations_complete &= push_rel(dir, e, &mut rels, cap, &mut capped);
         });
-    (rels, capped, complete && !capped, recognized_root)
+    (rels, capped, complete && !capped, source_complete && declarations_complete && !capped)
 }
 
-/// Record one `<Relationship>` element, ignoring any other element.
-fn push_rel(dir: &str, e: &BytesStart, rels: &mut Vec<Rel>, cap: usize, capped: &mut bool) {
+/// Record one `<Relationship>` element, returning false when a declaration is lost or partial.
+fn push_rel(dir: &str, e: &BytesStart, rels: &mut Vec<Rel>, cap: usize, capped: &mut bool) -> bool {
     observation_contract! {
         rules: "-";
         collections: "parser.parse_rel*1,type.Vec*1";
@@ -1765,19 +1802,20 @@ fn push_rel(dir: &str, e: &BytesStart, rels: &mut Vec<Rel>, cap: usize, capped: 
         package_loss: "independent";
     }
 
-    if e.local_name().as_ref() == b"Relationship"
-        && let Some(rel) = parse_rel(dir, e)
-    {
-        if rels.len() >= cap {
-            *capped = true;
-        } else {
-            rels.push(rel);
-        }
+    if e.local_name().as_ref() != b"Relationship" {
+        return true;
     }
+    let Some((rel, complete)) = parse_rel(dir, e) else { return false };
+    if rels.len() >= cap {
+        *capped = true;
+    } else {
+        rels.push(rel);
+    }
+    complete
 }
 
 /// Parse attributes of a `<Relationship>` element into a [`Rel`] struct, resolving internal targets.
-fn parse_rel(dir: &str, e: &BytesStart) -> Option<Rel> {
+fn parse_rel(dir: &str, e: &BytesStart) -> Option<(Rel, bool)> {
     observation_contract! {
         rules: "-";
         collections: "parser.parse_rel*1";
@@ -1790,9 +1828,10 @@ fn parse_rel(dir: &str, e: &BytesStart) -> Option<Rel> {
     let id = attr_plain(e, b"Id")?;
     let kind = attr_plain(e, b"Type").unwrap_or_default();
     let target = attr_plain(e, b"Target").unwrap_or_default();
+    let complete = !id.is_empty() && !kind.is_empty() && !target.is_empty();
     let external = attr_plain(e, b"TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
     let target_abs = (!external).then(|| resolve(dir, &target));
-    Some(Rel { id: id.into(), role: RelationKind::parse(&kind), kind, target_abs, external })
+    Some((Rel { id: id.into(), role: RelationKind::parse(&kind), kind, target_abs, external }, complete))
 }
 
 /// An unqualified OPC attribute; foreign qualified lookalikes never declare OPC metadata.

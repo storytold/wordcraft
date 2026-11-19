@@ -2601,7 +2601,7 @@ fn lossy(bytes: &[u8]) -> String {
 }
 
 /// Check whether the text event consists entirely of XML whitespace characters.
-fn is_whitespace(e: &quick_xml::events::BytesText) -> bool {
+pub(crate) fn is_whitespace(e: &quick_xml::events::BytesText) -> bool {
     e.as_ref().iter().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
 }
 
