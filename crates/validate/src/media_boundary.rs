@@ -1,4 +1,4 @@
-//! The coded image inside an alternate-encoding media part.
+//! The coded image inside an alternate-encoding media part, and layouts its header declines.
 //!
 //! The assessment is a function of the coded image only. For each format the image ends at
 //! the format's own boundary: the JPEG end-of-image marker, the PNG `IEND` chunk, the GIF
@@ -155,4 +155,74 @@ fn bmp_end(bytes: &[u8]) -> Option<usize> {
 /// The RIFF container size plus its eight-byte header.
 fn webp_end(bytes: &[u8]) -> Option<usize> {
     le32(bytes, 4)?.checked_add(8).filter(|&size| size >= 20)
+}
+
+/// A layout the locked decoders refuse by construction, named from the header alone, for a codec
+/// whose adapter reports the refusal as plain malformed data. Genuinely damaged data in a layout
+/// the decoder supports is not named here, so it stays an unexplained decoding error.
+///
+/// WebP: `image-webp` decodes only VP8 keyframes. A frame tag with the keyframe bit set is an
+/// interframe, which every `UnsupportedFeature` it raises is about (`decoder.rs`, `vp8.rs`).
+///
+/// JPEG: `zune-jpeg` reads the sequential and progressive Huffman frames (SOF0 to SOF2) and
+/// `craft-jpeg` the arithmetic, lossless and non-8-bit ones, so the differential (hierarchical)
+/// frames SOF5 to SOF7 and SOF13 to SOF15 are refused as a format error.
+///
+/// PNG, GIF, BMP and TIFF adapters keep the codec's own unsupported error, which the caller
+/// reports through its discriminant; the validator decodes PNG through the `png` crate directly,
+/// which has no unsupported-layout error.
+pub(crate) fn declined_layout(format: Format, bytes: &[u8]) -> Option<&'static str> {
+    match format {
+        Format::WebP => (webp_frame_tag(bytes)? & 1 != 0).then_some("a VP8 frame that is not a keyframe"),
+        Format::Jpeg => matches!(jpeg_frame_marker(bytes)?, 0xc5..=0xc7 | 0xcd..=0xcf).then_some("a differential (hierarchical) JPEG frame"),
+        _ => None,
+    }
+}
+
+/// The 24-bit frame tag of the first `VP8 ` chunk, found by walking RIFF chunks and animation frames.
+fn webp_frame_tag(bytes: &[u8]) -> Option<u32> {
+    if bytes.get(..4)? != b"RIFF" || bytes.get(8..12)? != b"WEBP" {
+        return None;
+    }
+    let mut at = 12usize;
+    loop {
+        let kind = bytes.get(at..at.checked_add(4)?)?;
+        let size = le32(bytes, at.checked_add(4)?)?;
+        let body = at.checked_add(8)?;
+        match kind {
+            b"VP8 " => {
+                return Some(u32::from_le_bytes([*bytes.get(body)?, *bytes.get(body.checked_add(1)?)?, *bytes.get(body.checked_add(2)?)?, 0]));
+            }
+            // An animation frame holds its own chunks after sixteen bytes of frame geometry.
+            b"ANMF" => at = body.checked_add(16)?,
+            _ => at = body.checked_add(size)?.checked_add(size & 1)?,
+        }
+    }
+}
+
+/// The marker of the first start-of-frame segment.
+fn jpeg_frame_marker(bytes: &[u8]) -> Option<u8> {
+    if bytes.get(..2)? != b"\xff\xd8" {
+        return None;
+    }
+    let mut at = 2usize;
+    loop {
+        while bytes.get(at) == Some(&0xff) {
+            at += 1;
+        }
+        let marker = *bytes.get(at)?;
+        at += 1;
+        match marker {
+            0xc0..=0xcf if !matches!(marker, 0xc4 | 0xc8 | 0xcc) => return Some(marker),
+            0xd9 | 0xda | 0x00 => return None,
+            0x01 | 0xd0..=0xd8 => {}
+            _ => {
+                let length = be16(bytes, at)?;
+                if length < 2 {
+                    return None;
+                }
+                at = at.checked_add(length)?;
+            }
+        }
+    }
 }

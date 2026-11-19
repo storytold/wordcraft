@@ -4133,7 +4133,14 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                         acc.note(format!("MEDIA-MAGIC: pixels in {} were not assessed because the codec declined the layout ({error})", e.name));
                         false
                     }
-                    Err(_) => false,
+                    Err(_) => {
+                        // An adapter can report a refusal as plain malformed data. Name the layouts
+                        // that the header alone shows the codec declines by construction.
+                        if let Some(reason) = media_boundary::declined_layout(format, bytes) {
+                            acc.note(format!("MEDIA-MAGIC: pixels in {} were not assessed because the codec declined the layout ({reason})", e.name));
+                        }
+                        false
+                    }
                 },
                 None => false,
             };
@@ -4919,6 +4926,61 @@ mod budget_tests {
             assert_eq!(attempt(exact - 1), 0, "{rows} rows");
             assert_eq!(attempt(exact), 1, "{rows} rows");
         }
+    }
+
+    #[test]
+    fn media_magic_names_header_declined_layouts_the_adapter_flattens() {
+        let grade = |bytes: &[u8]| {
+            let report = validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], DRAWN, "png"));
+            let notes = report.coverage_notes.iter().filter(|note| note.contains("codec declined")).count();
+            (report.verdict, report.findings.iter().map(|f| (f.rule, f.severity)).collect::<Vec<_>>(), notes)
+        };
+        let declined = |notes| (Verdict::Fail, vec![("MEDIA-MAGIC", Severity::Error)], notes);
+        // A single black 1x512 VP8 keyframe in a WebP container.
+        let keyframe = b"RIFF:\0\0\0WEBPVP8 -\0\0\0\xd0\x03\0\x9d\x01*\x01\0\0\x02\0G\x08\x85\x85\x88\x85\x84\x88\x02\x02\0\x06@\x1e\x19U\xf2\xc0=\xe4\xffF\xd4U|\xb0\x0f@\0\xfe\xff\xabP\x80\0".to_vec();
+        assert_eq!(grade(&keyframe), (Verdict::Pass, vec![("MEDIA-MAGIC", Severity::Warning)], 0));
+        // The frame tag's low bit marks an interframe, whether the chunk is first, after a VP8X
+        // header, or inside an animation frame.
+        let mut interframe = keyframe.clone();
+        interframe[20] |= 1;
+        assert_eq!(grade(&interframe), declined(1));
+        let mut extended = keyframe[..12].to_vec();
+        extended.extend(b"VP8X\x0a\0\0\0\0\0\0\0\0\0\0\0\0\0");
+        extended.extend(&interframe[12..]);
+        assert_eq!(grade(&extended), declined(1));
+        let mut animated = keyframe[..12].to_vec();
+        animated.extend(b"ANMF\x10\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
+        animated.extend(&interframe[12..]);
+        assert_eq!(grade(&animated), declined(1));
+        // A keyframe whose data is damaged is genuinely malformed, and stays unexplained.
+        let mut damaged = keyframe.clone();
+        let last = damaged.len() - 1;
+        damaged.truncate(last - 20);
+        assert_eq!(grade(&damaged), declined(0));
+        damaged = keyframe.clone();
+        damaged[23] ^= 0xff;
+        assert_eq!(grade(&damaged), declined(0));
+
+        // Differential JPEG frames are refused by every backend; the supported frame markers are not.
+        let jpeg = test_jpeg(8);
+        let at = jpeg.windows(2).position(|pair| pair == [0xff, 0xc0]).unwrap() + 1;
+        for marker in 0xc0..=0xcfu8 {
+            if matches!(marker, 0xc4 | 0xc8 | 0xcc) {
+                continue;
+            }
+            let mut changed = jpeg.clone();
+            changed[at] = marker;
+            let (_, _, notes) = grade(&changed);
+            // Lossless and arithmetic frames are the codec's own business: it reports its refusals
+            // through its unsupported error. This mechanism covers the markers it flattens.
+            match marker {
+                0xc5..=0xc7 | 0xcd..=0xcf => assert_eq!(notes, 1, "SOF marker {marker:#x}"),
+                0xc0..=0xc2 => assert_eq!(notes, 0, "SOF marker {marker:#x}"),
+                _ => {}
+            }
+        }
+        let truncated = &jpeg[..jpeg.len() / 2];
+        assert_eq!(grade(truncated), declined(0));
     }
 
     #[test]
