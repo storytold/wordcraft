@@ -756,11 +756,13 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
         frame_at(&ctx, &mut app, 500.0);
     }
     let _ = app.run("ui.backstage", json!({"value": false}));
-    // A dialog's columns start at the right too: Go To's list of targets is right of its input.
+    // A dialog's columns start at the right too. Main's Go To set its list of targets beside its page number box; the
+    // framework's Find and Replace stacks Go to what over the target's field and keeps its buttons (Next, Previous,
+    // Close) in a column at the far side, so here the targets are right of that button column.
     let _ = app.run("ui.dialog", json!({"name": "goto"}));
     let drawn = frame_at(&ctx, &mut app, 1600.0);
-    let (targets, input) = (x_of(&drawn, "Go to what:"), x_of(&drawn, "Enter page number:"));
-    assert!(targets > input, "Go To: targets {targets}, input {input}");
+    let (targets, buttons) = (x_of(&drawn, "Go to what:"), x_of(&drawn, "Next"));
+    assert!(targets > buttons, "Go To: targets {targets}, buttons {buttons}");
     crate::dialogs::host::close_all(&mut app, &ctx);
     let dialogs = [
         "font",
