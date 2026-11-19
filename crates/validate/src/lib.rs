@@ -45,6 +45,7 @@ mod resolution;
 #[cfg(test)]
 mod resolution_tests;
 use resolution::Resolution;
+mod media_boundary;
 mod media_workspace;
 mod scan;
 mod tiff_admission;
@@ -4243,7 +4244,7 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
             Format::Png | Format::Gif | Format::Bmp | Format::WebP => 2,
             _ => return Ok(AlternateAssessment::Unassessed),
         };
-        let payload = unpadded_alternate(format, bytes);
+        let payload = media_boundary::coded_image(format, bytes);
         reserve((payload.len() as u64).saturating_mul(factor).max(8192))?;
         payload
     };
@@ -4307,36 +4308,6 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
         }
     }
     Ok(AlternateAssessment::Usable)
-}
-
-/// Remove zero padding beyond a format-defined payload boundary. An incomplete
-/// image may need trailing zeros as data, so retain all bytes without a boundary.
-fn unpadded_alternate(format: Format, bytes: &[u8]) -> &[u8] {
-    let nonzero_end = || bytes.iter().rposition(|&byte| byte != 0).map_or(0, |i| i + 1);
-    let u32_le = |at: usize| bytes.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
-    let end = match format {
-        Format::Png | Format::Jpeg | Format::Gif => {
-            let end = nonzero_end();
-            let content = bytes.get(..end).unwrap_or_default();
-            let framed = match format {
-                Format::Png => content.ends_with(b"\0\0\0\0IEND\xaeB`\x82"),
-                Format::Jpeg => content.ends_with(b"\xff\xd9"),
-                _ => content.ends_with(b";"),
-            };
-            framed.then_some(end)
-        }
-        Format::Bmp => u32_le(2)
-            .filter(|&size| size >= 26 && u32_le(10).is_some_and(|offset| offset < size))
-            .and_then(|size| usize::try_from(size).ok())
-            .map(|size| size.max(nonzero_end())),
-        Format::WebP => u32_le(4)
-            .and_then(|size| usize::try_from(size).ok())
-            .and_then(|size| size.checked_add(8))
-            .filter(|&size| size >= 20)
-            .map(|size| size.max(nonzero_end())),
-        _ => None,
-    };
-    end.and_then(|end| bytes.get(..end)).unwrap_or(bytes)
 }
 
 fn probe_alternate_tiff(bytes: &[u8]) -> Result<Option<codecs::TiffPage>, CodecError> {
@@ -4764,6 +4735,118 @@ mod budget_tests {
         assert!(!admitted(vec![node(Some(1), None), node(Some(0), None)]));
         assert!(!admitted(vec![node(Some(1), None), node(None, Some(0))]));
         assert!(!admitted(vec![node(None, Some(0))]));
+    }
+
+    #[test]
+    fn alternate_image_assessment_and_debit_ignore_every_trailer() {
+        // The assessment is a function of the coded image. Whatever follows its own boundary, of any
+        // content and length, changes neither the outcome nor the budget charged for the image.
+        let image = codecs::Image::from_u8(8, 8, codecs::ChannelLayout::Rgb, vec![90; 192]).unwrap();
+        let outcome = |format: Format, bytes: &[u8]| {
+            let mut remaining = 1u64 << 20;
+            let result = match decode_alternate_image(format, bytes, 1 << 20, &mut remaining) {
+                Ok(AlternateAssessment::Usable) => "usable".to_string(),
+                Ok(AlternateAssessment::Unusable) => "unusable".to_string(),
+                Ok(AlternateAssessment::Unassessed) => "unassessed".to_string(),
+                Ok(AlternateAssessment::IncompleteTiffDirectory) => "directory".to_string(),
+                Err(error) => format!("{error:?}"),
+            };
+            (result, (1u64 << 20) - remaining)
+        };
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut random = |len: usize| {
+            (0..len)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    (state >> 24) as u8
+                })
+                .collect::<Vec<u8>>()
+        };
+        let trailers = [
+            vec![0],
+            vec![b'X'],
+            vec![0; 5000],
+            [vec![b'X'], vec![0; 700_000]].concat(),
+            b"trailing note\n".repeat(60_000),
+            random(3000),
+            random(600_000),
+            [vec![0; 100], b"tail".to_vec(), vec![0; 700_000]].concat(),
+            // Bytes that look like the end of an image or the start of another.
+            b"\xff\xd9\xff\xd8\xff\xd9".repeat(4000),
+            [b"\0\0\0\0IEND\xaeB`\x82".as_slice(), b";", b"GIF89a", b"BM", b"RIFF", b"II*\0"].concat().repeat(1000),
+        ];
+        let mut formats = Vec::new();
+        for format in [Format::Png, Format::Jpeg, Format::Gif, Format::Bmp, Format::WebP, Format::Tiff] {
+            if let Ok(bytes) = codecs::encode(&image, format, &codecs::EncodeOptions::default()) {
+                formats.push((format, bytes));
+            }
+        }
+        // The synthetic encoders cover PNG, JPEG, BMP and TIFF; these byte fixtures cover GIF and WebP.
+        formats.push((
+            Format::Gif,
+            b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff!\xf9\x04\x01\0\0\0\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;".to_vec(),
+        ));
+        formats.push((Format::WebP, b"RIFF:\0\0\0WEBPVP8 -\0\0\0\xd0\x03\0\x9d\x01*\x01\0\0\x02\0G\x08\x85\x85\x88\x85\x84\x88\x02\x02\0\x06@\x1e\x19U\xf2\xc0=\xe4\xffF\xd4U|\xb0\x0f@\0\xfe\xff\xabP\x80\0".to_vec()));
+        let covered: Vec<Format> = formats.iter().map(|(format, _)| *format).collect();
+        for format in [Format::Png, Format::Jpeg, Format::Gif, Format::Bmp, Format::WebP, Format::Tiff] {
+            assert!(covered.contains(&format), "no sample for {format:?}");
+        }
+        for (format, coded) in formats {
+            let plain = outcome(format, &coded);
+            assert_eq!(plain.0, "usable", "{format:?}: {plain:?}");
+            for trailer in &trailers {
+                let padded = [coded.as_slice(), trailer.as_slice()].concat();
+                assert_eq!(
+                    outcome(format, &padded),
+                    plain,
+                    "{format:?} with a {}-byte trailer starting {:02x?}",
+                    trailer.len(),
+                    &trailer[..trailer.len().min(4)]
+                );
+            }
+            // Hostile structure never panics and never extends the input: every cut-off, and a
+            // corrupted byte at every position, leaves a prefix of the part.
+            for cut in 0..=coded.len() {
+                let prefix = coded.get(..cut).unwrap_or_default();
+                assert!(media_boundary::coded_image(format, prefix).len() <= prefix.len());
+                let mut corrupt = coded.clone();
+                if let Some(byte) = corrupt.get_mut(cut) {
+                    *byte = !*byte;
+                    assert!(media_boundary::coded_image(format, &corrupt).len() <= corrupt.len());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn coded_image_boundary_skips_marker_lookalikes_inside_segments() {
+        // A marker, chunk name or trailer byte inside a length-delimited segment is data.
+        let tail = b"\xff\xd9trailing\0\0\0\0IEND\xaeB`\x82;";
+        let jpeg = test_jpeg(4);
+        let mut spliced = jpeg[..2].to_vec();
+        spliced.extend(b"\xff\xe1\x00\x08\xff\xd9\xff\xd9\xff\xd9");
+        spliced.extend(&jpeg[2..]);
+        let padded = [spliced.as_slice(), tail].concat();
+        assert_eq!(media_boundary::coded_image(Format::Jpeg, &padded), spliced.as_slice());
+
+        let image = codecs::Image::from_u8(2, 2, codecs::ChannelLayout::Rgb, vec![9; 12]).unwrap();
+        let png = codecs::encode(&image, Format::Png, &codecs::EncodeOptions::default()).unwrap();
+        let mut chunk = b"\0\0\0\x0c".to_vec();
+        chunk.extend(b"tEXt\0\0\0\0IEND\xaeB`\x82\0\0\0\0");
+        let mut spliced = png[..33].to_vec();
+        spliced.extend(&chunk);
+        spliced.extend(&png[33..]);
+        let padded = [spliced.as_slice(), tail].concat();
+        assert_eq!(media_boundary::coded_image(Format::Png, &padded), spliced.as_slice());
+
+        let mut gif = b"GIF89a\x01\0\x01\0\0\0\0!\xfe\x03;;;\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;".to_vec();
+        let end = gif.len();
+        gif.extend(tail);
+        assert_eq!(media_boundary::coded_image(Format::Gif, &gif).len(), end);
+        // Without a boundary every byte is data.
+        assert_eq!(media_boundary::coded_image(Format::Gif, &gif[..end - 1]).len(), end - 1);
     }
 
     #[test]

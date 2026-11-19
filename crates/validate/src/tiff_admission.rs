@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use craft_image_codecs::CodecError;
 use craft_tiff::{ByteOrder, EntrySpan, FieldType, ParseOptions, Tiff, directory_entries, entry_span, tags};
 
-/// What the codec will read for a complete TIFF, excluding zero padding after
-/// its last referenced byte. Keep nonzero trailers for the codec's format checks.
+/// What the codec will read for a complete TIFF: everything up to its last referenced byte.
+/// Bytes after that are padding of any content and any length.
 pub(crate) fn payload(bytes: &[u8], mut reserve: impl FnMut(u64) -> Result<(), CodecError>) -> Result<Option<&[u8]>, CodecError> {
     observation_contract! {
         rules: "-";
@@ -41,9 +41,8 @@ pub(crate) fn payload(bytes: &[u8], mut reserve: impl FnMut(u64) -> Result<(), C
     if !walk.chain(first, 0, true)? {
         return Ok(None);
     }
+    // Every range the codec reads is named by the walk, so what follows its end is padding of any content.
     let end = usize::try_from(walk.end).unwrap_or(usize::MAX).min(bytes.len());
-    let suffix = bytes.get(end..).unwrap_or_default();
-    let end = suffix.iter().rposition(|&byte| byte != 0).map_or(end, |last| end.saturating_add(last + 1));
     Ok(bytes.get(..end))
 }
 
