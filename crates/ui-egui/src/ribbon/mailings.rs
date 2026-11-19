@@ -4,7 +4,7 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, IconButton};
-use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::MenuItem;
 use craft::ui::primitives::IconSpec;

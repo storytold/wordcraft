@@ -5,7 +5,7 @@ use craft::keymap::CommandRef;
 use craft::menu::{RibbonGroup, RibbonRow};
 use craft::pages::ui::TableSizePicker;
 use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
-use craft::ui::contract::{ActivateOn, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _};
+use craft::ui::contract::{ActivateOn, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
 use craft::ui::list::ThumbAspect;
