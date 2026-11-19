@@ -115,7 +115,7 @@ impl Windows {
             recent: vec![1],
             focus: None,
             menu: WindowMenu::default(),
-            builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
+            builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size(crate::window_geometry::MIN_SIZE),
             input_plugin: false,
             driven: false,
             arranged: arrange::State::default(),
@@ -866,6 +866,12 @@ impl WordApp {
     /// borrowed for the interface).
     pub(crate) fn other_windows(&self) -> impl Iterator<Item = &WindowUi> {
         self.windows.open.iter().filter_map(|w| w.ui.as_deref())
+    }
+
+    /// [`WordApp::other_windows`] with each window's key, for each window's composition face
+    /// ([`crate::theme::composition_family`]).
+    pub(crate) fn other_windows_by_key(&self) -> impl Iterator<Item = (u64, &WindowUi)> {
+        self.windows.open.iter().filter_map(|w| w.ui.as_deref().map(|ui| (w.key, ui)))
     }
 }
 
