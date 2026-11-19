@@ -2,7 +2,7 @@
 
 WordCraft works with the [Zotero](https://www.zotero.org) desktop app the way Word does: Zotero's
 own citation dialog, all of its citation styles, automatic bibliography and refresh. Nothing to
-install in Zotero; it only has to be running. The **Zotero** tab in the ribbon has the buttons:
+install in Zotero; it only has to be running. The **Citations** tab in the ribbon (Zotero is the citation provider) has the buttons:
 Add/Edit Citation, Add Note, Add/Edit Bibliography, Refresh, Document Preferences and Unlink
 Citations (each runs one of the commands below).
 
@@ -36,7 +36,7 @@ wordcraft-cli zotero refresh paper.docx --save paper.docx [--trace]
 
 Two engine commands work with Zotero's fields without Zotero running:
 
-- `caret.pastCitation` (Zotero › Move Past Citation) moves the caret to just after the citation
+- `caret.pastCitation` (Citations › Move Past Citation) moves the caret to just after the citation
   it is in or before. Adjacent citations count as one. If there is none, it moves past the next
   citation.
 - Read Aloud (`review.readAloud`, Review › Speech, Mod+Alt+Space) skips citations and the
