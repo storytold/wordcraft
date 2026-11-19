@@ -7658,6 +7658,7 @@ name = "wordcraft-validate"
 version = "0.18.1"
 dependencies = [
  "craft-image-codecs",
+ "craft-tiff",
  "png",
  "quick-xml 0.41.0",
  "serde",

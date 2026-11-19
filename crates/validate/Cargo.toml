@@ -13,6 +13,7 @@ zip = { workspace = true }
 quick-xml = { workspace = true }
 serde = { workspace = true }
 craft-image-codecs = { workspace = true }
+craft-tiff = { workspace = true }
 png = "0.18"
 
 [dev-dependencies]

@@ -4070,7 +4070,7 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         collections: "access.missing*1,field.bytes*1,field.content_types*1,field.entries*1,type.Vec*1";
         scope: "existing media candidates and signatures; prove non-consumption from drawing-reference coverage or verify alternate raster bytes with the shared bounded decoder";
         loss: "incomplete relationship or reference discovery, unsupported alternate encoding, or decode budget";
-        fallback: "retain the signature Error when neither basis for a Warning is established; explain decoder budget loss";
+        fallback: "retain the signature Error when neither basis for a Warning is established and explain decoder budget loss or an unavailable decoder for a recognized encoding";
         package_loss: "independent";
     }
 
@@ -4092,13 +4092,20 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         }
         let unused = drawing_targets.get_or_insert_with(|| possible_drawing_targets(pkg, xml)).as_ref().is_some_and(|targets| targets.missing(&l));
         let warn = unused
-            || match decode_alternate_image(bytes, acc.limits.part_bytes, &mut decode_bytes) {
-                Ok(usable) => usable,
-                Err(CodecError::LimitExceeded(_)) => {
-                    decode_limited_at.get_or_insert(&e.name);
+            || match codecs::detect(bytes) {
+                Some(format) if !format.caps().read => {
+                    acc.note(format!("MEDIA-MAGIC: {} encoding in {} was not assessed because its decoder is unavailable", format.name(), e.name));
                     false
                 }
-                Err(_) => false,
+                Some(format) => match decode_alternate_image(format, bytes, acc.limits.part_bytes, &mut decode_bytes) {
+                    Ok(usable) => usable,
+                    Err(CodecError::LimitExceeded(_)) => {
+                        decode_limited_at.get_or_insert(&e.name);
+                        false
+                    }
+                    Err(_) => false,
+                },
+                None => false,
             };
         if warn {
             // Save one extra Warning to exercise the existing overflow path. Emit Errors first
@@ -4166,19 +4173,22 @@ fn possible_drawing_targets(pkg: &Package, xml: &XmlScan) -> Option<CompleteSet<
     Observed::complete(targets).into_complete_set()
 }
 
-/// Verify the raster with the shared codec. Charge a bounded decode even on failure. TIFF and
-/// other encodings without a bounded path here retain the signature mismatch's default grade.
-fn decode_alternate_image(bytes: &[u8], per_part: u64, remaining: &mut u64) -> Result<bool, CodecError> {
-    let Some(format) = codecs::detect(bytes) else { return Ok(false) };
-    if !matches!(format, Format::Png | Format::Jpeg | Format::Gif | Format::Bmp | Format::WebP) {
+/// Verify the raster with a bounded decoder and charge the assessment even on failure.
+fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining: &mut u64) -> Result<bool, CodecError> {
+    if !matches!(format, Format::Png | Format::Jpeg | Format::Gif | Format::Bmp | Format::WebP | Format::Tiff) {
         return Ok(false);
     }
     let budget = per_part.min(*remaining);
     let over_budget = || CodecError::LimitExceeded("alternate image decode budget".into());
     let encoded = bytes.len() as u64;
-    // Reserve before inspecting headers. JPEG's coefficient scan can copy metadata and
-    // allocate a marker table. Keep the reservation even if the header can't be read.
-    let preflight = encoded.saturating_mul(if format == Format::Jpeg { 4 } else { 2 }).max(8192);
+    // Reserve before inspecting headers. TIFF builds a directory inventory and JPEG's
+    // coefficient scan copies metadata. Keep the reservation even if a header can't be read.
+    let header_factor = match format {
+        Format::Tiff => 16,
+        Format::Jpeg => 4,
+        _ => 2,
+    };
+    let preflight = encoded.saturating_mul(header_factor).max(8192);
     if preflight > budget {
         return Err(over_budget());
     }
@@ -4202,17 +4212,24 @@ fn decode_alternate_image(bytes: &[u8], per_part: u64, remaining: &mut u64) -> R
             let (width, height) = codecs::bmp_probe::dimensions(bytes).ok_or(CodecError::UnknownFormat)?;
             (width, height, 0)
         }
+        Format::Tiff => {
+            let Some((width, height)) = probe_alternate_tiff(bytes, preflight)? else { return Ok(false) };
+            (width, height, 0)
+        }
         _ => return Ok(false),
     };
     let pixels = u64::from(width) * u64::from(height);
-    // Allow one 16-bit RGBA buffer plus decoder working space, encoded metadata and JPEG
-    // coefficients. Use a small allowance for headers and rows in tiny images.
-    let allocation = pixels.saturating_mul(8).max(encoded).max(4096);
-    let charge = allocation.saturating_mul(2).saturating_add(coefficients).max(preflight);
+    // Allow one output buffer plus decoder working space, encoded metadata and JPEG coefficients.
+    // TIFF also supports wider samples and CMYK with alpha.
+    let bytes_per_pixel = if format == Format::Tiff { 20 } else { 8 };
+    let allocation = pixels.saturating_mul(bytes_per_pixel).max(encoded).max(4096);
+    let decode_charge = allocation.saturating_mul(2).saturating_add(coefficients);
+    let charge = if format == Format::Tiff { preflight.saturating_add(decode_charge) } else { decode_charge.max(preflight) };
     if charge > budget {
         return Err(over_budget());
     }
-    // Decoder allocations can reuse the preflight reservation after header inspection ends.
+    // TIFF decoding rebuilds its directory inventory alongside the raster. Other decoders can
+    // reuse the reservation after their header inspection ends.
     *remaining -= charge - preflight;
     if format == Format::Png {
         // The encoded-byte reserve covers raw ancillary chunks alongside pixel working space.
@@ -4229,6 +4246,39 @@ fn decode_alternate_image(bytes: &[u8], per_part: u64, remaining: &mut u64) -> R
         }
     }
     Ok(true)
+}
+
+/// Validate and bound the directory walk before the decoder builds its own page inventory.
+fn probe_alternate_tiff(bytes: &[u8], preflight: u64) -> Result<Option<(u32, u32)>, CodecError> {
+    observation_contract! {
+        rules: "-";
+        collections: "parser.parse_with_status*1";
+        scope: "bounded TIFF directory discovery for the default page's decode estimate";
+        loss: "unreadable or unexamined TIFF directory entries and values";
+        fallback: "retain the signature Error when the default page cannot be established";
+        package_loss: "independent";
+    }
+
+    let metadata_bytes = usize::try_from(preflight).unwrap_or(usize::MAX);
+    let parser_defaults = craft_tiff::ParseOptions::default();
+    let options = craft_tiff::ParseOptions {
+        max_ifds: parser_defaults.max_ifds.min(metadata_bytes / 1024),
+        max_entries_total: parser_defaults.max_entries_total.min(metadata_bytes / 256),
+        // Values can be copied into ancestor directories. Charge aliases as well as their source.
+        value_budget: Some(preflight / 16),
+        ..parser_defaults
+    };
+    match craft_tiff::Tiff::parse_with_status(bytes, &options) {
+        Ok((_, true)) => {}
+        Err(craft_tiff::TiffError::Limit(reason)) => return Err(CodecError::LimitExceeded(reason.into())),
+        _ => return Ok(None),
+    }
+    let directories = codecs::tiff_info(bytes)?;
+    Ok(directories
+        .default_page()
+        .filter(|_| directories.complete)
+        .and_then(|index| directories.pages.get(index))
+        .map(|page| (page.width, page.height)))
 }
 
 /// Check the first PNG image's rows, including Adam7 passes, without inflating text or ICC data.
@@ -4441,6 +4491,26 @@ mod budget_tests {
     }
 
     #[test]
+    fn media_magic_distinguishes_decoded_failed_and_unassessed_encodings() {
+        let image = codecs::Image::from_u8(10, 10, codecs::ChannelLayout::Rgb, vec![80; 300]).unwrap();
+        let tiff = codecs::encode(&image, Format::Tiff, &codecs::EncodeOptions::default()).unwrap();
+        for (bytes, verdict, severity, unassessed) in [
+            (tiff.as_slice(), Verdict::Pass, Severity::Warning, false),
+            (&tiff[..tiff.len() / 2], Verdict::Fail, Severity::Error, false),
+            (b"\xff\x0a".as_slice(), Verdict::Fail, Severity::Error, true),
+        ] {
+            let report = validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], DRAWN, "png"));
+            assert_eq!(report.verdict, verdict, "{report:?}");
+            assert_eq!(report.findings.len(), 1, "{report:?}");
+            assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", severity));
+            assert_eq!(report.coverage_notes.len(), usize::from(unassessed), "{report:?}");
+            if unassessed {
+                assert!(report.coverage_notes[0].contains("JPEG XL") && report.coverage_notes[0].contains("was not assessed"));
+            }
+        }
+    }
+
+    #[test]
     fn media_magic_budget_keeps_errors_ahead_of_warnings_in_both_orders() {
         let used = ("word/media/drawn.png", b"bad".as_slice());
         let unused = ("word/media/unused.png", b"also bad".as_slice());
@@ -4472,18 +4542,18 @@ mod budget_tests {
         let malformed = b"RIFF\x04\0\0\0WEBP";
         for (per_part, mut remaining) in [(1, 64 * 1024), (64 * 1024, 1), (64 * 1024, 0)] {
             let before = remaining;
-            assert!(matches!(decode_alternate_image(malformed, per_part, &mut remaining), Err(CodecError::LimitExceeded(_))));
+            assert!(matches!(decode_alternate_image(Format::WebP, malformed, per_part, &mut remaining), Err(CodecError::LimitExceeded(_))));
             assert_eq!(remaining, before);
         }
 
         let image = codecs::Image::from_u8(2, 2, codecs::ChannelLayout::Rgb, vec![42; 12]).unwrap();
         let webp = codecs::encode(&image, Format::WebP, &codecs::EncodeOptions::default()).unwrap();
         let mut remaining = 16 * 1024;
-        assert!(decode_alternate_image(malformed, 16 * 1024, &mut remaining).is_err());
+        assert!(decode_alternate_image(Format::WebP, malformed, 16 * 1024, &mut remaining).is_err());
         assert!(remaining < 16 * 1024, "an admitted failed probe consumes budget");
-        assert!(decode_alternate_image(&webp, 16 * 1024, &mut remaining).unwrap());
+        assert!(decode_alternate_image(Format::WebP, &webp, 16 * 1024, &mut remaining).unwrap());
         assert_eq!(remaining, 0);
-        assert!(matches!(decode_alternate_image(&webp, 16 * 1024, &mut remaining), Err(CodecError::LimitExceeded(_))));
+        assert!(matches!(decode_alternate_image(Format::WebP, &webp, 16 * 1024, &mut remaining), Err(CodecError::LimitExceeded(_))));
     }
 
     #[test]
