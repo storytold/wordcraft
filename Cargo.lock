@@ -7657,6 +7657,7 @@ dependencies = [
 name = "wordcraft-validate"
 version = "0.18.1"
 dependencies = [
+ "craft-image-codecs",
  "quick-xml 0.41.0",
  "serde",
  "serde_json",

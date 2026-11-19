@@ -4,7 +4,7 @@ One row per (fixture × consumer). An `observed` evidence grade in the checker
 traces to a row here. New consumers add rows; a result for one consumer is
 never silently promoted to a claim about another.
 
-**Consumer for all current rows:** Word for the web (Microsoft 365 web
+**Consumer for the original calibration:** Word for the web (Microsoft 365 web
 build; exact build/version not exposed by the product UI).
 **Dates:** 2026-11-06. **Protocol:** file uploaded, opened, editing attempted
 (Edit clicked when the file opened in Reading View); verdicts scored only
@@ -54,7 +54,19 @@ corruption — the verbatim wording is what distinguishes the two.
 | 23-tc-no-p | opens clean | cell present in structure, nothing visible; spec basis stands, web tolerance recorded |
 | 24-deltext | opens clean | text renders as a tracked deletion anyway (lenient recovery) |
 | 25-move-unpaired | opens clean, semantic loss | text demoted to plain text; move semantics silently dropped |
-| 26-media-magic | tier 5: opens, content loss | picture does not render; no content-sniffing rescue |
+| 26-media-magic | tier 5: opens, content loss | The drawing references a JPEG signature stub in a part declared as PNG. The picture does not render. |
+
+## Corpus probes — media mismatches
+
+Word for the web was used to open the drawn probes and inspect the picture on 2026-11-18. The complete JPEG displayed when declared as PNG. The signature stub and the text payload both left the drawing without a picture. Desktop Word for Mac 16.114.4 opened the drawn stub and text documents cleanly at the document level.
+
+| Probe | SHA-256 | Web picture outcome |
+| --- | --- | --- |
+| `probe-media-drawn-jpeg` | `bb8014c5882d68a1bd6b1e1d6fb7b858d2d9a7bb2fc2e757ab092d8c3ec01703` | Displayed |
+| `probe-media-drawn-stub` | `06a372229fa0c9a902144715412936cb2cbad053c41efe236072c525f33d574a` | Missing |
+| `probe-media-drawn-text` | `944c4fc7782cbc90692c72b02e56204d7d96488c772445f1332e63e926c3c03b` | Missing |
+
+The open-only probes `probe-mediamagic-bin` and `probe-mediamagic-text` have image relationships and no consuming drawings. The measured `probe-mediamagic-bin` archive has SHA-256 `02ad532831e4850bd75b7d9e5d3594572f5cc8b4d96022974cd176ea8b4c4942`.
 
 ## Oracle probes — extension-part content-type spellings (A/B)
 

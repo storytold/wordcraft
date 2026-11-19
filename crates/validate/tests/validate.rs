@@ -3002,7 +3002,7 @@ fn custom_xml_outside_wrapper_does_not_fire() {
 }
 
 #[test]
-fn media_magic_is_an_error() {
+fn unused_media_magic_warns() {
     let mut d = Doc::minimal();
     d.set("[Content_Types].xml", content_types_xml(&[("png", "image/png")], &[]));
     d.set("word/media/pic.png", b"this is not a png file at all".to_vec());
@@ -3010,10 +3010,18 @@ fn media_magic_is_an_error() {
         r#"<Relationship Id="rIdI" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/pic.png"/>"#,
     );
     let report = validate(&d);
-    assert_eq!(report.verdict, Verdict::Fail);
+    assert_eq!(report.verdict, Verdict::Pass);
     let f = assert_finding(&report, "MEDIA-MAGIC", Some("word/media/pic.png"));
-    assert_eq!(f.severity, Severity::Error);
+    assert_eq!(f.severity, Severity::Warning);
     assert_eq!(f.evidence, wordcraft_validate::Evidence::Observed);
+}
+
+#[test]
+fn media_magic_calibration_retains_the_picture_error() {
+    let report = validate_bytes(include_bytes!("../corpus/calibration/26-media-magic.docx"));
+    assert_eq!(report.verdict, Verdict::Fail);
+    assert_eq!(assert_finding(&report, "MEDIA-MAGIC", Some("word/media/image1.png")).severity, Severity::Error);
+    assert!(has(&report, "NOTE-PR-LISTING"));
 }
 
 #[test]

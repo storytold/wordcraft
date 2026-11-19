@@ -12,6 +12,7 @@ workspace = true
 zip = { workspace = true }
 quick-xml = { workspace = true }
 serde = { workspace = true }
+craft-image-codecs = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -55,6 +55,7 @@ use std::collections::hash_map::Entry;
 use std::io::Read;
 use std::path::Path;
 
+use craft_image_codecs::{self as codecs, CodecError, DecodeOptions, DecodeWarning, Format, Limits as CodecLimits};
 use serde::Serialize;
 
 #[cfg(test)]
@@ -187,8 +188,8 @@ pub struct Report {
     pub checks_run: Vec<&'static str>,
 }
 
-/// A rule's fixed severity and evidence. [`Acc::add`] looks a rule's grade up here, so this table
-/// is the single place a rule's severity and evidence are recorded, next to their provenance.
+/// A rule's default severity and evidence. [`Acc::add`] looks the grade up here, next to its
+/// provenance. Rules whose grade depends on the observation can use [`Acc::add_graded`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RuleSpec {
     pub id: &'static str,
@@ -484,8 +485,8 @@ pub(crate) const STRUCT_MOVE_UNPAIRED: RuleSpec = RuleSpec { id: "STRUCT-MOVE-UN
 /// documents that Word will not open it. Desktop Word opens files with unattached custom XML
 /// schema references cleanly, so those references are reported as informational coverage.
 pub(crate) const CUSTOMXML_SCHEMA: RuleSpec = RuleSpec { id: "CUSTOMXML-SCHEMA", severity: Severity::Error, evidence: Evidence::MsDocumented };
-/// `MEDIA-MAGIC`: an image whose bytes do not match its extension/type. Observed: Word web opens
-/// but the picture does not render — content lost, no format-sniffing rescue.
+/// `MEDIA-MAGIC`: an image whose bytes do not match its extension/type. Word for the web loses
+/// a drawn picture with unusable bytes. Unused images and usable alternate encodings warn.
 pub(crate) const MEDIA_MAGIC: RuleSpec = RuleSpec { id: "MEDIA-MAGIC", severity: Severity::Error, evidence: Evidence::Observed };
 
 /// Every rule, in the documented order; [`Acc::add`] grades findings from this table.
@@ -815,7 +816,7 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
         check_story(&pkg, &xml, &mut acc);
         check_note_pr(&pkg, &xml, &mut acc);
     }
-    check_media(&pkg, &mut acc);
+    check_media(&pkg, &xml, &mut acc);
     acc.finish()
 }
 
@@ -1099,6 +1100,7 @@ struct PartFacts {
     name: String,
     syntax: Completeness,
     references: Observed<Vec<RefFact>>,
+    drawing_refs_complete: bool,
     content: Observed<Vec<RelId>>,
     exemptions: Observed<Vec<RelId>>,
     facts: scan::StoryFacts,
@@ -1107,7 +1109,14 @@ struct PartFacts {
 }
 impl PartFacts {
     /// Create empty auxiliary observations with the exact source availability before distributing budgeted values.
-    fn new(name: &str, facts: scan::StoryFacts, syntax_complete: bool, note_role_known: bool, references_complete: bool) -> Self {
+    fn new(
+        name: &str,
+        facts: scan::StoryFacts,
+        syntax_complete: bool,
+        note_role_known: bool,
+        references_complete: bool,
+        drawing_refs_complete: bool,
+    ) -> Self {
         observation_contract! {
             rules: "-";
             collections: "type.Observed*6,type.Vec*6";
@@ -1127,6 +1136,7 @@ impl PartFacts {
                 Vec::new(),
                 if references_complete { Completeness::Complete } else { Completeness::Incomplete("relationship reference source or budget") },
             ),
+            drawing_refs_complete,
             content: Observed::with_status(Vec::new(), syntax),
             exemptions: Observed::with_status(Vec::new(), syntax),
             listings: (Observed::with_status(Vec::new(), note_status), Observed::with_status(Vec::new(), note_status)),
@@ -1360,7 +1370,11 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             }
         }
         let references_complete = scanned.facts_complete && !refs_pooled_capped && pooled_refs.saturating_add(scanned.refs.len()) <= acc.limits.facts;
-        parts.insert(PartId::new(&e.name), PartFacts::new(&e.name, scanned.facts, scanned.syntax_complete, !role.conflicting(), references_complete));
+        let drawing_refs_complete = scanned.drawing_refs_complete && role.is_story() && !role.conflicting();
+        parts.insert(
+            PartId::new(&e.name),
+            PartFacts::new(&e.name, scanned.facts, scanned.syntax_complete, !role.conflicting(), references_complete, drawing_refs_complete),
+        );
         if scanned.content_part_capped {
             content_part_capped_any = true;
             content_part_incomplete_owners.insert(e.name.clone());
@@ -4050,19 +4064,23 @@ fn report_missing_note(acc: &mut Acc, refs: &[(DecimalId, String)], defs: &Compl
     }
 }
 
-/// Verify that media files in `word/media/` or targeted by image relationships match magic byte signatures.
-fn check_media(pkg: &Package, acc: &mut Acc) {
+/// Compare the expected media signature and grade mismatches by observed use or decodability.
+fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     observation_contract! {
         rules: "MEDIA-MAGIC";
-        collections: "field.bytes*1,field.content_types*1,field.entries*1";
-        scope: "source-local bounded extraction; no implicit document owner";
-        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
-        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        collections: "access.missing*1,field.bytes*1,field.content_types*1,field.entries*1,type.Vec*1";
+        scope: "existing media candidates and signatures; prove non-consumption from drawing-reference coverage or verify alternate raster bytes with the shared bounded decoder";
+        loss: "incomplete relationship or reference discovery, unsupported alternate encoding, or decode budget";
+        fallback: "retain the signature Error when neither basis for a Warning is established; explain decoder budget loss";
         package_loss: "independent";
     }
 
     acc.ran("MEDIA-MAGIC");
     let image_targets = image_rel_targets(pkg);
+    let mut drawing_targets = None;
+    let mut decode_bytes = acc.limits.total_bytes;
+    let mut decode_limited_at = None;
+    let mut warnings = Vec::new();
     for e in pkg.entries.iter().filter(|e| !e.is_dir) {
         let l = e.name.to_ascii_lowercase();
         if !l.starts_with("word/media/") && !image_targets.contains(&l) {
@@ -4070,10 +4088,125 @@ fn check_media(pkg: &Package, acc: &mut Acc) {
         }
         let Some(bytes) = &e.bytes else { continue };
         let Some(kind) = media_kind(&e.name, pkg.content_types.of(&e.name)) else { continue };
-        if !magic_matches(kind, bytes) {
+        if magic_matches(kind, bytes) {
+            continue;
+        }
+        let unused = drawing_targets.get_or_insert_with(|| possible_drawing_targets(pkg, xml)).as_ref().is_some_and(|targets| targets.missing(&l));
+        let warn = unused
+            || match decode_alternate_image(bytes, acc.limits.part_bytes, &mut decode_bytes) {
+                Ok(usable) => usable,
+                Err(CodecError::LimitExceeded(_)) => {
+                    decode_limited_at.get_or_insert(&e.name);
+                    false
+                }
+                Err(_) => false,
+            };
+        if warn {
+            // Save one extra Warning to exercise the existing overflow path. Emit Errors first
+            // so a mismatch that loses a picture cannot be hidden by earlier Warnings.
+            if warnings.len() <= acc.limits.findings_per_rule {
+                warnings.push((e, kind));
+            }
+        } else {
             acc.add("MEDIA-MAGIC", Some(e.name.clone()), format!("{} does not have the magic bytes of a {kind} file", e.name));
         }
     }
+    if let Some(part) = decode_limited_at {
+        acc.note(format!(
+            "MEDIA-MAGIC: alternate image decoding exceeded its byte budget at {part}; affected signature mismatches kept their Error grade"
+        ));
+        acc.set_incomplete();
+    }
+    for (e, kind) in warnings {
+        acc.add_graded(
+            MEDIA_MAGIC.id,
+            Severity::Warning,
+            MEDIA_MAGIC.evidence,
+            Some(e.name.clone()),
+            format!("{} does not have the magic bytes of a {kind} file", e.name),
+        );
+    }
+}
+
+/// Use only complete, unambiguous story-source reference sets for negative conclusions.
+/// References outside the narrow typed-image vocabulary can still consume image data (for
+/// example, an extension's embedded image), so every retained relationship ID counts here.
+fn possible_drawing_targets(pkg: &Package, xml: &XmlScan) -> Option<CompleteSet<String>> {
+    observation_contract! {
+        rules: "-";
+        collections: "access.into_complete_set*2,access.is_complete*1,access.missing*1,access.prefix*1,field.collapsed_names*1,field.entries*1,field.parts*1,field.references*2,field.rels*2,type.CompleteSet*1,type.HashMap*2,type.HashSet*1,type.Observed*2";
+        scope: "package relationship targets possibly consumed by drawings; join complete per-story reference sets by owning relationship part";
+        loss: "package relationship discovery incomplete; source missing or unexamined, duplicate owner identity, skipped markup, unmodeled relationship attributes, or reference budget";
+        fallback: "unknown owner usage leaves every internal target of its declarations possible; incomplete package discovery withholds non-consumption entirely";
+        package_loss: "independent";
+    }
+
+    if !ownership_discovery_complete(pkg) || !pkg.collapsed_names.is_empty() {
+        return None;
+    }
+    let mut sources: HashMap<String, Option<&PartFacts>> = HashMap::new();
+    for e in pkg.entries.iter().filter(|e| !e.is_dir && !e.name.is_empty()) {
+        let facts = xml.parts.get(&PartId::new(&e.name)).filter(|f| f.drawing_refs_complete && f.references.is_complete());
+        sources.entry(rels_part_name(&e.name).to_ascii_lowercase()).and_modify(|source| *source = None).or_insert(facts);
+    }
+    let mut targets = HashSet::new();
+    for rp in &pkg.rels {
+        let ids = sources
+            .get(&rp.name.to_ascii_lowercase())
+            .copied()
+            .flatten()
+            .and_then(|facts| Observed::complete(facts.references.prefix().iter().map(|r| &r.value).collect()).into_complete_set());
+        for rel in &rp.rels {
+            if let Some(target) = &rel.target_abs
+                && !ids.as_ref().is_some_and(|ids| ids.missing(&&rel.id))
+            {
+                targets.insert(target.to_ascii_lowercase());
+            }
+        }
+    }
+    Observed::complete(targets).into_complete_set()
+}
+
+/// Verify the raster with the shared codec. Charge a bounded decode even on failure. TIFF and
+/// other encodings without a bounded path here retain the signature mismatch's default grade.
+fn decode_alternate_image(bytes: &[u8], per_part: u64, remaining: &mut u64) -> Result<bool, CodecError> {
+    let Some(format) = codecs::detect(bytes) else { return Ok(false) };
+    let (width, height, coefficients) = match format {
+        Format::Png => {
+            // Read the pixel model without inflating compressed metadata under default limits.
+            let model = codecs::png_probe::pixel_model(bytes)?;
+            (model.width, model.height, 0)
+        }
+        Format::Jpeg => {
+            let info = codecs::jpeg_info(bytes).ok_or(CodecError::UnknownFormat)?;
+            (info.width, info.height, codecs::jpeg_worst_case_coefficients(bytes))
+        }
+        Format::Gif | Format::Bmp | Format::WebP => {
+            let (width, height) = codecs::probe_size(bytes)?;
+            (width, height, 0)
+        }
+        _ => return Ok(false),
+    };
+    let pixels = u64::from(width) * u64::from(height);
+    // Allow one 16-bit RGBA buffer plus decoder working space, encoded metadata and JPEG
+    // coefficients. Use a small allowance for headers and rows in tiny images.
+    let allocation = pixels.saturating_mul(8).max(bytes.len() as u64).max(4096);
+    let charge = allocation.saturating_mul(2).saturating_add(coefficients);
+    if charge > per_part.min(*remaining) {
+        return Err(CodecError::LimitExceeded("alternate image decode budget".into()));
+    }
+    *remaining = remaining.saturating_sub(charge);
+    let side = width.max(height);
+    let options = DecodeOptions { limits: CodecLimits::new(side, side, pixels, allocation.saturating_add(coefficients)), keep_orientation: true };
+    let image = codecs::decode_as_with(format, bytes, &options)?;
+    // The codec can return synthesized pixels for a damaged scan. Its complete warning list
+    // is available once decoding succeeds, and a repaired scan cannot prove usability here.
+    for warning in image.warnings {
+        if warning == (DecodeWarning::Truncated { format }) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Collect lowercased target paths for all image relationships in the package.
@@ -4201,6 +4334,99 @@ mod budget_tests {
             ("word/document.xml", document()),
             ("word/_rels/document.xml.rels", doc_rels()),
         ])
+    }
+
+    fn media_zip(files: &[(&str, &[u8])], body: &str) -> Vec<u8> {
+        let main = package::MAIN_CONTENT_TYPE;
+        let types = format!(
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="{main}"/></Types>"#
+        );
+        let doc = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:wp="{NS_WP}"><w:body>{body}</w:body></w:document>"#);
+        let declarations = rels(
+            r#"<Relationship Id="rImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/drawn.png"/>"#,
+        );
+        let mut entries = vec![
+            ("[Content_Types].xml", types.into_bytes()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc.into_bytes()),
+            ("word/_rels/document.xml.rels", declarations),
+        ];
+        entries.extend(files.iter().map(|(name, bytes)| (*name, bytes.to_vec())));
+        tiny_zip(&entries)
+    }
+
+    const DRAWN: &str = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="4000" cy="4000"/><wp:docPr id="1" name="Drawing"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rImg"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
+
+    #[test]
+    fn media_magic_grades_drawn_and_unused_bytes_separately() {
+        let jpeg = test_jpeg(4);
+        let truncated = &jpeg[..jpeg.len() - 2];
+        let stub = b"\xff\xd8\xff\xe0\x00\x00";
+        let text = b"not an image";
+        let vml = r#"<w:p><w:r><w:pict><v:imagedata xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" o:relid="rImg"/></w:pict></w:r></w:p>"#;
+        let skipped = format!(
+            r#"<mc:AlternateContent xmlns:mc="{NS_MC}" xmlns:x="urn:unknown"><mc:Choice Requires="x">{DRAWN}</mc:Choice></mc:AlternateContent>"#
+        );
+        for (body, bytes, severity) in [
+            (DRAWN, jpeg.as_slice(), Severity::Warning),
+            (DRAWN, truncated, Severity::Error),
+            (DRAWN, stub.as_slice(), Severity::Error),
+            (DRAWN, text.as_slice(), Severity::Error),
+            ("<w:p/>", stub.as_slice(), Severity::Warning),
+            ("<w:p/>", text.as_slice(), Severity::Warning),
+            (vml, stub.as_slice(), Severity::Error),
+            (&skipped, stub.as_slice(), Severity::Error),
+        ] {
+            let report = validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], body));
+            let mut findings = report.findings.iter().filter(|f| f.rule == "MEDIA-MAGIC");
+            assert_eq!(findings.next().unwrap().severity, severity, "{report:?}");
+            assert!(findings.next().is_none());
+            assert_eq!(report.verdict, if severity == Severity::Error { Verdict::Fail } else { Verdict::Pass }, "{report:?}");
+        }
+    }
+
+    #[test]
+    fn media_magic_budget_keeps_errors_ahead_of_warnings_in_both_orders() {
+        let used = ("word/media/drawn.png", b"bad".as_slice());
+        let unused = ("word/media/unused.png", b"also bad".as_slice());
+        let limits = Limits { findings_per_rule: 1, ..Limits::default() };
+        for files in [[unused, used], [used, unused]] {
+            let report = validate_bytes_limited(&media_zip(&files, DRAWN), limits);
+            assert_eq!(report.verdict, Verdict::Fail);
+            assert_eq!(report.findings.len(), 1);
+            assert_eq!(report.findings[0].rule, "MEDIA-MAGIC");
+            assert_eq!(report.findings[0].part.as_deref(), Some(used.0));
+            assert_eq!(report.findings[0].severity, Severity::Error);
+            assert!(report.coverage_notes.iter().any(|n| n.starts_with("more than 1 MEDIA-MAGIC")));
+        }
+
+        let mut files = vec![unused, used];
+        let only_warnings = validate_bytes_limited(&media_zip(&files, "<w:p/>"), limits);
+        assert_eq!(only_warnings.verdict, Verdict::Incomplete);
+        assert_eq!(only_warnings.findings.len(), 1);
+        assert_eq!(only_warnings.findings[0].severity, Severity::Warning);
+        files.push(("word/undeclared.blob", b"independent"));
+        let mixed = validate_bytes_limited(&media_zip(&files, "<w:p/>"), limits);
+        assert_eq!(mixed.verdict, Verdict::Fail);
+        assert!(mixed.findings.iter().any(|f| f.rule == "CT-UNDECLARED" && f.severity == Severity::Error));
+        assert!(mixed.findings.iter().any(|f| f.rule == "MEDIA-MAGIC" && f.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn media_magic_explains_an_alternate_decode_budget_stop() {
+        let jpeg = test_jpeg(128);
+        assert!(jpeg.len() < 4096);
+        let zip = media_zip(&[("word/media/drawn.png", &jpeg)], DRAWN);
+        let report = validate_bytes_limited(&zip, Limits { part_bytes: 4096, ..Limits::default() });
+        assert_eq!(report.verdict, Verdict::Fail);
+        assert!(report.findings.iter().any(|f| f.rule == "MEDIA-MAGIC" && f.severity == Severity::Error));
+        assert!(report.coverage_notes.iter().any(|n| n.starts_with("MEDIA-MAGIC: alternate image decoding exceeded its byte budget")));
+    }
+
+    fn test_jpeg(side: u32) -> Vec<u8> {
+        let pixels = vec![128; (side * side * 3) as usize];
+        let image = codecs::Image::from_u8(side, side, codecs::ChannelLayout::Rgb, pixels).unwrap();
+        codecs::encode(&image, Format::Jpeg, &codecs::EncodeOptions::default()).unwrap()
     }
 
     #[test]

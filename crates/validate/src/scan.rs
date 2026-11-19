@@ -358,6 +358,8 @@ pub(crate) struct PartScan {
     pub unknown_prefixes: Vec<String>,
     /// Every `r:id`/`r:embed`/`r:link` value in the part, with element identity.
     pub refs: Vec<RefFact>,
+    /// The supported reference attributes cover all observed drawing-reference syntax.
+    pub drawing_refs_complete: bool,
     pub facts: StoryFacts,
     /// Relationship ids named by `w:contentPart` elements in this part.
     pub content_parts: Vec<RelId>,
@@ -837,7 +839,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "-";
-        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*4,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.refs*2,field.special_notes*2,field.unknown_prefixes*4,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
+        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*4,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.special_notes*2,field.unknown_prefixes*4,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -851,6 +853,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         malformed: None,
         unknown_prefixes: Vec::new(),
         refs: Vec::new(),
+        drawing_refs_complete: true,
         facts: StoryFacts::default(),
         content_parts: Vec::new(),
         content_part_exemptions: Vec::new(),
@@ -918,7 +921,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &[], &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
-                    collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
+                    collect_refs(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts, &mut state.refs_capped);
                     collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
                     on_open(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 } else {
@@ -958,7 +961,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &decls, &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
-                    collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
+                    collect_refs(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts, &mut state.refs_capped);
                     collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
                     on_empty(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 } else {
@@ -2231,13 +2234,13 @@ fn collect_ink_content_part(id: &ElemId, attrs: &[Attribute], res: &NamespaceRes
 }
 
 /// Collect relationship references (`r:id`, `r:embed`, `r:link`) from element attributes up to the fact limit.
-fn collect_refs(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: &mut Vec<RefFact>, cap: usize, capped: &mut bool) {
+fn collect_refs(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: &mut PartScan, cap: usize, capped: &mut bool) {
     observation_contract! {
         rules: "-";
-        collections: "type.Vec*1";
-        scope: "source-local bounded extraction; no implicit document owner";
+        collections: "field.refs*2";
+        scope: "bounded source-local relationship IDs for existing typed checks and conservative media use";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
-        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        fallback: "preserve the existing reference facts; unsupported drawing-reference attributes only disable media absence";
         package_loss: "independent";
     }
 
@@ -2250,20 +2253,32 @@ fn collect_refs(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: 
         let key = a.key;
         let local = key.local_name();
         let l = local.as_ref();
-        if !matches!(l, b"id" | b"embed" | b"link") {
+        let ResolveResult::Bound(namespace) = res.resolve_attribute(key).0 else {
             continue;
-        }
-        if !ns_matches(res.resolve_attribute(key).0, NS_R) {
-            continue;
-        }
-        if let Ok(v) = a.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
-            let image = image_elem && matches!(l, b"embed" | b"link" | b"id");
-            if out.len() >= cap {
-                *capped = true;
-                return;
+        };
+        if namespace.as_ref() != NS_R.as_bytes() {
+            // Legacy VML and Strict relationship attributes do not participate in the
+            // Transitional reference checks but can prevent proving a drawing is absent.
+            if (namespace.as_ref() == b"urn:schemas-microsoft-com:office:office" && l == b"relid")
+                || namespace.as_ref() == b"http://purl.oclc.org/ooxml/officeDocument/relationships"
+            {
+                out.drawing_refs_complete = false;
             }
-            out.push(RefFact { attr: String::from_utf8_lossy(l).into_owned(), value: v.into_owned().into(), image });
+            continue;
         }
+        if !matches!(l, b"id" | b"embed" | b"link") {
+            out.drawing_refs_complete = false;
+            continue;
+        }
+        let Ok(v) = a.normalized_value(quick_xml::XmlVersion::Implicit1_0) else {
+            out.drawing_refs_complete = false;
+            continue;
+        };
+        if out.refs.len() >= cap {
+            *capped = true;
+            return;
+        }
+        out.refs.push(RefFact { attr: String::from_utf8_lossy(l).into_owned(), value: v.into_owned().into(), image: image_elem });
     }
 }
 
