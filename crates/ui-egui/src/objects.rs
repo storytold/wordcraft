@@ -966,6 +966,11 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
         return;
     }
     let Some(pp) = placed(body, o.page) else { return };
+    // The picture in crop mode has the crop overlay's frame and handles on its corners: the object's own
+    // resize handles there would take the press first and resize the picture instead of cropping it.
+    if crate::crop::active(app).is_some() {
+        return;
+    }
     let view = &body.view;
     if editing || fixed(app, &o) {
         let frame = [outline_path(pp, view, &o)];

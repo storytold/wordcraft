@@ -144,11 +144,15 @@ fn split_arrow(h: &H, label: &str) -> Rect {
         .filter(|n| c.contains_rect(n.rect()))
         .map(|n| (n.rect(), n.accesskit_node().has_popup().is_some()))
         .collect();
-    nodes
-        .iter()
-        .find(|(_, popup)| *popup)
-        .or_else(|| nodes.iter().max_by(|a, b| a.0.min.x.total_cmp(&b.0.min.x)))
-        .map(|(r, _)| *r)
+    // The arrow is its own button, named "<label> options" (`colors::split_with`); the main part keeps the label.
+    let arrow_name = format!("{label} options");
+    let named = h
+        .query_all_by_label(arrow_name.as_str())
+        .map(|n| n.rect())
+        .find(|r| c.contains_rect(*r));
+    named
+        .or_else(|| nodes.iter().find(|(_, popup)| *popup).map(|(r, _)| *r))
+        .or_else(|| nodes.iter().max_by(|a, b| a.0.min.x.total_cmp(&b.0.min.x)).map(|(r, _)| *r))
         .expect("the bar has the split button")
 }
 
@@ -193,8 +197,9 @@ fn every_control_fits_inside_the_bar() {
     }
     rects.push(("font box".into(), font_box(&h)));
     rects.push(("size box".into(), size_box(&h)));
+    // The framework's selection task bar is a group named by the label `mini_toolbar::show` gives it.
     let bar = h
-        .query_all_by_role(Role::Toolbar)
+        .query_all_by_role(Role::Group)
         .filter(|n| n.accesskit_node().label().as_deref() == Some("Formatting"))
         .map(|n| n.rect())
         .find(|r| c.contains_rect(*r))
@@ -549,7 +554,7 @@ fn the_alignment_buttons_mark_the_paragraph_as_seen_on_the_page() {
         ("سلام دنیا", &[("select.all", json!({})), ("para.rtl", json!({})), ("para.alignLeft", json!({}))], "Align Left", "Align Right"),
         (
             "One\nTwo",
-            &[("select.text", json!({"text": "One"})), ("para.alignRight", json!({})), ("select.text", json!({"text": "One\n"}))],
+            &[("select.text", json!({"text": "One"})), ("para.alignRight", json!({})), ("select.paragraph", json!({}))],
             "Align Right",
             "Align Left",
         ),

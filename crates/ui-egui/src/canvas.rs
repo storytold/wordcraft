@@ -219,6 +219,10 @@ pub struct CanvasState {
     pub(crate) command_preview: Option<(String, serde_json::Value)>,
     /// The command preview the page last drew, so the bar repaints only when its hover changes.
     pub(crate) command_previewed: Option<(String, serde_json::Value)>,
+    /// The preview a bar list (font, size, highlight, font colour) started: the framework reports a
+    /// list's preview once, when it starts (`Preview::Shows`) and once when it ends, so the bar keeps
+    /// it here and re-asserts it each frame until the list's `Preview::Ended`.
+    pub(crate) list_preview: Option<(String, serde_json::Value)>,
     /// The scroll offset held while a command preview is shown, so the page does not move as
     /// the previewed text reflows.
     pub(crate) preview_scroll: Option<(f64, f64)>,
@@ -368,6 +372,7 @@ impl Default for CanvasState {
             table_preview: None,
             command_preview: None,
             command_previewed: None,
+            list_preview: None,
             preview_scroll: None,
             table_preview_layout: None,
         }
@@ -619,6 +624,13 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
     app.canvas.viewed_page = None;
     app.canvas.read_first_visible = reading_page_start(layout, app.canvas.reading.column);
     app.canvas.scroll_to_caret = false;
+    // The text menu stays available in Reading Mode (copying and looking things up): opened by
+    // `ui.contextMenu`, or by a right click on the columns. The bar over it is off (`context_menu_visible`).
+    let ask = app.canvas.context_request.take().or_else(|| {
+        let r = &out.response;
+        r.secondary_clicked().then(|| r.interact_pointer_pos()).flatten().map(ContextAsk::AtPointer)
+    });
+    context_menu::show(app, ui, &out.response, ask);
     if nav.action {
         let _ = app.run("view.printLayout", json!({}));
     }

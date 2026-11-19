@@ -305,7 +305,12 @@ pub fn legacy_ui_json(bytes: &[u8]) -> Result<(Prefs, Vec<SectionError>), String
     let (mut prefs, mut errors) = lenient(&v);
     if let Some(saved) = keyboard {
         match legacy_keyboard(&saved) {
-            Some(overrides) => prefs.keyboard = overrides,
+            Some(overrides) => {
+                // The framework's overrides never fail to load: a value that is no shortcut map loads as no
+                // overrides and says what it dropped (`Overrides::load_notes`), so each note is reported.
+                errors.extend(overrides.0.load_notes().iter().map(|note| SectionError { section: "keyboard".into(), message: format!("{note:?}") }));
+                prefs.keyboard = overrides;
+            }
             None => errors.push(SectionError { section: "keyboard".into(), message: "not a shortcut map".into() }),
         }
     }

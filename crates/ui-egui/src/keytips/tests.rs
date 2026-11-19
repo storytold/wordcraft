@@ -18,11 +18,11 @@ fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
         },
         a,
     );
-    h.run_steps(4);
+    crate::test_harness::frames(&mut h, 4);
     let ctx = h.ctx.clone();
     // PLAN: `focus_page(ctx)` is canvas-w9's (cv.A10).
     h.state_mut().canvas.focus_page(&ctx);
-    h.run_steps(2);
+    crate::test_harness::frames(&mut h, 2);
     h
 }
 
@@ -106,9 +106,9 @@ fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
     assert_eq!(bold_index, 0);
     let mut h = harness(a);
     h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
-    h.step();
+    crate::test_harness::frame(&mut h);
     h.input_mut().events.push(key_event(egui::Key::Num1, true, egui::Modifiers::NONE));
-    h.step();
+    crate::test_harness::frame(&mut h);
     assert!(bold(&mut h), "Alt, 1 runs the first button");
 
     // Bold, then the disabled Undo, then Italic: the digit of Italic among the enabled buttons runs Italic.
@@ -128,9 +128,9 @@ fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
     let digit = qat[..italic].iter().filter(|id| crate::chrome::qat_enabled(&ctx, app, id)).count() + 1;
     let key = egui::Key::from_name(&digit.to_string()).unwrap();
     h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
-    h.step();
+    crate::test_harness::frame(&mut h);
     h.input_mut().events.push(key_event(key, true, egui::Modifiers::NONE));
-    h.step();
+    crate::test_harness::frame(&mut h);
     assert_eq!(h.state_mut().session.run("format.state", &serde_json::json!({})).unwrap()["italic"], true, "the disabled Undo takes no digit");
 }
 
@@ -144,16 +144,16 @@ fn legacy_menu_keys_through_the_app_never_type() {
     let mut h = harness(app());
     let alt = egui::Modifiers { alt: true, ..Default::default() };
     h.input_mut().events.extend([key_event(egui::Key::AltLeft, true, egui::Modifiers::NONE), egui::Event::ModifiersChanged(alt)]);
-    h.step();
+    crate::test_harness::frame(&mut h);
     h.input_mut().events.extend([key_event(egui::Key::AltLeft, false, alt), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
-    h.step();
+    crate::test_harness::frame(&mut h);
     // PLAN: `WordApp::keytips_active` is app-hub's (rb.A11).
     assert!(h.state().keytips_active, "a bare Alt tap shows the keytips");
     let key = |key| key_event(key, true, egui::Modifiers::NONE);
     h.input_mut().events.extend([key(egui::Key::V), egui::Event::Text("v".into())]);
-    h.step();
+    crate::test_harness::frame(&mut h);
     h.input_mut().events.extend([key(egui::Key::U), egui::Event::Text("u".into())]);
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert!(h.state().session.view.full_screen_view, "Alt, V, U: Full Screen View");
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "no letter typed");
 }
