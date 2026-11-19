@@ -261,8 +261,9 @@ mod tests {
         // No native windows, so the window commands stay disabled.
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
         app.ctx = Some(ctx.clone());
-        app.windows.native = false;
+        // A second window needs native windows; the commands are checked once the platform has none.
         app.new_window();
+        app.windows.native = false;
         let keys: Vec<u64> = app.windows.list.ids().map(WindowId::get).collect();
         assert_eq!(keys.len(), 2);
         let (first, second) = (keys[0], keys[1]);

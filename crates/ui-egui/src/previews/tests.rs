@@ -36,7 +36,9 @@ fn the_style_revision_follows_the_font_generation() {
             i += at + to.len();
         }
     }
-    assert!(wordcraft_fonts::FontDb::global().add_font(data) > 0, "the font is added");
+    // `add_font` adds faces quietly; `add_document_fonts` is the path that bumps the generation, as a document's
+    // embedded fonts do.
+    assert!(wordcraft_fonts::FontDb::global().add_document_fonts(vec![(data, "Revprobe Sans".to_string())]) > 0, "the font is added");
     assert_ne!(before, style_revision(&mut app, Mode::Light), "a new font draws the previews again");
 }
 

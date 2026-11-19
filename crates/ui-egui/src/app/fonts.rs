@@ -119,8 +119,14 @@ mod tests {
         for path in crate::rust_sources(&dir).into_iter().filter(|p| !p.starts_with(dir.join("i18n"))) {
             let code = std::fs::read_to_string(&path).unwrap();
             let file = path.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/");
+            // Test files and the test modules at the end of a file hold test data (emoji, full-width digits), not
+            // interface text.
+            if file.ends_with("tests.rs") || file.contains("/tests/") {
+                continue;
+            }
+            let production = code.split("#[cfg(test)]").next().unwrap_or_default();
             // Characters inside string literals, line by line (good enough for this code base).
-            for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            for line in production.lines().filter(|l| !l.trim_start().starts_with("//")) {
                 for (i, part) in line.split('"').enumerate() {
                     if i % 2 == 1 {
                         symbols.extend(part.chars().filter(|c| !c.is_ascii() && !c.is_alphabetic() && !c.is_whitespace()).map(|c| (c, file.clone())));

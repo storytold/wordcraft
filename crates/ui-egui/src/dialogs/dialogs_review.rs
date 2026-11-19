@@ -390,6 +390,8 @@ fn list_table(ui: &mut Ui, name: &str, rows: &[(String, String)], second: bool, 
     let out = Table::<String>::new(Label::from(name.to_string()), columns)
         .select(if selectable { SelectMode::Single } else { SelectMode::None })
         .striped(true)
+        // The dialog's body scrolls, so the table caps its rows and scrolls the rest itself.
+        .max_rows(8)
         .empty(Label::from(tl!("(none)").to_string()))
         .show_items(ui, &source, &mut |key, icx| {
             let with = rows.iter().find(|r| r.0 == *key).map(|r| r.1.clone()).unwrap_or_default();
@@ -548,6 +550,7 @@ impl WordForm for AutoCorrectForm {
             let strip = TabStrip::new(Label::from(tl!("AutoCorrect Options").to_string()))
                 .kind(TabKind::Text)
                 .shown(self.tab)
+                .natural_height(true)
                 .show_items(ui, &source, &mut |key, _| Tab::new(tab_name(*key)));
             for event in strip.response.events {
                 if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event

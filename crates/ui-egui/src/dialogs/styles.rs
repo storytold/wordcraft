@@ -146,7 +146,7 @@ impl ManageStylesDialog {
                 let glyph = match st.get("type").and_then(Value::as_str) {
                     Some("character") => "a",
                     Some("linked") => "¶a",
-                    Some("table") => "⊞",
+                    Some("table") => "#",
                     _ => "¶",
                 };
                 let row = ListRow::new(label(text_of(st, "name"))).lead_text(label(glyph), label("¶a"));

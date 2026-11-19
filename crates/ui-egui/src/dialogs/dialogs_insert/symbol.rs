@@ -470,7 +470,7 @@ fn symbol_body(
             form.tab = 0;
         } else {
             let pages = [0u8, 1u8];
-            let out = TabStrip::new(word("Symbol pages")).kind(TabKind::Text).shown(form.tab).show_items(ui, &keyed(&pages, |t: &u8| *t), &mut |t, _| {
+            let out = TabStrip::new(word("Symbol pages")).kind(TabKind::Text).shown(form.tab).natural_height(true).show_items(ui, &keyed(&pages, |t: &u8| *t), &mut |t, _| {
                 Tab::new(word(if *t == 0 { "Symbols" } else { "Special Characters" }))
             });
             for event in out.response.events {
@@ -527,6 +527,7 @@ fn special_table(ui: &mut Ui, form: &mut SymbolForm) -> bool {
     let ctx = ui.ctx().clone();
     let events = Table::<usize>::new(word("Special Characters"), columns)
         .select(SelectMode::Single)
+        .max_rows(10)
         .selection(Bind::bound(&mut selection))
         .show_items(ui, &source, &mut |at, icx| {
             let Some((label, c, command)) = SPECIAL.get(*at) else { return ListRow::new(Label::Empty) };
@@ -609,6 +610,7 @@ fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
             .select(SelectMode::Single)
             .caption(CaptionPlace::None)
             .card_columns(RECENT_SYMBOLS)
+            .natural_height(true)
             .selection(Bind::given(Selection::default()))
             .show_items(ui, &source, &mut |at, _| {
                 let r = recent.get(*at).cloned().unwrap_or_default();
@@ -647,7 +649,7 @@ fn glyph_grid(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
     let font = form.shown_font().to_string();
     let events = {
         let chars = &form.chars;
-        let mut grid = TileGrid::new(word("Symbols")).select(SelectMode::Single).caption(CaptionPlace::None).selection(Bind::bound(&mut selection));
+        let mut grid = TileGrid::new(word("Symbols")).select(SelectMode::Single).max_rows(8).caption(CaptionPlace::None).selection(Bind::bound(&mut selection));
         if let Some(at) = reveal {
             grid = grid.reveal(at);
         }
