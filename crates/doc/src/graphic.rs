@@ -115,9 +115,7 @@ pub enum GraphicItem {
         #[serde(default)]
         stroke_width: f32,
     },
-    /// One line of text in `rect`, aligned horizontally by `align`, centred vertically; `angle`
-    /// degrees clockwise turns the text about `rect`'s centre as it is drawn (chart axis titles
-    /// use 90° for the vertical axis).
+    /// One line of text in `rect`, aligned horizontally by `align`, centred vertically.
     Text {
         rect: [f32; 4],
         text: String,
@@ -129,6 +127,8 @@ pub enum GraphicItem {
         align: TextAlign,
         #[serde(default)]
         font: Option<String>,
+        /// Degrees clockwise the text turns about `rect`'s center as it is drawn (a chart's vertical
+        /// axis title is turned -90°).
         #[serde(default)]
         angle: f32,
     },

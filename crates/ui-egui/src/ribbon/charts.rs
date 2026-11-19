@@ -92,7 +92,7 @@ pub(super) fn chart_design(app: &mut WordApp, ui: &mut Ui) {
     let Some(chart) = wordcraft_engine::cmd::chart::selected_chart(&app.session) else { return };
     group(ui, "Current Selection", None, app, |ui, app| {
         // Word's Format Axis / Format Series open on the chart's value axis and first series; the
-        // commands reach the others with `side` and `index`, so scripts get the same dialogs.
+        // commands reach the others with `side` and `index`.
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("axis", Some("Axis"), "Axis", true, "chart.axis"), |ui, app| {
             mi(ui, app, "Format Axis…", "ui.dialog", json!({"name": "formatAxis"}));
         });

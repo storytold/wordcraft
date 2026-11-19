@@ -119,6 +119,9 @@ pub struct ChartAxisForm {
 impl ChartAxisForm {
     pub fn new(app: &WordApp) -> Option<ChartAxisForm> {
         let c = wordcraft_engine::cmd::chart::selected_chart(&app.session)?;
+        if c.kind.is_round() {
+            return None;
+        }
         let a = &c.val_axis;
         Some(ChartAxisForm {
             title: a.title.clone().unwrap_or_default(),
@@ -212,6 +215,10 @@ pub struct ChartSeriesForm {
     opened_markers: bool,
     #[serde(skip)]
     opened_labels: bool,
+    #[serde(skip)]
+    stroke_and_fill: bool,
+    #[serde(skip)]
+    markers_and_smooth: bool,
 }
 
 impl ChartSeriesForm {
@@ -224,7 +231,7 @@ impl ChartSeriesForm {
             index: 0,
             fill: s.fill.map(|c| c.hex()).unwrap_or_default(),
             no_fill: s.no_fill,
-            width: s.line_w.map(|w| number_text(w as f64)).unwrap_or_default(),
+            width: s.line_w.filter(|_| !s.no_line).map(|w| number_text(w as f64)).unwrap_or_default(),
             markers,
             smooth: s.smooth,
             labels,
@@ -232,6 +239,8 @@ impl ChartSeriesForm {
             message: String::new(),
             opened_markers: markers,
             opened_labels: labels,
+            stroke_and_fill: !c.kind.is_round(),
+            markers_and_smooth: wordcraft_engine::cmd::chart::has_line_markers(c.kind),
         })
     }
 
@@ -239,6 +248,25 @@ impl ChartSeriesForm {
     pub fn params(&self) -> Result<Value, String> {
         let mut v = serde_json::Map::new();
         v.insert("index".into(), json!(self.index));
+        if self.stroke_and_fill {
+            self.stroke_and_fill_params(&mut v)?;
+        }
+        if self.markers_and_smooth {
+            if self.markers != self.opened_markers {
+                v.insert("markers".into(), json!(self.markers));
+            }
+            v.insert("smooth".into(), json!(self.smooth));
+        }
+        if self.labels != self.opened_labels {
+            v.insert("labels".into(), json!(self.labels));
+        }
+        if !self.fmt.trim().is_empty() {
+            v.insert("format".into(), json!(self.fmt.trim()));
+        }
+        Ok(Value::Object(v))
+    }
+
+    fn stroke_and_fill_params(&self, v: &mut serde_json::Map<String, Value>) -> Result<(), String> {
         if self.no_fill {
             v.insert("fill".into(), json!("none"));
         } else if !self.fill.trim().is_empty() {
@@ -258,17 +286,7 @@ impl ChartSeriesForm {
         } else if !self.width.trim().is_empty() {
             return Err(crate::i18n::fmt(tl!("“{text}” isn't a width in points."), &[("text", self.width.trim())]));
         }
-        if self.markers != self.opened_markers {
-            v.insert("markers".into(), json!(self.markers));
-        }
-        v.insert("smooth".into(), json!(self.smooth));
-        if self.labels != self.opened_labels {
-            v.insert("labels".into(), json!(self.labels));
-        }
-        if !self.fmt.trim().is_empty() {
-            v.insert("format".into(), json!(self.fmt.trim()));
-        }
-        Ok(Value::Object(v))
+        Ok(())
     }
 }
 
@@ -276,16 +294,20 @@ impl ChartSeriesForm {
 pub fn series_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartSeriesForm) -> bool {
     let t = Tokens::get(ui.ctx());
     ui.label(crate::i18n::fmt(tl!("Series {n}"), &[("n", &(f.index + 1).to_string())]));
+    if f.stroke_and_fill {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Fill:"));
+            ui.add_sized([90.0, 24.0], egui::TextEdit::singleline(&mut f.fill).hint_text(tl!("accent")));
+            ui.checkbox(&mut f.no_fill, tl!("No fill"));
+            ui.label(tl!("Width (pt):"));
+            ui.add_sized([70.0, 24.0], egui::TextEdit::singleline(&mut f.width));
+        });
+    }
     ui.horizontal(|ui| {
-        ui.label(tl!("Fill:"));
-        ui.add_sized([90.0, 24.0], egui::TextEdit::singleline(&mut f.fill).hint_text(tl!("accent")));
-        ui.checkbox(&mut f.no_fill, tl!("No fill"));
-        ui.label(tl!("Width (pt):"));
-        ui.add_sized([70.0, 24.0], egui::TextEdit::singleline(&mut f.width));
-    });
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut f.markers, tl!("Markers"));
-        ui.checkbox(&mut f.smooth, tl!("Smooth lines"));
+        if f.markers_and_smooth {
+            ui.checkbox(&mut f.markers, tl!("Markers"));
+            ui.checkbox(&mut f.smooth, tl!("Smooth lines"));
+        }
         ui.checkbox(&mut f.labels, tl!("Data labels"));
         ui.label(tl!("Number format:"));
         ui.add_sized([110.0, 24.0], egui::TextEdit::singleline(&mut f.fmt).hint_text(tl!("linked")));

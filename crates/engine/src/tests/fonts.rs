@@ -371,6 +371,27 @@ fn missing_fonts_from_command_search_say_so_in_the_status_line() {
     assert!(s.status.ends_with(" and 35 more") && s.status.len() < 300, "{}", s.status);
 }
 
+/// A missing font its publisher gives away says where to get it; others don't.
+#[test]
+fn a_missing_font_its_publisher_gives_away_names_the_download_page() {
+    if wordcraft_fonts::FontDb::global().families().iter().any(|f| f.eq_ignore_ascii_case("Aptos")) {
+        return; // Installed here: not missing.
+    }
+    let mut s = Session::new(doc_of(vec![para_in("Text", "Aptos"), para_in("Text", "Wordcraft Nowhere Face")]));
+    let layout = s.layout();
+    let m = crate::cmd::font::missing_fonts(&s.doc, &layout);
+    let aptos = m.iter().find(|f| f.font == "Aptos").unwrap();
+    assert_eq!(aptos.download.map(|d| d.publisher.as_str()), Some("Microsoft"));
+    assert!(m.iter().find(|f| f.font == "Wordcraft Nowhere Face").unwrap().download.is_none());
+    let out = s.run("font.missing", &json!({})).unwrap();
+    let listed = out["missing"].as_array().unwrap();
+    let aptos = listed.iter().find(|f| f["font"] == "Aptos").unwrap();
+    assert!(aptos["download"]["url"].as_str().unwrap().starts_with("https://www.microsoft.com/"), "{aptos}");
+    assert_eq!(aptos["download"]["publisher"], "Microsoft");
+    assert_eq!(aptos["download"]["restricted"], false);
+    assert!(listed.iter().find(|f| f["font"] == "Wordcraft Nowhere Face").unwrap().get("download").is_none());
+}
+
 #[test]
 fn a_huge_font_name_is_kept_short() {
     let name = format!("Wordcraft {}", "é".repeat(100_000));

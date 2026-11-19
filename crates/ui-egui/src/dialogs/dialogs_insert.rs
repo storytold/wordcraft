@@ -38,6 +38,7 @@ pub enum InsertDialog {
     SmartArt(crate::dialogs_smart_art::SmartArtForm),
     ChartType(crate::dialogs_chart::ChartTypeForm),
     ChartData(crate::dialogs_chart::ChartDataForm),
+    DefineBullet(crate::dialogs_bullet::DefineBulletForm),
     DropCap(DropCapForm),
     ChartAxis(crate::dialogs_chart::ChartAxisForm),
     ChartSeries(crate::dialogs_chart::ChartSeriesForm),
@@ -55,6 +56,7 @@ impl InsertDialog {
             InsertDialog::ChartType(f) if f.change => "changeChartType",
             InsertDialog::ChartType(_) => "insertChart",
             InsertDialog::ChartData(_) => "chartData",
+            InsertDialog::DefineBullet(_) => "defineBullet",
             InsertDialog::DropCap(_) => "dropCap",
             InsertDialog::ChartAxis(_) => "formatAxis",
             InsertDialog::ChartSeries(_) => "formatSeries",
@@ -72,6 +74,7 @@ impl InsertDialog {
             InsertDialog::ChartType(f) if f.change => "Change Chart Type",
             InsertDialog::ChartType(_) => "Insert Chart",
             InsertDialog::ChartData(_) => "Edit Data",
+            InsertDialog::DefineBullet(_) => "Define New Bullet",
             InsertDialog::DropCap(_) => "Drop Cap",
             InsertDialog::ChartAxis(_) => "Format Axis",
             InsertDialog::ChartSeries(_) => "Format Series",
@@ -80,8 +83,9 @@ impl InsertDialog {
 }
 
 /// The dialog `ui.dialog` opens by `name`: `columns`, `symbol`, `specialCharacters`, `field`,
-/// `insertChart`, `changeChartType` or `chartData` (the last two for the selected chart), or
-/// `insertSmartArt`, or `dropCap` (Drop Cap Options…, where the paragraph can take one).
+/// `insertChart`, `changeChartType` or `chartData` (the last two for the selected chart),
+/// `insertSmartArt`, `defineBullet` (Home › Bullets › Define New Bullet…), or `dropCap` (Drop Cap
+/// Options…, where the paragraph can take one).
 pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
     Some(match name {
         "dateTime" => InsertDialog::DateTime(DateTimeForm::new(app)),
@@ -93,6 +97,7 @@ pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
         "insertChart" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, false)?),
         "changeChartType" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, true)?),
         "chartData" => InsertDialog::ChartData(crate::dialogs_chart::ChartDataForm::new(app)?),
+        "defineBullet" => InsertDialog::DefineBullet(crate::dialogs_bullet::DefineBulletForm::new(app)),
         "dropCap" => InsertDialog::DropCap(DropCapForm::read(app)?),
         "formatAxis" => InsertDialog::ChartAxis(crate::dialogs_chart::ChartAxisForm::new(app)?),
         "formatSeries" => InsertDialog::ChartSeries(crate::dialogs_chart::ChartSeriesForm::new(app)?),
@@ -110,6 +115,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut InsertDialog) -> bool {
         InsertDialog::SmartArt(f) => crate::dialogs_smart_art::picker_ui(app, ui, f),
         InsertDialog::ChartType(f) => crate::dialogs_chart::type_ui(app, ui, f),
         InsertDialog::ChartData(f) => crate::dialogs_chart::data_ui(app, ui, f),
+        InsertDialog::DefineBullet(f) => crate::dialogs_bullet::body(app, ui, f),
         InsertDialog::DropCap(f) => drop_cap_ui(app, ui, f),
         InsertDialog::ChartAxis(f) => crate::dialogs_chart::axis_ui(app, ui, f),
         InsertDialog::ChartSeries(f) => crate::dialogs_chart::series_ui(app, ui, f),

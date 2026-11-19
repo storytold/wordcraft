@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use wordcraft_doc::chart::{ChartAxis, ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES};
+use wordcraft_doc::chart::{ChartAxis, ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES, value_axis};
 use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::para::{Float, InlineObject};
 use wordcraft_doc::props::Rgb;
@@ -33,6 +33,23 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("chart.type", "Change Chart Type", "Chart Design › Type", |s, v| {
             let kind = chart_type(v)?.ok_or_else(|| CmdError::Params(format!("`type` is required: {TYPES}")))?;
             edit(s, |c| {
+                // A scatter series is drawn as markers without a line; the other types draw it.
+                if (c.kind == ChartType::Scatter) != (kind == ChartType::Scatter) {
+                    for series in &mut c.series {
+                        series.no_line = kind == ChartType::Scatter;
+                        if series.no_line && series.markers == Some(false) {
+                            series.markers = None;
+                        }
+                    }
+                }
+                // Pie and doughnut charts have a plain value axis and the other types a new
+                // chart's value axis; an axis left as the old type had it takes the new type's.
+                if c.kind.is_round() != kind.is_round() {
+                    let (from, to) = if kind.is_round() { (value_axis(), ChartAxis::default()) } else { (ChartAxis::default(), value_axis()) };
+                    if c.val_axis == from {
+                        c.val_axis = to;
+                    }
+                }
                 c.kind = kind;
                 Ok(())
             })
@@ -52,7 +69,15 @@ pub fn specs() -> Vec<CommandSpec> {
                     c.categories = cats.clone();
                 }
                 if let Some(series) = &series {
-                    c.series = series.clone();
+                    // Each series keeps the formatting of the one it replaces.
+                    c.series = series
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (name, values))| match c.series.get(i) {
+                            Some(old) => ChartSeries { name: name.clone(), values: values.clone(), ..old.clone() },
+                            None => ChartSeries::new(c.kind, name.clone(), values.clone()),
+                        })
+                        .collect();
                 }
                 Ok(())
             })
@@ -99,6 +124,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let on = p::bool(v, "on").or_else(|| p::bool(v, "value"));
             edit(s, move |c| {
                 c.data_labels = on.unwrap_or(!c.data_labels);
+                // The chart's setting replaces each series' own.
+                for series in &mut c.series {
+                    series.labels = None;
+                }
                 Ok(())
             })
         })
@@ -108,6 +137,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let side = side(v)?;
             let axis = axis_of(v)?;
             edit(s, move |c| {
+                if c.kind.is_round() {
+                    return Err(CmdError::Params("pie and doughnut charts have no axes".into()));
+                }
                 let a = side.pick(&mut c.cat_axis, &mut c.val_axis);
                 if let Some(t) = &axis.title {
                     a.title = t.clone();
@@ -134,7 +166,9 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"side"?: "category|value", "title"?: string|null, "min"?: number|null (null: Auto), "max"?: number|null (null: Auto), "format"?: string, "gridlines"?: bool, "labels"?: bool, "line"?: bool} (side: the category axis of a scatter chart is its x axis)"#)
-        .when(has_chart),
+        .when(|s| {
+            has_chart(s).or_else(|| selected_chart(s).filter(|c| c.kind.is_round()).map(|_| "pie and doughnut charts have no axes"))
+        }),
         CommandSpec::new("chart.series", "Format Series", "Chart Design › Format Selection", |s, v| {
             let i = p::u64(v, "index").unwrap_or(0) as usize;
             let mut set = ChartSeries::default();
@@ -161,6 +195,12 @@ pub fn specs() -> Vec<CommandSpec> {
             set.labels = p::bool(v, "labels").or_else(|| p::bool(v, "dataLabels"));
             set.fmt = v.get("format").filter(|f| !f.is_null()).map(|f| f.as_str().unwrap_or_default().to_string());
             edit(s, move |c| {
+                if c.kind.is_round() && (v.get("fill").is_some() || v.get("line").is_some()) {
+                    return Err(CmdError::Params("series fill and line are unavailable for pie and doughnut charts".into()));
+                }
+                if !has_line_markers(c.kind) && (set.markers.is_some() || smooth.is_some()) {
+                    return Err(CmdError::Params("markers and smoothing require a line or scatter chart".into()));
+                }
                 let n = c.series.len();
                 let s = c.series.get_mut(i).ok_or_else(|| CmdError::Params(format!("`index` must be a series of the chart (0-based, {n} series)")))?;
                 if fill_auto {
@@ -197,9 +237,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         })
-        .params(r#"{"index"?: 0-based series (default 0), "fill"?: "RRGGBB"|"auto" (the chart's accent colour, clears No fill)|null|"none", "line"?: number (pt)|null|"none", "markers"?: bool, "smooth"?: bool, "labels"?: bool, "format"?: number format code (string)}"#)
+        .params(r#"{"index"?: 0-based series (default 0), "fill"?: "RRGGBB"|"auto" (the chart's accent colour, clears No fill)|null|"none", "line"?: number (pt)|null|"none", "markers"?: bool, "smooth"?: bool, "labels"?: bool, "format"?: number format code (string)} (markers and smoothing: line or scatter; fill and line: unavailable for pie or doughnut)"#)
         .when(has_chart),
     ]
+}
+
+/// Whether the DOCX chart series supports markers and smoothing.
+pub fn has_line_markers(kind: ChartType) -> bool {
+    matches!(kind, ChartType::Line | ChartType::Scatter)
 }
 
 /// Which axis a command addresses.
@@ -310,7 +355,14 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let mut spec = ChartSpec::sample(kind);
     if let Some(d) = v.get("data") {
         spec.categories = d.get("categories").map(categories).transpose()?.unwrap_or_default();
-        spec.series = d.get("series").map(series_list).transpose()?.unwrap_or_default();
+        spec.series = d
+            .get("series")
+            .map(series_list)
+            .transpose()?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, values)| ChartSeries::new(kind, name, values))
+            .collect();
         if spec.series.is_empty() {
             return Err(CmdError::Params(format!("`data.series` needs at least one series: {DATA}")));
         }
@@ -378,8 +430,8 @@ fn cell_text(v: &Value) -> String {
     }
 }
 
-/// Series from JSON: `[{"name", "values": [number|null|numeric string]}]`.
-fn series_list(v: &Value) -> Result<Vec<ChartSeries>, CmdError> {
+/// Series names and values from JSON: `[{"name", "values": [number|null|numeric string]}]`.
+fn series_list(v: &Value) -> Result<Vec<(String, Vec<Option<f64>>)>, CmdError> {
     let a = v.as_array().ok_or_else(|| CmdError::Params(format!("`series`: {DATA}")))?;
     a.iter()
         .take(MAX_SERIES)
@@ -390,7 +442,7 @@ fn series_list(v: &Value) -> Result<Vec<ChartSeries>, CmdError> {
                 None | Some(Value::Null) => Vec::new(),
                 Some(_) => return Err(CmdError::Params("`values`: an array of numbers (null for none)".into())),
             };
-            Ok(ChartSeries { name, values, ..Default::default() })
+            Ok((name, values))
         })
         .collect()
 }
