@@ -3722,7 +3722,7 @@ fn shift_f10_opens_the_context_menu_at_the_caret() {
     let caret = canvas::caret_screen(h.state_mut()).unwrap();
     let at = h.state().canvas.context_menu_at.unwrap();
     assert!((at.x - caret.0.x).abs() < 1.0 && at.y > caret.0.y, "below the caret: {at:?} vs {caret:?}");
-    assert_eq!(h.state().ui.keytips, keytips::Phase::Off, "Shift+F10 doesn't show keytips");
+    assert!(!h.state().keytips_active, "Shift+F10 doesn't show keytips");
     h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
     h.step();
     h.step();

@@ -4,8 +4,8 @@
 use std::borrow::Cow;
 
 use craft::behavior::IconId;
-use craft_ui::primitives::{AppIcons, Glyph, IconSpec, register_app_icons};
-use craft_ui::style::UiTokens;
+use craft::ui::primitives::{AppIcons, Glyph, IconSpec, register_app_icons};
+use craft::ui::style::UiTokens;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
 /// One row per file in `crates/ui-egui/icons/`, in sorted order: the icon's name and its document.

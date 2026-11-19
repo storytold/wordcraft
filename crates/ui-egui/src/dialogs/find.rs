@@ -7,10 +7,10 @@ use crate::WordApp;
 pub(crate) const NOT_IN_SEARCH: [&str; 2] = ["proof.installPack", "proof.removePack"];
 
 /// What Search lists before anything is typed: common commands (#819).
-pub(super) const SEARCH_SUGGESTIONS: [&str; 3] = ["review.spelling", "review.wordCount", "file.print"];
+pub(crate) const SEARCH_SUGGESTIONS: [&str; 3] = ["review.spelling", "review.wordCount", "file.print"];
 
 /// Search's "Find … in the document": the Navigation pane opens on its results for `text`.
-pub(super) fn find_in_navigation_pane(app: &mut WordApp, ctx: &egui::Context, text: &str) {
+pub(crate) fn find_in_navigation_pane(app: &mut WordApp, ctx: &egui::Context, text: &str) {
     let qid = app.window_id("nav_query");
     ctx.data_mut(|d| d.insert_temp(qid, text.to_string()));
     app.ui.nav_tab = "results".into();
