@@ -9,7 +9,6 @@ default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 selection = ["wordcraft", "wordcraft-ui-egui", "wordcraft-web", "wordcraft-cli", "wordcraft-control-key", "wordcraft-doc", "wordcraft-docbin", "wordcraft-docx", "wordcraft-engine", "wordcraft-fonts", "wordcraft-formats", "wordcraft-geom", "wordcraft-layout", "wordcraft-mcp", "wordcraft-pdf", "wordcraft-render", "wordcraft-zotero"]
 tracked = ["egui", "eframe", "wordcraft-ui-egui"]
 unset_env = ["CARGO_INCREMENTAL", "WORDCRAFT_REQUIRE_WINRES", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_REQUIRED", "CRAFT_PROOF_EMBED"]
-set_env = { CRAFT_I18N_DIR = "../craft-i18n", CRAFT_FONTS_DIR = "../craft-fonts" }
 run_slots = 3
 test_threads = 4
 
