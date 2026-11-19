@@ -420,6 +420,14 @@ impl StackDialog for SymbolDialog {
         self.request.as_ref().is_none_or(|r| !r.modal)
     }
 
+    /// OK as a click would: a picking dialog answers with the selected character (`None` while nothing
+    /// is selected); the Insert dialog holds its OK like a form's and has no programmatic one here.
+    fn confirm(&mut self, _ctx: &egui::Context) -> Option<Option<SymbolPick>> {
+        self.request.as_ref()?;
+        let ch = self.form.selected?;
+        Some(Some(SymbolPick { ch, font: self.form.font.clone() }))
+    }
+
     fn held_state(&self) -> Option<HeldOk> {
         self.held.state()
     }

@@ -59,6 +59,11 @@ pub(super) const QAT_MENU: [&str; 10] =
 /// Match the toolbar's enabled state for keyboard activation too.
 pub(crate) fn qat_enabled(ctx: &egui::Context, app: &WordApp, id: &str) -> bool {
     match id {
+        // In the Markdown Source pane Undo and Redo are the field's own typing history (S-L187), which the
+        // runtime resolves; the session's steps are not what they act on.
+        "edit.undo" | "edit.redo" if app.session.md_source.is_some() => {
+            craft::ui::runtime::commands::resolve(ctx, craft::keymap::CommandRef::new(id)).enabled
+        }
         "edit.undo" => app.session.can_undo(),
         "edit.redo" => app.session.can_redo(),
         "file.save" => app.has_document(),

@@ -1187,7 +1187,9 @@ fn rotation_drag_keeps_text_boxes_outline_only_until_their_text_can_rotate() {
     assert_eq!(h.state().session.undo_depth(), depth);
     button(&h, end, false);
     steps(&mut h, 3);
-    assert_eq!(selected(h.state()).unwrap().1.frame().unwrap().2.rot, 90.0);
+    // The box turns by f32 trigonometry about its pivot: a quarter turn lands within rounding of 90°.
+    let turned = selected(h.state()).unwrap().1.frame().unwrap().2.rot;
+    assert!((turned - 90.0).abs() < 0.01, "turned a quarter: {turned}");
     assert_eq!(h.state().session.undo_depth(), depth + 1);
 }
 
