@@ -992,14 +992,14 @@ fn is_tombstone_name(name: &str) -> bool {
 fn complete_internal_targets(pkg: &Package) -> Option<CompleteSet<String>> {
     observation_contract! {
         rules: "-";
-        collections: "access.into_complete_set*1,field.collapsed_names*1,field.rels*2,type.CompleteSet*1,type.Observed*1";
+        collections: "access.into_complete_set*1,field.collapsed_names*1,field.rels*3,type.CompleteSet*1,type.Observed*1";
         scope: "all package relationship declarations; conservative superset of explicit and implicit consumers";
-        loss: "entry discovery incomplete, collapsed relationship records, or an incomplete relationship source";
+        loss: "entry discovery incomplete, collapsed relationship records, or an unrecognized or incomplete relationship source";
         fallback: "withhold all non-consumption conclusions";
         package_loss: "independent";
     }
 
-    if !ownership_discovery_complete(pkg) || !pkg.collapsed_names.is_empty() {
+    if !ownership_discovery_complete(pkg) || !pkg.collapsed_names.is_empty() || pkg.rels.iter().any(|rp| !rp.recognized_root) {
         return None;
     }
     let targets = pkg.rels.iter().flat_map(|rp| &rp.rels).filter_map(|rel| rel.target_abs.as_deref().map(str::to_ascii_lowercase));
@@ -4584,6 +4584,25 @@ mod budget_tests {
         assert_eq!(capped.findings.len(), 1);
         assert_eq!(capped.findings[0].part.as_deref(), Some("undeclared.bin"));
         assert_eq!(capped.findings[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn unrecognized_relationship_root_withholds_both_ct_demotions() {
+        for (manifest, part, bytes, rule) in [
+            (content_types(), "[trash]/00af.dat", vec![0xff; 4], "CT-UNDECLARED"),
+            (content_types_with_override("word/extra.xml", package::MAIN_CONTENT_TYPE), "word/extra.xml", document(), "CT-DUP-MAIN"),
+        ] {
+            let report = validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", manifest),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document()),
+                ("word/_rels/document.xml.rels", b"<settings/>".to_vec()),
+                (part, bytes),
+            ]));
+            assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+            assert!(report.findings.iter().any(|f| f.rule == rule && f.part.as_deref() == Some(part) && f.severity == Severity::Error));
+            assert!(!report.coverage_notes.iter().any(|note| note.starts_with(rule)));
+        }
     }
 
     #[test]

@@ -225,6 +225,8 @@ pub(crate) struct RelsPart {
     pub rels: Vec<Rel>,
     /// Later relationships were not examined, so missing IDs/kinds are unknown.
     pub incomplete: bool,
+    /// A complete empty consumer inventory requires an actual OPC Relationships container.
+    pub recognized_root: bool,
 }
 
 /// Everything loaded from a package once.
@@ -1284,11 +1286,11 @@ fn load_rels(entries: &[Entry], acc: &mut Acc) -> Vec<RelsPart> {
             // An unreadable declaration source disables relationship-dependent joins too.
             acc.note(format!("{} declarations could not be read; dependent absence checks were skipped", e.name));
             acc.set_incomplete();
-            rels.push(RelsPart { name: e.name.clone(), rels: Vec::new(), incomplete: true });
+            rels.push(RelsPart { name: e.name.clone(), rels: Vec::new(), incomplete: true, recognized_root: false });
             continue;
         };
         let mut guard = ParseGuard::new(limits.events, limits.depth);
-        let (parsed, c, complete) = parse_rels(&dir, text, cap, &mut guard);
+        let (parsed, c, complete, recognized_root) = parse_rels(&dir, text, cap, &mut guard);
         if c {
             acc.note(format!("{} declares more than {cap} relationships; later ones were not recorded", e.name));
             acc.set_incomplete();
@@ -1302,7 +1304,7 @@ fn load_rels(entries: &[Entry], acc: &mut Acc) -> Vec<RelsPart> {
             acc.note(format!("{} declarations were not fully examined; dependent absence checks were skipped", e.name));
             acc.set_incomplete();
         }
-        rels.push(RelsPart { name: e.name.clone(), rels: parsed, incomplete: !complete });
+        rels.push(RelsPart { name: e.name.clone(), rels: parsed, incomplete: !complete, recognized_root });
     }
     rels
 }
@@ -1623,7 +1625,7 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
 
     let mut count = 0usize;
     let mut capped = false;
-    let complete = parse_opc_children(text, b"Types", b"http://schemas.openxmlformats.org/package/2006/content-types", guard, |e| {
+    let (complete, _) = parse_opc_children(text, b"Types", b"http://schemas.openxmlformats.org/package/2006/content-types", guard, |e| {
         if !matches!(e.local_name().as_ref(), b"Default" | b"Override") {
             return;
         }
@@ -1640,7 +1642,9 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
 
 /// Visit only namespace-qualified direct children of the expected OPC root container.
 /// All XML events still consume the guard, including ignored foreign or nested elements.
-fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mut ParseGuard, mut visit: impl FnMut(&BytesStart)) -> bool {
+/// Returns whether traversal reached EOF at depth zero and whether it saw one recognized root.
+/// These are distinct so a foreign root can still be diagnosed as lacking OPC declarations.
+fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mut ParseGuard, mut visit: impl FnMut(&BytesStart)) -> (bool, bool) {
     observation_contract! {
         rules: "-";
         collections: "parser.parse_opc_children*1,type.Vec*1";
@@ -1654,17 +1658,19 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
     let mut buf = Vec::new();
     let mut depth = 0usize;
     let mut valid_root = false;
+    let mut roots = 0usize;
     loop {
         if !guard.tick() {
-            return false;
+            return (false, false);
         }
         match reader.read_resolved_event_into(&mut buf) {
             Ok((ns, Event::Start(e))) => {
                 if !guard.enter() {
-                    return false;
+                    return (false, false);
                 }
                 let in_namespace = matches!(ns, ResolveResult::Bound(n) if n.as_ref() == namespace);
                 if depth == 0 {
+                    roots += 1;
                     valid_root = in_namespace && e.local_name().as_ref() == container;
                 } else if depth == 1 && valid_root && in_namespace {
                     visit(&e);
@@ -1674,6 +1680,7 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
             Ok((ns, Event::Empty(e))) => {
                 let in_namespace = matches!(ns, ResolveResult::Bound(n) if n.as_ref() == namespace);
                 if depth == 0 {
+                    roots += 1;
                     valid_root = in_namespace && e.local_name().as_ref() == container;
                 } else if depth == 1 && valid_root && in_namespace {
                     visit(&e);
@@ -1683,8 +1690,8 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
                 guard.leave();
                 depth = depth.saturating_sub(1);
             }
-            Ok((_, Event::Eof)) => return depth == 0,
-            Err(_) => return false,
+            Ok((_, Event::Eof)) => return (depth == 0, roots == 1 && valid_root),
+            Err(_) => return (false, false),
             _ => {}
         }
         buf.clear();
@@ -1717,11 +1724,11 @@ fn record_content_type(e: &BytesStart, ct: &mut ContentTypes) {
     }
 }
 
-/// Parse a `.rels` part. Returns `(relationships, capped, complete)` where `capped` is set when the budget
+/// Parse a `.rels` part. Returns `(relationships, capped, complete, recognized_root)` where `capped` is set when the budget
 /// stopped further relationships from being recorded. The depth bound is tracked like every other
 /// parser (J1), so a deeply nested relationships part stops before a later (possibly dangling)
 /// relationship is read.
-fn parse_rels(dir: &str, text: &str, cap: usize, guard: &mut ParseGuard) -> (Vec<Rel>, bool, bool) {
+fn parse_rels(dir: &str, text: &str, cap: usize, guard: &mut ParseGuard) -> (Vec<Rel>, bool, bool, bool) {
     observation_contract! {
         rules: "-";
         collections: "parser.parse_opc_children*1,parser.parse_rels*1,type.Vec*2";
@@ -1733,10 +1740,11 @@ fn parse_rels(dir: &str, text: &str, cap: usize, guard: &mut ParseGuard) -> (Vec
 
     let mut rels = Vec::new();
     let mut capped = false;
-    let complete = parse_opc_children(text, b"Relationships", b"http://schemas.openxmlformats.org/package/2006/relationships", guard, |e| {
-        push_rel(dir, e, &mut rels, cap, &mut capped);
-    });
-    (rels, capped, complete && !capped)
+    let (complete, recognized_root) =
+        parse_opc_children(text, b"Relationships", b"http://schemas.openxmlformats.org/package/2006/relationships", guard, |e| {
+            push_rel(dir, e, &mut rels, cap, &mut capped);
+        });
+    (rels, capped, complete && !capped, recognized_root)
 }
 
 /// Record one `<Relationship>` element, ignoring any other element.
