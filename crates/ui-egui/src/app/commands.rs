@@ -418,9 +418,16 @@ impl WordApp {
         } else if !file_keeps_view && !["ui.", "view.", "document.", "format.state", "draw."].iter().any(|p| id.starts_with(p)) {
             self.canvas.scroll_to_caret = true;
         }
+        // A command that changes nothing and only asks for its dialog (Font Dialog, Zoom, Page Setup…) opens it for a
+        // script too, as production did: the dialog is what the script asked for. A command that changes the document
+        // and lacked its input (Insert Icon without an `id`) gives a script its data and opens nothing.
+        let launcher = self.session.registry.get(id).is_some_and(|spec| !spec.mutates);
+        let origin = self.user_origin;
+        self.user_origin = origin || launcher;
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
         }
+        self.user_origin = origin;
         // The open document goes to the front of the recent list after every command. The recent
         // commands (`ui.recentRemove`, `ui.recentClear`) return from `ui_command` before this
         // runs, so taking a document off the list is never undone by the re-add (#2716).

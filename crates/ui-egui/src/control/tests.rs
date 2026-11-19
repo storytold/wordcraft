@@ -336,3 +336,21 @@ fn control_keyboard_preserves_native_focus_and_document_protection() {
     frames(&mut h, 8);
     assert_eq!(h.state().session.doc, doc, "control input respects the same protection as real keys");
 }
+
+/// A script's `engine.execute` of a command that only asks for its dialog opens it, as production did (`format.fontDialog`
+/// opened the Font dialog); a command that changes the document and lacked its input (Insert Icon without an `id`) opens
+/// nothing and gives the script its data.
+#[test]
+fn a_script_opens_the_dialog_a_launcher_command_asks_for() {
+    let ctx = installed();
+    let fresh = || WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut a = fresh();
+    let r = call(&mut a, &ctx, "engine.execute", json!({"command": "format.fontDialog"}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    let keys: Vec<String> = a.dialog_host.open_dialogs().into_iter().filter_map(|d| d.key).collect();
+    assert!(keys.iter().any(|k| k == "font"), "the Font dialog is open: {keys:?}");
+    let mut b = fresh();
+    let r = call(&mut b, &ctx, "engine.execute", json!({"command": "insert.icon"}));
+    assert!(r["result"]["icons"].is_array(), "{r}");
+    assert!(b.dialog_host.open_dialogs().is_empty(), "a script's Insert Icon without an id opens no picker");
+}
