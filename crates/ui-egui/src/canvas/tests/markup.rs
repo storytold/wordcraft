@@ -150,16 +150,17 @@ fn the_rulers_span_the_caret_page_in_multiple_pages() {
         let (t, b) = down(h);
         r.min.y <= t && t <= b && b <= r.max.y
     };
-    let rects: Vec<Rect> = h.state().canvas.page_rects().map(|(_, r)| r).collect();
-    assert!(rects.len() == 4 && (rects[0].min.y - rects[1].min.y).abs() < 1.0 && rects[1].min.x > rects[0].min.x, "pages side by side: {rects:?}");
+    // Every page of the layout on screen, those scrolled out of view too (production's `page_rects`).
+    let rects: Vec<Rect> = h.state().canvas.laid_page_rects().to_vec();
+    assert!(rects.len() == 4 &&(rects[0].min.y - rects[1].min.y).abs() < 1.0 && rects[1].min.x > rects[0].min.x, "pages side by side: {rects:?}");
     assert!(within_x(&h, rects[0]) && within_y(&h, rects[0]), "the rulers span page 1");
     assert!(!within_x(&h, rects[1]), "and not page 2, which sits beside it");
 
     // The caret moves to the second page of the row: the horizontal ruler follows it.
     h.state_mut().run("edit.goto", json!({"page": 2})).unwrap();
     h.run_steps(4);
-    let rects: Vec<Rect> = h.state().canvas.page_rects().map(|(_, r)| r).collect();
-    assert!(within_x(&h, rects[1]), "the horizontal ruler follows the caret to page 2");
+    let rects: Vec<Rect> = h.state().canvas.laid_page_rects().to_vec();
+    assert!(within_x(&h, rects[1]),"the horizontal ruler follows the caret to page 2");
     assert!(within_y(&h, rects[1]));
     assert!(!within_x(&h, rects[0]));
 
@@ -167,7 +168,7 @@ fn the_rulers_span_the_caret_page_in_multiple_pages() {
     let below = (0..rects.len()).find(|i| rects[*i].min.y > rects[0].min.y + 1.0).expect("a second row of pages");
     h.state_mut().run("edit.goto", json!({"page": below + 1})).unwrap();
     h.run_steps(4);
-    let rects: Vec<Rect> = h.state().canvas.page_rects().map(|(_, r)| r).collect();
+    let rects: Vec<Rect> = h.state().canvas.laid_page_rects().to_vec();
     assert!(within_y(&h, rects[below]), "the vertical ruler spans page {}", below + 1);
     assert!(within_x(&h, rects[below]));
     assert!(!within_y(&h, rects[0]), "page 1 is in the row above");
@@ -701,7 +702,8 @@ fn shape_commands_ready(h: &H) {
 fn the_context_menu_rows_follow_the_target() {
     let targets = [
         Target { name: "picture", make: picture_target, before: nothing, present: &["Wrap Text", "Insert Caption…"], absent: &["Update Field"] },
-        Target { name: "shape", make: shape_target, before: shape_commands_ready, present: &["Format Shape…"], absent: &["Wrap Text", "Update Field"] },
+        // A selected shape is an object like a picture: Wrap Text is its row too (#513).
+        Target { name: "shape", make: shape_target, before: shape_commands_ready, present: &["Format Shape…", "Wrap Text"], absent: &["Update Field"] },
         Target {
             name: "TOC entry",
             make: toc_target,

@@ -1086,8 +1086,7 @@ fn hiding_white_space_stacks_page_bands_and_keeps_hit_testing() {
     let on_second = page_to_screen(h.state_mut(), 1, second.x + 1.0, second.top + second.height / 2.0).expect("page 2 on screen");
     assert_eq!(click(&mut h, on_second), Some(1), "a click in page 2's band is on page 2");
     // Just below page 1's text area: the margin Hide White Space cuts, still page 1's.
-    let below_first = page_to_screen(h.state_mut(), 0, body0.x + 20.0, body0.bottom() + 2.0).expect("page 1 on screen");
-    assert_eq!(click(&mut h, below_first), Some(0), "the cut margin under page 1 belongs to page 1");
+    let below_first = page_to_screen(h.state_mut(), 0, body0.x + 20.0, body0.bottom() + 2.0).expect("page 1 on screen");    assert_eq!(click(&mut h, below_first), Some(0), "the cut margin under page 1 belongs to page 1");
     // Just above page 2's text area: page 2's.
     let above_second = page_to_screen(h.state_mut(), 1, body1.x + 20.0, body1.y - 2.0).expect("page 2 on screen");
     assert_eq!(click(&mut h, above_second), Some(1), "the cut margin over page 2 belongs to page 2");

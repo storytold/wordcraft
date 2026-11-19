@@ -281,9 +281,8 @@ pub fn select_balloon(app: &mut WordApp, id: u32) {
 /// lost focus).
 pub fn deselect_balloon(app: &mut WordApp) {
     let Some(id) = app.canvas.selected_balloon() else { return };
+    // What was written is cleared by the write; a draft the document refused (read-only protection) stays, with its
+    // reason on the status line, for when the balloon is selected again or the document is saved or closed (#1348).
     write_back(app, id);
-    let comments = &mut app.canvas.comments;
-    comments.selected = None;
-    comments.editing = None;
-    comments.reply.clear();
+    app.canvas.comments.selected = None;
 }

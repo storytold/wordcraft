@@ -326,7 +326,15 @@ fn context_menu_crop_item_activates_crop_mode() {
     }
     h.app_frame();
     assert!(h.state().canvas.context_menu_open, "context menu is open on image");
-    h.get_by_label("Crop ").click();
+    // The menu's Crop row (the ribbon above the page has a Crop button of the same name).
+    let top = h.state().canvas.page_rects().next().map_or(0.0, |(_, r)| r.min.y);
+    let row = h.query_all_by_label("Crop").map(|n| n.rect()).find(|r| r.min.y >= top).map(|r| r.center()).expect("the menu has a Crop row");
+    h.event(egui::Event::PointerMoved(row));
+    h.app_frame();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: row, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.app_frame();
+    }
     for _ in 0..3 {
         h.app_frame();
     }

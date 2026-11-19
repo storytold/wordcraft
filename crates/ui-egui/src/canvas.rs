@@ -806,6 +806,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let mut unplaced = None;
     let out = PageView::new(tl!("Document"), &source, &mut state, paper)
         .options(options)
+        // Hide White Space cuts each page to its text area: without the bodies the pages show whole.
+        .bodies(&bodies)
         .navigation(navigation_options())
         .editor(craft::ui::primitives::EditorPurpose::Text)
         .rulers(show_rulers)
