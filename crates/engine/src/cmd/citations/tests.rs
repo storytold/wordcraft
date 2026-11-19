@@ -488,6 +488,32 @@ fn table_of_authorities_updates() {
     assert!(after.matches("Doe v. Roe").count() > t.matches("Doe v. Roe").count(), "{after}");
 }
 
+/// #3856: the table of figures and the table of authorities write each page as its footer shows
+/// it, in the section's number format; the authority cited on pages i and ii lists both.
+#[test]
+fn figures_and_authorities_follow_the_page_number_format() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Smith v. Jones held it.\nSmith v. Jones again."));
+    s.run("select.text", &json!({"text": "Smith v. Jones again"})).unwrap();
+    s.run("caret.home", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "page"})).unwrap();
+    s.run("references.caption", &json!({"label": "Figure", "text": "The court"})).unwrap();
+    for occurrence in [1, 2] {
+        s.run("select.text", &json!({"text": "Smith v. Jones", "occurrence": occurrence})).unwrap();
+        s.run("references.markCitation", &json!({})).unwrap();
+    }
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("layout.pageNumberFormat", &json!({"format": "lowerRoman", "start": 1})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.tableOfFigures", &json!({})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.tableOfAuthorities", &json!({})).unwrap();
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("Figure 1: The court\tii"), "{t}");
+    assert!(t.contains("Smith v. Jones\ti, ii"), "{t}");
+}
+
 /// Field instructions and results in the body, in order.
 fn fields(s: &Session) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -784,4 +810,159 @@ fn gost_numbers_follow_its_name_or_title_sort() {
     assert_eq!(find_style("ISO 690 - Numerical Reference").map(|x| x.name), Some("ISO 690 (numerical)"));
     assert_eq!(find_style("Harvard - Anglia 2008").map(|x| x.name), Some("Harvard (Anglia)"));
     assert!(find_style("").is_none() && find_style("Vancouver").is_none());
+}
+
+fn lookup_session(tags: &[&str]) -> Session {
+    let mut p = Paragraph::new();
+    for tag in tags {
+        p.insert_object(
+            p.len(),
+            InlineObject::Field {
+                instr: format!("CITATION {tag}"),
+                result: "Original cache".into(),
+                locked: false,
+                dirty: true,
+                code: false,
+                form: String::new(),
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+    }
+    let mut doc = Document::new();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+    Session::new(doc)
+}
+
+#[test]
+fn citation_source_lookups_keep_first_duplicates_case_and_style_order() {
+    let mut s = lookup_session(&["A", "B", "missing", "a", "B"]);
+    s.doc.sources = [
+        ("B", "Zed, Zo", "Zulu"),
+        ("A", "Able, Ann", "Alpha"),
+        ("B", "Baker, Ben", "Beta duplicate"),
+        ("a", "Middle, May", "Middle"),
+        ("unused", "Other, One", "Unused"),
+    ]
+    .into_iter()
+    .map(|(tag, author, title)| Source { tag: tag.into(), author: author.into(), title: title.into(), year: "2024".into(), ..Default::default() })
+    .collect();
+    let original = s.doc.clone();
+    for st in &STYLES {
+        s.bib_style = st.name.into();
+        let expected = if st.order == Order::Cited { vec![1, 0, 3] } else { vec![1, 2, 3, 0] };
+        assert_eq!(sources::bib_order(&s.doc, st, None), expected, "{}", st.name);
+        update_citations(&mut s).unwrap();
+        let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+        for (k, (source, number)) in [(1, 1), (0, 2), (usize::MAX, 0), (3, 3), (0, 2)].into_iter().enumerate() {
+            let InlineObject::Field { instr, result, locked, dirty, code, form } = &p.objects[k] else { panic!() };
+            let InlineObject::Field { instr: before, .. } = &original.para(StoryRef::Body, &Path::top(0)).unwrap().objects[k] else { panic!() };
+            assert_eq!(instr, before);
+            let expected = original.sources.get(source).map(|x| cite(x, st.name, number, "")).unwrap_or_else(|| "Original cache".into());
+            assert_eq!(result, &expected, "{}: {instr}", st.name);
+            assert!(!locked && *dirty && !code && form.is_empty());
+        }
+        assert_eq!(s.doc.sources, original.sources);
+    }
+    // Without citations even duplicate and unused source records remain in the bibliography.
+    s.doc.body.clear();
+    assert_eq!(sources::bib_order(&s.doc, style("IEEE"), None), vec![0, 1, 2, 3, 4]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
+fn citation_refresh_source_lookup_work_scales_with_document_size() {
+    fn doc(n: usize) -> Session {
+        let mut p = Paragraph::new();
+        p.text = wordcraft_doc::para::OBJ.to_string().repeat(n);
+        p.runs = vec![wordcraft_doc::Run { len: p.text.len(), props: CharProps::default() }];
+        p.objects = (0..n)
+            .rev()
+            .map(|i| InlineObject::Field {
+                instr: format!("CITATION T{i}"),
+                result: String::new(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            })
+            .collect();
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d.sources = (0..n).map(|i| Source { tag: format!("T{i}"), ..Default::default() }).collect();
+        let mut s = Session::new(d);
+        s.bib_style = "IEEE".into();
+        s
+    }
+    // Use the running thread's CPU time on Linux; scheduler pauses are not lookup work.
+    fn cost(f: &mut impl FnMut()) -> f64 {
+        let ran = || std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse::<u64>().ok();
+        let (t, before) = (std::time::Instant::now(), ran());
+        f();
+        match (before, ran()) {
+            (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
+            _ => t.elapsed().as_secs_f64(),
+        }
+    }
+    const SCALE: usize = 8;
+    let (mut small, mut big) = (doc(2_000), doc(SCALE * 2_000));
+    update_citations(&mut small).unwrap();
+    update_citations(&mut big).unwrap();
+    let (mut a, mut b) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        a = a.min(
+            cost(&mut || {
+                for _ in 0..SCALE {
+                    update_citations(&mut small).unwrap();
+                }
+            }) / SCALE as f64,
+        );
+        b = b.min(cost(&mut || {
+            update_citations(&mut big).unwrap();
+        }));
+    }
+    let ratio = b / a.max(1e-9);
+    assert!(ratio < 32.0, "citation refresh: {a:.6}s -> {b:.6}s, {ratio:.1}x for {SCALE}x input");
+    let p = big.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert!(p.objects.iter().enumerate().all(|(i, o)| matches!(o, InlineObject::Field { result, .. } if result == &format!("[{}]", i + 1))));
+}
+
+/// A heading that starts with a page break and has a `_Ref` bookmark from before the break: the
+/// page cross-reference reuses it and reads the heading's page, and still does after Update Field.
+#[test]
+fn a_ref_bookmark_before_a_page_break_reads_the_heading_page() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Front\nPreface"));
+    s.run("select.text", &json!({"text": "Preface"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.run("caret.home", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "page"})).unwrap();
+    let path =
+        s.doc.para_paths(StoryRef::Body).into_iter().find(|p| s.doc.para(StoryRef::Body, p).is_some_and(|p| p.text.contains("Preface"))).unwrap();
+    let len = s.doc.para(StoryRef::Body, &path).unwrap().len();
+    let props = CharProps::default();
+    s.doc
+        .insert_object(
+            &Pos { story: StoryRef::Body, path: path.clone(), off: len },
+            InlineObject::BookmarkEnd { name: "_Ref000000003".into() },
+            &props,
+        )
+        .unwrap();
+    s.doc.insert_object(&Pos { story: StoryRef::Body, path, off: 0 }, InlineObject::BookmarkStart { name: "_Ref000000003".into() }, &props).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("insert.crossReference", &json!({"to": "heading", "target": "Preface", "show": "page"})).unwrap();
+    let pageref = |s: &Session| {
+        s.doc
+            .para_paths(StoryRef::Body)
+            .into_iter()
+            .flat_map(|p| s.doc.para(StoryRef::Body, &p).map(|p| p.objects.clone()).unwrap_or_default())
+            .find_map(|o| match o {
+                InlineObject::Field { instr, result, .. } if instr.starts_with("PAGEREF") => Some((instr, result)),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(pageref(&s), ("PAGEREF _Ref000000003 \\h".to_string(), "2".to_string()));
+    crate::cmd::references::update_fields_in(&mut s, true).unwrap();
+    assert_eq!(pageref(&s).1, "2");
 }
