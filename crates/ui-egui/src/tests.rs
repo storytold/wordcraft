@@ -182,6 +182,9 @@ fn row_bound_ctrl_f1_runs_the_bound_command() {
     let mut h = canvas_harness();
     // PLAN(shell-w7): sh.A11 `Session::keymap_mut` over `Overrides::insert`.
     h.state_mut().session.keymap_mut().insert("view.focus", vec!["Mod+F1".into()]);
+    // The harness hands the app's input (with the user's bindings) to the runtime one frame behind (`driver_logic`),
+    // so the binding reaches the keymap in the frame after it is made, as in the row for Mod+Shift+0.
+    h.step();
     press_ctrl_f1(&mut h);
     assert!(h.state().session.view.focus_mode, "the bound command ran");
     assert!(!h.state().ui.ribbon_collapsed, "the ribbon is unchanged");
@@ -714,7 +717,7 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
         frame(&mut a, Vec::new());
     }
     // The centre of the area the pages show in (inside the rulers), as production's `canvas_rect` was.
-    let pointer = a.canvas.view_rect().unwrap().center();
+    let mut pointer = a.canvas.view_rect().unwrap().center();
     frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
     let wheel = |y: f32, modifiers| egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Line,
@@ -731,22 +734,39 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
         frame(&mut a, Vec::new());
     }
     assert!(offset(&a).y > 500.0, "scrolled down: {:?}", offset(&a));
-    let page = nearest_page(&a, pointer).unwrap();
+    // The page under `p`.
+    let page_under = |a: &WordApp, p: egui::Pos2| a.canvas.page_rects().find(|(_, r)| r.contains(p)).map(|(i, _)| i);
+    let mut page = page_under(&a, pointer).unwrap();
     assert!(page >= 3, "a few pages down: page {page}");
-    let under = |a: &WordApp| (pointer - page_rect(a, page).unwrap().min) / page_scale(a);
-    let at = under(&a);
+    let under = |a: &WordApp, page: usize, pointer: egui::Pos2| (pointer - page_rect(a, page).unwrap().min) / page_scale(a);
+    let mut at = under(&a, page, pointer);
     let linux_ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
     frame(&mut a, vec![egui::Event::ModifiersChanged(linux_ctrl)]);
     let (cols, before) = (columns(&page_rects(&a)), page_scale(&a));
     for n in 0..40 {
-        let events = if n % 8 == 0 { vec![wheel(-1.0, linux_ctrl)] } else { Vec::new() };
-        frame(&mut a, events);
-        let now = under(&a);
+        let notch = n % 8 == 0;
+        if notch {
+            // The place each notch keeps is the one under the pointer when it comes. Once the pages reflow into rows
+            // they are centred, not kept across (below), so another page can be under the pointer by then, or, with
+            // an even number to a row, the gutter at the centre, where there is no place to keep: the pointer moves
+            // onto the page right of it first.
+            if page_under(&a, pointer).is_none()
+                && let Some(right) = a.canvas.page_rects().map(|(_, r)| r).filter(|r| r.left() > pointer.x && r.y_range().contains(pointer.y)).map(|r| r.left()).reduce(f32::min)
+            {
+                pointer.x = right + 20.0;
+                frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
+            }
+            page = page_under(&a, pointer).unwrap_or_else(|| panic!("frame {n}: the pointer is on a page"));
+            at = under(&a, page, pointer);
+        }
+        frame(&mut a, if notch { vec![wheel(-1.0, linux_ctrl)] } else { Vec::new() });
+        let now = under(&a, page, pointer);
         // Across, the place can only be kept while the pages stay one per row: in rows they
         // fit the window side by side and there is nothing to scroll sideways.
         // Within a couple of screen pixels.
         let off = (now - at) * page_scale(&a);
-        let across = columns(&page_rects(&a)) > cols || off.x.abs() < 2.0;        assert!(across && off.y.abs() < 2.0, "frame {n} at {:.0}%: {now:?} on page {page}, was {at:?}", a.canvas.zoom() * 100.0);
+        let across = columns(&page_rects(&a)) > cols || off.x.abs() < 2.0;
+        assert!(across && off.y.abs() < 2.0, "frame {n} at {:.0}%: {now:?} on page {page}, was {at:?}", a.canvas.zoom() * 100.0);
     }
     assert!(page_scale(&a) < before * 0.6, "zoomed out: {before} -> {}", page_scale(&a));
     assert!(columns(&page_rects(&a)) > cols, "the pages reflowed into rows on the way");

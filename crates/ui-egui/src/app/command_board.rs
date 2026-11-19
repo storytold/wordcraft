@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use craft::keymap::Overrides;
 use craft::ui::runtime::commands::{
-    AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, CommandState, FireSource, Scope, TypingRule, WindowCommand,
+    AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, CommandState, FireSource, Scope, TypingRule,
 };
 use craft::ui::runtime::frame::FrameOutput;
 
@@ -124,14 +124,9 @@ impl WordApp {
             }
             // Word's Alt chords (Alt+Q, Alt+F7, Ctrl+Alt+1…) fire while the person types in the page:
             // plain keys type, and every modified chord is offered to the keymap first.
-            // Alt+F7 and Alt+F8 are Word's Next Misspelling and Macros; the framework's floating-window Move and Size
-            // keep their title-row menu items without a chord, as on macOS.
             match AppCatalog::new(defs, generation) {
                 Ok(catalog) => {
-                    let catalog = catalog
-                        .typing_rule(TypingRule::PlainKeysWait)
-                        .replace_defaults(WindowCommand::Move.id(), Vec::new())
-                        .replace_defaults(WindowCommand::Size.id(), Vec::new());
+                    let catalog = catalog.typing_rule(TypingRule::PlainKeysWait);
                     self.command_catalog = Some((registry, with_word_chords(catalog)));
                 }
                 Err(error) => {
@@ -162,8 +157,7 @@ impl WordApp {
             input = input.catalog(catalog);
         }
         for spec in registry.all() {
-            let (enabled, reason) = gate(self, spec.id);
-            // A toggle's checked state is bound at its ribbon button, not here.
+            let (enabled, reason) = gate(self, spec.id);            // A toggle's checked state is bound at its ribbon button, not here.
             let mut state = CommandState::new().enabled(enabled);
             if let Some(hint) = crate::widgets::command_hint(spec.location, spec.label, reason) {
                 state = state.hint(hint);
@@ -189,8 +183,7 @@ impl WordApp {
             if let Some(window) = self.windows.active() {
                 self.enter_window(window);
             }
-            let id = fired.command.id.as_str();
-            let params = if fired.command.params.is_null() { json!({}) } else { fired.command.params.clone() };
+            let id = fired.command.id.as_str();            let params = if fired.command.params.is_null() { json!({}) } else { fired.command.params.clone() };
             let from_key = fired.source == FireSource::Key;
 
             let (id, params) = if id == "edit.pasteFormat" && from_key { self.paste_format_command(ctx, params) } else { (id, params) };

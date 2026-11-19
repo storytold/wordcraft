@@ -63,8 +63,11 @@ pub(crate) fn report_editor(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Cont
         None => EditorSurrounding::Unavailable { revision },
     };
     // The page reports no lines: the page view's describer carries the text and selection.
-    let mut state = EditorState::new(caret, &[], TextPos::new(0, 0)).surrounding(epoch, surrounding);
-    state.composing = !app.canvas.ime_preedit.is_empty();
+    // The page draws the marked text itself, so a pass that dropped it (a refused deletion) reports
+    // that, and the framework interrupts the composition even in the pre-edit's own pass.
+    let state = EditorState::new(caret, &[], TextPos::new(0, 0))
+        .surrounding(epoch, surrounding)
+        .marked(!app.canvas.ime_preedit.is_empty());
     handle.report(ctx, state);
 }
 

@@ -393,7 +393,7 @@ fn disabled_alt_shortcut_leaves_the_typed_character() {
     let mut h = alt_frame_app();
     let alt_shift = Modifiers { alt: true, shift: true, ..Default::default() };
     let key = |pressed| key_event(Key::Minus, pressed, alt_shift);
-    alt_frame(&mut h, vec![key(true), egui::Event::Text("\u{2014}".into()), key(false)]);
+    batch_frame(&mut h, vec![key(true), egui::Event::Text("\u{2014}".into()), key(false)]);
     assert_eq!(body(h.state()), "\u{2014}");
 }
 
@@ -973,7 +973,7 @@ fn a_refused_body_delete_clears_preedit_and_joins() {
     caret(&mut h, 1);
     let depth = h.state().session.undo_depth();
 
-    alt_frame(&mut h, vec![surround(1, 0), preedit("に"), surround(0, 1)]);
+    batch_frame(&mut h, vec![surround(1, 0), preedit("に"), surround(0, 1)]);
     assert_eq!(body(h.state()), "b", "the editable `a` is erased; the locked control's `b` is not");
     assert!(h.state().canvas.ime_preedit.is_empty(), "a refused request must not leave its pre-edit painted");
     assert_eq!(h.state().canvas.ime_preedit_range, None);
@@ -1067,6 +1067,9 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     let after_commit = linear(&mut h);
     // Delete (at the equation's end it changes nothing) is a key the page reads; F20 is no editor input.
     let key = key_event(Key::Delete, true, Modifiers::NONE);
+    // The framework takes a Delete in the frame right after a commit as the key that ended the composition
+    // (`ime::GUARD_FRAMES`); this one is a later key, so a frame passes first.
+    batch_frame(&mut h, Vec::new());
     batch_frame(&mut h, vec![surround_bytes(1, 0), key, egui::Event::Text("K".into())]);
     assert_eq!(linear(&mut h), format!("{after_commit}K"), "a key between the deletion and text clears the suppression");
 
