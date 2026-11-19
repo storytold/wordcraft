@@ -114,8 +114,8 @@ fn count(app: &mut WordApp, ui: &mut Ui) {
     if out.clicked() {
         let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
     }
-    let mut open = app.chrome.count;
-    Menu::context(tl!("Status count").to_string(), &out.response).values().open(Bind::bound(&mut open)).show(ui, |ui, _| {
+    // No `open` binding: with one the framework leaves the opening to the app, without it the opener opens the menu.
+    Menu::context(tl!("Status count").to_string(), &out.response).values().show(ui, |ui, _| {
         for c in crate::StatusCount::ALL {
             MenuItem::command(CommandRef::with_params("ui.statusCount", json!({"value": c.code()})))
                 .label(tl!(c.label()).to_string())
@@ -123,7 +123,6 @@ fn count(app: &mut WordApp, ui: &mut Ui) {
                 .show(ui);
         }
     });
-    app.chrome.count = open;
 }
 
 /// The language at the caret; a click sets the proofing language (Review › Language).
@@ -140,12 +139,7 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     };
     let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
     let out = item(ui, shown, Some(tip));
-    let mut open = app.chrome.language;
-    Menu::new(tl!("Language").to_string())
-        .opened_by(&out.response, Trigger::Click)
-        .open(Bind::bound(&mut open))
-        .show(ui, |ui, _| crate::ribbon::language_menu(ui, app));
-    app.chrome.language = open;
+    Menu::new(tl!("Language").to_string()).opened_by(&out.response, Trigger::Click).show(ui, |ui, _| crate::ribbon::language_menu(ui, app));
 }
 
 /// Fonts the document uses that aren't installed: they're drawn in other fonts, so the text can wrap and
@@ -166,8 +160,7 @@ fn missing_fonts(app: &mut WordApp, ui: &mut Ui) {
         .variant(Variant::GHOST)
         .tooltip(TooltipSpec::new(tl!("Shown in substitute fonts. Click for details.").to_string()))
         .show(ui);
-    let mut open = app.chrome.fonts;
-    Menu::new(tl!("Missing fonts").to_string()).opened_by(&out.response, Trigger::Click).open(Bind::bound(&mut open)).show(ui, |ui, _| {
+    Menu::new(tl!("Missing fonts").to_string()).opened_by(&out.response, Trigger::Click).show(ui, |ui, _| {
         MenuItem::heading(tl!("Not installed — shown as").to_string()).show(ui);
         for f in missing.iter().filter(|f| !f.metric_compatible).take(SHOWN) {
             MenuItem::heading(format!("{} → {}", f.font, f.shown_as.join(", "))).show(ui);
@@ -183,7 +176,6 @@ fn missing_fonts(app: &mut WordApp, ui: &mut Ui) {
         }
         MenuItem::command(CommandRef::new("font.add")).label(tl!("Add Font…").to_string()).show(ui);
     });
-    app.chrome.fonts = open;
 }
 
 /// The view, zoom and Focus controls, which stay at the reading end outside the bar's scroll.
@@ -197,10 +189,11 @@ fn controls(app: &mut WordApp, ui: &mut Ui) {
         ("view.printLayout", "printLayout", tl!("Print Layout"), mode == wordcraft_layout::ViewMode::Print && !read),
         ("view.webLayout", "webLayout", tl!("Web Layout"), mode == wordcraft_layout::ViewMode::Web),
     ] {
-        ToggleButton::command(CommandRef::new(id))
+        // No command carries a checked state, so the view is given at the button (S-L415).
+        ToggleButton::new(name.to_string(), Bind::given(on))
+            .command(CommandRef::new(id))
             .icon(IconId::new(icon))
             .icon_only()
-            .selected(on)
             .tooltip(TooltipSpec::new(name.to_string()))
             .show(ui);
     }

@@ -18,14 +18,6 @@ pub(crate) struct ChromeOpen {
     pub(crate) undo: bool,
     /// The actions marked in the open Undo drop-down; back to none whenever the drop-down is closed.
     pub(crate) undo_mark: craft::ui::list::UndoMark,
-    /// The Quick Access Toolbar's customize menu.
-    pub(crate) qat_menu: bool,
-    /// The status bar's count menu.
-    pub(crate) count: bool,
-    /// The status bar's language menu.
-    pub(crate) language: bool,
-    /// The status bar's missing-fonts menu.
-    pub(crate) fonts: bool,
     /// The command search.
     pub(crate) search: bool,
 }
