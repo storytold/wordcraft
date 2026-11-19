@@ -618,13 +618,15 @@ impl<'a> Flow<'a> {
             Some(LineEnd::PageBreak) => pb.new_page(block, body_top),
             // A paragraph that starts with a column break has its space before in the next column,
             // not in the column the break ends. There the line holding the break keeps its height
-            // in Word 2013 layout and takes no room in older layouts (Word).
+            // in Word 2013 layout and takes no room in older layouts. A column starting at the top
+            // of the page drops the space before in Word 2013 layout, as after a page break (Word).
             Some(LineEnd::ColumnBreak) if starts_with(wordcraft_doc::para::COLUMN_BREAK) && !pb.web => {
+                let modern = ctx.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
                 pb.col_break_page = Some(pb.pages.len().saturating_sub(1));
                 if let Some((at, y, gap, content_bottom)) = self.start
                     && at == (pb.pages.len(), pb.col)
                 {
-                    if ctx.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT {
+                    if modern {
                         pb.y -= gap;
                         pb.content_bottom = content_bottom.max(pb.y);
                     } else {
@@ -633,7 +635,7 @@ impl<'a> Flow<'a> {
                 }
                 pb.advance(block, body_top);
                 self.rewidth_after_column_break(ctx, pb);
-                self.space_here = self.pl.rp.space_before.max(0.0);
+                self.space_here = if modern && pb.fresh() { 0.0 } else { self.pl.rp.space_before.max(0.0) };
                 pb.y += self.space_here;
             }
             Some(LineEnd::ColumnBreak) => {
