@@ -300,9 +300,6 @@ fn sample_key(props: &CharProps, mark: Option<VertAlign>, paper: Rgb, dark: bool
 /// The columns of the font rows: the labels, then the controls filling the rest.
 const FONT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
-/// The Effects check boxes, two to a line.
-const EFFECT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
-
 /// One font box over `family` as two grid cells, its label and the box; the action rows (Add Font…, Load System
 /// Installed Fonts…) file a run.
 fn font_row(
@@ -403,22 +400,30 @@ impl WordForm for FontForm {
             });
         });
         GroupBox::new(Label::from(tl!("Effects")), None).show(ui, |ui, _| {
-            Grid::new(&EFFECT_COLUMNS).fill_width().show(ui, |ui, _| {
+            // Two to a line: each pair is a row of its own, so a pair stands on one line whatever a grid's column
+            // widths would do with labelled check boxes.
+            Row::new().show(ui, |ui, _| {
                 tick(ui, &mut self.bold, tl!("Bold"));
                 tick(ui, &mut self.italic, tl!("Italic"));
+            });
+            Row::new().show(ui, |ui, _| {
                 tick(ui, &mut self.underline, tl!("Underline"));
                 tick(ui, &mut self.strike, tl!("Strikethrough"));
-                // Superscript and Subscript exclude each other: the one just ticked wins.
+            });
+            // Superscript and Subscript exclude each other: the one just ticked wins.
+            Row::new().show(ui, |ui, _| {
                 if tick(ui, &mut self.sup, tl!("Superscript")) && self.sup {
                     self.sub = false;
                 }
                 if tick(ui, &mut self.sub, tl!("Subscript")) && self.sub {
                     self.sup = false;
                 }
+            });
+            Row::new().show(ui, |ui, _| {
                 tick(ui, &mut self.small_caps, tl!("Small caps"));
                 tick(ui, &mut self.caps, tl!("All caps"));
-                tick(ui, &mut self.hidden, tl!("Hidden"));
             });
+            tick(ui, &mut self.hidden, tl!("Hidden"));
         });
         GroupBox::new(Label::from(tl!("Preview")), None).show(ui, |ui, _| {
             let paper = self.paper.unwrap_or(Rgb(255, 255, 255));
