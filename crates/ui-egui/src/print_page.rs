@@ -101,6 +101,9 @@ pub struct PrintPage {
     pub(crate) said: Option<u64>,
     /// The generation of the result held back on this opening of the page.
     pub(crate) hidden: Option<u64>,
+    /// The frame whose first pass decided what this opening holds back: the page counts as appearing through every
+    /// pass of that frame, and the later passes must not read the page's own "said" mark of the first one.
+    opened_in: Option<u64>,
     /// The preview's zoom and pan; it follows the pane until the user zooms or pans.
     pub(crate) view: PreviewView,
     /// The output layout, kept while what it is made from ([`LayoutKey`]) is unchanged.
@@ -119,7 +122,7 @@ impl PrintPage {
 
 impl Default for PrintPage {
     fn default() -> Self {
-        PrintPage { settings: PrintSettings::default(), said: None, hidden: None, view: PrintPage::fit_view(), layout: None }
+        PrintPage { settings: PrintSettings::default(), said: None, hidden: None, opened_in: None, view: PrintPage::fit_view(), layout: None }
     }
 }
 
@@ -205,7 +208,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // it (its status bar, or this page): `printing.message` itself stays, as `ui.printSettings`
         // and other windows still report it. What the printers are doing (finding them, none found)
         // always shows.
-        let opened = cx.appeared();
+        // `appeared` holds through every pass of the opening frame: the first pass decides.
+        let frame = ui.ctx().cumulative_frame_nr();
+        let opened = cx.appeared() && app.print.opened_in != Some(frame);
+        if opened {
+            app.print.opened_in = Some(frame);
+        }
         let result = |m: &Option<crate::printing::Feedback>| {
             matches!(m, Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped))
         };
@@ -218,8 +226,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         if app.print.hidden != Some(generation) {
             app.print.hidden = None;
         }
-        let hide_message = app.print.hidden.is_some();
-        if !hide_message {
+        let hide_message = app.print.hidden.is_some();        if !hide_message {
             // Shown here, so the next opening needn't repeat it.
             app.print.said = result(&message).then_some(generation);
         }
