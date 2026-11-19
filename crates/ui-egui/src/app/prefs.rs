@@ -191,6 +191,7 @@ mod autosave_preference_tests {
     #[test]
     fn switching_documents_keeps_the_app_autosave_choice() {
         let mut a = app(Services::default());
+        a.run("text.insert", json!({"text": "First document"})).unwrap();
         let first = a.session.document_id();
         a.run("file.new", json!({})).unwrap();
         assert!(!a.autosave && !a.session.autosave);
@@ -203,6 +204,27 @@ mod autosave_preference_tests {
         a.session.switch_document(first).unwrap();
         a.sync_document();
         assert!(!a.autosave && !a.session.autosave);
+    }
+
+    #[test]
+    fn native_window_document_carry_keeps_the_global_autosave_choice() {
+        let mut a = app(Services::default());
+        a.run("text.insert", json!({"text": "First document"})).unwrap();
+        let first = a.session.document_id();
+        a.autosave = true;
+        a.session.autosave = true;
+        a.run("file.new", json!({})).unwrap();
+        let second = a.session.document_id();
+        // Like File > Options in this window: the other document still carries its old mirror.
+        a.autosave = false;
+        a.session.autosave = false;
+        a.carry_document_state(second, first);
+        assert!(!a.session.autosave);
+        a.autosave = true;
+        a.session.autosave = true;
+        a.carry_document_state(first, second);
+        assert!(a.session.autosave);
+        assert!(a.autosave_path.is_none());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
