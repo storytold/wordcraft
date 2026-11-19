@@ -492,12 +492,61 @@ fn close_dialogs(a: &mut WordApp, ctx: &egui::Context) {
 }
 
 /// Offers a picture on the installed clipboard for the next paste.
-fn offer_paste(ctx: &egui::Context, png: Vec<u8>) {
+///
+/// The browser delivers a paste as a late offer that `arrived` reports for one frame (sh.A18); the default test
+/// clipboard has no such queue, so the paste harness installs [`LatePaste`] and this queues the picture on it.
+fn offer_paste(_ctx: &egui::Context, png: Vec<u8>) {
+    use craft::platform::clipboard::{Flavor, RGBA8};
     let rgba = image::load_from_memory(&png).unwrap().to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    let picture = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-    let item = craft::ui::runtime::commands::ClipItem::Image(Arc::new(picture));
-    let _ = craft::ui::runtime::commands::ClipboardHandle::of(ctx).offer(&[item]);
+    let mut data = Vec::new();
+    data.extend_from_slice(&rgba.width().to_le_bytes());
+    data.extend_from_slice(&rgba.height().to_le_bytes());
+    data.extend_from_slice(rgba.as_raw());
+    LATE_PASTES.with(|q| q.borrow_mut().push(Flavor::new(RGBA8, data)));
+}
+
+thread_local! {
+    /// Pictures offered by [`offer_paste`], each taken as one late paste by [`LatePaste`].
+    static LATE_PASTES: std::cell::RefCell<Vec<craft::platform::clipboard::Flavor>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+use craft::platform::clipboard::ClipboardBackend as _;
+
+/// An in-memory clipboard that, like the event clipboard of the web build, takes a queued paste as one late arrival.
+#[derive(Default)]
+struct LatePaste(craft::platform::clipboard::MemoryClipboard);
+
+impl craft::platform::clipboard::ClipboardBackend for LatePaste {
+    fn write(&mut self, flavors: &[craft::platform::clipboard::Flavor]) -> Result<usize, craft::platform::clipboard::ClipboardError> {
+        self.0.write(flavors)
+    }
+
+    fn read(&mut self, mimes: &[&str], limit: u64) -> Result<Option<craft::platform::clipboard::Flavor>, craft::platform::clipboard::ClipboardError> {
+        self.0.read(mimes, limit)
+    }
+
+    fn read_image(&mut self, limit: u64) -> Result<Option<craft::platform::clipboard::ClipboardImage>, craft::platform::clipboard::ClipboardError> {
+        self.0.read_image(limit)
+    }
+
+    fn read_files(&mut self, limit: usize) -> Result<Option<Vec<std::path::PathBuf>>, craft::platform::clipboard::ClipboardError> {
+        self.0.read_files(limit)
+    }
+
+    fn has(&mut self, mimes: &[&str]) -> bool {
+        self.0.has(mimes)
+    }
+
+    fn take_arrived(&mut self) -> bool {
+        let next = LATE_PASTES.with(|q| {
+            let mut q = q.borrow_mut();
+            (!q.is_empty()).then(|| q.remove(0))
+        });
+        match next {
+            Some(flavor) => self.0.write(&[flavor]).is_ok(),
+            None => false,
+        }
+    }
 }
 
 /// Files handed to the app as a drop, through its intake.
@@ -559,11 +608,16 @@ fn split_buttons_are_disabled_with_no_document() {
     let mut h = harness(a);
     h.run_steps(4);
     for tip in ["Underline", "Text Highlight Color", "Font Color", "Bullets", "Numbering", "Shading", "Borders"] {
-        let node = h.query_by_role_and_label(Role::Button, tip);
-        assert!(node.is_some_and(|n| n.accesskit_node().is_disabled()), "{tip} is greyed out with no document");
+        // A split button names both its parts (the action and its arrow) by the same label.
+        let nodes: Vec<_> = h.query_all_by_role_and_label(Role::Button, tip).collect();
+        assert!(!nodes.is_empty() && nodes.iter().all(|n| n.accesskit_node().is_disabled()), "{tip} is greyed out with no document");
     }
-    let r = h.get_by_role_and_label(Role::Button, "Underline").rect();
-    let arrow = egui::pos2(r.max.x + 6.5, r.center().y);
+    let arrow = h
+        .query_all_by_role_and_label(Role::Button, "Underline")
+        .map(|n| n.rect())
+        .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .map(|r| r.center())
+        .expect("the Underline split button shows");
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: arrow, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
     }
@@ -638,8 +692,8 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
         modifiers,
         source: egui::MouseWheelSource::Unknown,
     };
-    // Away from the caret, several pages down.
-    for _ in 0..60 {
+    // Away from the caret, several pages down (a wheel line scrolls less under the framework's page view).
+    for _ in 0..240 {
         frame(&mut a, vec![wheel(-1.0, egui::Modifiers::NONE)]);
     }
     for _ in 0..60 {
@@ -744,7 +798,11 @@ fn web_layout_fills_the_window_width() {
     frame(&mut a, 1400.0, tick);
     assert_eq!(a.session.view.web_width, wide, "no change without a resize");
     let page = first_page(&a).unwrap();
-    assert!(page.left() < 4.0, "page starts at the left edge: {page:?}");
+    // The page view keeps a side gutter clear (the rail width, S-L: the framework's page spacing); the page fills the
+    // rest of the window, so it neither overflows to the right nor leaves more than the gutter on the left.
+    let gutter = 40.0; // the `size.rail.width` token the page view keeps clear
+    assert!(page.left() <= gutter + 4.0, "page starts at the left gutter: {page:?}");
+    assert!(page.right() <= 1400.0 - gutter + 4.0, "page ends before the right gutter: {page:?}");
     // A window drag: the width holds while the size keeps changing, then follows once it settles.
     for w in [1300.0, 1100.0, 900.0, 700.0, 500.0] {
         frame(&mut a, w, tick);
@@ -787,6 +845,8 @@ fn dragging_a_selection_past_the_viewport_edge_auto_scrolls() {
     let mut a = app();
     // A few pages of text, so there is content below the fold.
     a.run("text.insert", json!({"text": "lorem ipsum dolor sit amet consectetur ".repeat(1200)})).unwrap();
+    // The caret starts at the top: the first frames follow the caret, which typing left at the end.
+    a.run("caret.docStart", json!({})).unwrap();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 600.0));
     let mut t = 0.0;
     let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
@@ -794,7 +854,7 @@ fn dragging_a_selection_past_the_viewport_edge_auto_scrolls() {
         let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
         crate::test_harness::pass(&ctx, a, input);
     };
-    for _ in 0..3 {
+    for _ in 0..10 {
         frame(&mut a, Vec::new());
     }
     let (Some(vp), Some(page)) = (a.canvas.canvas_rect(), first_page(&a)) else { panic!("the canvas laid out") };
@@ -3425,7 +3485,9 @@ fn pasted_picture_inserts_only_when_the_page_is_the_edit_target() {
 }
 
 fn paste_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    use craft::platform::clipboard::Clipboard;
+    let spec = || craft::ui::testing::install_spec().clipboard(Clipboard::new(LatePaste::default()));
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             crate::test_harness::driver_logic(&ctx, app);

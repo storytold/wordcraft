@@ -598,12 +598,14 @@ fn return_on_the_print_page_prints() {
     assert_eq!(rec.sent_count(), 1, "Return printed once");
     assert_eq!(body_text(h.state()), before, "the document is unchanged");
     // Held down, Return repeats (egui marks a press of a key already down as a repeat): one job.
-    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
-    for _ in 0..4 {
-        h.event(enter(true));
+    // The platform marks every press after the first of a held key as a repeat (`Event::Key::repeat`); the first
+    // press here is the second job's, so it is not one.
+    let enter = |pressed, repeat| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat, modifiers: egui::Modifiers::NONE };
+    for n in 0..4 {
+        h.event(enter(true, n > 0));
         h.run_steps(1);
     }
-    h.event(enter(false));
+    h.event(enter(false, false));
     h.run_steps(1);
     assert_eq!(rec.sent_count(), 2, "a held Return prints once");
     // The fallback file chooser over the page takes Return for itself, even with nothing in it
@@ -801,7 +803,8 @@ fn search_command_matches_every_word() {
     assert_eq!(a.run("tools.search", json!({"query": "zzqqxx"})).unwrap()["matches"], json!([]));
     assert!(a.dialog_host.open_dialogs().is_empty(), "a query never opens the box");
     a.run("tools.search", json!({})).unwrap();
-    assert!(!a.dialog_host.open_dialogs().is_empty(), "no query opens Search");
+    // The title bar's in-place field takes the request (#5398), where there is a box to show it; no dialog opens.
+    assert!(crate::chrome::search::is_open(&a), "no query opens Search");
 }
 
 /// Issue #2716: taking documents off the list needs no open document — the Start screen shows

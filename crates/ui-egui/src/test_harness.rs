@@ -28,6 +28,8 @@ pub(crate) fn builder_with<S>(spec: impl FnOnce() -> InstallSpec + 'static) -> H
         // Before the runtime's plugin: egui runs input hooks in registration order, and the runtime's key stage reads
         // the input this hands it.
         ctx.add_plugin(HandOver);
+        // A frame may draw a file name or language name in CJK on its first pass; a CI runner has no CJK font.
+        cjk_stand_in(ctx);
         craft::ui::shell::embed::install(ctx, spec(), &crate::ui_fonts(Lang::EN)).expect("the craft runtime installs on a fresh test context");
     })
 }

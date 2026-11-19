@@ -325,6 +325,11 @@ impl WordApp {
         self.window_work(ctx);
         self.drain_inbox();
         self.paste_arrived(ctx);
+        // Focus hides the title bar's search box: a search left open there has no box to show it, and would keep
+        // Escape from leaving Focus (#5398).
+        if self.chrome.search && matches!(crate::chrome::Screen::of(&self.session.view), crate::chrome::Screen::Focus) {
+            self.chrome.search = false;
+        }
         self.pump_close_prompt();
         self.control_logic(ctx);
         self.watch_fonts(ctx);

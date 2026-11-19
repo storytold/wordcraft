@@ -397,7 +397,7 @@ impl Default for CanvasState {
 
 /// Settles the reading size and Web Layout's width from the room, and returns the text anchor to restore after a
 /// Read Mode reflow.
-fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics) -> Option<Pos> {
+fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side: f32) -> Option<Pos> {
     let mut reflow_anchor: Option<Pos> = None;
     if app.session.view.read_mode {
         let scale = ReadingView::screen_scale(app.session.view.read_zoom.clamp(0.75, 1.5));
@@ -415,7 +415,9 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics) -> O
         if app.session.view.mode == wordcraft_layout::ViewMode::Web {
             // Web Layout wraps to the work area (#1876).
             let scale = app.session.view.zoom.clamp(0.1, 5.0) * PX_PER_PT;
-            let w = web_layout_width(full.width(), scale);
+            // The page view keeps its side gutter (the rail width) clear on both sides of a page, so the page
+            // fits the window only when its width leaves that room.
+            let w = web_layout_width((full.width() - 2.0 * side).max(0.0), scale);
             if (app.session.view.web_width - w).abs() > 0.5 {
                 app.session.view.web_width = w;
                 // The pixel offset no longer points at the same text: keep the caret's line in view.
@@ -429,8 +431,8 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics) -> O
 }
 
 /// The layout the pass shows, after the viewport sizes are settled.
-fn prepare_layout(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics) -> Arc<DocLayout> {
-    let reflow_anchor = update_viewport(app, full, metrics);
+fn prepare_layout(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side: f32) -> Arc<DocLayout> {
+    let reflow_anchor = update_viewport(app, full, metrics, side);
     let layout = shown_layout(app);
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
@@ -656,7 +658,7 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let full = ui.available_rect_before_wrap();
     let Some(metrics) = reading_metrics::read(ui) else { return };
-    let layout = prepare_layout(app, full, &metrics);
+    let layout = prepare_layout(app, full, &metrics, Env::of(ui).tokens.size.rail.width);
     if app.session.view.read_mode {
         show_reading(app, ui, &layout, full, &metrics);
     } else {
