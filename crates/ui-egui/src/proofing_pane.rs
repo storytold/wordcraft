@@ -172,7 +172,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
         heading.tooltip(lang).show(ui);
     }
     let message = if spelling { tl!("Not in Dictionary") } else { tl!(form.issue.get("message").and_then(Value::as_str).unwrap_or("")) };
-    Text::new(message).shade(Shade::Muted).show(ui);
+    Text::new(message.to_owned()).shade(Shade::Muted).show(ui);
 
     let mut ask: Option<Ask> = None;
     let flagged = form.issue.get("text").and_then(Value::as_str).unwrap_or("").to_string();
@@ -182,7 +182,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
         Span::new(form.context_after.clone()),
     ];
     Row::new().show(ui, |ui, _| {
-        Text::styled(spans).show(ui);
+        Text::styled(spans.clone()).show(ui);
         // PLAN: assumed IconSpec::svg("readAloud") from WORDCRAFT_ICONS (rb.A7, ribbon-w13); the icon is registered by name
         if IconButton::new(IconSpec::svg(IconId::new("readAloud"))).label(tl!("Read Aloud")).show(ui).clicked() {
             ask = Some(Ask::ReadAloud);

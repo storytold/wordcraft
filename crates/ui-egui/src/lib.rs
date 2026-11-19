@@ -505,8 +505,6 @@ pub struct WordApp {
     pub(crate) chrome: chrome::ChromeOpen,
     /// The File page's state.
     pub(crate) backstage_state: backstage::BackstageState,
-    /// The File page's template thumbnails.
-    pub(crate) template_thumbs: backstage::TemplateThumbs,
     /// File › Options' state.
     pub(crate) options_state: craft::ui::patterns::preferences::PreferencesState,
     /// The Markdown Source pane's last visit.

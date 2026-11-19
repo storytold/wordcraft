@@ -39,7 +39,7 @@ fn card(app: &mut WordApp, ui: &mut Ui, ctx: &egui::Context, document: u64, id: 
     let when = app.session.doc.comments.get(&id).map(crate::local_time::comment_time).unwrap_or_default();
     let resolved = c.get("resolved").and_then(Value::as_bool).unwrap_or(false);
     Row::new().wrap(true).show(ui, |ui, _| {
-        Text::new(when).show(ui);
+        Text::new(when.clone()).show(ui);
         if resolved {
             Text::new(tl!("Resolved").to_owned()).show(ui);
         }

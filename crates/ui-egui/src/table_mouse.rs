@@ -135,6 +135,15 @@ fn cursor_of(spot: Spot) -> Cursor {
     }
 }
 
+/// The pointer while a spot is dragged: the move arrows on the handle, else the plain arrow (a drag cursor is a
+/// standard icon; the painted selection arrows are only the hover cursor).
+fn drag_cursor_of(spot: Spot) -> CursorIcon {
+    match spot {
+        Spot::Handle => CursorIcon::Move,
+        _ => CursorIcon::Default,
+    }
+}
+
 /// The colours of the handle, the insert button and the move preview.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 pub(crate) struct TableMouseStyle {
@@ -427,7 +436,7 @@ impl Component for TableMouse<'_> {
                     .sense(Sense::DRAG)
                     .priority(HitPriority::new(level, 0))
                     .cursor(cursor_of(spot))
-                    .drag_cursor(cursor_of(spot))
+                    .drag_cursor(drag_cursor_of(spot))
                     .pointer_only("the table.selectAt, table.insertAt and table.moveDrag commands do the same");
                 self.declared.push(Declared { key, index: at, page: placed.page, target: a.target });
             }

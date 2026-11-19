@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use craft::behavior::{IconId, Selection, SelectionChange, keyed};
 use craft::ui::buttons::{Button, IconButton, ToggleButton};
-use craft::ui::contract::{Bind, CollectionEvent, Entry, Props, SelectMode, Show, ShowCollection, ShowContainer};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Props, SelectMode, Show, ShowCollection, ShowContainer, clicked};
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow};
@@ -87,8 +87,7 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
     if Button::new(tl!("Manage Styles…").to_owned()).show(ui).clicked() {
         let _ = app.run("styles.manage", json!({}));
     }
-    // PLAN: assumed `ToggleButton::show(..).clicked()`: a click is the toggle's committed change
-    if ToggleButton::new(tl!("Style Inspector").to_owned(), Bind::given(app.session.view.style_inspector)).show(ui).clicked() {
+    if clicked(&ToggleButton::new(tl!("Style Inspector").to_owned(), Bind::given(app.session.view.style_inspector)).show(ui).response) {
         let _ = app.run("styles.inspector", json!({}));
     }
     let mut list: Vec<(String, String, bool, bool)> = app

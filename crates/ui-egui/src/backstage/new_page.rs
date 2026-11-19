@@ -87,13 +87,14 @@ pub(super) fn show(ui: &mut Ui, app: &mut WordApp) {
         let store = thumbs::store(&ctx);
         let source = thumbs::TemplateThumbs { region: app.session.region() };
         if !found.is_empty() {
+            let (store, source) = (&store, &source);
             let cards = template_cards(&found);
             let items = keyed(&cards, |t: &Template| t.id.clone()).with_text(|t| Cow::Borrowed(t.name.as_str()));
             let out = grid(label("Templates")).show_items(ui, &items, &mut |id, _| {
                 let Some(card) = cards.iter().find(|c| &c.id == id) else { return Tile::new(Label::Empty) };
                 let thumb = ThumbKey::Template(card.id.clone());
                 Tile::new(Label::from(card.name.clone()))
-                    .thumb(ThumbAspect::new(PAGE_WIDE, PAGE_HIGH), |cx, rect| thumbs::paint(cx, rect, &store, &source, &thumb))
+                    .thumb(ThumbAspect::new(PAGE_WIDE, PAGE_HIGH), move |cx, rect| thumbs::paint(cx, rect, store, source, &thumb))
             });
             for id in activated(out.response.events) {
                 let _ = app.run("file.new", json!({"template": id}));

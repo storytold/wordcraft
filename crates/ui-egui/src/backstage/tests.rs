@@ -13,9 +13,8 @@ fn new_app() -> WordApp {
 
 /// A window whose file service is `files`: every pick and save of the page goes to it.
 fn app_with_files(files: &Arc<ScriptedFiles>) -> WordApp {
-    // PLAN: assumed `WordApp::with_host(Arc<Host>)` (app-hub app.H1, S-L103) over `Host::with_files` (host/src/lib.rs:104) and a default testing `Host` (shell-w9).
-    let host = craft::host::Host::default().with_files(files.clone());
-    WordApp::with_host(Arc::new(host))
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    new_app().with_host(Arc::new(host))
 }
 
 /// The app in a window of `size`, run until it settles.
@@ -237,8 +236,7 @@ fn recovery_page_keeps_dismissed_copies_and_confirms_discard() {
     h.run_steps(4);
     h.get_by_label("Discard…").click();
     h.run_steps(4);
-    // PLAN: assumed `dialog_host.open_dialogs()` yields the open dialogs' key names (dialogs-w13).
-    assert!(h.state().dialog_host.open_dialogs().into_iter().any(|key| key == "discardRecovery"), "the discard is confirmed first");
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("discardRecovery")), "the discard is confirmed first");
     h.get_by_label("Cancel").click();
     h.run_steps(4);
     assert_eq!(h.state().session.recovery_documents().len(), 1);

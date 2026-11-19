@@ -112,7 +112,6 @@ impl WordApp {
             autosave_path: None,
             saves_in_flight: Vec::new(),
             fallback_chooser: false,
-            template_thumbs: Default::default(),
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             recovery_seen: false,
             no_document: None,
@@ -225,8 +224,8 @@ impl WordApp {
     /// command states, host). It runs before `logic`, so what needs the frame's own flags
     /// (a late paste, the control channel) is in `logic`.
     pub fn frame_input(&mut self, out: FrameOutput) -> FrameInput {
-        self.run_fired(&out);
         if let Some(ctx) = self.ctx.clone() {
+            self.run_fired(&ctx, &out);
             self.native_scale = theme::usable_scale(ctx.native_pixels_per_point().unwrap_or(1.0));
             if let Some(native) = ctx.native_pixels_per_point()
                 && let Some(old) = self.legacy_interface_size.take()
@@ -243,8 +242,8 @@ impl WordApp {
         self.fonts_frames = self.fonts_frames.saturating_add(1).min(2);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::apply_language(lang);
-        if self.host.lang() != lang.lang {
-            self.host = std::sync::Arc::new(self.host.with_lang(lang.lang));
+        if self.host.lang() != lang.craft_lang() {
+            self.host = std::sync::Arc::new(self.host.with_lang(lang.craft_lang()));
         }
         let commands: CommandInput = self.command_input();
         FrameInput::new(self.root_env()).commands(commands).host(self.host.clone())

@@ -155,7 +155,6 @@ impl WordApp {
             control: _,
             capture_token: _,
             fallback_chooser: _,
-            template_thumbs: _,
             // The current command's origin, set and cleared around it.
             ime_origin: _,
             native_scale: _,

@@ -178,6 +178,11 @@ impl Lang {
         LANGUAGES.iter().find(|l| l.code == code)
     }
 
+    /// The framework language this one is bound as, for the host.
+    pub(crate) fn craft_lang(self) -> craft::i18n::Lang {
+        self.lang
+    }
+
     pub fn code(self) -> &'static str {
         self.i18n().code(self.lang)
     }
