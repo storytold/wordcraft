@@ -179,7 +179,7 @@ impl Lang {
     }
 
     /// The framework language this one is bound as, for the host.
-    pub(crate) fn craft_lang(self) -> craft::i18n::Lang {
+    pub fn craft_lang(self) -> craft::i18n::Lang {
         self.lang
     }
 

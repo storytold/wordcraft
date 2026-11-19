@@ -356,9 +356,9 @@ fn native_print_scales_to_the_chosen_paper() {
     // The Print page's choice reaches the job.
     assert_eq!(page_of(&mut app)["paper"], "none", "No Scaling by default");
     app.run("ui.printPage", json!({"paper": "Legal"})).unwrap();
-    let page = page_of(&mut app);
-    assert_eq!(page["paper"], "Legal");
-    app.run("ui.printSubmit", json!({"paper": page["paper"]})).unwrap();
+    let chosen = page_of(&mut app);
+    assert_eq!(chosen["paper"], "Legal");
+    app.run("ui.printSubmit", json!({"paper": chosen["paper"]})).unwrap();
     assert_eq!(media_box(&fake.last_pdf()), (612.0, 1008.0));
     assert!(fake.last_options().contains(&("media".to_owned(), "na_legal_8.5x14in".to_owned())), "{:?}", fake.last_options());
     app.printing.poll(&egui::Context::default());

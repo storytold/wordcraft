@@ -127,9 +127,10 @@ fn dropped_files(raw: &egui::RawInput) -> Vec<DroppedFile> {
     raw.dropped_files
         .iter()
         .map(|file| {
-            let path = file.path.clone().filter(|p| !p.as_os_str().is_empty());
-            let name = path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| file.name.clone());
-            let bytes = if path.is_none() { file.bytes.clone() } else { None };
+            let path = Some(file.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty());
+            let name = path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            // A file without a path (the web) carries its bytes; one that cannot be read is dropped as empty.
+            let bytes = if path.is_none() { file.bytes().ok() } else { None };
             DroppedFile { path, name, bytes }
         })
         .collect()
@@ -519,7 +520,7 @@ fn main() -> eframe::Result {
             let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&settings.lock().get().language);
             let (file_service, panels) = FileService::new(Wake::new(wake.clone()));
             let host = Arc::new(
-                Host::builder(wordcraft_ui_egui::APP).files(Arc::new(file_service)).settings(Arc::new(settings.clone())).lang(lang.lang).build(),
+                Host::builder(wordcraft_ui_egui::APP).files(Arc::new(file_service)).settings(Arc::new(settings.clone())).lang(lang.craft_lang()).build(),
             );
             let shell = ShellInfo::current().backend(if x11 { Backend::X11 } else { Backend::from_env() });
             let spec = InstallSpec::new(shell, Arc::new(SystemWindows))
@@ -777,7 +778,7 @@ mod smoke {
             let (settings, _) = prefs::open(false, &mut Store::in_memory());
             let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&settings.lock().get().language);
             let host =
-                Arc::new(Host::builder(wordcraft_ui_egui::APP).files(Arc::new(files)).settings(Arc::new(settings.clone())).lang(lang.lang).build());
+                Arc::new(Host::builder(wordcraft_ui_egui::APP).files(Arc::new(files)).settings(Arc::new(settings.clone())).lang(lang.craft_lang()).build());
             let spec = InstallSpec::new(ShellInfo::current(), Arc::new(SystemWindows))
                 .app_id("ai.storyteller.wordcraft")
                 .placement(Arc::new(Mutex::new(Store::in_memory())));
