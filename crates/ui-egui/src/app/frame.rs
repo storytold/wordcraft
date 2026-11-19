@@ -4,7 +4,7 @@ use craft::theme::variant::Tone;
 use craft::ui::bars::StatusMessage;
 use craft::ui::contract::Bind;
 use craft::ui::runtime::env::ShellRegions;
-use craft::ui::shell::{AppShell, ScreenModeSet, Slot};
+use craft::ui::shell::{AppShell, ScreenModeSet, Slot, SlotSize};
 
 use crate::i18n;
 use crate::language_packs;
@@ -88,12 +88,15 @@ impl WordApp {
             .page(self.ui.backstage, crate::backstage::scope(), crate::backstage::show)
             .title_bar(chrome::title_bar::show)
             .top(Slot::new("screenBar").screen_bar(), chrome::screen_bar::show)
-            .top(Slot::new("ribbonDrop").drops(), |ui, _cx, app: &mut WordApp| {
+            // The ribbon is a tab strip over a group row: its slots are as tall as it is and stack it. A slot of the
+            // default size is one options bar high and lays its content in one line, which put the groups beside the
+            // tabs and collapsed every one of them.
+            .top(Slot::new("ribbonDrop").drops().size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
                     ribbon_slot(app, ui);
                 }
             })
-            .top(Slot::new("ribbon"), |ui, _cx, app: &mut WordApp| {
+            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
                     ribbon_slot(app, ui);
                 }
