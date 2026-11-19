@@ -5,8 +5,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{Cursor, Read};
 
 use crate::xml::XmlReader;
-use quick_xml::events::{BytesStart, Event};
-use quick_xml::name::ResolveResult;
+use quick_xml::events::{BytesDecl, BytesStart, Event};
+use quick_xml::name::{NamespaceResolver, PrefixDeclaration, ResolveResult};
 
 use crate::Acc;
 use crate::resolution::Resolution;
@@ -1627,7 +1627,7 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
     let mut capped = false;
     let (complete, _) = parse_opc_children(text, b"Types", b"http://schemas.openxmlformats.org/package/2006/content-types", guard, |e| {
         if !matches!(e.local_name().as_ref(), b"Default" | b"Override") {
-            return;
+            return true;
         }
         if count >= cap {
             capped = true;
@@ -1635,6 +1635,7 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
             record_content_type(e, ct);
             count += 1;
         }
+        !capped
     });
     ct.incomplete |= capped || !complete;
     capped
@@ -1644,13 +1645,19 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
 /// All XML events still consume the guard, including ignored foreign or nested elements.
 /// Returns traversal completeness and whether the traversal can certify an OPC inventory.
 /// Other checks can still diagnose the declarations obtained from a source with inventory loss.
-fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mut ParseGuard, mut visit: impl FnMut(&BytesStart)) -> (bool, bool) {
+fn parse_opc_children(
+    text: &str,
+    container: &[u8],
+    namespace: &[u8],
+    guard: &mut ParseGuard,
+    mut visit: impl FnMut(&BytesStart) -> bool,
+) -> (bool, bool) {
     observation_contract! {
         rules: "-";
         collections: "parser.parse_opc_children*1,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
-        loss: "source unavailable or malformed; XML event/depth and namespace declaration budgets; category allocation cap";
-        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        loss: "malformed XML or discarded declarations; XML event, depth, namespace and declaration budgets";
+        fallback: "retain delivered declarations for positive checks; no negative membership from an incomplete inventory";
         package_loss: "independent";
     }
 
@@ -1659,57 +1666,154 @@ fn parse_opc_children(text: &str, container: &[u8], namespace: &[u8], guard: &mu
     let mut depth = 0usize;
     let mut valid_root = false;
     let mut roots = 0usize;
-    let mut well_formed = true;
+    let mut inventory_complete = text.chars().all(craft_xml::is_xml_char);
     let mut at_start = true;
+    // Hashing expanded attribute names can rescan an inherited URI. Bound that work
+    // separately from reading namespace declarations, which are expanded once.
+    let mut namespace_work = text.len().saturating_mul(16);
     loop {
         if !guard.tick() {
             return (false, false);
         }
-        match reader.read_resolved_event_into(&mut buf) {
-            Ok((ns, Event::Start(e))) => {
-                if !guard.enter() {
+        let Ok(event) = reader.read_event_into(&mut buf) else { return (false, false) };
+        let opens = matches!(event, Event::Start(_));
+        match event {
+            Event::Start(e) | Event::Empty(e) => {
+                if opens && !guard.enter() {
                     return (false, false);
                 }
-                well_formed &= opc_element_well_formed(&ns, &e);
+                let res = reader.resolver();
+                let ns = res.resolve_element(e.name()).0;
+                let local = e.local_name();
+                let recognized = matches!(&ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace);
+                if inventory_complete {
+                    inventory_complete = !matches!(&ns, ResolveResult::Unknown(_))
+                        && valid_qname(e.name().as_ref())
+                        && opc_attributes_valid(res, &e, &mut namespace_work);
+                }
                 if depth == 0 {
                     roots += 1;
-                    valid_root = matches!(ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace) && e.local_name().as_ref() == container;
-                } else if depth == 1 && valid_root && matches!(ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace) {
-                    visit(&e);
+                    valid_root = recognized && local.as_ref() == container;
+                } else if valid_root && recognized {
+                    if depth == 1 {
+                        inventory_complete &= visit(&e);
+                    } else if container == b"Relationships" && local.as_ref() == b"Relationship" {
+                        // A known declaration in the wrong location was discarded.
+                        inventory_complete = false;
+                    }
                 }
-                depth += 1;
+                depth += usize::from(opens);
             }
-            Ok((ns, Event::Empty(e))) => {
-                well_formed &= opc_element_well_formed(&ns, &e);
-                if depth == 0 {
-                    roots += 1;
-                    valid_root = matches!(ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace) && e.local_name().as_ref() == container;
-                } else if depth == 1 && valid_root && matches!(ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace) {
-                    visit(&e);
-                }
-            }
-            Ok((_, Event::End(_))) => {
+            Event::End(_) => {
                 guard.leave();
                 depth = depth.saturating_sub(1);
             }
-            Ok((_, Event::Text(e))) if depth == 0 => well_formed &= crate::scan::is_whitespace(&e),
-            Ok((_, Event::CData(_) | Event::GeneralRef(_))) if depth == 0 => well_formed = false,
-            Ok((_, Event::Decl(_))) if !at_start => well_formed = false,
-            // OPC declarations do not need a DTD. Without evaluating it we cannot certify
-            // namespace values or the absence of declarations supplied by entity expansion.
-            Ok((_, Event::DocType(_))) => well_formed = false,
-            Ok((_, Event::Eof)) => return (depth == 0, depth == 0 && roots == 1 && valid_root && well_formed),
-            Err(_) => return (false, false),
-            _ => {}
+            Event::Text(e) => {
+                inventory_complete &= if depth == 0 { crate::scan::is_whitespace(&e) } else { !e.windows(3).any(|bytes| bytes == b"]]>") };
+            }
+            Event::GeneralRef(e) => {
+                let defined = matches!(e.as_ref(), b"lt" | b"gt" | b"amp" | b"apos" | b"quot");
+                inventory_complete &= depth > 0 && (defined || e.resolve_char_ref().is_ok_and(|c| c.is_some_and(craft_xml::is_xml_char)));
+            }
+            Event::CData(_) => inventory_complete &= depth > 0,
+            Event::Comment(e) => inventory_complete &= !e.ends_with(b"-") && !e.windows(2).any(|bytes| bytes == b"--"),
+            Event::PI(e) => {
+                let target = e.target();
+                inventory_complete &= !target.eq_ignore_ascii_case(b"xml") && std::str::from_utf8(target).is_ok_and(craft_xml::is_name);
+            }
+            Event::Decl(e) => inventory_complete &= at_start && opc_xml_decl_valid(&e),
+            // An unevaluated DTD can change declarations or present replacement markup
+            // that this walk does not traverse.
+            Event::DocType(_) => inventory_complete = false,
+            Event::Eof => return (depth == 0, depth == 0 && roots == 1 && valid_root && inventory_complete),
         }
         at_start = false;
         buf.clear();
     }
 }
 
-fn opc_element_well_formed(namespace: &ResolveResult, element: &BytesStart) -> bool {
-    !matches!(namespace, ResolveResult::Unknown(_))
-        && element.attributes().all(|attr| attr.is_ok_and(|attr| attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).is_ok()))
+/// Validate the lexical QName as well as its in-scope prefix, which the resolver checks separately.
+fn valid_qname(raw: &[u8]) -> bool {
+    std::str::from_utf8(raw).is_ok_and(|name| {
+        let mut parts = name.splitn(2, ':');
+        parts.next().is_some_and(craft_xml::is_name) && parts.next().is_none_or(|local| !local.chars().any(|c| c == ':') && craft_xml::is_name(local))
+    })
+}
+
+/// Ensure raw, unqualified and expanded names are unique and all values are observable.
+fn opc_attributes_valid(res: &NamespaceResolver, element: &BytesStart, work: &mut usize) -> bool {
+    observation_contract! {
+        rules: "-";
+        collections: "type.HashSet*1";
+        scope: "attributes on one byte-bounded OPC element";
+        loss: "malformed names or values, unresolved prefixes, duplicate expanded names, or namespace work budget";
+        fallback: "return inventory loss; retain declarations for independent positive checks";
+        package_loss: "independent";
+    }
+
+    let mut names = HashSet::new();
+    for attr in element.attributes().with_checks(false) {
+        let Ok(attr) = attr else { return false };
+        let key = attr.key.into_inner();
+        if !valid_qname(key) || attr.value.split(|&byte| byte == b'<').nth(1).is_some() {
+            return false;
+        }
+        let Ok(value) = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0) else { return false };
+        if !value.chars().all(craft_xml::is_xml_char) {
+            return false;
+        }
+        if let Some(prefix) = attr.key.as_namespace_binding() {
+            let invalid = match prefix {
+                PrefixDeclaration::Default => matches!(value.as_ref(), craft_xml::XML_NS | "http://www.w3.org/2000/xmlns/"),
+                PrefixDeclaration::Named(_) => value.is_empty(),
+            };
+            if invalid || !names.insert((None, key)) {
+                return false;
+            }
+            continue;
+        }
+        let (ns, local) = res.resolve_attribute(attr.key);
+        let uri = match ns {
+            ResolveResult::Unbound => None,
+            ResolveResult::Unknown(_) => return false,
+            ResolveResult::Bound(uri) => {
+                let Some(left) = work.checked_sub(uri.as_ref().len()) else { return false };
+                *work = left;
+                Some(uri.into_inner())
+            }
+        };
+        if !names.insert((uri, local.into_inner())) {
+            return false;
+        }
+    }
+    true
+}
+
+fn opc_xml_decl_valid(decl: &BytesDecl) -> bool {
+    let Ok(raw) = std::str::from_utf8(decl.as_ref()) else { return false };
+    let declaration = BytesStart::from_content(raw, 3);
+    let mut attrs = declaration.attributes();
+    let Some(Ok(version)) = attrs.next() else { return false };
+    if version.key.as_ref() != b"version" || version.value.as_ref() != b"1.0" {
+        return false;
+    }
+    let mut next = attrs.next();
+    if let Some(Ok(encoding)) = &next
+        && encoding.key.as_ref() == b"encoding"
+    {
+        let mut bytes = encoding.value.iter();
+        if !bytes.next().is_some_and(u8::is_ascii_alphabetic) || !bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')) {
+            return false;
+        }
+        next = attrs.next();
+    }
+    if let Some(Ok(standalone)) = &next
+        && standalone.key.as_ref() == b"standalone"
+        && matches!(standalone.value.as_ref(), b"yes" | b"no")
+    {
+        next = attrs.next();
+    }
+    next.is_none()
 }
 
 /// Extract and record an `Override` or `Default` content type declaration from an XML element.
@@ -1754,12 +1858,11 @@ fn parse_rels(dir: &str, text: &str, cap: usize, guard: &mut ParseGuard) -> (Vec
 
     let mut rels = Vec::new();
     let mut capped = false;
-    let mut declarations_complete = true;
-    let (complete, source_complete) =
+    let (complete, inventory_complete) =
         parse_opc_children(text, b"Relationships", b"http://schemas.openxmlformats.org/package/2006/relationships", guard, |e| {
-            declarations_complete &= push_rel(dir, e, &mut rels, cap, &mut capped);
+            push_rel(dir, e, &mut rels, cap, &mut capped)
         });
-    (rels, capped, complete && !capped, source_complete && declarations_complete && !capped)
+    (rels, capped, complete && !capped, inventory_complete)
 }
 
 /// Record one `<Relationship>` element, returning false when a declaration is lost or partial.
@@ -1779,9 +1882,9 @@ fn push_rel(dir: &str, e: &BytesStart, rels: &mut Vec<Rel>, cap: usize, capped: 
     let Some((rel, complete)) = parse_rel(dir, e) else { return false };
     if rels.len() >= cap {
         *capped = true;
-    } else {
-        rels.push(rel);
+        return false;
     }
+    rels.push(rel);
     complete
 }
 

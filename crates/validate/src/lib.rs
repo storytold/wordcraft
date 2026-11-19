@@ -4870,9 +4870,28 @@ mod budget_tests {
             (content_types_with_override("word/extra.xml", package::MAIN_CONTENT_TYPE), "word/extra.xml", document(), "CT-DUP-MAIN", "extra.xml"),
         ] {
             let root = String::from_utf8(doc_rels()).unwrap();
+            // Legal references and same local names in distinct namespaces preserve inventory.
+            let control = validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", manifest.clone()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document()),
+                ("word/_rels/document.xml.rels", rels(r#"<vendor xmlns:a="urn:a" xmlns:b="urn:b" a:y="1" b:y="2">&amp;&#48;</vendor>"#)),
+                (part, bytes.clone()),
+            ]));
+            assert_eq!(control.verdict, Verdict::Pass, "{control:?}");
+            assert!(control.coverage_notes.iter().any(|note| note.starts_with(rule)));
+            let rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships";
             for (relationships, xml_warning) in [
                 (format!("x{}", root.split_once("?>").unwrap().1).into_bytes(), true),
                 (rels(&format!(r#"<Relationship Type="urn:test" Target="{target}"/>"#)), false),
+                (rels("<vendor>&undeclared;</vendor>"), true),
+                (rels(r#"<vendor xmlns:a="urn:test" xmlns:b="urn:tes&#116;" a:y="1" b:y="2"/>"#), false),
+                (format!(r#"<Relationships xmlns="{rel_ns}" xmlns:a="urn:x" xmlns:b="urn:x" a:y="1" b:y="2"/>"#).into_bytes(), false),
+                (rels(&format!(r#"<vendor><Relationship Id="nested" Type="urn:test" Target="{target}"/></vendor>"#)), false),
+                (rels(r#"<vendor xmlns:a="urn:x"><other a:y="&undefined;"/></vendor>"#), false),
+                (rels(r#"<vendor xmlns:a="urn:x"><other b:y="1"/></vendor>"#), false),
+                (rels("<vendor><!-- bad--comment --></vendor>"), false),
+                (rels(r#"<vendor xmlns="http://www.w3.org/XML/1998/namespace"/>"#), false),
             ] {
                 let report = validate_bytes(&tiny_zip(&[
                     ("[Content_Types].xml", manifest.clone()),
