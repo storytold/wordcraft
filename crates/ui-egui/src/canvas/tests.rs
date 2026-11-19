@@ -5487,22 +5487,52 @@ fn a_raster_is_stretched_at_most_half_again_during_a_zoom() {
 }
 
 #[test]
+fn only_pages_follow_the_systems_text_settings() {
+    use crate::screen_text::ScreenText;
+    // Previews and thumbnails are cached without the system's settings in their keys: they are
+    // drawn the platform's fixed way. Thumbnails are not baseline-snapped either.
+    let (screen, thumb) = (screen_render_options(), thumbnail_render_options());
+    for opts in [&screen, &thumb] {
+        assert_eq!((opts.text_darkening, opts.hinting, opts.lcd), (ScreenText::PLATFORM.darkening, ScreenText::PLATFORM.hinting, None));
+    }
+    assert!(screen.baseline_snap && !thumb.baseline_snap);
+    // A page takes the same until the app has asked the system (tests never do).
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let page = page_render_options(&a, false);
+    assert_eq!((page.text_darkening, page.hinting, page.baseline_snap), (screen.text_darkening, screen.hinting, true));
+}
+
+#[test]
 fn subpixel_text_follows_the_choice_the_system_and_the_screen() {
-    use super::pages::{lcd_for, lcd_view_key, page_lcd};
-    use crate::screen_text::SubpixelOrder;
+    use super::pages::{lcd_for, lcd_view_key, page_lcd, raster_is_native};
+    use crate::screen_text::SubpixelOrder::{Bgr, Rgb};
     use wordcraft_engine::cmd::view::TextSmoothing::{Grayscale, Subpixel, System};
     use wordcraft_render::LcdOrder;
     // Use system setting: where the system asks for it, in its order, below 2x only.
-    assert_eq!(lcd_for(System, Some(SubpixelOrder::Rgb), 1.0), Some(LcdOrder::Rgb));
-    assert_eq!(lcd_for(System, Some(SubpixelOrder::Bgr), 1.5), Some(LcdOrder::Bgr));
-    assert_eq!(lcd_for(System, Some(SubpixelOrder::Rgb), 2.0), None, "a high-density screen");
-    assert_eq!(lcd_for(System, Some(SubpixelOrder::Rgb), f32::NAN), None);
-    assert_eq!(lcd_for(System, None, 1.0), None, "the system asks for greyscale, or says nothing");
+    assert_eq!(lcd_for(System, Some(Rgb), Some(Rgb), 1.0), Some(LcdOrder::Rgb));
+    assert_eq!(lcd_for(System, Some(Bgr), Some(Bgr), 1.5), Some(LcdOrder::Bgr));
+    assert_eq!(lcd_for(System, Some(Rgb), Some(Rgb), 2.0), None, "a high-density screen");
+    assert_eq!(lcd_for(System, Some(Rgb), Some(Rgb), f32::NAN), None);
+    assert_eq!(lcd_for(System, None, None, 1.0), None, "the system asks for greyscale, or says nothing");
+    assert_eq!(lcd_for(System, None, Some(Bgr), 1.0), None, "a known stripe order is not a request");
     // The user's own choice wins on any screen; RGB when the system names no order.
-    assert_eq!(lcd_for(Subpixel, None, 2.0), Some(LcdOrder::Rgb));
-    assert_eq!(lcd_for(Subpixel, Some(SubpixelOrder::Bgr), 3.0), Some(LcdOrder::Bgr));
-    for system in [None, Some(SubpixelOrder::Rgb), Some(SubpixelOrder::Bgr)] {
-        assert_eq!(lcd_for(Grayscale, system, 1.0), None);
+    assert_eq!(lcd_for(Subpixel, None, None, 2.0), Some(LcdOrder::Rgb));
+    assert_eq!(lcd_for(Subpixel, Some(Bgr), Some(Bgr), 3.0), Some(LcdOrder::Bgr));
+    // A BGR panel whose system has smoothing off (ClearType off on Windows, greyscale on a
+    // Linux desktop) still gets BGR edges, not RGB ones.
+    assert_eq!(lcd_for(Subpixel, None, Some(Bgr), 1.0), Some(LcdOrder::Bgr));
+    let cleartype_off = crate::screen_text::ScreenText::from_windows(Some("0"), Some(2), Some(0));
+    assert_eq!(lcd_for(Subpixel, cleartype_off.subpixel, cleartype_off.stripes, 1.0), Some(LcdOrder::Bgr));
+    assert_eq!(lcd_for(System, cleartype_off.subpixel, cleartype_off.stripes, 1.0), None);
+    for (asked, stripes) in [(None, None), (Some(Rgb), Some(Rgb)), (None, Some(Bgr))] {
+        assert_eq!(lcd_for(Grayscale, asked, stripes, 1.0), None);
+    }
+    // Only a raster shown pixel for pixel: one capped to the largest texture is stretched.
+    assert!(raster_is_native(1.5, 1.5) && raster_is_native(1.933_333, 1.933_333_4));
+    assert!(!raster_is_native(4.096, 5.0), "a page too large for one texture");
+    assert!(!raster_is_native(1.5, 1.6));
+    for (raster, screen) in [(f32::NAN, 1.0), (1.0, f32::NAN), (1.0, 0.0), (f32::INFINITY, f32::INFINITY), (1.0, -1.0)] {
+        assert!(!raster_is_native(raster, screen), "{raster} {screen}");
     }
     // In the app: greyscale until chosen (tests never ask the system), and the choice is a
     // command. A page drawn the other way is another raster.

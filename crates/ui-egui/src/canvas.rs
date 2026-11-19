@@ -62,10 +62,10 @@ pub use navigation::{nearest_page, page_at, page_to_screen};
 use navigation::{scrollbar_page_tip, viewed_page};
 #[cfg(test)]
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
-pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
+pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options, thumbnail_render_options};
 use pages::{
-    drawing_grid, drawing_grid_step, gridline_segments, lcd_view_key, page_image, page_key, page_lcd, page_render_options, page_shows, shown_layout,
-    texel_aligned_rect, view_key, visible_tiles,
+    drawing_grid, drawing_grid_step, gridline_segments, lcd_view_key, page_image, page_key, page_lcd, page_render_options, page_shows,
+    raster_is_native, shown_layout, texel_aligned_rect, view_key, visible_tiles,
 };
 pub(crate) use reading::turn_read_page;
 #[cfg(test)]
@@ -1052,7 +1052,7 @@ struct PagePaintOutput {
     rendered: usize,
 }
 
-/// Are pages drawn hinted this frame (as [`screen_render_options`] says)? Not while a pointer
+/// Are pages drawn hinted this frame (as the system's text settings say, [`crate::screen_text`])? Not while a pointer
 /// zoom moving over several frames ([`pointer_zoom`]) changes the scale: each such frame is a new
 /// size shown for a moment, and hinting every one would cost each page about 1.5 ms more and fill
 /// the hint caches with sizes nobody rests on, pushing out the one the zoom ends at. The first
@@ -1061,7 +1061,7 @@ struct PagePaintOutput {
 /// changes (the Zoom dialog or slider, a fit zoom following the window, a wheel step with
 /// animation effects off) are drawn hinted at once.
 fn hint_pages(zoom_delta: f32, rescaled: bool, gliding: bool) -> bool {
-    screen_render_options().hinting && !pointer_zoom(zoom_delta, rescaled, gliding)
+    crate::screen_text::current().sanitized().hinting && !pointer_zoom(zoom_delta, rescaled, gliding)
 }
 
 /// Is a pointer zoom (Ctrl/⌘+wheel, a pinch: `zoom_delta` other than 1) changing the scale this
@@ -1155,6 +1155,12 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         let visible = band_of(sr).intersects(ui.clip_rect().expand(200.0));
         // Only pages on screen or with a texture need their key (#811).
         let cached = !tiled && app.canvas.textures.contains_key(&i);
+        // Subpixel text only on a raster shown pixel for pixel: one capped to the largest texture
+        // is stretched on screen, which would put each colour's edge on the wrong stripe.
+        let lcd = lcd.filter(|_| raster_is_native(scale_px, geo.scale * ppp));
+        // A page drawn in greyscale (mid-zoom, stretched, or before the setting changed) must not
+        // pass for one drawn with subpixel text.
+        let view = lcd_view_key(view, lcd);
         let key =
             if visible || cached { page_key(app, layout, i, view, scale_px) ^ if tiled { (tile_height_px as u64) << 32 } else { 0 } } else { 0 };
         let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _, _)| *k == key);
@@ -1681,9 +1687,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let content_origin = ui.min_rect().min;
         let hidden = app.canvas.dragged_off_page();
         // Subpixel text costs three rasters a page: like hinting, not for the in-between sizes of a
-        // pointer zoom. The first frame at rest draws it (it is in the page's key).
+        // pointer zoom. The first frame at rest draws it (it is in each page's key).
         let lcd = page_lcd(app, ppp).filter(|_| !zooming);
-        let page_view = lcd_view_key(view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), hinted), lcd);
+        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), hinted);
         // The view without the hinting, which a stretched raster may differ in (see `stretched`).
         let shown_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), true);
         let t0 = crate::now_ms();

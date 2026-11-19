@@ -325,6 +325,9 @@ pub(crate) fn dark_page(app: &WordApp) -> bool {
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
+    // Pages, and only pages, follow the system's own text settings once the app has asked for
+    // them ([`crate::screen_text`]); `view_key` has them, so a change redraws the pages.
+    crate::screen_text::current().apply(&mut opts);
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
     opts.display.placeholders = true;
@@ -360,29 +363,42 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
 /// the pixels to rasterise three times. "Subpixel (LCD)" draws it on any screen, in the
 /// system's stripe order, RGB when it names none (macOS never does).
 pub(super) fn page_lcd(app: &WordApp, ppp: f32) -> Option<wordcraft_render::LcdOrder> {
-    lcd_for(app.session.prefs.text_smoothing, crate::screen_text::current().subpixel, ppp)
+    let system = crate::screen_text::current();
+    lcd_for(app.session.prefs.text_smoothing, system.subpixel, system.stripes, ppp)
 }
 
-/// [`page_lcd`] for the user's choice, the system's stripe order (`None`: it asks for greyscale,
-/// or says nothing) and the screen's density.
+/// [`page_lcd`] for the user's choice, what the system asks for (`asked`: subpixel text in this
+/// order, or `None` for greyscale or no answer), the screen's stripe order where the system
+/// names one (`stripes`, whatever it asks for), and the screen's density.
 pub(super) fn lcd_for(
     choice: wordcraft_engine::cmd::view::TextSmoothing,
-    system: Option<crate::screen_text::SubpixelOrder>,
+    asked: Option<crate::screen_text::SubpixelOrder>,
+    stripes: Option<crate::screen_text::SubpixelOrder>,
     ppp: f32,
 ) -> Option<wordcraft_render::LcdOrder> {
     use crate::screen_text::SubpixelOrder;
     use wordcraft_engine::cmd::view::TextSmoothing;
     use wordcraft_render::LcdOrder;
-    let system = system.map(|stripes| match stripes {
+    let order = |stripes: SubpixelOrder| match stripes {
         SubpixelOrder::Rgb => LcdOrder::Rgb,
         SubpixelOrder::Bgr => LcdOrder::Bgr,
-    });
+    };
     match choice {
         TextSmoothing::Grayscale => None,
-        TextSmoothing::Subpixel => Some(system.unwrap_or(LcdOrder::Rgb)),
+        // The user's own choice, in the order of their screen even where the system has
+        // smoothing off (a BGR panel with ClearType off must not get RGB edges).
+        TextSmoothing::Subpixel => Some(asked.or(stripes).map(order).unwrap_or(LcdOrder::Rgb)),
         // Written so a density that isn't a number is greyscale too.
-        TextSmoothing::System => system.filter(|_| ppp < 2.0),
+        TextSmoothing::System => asked.map(order).filter(|_| ppp < 2.0),
     }
+}
+
+/// Is a page raster at `raster_scale` pixels per point shown one raster pixel per device pixel,
+/// on a view at `screen_scale` device pixels per point? A page too large for one texture is
+/// rasterised smaller and stretched: subpixel text there would put each colour's edge on the
+/// wrong stripe, so such a raster is greyscale ([`wordcraft_render::RenderOptions::lcd`]).
+pub(super) fn raster_is_native(raster_scale: f32, screen_scale: f32) -> bool {
+    raster_scale.is_finite() && screen_scale.is_finite() && screen_scale > 0.0 && (raster_scale - screen_scale).abs() <= screen_scale * 1e-4
 }
 
 /// `view` ([`view_key`]) for pages drawn with subpixel text in `lcd` order: a page drawn in
@@ -393,15 +409,25 @@ pub(super) fn lcd_view_key(view: u64, lcd: Option<wordcraft_render::LcdOrder>) -
     h.finish()
 }
 
-/// Render options for page rasters shown on screen, so a page looks as text does in the
-/// platform's other apps (exports never change). How follows the system's own text settings
-/// once the app has asked for them ([`crate::screen_text`]), and until then what each platform
-/// does by default: on macOS, text is darkened the way the system draws it; on Linux and the
+/// Render options for rasters shown on screen other than the pages themselves (style and font
+/// previews, a dragged object), so their text looks as it does in the platform's other apps
+/// (exports never change): on macOS it is darkened the way the system draws it; on Linux and the
 /// BSDs it is hinted lightly, as FreeType's `hintslight` draws it there (not darkened: hinted
-/// text already has FreeType's weight, and darkening made it look semi-bold). Everywhere,
-/// baselines sit on whole device pixels (hinting does that; unhinted text is moved there).
+/// text already has FreeType's weight, and darkening made it look semi-bold). Baselines sit on
+/// whole device pixels (hinting does that; unhinted text is moved there). These are fixed per
+/// platform: such rasters are cached without the system's text settings in their keys, so
+/// they must not follow them. Pages do ([`page_render_options`]).
 pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
     let mut opts = wordcraft_render::RenderOptions { baseline_snap: true, ..Default::default() };
-    crate::screen_text::current().apply(&mut opts);
+    crate::screen_text::ScreenText::PLATFORM.apply(&mut opts);
+    opts
+}
+
+/// Render options for the template thumbnails of File › New: the platform's text, as
+/// [`screen_render_options`], without the baseline snapping. A thumbnail is a page shrunk to a
+/// tile, drawn as it was before pages were sharpened.
+pub(crate) fn thumbnail_render_options() -> wordcraft_render::RenderOptions {
+    let mut opts = wordcraft_render::RenderOptions::default();
+    crate::screen_text::ScreenText::PLATFORM.apply(&mut opts);
     opts
 }

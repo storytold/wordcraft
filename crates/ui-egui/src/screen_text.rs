@@ -31,8 +31,13 @@ pub struct ScreenText {
     pub darkening: f32,
     /// Light hinting, as FreeType's `hintslight` draws text.
     pub hinting: bool,
-    /// Subpixel (LCD) antialiasing in this stripe order; `None` is greyscale antialiasing.
+    /// The system asks for subpixel (LCD) antialiasing, in this stripe order; `None` when it asks
+    /// for greyscale antialiasing or says nothing.
     pub subpixel: Option<SubpixelOrder>,
+    /// The screen's stripe order, where the system names one, whether or not it asks for
+    /// subpixel antialiasing: a user who chooses subpixel text themselves gets it in the order
+    /// of their screen. `None` when the system names no side-by-side order.
+    pub stripes: Option<SubpixelOrder>,
 }
 
 impl ScreenText {
@@ -44,6 +49,7 @@ impl ScreenText {
         darkening: if cfg!(target_os = "macos") { 1.0 } else { 0.0 },
         hinting: cfg!(all(unix, not(target_os = "macos"))),
         subpixel: None,
+        stripes: None,
     };
 
     /// macOS, from the `AppleFontSmoothing` default (`None` when it isn't set). 0 turns the
@@ -58,19 +64,25 @@ impl ScreenText {
             Some(2) | None => 1.0,
             Some(_) => 1.5,
         };
-        ScreenText { darkening, hinting: false, subpixel: None }
+        ScreenText { darkening, hinting: false, subpixel: None, stripes: None }
     }
 
     /// Windows, from the values under `HKCU\Control Panel\Desktop` (`None` for one that isn't
     /// there): `FontSmoothing` is the text "2" when edges are smoothed and "0" when not,
     /// `FontSmoothingType` is 2 for ClearType (1 is greyscale), `FontSmoothingOrientation` is 1
     /// for RGB stripes and 0 for BGR. ClearType gives subpixel edges, RGB unless the system
-    /// says BGR. Text with smoothing off is still drawn antialiased, in greyscale: this
+    /// says BGR; the stripe order itself is kept even with ClearType off. Text with smoothing off is still drawn antialiased, in greyscale: this
     /// rasteriser has no aliased text.
     pub fn from_windows(smoothing: Option<&str>, kind: Option<u32>, orientation: Option<u32>) -> Self {
         let smoothed = smoothing.map(str::trim) != Some("0");
-        let subpixel = (smoothed && kind == Some(2)).then_some(if orientation == Some(0) { SubpixelOrder::Bgr } else { SubpixelOrder::Rgb });
-        ScreenText { darkening: 0.0, hinting: false, subpixel }
+        // The orientation is the screen's, and is kept whatever the smoothing is set to.
+        let stripes = match orientation {
+            Some(0) => Some(SubpixelOrder::Bgr),
+            Some(1) => Some(SubpixelOrder::Rgb),
+            _ => None,
+        };
+        let subpixel = (smoothed && kind == Some(2)).then_some(stripes.unwrap_or(SubpixelOrder::Rgb));
+        ScreenText { darkening: 0.0, hinting: false, subpixel, stripes }
     }
 
     /// GNOME (and the desktops that keep its settings), from `org.gnome.desktop.interface`:
@@ -90,7 +102,9 @@ impl ScreenText {
             _ => Some(SubpixelOrder::Rgb),
         };
         let subpixel = if antialiasing.map(str::trim) == Some("rgba") { order } else { None };
-        Some(ScreenText { darkening: 0.0, hinting: hinting.map(str::trim) != Some("none"), subpixel })
+        // The order the desktop names, kept when it asks for greyscale.
+        let stripes = order.filter(|_| rgba_order.is_some());
+        Some(ScreenText { darkening: 0.0, hinting: hinting.map(str::trim) != Some("none"), subpixel, stripes })
     }
 
     /// KDE Plasma, from the `[General]` group of `kdeglobals`: `XftAntialias` is `true` or
@@ -107,7 +121,12 @@ impl ScreenText {
             Some("bgr") => Some(SubpixelOrder::Bgr),
             _ => None,
         };
-        Some(ScreenText { darkening: 0.0, hinting: hint_style.map(str::trim) != Some("hintnone"), subpixel: order.filter(|_| antialiased) })
+        Some(ScreenText {
+            darkening: 0.0,
+            hinting: hint_style.map(str::trim) != Some("hintnone"),
+            subpixel: order.filter(|_| antialiased),
+            stripes: order,
+        })
     }
 
     /// The same settings with numbers a raster can take: a darkening that isn't a number, or is
@@ -126,9 +145,9 @@ impl ScreenText {
 
     /// A value to hash into a page's cache key: a page drawn under other settings is another
     /// raster.
-    pub fn key(self) -> (u32, bool, Option<SubpixelOrder>) {
+    pub fn key(self) -> (u32, bool, Option<SubpixelOrder>, Option<SubpixelOrder>) {
         let text = self.sanitized();
-        (text.darkening.to_bits(), text.hinting, text.subpixel)
+        (text.darkening.to_bits(), text.hinting, text.subpixel, text.stripes)
     }
 }
 
@@ -159,7 +178,7 @@ mod tests {
         let p = ScreenText::PLATFORM;
         assert_eq!(p.darkening > 0.0, cfg!(target_os = "macos"));
         assert_eq!(p.hinting, cfg!(all(unix, not(target_os = "macos"))));
-        assert_eq!(p.subpixel, None, "a stripe order only ever comes from the system");
+        assert_eq!((p.subpixel, p.stripes), (None, None), "a stripe order only ever comes from the system");
         // Tests and headless screenshots never ask the system, so this is what they draw with.
         assert_eq!(super::current(), p);
     }
@@ -190,6 +209,14 @@ mod tests {
         assert_eq!(order(Some("junk"), Some(u32::MAX), Some(u32::MAX)), None);
         let text = ScreenText::from_windows(Some("2"), Some(2), Some(1));
         assert!(!text.hinting && text.darkening == 0.0);
+        // The screen's stripe order survives ClearType being off or greyscale, for a user who
+        // chooses subpixel text themselves; no orientation value is no known order.
+        let stripes = |smoothing, kind, orientation| ScreenText::from_windows(smoothing, kind, orientation).stripes;
+        assert_eq!(stripes(Some("0"), Some(2), Some(0)), Some(SubpixelOrder::Bgr));
+        assert_eq!(stripes(Some("2"), Some(1), Some(0)), Some(SubpixelOrder::Bgr));
+        assert_eq!(stripes(Some("0"), None, Some(1)), Some(SubpixelOrder::Rgb));
+        assert_eq!(stripes(Some("2"), Some(2), None), None);
+        assert_eq!(stripes(Some("2"), Some(2), Some(7)), None);
     }
 
     #[test]
@@ -197,7 +224,10 @@ mod tests {
         assert_eq!(ScreenText::from_gnome(None, None, None), None, "a desktop without these settings says nothing");
         let text = |a, h, o| ScreenText::from_gnome(a, h, o).unwrap();
         // GNOME's own defaults: greyscale, slight hinting.
-        assert_eq!(text(Some("grayscale"), Some("slight"), Some("rgb")), ScreenText { darkening: 0.0, hinting: true, subpixel: None });
+        assert_eq!(
+            text(Some("grayscale"), Some("slight"), Some("rgb")),
+            ScreenText { darkening: 0.0, hinting: true, subpixel: None, stripes: Some(SubpixelOrder::Rgb) }
+        );
         assert_eq!(text(Some("rgba"), Some("slight"), Some("rgb")).subpixel, Some(SubpixelOrder::Rgb));
         assert_eq!(text(Some("rgba"), Some("slight"), Some("rgba")).subpixel, Some(SubpixelOrder::Rgb));
         assert_eq!(text(Some("rgba"), Some("slight"), Some("bgr")).subpixel, Some(SubpixelOrder::Bgr));
@@ -212,6 +242,11 @@ mod tests {
             assert!(text(None, Some(style), None).hinting, "{style}");
         }
         assert!(text(Some("grayscale"), None, None).hinting);
+        // The stripe order is kept when the desktop asks for greyscale or no antialiasing.
+        assert_eq!(text(Some("grayscale"), None, Some("bgr")).stripes, Some(SubpixelOrder::Bgr));
+        assert_eq!(text(Some("none"), None, Some("rgb")).stripes, Some(SubpixelOrder::Rgb));
+        assert_eq!(text(Some("rgba"), None, None).stripes, None, "no order named");
+        assert_eq!(text(Some("grayscale"), None, Some("vbgr")).stripes, None);
     }
 
     #[test]
@@ -220,7 +255,7 @@ mod tests {
         let text = |a, h, s| ScreenText::from_kde(a, h, s).unwrap();
         assert_eq!(
             text(Some("true"), Some("hintslight"), Some("rgb")),
-            ScreenText { darkening: 0.0, hinting: true, subpixel: Some(SubpixelOrder::Rgb) }
+            ScreenText { darkening: 0.0, hinting: true, subpixel: Some(SubpixelOrder::Rgb), stripes: Some(SubpixelOrder::Rgb) }
         );
         assert_eq!(text(Some("true"), Some("hintslight"), Some("bgr")).subpixel, Some(SubpixelOrder::Bgr));
         assert_eq!(text(None, None, Some("rgb")).subpixel, Some(SubpixelOrder::Rgb));
@@ -231,24 +266,28 @@ mod tests {
         assert_eq!(text(Some(" False "), None, Some("rgb")).subpixel, None);
         assert!(!text(None, Some("hintnone"), None).hinting);
         assert!(text(None, Some("hintfull"), None).hinting && text(Some("true"), None, None).hinting);
+        // The stripe order is kept with antialiasing off.
+        assert_eq!(text(Some("false"), None, Some("bgr")).stripes, Some(SubpixelOrder::Bgr));
+        assert_eq!(text(Some("true"), None, Some("none")).stripes, None);
     }
 
     #[test]
     fn settings_go_into_the_page_options_as_numbers_a_raster_can_take() {
         let mut opts = wordcraft_render::RenderOptions::default();
-        ScreenText { darkening: 1.5, hinting: true, subpixel: None }.apply(&mut opts);
+        ScreenText { darkening: 1.5, hinting: true, subpixel: None, stripes: None }.apply(&mut opts);
         assert_eq!((opts.text_darkening, opts.hinting), (1.5, true));
         for (given, taken) in [(f32::NAN, 0.0), (f32::INFINITY, 0.0), (-3.0, 0.0), (40.0, 2.0), (0.5, 0.5)] {
-            let text = ScreenText { darkening: given, hinting: false, subpixel: None };
+            let text = ScreenText { darkening: given, hinting: false, subpixel: None, stripes: None };
             text.apply(&mut opts);
             assert_eq!((opts.text_darkening, opts.hinting), (taken, false), "{given}");
             assert_eq!(text.key(), ScreenText { darkening: taken, ..text }.key());
         }
         // Each setting changes the cache key.
-        let base = ScreenText { darkening: 1.0, hinting: false, subpixel: None };
+        let base = ScreenText { darkening: 1.0, hinting: false, subpixel: None, stripes: None };
         assert_ne!(base.key(), ScreenText { darkening: 0.5, ..base }.key());
         assert_ne!(base.key(), ScreenText { hinting: true, ..base }.key());
         assert_ne!(base.key(), ScreenText { subpixel: Some(SubpixelOrder::Rgb), ..base }.key());
+        assert_ne!(base.key(), ScreenText { stripes: Some(SubpixelOrder::Bgr), ..base }.key());
         assert_ne!(ScreenText { subpixel: Some(SubpixelOrder::Bgr), ..base }.key(), ScreenText { subpixel: Some(SubpixelOrder::Rgb), ..base }.key());
     }
 }
