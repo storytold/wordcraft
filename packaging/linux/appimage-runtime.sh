@@ -33,7 +33,7 @@ bundle_x11_keyboard() {
   done
   # Both launch paths name one ELF inode. Only the fallback path has the sibling
   # library directory. Verify the linker setting before accepting a --skip-build binary.
-  if ! LC_ALL=C readelf --dynamic "$binary" | grep -F '(RPATH)' | grep -F '$ORIGIN/wordcraft-x11-libraries' >/dev/null; then
+  if ! LC_ALL=C readelf --dynamic "$binary" | grep -F '(RPATH)' | grep -F "\$ORIGIN/wordcraft-x11-libraries" >/dev/null; then
     echo "error: the staged WordCraft binary lacks its AppImage library path; rebuild WordCraft" >&2
     return 1
   fi
