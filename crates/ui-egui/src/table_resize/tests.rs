@@ -174,6 +174,9 @@ fn a_column_marker_on_the_ruler_moves_the_columns_right_of_it() {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
         h.app_frame();
     }
+    // The pointer stays put for two more frames: the framework's marker (and its access node) settle on the pointer's
+    // last position a frame after it arrives.
+    steps(&mut h, 2);
     assert!((ruler_marker(&h, "Table Column Width", end).center().x - end.x).abs() < 1.0, "the marker follows the pointer");
     assert_eq!(h.state().session.undo_depth(), depth, "nothing is written while dragging");
     button(&h, end, false);
