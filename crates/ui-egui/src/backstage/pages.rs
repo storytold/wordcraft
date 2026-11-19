@@ -2,8 +2,7 @@
 
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, clicked};
-use craft::ui::contract::Sizing;
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft::ui::display::Text;
 use craft::ui::form::{Field, FieldGroup};
 use craft::ui::layout_components::{Row, Stack};
