@@ -865,7 +865,9 @@ mod smoke {
         assert!(run.app.app.dialog_host_mut().shows_modal(), "the Save Changes prompt shows");
 
         let tree = run.frames.tree();
-        let button = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some("Don't Save")).unwrap();
+        // The framework words the answer as the platform does: "Don't Save" on macOS, "No" elsewhere.
+        let dont_save = if cfg!(target_os = "macos") { "Don't Save" } else { "No" };
+        let button = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some(dont_save)).expect("the prompt has a button for Don't Save");
         let press = egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
             action: egui::accesskit::Action::Click,
             target_tree: egui::accesskit::TreeId::ROOT,
