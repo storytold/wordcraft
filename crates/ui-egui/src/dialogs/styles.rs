@@ -27,13 +27,15 @@ const KEY: &str = "manageStyles";
 /// The style list's one column, which holds the style's name.
 const NAME: ColumnKey = ColumnKey::new("name");
 
-/// What a preview image was made for: the style, its type, the styles' revision, the room and the pixel density.
+/// What a preview image was made for: the style, its type, the styles' revision, the room, the
+/// interface mode and the pixel density.
 #[derive(Clone, PartialEq)]
 struct PreviewKey {
     selected: String,
     ty: String,
     styles: Revision,
     room: [u32; 2],
+    mode: Mode,
     ppp: u32,
 }
 
@@ -282,7 +284,7 @@ fn refresh_preview(app: &mut WordApp, ctx: &Context, id: DialogId) {
     let held = d.preview.as_ref().map(|(key, _)| key.clone());
     let ppp = ctx.pixels_per_point();
     let styles = crate::previews::style_revision(app, mode);
-    let key = PreviewKey { selected, ty, styles, room: [room.x.to_bits(), room.y.to_bits()], ppp: ppp.to_bits() };
+    let key = PreviewKey { selected, ty, styles, room: [room.x.to_bits(), room.y.to_bits()], mode, ppp: ppp.to_bits() };
     if held.as_ref() == Some(&key) {
         return;
     }

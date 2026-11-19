@@ -2,7 +2,7 @@ use super::services::Services;
 use super::state::{AutoSaveBlock, PromptSave, keeps_everything};
 use super::{
     DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, SaveInFlight, Session, Status, Value, WordApp, applied_font, backstage, canvas, chrome, content_controls,
-    crop, dialogs, documents, file_dialogs, i18n, json, keys, keytips, options, panes, paste_picture, printing, push_recent_font, read_aloud,
+    crop, dialogs, documents, file_dialogs, i18n, json, keys, options, panes, paste_picture, printing, push_recent_font, read_aloud,
     recent_fonts_from, ribbon, scroll, system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
 };
 use craft::platform::clock::monotonic_ms;
@@ -390,7 +390,7 @@ impl WordApp {
         self.escape_free = self.dialog_host.is_empty()
             && !self.ui.backstage
             && !self.keytips_active
-            && !egui::Popup::is_any_open(&ctx)
+            && !craft::ui::runtime::overlay::any_open(&ctx, craft::ui::runtime::overlay::OpenFilter::Keys)
             && !crate::chrome::search::is_open(self);
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
