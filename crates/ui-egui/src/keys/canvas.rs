@@ -566,6 +566,13 @@ fn paste(app: &mut WordApp, ctx: &egui::Context) {
 /// Escape: the nearest thing that takes it first (a painter, a pen, a table pen, an object, a text
 /// box, a header), then Focus or Full Screen.
 fn cancel(app: &mut WordApp, ctx: &egui::Context) {
+    // The text menu stays open while its bar's commands hand the keyboard back to the page (Bold, then type): its
+    // Escape then reaches the page, and dismisses the menu before anything on the page.
+    if app.canvas.context_menu_open {
+        app.canvas.context_menu_open = false;
+        app.canvas.context_menu_at = None;
+        return;
+    }
     if app.session.painter.is_some() {
         app.session.painter = None;
         return;
