@@ -824,12 +824,14 @@ mod smoke {
             let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 920.0))), ..Default::default() };
             input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() });
             let mut first = true;
-            let output = ctx.run_ui(input, |ui| {
+            let mut output = ctx.run_ui(input, |ui| {
                 if std::mem::take(&mut first) {
                     app.logic_pass(ui.ctx(), None);
                 }
                 app.ui_pass(ui, None);
             });
+            // Nothing paints this frame, so its texture uploads are dropped on purpose (egui panics on an unhandled drop).
+            output.textures_delta.clear();
             let held = output
                 .viewport_output
                 .get(&egui::ViewportId::ROOT)

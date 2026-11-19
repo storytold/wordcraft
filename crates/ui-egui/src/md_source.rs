@@ -181,10 +181,11 @@ mod tests {
         crate::test_harness::frames(&mut h, 1);
         crate::test_harness::frames(&mut h, 1);
         h.event(egui::Event::Text("Typed. ".into()));
-        crate::test_harness::frames(&mut h, 1);
+        crate::test_harness::frames(&mut h, 2);
         assert!(h.state().session.dirty, "typing is an unsaved change");
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
-        crate::test_harness::frames(&mut h, 1);
+        // The key's command reaches the app in the next frame's input hook (`frame_input`), so it takes a second frame.
+        crate::test_harness::frames(&mut h, 2);
         let saved = std::fs::read_to_string(dir.join("note.md")).unwrap();
         assert!(saved.contains("Typed."), "{saved}");
         assert!(!h.state().session.dirty);
@@ -202,16 +203,17 @@ mod tests {
         crate::test_harness::frames(&mut h, 1);
         assert!(!enabled(&h.ctx, "edit.undo"), "nothing typed yet");
         h.event(egui::Event::Text("Typed. ".into()));
-        crate::test_harness::frames(&mut h, 1);
+        // The field's Undo state reaches the board at the next frame's input hook, so it takes a second frame.
+        crate::test_harness::frames(&mut h, 2);
         let typed = h.state().session.md_source.as_ref().unwrap().text.clone();
         assert!(typed.contains("Typed. "), "{typed}");
         assert!(enabled(&h.ctx, "edit.undo"));
         h.get_by_label("Undo").click();
-        crate::test_harness::frames(&mut h, 1);
+        crate::test_harness::frames(&mut h, 3);
         assert_eq!(h.state().session.md_source.as_ref().unwrap().text, "# Heading\n\nSome text.\n", "Undo takes the typing back");
         assert!(h.state().session.md_source.is_some(), "and stays in the pane");
         h.get_by_label("Redo").click();
-        crate::test_harness::frames(&mut h, 1);
+        crate::test_harness::frames(&mut h, 3);
         assert_eq!(h.state().session.md_source.as_ref().unwrap().text, typed, "Redo puts it back");
         assert!(!enabled(&h.ctx, "edit.redo"), "nothing more to redo");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -290,7 +292,7 @@ mod tests {
         crate::test_harness::frames(&mut h, 1);
         crate::test_harness::frames(&mut h, 1);
         h.event(egui::Event::Text("First visit. ".into()));
-        crate::test_harness::frames(&mut h, 1);
+        crate::test_harness::frames(&mut h, 2);
         assert!(enabled(&h.ctx, "edit.undo"), "undo enabled after typing");
 
         h.state_mut().run("view.markdownSource", json!({})).unwrap();
