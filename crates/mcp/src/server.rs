@@ -160,15 +160,18 @@ impl Server {
 
     /// Handle one line; returns the reply line (None for notifications and blank lines).
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
-        // The shared core checks the raw line's length before parsing; keep that on the original
-        // line rather than on the re-serialised one below.
+        // The shared core checks the received line's length before parsing; keep that check on the
+        // line as received, not on anything re-serialised from it.
         if line.len() > MAX_REQUEST_LINE {
             return self.inner.handle_line(line);
         }
-        match serde_json::from_str::<Value>(line) {
+        // The shared core trims the line before parsing (Rust's `trim`, so a no-break space too);
+        // parse the same text, so a call it would accept is filtered rather than refused.
+        match serde_json::from_str::<Value>(line.trim()) {
             Ok(mut msg) => {
-                drop_unknown_arguments(&mut msg);
-                self.inner.handle_line(&msg.to_string())
+                // Only a message that loses an argument is re-serialised; every other line reaches
+                // the shared core as received, so the length it checks is the length that arrived.
+                if drop_unknown_arguments(&mut msg) { self.dispatch(msg) } else { self.inner.handle_line(line) }
             }
             // Not JSON: the shared core's own parse error, unchanged.
             Err(_) => self.inner.handle_line(line),
@@ -180,6 +183,16 @@ impl Server {
         drop_unknown_arguments(&mut msg);
         self.inner.handle(msg)
     }
+
+    /// Dispatch a message whose unknown arguments were dropped, replying in the shared core's own
+    /// format (`handle_line` is `handle` plus framing). A batch goes back through the core's line
+    /// handling, which alone knows its rules for an empty batch and one over its cap.
+    fn dispatch(&mut self, msg: Value) -> Option<String> {
+        match msg {
+            batch @ Value::Array(_) => self.inner.handle_line(&batch.to_string()),
+            msg => self.inner.handle(msg).map(|reply| reply.to_string()),
+        }
+    }
 }
 
 /// Drop the top-level `tools/call` arguments a tool's schema does not declare, as WordCraft's
@@ -187,26 +200,33 @@ impl Server {
 /// advertised schemas leave the argument object open, so a client following the schema could send
 /// one and have a call that worked before refused. Arguments the schema does declare are still
 /// checked there: required, type and enum. Only the top level is touched: `execute`'s `params`
-/// are the command's own and stay as sent.
-fn drop_unknown_arguments(msg: &mut Value) {
+/// are the command's own and stay as sent. Returns whether anything was dropped.
+fn drop_unknown_arguments(msg: &mut Value) -> bool {
     match msg {
-        Value::Array(batch) => batch.iter_mut().for_each(drop_unknown_arguments),
+        Value::Array(batch) => {
+            let mut dropped = false;
+            for item in batch {
+                dropped = drop_unknown_arguments(item) || dropped;
+            }
+            dropped
+        }
         Value::Object(o) => {
             if o.get("method").and_then(Value::as_str) != Some("tools/call") {
-                return;
+                return false;
             }
-            let Some(params) = o.get_mut("params").and_then(Value::as_object_mut) else { return };
-            let Some(name) = params.get("name").and_then(Value::as_str) else { return };
+            let Some(params) = o.get_mut("params").and_then(Value::as_object_mut) else { return false };
+            let Some(name) = params.get("name").and_then(Value::as_str) else { return false };
             let defs = tool_definitions();
             let Some(declared) =
                 defs.as_array().and_then(|d| d.iter().find(|t| t["name"] == name)).and_then(|t| t["inputSchema"]["properties"].as_object())
             else {
-                return;
+                return false;
             };
-            if let Some(Value::Object(args)) = params.get_mut("arguments") {
-                args.retain(|k, _| declared.contains_key(k));
-            }
+            let Some(Value::Object(args)) = params.get_mut("arguments") else { return false };
+            let before = args.len();
+            args.retain(|k, _| declared.contains_key(k));
+            args.len() != before
         }
-        _ => {}
+        _ => false,
     }
 }

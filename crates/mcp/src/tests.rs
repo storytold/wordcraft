@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 
+use crate::server::MAX_REQUEST_LINE;
 use crate::{Headless, Server};
 
 mod differential;
@@ -78,6 +79,35 @@ fn unknown_top_level_arguments_are_ignored() {
     let r = call(&mut s, 9, "tools/call", json!({"name": "get_text", "arguments": {"doc": "1"}}));
     assert_eq!(r["result"]["isError"], true, "{r}");
     assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("must be of type"), "{r}");
+    // The shared core trims the line before parsing (a no-break space is whitespace to Rust's
+    // `trim`), so a call it would accept is filtered rather than answered with a parse error.
+    let line = json!({"jsonrpc": "2.0", "id": 12, "method": "tools/call", "params": {"name": "get_text", "arguments": {"extra": true}}});
+    let r: Value = serde_json::from_str(&s.handle_line(&format!("\u{a0}{line}")).expect("reply")).expect("json");
+    assert_eq!(r["result"]["isError"], false, "{r}");
+}
+
+/// The limit applies to the received line, not to a message re-serialised from it: `serde_json`
+/// writes a parsed `1e2` back as `100.0`, two bytes longer, so a line at the limit would grow past
+/// it. The call still runs, whether or not filtering drops an argument (#6972 review).
+#[test]
+fn a_line_within_the_limit_runs_even_when_filtering_makes_it_longer() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    let run = |s: &mut Server, id: u64, unknown: &str| {
+        let head = format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"execute","arguments":{{{unknown}"command":"caret.docEnd","params":{{"pad":[""#
+        );
+        let tail = r#"",1e2,1e2,1e2,1e2,1e2,1e2]}}}}"#;
+        let filler = "a".repeat(MAX_REQUEST_LINE - head.len() - tail.len());
+        let line = format!("{head}{filler}{tail}");
+        assert_eq!(line.len(), MAX_REQUEST_LINE);
+        let r: Value = serde_json::from_str(&s.handle_line(&line).expect("reply")).expect("json");
+        assert!(r["result"].is_object(), "{r}");
+    };
+    // Nothing dropped, and the message re-serialises twelve bytes longer than the line.
+    run(&mut s, 1, "");
+    // An argument dropped (ten bytes), and the message still re-serialises longer.
+    run(&mut s, 2, r#""bogus":1,"#);
 }
 
 /// The document's paragraphs as (text, in a list) from `inspect_document`.
