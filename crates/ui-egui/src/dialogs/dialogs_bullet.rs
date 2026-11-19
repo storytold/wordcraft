@@ -347,7 +347,10 @@ mod tests {
         let symbol = open.last().unwrap().id;
         assert_ne!(symbol, id, "a child dialog is open over the form");
         set(&mut h, symbol, "selected", json!("†"));
+        // The first confirm after a shown pass files the OK; a later one finishes the dialog (`confirm`'s doc).
         confirm(&mut h, symbol);
+        confirm(&mut h, symbol);
+        h.run_steps(3);
         let back = form_of(&h, id).unwrap();
         assert_eq!((back.ch.as_str(), back.align.as_str()), ("†", "center"));
         assert_eq!(h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap().text, "One");

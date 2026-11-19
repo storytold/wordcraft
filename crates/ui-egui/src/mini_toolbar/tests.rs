@@ -247,8 +247,10 @@ fn hovering_a_bar_member_previews_its_command() {
             Member::Font => {
                 let b = font_box(&h);
                 open_list_of(&mut h, b);
-                h.query_all_by_role(Role::ListBoxOption)
+                // The framework's font list is a tree of families (depth rows), so its rows are tree items.
+                h.query_all_by_role(Role::TreeItem)
                     .filter(|n| n.rect().min.y > b.max.y && n.accesskit_node().label().as_deref() != Some(font.as_str()))
+                    .filter(|n| n.accesskit_node().label().as_deref().is_some_and(|name| !name.ends_with('…')))
                     .map(|n| n.rect().center())
                     .next()
                     .expect("the list shows another family")
@@ -364,7 +366,12 @@ fn context_menu_toolbar_opens_at_a_caret_from_the_keyboard_and_dismisses() {
     click_at(&mut h, bold.center());
     assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)));
     assert_eq!(h.state().session.sel, caret);
+    // The framework's Escape closes the top layer first: the bar (where the click on Bold left the keyboard), then the
+    // menu under it.
     press_key(&mut h, egui::Key::Escape, Default::default());
+    if h.state().canvas.context_menu_open {
+        press_key(&mut h, egui::Key::Escape, Default::default());
+    }
     assert!(!h.state().canvas.context_menu_open);
     h.event(egui::Event::Text(" typed".into()));
     steps(&mut h);
