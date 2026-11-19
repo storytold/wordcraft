@@ -996,8 +996,10 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
         Some(obj) => (wordcraft_engine::cmd::objects::min_size(obj), matches!(obj, InlineObject::Image { .. })),
         None => return,
     };
-    let mut state = BoxState::from_rect(DocRect::new(0.0, 0.0, 0.0, 0.0));
-    state.quad = box_quad(pp, view, &o);
+    // The framework turns a box about its pivot: the centre of the object's (possibly turned) bounds, not the origin.
+    let quad = box_quad(pp, view, &o);
+    let pivot = quad[0].midpoint(quad[2]);
+    let state = BoxState::new(quad, pivot);
     let start = DocRect::from_points(pp.to_doc(view, pt(o.rect.x, o.rect.y)), pp.to_doc(view, pt(o.rect.right(), o.rect.bottom())));
     let scale = if picture { ScaleRule::Corners } else { ScaleRule::Free };
     let rules = BoxRules::default()
